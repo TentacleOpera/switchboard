@@ -64,13 +64,13 @@ describe('brain session dedupe rules', () => {
         const merged = dedupeEvents([
             { workflow: 'Implementation', action: 'start', timestamp: '2026-02-23T02:00:00.000Z' },
             { action: 'start', workflow: 'Implementation', timestamp: '2026-02-23T02:00:00.000Z' },
-            { workflow: 'challenge', action: 'start', timestamp: '2026-02-23T03:00:00.000Z' },
+            { workflow: 'accuracy', action: 'start', timestamp: '2026-02-23T03:00:00.000Z' },
             { workflow: 'jules', action: 'start', timestamp: 'invalid' }
         ]);
 
         assert.strictEqual(merged.length, 3);
         assert.strictEqual(merged[0].workflow, 'Implementation');
-        assert.strictEqual(merged[1].workflow, 'challenge');
+        assert.strictEqual(merged[1].workflow, 'accuracy');
         assert.strictEqual(merged[2].workflow, 'jules');
     });
 

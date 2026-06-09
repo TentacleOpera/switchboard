@@ -1,0 +1,225 @@
+                                terminalRow.appendChild(left);
+                                terminalRow.appendChild(right);
+                                roleBlockSc.appendChild(terminalRow);
+                            });
+                        }
+                        terminalPoolsSectionSc.appendChild(roleBlockSc);
+                    });
+                }
+
+            } else if (currentAutomationMode === 'multi-column') {
+                const multiColumnContainer = document.createElement('div');
+                multiColumnContainer.style.cssText = 'display: flex; flex-direction: column; gap: 12px;';
+                container.appendChild(multiColumnContainer);
+
+                // --- Multi Column Content (Existing UI) ---
+                const autobanRoles = [
+                    { role: 'planner', label: 'Planner' },
+                    { role: 'intern', label: 'Intern' },
+                    { role: 'coder', label: 'Coder' },
+                    { role: 'lead', label: 'Lead Coder' },
+                    { role: 'reviewer', label: 'Reviewer' },
+                    ...lastCustomAgents
+                        .map(agent => ({ role: agent.role, label: agent.name }))
+                ];
+
+                const columnTransitions = [
+                    { column: 'CREATED', label: 'CREATED -> PLAN REVIEWED', defaultMin: 10, floorPerPlan: 3 },
+                    { column: 'PLAN REVIEWED', label: 'PLAN REVIEWED -> INTERN/CODER/LEAD', defaultMin: 20, floorPerPlan: 5 },
+                    { column: 'INTERN CODED', label: 'INTERN CODED -> CODE REVIEWED', defaultMin: 15, floorPerPlan: 4 },
+                    { column: 'LEAD CODED', label: 'LEAD CODED -> CODE REVIEWED', defaultMin: 15, floorPerPlan: 4 },
+                    { column: 'CODER CODED', label: 'CODER CODED -> CODE REVIEWED', defaultMin: 15, floorPerPlan: 4 }
+                ];
+
+                // --- Column Rules Section (ordered first) ---
+                const columnRulesSection = document.createElement('div');
+                columnRulesSection.className = 'db-subsection';
+                multiColumnContainer.appendChild(columnRulesSection);
+
+                const rulesHeader = document.createElement('div');
+                rulesHeader.className = 'subsection-header';
+                const rulesSpan = document.createElement('span');
+                rulesSpan.textContent = 'COLUMN RULES';
+                rulesHeader.appendChild(rulesSpan);
+                columnRulesSection.appendChild(rulesHeader);
+
+                const timingExplanation = document.createElement('div');
+                timingExplanation.style.cssText = 'padding:8px 12px; font-size:11px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
+                timingExplanation.textContent = 'Specify the time delay between advancing each plan to the next stage. Lower intervals require more backup terminals to avoid overwhelming each agent.';
+                columnRulesSection.appendChild(timingExplanation);
+
+                columnTransitions.forEach(({ column, label, defaultMin }) => {
+                    const idSuffix = getAutobanRuleIdSuffix(column);
+                    const rule = state.rules?.[column] || { enabled: true, intervalMinutes: defaultMin };
+                    const ruleRow = document.createElement('div');
+                    ruleRow.style.cssText = 'display:flex; align-items:center; gap:6px; padding:4px 8px; font-family:var(--font-mono); font-size:10px;';
+
+                    const checkbox = document.createElement('input');
+                    checkbox.type = 'checkbox';
+                    checkbox.checked = rule.enabled;
+                    checkbox.style.cssText = 'accent-color:var(--accent-teal); cursor:pointer;';
+                    checkbox.addEventListener('change', () => {
+                        if (!state.rules) state.rules = {};
+                        if (!state.rules[column]) {
+                            state.rules[column] = { enabled: true, intervalMinutes: defaultMin };
+                        }
+                        state.rules[column].enabled = checkbox.checked;
+                        emitAutobanState();
+                    });
+
+                    const ruleLbl = document.createElement('span');
+                    ruleLbl.style.cssText = 'color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
+                    ruleLbl.textContent = label;
+
+                    const everyLbl = document.createElement('span');
+                    everyLbl.style.cssText = 'color:var(--text-secondary);';
+                    everyLbl.textContent = 'every';
+
+                    const minInput = document.createElement('input');
+                    minInput.type = 'number';
+                    minInput.min = '1';
+                    minInput.max = '60';
+                    minInput.id = 'interval-input-' + idSuffix;
+                    minInput.value = String(rule.intervalMinutes);
+                    minInput.style.cssText = 'width:40px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px; text-align:center;';
+                    guardInteraction(minInput);
+                    minInput.addEventListener('change', () => {
+                        if (!state.rules) state.rules = {};
+                        if (!state.rules[column]) {
+                            state.rules[column] = { enabled: true, intervalMinutes: defaultMin };
+                        }
+                        const val = Math.max(1, parseInt(minInput.value, 10) || defaultMin);
+                        state.rules[column].intervalMinutes = val;
+                        minInput.value = String(val);
+                        emitAutobanState();
+                    });
+
+                    const minLbl = document.createElement('span');
+                    minLbl.style.cssText = 'color:var(--text-secondary);';
+                    minLbl.textContent = 'min';
+
+                    ruleRow.appendChild(checkbox);
+                    ruleRow.appendChild(ruleLbl);
+                    ruleRow.appendChild(everyLbl);
+                    ruleRow.appendChild(minInput);
+                    ruleRow.appendChild(minLbl);
+                    columnRulesSection.appendChild(ruleRow);
+                });
+
+                const poolBannerMc = document.createElement('div');
+                poolBannerMc.style.cssText = 'padding:6px 10px; font-family:var(--font-mono); font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 4px 8px; line-height:1.4;';
+                poolBannerMc.innerHTML = '💡 <strong>Terminal Pools:</strong> Using terminal pools allows you to lower this value, since instructions will be rotated among terminals.';
+                columnRulesSection.appendChild(poolBannerMc);
+
+                // --- Automation Rules Section (ordered second) ---
+                const automationRulesSection = document.createElement('div');
+                automationRulesSection.className = 'db-subsection';
+                multiColumnContainer.appendChild(automationRulesSection);
+
+                const automationRulesHeader = document.createElement('div');
+                automationRulesHeader.className = 'subsection-header';
+                const automationRulesSpan = document.createElement('span');
+                automationRulesSpan.textContent = 'KANBAN AUTOMATION RULES';
+                automationRulesHeader.appendChild(automationRulesSpan);
+                automationRulesSection.appendChild(automationRulesHeader);
+
+                const batchRow = document.createElement('div');
+                batchRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
+
+                const batchLabel = document.createElement('span');
+                batchLabel.textContent = 'MAX BATCH SIZE:';
+
+                const batchSelect = document.createElement('select');
+                batchSelect.style.cssText = autobanSelectStyle;
+                guardInteraction(batchSelect);
+                const AUTOBAN_BATCH_SIZE_OPTIONS = [1, 2, 3, 4, 5];
+                AUTOBAN_BATCH_SIZE_OPTIONS.forEach(val => {
+                    const opt = document.createElement('option');
+                    opt.value = String(val);
+                    opt.textContent = String(val);
+                    if (val === state.batchSize) opt.selected = true;
+                    batchSelect.appendChild(opt);
+                });
+                batchSelect.addEventListener('change', () => {
+                    state.batchSize = parseInt(batchSelect.value, 10) || 1;
+                    emitAutobanState();
+                });
+
+                batchRow.appendChild(batchLabel);
+                batchRow.appendChild(batchSelect);
+                automationRulesSection.appendChild(batchRow);
+
+                const complexityRow = document.createElement('div');
+                complexityRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
+
+                const complexityLabel = document.createElement('span');
+                complexityLabel.textContent = 'COMPLEXITY:';
+
+                const complexitySelect = document.createElement('select');
+                complexitySelect.style.cssText = autobanSelectStyle;
+                guardInteraction(complexitySelect);
+                [
+                    { value: 'all', label: 'All' },
+                    { value: 'low_and_below', label: 'Low and below (1-4)' },
+                    { value: 'medium_and_below', label: 'Medium and below (1-6)' },
+                    { value: 'medium_and_above', label: 'Medium and above (5-10)' },
+                    { value: 'high_and_above', label: 'High and above (7-10)' }
+                ].forEach(({ value, label }) => {
+                    const opt = document.createElement('option');
+                    opt.value = value;
+                    opt.textContent = label;
+                    if (value === state.complexityFilter) opt.selected = true;
+                    complexitySelect.appendChild(opt);
+                });
+                complexitySelect.title = 'Unknown complexity is treated as High (8). Low and below excludes Unknown.';
+                complexitySelect.addEventListener('change', () => {
+                    state.complexityFilter = complexitySelect.value || 'all';
+                    emitAutobanState();
+                });
+
+                complexityRow.appendChild(complexityLabel);
+                complexityRow.appendChild(complexitySelect);
+                automationRulesSection.appendChild(complexityRow);
+
+                const routingRow = document.createElement('div');
+                routingRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
+
+                const routingLabel = document.createElement('span');
+                routingLabel.textContent = 'ROUTING:';
+
+                const routingSelect = document.createElement('select');
+                routingSelect.style.cssText = autobanSelectStyle;
+                guardInteraction(routingSelect);
+                [
+                    { value: 'dynamic', label: 'Dynamic' },
+                    { value: 'all_coder', label: 'All -> Coder' },
+                    { value: 'all_lead', label: 'All -> Lead' }
+                ].forEach(({ value, label }) => {
+                    const opt = document.createElement('option');
+                    opt.value = value;
+                    opt.textContent = label;
+                    if (value === state.routingMode) opt.selected = true;
+                    routingSelect.appendChild(opt);
+                });
+                routingSelect.addEventListener('change', () => {
+                    state.routingMode = routingSelect.value || 'dynamic';
+                    emitAutobanState();
+                });
+
+                routingRow.appendChild(routingLabel);
+                routingRow.appendChild(routingSelect);
+                automationRulesSection.appendChild(routingRow);
+
+                // Clear Before Prompt Toggle (inside automation rules section)
+                const mcClearRow = document.createElement('div');
+                mcClearRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
+                const mcClearLabel = document.createElement('span');
+                mcClearLabel.textContent = 'CLEAR TERMINAL BEFORE PROMPT:';
+                mcClearLabel.title = '⚠️ Strongly recommended — prevents token waste and agent overload.';
+                const mcClearToggle = document.createElement('input');
+                mcClearToggle.id = 'mc-clear-terminal-before-prompt-toggle';
+                mcClearToggle.type = 'checkbox';
+                mcClearToggle.checked = !!clearTerminalBeforePrompt;
+                mcClearToggle.addEventListener('change', () => {
+                    clearTerminalBeforePrompt = mcClearToggle.checked;
+                    updateClearTerminalBeforePromptUi();

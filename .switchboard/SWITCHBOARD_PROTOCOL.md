@@ -6,20 +6,13 @@ The Switchboard Protocol defines a file-based messaging system for multi-agent c
 
 ## Transport Layers
 
-### 1. MCP (Model Context Protocol) — Primary
-Agents with MCP support use Switchboard tools directly:
-- **Stdio**: VS Code extension IPC (default)
-- **HTTP/SSE**: External agents connect via `http://127.0.0.1:<port>/sse`
-
-### 2. File-Based Messaging — Fallback
-Agents without MCP support can participate by reading/writing JSON files directly to the `.switchboard/` directory structure.
+### File-Based Messaging
+Agents participate by reading/writing JSON files directly to the `.switchboard/` directory structure.
 
 ## Directory Structure
 
 ```
 .switchboard/
-├── auth_token              # Bearer token for HTTP/SSE auth
-├── server_info.json        # HTTP server discovery (port, endpoints)
 ├── state.json              # Shared agent state (locked via proper-lockfile)
 ├── bridge.json             # IPC bridge for terminal input routing
 ├── inbox/
@@ -75,51 +68,10 @@ Written to `.switchboard/outbox/<sender>/`:
 }
 ```
 
-## HTTP/SSE Transport
-
-### Discovery
-
-Read `.switchboard/server_info.json`:
-```json
-{
-  "port": 3100,
-  "host": "127.0.0.1",
-  "transport": "sse",
-  "sseEndpoint": "/sse",
-  "messagesEndpoint": "/messages",
-  "healthEndpoint": "/health",
-  "pid": 12345,
-  "startedAt": "2025-01-01T00:00:00.000Z"
-}
-```
-
-### Authentication
-
-Read token from `.switchboard/auth_token`, then:
-- **Header**: `Authorization: Bearer <token>`
-- **Query string**: `?token=<token>` (fallback for CLIs)
-
-### Endpoints
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/health` | No | Server health check |
-| `GET` | `/sse` | Yes | Establish SSE stream (MCP session) |
-| `POST` | `/messages?sessionId=<id>` | Yes | Send JSON-RPC message to session |
-
-### Connection Flow
-
-1. `GET /health` — verify server is running
-2. `GET /sse` with auth — receive SSE stream with `endpoint` event containing message URL
-3. `POST /messages?sessionId=<id>` — send MCP tool calls as JSON-RPC
 
 ## Agent Registration
 
-### Terminal Agents
-Registered via `register_terminal` tool with PID, purpose, and optional styling.
-
-### Chat Agents
-Registered via `register_chat_agent` tool with interface type and capabilities.
+The extension registers terminals and chat agents in `state.json`.
 
 ### Roles
 Agents can be assigned roles: `lead`, `coder 1`, `coder 2`, `reviewer`, `tester`, `researcher`, `execution`.
@@ -130,8 +82,6 @@ Agents can be grouped into teams (manual grouping or composite single-agent team
 ## Security
 
 - **Path traversal**: Recipient names are validated — no `..`, `/`, or `\` allowed
-- **Token auth**: File-based bearer token, regenerated per server lifecycle
-- **Localhost binding**: HTTP server binds to `127.0.0.1` only
 - **Workspace isolation**: Clipboard and file operations restricted to workspace root
 
 ## Validation

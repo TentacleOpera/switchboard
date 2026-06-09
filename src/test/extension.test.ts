@@ -33,39 +33,34 @@ suite('Extension Test Suite', () => {
 		assert.strictEqual(enrichedTerminals['Planner']._isChat, undefined, 'Terminal entry should not have _isChat flag');
 	});
 
-	test('TaskViewerProvider payload: teamReady requires both lead and coder terminal agents alive', () => {
+	test('TaskViewerProvider payload: dispatchReadiness computes per-role readiness from terminal agents', () => {
 		const enrichedTerminals: any = {
 			'Lead': { role: 'lead', alive: true, type: 'terminal' },
 			'Coder': { role: 'coder', alive: false, type: 'terminal' },
 		};
 
+		// Verify terminal agents are discoverable by role
 		const leadAgent = Object.values(enrichedTerminals).find((t: any) => t.role === 'lead' && t.type === 'terminal');
 		const coderAgent = Object.values(enrichedTerminals).find((t: any) => t.role === 'coder' && t.type === 'terminal');
-		const teamReady = !!(leadAgent && (leadAgent as any).alive && coderAgent && (coderAgent as any).alive);
-
-		assert.strictEqual(teamReady, false, 'teamReady should be false when coder is not alive');
+		assert.strictEqual(!!(leadAgent && (leadAgent as any).alive), true, 'Lead terminal should be alive');
+		assert.strictEqual(!!(coderAgent && (coderAgent as any).alive), false, 'Coder terminal should not be alive');
 
 		// Both alive
 		(enrichedTerminals['Coder'] as any).alive = true;
-		const leadAgent2 = Object.values(enrichedTerminals).find((t: any) => t.role === 'lead' && t.type === 'terminal');
 		const coderAgent2 = Object.values(enrichedTerminals).find((t: any) => t.role === 'coder' && t.type === 'terminal');
-		const teamReady2 = !!(leadAgent2 && (leadAgent2 as any).alive && coderAgent2 && (coderAgent2 as any).alive);
-
-		assert.strictEqual(teamReady2, true, 'teamReady should be true when both lead and coder terminal agents are alive');
+		assert.strictEqual(!!(coderAgent2 && (coderAgent2 as any).alive), true, 'Coder terminal should be alive after update');
 	});
 
-	test('TaskViewerProvider payload: teamReady is false when agents are chat-only', () => {
-		// Chat agents must NOT count toward teamReady
+	test('TaskViewerProvider payload: chat-only agents do not count as terminal agents', () => {
 		const enrichedTerminals: any = {
 			'lead-chat': { role: 'lead', alive: true, type: 'chat', _isChat: true },
 			'coder-chat': { role: 'coder', alive: true, type: 'chat', _isChat: true },
 		};
 
-		const leadAgent = Object.values(enrichedTerminals).find((t: any) => t.role === 'lead' && t.type === 'terminal');
-		const coderAgent = Object.values(enrichedTerminals).find((t: any) => t.role === 'coder' && t.type === 'terminal');
-		const teamReady = !!(leadAgent && (leadAgent as any).alive && coderAgent && (coderAgent as any).alive);
-
-		assert.strictEqual(teamReady, false, 'teamReady should be false when only chat agents exist, not terminals');
+		const leadTerminal = Object.values(enrichedTerminals).find((t: any) => t.role === 'lead' && t.type === 'terminal');
+		const coderTerminal = Object.values(enrichedTerminals).find((t: any) => t.role === 'coder' && t.type === 'terminal');
+		assert.strictEqual(!!leadTerminal, false, 'Chat-only lead should not match terminal filter');
+		assert.strictEqual(!!coderTerminal, false, 'Chat-only coder should not match terminal filter');
 	});
 });
 

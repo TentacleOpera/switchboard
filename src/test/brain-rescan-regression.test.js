@@ -16,8 +16,15 @@ describe('brain rescan regressions', () => {
         );
         assert.match(
             source,
-            /private async _syncFilesAndRefreshRunSheets\(workspaceRoot\?: string\) \{[\s\S]*await this\._rescanAntigravityPlanSources\(resolvedWorkspaceRoot\);[\s\S]*await this\._syncFilesToDb\(resolvedWorkspaceRoot\);[\s\S]*await this\._refreshRunSheets\(resolvedWorkspaceRoot\);/,
-            'Expected the heavy refresh path to rescan Antigravity source files before syncing DB/UI snapshots.'
+            /private async _syncFilesAndRefreshRunSheets\(workspaceRoot\?: string\) \{[\s\S]*await this\._rescanAntigravityPlanSources\(resolvedWorkspaceRoot\);[\s\S]*await this\._refreshRunSheets\(resolvedWorkspaceRoot\);/,
+            'Expected the heavy refresh path to rescan Antigravity source files before refreshing run sheets.'
+        );
+        // Guard: unclaimed plans (no registry entry, no DB row) must never be skipped by the
+        // cutoff filter — only already-known plans that haven't changed recently should be skipped.
+        assert.match(
+            source,
+            /if \(\(existingEntry \|\| hasDbRow\) && !isRecent\) \{/,
+            'Expected rescan cutoff guard to skip only known plans (existingEntry || hasDbRow), not unclaimed ones.'
         );
     });
 

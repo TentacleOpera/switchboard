@@ -11,6 +11,8 @@ function run() {
     const setupProviderPath = path.join(process.cwd(), 'src', 'services', 'SetupPanelProvider.ts');
     const extensionPath = path.join(process.cwd(), 'src', 'extension.ts');
     const packagePath = path.join(process.cwd(), 'package.json');
+    const kanbanHtmlPath = path.join(process.cwd(), 'src', 'webview', 'kanban.html');
+    const kanbanProviderPath = path.join(process.cwd(), 'src', 'services', 'KanbanProvider.ts');
 
     const implementationSource = fs.readFileSync(implementationPath, 'utf8');
     const setupSource = fs.readFileSync(setupPath, 'utf8');
@@ -18,6 +20,8 @@ function run() {
     const setupProviderSource = fs.readFileSync(setupProviderPath, 'utf8');
     const extensionSource = fs.readFileSync(extensionPath, 'utf8');
     const packageSource = fs.readFileSync(packagePath, 'utf8');
+    const kanbanHtmlSource = fs.readFileSync(kanbanHtmlPath, 'utf8');
+    const kanbanProviderSource = fs.readFileSync(kanbanProviderPath, 'utf8');
 
     assert.ok(
         implementationSource.includes('id="terminal-operations-fields"') &&
@@ -31,6 +35,22 @@ function run() {
         'Expected steady-state configuration UI to stay out of the sidebar implementation view.'
     );
 
+    assert.ok(
+        setupSource.includes('Centralize Switchboard Configuration') &&
+        setupSource.includes('id="control-plane-modal"') &&
+        setupSource.includes('id="btn-control-plane-mode-migrate"') &&
+        setupSource.includes('id="btn-control-plane-mode-fresh"') &&
+        setupSource.includes('id="btn-detect-control-plane"') &&
+        setupSource.includes('id="btn-preview-control-plane"') &&
+        setupSource.includes('id="btn-execute-control-plane"') &&
+        setupSource.includes('id="btn-fresh-control-plane"') &&
+        setupSource.includes('id="control-plane-explicit-root-input"') &&
+        setupSource.includes('id="btn-set-control-plane-root"') &&
+        setupSource.includes('id="btn-reset-control-plane-root"') &&
+        setupSource.includes('id="btn-clear-control-plane-cache"') &&
+        !setupSource.includes('id="multi-repo-toggle"'),
+        'Expected the setup panel to expose the Centralize Switchboard Configuration modal with mode switching, explicit-root controls, and no duplicate multi-repo accordion.'
+    );
     assert.ok(
         setupSource.includes('id="project-mgmt-fields"') &&
         setupSource.includes('id="clickup-token-input"') &&
@@ -61,6 +81,23 @@ function run() {
         !setupSource.includes('btn-setup-coding-mode') &&
         !setupSource.includes('btn-setup-board-mgmt-mode'),
         'Expected the standalone operation-mode setup block to be removed from setup.html.'
+    );
+    assert.ok(
+        setupSource.includes("type: 'getControlPlaneStatus'") &&
+        setupSource.includes("type: 'setExplicitControlPlaneRoot'") &&
+        setupSource.includes("type: 'resetExplicitControlPlaneRoot'") &&
+        setupSource.includes("type: 'clearControlPlaneCache'") &&
+        setupSource.includes("type: 'detectControlPlaneCandidate'") &&
+        setupSource.includes("type: 'previewControlPlaneMigration'") &&
+        setupSource.includes("type: 'executeControlPlaneMigration'") &&
+        setupSource.includes("type: 'executeControlPlaneFreshSetup'") &&
+        setupSource.includes('controlPlaneStatusResult') &&
+        setupSource.includes('controlPlaneOverrideResult') &&
+        setupSource.includes('controlPlaneCandidateResult') &&
+        setupSource.includes('controlPlaneMigrationPreview') &&
+        setupSource.includes('controlPlaneMigrationResult') &&
+        setupSource.includes('controlPlaneFreshSetupResult'),
+        'Expected setup.html to send and receive the merged Control Plane status, override, and migration messages.'
     );
     assert.ok(
         setupSource.includes("type: 'applyClickUpConfig'") &&
@@ -103,11 +140,40 @@ function run() {
     );
 
     assert.ok(
+        setupProviderSource.includes("case 'getControlPlaneStatus'") &&
+        setupProviderSource.includes("case 'setExplicitControlPlaneRoot'") &&
+        setupProviderSource.includes("case 'resetExplicitControlPlaneRoot'") &&
+        setupProviderSource.includes("case 'clearControlPlaneCache'") &&
+        setupProviderSource.includes("case 'detectControlPlaneCandidate'") &&
+        setupProviderSource.includes("case 'previewControlPlaneMigration'") &&
+        setupProviderSource.includes("case 'executeControlPlaneMigration'") &&
+        setupProviderSource.includes("case 'executeControlPlaneFreshSetup'"),
+        'Expected SetupPanelProvider to route Control Plane status/override/cache messages alongside detect/preview/execute cases.'
+    );
+    assert.ok(
         setupProviderSource.includes("case 'applyClickUpConfig'") &&
         setupProviderSource.includes("case 'applyLinearConfig'") &&
         setupProviderSource.includes("case 'applyNotionConfig'") &&
         !setupProviderSource.includes("case 'switchOperationMode'"),
         'Expected SetupPanelProvider to route the new apply messages and drop the legacy mode-switch case.'
+    );
+    assert.match(
+        setupProviderSource,
+        /private _getWorkspaceFolderUri\(workspaceRoot\?: string\): vscode\.Uri \| undefined \{[\s\S]*path\.resolve\(folder\.uri\.fsPath\) === path\.resolve\(resolvedRoot\)/m,
+        'Expected SetupPanelProvider to resolve the selected workspace folder before falling back to direct configuration reads/writes.'
+    );
+    assert.match(
+        setupProviderSource,
+        /await config\.update\(\s*'kanban\.controlPlaneRoot',[\s\S]*folderUri \? vscode\.ConfigurationTarget\.WorkspaceFolder : vscode\.ConfigurationTarget\.Workspace\s*\)/m,
+        'Expected fallback Control Plane override writes to stay resource-scoped instead of forcing a workspace-global setting.'
+    );
+    assert.ok(
+        packageSource.includes('switchboard.clearControlPlaneCache') &&
+        packageSource.includes('switchboard.kanban.controlPlaneRoot') &&
+        extensionSource.includes('switchboard.setupControlPlane') &&
+        packageSource.includes('switchboard.setupControlPlane') &&
+        packageSource.includes('switchboard.controlPlane.onboardingDismissed'),
+        'Expected the extension/package manifests to contribute the Control Plane entry point, cache-clear command, explicit-root setting, and onboarding-dismissal setting.'
     );
     assert.ok(
         !extensionSource.includes('switchboard.setupClickUp') &&
@@ -115,6 +181,19 @@ function run() {
         !packageSource.includes('switchboard.setupClickUp') &&
         !packageSource.includes('switchboard.setupLinear'),
         'Expected the unreleased ClickUp and Linear setup commands to be removed so the Setup panel is the only setup entry point.'
+    );
+
+    assert.ok(
+        implementationSource.includes("type: 'openKanban', tab: 'agents'"),
+        "Expected implementation.html source to contain { type: 'openKanban', tab: 'agents' }"
+    );
+    assert.ok(
+        kanbanProviderSource.includes('_pendingTab'),
+        "Expected KanbanProvider.ts to contain _pendingTab"
+    );
+    assert.ok(
+        kanbanHtmlSource.includes('switchToTab'),
+        "Expected kanban.html to contain switchToTab case"
     );
 
     console.log('setup panel migration test passed');

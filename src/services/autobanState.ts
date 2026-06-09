@@ -6,20 +6,56 @@ export type AutobanRuleState = {
 export type AutobanComplexityFilter = 'all' | 'low_and_below' | 'medium_and_below' | 'medium_and_above' | 'high_and_above';
 export type AutobanRoutingMode = 'dynamic' | 'all_coder' | 'all_lead';
 
-export const AUTOBAN_SHARED_REVIEWER_COLUMNS = ['LEAD CODED', 'CODER CODED'] as const;
+export const AUTOBAN_SHARED_REVIEWER_COLUMNS = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'] as const;
 
 export const AUTOBAN_BATCH_SIZE_OPTIONS = [1, 2, 3, 4, 5] as const;
-export const DEFAULT_AUTOBAN_BATCH_SIZE = 3;
-export const DEFAULT_AUTOBAN_MAX_SENDS_PER_TERMINAL = 10;
+export const DEFAULT_AUTOBAN_BATCH_SIZE = 1;
 export const DEFAULT_AUTOBAN_GLOBAL_SESSION_CAP = 200;
 export const MAX_AUTOBAN_TERMINALS_PER_ROLE = 5;
+
+export type SingleColumnAutobanConfig = {
+    enabled: boolean;
+    intervalMinutes: number;
+    batchSize: number;
+    complexityFilter: AutobanComplexityFilter;
+    terminalPools: Record<string, string[]>;
+    sourceColumn: string;  // NEW: the Kanban column to automate
+    sourceColumnRole?: string; // NEW: dynamic role of the source column
+};
+
+export const DEFAULT_SINGLE_COLUMN_CONFIG: SingleColumnAutobanConfig = {
+    enabled: false,
+    intervalMinutes: 10,
+    batchSize: 1,
+    complexityFilter: 'all',
+    terminalPools: {},
+    sourceColumn: 'PLAN REVIEWED',
+    sourceColumnRole: 'lead'
+};
+
+export function normalizeSingleColumnConfig(state?: Partial<SingleColumnAutobanConfig> | null): SingleColumnAutobanConfig {
+    return {
+        enabled: state?.enabled === true,
+        intervalMinutes: Math.max(1, Math.min(60, Number.isFinite(state?.intervalMinutes as number) ? Math.floor(state!.intervalMinutes!) : 10)),
+        batchSize: normalizeAutobanBatchSize(state?.batchSize),
+        complexityFilter: (['all', 'low_and_below', 'medium_and_below', 'medium_and_above', 'high_and_above'] as const).includes(state?.complexityFilter as any)
+            ? state!.complexityFilter!
+            : 'all',
+        terminalPools: (typeof state?.terminalPools === 'object' && state!.terminalPools !== null)
+            ? Object.fromEntries(Object.entries(state!.terminalPools).map(([k, v]) => [k, Array.isArray(v) ? v.filter(Boolean) : []]))
+            : {},
+        sourceColumn: (typeof state?.sourceColumn === 'string' && state!.sourceColumn!.trim().length > 0)
+            ? state!.sourceColumn!.trim()
+            : 'PLAN REVIEWED',
+        sourceColumnRole: typeof state?.sourceColumnRole === 'string' ? state.sourceColumnRole : undefined
+    };
+}
 
 export type AutobanConfigState = {
     enabled: boolean;
     batchSize: number;
     complexityFilter: AutobanComplexityFilter;
     routingMode: AutobanRoutingMode;
-    maxSendsPerTerminal: number;
     globalSessionCap: number;
     sessionSendCount: number;
     sendCounts: Record<string, number>;
@@ -28,13 +64,18 @@ export type AutobanConfigState = {
     poolCursor: Record<string, number>;
     rules: Record<string, AutobanRuleState>;
     lastTickAt?: Record<string, number>;
+    paused: boolean;
+    pausedRemainingMs?: Record<string, number>;
     pairProgrammingMode: 'off' | 'cli-cli' | 'cli-ide' | 'ide-cli' | 'ide-ide';
     aggressivePairProgramming: boolean;
+    automationMode?: 'single-column' | 'multi-column' | 'antigravity-batch';
+    singleColumnConfig?: SingleColumnAutobanConfig;
 };
 
 const DEFAULT_AUTOBAN_RULES: Record<string, AutobanRuleState> = {
     CREATED: { enabled: true, intervalMinutes: 10 },
     'PLAN REVIEWED': { enabled: true, intervalMinutes: 20 },
+    'INTERN CODED': { enabled: true, intervalMinutes: 15 },
     'LEAD CODED': { enabled: true, intervalMinutes: 15 },
     'CODER CODED': { enabled: true, intervalMinutes: 15 }
 };
@@ -159,7 +200,8 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
         ...DEFAULT_AUTOBAN_RULES,
         ...rawRules,
         'LEAD CODED': rawRules['LEAD CODED'] ?? legacyCodedRule ?? DEFAULT_AUTOBAN_RULES['LEAD CODED'],
-        'CODER CODED': rawRules['CODER CODED'] ?? legacyCodedRule ?? DEFAULT_AUTOBAN_RULES['CODER CODED']
+        'CODER CODED': rawRules['CODER CODED'] ?? legacyCodedRule ?? DEFAULT_AUTOBAN_RULES['CODER CODED'],
+        'INTERN CODED': rawRules['INTERN CODED'] ?? DEFAULT_AUTOBAN_RULES['INTERN CODED']
     };
     const normalizedRules = Object.fromEntries(
         Object.entries(mergedRules)
@@ -190,12 +232,6 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
         routingMode: state?.routingMode === 'all_coder' || state?.routingMode === 'all_lead'
             ? state.routingMode
             : 'dynamic',
-        maxSendsPerTerminal: normalizeFiniteCount(
-            state?.maxSendsPerTerminal,
-            DEFAULT_AUTOBAN_MAX_SENDS_PER_TERMINAL,
-            1,
-            100
-        ),
         globalSessionCap: normalizeFiniteCount(
             typeof state?.globalSessionCap === 'number' && Number.isFinite(state.globalSessionCap) && state.globalSessionCap >= 1
                 ? state.globalSessionCap
@@ -210,6 +246,14 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
         poolCursor: normalizedPoolCursor,
         rules: normalizedRules,
         lastTickAt: state?.lastTickAt ? { ...state.lastTickAt } : undefined,
+        paused: state?.paused === true,
+        pausedRemainingMs: (typeof state?.pausedRemainingMs === 'object' && state!.pausedRemainingMs !== null)
+            ? Object.fromEntries(
+                Object.entries(state!.pausedRemainingMs)
+                    .filter(([, v]) => typeof v === 'number' && Number.isFinite(v) && v > 0)
+                    .map(([k, v]) => [String(k).trim(), v])
+              )
+            : undefined,
         pairProgrammingMode: (function(m: any, legacyEnabled: any) {
             const valid = ['off', 'cli-cli', 'cli-ide', 'ide-cli', 'ide-ide'];
             if (valid.includes(m)) return m;
@@ -217,7 +261,11 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
             if (legacyEnabled === true) return 'cli-cli';
             return 'off';
         })((state as any)?.pairProgrammingMode, (state as any)?.pairProgrammingEnabled),
-        aggressivePairProgramming: state?.aggressivePairProgramming === true
+        aggressivePairProgramming: state?.aggressivePairProgramming === true,
+        automationMode: (['single-column', 'multi-column', 'antigravity-batch'] as const).includes(state?.automationMode as any)
+            ? state!.automationMode!
+            : 'single-column',
+        singleColumnConfig: normalizeSingleColumnConfig(state?.singleColumnConfig)
     };
 }
 

@@ -26,7 +26,7 @@ describe('brain delete tombstone regressions', () => {
     it('keeps deleted brain rows as tombstones instead of removing them after delete confirmation', () => {
         assert.match(
             providerSource,
-            /const db = await this\._getKanbanDb\(resolvedWorkspaceRoot\);\s*if \(db && !brainSourcePath\) \{\s*await db\.deletePlan\(sessionId\);\s*\}/,
+            /if \(db && \(!brainSourcePath \|\| isManagedImport\)\) \{\s*\n\s*await db\.deletePlan\(sessionId\);/,
             'Expected _handleDeletePlan to retain deleted brain rows in the DB as tombstones.'
         );
     });

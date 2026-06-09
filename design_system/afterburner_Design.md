@@ -1,0 +1,110 @@
+Design Overview: Afterburner
+
+This design, inspired by high-fidelity aerospace interfaces and tactical HUDs, balances technical precision with atmospheric depth. It utilizes high-contrast surfaces, vibrant neon accents, and a subtle scanline texture to create a modern hardware-inspired aesthetic.
+
+Visual Identity & Theme
+
+
+
+Aesthetic: Clean, high-contrast "Modern Aerospace" HUD style.
+
+
+
+Surface: A deep, near-black foundation (#101414) that allows neon elements to glow without overwhelming the layout.
+
+
+
+Accents: High-vibrancy Neon Cyan (#00e5ff) for primary actions, active states, and thematic glows.
+
+
+
+Texture: A subtle horizontal scanline overlay (approx. 7% opacity) mimicking a high-resolution CRT or tactical monitor.
+
+Typography
+
+
+
+
+
+Primary Font: Hanken Grotesk (Sans-serif). Chosen for its geometric clarity and technical readability.
+
+
+
+Headers: All-caps with a subtle text-glow effect (0 0 8px) to simulate light-emitting display technology.
+
+
+
+Detailed CSS Variable List
+
+These variables are extracted from the Neon Tactical design system and the Modern Aerospace - Scanline Variant. Use these to maintain visual consistency across all tactical interface components.
+
+1. Brand & Accent Colors
+
+:root {
+  /* Primary Accent - The "Neon" in Neon Tactical */
+  --color-accent-primary: #00e5ff;
+  --color-accent-primary-glow: rgba(0, 229, 255, 0.4);
+  --color-accent-primary-muted: rgba(0, 229, 255, 0.1);
+
+  /* Functional Accents */
+  --color-success: #3ef06d;
+  --color-warning: #ffb800;
+  --color-danger: #ff4747;
+}
+
+2. Surface & Backgrounds
+
+:root {
+  /* Backgrounds */
+  --color-surface: #101414; /* Main background */
+  --color-surface-dim: #0b0f0f; /* Darker areas (e.g. status bars) */
+  --color-surface-bright: #363a3a; /* Elevated surfaces */
+  
+  /* Containers & Borders */
+  --color-border: #1d2323;
+  --color-border-active: var(--color-accent-primary);
+  
+  /* Tactical Textures */
+  --grid-line-color: rgba(0, 229, 255, 0.03);
+  --scanline-opacity: 0.07;
+}
+
+3. Typography & Text Colors
+
+:root {
+  /* Fonts */
+  --font-family-technical: 'Hanken Grotesk', sans-serif;
+  
+  /* Text Colors */
+  --color-text-primary: #ffffff; /* High contrast headers */
+  --color-text-secondary: #a0a6a6; /* Body copy & labels */
+  --color-text-muted: #5e6666; /* Breadcrumbs & inactive items */
+  --color-text-accent: var(--color-accent-primary);
+}
+
+4. Layout & Spacing
+
+:root {
+  --sidebar-width: 280px;
+  --header-height: 64px;
+  --border-radius-sm: 2px;
+  --border-radius-md: 4px;
+  --glow-intensity-standard: 0 0 10px var(--color-accent-primary-glow);
+}
+
+Implementation Notes
+
+
+
+
+
+Scanline Overlay: Use a fixed-position ::after element on the body or main container with a repeating linear gradient to achieve the scanline effect.
+
+
+
+Glow Effects: Apply text-shadow to headers and box-shadow to active indicators using the --color-accent-primary-glow variable for the "lit" display feel.
+
+
+
+Hierarchy: Maintain high contrast for content; use --color-text-secondary for long-form documentation text to ensure comfortable reading against the dark background.
+

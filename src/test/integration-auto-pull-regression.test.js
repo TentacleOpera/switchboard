@@ -50,8 +50,8 @@ function run() {
     );
     assert.match(
         providerSource,
-        /public async applyLiveSyncConfig\(workspaceRoot\?: string\): Promise<void> \{[\s\S]*liveSyncConfig\.enabled[\s\S]*clickUpConfig\?\.setupComplete === true && clickUpConfig\.realTimeSyncEnabled === true[\s\S]*linearConfig\?\.setupComplete === true && linearConfig\.realTimeSyncEnabled === true[\s\S]*this\._continuousSync\.start/s,
-        'Expected global live sync to start only when the global toggle is enabled and at least one integration has realtime sync enabled.'
+        /public async applyLiveSyncConfig\(workspaceRoot\?: string\): Promise<void> \{[\s\S]*clickUpConfig\?\.setupComplete === true && clickUpConfig\.realTimeSyncEnabled === true[\s\S]*linearConfig\?\.setupComplete === true && linearConfig\.realTimeSyncEnabled === true[\s\S]*this\._continuousSync\.start/s,
+        'Expected live sync to start when at least one integration has realtime sync enabled (no global gate).'
     );
     assert.match(
         providerSource,

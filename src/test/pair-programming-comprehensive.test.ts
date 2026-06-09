@@ -16,7 +16,8 @@ const TEST_SESSION_ID = 'test-session-001';
 const TEST_PLAN: BatchPromptPlan = {
     topic: 'Add user authentication',
     absolutePath: '/mock/workspace/.switchboard/plans/auth_plan.md',
-    complexity: '7'
+    complexity: '7',
+    sessionId: TEST_SESSION_ID
 };
 const TEST_PLANS: BatchPromptPlan[] = [TEST_PLAN];
 
@@ -44,7 +45,7 @@ async function simulatePairButtonFlow(params: {
     workspaceRoot: string;
     aggressivePairProgramming?: boolean;
     accurateCodingEnabled?: boolean;
-}): Promise<{ leadPrompt: string; coderPrompt: string; backupPath: string | undefined }> {
+}): Promise<{ leadPrompt: string; coderPrompt: string }> {
     const {
         coderUsesIde, plans, sessionId, workspaceRoot,
         aggressivePairProgramming = false,
@@ -64,14 +65,6 @@ async function simulatePairButtonFlow(params: {
         // Stage 1 — Lead prompt to clipboard
         await vscode.env.clipboard.writeText(leadPrompt);
 
-        // Write Coder prompt backup
-        const handoffDir = path.join(workspaceRoot, '.switchboard', 'handoff');
-        const backupPath = path.join(handoffDir, `coder_prompt_${sessionId}.md`);
-        try {
-            if (!fs.existsSync(handoffDir)) { fs.mkdirSync(handoffDir, { recursive: true }); }
-            fs.writeFileSync(backupPath, coderPrompt, 'utf8');
-        } catch { /* mirror production error-swallow */ }
-
         // Advance card
         await vscode.commands.executeCommand(
             'switchboard.kanbanForwardMove', [sessionId], 'LEAD CODED', workspaceRoot
@@ -86,14 +79,13 @@ async function simulatePairButtonFlow(params: {
         if (choice === 'Copy Coder Prompt') {
             await vscode.env.clipboard.writeText(coderPrompt);
             vscode.window.showInformationMessage('Coder prompt copied to clipboard.');
-            try { fs.unlinkSync(backupPath); } catch { /* ignore */ }
         } else {
             console.log(
-                `[KanbanProvider] Pair programming: user dismissed Coder prompt notification. Backup at: ${backupPath}`
+                `[KanbanProvider] Pair programming: user dismissed Coder prompt notification.`
             );
         }
 
-        return { leadPrompt, coderPrompt, backupPath };
+        return { leadPrompt, coderPrompt };
     } else {
         // Hybrid — Lead to clipboard, Coder to terminal
         await vscode.env.clipboard.writeText(leadPrompt);
@@ -107,7 +99,7 @@ async function simulatePairButtonFlow(params: {
             'switchboard.kanbanForwardMove', [sessionId], 'LEAD CODED', workspaceRoot
         );
 
-        return { leadPrompt, coderPrompt, backupPath: undefined };
+        return { leadPrompt, coderPrompt };
     }
 }
 
@@ -144,12 +136,6 @@ async function simulateDragDropFlow(params: {
     if (pairEnabled && !isLowComplexity && cardComplexity !== 'Unknown') {
         const coderPrompt = buildKanbanBatchPrompt('coder', plans, { pairProgrammingEnabled: true });
         if (coderUsesIde) {
-            const handoffDir = path.join(workspaceRoot, '.switchboard', 'handoff');
-            if (!fs.existsSync(handoffDir)) { fs.mkdirSync(handoffDir, { recursive: true }); }
-            fs.writeFileSync(
-                path.join(handoffDir, `coder_prompt_${sessionId}_${Date.now()}.md`),
-                coderPrompt, 'utf8'
-            );
             const choice = await vscode.window.showInformationMessage(
                 'Pair Programming: Routine tasks identified. Click to copy Coder prompt.',
                 'Copy Coder Prompt'
@@ -178,8 +164,20 @@ suite('Pair programming comprehensive', () => {
 
     setup(() => {
         sandbox = sinon.createSandbox();
-        clipboardWriteStub  = sandbox.stub(vscode.env.clipboard, 'writeText').resolves();
-        clipboardReadStub   = sandbox.stub(vscode.env.clipboard, 'readText').resolves('');
+        clipboardWriteStub  = sandbox.stub().resolves();
+        clipboardReadStub   = sandbox.stub().resolves('');
+        try {
+            sandbox.replaceGetter(vscode.env, 'clipboard', () => ({
+                writeText: clipboardWriteStub,
+                readText: clipboardReadStub
+            } as any));
+        } catch (e) {
+            // Fallback if not a getter
+            (sandbox.stub(vscode.env, 'clipboard') as any).value({
+                writeText: clipboardWriteStub,
+                readText: clipboardReadStub
+            });
+        }
         // Double-cast needed: showInformationMessage has complex overloads that sinon can't resolve
         showInfoStub        = sandbox.stub(vscode.window, 'showInformationMessage') as unknown as sinon.SinonStub;
         showInfoStub.resolves(undefined);
@@ -290,7 +288,7 @@ suite('Pair programming comprehensive', () => {
     // Suite 3 — Full Clipboard Mode — Stage 1
     // -----------------------------------------------------------------------
     suite('Suite 3: Full Clipboard Mode — Stage 1', () => {
-        test('3.1: Lead prompt to clipboard, backup written, card advanced, Copy Coder button offered', async () => {
+        test('3.1: Lead prompt to clipboard, card advanced, Copy Coder button offered', async () => {
             // User dismisses notification — tests Stage 1 in isolation
             showInfoStub.resolves(undefined);
 
@@ -316,15 +314,6 @@ suite('Pair programming comprehensive', () => {
                 'notification should offer "Copy Coder Prompt" action button'
             );
 
-            // Backup file exists (verified path: .switchboard/handoff/coder_prompt_<sessionId>.md)
-            const backupPath = result.backupPath!;
-            assert.ok(fs.existsSync(backupPath), `backup file should exist at ${backupPath}`);
-            const backupContent = fs.readFileSync(backupPath, 'utf8');
-            assert.strictEqual(
-                backupContent, result.coderPrompt,
-                'backup file should contain the Coder prompt'
-            );
-
             // Card advanced to LEAD CODED
             assert.ok(
                 executeCommandStub.calledWith(
@@ -340,7 +329,7 @@ suite('Pair programming comprehensive', () => {
     // Suite 4 — Full Clipboard Mode — Stage 2
     // -----------------------------------------------------------------------
     suite('Suite 4: Full Clipboard Mode — Stage 2', () => {
-        test('4.1: user clicks Copy Coder Prompt → second clipboard write, success notification, backup deleted', async () => {
+        test('4.1: user clicks Copy Coder Prompt → second clipboard write, success notification', async () => {
             showInfoStub.resolves('Copy Coder Prompt');
 
             const result = await simulatePairButtonFlow({
@@ -366,16 +355,9 @@ suite('Pair programming comprehensive', () => {
                 showInfoStub.calledWith('Coder prompt copied to clipboard.'),
                 'success notification should be shown after Stage 2 copy'
             );
-
-            // Backup file deleted
-            const backupPath = result.backupPath!;
-            assert.ok(
-                !fs.existsSync(backupPath),
-                'backup file should be deleted after successful Stage 2 copy'
-            );
         });
 
-        test('4.2: user dismisses notification → backup persists, dismissal logged', async () => {
+        test('4.2: user dismisses notification', async () => {
             showInfoStub.resolves(undefined);
 
             const result = await simulatePairButtonFlow({
@@ -389,23 +371,6 @@ suite('Pair programming comprehensive', () => {
             assert.strictEqual(
                 clipboardWriteStub.callCount, 1,
                 'clipboard.writeText should only be called once (Stage 1 Lead prompt)'
-            );
-
-            // Backup file persists
-            const backupPath = result.backupPath!;
-            assert.ok(
-                fs.existsSync(backupPath),
-                'backup file should remain when user dismisses the notification'
-            );
-
-            // Dismissal logged
-            assert.ok(
-                consoleLogStub.calledWithMatch(
-                    sinon.match((msg: string) =>
-                        typeof msg === 'string' && msg.includes('dismissed Coder prompt notification')
-                    )
-                ),
-                'dismissal should be logged to console'
             );
         });
     });
@@ -611,12 +576,10 @@ suite('Pair programming comprehensive', () => {
             return role;
         };
 
-        test('7.1: pair mode elevates intern scores (1-3) to coder', () => {
-            for (let s = 1; s <= 3; s++) {
+        test('7.1: pair mode elevates intern scores (1-4) to coder', () => {
+            for (let s = 1; s <= 4; s++) {
                 assert.strictEqual(simulateBypass(s, true), 'coder', `score ${s} should be elevated from intern to coder in pair mode`);
             }
-            // Score 4 is already 'coder' by default — pair mode bypass is a no-op
-            assert.strictEqual(simulateBypass(4, true), 'coder', 'score 4 is coder by default; pair mode does not change it');
         });
 
         test('7.2: pair mode leaves coder scores (5-6) unchanged', () => {
@@ -634,7 +597,7 @@ suite('Pair programming comprehensive', () => {
         test('7.4: without pair mode, normal routing applies', () => {
             assert.strictEqual(simulateBypass(1, false), 'intern');
             assert.strictEqual(simulateBypass(3, false), 'intern');
-            assert.strictEqual(simulateBypass(4, false), 'coder');  // 4-6 → coder
+            assert.strictEqual(simulateBypass(4, false), 'intern');  // 1-4 → intern
             assert.strictEqual(simulateBypass(5, false), 'coder');
             assert.strictEqual(simulateBypass(6, false), 'coder');
             assert.strictEqual(simulateBypass(7, false), 'lead');

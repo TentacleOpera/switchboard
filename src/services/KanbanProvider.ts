@@ -3,6 +3,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import * as cp from 'child_process';
+import { promisify } from 'util';
 import { SessionActionLog } from './SessionActionLog';
 import {
     buildKanbanColumns,
@@ -14,28 +16,29 @@ import {
     parseDefaultPromptOverrides
 } from './agentConfig';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
-import { buildKanbanBatchPrompt, BatchPromptPlan, columnToPromptRole } from './agentPromptBuilder';
-import { KanbanDatabase } from './KanbanDatabase';
+import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions } from './agentPromptBuilder';
+import { KanbanDatabase, type WorkspaceDatabaseMapping } from './KanbanDatabase';
 import { KanbanMigration } from './KanbanMigration';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore } from './complexityScale';
-import { writePlanStateToFile } from './planStateUtils';
+import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
 import type { AutobanConfigState } from './autobanState';
 import type { TaskViewerProvider } from './TaskViewerProvider';
 import { ClickUpAutomationService } from './ClickUpAutomationService';
 import { ClickUpSyncService, type ClickUpConfig, type ClickUpSyncResult } from './ClickUpSyncService';
+import { ClickUpDocsAdapter } from './ClickUpDocsAdapter';
 import { LinearAutomationService } from './LinearAutomationService';
 import { LinearSyncService, type LinearConfig } from './LinearSyncService';
+import { LinearDocsAdapter } from './LinearDocsAdapter';
 import { NotionFetchService } from './NotionFetchService';
 import { type AutoPullIntegration, type AutoPullIntervalMinutes, IntegrationAutoPullService } from './IntegrationAutoPullService';
 import { ContinuousSyncService } from './ContinuousSyncService';
 import type { LiveSyncState } from '../models/LiveSyncTypes';
-
-/** Debounce timers keyed by sessionId to coalesce rapid column moves into a single file write. */
-const _planStateWriteTimers = new Map<string, NodeJS.Timeout>();
+import { resolveEffectiveWorkspaceRootFromMappings } from './WorkspaceIdentityService';
 
 /**
  * Schedules a fire-and-forget write of the kanban state section to the plan file.
  * Debounced per sessionId (300ms) so rapid successive moves only trigger one write.
+ * DISABLED: File-based state writes are deprecated.
  */
 async function _schedulePlanStateWrite(
     db: import('./KanbanDatabase').KanbanDatabase,
@@ -44,59 +47,48 @@ async function _schedulePlanStateWrite(
     column: string,
     status: string
 ): Promise<void> {
-    const existing = _planStateWriteTimers.get(sessionId);
-    if (existing) {
-        clearTimeout(existing);
-    }
-    _planStateWriteTimers.set(
-        sessionId,
-        setTimeout(async () => {
-            _planStateWriteTimers.delete(sessionId);
-            const planFilePath = await db.getPlanFilePath(sessionId);
-            if (!planFilePath) {
-                return;
-            }
-            await writePlanStateToFile(planFilePath, workspaceRoot, column, status);
-        }, 300)
-    );
+    // DISABLED: File-based state writes are deprecated.
+    return;
 }
 
 export type KanbanColumn = string;
-type McpMoveTargetResolution = { role: string; normalizedTarget: string; usesComplexityRouting: boolean };
+export type ControlPlaneSelectionStatus = {
+    mode: 'explicit' | 'auto' | 'none';
+    controlPlaneRoot: string | null;
+    workspaceRoot: string;
+    effectiveWorkspaceRoot: string;
+    explicitControlPlaneRoot: string | null;
+    manualControlPlaneRoot?: string | null;
+    autoCandidateRoot?: string | null;
+    pendingCandidate: string | null;
+    repoScopeFilter: string | null;
+    isRepoScoped: boolean;
+    selectedWorkspaceRoot?: string;
+    error?: string;
+};
+
 type KanbanDispatchSpec = {
     targetColumn: string;
     role: string;
     source: 'built-in' | 'custom-agent' | 'custom-user';
-    dragDropMode: 'cli' | 'prompt';
+    dragDropMode: 'cli' | 'prompt' | 'disabled';
     triggerPrompt?: string;
 };
-
-const ALLOWED_TAGS = new Set([
-    'frontend', 'backend', 'authentication', 'database', 'ui', 'devops', 'infrastructure', 'bugfix'
-]);
-
-function sanitizeTags(raw: string): string {
-    if (!raw || raw.toLowerCase().trim() === 'none') return '';
-    const tags = raw
-        .toLowerCase()
-        .split(',')
-        .map(t => t.trim())
-        .filter(t => t.length > 0 && ALLOWED_TAGS.has(t));
-    if (tags.length === 0) return '';
-    return `,${tags.join(',')},`;
-}
 
 /** Column ordering: each column maps to its next column. */
 const NEXT_COLUMN: Record<string, KanbanColumn | null> = {};
 
 export interface KanbanCard {
+    planId: string;
     sessionId: string;
     topic: string;
     planFile: string;
     column: KanbanColumn;
     lastActivity: string;
+    createdAt: string;
     complexity: string;
     workspaceRoot: string;
+    project?: string;
 }
 
 /**
@@ -106,16 +98,18 @@ export interface KanbanCard {
 export class KanbanProvider implements vscode.Disposable {
     private static readonly _AUTO_PULL_INTERVALS = new Set<number>([5, 15, 30, 60]);
     private _panel?: vscode.WebviewPanel;
+    private _pendingTab?: string;
+    private _onWorkspaceChangeEmitter = new vscode.EventEmitter<string>();
+    public readonly onWorkspaceChange = this._onWorkspaceChangeEmitter.event;
     private _disposables: vscode.Disposable[] = [];
     private _sessionLogs = new Map<string, SessionActionLog>();
     private _sessionWatcher?: vscode.FileSystemWatcher;
     private _stateWatcher?: vscode.FileSystemWatcher;
-    private _planContentWatcher?: vscode.FileSystemWatcher;
+    private _planContentWatchers: vscode.FileSystemWatcher[] = [];
     private _fsSessionWatcher?: fs.FSWatcher;
     private _fsStateWatcher?: fs.FSWatcher;
     private _refreshDebounceTimer?: NodeJS.Timeout;
-    private _isRefreshing: boolean = false;
-    private _refreshPending: boolean = false;
+    private _metadataDebounceTimers = new Map<string, NodeJS.Timeout>();
     private _cliTriggersEnabled: boolean;
     private _dynamicComplexityRoutingEnabled: boolean;
     private _lastColumnsSignature: string | null = null;
@@ -126,24 +120,60 @@ export class KanbanProvider implements vscode.Disposable {
     private _linearServices = new Map<string, LinearSyncService>();
     private _linearAutomationServices = new Map<string, LinearAutomationService>();
     private _notionServices = new Map<string, NotionFetchService>();
+    private _cacheServices = new Map<string, import('./PlanningPanelCacheService').PlanningPanelCacheService>();
     private readonly _integrationAutoPull = new IntegrationAutoPullService();
     private _clickUpSyncWarnings = new Map<string, string>();
-    private readonly _continuousSync: ContinuousSyncService;
-    private _planFileChangeEmitter = new vscode.EventEmitter<vscode.Uri>();
-    public readonly onPlanFileChange = this._planFileChangeEmitter.event;
+    private _continuousSync?: ContinuousSyncService;
     private _lastCards: KanbanCard[] = [];
     private _currentWorkspaceRoot: string | null = null;
-    private _columnDragDropModes: Record<string, 'cli' | 'prompt'>;
+    private _columnDragDropModes: Record<string, 'cli' | 'prompt' | 'disabled'>;
     private _showingBacklog: boolean = false;
     private _allowUnknownComplexityAutoMove: boolean;
+    private _clearTerminalBeforePrompt: boolean;
+    private _clearTerminalBeforePromptDelay: number;
+
     private _routingMapConfig: { lead: number[]; coder: number[]; intern: number[] } | null = null;
-    private _teamLeadComplexityCutoff: number;
-    private _teamLeadKanbanOrder: number;
     private _kanbanOrderOverrides: Record<string, number>;
     private _taskViewerProvider?: TaskViewerProvider;
+    private _repoScopeFilter: string | null = null;
+    private _projectFilter: string | null = KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
+    private _allWorkspaceProjectsCache: Record<string, string[]> | null = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- PlannerPromptWriter type lives in extension.ts; using any avoids a circular import
+    private _plannerPromptWriter: any | null = null;
+    private _outputChannel?: vscode.OutputChannel;
+    private _nativeFsWatchers?: fs.FSWatcher[];
+    private _workspaceSaveTimeout: NodeJS.Timeout | null = null;
+    private _globalPlanWatcher?: import('./GlobalPlanWatcherService').GlobalPlanWatcherService;
 
     public setTaskViewerProvider(provider: TaskViewerProvider) {
         this._taskViewerProvider = provider;
+        this._reloadSettingsFromStore();
+    }
+
+    private _planningPanelProvider?: import('./PlanningPanelProvider').PlanningPanelProvider;
+
+    public setPlanningPanelProvider(provider: import('./PlanningPanelProvider').PlanningPanelProvider) {
+        this._planningPanelProvider = provider;
+    }
+
+    private _getCacheService(workspaceRoot: string): import('./PlanningPanelCacheService').PlanningPanelCacheService {
+        const resolved = path.resolve(workspaceRoot);
+        const existing = this._cacheServices.get(resolved);
+        if (existing) { return existing; }
+        const { PlanningPanelCacheService } = require('./PlanningPanelCacheService');
+        const service = new PlanningPanelCacheService(resolved);
+        this._cacheServices.set(resolved, service);
+        return service;
+    }
+
+    public _getClickUpDocsAdapter(workspaceRoot: string): ClickUpDocsAdapter {
+        const clickUpService = this._getClickUpService(workspaceRoot);
+        return new ClickUpDocsAdapter(workspaceRoot, clickUpService, this._getCacheService(workspaceRoot));
+    }
+
+    public _getLinearDocsAdapter(workspaceRoot: string): LinearDocsAdapter {
+        const linearService = this._getLinearService(workspaceRoot);
+        return new LinearDocsAdapter(workspaceRoot, linearService);
     }
 
     private async _getLiveSyncConfig(workspaceRoot: string): Promise<{
@@ -172,8 +202,8 @@ export class KanbanProvider implements vscode.Disposable {
 
     public async applyLiveSyncConfig(workspaceRoot?: string): Promise<void> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
-        if (!resolvedRoot) {
-            this._continuousSync.stop(false);
+        if (!resolvedRoot || !this._continuousSync) {
+            this._continuousSync?.stop(false);
             return;
         }
 
@@ -213,35 +243,179 @@ export class KanbanProvider implements vscode.Disposable {
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
-        private readonly _context: vscode.ExtensionContext
+        private readonly _context: vscode.ExtensionContext,
+        outputChannel?: vscode.OutputChannel,
+        globalPlanWatcher?: import('./GlobalPlanWatcherService').GlobalPlanWatcherService
     ) {
-        this._cliTriggersEnabled = this._context.workspaceState.get<boolean>('kanban.cliTriggersEnabled', true);
-        this._dynamicComplexityRoutingEnabled = this._context.workspaceState.get<boolean>(
+        this._outputChannel = outputChannel;
+        this._globalPlanWatcher = globalPlanWatcher;
+        const persistedWorkspace = this._context.workspaceState.get<{ index: number; name: string } | null>('kanban.lastSelectedWorkspace', null);
+        this._currentWorkspaceRoot = this._resolvePersistedWorkspace(persistedWorkspace);
+        this._cliTriggersEnabled = this._getSetting<boolean>('kanban.cliTriggersEnabled', true);
+        this._dynamicComplexityRoutingEnabled = this._getSetting<boolean>(
             'kanban.dynamicComplexityRoutingEnabled',
             true
         );
-        this._columnDragDropModes = this._context.workspaceState.get<Record<string, 'cli' | 'prompt'>>('kanban.columnDragDropModes', {});
-        this._routingMapConfig = this._context.workspaceState.get<{ lead: number[]; coder: number[]; intern: number[] } | null>('kanban.routingMapConfig', null);
-        this._allowUnknownComplexityAutoMove = this._context.workspaceState.get<boolean>('kanban.allowUnknownComplexityAutoMove', false);
-        this._teamLeadComplexityCutoff = this._context.workspaceState.get<number>('kanban.teamLeadComplexityCutoff', 0);
-        this._teamLeadKanbanOrder = this._context.workspaceState.get<number>('kanban.teamLeadKanbanOrder', 170);
-        this._kanbanOrderOverrides = this._sanitizeKanbanOrderOverrides(
-            this._context.workspaceState.get<Record<string, number>>('kanban.orderOverrides', {})
-        );
+        this._columnDragDropModes = this._getSetting<Record<string, 'cli' | 'prompt' | 'disabled'>>('kanban.columnDragDropModes', {});
+        this._routingMapConfig = this._getSetting<{ lead: number[]; coder: number[]; intern: number[] } | null>('kanban.routingMapConfig', null);
+        this._allowUnknownComplexityAutoMove = this._getSetting<boolean>('kanban.allowUnknownComplexityAutoMove', true);
+        this._clearTerminalBeforePrompt = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true);
+        this._clearTerminalBeforePromptDelay = Math.min(Math.max(
+            vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 2000),
+            0
+        ), 10000);
 
+        this._kanbanOrderOverrides = this._sanitizeKanbanOrderOverrides(
+            this._getSetting<Record<string, number>>('kanban.orderOverrides', {})
+        );
+        this._context.subscriptions.push(
+            vscode.workspace.onDidChangeWorkspaceFolders(() => {
+                this._allWorkspaceProjectsCache = null;
+            }),
+            vscode.workspace.onDidChangeConfiguration(e => {
+                if (e.affectsConfiguration('switchboard.theme.name')) {
+                    const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
+                    this._panel?.webview.postMessage({ type: 'switchboardThemeChanged', theme });
+                }
+            })
+        );
+    }
+
+    /** Check if a card matches any ID in the given array (planId-primary, sessionId-legacy). */
+    private _cardMatchesIds(card: KanbanCard, ids: string[]): boolean {
+        const cardKey = card.planId || card.sessionId;
+        return ids.includes(cardKey) || (!!card.sessionId && ids.includes(card.sessionId));
+    }
+
+    /** Get the primary identifier for a card (planId-first, sessionId-legacy). */
+    private _cardId(card: KanbanCard): string {
+        return card.planId || card.sessionId;
+    }
+
+    /** Resolve the best available identifier for a card. Returns sessionId if present, otherwise planId. */
+    private _resolveSessionId(planId?: string, sessionId?: string): string | undefined {
+        if (sessionId) { return sessionId; }
+        if (planId) { return planId; }
+        return undefined;
+    }
+
+    /** Resolve planIds to sessionIds, merging with any provided sessionIds. */
+    private _resolveSessionIds(planIds?: string[], sessionIds?: string[]): string[] {
+        const resolved = new Set<string>();
+        if (sessionIds) {
+            for (const id of sessionIds) { if (id) { resolved.add(id); } }
+        }
+        if (planIds && this._lastCards) {
+            for (const pid of planIds) {
+                if (!pid) { continue; }
+                const card = this._lastCards.find(c => c.planId === pid);
+                if (card) { resolved.add(card.sessionId || card.planId); }
+            }
+        }
+        return Array.from(resolved);
+    }
+
+    public onGlobalSettingsFlagChanged(enabled: boolean): void {
+        // Re-read all in-memory settings from the newly active store
+        // This ensures the next read reflects the correct store without a restart
+        this._reloadSettingsFromStore();
+    }
+
+    private _isGlobalSettingsEnabled(): boolean {
+        return this._taskViewerProvider?.getGlobalSettingsEnabled() ?? true;
+    }
+
+    private _getSetting<T>(key: string, defaultValue: T): T {
+        if (this._isGlobalSettingsEnabled()) {
+            return this._context.globalState.get<T>(key, defaultValue);
+        }
+        return this._context.workspaceState.get<T>(key, defaultValue);
+    }
+
+    private _getRoleConfig(role: string): any {
+        if (this._taskViewerProvider) {
+            return this._taskViewerProvider.getRoleConfig(`roleConfig_${role}`);
+        }
+        return this._getSetting(`switchboard.prompts.roleConfig_${role}`, undefined);
+    }
+
+    private async _updateSetting<T>(key: string, value: T): Promise<void> {
+        if (this._isGlobalSettingsEnabled()) {
+            await this._context.globalState.update(key, value);
+        } else {
+            await this._context.workspaceState.update(key, value);
+        }
+    }
+
+    private _reloadSettingsFromStore(): void {
+        this._cliTriggersEnabled = this._getSetting<boolean>('kanban.cliTriggersEnabled', true);
+        this._dynamicComplexityRoutingEnabled = this._getSetting<boolean>(
+            'kanban.dynamicComplexityRoutingEnabled',
+            true
+        );
+        this._columnDragDropModes = this._getSetting<Record<string, 'cli' | 'prompt' | 'disabled'>>('kanban.columnDragDropModes', {});
+        this._routingMapConfig = this._getSetting<{ lead: number[]; coder: number[]; intern: number[] } | null>('kanban.routingMapConfig', null);
+        this._allowUnknownComplexityAutoMove = this._getSetting<boolean>('kanban.allowUnknownComplexityAutoMove', true);
+        this._kanbanOrderOverrides = this._sanitizeKanbanOrderOverrides(
+            this._getSetting<Record<string, number>>('kanban.orderOverrides', {})
+        );
+    }
+
+    public async setGlobalPlanWatcher(watcher: import('./GlobalPlanWatcherService').GlobalPlanWatcherService): Promise<void> {
+        this._globalPlanWatcher = watcher;
+
+        // Create ContinuousSyncService
         this._continuousSync = new ContinuousSyncService(
             this,
+            this._globalPlanWatcher,
             (root) => this._getClickUpService(root),
             (root) => this._getLinearService(root),
             (root) => this._getKanbanDb(root)
         );
         this._disposables.push(this._continuousSync);
+
+        // Subscribe to discovered plans to refresh UI
+        this._disposables.push(
+            this._globalPlanWatcher.onPlanDiscovered(({ workspaceRoot }) => {
+                this.refreshIfShowing(workspaceRoot);
+            })
+        );
+
+        // Initial scan: import plans that exist on disk before watchers started
+        const folders = this._getWatchFolders();
+        for (const folder of folders) {
+            try {
+                const db = this._getKanbanDb(folder);
+                await db.ensureReady();
+                const wsId = await db.getWorkspaceId();
+                if (!wsId) {
+                    console.warn(`[KanbanProvider] Deferring scan for ${folder}: workspace_id not yet set`);
+                    continue;
+                }
+                await this._globalPlanWatcher.triggerScan(folder);
+            } catch (err) {
+                console.error(`[KanbanProvider] Failed to scan folder ${folder}:`, err);
+            }
+        }
+
+        // Ensure board reflects scanned plans if currently showing one of the folders
+        if (this._currentWorkspaceRoot) {
+            this._scheduleBoardRefresh(this._currentWorkspaceRoot);
+        }
+
+        this._outputChannel?.appendLine(`[KanbanProvider] GlobalPlanWatcher wired up, scanned ${folders.length} folders`);
     }
 
-    private _buildKanbanColumns(
+    public getGlobalPlanWatcher(): import('./GlobalPlanWatcherService').GlobalPlanWatcherService | undefined {
+        return this._globalPlanWatcher;
+    }
+
+
+
+    private async _buildKanbanColumns(
         customAgents: CustomAgentConfig[],
         customKanbanColumns: CustomKanbanColumnConfig[] = []
-    ): KanbanColumnDefinition[] {
+    ): Promise<KanbanColumnDefinition[]> {
         return buildKanbanColumns(customAgents, customKanbanColumns, { orderOverrides: this._getEffectiveKanbanOrderOverrides() });
     }
 
@@ -260,34 +434,6 @@ export class KanbanProvider implements vscode.Disposable {
         }
     }
 
-    public getTeamLeadRoutingSettings(): { complexityCutoff: number; kanbanOrder: number } {
-        const effectiveOverrides = this._getEffectiveKanbanOrderOverrides();
-        return {
-            complexityCutoff: this._teamLeadComplexityCutoff,
-            kanbanOrder: effectiveOverrides['TEAM LEAD CODED'] ?? this._teamLeadKanbanOrder
-        };
-    }
-
-    public async setTeamLeadComplexityCutoff(cutoff: number, workspaceRoot?: string): Promise<void> {
-        const normalized = Number.isFinite(cutoff) ? Math.max(0, Math.min(10, Math.round(cutoff))) : 0;
-        this._teamLeadComplexityCutoff = normalized;
-        await this._context.workspaceState.update('kanban.teamLeadComplexityCutoff', normalized);
-        const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
-        if (resolvedWorkspaceRoot) {
-            this._scheduleBoardRefresh(resolvedWorkspaceRoot);
-        }
-    }
-
-    public async setTeamLeadKanbanOrder(order: number, workspaceRoot?: string): Promise<void> {
-        const normalized = Number.isFinite(order) ? Math.max(0, Math.round(order)) : 170;
-        this._teamLeadKanbanOrder = normalized;
-        await this._context.workspaceState.update('kanban.teamLeadKanbanOrder', normalized);
-        await this.setKanbanOrderOverrides({
-            ...this._getEffectiveKanbanOrderOverrides(),
-            'TEAM LEAD CODED': normalized
-        }, workspaceRoot);
-    }
-
     public getKanbanOrderOverrides(): Record<string, number> {
         return { ...this._getEffectiveKanbanOrderOverrides() };
     }
@@ -295,11 +441,7 @@ export class KanbanProvider implements vscode.Disposable {
     public async setKanbanOrderOverrides(overrides: Record<string, number>, workspaceRoot?: string): Promise<void> {
         const normalized = this._sanitizeKanbanOrderOverrides(overrides);
         this._kanbanOrderOverrides = normalized;
-        await this._context.workspaceState.update('kanban.orderOverrides', normalized);
-        if (typeof normalized['TEAM LEAD CODED'] === 'number') {
-            this._teamLeadKanbanOrder = normalized['TEAM LEAD CODED'];
-            await this._context.workspaceState.update('kanban.teamLeadKanbanOrder', this._teamLeadKanbanOrder);
-        }
+        await this._updateSetting('kanban.orderOverrides', normalized);
         const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (resolvedWorkspaceRoot) {
             this._scheduleBoardRefresh(resolvedWorkspaceRoot);
@@ -307,14 +449,7 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     private _getEffectiveKanbanOrderOverrides(): Record<string, number> {
-        const effectiveOverrides = { ...this._kanbanOrderOverrides };
-        if (
-            typeof this._teamLeadKanbanOrder === 'number'
-            && effectiveOverrides['TEAM LEAD CODED'] === undefined
-        ) {
-            effectiveOverrides['TEAM LEAD CODED'] = this._teamLeadKanbanOrder;
-        }
-        return effectiveOverrides;
+        return { ...this._kanbanOrderOverrides };
     }
 
     private _sanitizeKanbanOrderOverrides(overrides: Record<string, number> | undefined): Record<string, number> {
@@ -343,23 +478,181 @@ export class KanbanProvider implements vscode.Disposable {
         return (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
     }
 
-    private _resolveWorkspaceRoot(workspaceRoot?: string): string | null {
+    private _getAllowedRoots(): Set<string> {
         const roots = this._getWorkspaceRoots();
-        if (roots.length === 0) {
-            return null;
+        const allowedRoots = new Set<string>(roots);
+        try {
+            const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
+            const cfg = getMappingsFromIndex();
+            if (cfg?.enabled && Array.isArray(cfg.mappings)) {
+                for (const m of cfg.mappings) {
+                    const parent = m.parentFolder || (m as any).parentWorkspaceFolder;
+                    if (typeof parent === 'string') {
+                        const p = parent.trim();
+                        const expanded = p.startsWith('~')
+                            ? path.join(os.homedir(), p.slice(1))
+                            : p;
+                        allowedRoots.add(path.resolve(expanded));
+                    }
+                    for (const wf of m.workspaceFolders ?? []) {
+                        const expanded = wf.startsWith('~')
+                            ? path.join(os.homedir(), wf.slice(1))
+                            : wf;
+                        allowedRoots.add(path.resolve(expanded));
+                    }
+                }
+            }
+        } catch { /* fall through */ }
+        return allowedRoots;
+    }
+
+    private async _getAllWorkspaceProjects(): Promise<Record<string, string[]>> {
+        if (this._allWorkspaceProjectsCache) {
+            return this._allWorkspaceProjectsCache;
         }
+        const result: Record<string, string[]> = {};
+        const roots = this._getWorkspaceRoots();
+        const allowedRoots = this._getAllowedRoots();
+        const allRoots = [...new Set([...roots, ...allowedRoots])];
+
+        for (const root of allRoots) {
+            try {
+                const db = this._getKanbanDb(root);
+                if (await db.ensureReady()) {
+                    const workspaceId = await db.getWorkspaceId();
+                    if (workspaceId) {
+                        result[path.resolve(root)] = await db.getProjects(workspaceId);
+                    }
+                }
+            } catch {
+                // Skip unavailable workspaces
+                result[path.resolve(root)] = [];
+            }
+        }
+        this._allWorkspaceProjectsCache = result;
+        return result;
+    }
+
+    private _resolveWorkspaceRoot(workspaceRoot?: string): string | null {
+        const allowedRoots = this._getAllowedRoots();
+        if (allowedRoots.size === 0) { return null; }
         if (workspaceRoot) {
             const resolved = path.resolve(workspaceRoot);
-            if (roots.includes(resolved)) {
-                this._currentWorkspaceRoot = resolved;
+            if (allowedRoots.has(resolved)) {
+                if (this._currentWorkspaceRoot && this._currentWorkspaceRoot !== resolved) {
+                    this._outputChannel?.appendLine(
+                        `[KanbanProvider] _resolveWorkspaceRoot: resolved ${resolved} differs from current ${this._currentWorkspaceRoot} — not switching`
+                    );
+                }
+                return resolved;
+            }
+            if (this._getWorkspaceRoots().includes(resolved)) {
                 return resolved;
             }
         }
-        if (this._currentWorkspaceRoot && roots.includes(this._currentWorkspaceRoot)) {
+        if (this._currentWorkspaceRoot && allowedRoots.has(this._currentWorkspaceRoot)) {
             return this._currentWorkspaceRoot;
         }
-        this._currentWorkspaceRoot = roots[0];
+
+        const autoSelect = vscode.workspace.getConfiguration('switchboard').get<boolean>('autoSelectFirstWorkspace', true);
+        if (autoSelect) {
+            // Only auto-select from allowed (mapped) roots — never fall back to unmapped workspace folders
+            const firstAllowed = Array.from(allowedRoots)[0];
+            if (firstAllowed) {
+                this._currentWorkspaceRoot = firstAllowed;
+                return this._currentWorkspaceRoot;
+            }
+            return null;
+        }
+
+        return null;
+    }
+
+    private _resolvePersistedWorkspace(persisted: unknown): string | null {
+        // Runtime schema validation
+        if (!persisted || typeof persisted !== 'object') { return null; }
+        const p = persisted as Record<string, unknown>;
+        if (typeof p.index !== 'number' || !Array.isArray(p.pathSegments)) {
+            this._outputChannel?.appendLine('[KanbanProvider] Invalid persisted workspace schema');
+            return null;
+        }
+        const pathSegments = p.pathSegments as string[];
+        if (!pathSegments.every(s => typeof s === 'string')) {
+            this._outputChannel?.appendLine('[KanbanProvider] Invalid pathSegments in persisted workspace');
+            return null;
+        }
+
+        const roots = this._getWorkspaceRoots();
+        if (roots.length === 0) { return null; }
+
+        // Try by index first (fast path)
+        if (p.index >= 0 && p.index < roots.length) {
+            const candidate = roots[p.index];
+            // Validate pathSegments match (handles reordered workspaces)
+            const candidateSegments = this._getPathSegments(candidate);
+            if (this._pathSegmentsMatch(candidateSegments, pathSegments)) {
+                return candidate;
+            }
+        }
+
+        // Fallback: find by path segment match (more specific than basename)
+        for (const root of roots) {
+            const segments = this._getPathSegments(root);
+            if (this._pathSegmentsMatch(segments, pathSegments)) {
+                return root;
+            }
+        }
+
+        this._outputChannel?.appendLine(`[KanbanProvider] Persisted workspace not found, falling back to roots[0]`);
+        return null; // Will trigger fallback to roots[0]
+    }
+
+    private _getPathSegments(workspacePath: string): string[] {
+        const normalized = path.normalize(workspacePath);
+        const parts = normalized.split(path.sep).filter(p => p);
+        return parts.slice(-2); // Last 2 segments for cross-machine compatibility
+    }
+
+    private _pathSegmentsMatch(a: string[], b: string[]): boolean {
+        if (a.length !== b.length) return false;
+        return a.every((seg, i) => seg === b[i]);
+    }
+
+    /**
+     * Public getter for the currently selected workspace root.
+     * Used by other providers to coordinate workspace selection.
+     */
+    public getCurrentWorkspaceRoot(): string | null {
         return this._currentWorkspaceRoot;
+    }
+
+    public setCurrentWorkspaceRoot(workspaceRoot: string): boolean {
+        const resolved = path.resolve(workspaceRoot);
+        const allowed = this._getAllowedRoots();
+        const roots = this._getWorkspaceRoots();
+        if (!allowed.has(resolved) && !roots.includes(resolved)) {
+            console.error(`[KanbanProvider] Rejected invalid workspace: ${workspaceRoot}`);
+            return false;
+        }
+        if (this._currentWorkspaceRoot !== resolved) {
+            this._currentWorkspaceRoot = resolved;
+            this._onWorkspaceChangeEmitter.fire(resolved);
+
+            // Persist selection for next activation
+            if (this._workspaceSaveTimeout) {
+                clearTimeout(this._workspaceSaveTimeout);
+            }
+            this._workspaceSaveTimeout = setTimeout(async () => {
+                const roots = this._getWorkspaceRoots();
+                const index = roots.indexOf(resolved);
+                await this._context.workspaceState.update('kanban.lastSelectedWorkspace', {
+                    index: index >= 0 ? index : 0,
+                    name: path.basename(resolved),
+                    pathSegments: this._getPathSegments(resolved)
+                });
+            }, 100);
+        }
+        return true;
     }
 
     /**
@@ -367,11 +660,7 @@ export class KanbanProvider implements vscode.Disposable {
      * routing map (if configured) and the pair-programming intern→coder bypass.
      * This is the single source of truth for score→role resolution.
      */
-    public resolveRoutedRole(score: number): 'lead' | 'coder' | 'intern' | 'team-lead' {
-        if (this._teamLeadComplexityCutoff > 0 && score >= this._teamLeadComplexityCutoff) {
-            return 'team-lead';
-        }
-
+    public resolveRoutedRole(score: number): 'lead' | 'coder' | 'intern' {
         let role: 'lead' | 'coder' | 'intern';
 
         // Apply custom routing map if configured
@@ -398,20 +687,105 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     private _getWorkspaceItems(): Array<{ label: string; workspaceRoot: string }> {
-        return (vscode.workspace.workspaceFolders || []).map(folder => ({
-            label: folder.name,
-            workspaceRoot: folder.uri.fsPath
-        }));
+        let mappings: WorkspaceDatabaseMapping[] = [];
+        let enabled = false;
+        try {
+            const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
+            const cfg = getMappingsFromIndex();
+            if (cfg?.enabled && Array.isArray(cfg.mappings)) {
+                mappings = cfg.mappings;
+                enabled = true;
+            }
+        } catch { /* ignore */ }
+
+        const items: Array<{ label: string; workspaceRoot: string }> = [];
+        const openRoots = this._getWorkspaceRoots();
+
+        // Check if ANY of the currently open workspace folders is mapped
+        let anyOpenFolderIsMapped = false;
+        if (enabled && mappings.length > 0) {
+            for (const root of openRoots) {
+                const resolvedRoot = path.resolve(root);
+                for (const m of mappings) {
+                    const parent = m.parentFolder || (m as any).parentWorkspaceFolder || (Array.isArray(m.workspaceFolders) && m.workspaceFolders.length > 0 ? m.workspaceFolders[0] : undefined);
+                    if (parent) {
+                        const expandedParent = parent.startsWith('~')
+                            ? path.join(os.homedir(), parent.slice(1))
+                            : parent;
+                        if (path.resolve(expandedParent) === resolvedRoot) {
+                            anyOpenFolderIsMapped = true;
+                            break;
+                        }
+                    }
+                    for (const wf of m.workspaceFolders || []) {
+                        const expandedWf = wf.startsWith('~')
+                            ? path.join(os.homedir(), wf.slice(1))
+                            : wf;
+                        if (path.resolve(expandedWf) === resolvedRoot) {
+                            anyOpenFolderIsMapped = true;
+                            break;
+                        }
+                    }
+                    if (anyOpenFolderIsMapped) break;
+                }
+                if (anyOpenFolderIsMapped) break;
+            }
+        }
+
+        if (enabled && mappings.length > 0 && anyOpenFolderIsMapped) {
+            // Multi-root/mapped context: strictly display the custom configured parent mapping names
+            const addedRoots = new Set<string>();
+            for (const m of mappings) {
+                const parent = m.parentFolder || (m as any).parentWorkspaceFolder || (Array.isArray(m.workspaceFolders) && m.workspaceFolders.length > 0 ? m.workspaceFolders[0] : undefined);
+                if (parent) {
+                    const expanded = parent.startsWith('~')
+                        ? path.join(os.homedir(), parent.slice(1))
+                        : parent;
+                    const resolvedParent = path.resolve(expanded);
+                    if (!addedRoots.has(resolvedParent)) {
+                        addedRoots.add(resolvedParent);
+                        items.push({
+                            label: m.name || path.basename(resolvedParent),
+                            workspaceRoot: resolvedParent
+                        });
+                    }
+                }
+            }
+        } else {
+            // Independent context or mappings disabled: display the standard open workspace folders
+            for (const root of openRoots) {
+                const resolvedRoot = path.resolve(root);
+                const folder = (vscode.workspace.workspaceFolders || []).find(f => path.resolve(f.uri.fsPath) === resolvedRoot);
+                items.push({
+                    label: folder ? folder.name : path.basename(resolvedRoot),
+                    workspaceRoot: resolvedRoot
+                });
+            }
+        }
+
+        return items;
     }
 
     dispose() {
         this._panel?.dispose();
         if (this._refreshDebounceTimer) clearTimeout(this._refreshDebounceTimer);
+        // Clean up metadata debounce timers
+        for (const timer of this._metadataDebounceTimers.values()) {
+            clearTimeout(timer);
+        }
+        this._metadataDebounceTimers.clear();
         this._sessionWatcher?.dispose();
         this._stateWatcher?.dispose();
-        this._planContentWatcher?.dispose();
+        this._planContentWatchers.forEach(w => w.dispose());
+        this._planContentWatchers = [];
         try { this._fsSessionWatcher?.close(); } catch { }
         try { this._fsStateWatcher?.close(); } catch { }
+        if (this._nativeFsWatchers) {
+            this._nativeFsWatchers.forEach(w => {
+                try { w.close(); } catch { }
+            });
+            this._nativeFsWatchers = undefined;
+        }
         this._integrationAutoPull.dispose();
         this._clickUpAutomationServices.clear();
         this._linearAutomationServices.clear();
@@ -423,11 +797,18 @@ export class KanbanProvider implements vscode.Disposable {
     /**
      * Open or reveal the Kanban panel in the editor area.
      */
-    public async open() {
+    public async open(tab?: string) {
+        if (tab) {
+            this._pendingTab = tab;
+        }
         if (this._panel) {
             this._panel.reveal(vscode.ViewColumn.One);
             // Trigger unified refresh so the board gets fresh data
             await vscode.commands.executeCommand('switchboard.fullSync');
+            if (this._pendingTab) {
+                this._panel.webview.postMessage({ type: 'switchToTab', tab: this._pendingTab });
+                this._pendingTab = undefined;
+            }
             return;
         }
 
@@ -468,7 +849,6 @@ export class KanbanProvider implements vscode.Disposable {
         // which triggers a full sync to populate the board from DB.
 
         this._setupSessionWatcher();
-        this._setupPlanContentWatcher();
     }
 
     /**
@@ -490,59 +870,136 @@ export class KanbanProvider implements vscode.Disposable {
         this._fsStateWatcher = undefined;
     }
 
-    private _setupPlanContentWatcher(): void {
-        this._planContentWatcher?.dispose();
-        this._planContentWatcher = undefined;
-
+    private _getWatchFolders(): string[] {
+        const folders: string[] = [];
         const workspaceRoot = this._currentWorkspaceRoot;
-        if (!workspaceRoot) { return; }
 
-        const pattern = new vscode.RelativePattern(workspaceRoot, '.switchboard/plans/**/*.md');
-        this._planContentWatcher = vscode.workspace.createFileSystemWatcher(pattern, true, false, true);
+        if (!workspaceRoot) return folders;
 
-        this._planContentWatcher.onDidChange(async (uri) => {
-            try {
-                const clickUp = this._getClickUpService(workspaceRoot);
-                const clickUpConfig = await clickUp.loadConfig();
-                if (clickUpConfig?.setupComplete === true && clickUpConfig.realTimeSyncEnabled === true) {
-                    const db = this._getKanbanDb(workspaceRoot);
-                    const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
-                    if (workspaceId) {
-                        // Try absolute path first, then relative (DB may store either form)
-                        let plan = await db.getPlanByPlanFile(uri.fsPath, workspaceId);
-                        if (!plan) {
-                            const relativePath = path.relative(workspaceRoot, uri.fsPath).replace(/\\/g, '/');
-                            plan = await db.getPlanByPlanFile(relativePath, workspaceId);
-                        }
-                        if (plan) {
-                            clickUp.debouncedSync(plan.sessionId, {
-                                planId: plan.planId,
-                                sessionId: plan.sessionId,
-                                topic: plan.topic,
-                                planFile: plan.planFile,
-                                kanbanColumn: plan.kanbanColumn,
-                                status: plan.status,
-                                complexity: plan.complexity,
-                                tags: plan.tags,
-                                dependencies: plan.dependencies,
-                                createdAt: plan.createdAt,
-                                updatedAt: plan.updatedAt,
-                                lastAction: plan.lastAction
-                            });
+        const expandHome = (p: string): string => {
+            const trimmed = p.trim();
+            return trimmed.startsWith('~')
+                ? path.join(os.homedir(), trimmed.slice(1))
+                : trimmed;
+        };
+
+        try {
+            const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
+            const cfg = getMappingsFromIndex();
+
+            if (cfg?.enabled && Array.isArray(cfg.mappings) && cfg.mappings.length > 0) {
+                for (const mapping of cfg.mappings) {
+                    // Watch the PARENT workspace folder where .switchboard/ lives,
+                    // not the child workspaceFolders (which share the DB but shouldn't create plans)
+                    if (typeof mapping.parentFolder === 'string') {
+                        const resolved = path.resolve(expandHome(mapping.parentFolder));
+                        if (!folders.includes(resolved)) {
+                            folders.push(resolved);
                         }
                     }
                 }
-            } catch { /* ClickUp sync failure must never block operations */ }
+            }
+        } catch {
+            // Outside extension host
+        }
 
-            // NEW: Emit for continuous sync service
-            this._planFileChangeEmitter.fire(uri);
-        });
+        // Fallback: if no mappings configured, watch the current workspace root
+        // If mappings exist but current workspace is not in any mapping, skip it silently
+        if (folders.length === 0) {
+            try {
+                const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
+                const cfg = getMappingsFromIndex();
+                if (!cfg?.enabled || !Array.isArray(cfg.mappings) || cfg.mappings.length === 0) {
+                    folders.push(workspaceRoot);
+                }
+            } catch {
+                // Outside extension host — fall back to current workspace
+                folders.push(workspaceRoot);
+            }
+        }
+
+        return folders;
+    }
+
+    /**
+     * Check if a workspace root is part of any workspace mapping (as parent or child).
+     * Returns true if mappings are not enabled (conservative: assume workspace is relevant).
+     */
+    public isWorkspaceInMapping(workspaceRoot: string): boolean {
+        try {
+            const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
+            const cfg = getMappingsFromIndex();
+            if (!cfg?.enabled || !Array.isArray(cfg.mappings) || cfg.mappings.length === 0) {
+                return true; // No mappings configured — assume workspace is relevant (preserves fallback)
+            }
+            const currentResolved = path.resolve(workspaceRoot);
+            for (const m of cfg.mappings) {
+                // Check if workspace is the parent folder
+                if (typeof m.parentFolder === 'string') {
+                    const expanded = m.parentFolder.startsWith('~')
+                        ? path.join(os.homedir(), m.parentFolder.slice(1))
+                        : m.parentFolder;
+                    if (path.resolve(expanded) === currentResolved) return true;
+                }
+                // Check if workspace is a child folder
+                if (Array.isArray(m.workspaceFolders)) {
+                    for (const wf of m.workspaceFolders) {
+                        if (typeof wf === 'string') {
+                            const expanded = wf.startsWith('~')
+                                ? path.join(os.homedir(), wf.slice(1))
+                                : wf;
+                            if (path.resolve(expanded) === currentResolved) return true;
+                        }
+                    }
+                }
+            }
+            return false; // Workspace not found in any mapping
+        } catch {
+            return true; // Conservative: assume relevant if we can't check
+        }
+    }
+
+    public async triggerPlanScan(): Promise<void> {
+        this._outputChannel?.appendLine('[KanbanProvider] Manual plan scan triggered');
+
+        const workspaceRoot = this._currentWorkspaceRoot;
+        if (!workspaceRoot) {
+            this._outputChannel?.appendLine('[KanbanProvider] No workspace root for scan');
+            return;
+        }
+
+        const foldersToScan = this._getWatchFolders();
+
+        for (const folder of foldersToScan) {
+            if (this._globalPlanWatcher) {
+                await this._globalPlanWatcher.triggerScan(folder);
+            }
+        }
+
+        await this._refreshBoard(workspaceRoot);
     }
 
     /**
      * Refresh the board externally (e.g. after runsheet changes).
      * Routes through the unified path so sidebar and kanban stay in sync.
      */
+    /**
+     * Refresh the board ONLY if it's currently showing the given workspace root.
+     * Called by GlobalPlanWatcherService to avoid unnecessary refreshes.
+     */
+    public refreshIfShowing(workspaceRoot: string): void {
+        const resolved = path.resolve(workspaceRoot).toLowerCase();
+        if (this._currentWorkspaceRoot && path.resolve(this._currentWorkspaceRoot).toLowerCase() === resolved) {
+            this._scheduleBoardRefresh(this._currentWorkspaceRoot);
+        } else {
+            // Plan discovered in a non-active workspace.
+            // The DB is already updated by GlobalPlanWatcherService._handlePlanFile.
+            // Schedule a refresh so if the user switches to this workspace later,
+            // the data is fresh.
+            this._outputChannel?.appendLine(`[KanbanProvider] Plan discovered in non-active workspace: ${resolved}`);
+        }
+    }
+
     public async refresh() {
         if (this._panel) {
             await vscode.commands.executeCommand('switchboard.refreshUI');
@@ -554,7 +1011,7 @@ export class KanbanProvider implements vscode.Disposable {
      * This ensures sidebar and kanban render from the exact same DB snapshot.
      * Builds cards and posts DIRECTLY to webview — no intermediary that could silently fail.
      */
-    public async refreshWithData(activeRows: import('./KanbanDatabase').KanbanPlanRecord[], completedRows: import('./KanbanDatabase').KanbanPlanRecord[], workspaceRoot: string) {
+    public async refreshWithData(activeRows: import('./KanbanDatabase').KanbanPlanRecord[], completedRows: import('./KanbanDatabase').KanbanPlanRecord[], workspaceRoot: string, projects?: string[]) {
         if (!this._panel) {
             console.warn('[KanbanProvider] refreshWithData: no panel — skipping');
             return;
@@ -562,57 +1019,78 @@ export class KanbanProvider implements vscode.Disposable {
 
         try {
             const resolvedWorkspaceRoot = path.resolve(workspaceRoot);
-            const db = this._getKanbanDb(resolvedWorkspaceRoot);
-
-            // Self-heal stale 'Unknown' complexity by re-parsing plan files.
-            const unknownRows = activeRows.filter(r => (r.complexity || 'Unknown') === 'Unknown');
-            if (unknownRows.length > 0) {
-                const batchUpdates: Array<{ sessionId: string; topic: string; planFile: string; complexity: string }> = [];
-                for (const row of unknownRows) {
-                    let pathToTry = row.planFile || '';
-                    if ((!pathToTry || !fs.existsSync(
-                        path.isAbsolute(pathToTry) ? pathToTry : path.join(resolvedWorkspaceRoot, pathToTry)
-                    )) && row.mirrorPath) {
-                        pathToTry = path.join('.switchboard', 'plans', row.mirrorPath);
-                    }
-
-                    if (!pathToTry) continue;
-
-                    const parsed = await this.getComplexityFromPlan(resolvedWorkspaceRoot, pathToTry);
-                    if (parsed !== 'Unknown') {
-                        batchUpdates.push({
-                            sessionId: row.sessionId,
-                            topic: row.topic || '',
-                            planFile: row.planFile || '',
-                            complexity: parsed
-                        });
-                        row.complexity = parsed;
-                    }
-                }
-                if (batchUpdates.length > 0) {
-                    await db.updateMetadataBatch(batchUpdates, { preserveTimestamps: true });
+            // Guard: only refresh if resolvedWorkspaceRoot matches the currently selected workspace root.
+            // Must resolve _currentWorkspaceRoot through resolveEffectiveWorkspaceRoot so that
+            // child workspaces (which map to a shared parent DB) are not incorrectly blocked.
+            if (this._currentWorkspaceRoot) {
+                const resolvedCurrentRoot = this.resolveEffectiveWorkspaceRoot(this._currentWorkspaceRoot);
+                if (path.resolve(resolvedCurrentRoot) !== resolvedWorkspaceRoot) {
+                    console.log(`[KanbanProvider] refreshWithData: resolvedWorkspaceRoot ${resolvedWorkspaceRoot} differs from current (effective) ${resolvedCurrentRoot} — not refreshing board`);
+                    return;
                 }
             }
+            const db = this._getKanbanDb(resolvedWorkspaceRoot);
+
+            const workspaceId = await db.getWorkspaceId();
+            const projList = projects || (workspaceId ? await db.getProjects(workspaceId) : []);
+
+            // Filter out ghost plans: plan files that no longer exist on disk.
+            // Only filter ACTIVE plans — completed plans may have been archived (file moved)
+            // and should still appear in the COMPLETED column; the DB is the source of truth.
+            // Note: plans reassigned from another workspace may have planFile paths outside
+            // the current workspaceRoot — those are legitimate and must NOT be filtered out.
+            const filterGhostPlans = (rows: import('./KanbanDatabase').KanbanPlanRecord[]) => rows.filter(row => {
+                const planFile = row.planFile || '';
+                if (!planFile) return false;
+                let planPath = planFile;
+                if (planPath.startsWith('file://')) {
+                    try {
+                        planPath = require('url').fileURLToPath(planPath);
+                    } catch (e) {
+                        planPath = planPath.replace(/^file:\/\/\/?/, '');
+                        if (process.platform !== 'win32' && !planPath.startsWith('/')) {
+                            planPath = '/' + planPath;
+                        }
+                    }
+                }
+                const resolvedPath = path.isAbsolute(planPath) ? planPath : path.resolve(resolvedWorkspaceRoot, planPath);
+                const exists = fs.existsSync(resolvedPath);
+                if (!exists) {
+                    console.log(`[KanbanProvider] filterGhostPlans (activeRows): file does not exist: planFile=${planFile}, resolvedPath=${resolvedPath}`);
+                }
+                return exists;
+            });
+            const activeRowsFiltered = filterGhostPlans(activeRows);
+            // Completed plans intentionally bypass file-existence check — DB is source of truth for completed state
+            const completedRowsFiltered = completedRows.filter(row => !!row.planFile);
 
             // Build cards directly from DB rows — no _resolveWorkspaceRoot that could return null
-            const cards: KanbanCard[] = activeRows.map(row => ({
-                sessionId: row.sessionId,
-                topic: row.topic || row.planFile || 'Untitled',
-                planFile: row.planFile || '',
-                column: this._normalizeLegacyKanbanColumn(row.kanbanColumn) || 'CREATED',
-                lastActivity: row.updatedAt || row.createdAt || '',
-                complexity: row.complexity || 'Unknown',
-                workspaceRoot: resolvedWorkspaceRoot
-            }));
+            const cards: KanbanCard[] = activeRowsFiltered.map(row => {
+                return {
+                    planId: row.planId,
+                    sessionId: row.sessionId,
+                    topic: row.topic || row.planFile || 'Untitled',
+                    planFile: row.planFile || '',
+                    column: this._normalizeLegacyKanbanColumn(row.kanbanColumn) || 'CREATED',
+                    lastActivity: row.updatedAt || row.createdAt || '',
+                    createdAt: row.createdAt || '',
+                    complexity: row.complexity || 'Unknown',
+                    workspaceRoot: resolvedWorkspaceRoot,
+                    project: row.project || ''
+                };
+            });
 
-            cards.push(...completedRows.map(rec => ({
+            cards.push(...completedRowsFiltered.map(rec => ({
+                planId: rec.planId,
                 sessionId: rec.sessionId,
                 topic: rec.topic || rec.planFile || 'Untitled',
                 planFile: rec.planFile || '',
                 column: 'COMPLETED',
                 lastActivity: rec.updatedAt || rec.createdAt || '',
+                createdAt: rec.createdAt || '',
                 complexity: rec.complexity || 'Unknown',
-                workspaceRoot: resolvedWorkspaceRoot
+                workspaceRoot: resolvedWorkspaceRoot,
+                project: rec.project || ''
             })));
 
             this._lastCards = cards;
@@ -625,11 +1103,11 @@ export class KanbanProvider implements vscode.Disposable {
                     this._getCustomAgents(resolvedWorkspaceRoot),
                     this._getCustomKanbanColumns(resolvedWorkspaceRoot)
                 ]);
-                columns = this._buildKanbanColumns(customAgents, customKanbanColumns);
+                columns = await this._buildKanbanColumns(customAgents, customKanbanColumns);
                 visibleAgents = await this._getVisibleAgents(resolvedWorkspaceRoot);
                 columns = this._filterDynamicColumns(columns, visibleAgents, cards);
             } catch {
-                columns = this._buildKanbanColumns([]);
+                columns = await this._buildKanbanColumns([]);
             }
 
             const nextColumnsSignature = this._columnsSignature(columns);
@@ -638,10 +1116,25 @@ export class KanbanProvider implements vscode.Disposable {
                 this._lastColumnsSignature = nextColumnsSignature;
             }
 
+            // When mapping is enabled, send the mapped workspace root (from the selected item) instead of the actual folder
+            const workspaceItems = this._getWorkspaceItems();
+            const allWorkspaceProjects = await this._getAllWorkspaceProjects();
+
+            const cpStatus = this.getControlPlaneSelectionStatus(resolvedWorkspaceRoot);
             this._panel.webview.postMessage({
                 type: 'updateWorkspaceSelection',
                 workspaceRoot: resolvedWorkspaceRoot,
-                workspaces: this._getWorkspaceItems()
+                workspaces: workspaceItems,
+                activeFilter: this._repoScopeFilter || null,
+                projectFilter: this._projectFilter ?? null,
+                projects: projList,
+                allWorkspaceProjects,
+                controlPlaneMode: cpStatus.mode,
+                controlPlaneRoot: cpStatus.controlPlaneRoot,
+                effectiveControlPlaneRoot: cpStatus.effectiveWorkspaceRoot,
+                explicitControlPlaneRoot: cpStatus.explicitControlPlaneRoot,
+                pendingCandidate: cpStatus.pendingCandidate,
+                repoScopeFilter: cpStatus.repoScopeFilter
             });
 
             // THE critical message — sends cards to webview
@@ -658,6 +1151,12 @@ export class KanbanProvider implements vscode.Disposable {
                 type: 'allowUnknownComplexityAutoMoveState',
                 enabled: this._allowUnknownComplexityAutoMove
             });
+            this._panel.webview.postMessage({
+                type: 'clearTerminalBeforePromptState',
+                enabled: this._clearTerminalBeforePrompt,
+                delay: this._clearTerminalBeforePromptDelay
+            });
+
 
             let agentNames: Record<string, string> = {};
             try {
@@ -666,9 +1165,15 @@ export class KanbanProvider implements vscode.Disposable {
             this._panel.webview.postMessage({ type: 'updateAgentNames', agentNames });
             this._panel.webview.postMessage({ type: 'visibleAgents', agents: visibleAgents });
 
-            const effectiveModes: Record<string, 'cli' | 'prompt'> = {};
+
+
+            const effectiveModes: Record<string, 'cli' | 'prompt' | 'disabled'> = {};
             for (const col of columns) {
-                effectiveModes[col.id] = this._columnDragDropModes[col.id] || col.dragDropMode || 'cli';
+                // Built-in 'disabled' is a hard constraint — never let a persisted override
+                // reinstate CLI dispatch for columns like CONTEXT GATHERER.
+                effectiveModes[col.id] = col.dragDropMode === 'disabled'
+                    ? 'disabled'
+                    : (this._columnDragDropModes[col.id] || col.dragDropMode || 'cli');
             }
             this._panel.webview.postMessage({ type: 'updateColumnDragDropModes', modes: effectiveModes });
 
@@ -688,7 +1193,7 @@ export class KanbanProvider implements vscode.Disposable {
                 });
             }
 
-            console.log(`[KanbanProvider] refreshWithData: sent ${cards.length} cards (${activeRows.length} active + ${completedRows.length} completed) to kanban webview`);
+            console.log(`[KanbanProvider] refreshWithData: sent ${cards.length} cards (${activeRowsFiltered.length} active + ${completedRowsFiltered.length} completed) to kanban webview`);
         } catch (e) {
             console.error('[KanbanProvider] refreshWithData FAILED:', e);
         }
@@ -715,7 +1220,11 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     private _getKanbanDb(workspaceRoot: string): KanbanDatabase {
-        const resolvedRoot = path.resolve(workspaceRoot);
+        // Use resolveEffectiveWorkspaceRoot so that child workspaces with
+        // workspaceDatabaseMappings share the same DB instance as the parent.
+        // Other cache methods (_getClickUpService, etc.) intentionally use
+        // path.resolve because external services have per-child-workspace config.
+        const resolvedRoot = this.resolveEffectiveWorkspaceRoot(workspaceRoot);
         const existing = this._kanbanDbs.get(resolvedRoot);
         if (existing) {
             return existing;
@@ -804,7 +1313,7 @@ export class KanbanProvider implements vscode.Disposable {
             this._getCustomAgents(workspaceRoot),
             this._getCustomKanbanColumns(workspaceRoot)
         ]);
-        return this._buildKanbanColumns(customAgents, customKanbanColumns).map((column) => column.id);
+        return (await this._buildKanbanColumns(customAgents, customKanbanColumns)).map((column) => column.id);
     }
 
     private _setClickUpSyncWarning(workspaceRoot: string, result?: ClickUpSyncResult): void {
@@ -1070,16 +1579,15 @@ export class KanbanProvider implements vscode.Disposable {
             return;
         }
 
-        clickUp.debouncedSync(plan.sessionId, {
+        clickUp.debouncedSync(plan.planFile, {
             planId: plan.planId,
-            sessionId: plan.sessionId,
-            topic: plan.topic,
+            sessionId: plan.planFile,
             planFile: plan.planFile,
+            topic: plan.topic,
             kanbanColumn: targetColumn,
             status: plan.status,
             complexity: plan.complexity,
             tags: plan.tags,
-            dependencies: plan.dependencies,
             createdAt: plan.createdAt,
             updatedAt: plan.updatedAt,
             lastAction: plan.lastAction,
@@ -1098,19 +1606,10 @@ export class KanbanProvider implements vscode.Disposable {
             return;
         }
 
-        linear.debouncedSync(plan.sessionId, {
-            planId: plan.planId,
-            sessionId: plan.sessionId,
-            topic: plan.topic,
+        linear.debouncedSync(plan.planFile, {
             planFile: plan.planFile,
-            kanbanColumn: targetColumn,
-            status: plan.status,
-            complexity: plan.complexity,
-            tags: plan.tags,
-            dependencies: plan.dependencies,
-            createdAt: plan.createdAt,
-            updatedAt: plan.updatedAt,
-            lastAction: plan.lastAction
+            topic: plan.topic,
+            complexity: plan.complexity
         }, targetColumn);
     }
 
@@ -1147,7 +1646,6 @@ export class KanbanProvider implements vscode.Disposable {
     ): Promise<void> {
         const roleFromColumn: Record<string, string> = {
             'PLAN REVIEWED': 'planner',
-            'TEAM LEAD CODED': 'team-lead',
             'LEAD CODED': 'lead',
             'CODER CODED': 'coder',
             'INTERN CODED': 'intern',
@@ -1218,24 +1716,20 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     private async _refreshBoard(_workspaceRoot?: string) {
-        if (!this._panel) return;
-        if (this._isRefreshing) {
-            this._refreshPending = true;
+        if (!this._panel) {
+            console.log('[KanbanProvider] _refreshBoard skipped: no panel');
             return;
         }
-        this._isRefreshing = true;
+        console.log(`[KanbanProvider] _refreshBoard start: workspaceRoot=${_workspaceRoot || 'undefined'}`);
         try {
             // ALL kanban refreshes go through the unified path:
             // TaskViewerProvider reads DB ONCE → feeds BOTH sidebar and kanban.
             // This eliminates the dual-path bug where _refreshBoardImpl could
             // show different data than what the sidebar shows.
-            await vscode.commands.executeCommand('switchboard.refreshUI');
-        } finally {
-            this._isRefreshing = false;
-            if (this._refreshPending) {
-                this._refreshPending = false;
-                void this._refreshBoard(_workspaceRoot);
-            }
+            await vscode.commands.executeCommand('switchboard.refreshUI', _workspaceRoot);
+            console.log(`[KanbanProvider] _refreshBoard done: workspaceRoot=${_workspaceRoot || 'undefined'}`);
+        } catch (err) {
+            console.error(`[KanbanProvider] _refreshBoard failed: workspaceRoot=${_workspaceRoot || 'undefined'}`, err);
         }
     }
 
@@ -1254,7 +1748,7 @@ export class KanbanProvider implements vscode.Disposable {
                 this._getCustomAgents(resolvedWorkspaceRoot),
                 this._getCustomKanbanColumns(resolvedWorkspaceRoot)
             ]);
-            const columns = this._buildKanbanColumns(customAgents, customKanbanColumns);
+            const columns = await this._buildKanbanColumns(customAgents, customKanbanColumns);
             const workspaceId = await this._readWorkspaceId(resolvedWorkspaceRoot);
 
             let cards: KanbanCard[] = [];
@@ -1265,90 +1759,71 @@ export class KanbanProvider implements vscode.Disposable {
             console.log(`[KanbanProvider] _refreshBoardImpl: workspaceId=${workspaceId}, dbReady=${dbReady}`);
 
             if (workspaceId && dbReady) {
-                const dbRows = await db.getBoard(workspaceId);
+                const projectFilter = this._projectFilter;
+                const repoScope = this._repoScopeFilter;
+                const dbRows = (projectFilter !== null || repoScope)
+                    ? await db.getBoardFilteredByProject(workspaceId, projectFilter, repoScope)
+                    : await db.getBoard(workspaceId);
                 console.log(`[KanbanProvider] _refreshBoardImpl: getBoard returned ${dbRows.length} active rows`);
 
-                // Self-heal stale 'Unknown' complexity by re-parsing plan files.
-                // Only runs for plans still at 'Unknown' in the DB — one-time cost per plan.
-                const complexityOverrides = new Map<string, string>();
-                const unknownRows = dbRows.filter(r => (r.complexity || 'Unknown') === 'Unknown');
-                if (unknownRows.length > 0) {
-                    const batchUpdates: Array<{ sessionId: string; topic: string; planFile: string; complexity: string }> = [];
-                    for (const row of unknownRows) {
-                        // Primary: use the stored planFile path.
-                        let pathToTry = row.planFile || '';
+                const effectiveRootForPaths = resolvedWorkspaceRoot;
 
-                        // Fallback: if planFile is missing or file doesn't exist, try constructing from mirrorPath.
-                        // mirrorPath stores just the filename (e.g. brain_<hash>.md).
-                        if ((!pathToTry || !fs.existsSync(
-                            path.isAbsolute(pathToTry) ? pathToTry : path.join(resolvedWorkspaceRoot, pathToTry)
-                        )) && row.mirrorPath) {
-                            pathToTry = path.join('.switchboard', 'plans', row.mirrorPath);
-                        }
-
-                        if (!pathToTry) {
-                            console.warn(`[KanbanProvider] Self-heal: no planFile or mirrorPath for ${row.sessionId}, skipping`);
-                            continue;
-                        }
-
-                        const parsed = await this.getComplexityFromPlan(resolvedWorkspaceRoot, pathToTry);
-                        if (parsed !== 'Unknown') {
-                            complexityOverrides.set(row.sessionId, parsed);
-                            batchUpdates.push({
-                                sessionId: row.sessionId,
-                                topic: row.topic || '',
-                                planFile: row.planFile || '',
-                                complexity: parsed
-                            });
+                const activeRows = dbRows.filter(row => {
+                    const planFile = row.planFile || '';
+                    if (!planFile) return false;
+                    let planPath = planFile;
+                    if (planPath.startsWith('file://')) {
+                        try {
+                            planPath = require('url').fileURLToPath(planPath);
+                        } catch (e) {
+                            planPath = planPath.replace(/^file:\/\/\/?/, '');
+                            if (process.platform !== 'win32' && !planPath.startsWith('/')) {
+                                planPath = '/' + planPath;
+                            }
                         }
                     }
-                    if (batchUpdates.length > 0) {
-                        await db.updateMetadataBatch(batchUpdates, { preserveTimestamps: true });
-                        console.log(`[KanbanProvider] Self-healed complexity for ${batchUpdates.length} plans`);
+                    const resolvedPath = path.isAbsolute(planPath) ? planPath : path.resolve(effectiveRootForPaths, planPath);
+                    const exists = fs.existsSync(resolvedPath);
+                    if (!exists) {
+                        console.log(`[KanbanProvider] _refreshBoardImpl filterGhostPlans: file does not exist: planFile=${planFile}, resolvedPath=${resolvedPath}`);
                     }
+                    return exists;
+                });
+                if (activeRows.length < dbRows.length) {
+                    console.log(`[KanbanProvider] _refreshBoardImpl: filtered out ${dbRows.length - activeRows.length} ghost plans`);
                 }
 
-                // Self-heal stale empty tags by parsing plan files.
-                const emptyTagRows = dbRows.filter(r => !r.tags && r.planFile);
-                if (emptyTagRows.length > 0) {
-                    const tagBatchUpdates: Array<{ sessionId: string; topic: string; planFile: string; tags: string }> = [];
-                    for (const row of emptyTagRows) {
-                        const parsedTags = await this.getTagsFromPlan(resolvedWorkspaceRoot, row.planFile);
-                        if (parsedTags) {
-                            tagBatchUpdates.push({
-                                sessionId: row.sessionId,
-                                topic: row.topic || '',
-                                planFile: row.planFile || '',
-                                tags: parsedTags
-                            });
-                        }
-                    }
-                    if (tagBatchUpdates.length > 0) {
-                        await db.updateMetadataBatch(tagBatchUpdates, { preserveTimestamps: true });
-                        console.log(`[KanbanProvider] Self-healed tags for ${tagBatchUpdates.length} plans`);
-                    }
-                }
+                cards = activeRows.map(row => {
+                    return {
+                        planId: row.planId,
+                        sessionId: row.sessionId,
+                        topic: row.topic || row.planFile || 'Untitled',
+                        planFile: row.planFile || '',
+                        column: this._normalizeLegacyKanbanColumn(row.kanbanColumn) || 'CREATED',
+                        lastActivity: row.updatedAt || row.createdAt || '',
+                        createdAt: row.createdAt || '',
+                        complexity: row.complexity || 'Unknown',
+                        workspaceRoot: resolvedWorkspaceRoot,
+                        project: row.project || '',
+                        worktreeId: row.worktreeId
+                    };
+                });
 
-                cards = dbRows.map(row => ({
-                    sessionId: row.sessionId,
-                    topic: row.topic || row.planFile || 'Untitled',
-                    planFile: row.planFile || '',
-                    column: this._normalizeLegacyKanbanColumn(row.kanbanColumn) || 'CREATED',
-                    lastActivity: row.updatedAt || row.createdAt || '',
-                    complexity: complexityOverrides.get(row.sessionId) || row.complexity || 'Unknown',
-                    workspaceRoot: resolvedWorkspaceRoot
-                }));
-
-                // Completed plans from DB
-                const completedRecords = await db.getCompletedPlans(workspaceId, completedLimit);
+                // Completed plans from DB — don't filter by file existence;
+                // completed plans may have been archived (file moved) and should still appear.
+                const completedRecords = (await db.getCompletedPlans(workspaceId, completedLimit))
+                    .filter(rec => rec.planFile);
                 cards.push(...completedRecords.map(rec => ({
+                    planId: rec.planId,
                     sessionId: rec.sessionId,
                     topic: rec.topic || rec.planFile || 'Untitled',
                     planFile: rec.planFile || '',
                     column: 'COMPLETED',
                     lastActivity: rec.updatedAt || rec.createdAt || '',
+                    createdAt: rec.createdAt || '',
                     complexity: rec.complexity || 'Unknown',
-                    workspaceRoot: resolvedWorkspaceRoot
+                    workspaceRoot: resolvedWorkspaceRoot,
+                    project: rec.project || ''
                 })));
             } else if (workspaceId) {
                 console.warn(`[KanbanProvider] Kanban DB unavailable: ${db.lastInitError || 'unknown error'}`);
@@ -1365,10 +1840,27 @@ export class KanbanProvider implements vscode.Disposable {
                 this._panel.webview.postMessage({ type: 'updateColumns', columns: filteredColumns });
                 this._lastColumnsSignature = nextColumnsSignature;
             }
+
+            // When mapping is enabled, send the mapped workspace root (from the selected item) instead of the actual folder
+            const workspaceItems = this._getWorkspaceItems();
+            const projects = workspaceId && dbReady ? await db.getProjects(workspaceId) : [];
+            const allWorkspaceProjects = await this._getAllWorkspaceProjects();
+
+            const cpStatus2 = this.getControlPlaneSelectionStatus(resolvedWorkspaceRoot);
             this._panel.webview.postMessage({
                 type: 'updateWorkspaceSelection',
                 workspaceRoot: resolvedWorkspaceRoot,
-                workspaces: this._getWorkspaceItems()
+                workspaces: workspaceItems,
+                activeFilter: this._repoScopeFilter || null,
+                projectFilter: this._projectFilter ?? null,
+                projects,
+                allWorkspaceProjects,
+                controlPlaneMode: cpStatus2.mode,
+                controlPlaneRoot: cpStatus2.controlPlaneRoot,
+                effectiveControlPlaneRoot: cpStatus2.effectiveWorkspaceRoot,
+                explicitControlPlaneRoot: cpStatus2.explicitControlPlaneRoot,
+                pendingCandidate: cpStatus2.pendingCandidate,
+                repoScopeFilter: cpStatus2.repoScopeFilter
             });
             this._lastCards = cards;
             this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig });
@@ -1377,12 +1869,22 @@ export class KanbanProvider implements vscode.Disposable {
                 type: 'allowUnknownComplexityAutoMoveState',
                 enabled: this._allowUnknownComplexityAutoMove
             });
+            this._panel.webview.postMessage({
+                type: 'clearTerminalBeforePromptState',
+                enabled: this._clearTerminalBeforePrompt,
+                delay: this._clearTerminalBeforePromptDelay
+            });
+
             this._panel.webview.postMessage({ type: 'updateAgentNames', agentNames });
             this._panel.webview.postMessage({ type: 'visibleAgents', agents: visibleAgents });
 
-            const effectiveModes: Record<string, 'cli' | 'prompt'> = {};
+            const effectiveModes: Record<string, 'cli' | 'prompt' | 'disabled'> = {};
             for (const col of columns) {
-                effectiveModes[col.id] = this._columnDragDropModes[col.id] || col.dragDropMode || 'cli';
+                // Built-in 'disabled' is a hard constraint — never let a persisted override
+                // reinstate CLI dispatch for columns like CONTEXT GATHERER.
+                effectiveModes[col.id] = col.dragDropMode === 'disabled'
+                    ? 'disabled'
+                    : (this._columnDragDropModes[col.id] || col.dragDropMode || 'cli');
             }
             this._panel.webview.postMessage({ type: 'updateColumnDragDropModes', modes: effectiveModes });
 
@@ -1397,6 +1899,9 @@ export class KanbanProvider implements vscode.Disposable {
 
     /**
      * Refresh the board using pre-fetched DB rows (no DB read — uses caller's snapshot).
+     *
+     * NOTE: This method is currently dead code (zero call sites). The active refresh
+     * path is the public `refreshWithData()` method. Kept for potential future use.
      */
     private async _refreshBoardWithData(
         activeRows: import('./KanbanDatabase').KanbanPlanRecord[],
@@ -1412,69 +1917,63 @@ export class KanbanProvider implements vscode.Disposable {
                 this._getCustomAgents(resolvedWorkspaceRoot),
                 this._getCustomKanbanColumns(resolvedWorkspaceRoot)
             ]);
-            const columns = this._buildKanbanColumns(customAgents, customKanbanColumns);
+            const columns = await this._buildKanbanColumns(customAgents, customKanbanColumns);
 
-            const cards: KanbanCard[] = activeRows.map(row => ({
-                sessionId: row.sessionId,
-                topic: row.topic || row.planFile || 'Untitled',
-                planFile: row.planFile || '',
-                column: this._normalizeLegacyKanbanColumn(row.kanbanColumn) || 'CREATED',
-                lastActivity: row.updatedAt || row.createdAt || '',
-                complexity: row.complexity || 'Unknown',
-                workspaceRoot: resolvedWorkspaceRoot
-            }));
+            // Filter out ghost plans: plan files that don't exist in this workspace.
+            // Only filter ACTIVE plans — completed plans may have been archived (file moved)
+            // and should still appear in the COMPLETED column; the DB is the source of truth.
+            const filterGhostPlans = (rows: import('./KanbanDatabase').KanbanPlanRecord[]) => rows.filter(row => {
+                const planFile = row.planFile || '';
+                if (!planFile) return false;
+                let planPath = planFile;
+                if (planPath.startsWith('file://')) {
+                    try {
+                        planPath = require('url').fileURLToPath(planPath);
+                    } catch (e) {
+                        planPath = planPath.replace(/^file:\/\/\/?/, '');
+                        if (process.platform !== 'win32' && !planPath.startsWith('/')) {
+                            planPath = '/' + planPath;
+                        }
+                    }
+                }
+                const resolvedPath = path.isAbsolute(planPath) ? planPath : path.resolve(resolvedWorkspaceRoot, planPath);
+                const exists = fs.existsSync(resolvedPath);
+                if (!exists) {
+                    console.log(`[KanbanProvider] filterGhostPlans (completedRows): file does not exist: planFile=${planFile}, resolvedPath=${resolvedPath}`);
+                }
+                return exists;
+            });
+            const activeRowsFiltered = filterGhostPlans(activeRows);
+            // Completed plans intentionally bypass file-existence check — DB is source of truth for completed state
+            const completedRowsFiltered = completedRows.filter(row => !!row.planFile);
 
-            cards.push(...completedRows.map(rec => ({
+            const cards: KanbanCard[] = activeRowsFiltered.map(row => {
+                return {
+                    planId: row.planId,
+                    sessionId: row.sessionId,
+                    topic: row.topic || row.planFile || 'Untitled',
+                    planFile: row.planFile || '',
+                    column: this._normalizeLegacyKanbanColumn(row.kanbanColumn) || 'CREATED',
+                    lastActivity: row.updatedAt || row.createdAt || '',
+                    createdAt: row.createdAt || '',
+                    complexity: row.complexity || 'Unknown',
+                    workspaceRoot: resolvedWorkspaceRoot,
+                    project: row.project || ''
+                };
+            });
+
+            cards.push(...completedRowsFiltered.map(rec => ({
+                planId: rec.planId,
                 sessionId: rec.sessionId,
                 topic: rec.topic || rec.planFile || 'Untitled',
                 planFile: rec.planFile || '',
                 column: 'COMPLETED',
                 lastActivity: rec.updatedAt || rec.createdAt || '',
+                createdAt: rec.createdAt || '',
                 complexity: rec.complexity || 'Unknown',
-                workspaceRoot: resolvedWorkspaceRoot
+                workspaceRoot: resolvedWorkspaceRoot,
+                project: rec.project || ''
             })));
-
-            // Self-heal stale 'Unknown' complexity (snapshot-based refresh path).
-            const complexityOverrides = new Map<string, string>();
-            const unknownCards = cards.filter(c => c.complexity === 'Unknown');
-            if (unknownCards.length > 0) {
-                const db = this._getKanbanDb(resolvedWorkspaceRoot);
-                const batchUpdates: Array<{ sessionId: string; topic: string; planFile: string; complexity: string }> = [];
-                for (const card of unknownCards) {
-                    // Primary: use the stored planFile path.
-                    let pathToTry = card.planFile || '';
-
-                    // Fallback: if planFile is missing or file doesn't exist, get mirrorPath from DB.
-                    if (!pathToTry || !fs.existsSync(
-                        path.isAbsolute(pathToTry) ? pathToTry : path.join(resolvedWorkspaceRoot, pathToTry)
-                    )) {
-                        try {
-                            const dbRecord = await db.getPlanBySessionId(card.sessionId);
-                            if (dbRecord?.mirrorPath) {
-                                pathToTry = path.join('.switchboard', 'plans', dbRecord.mirrorPath);
-                            }
-                        } catch { /* non-critical */ }
-                    }
-
-                    if (!pathToTry) continue;
-
-                    const parsed = await this.getComplexityFromPlan(resolvedWorkspaceRoot, pathToTry);
-                    if (parsed !== 'Unknown') {
-                        card.complexity = parsed;
-                        complexityOverrides.set(card.sessionId, parsed);
-                        batchUpdates.push({
-                            sessionId: card.sessionId,
-                            topic: card.topic || '',
-                            planFile: card.planFile || '',
-                            complexity: parsed
-                        });
-                    }
-                }
-                if (batchUpdates.length > 0) {
-                    await db.updateMetadataBatch(batchUpdates, { preserveTimestamps: true });
-                    console.log(`[KanbanProvider] Self-healed complexity for ${batchUpdates.length} plans (snapshot path)`);
-                }
-            }
 
             const agentNames = await this._getAgentNames(resolvedWorkspaceRoot);
             const visibleAgents = await this._getVisibleAgents(resolvedWorkspaceRoot);
@@ -1485,10 +1984,29 @@ export class KanbanProvider implements vscode.Disposable {
                 this._panel.webview.postMessage({ type: 'updateColumns', columns: filteredColumns });
                 this._lastColumnsSignature = nextColumnsSignature;
             }
+
+            // When mapping is enabled, send the mapped workspace root (from the selected item) instead of the actual folder
+            const workspaceItems = this._getWorkspaceItems();
+            const db = this._getKanbanDb(resolvedWorkspaceRoot);
+            const workspaceId = await db.getWorkspaceId();
+            const projects = workspaceId ? await db.getProjects(workspaceId) : [];
+            const allWorkspaceProjects = await this._getAllWorkspaceProjects();
+
+            const cpStatus3 = this.getControlPlaneSelectionStatus(resolvedWorkspaceRoot);
             this._panel.webview.postMessage({
                 type: 'updateWorkspaceSelection',
                 workspaceRoot: resolvedWorkspaceRoot,
-                workspaces: this._getWorkspaceItems()
+                workspaces: workspaceItems,
+                activeFilter: this._repoScopeFilter || null,
+                projectFilter: this._projectFilter ?? null,
+                projects,
+                allWorkspaceProjects,
+                controlPlaneMode: cpStatus3.mode,
+                controlPlaneRoot: cpStatus3.controlPlaneRoot,
+                effectiveControlPlaneRoot: cpStatus3.effectiveWorkspaceRoot,
+                explicitControlPlaneRoot: cpStatus3.explicitControlPlaneRoot,
+                pendingCandidate: cpStatus3.pendingCandidate,
+                repoScopeFilter: cpStatus3.repoScopeFilter
             });
             this._lastCards = cards;
             this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig });
@@ -1500,9 +2018,13 @@ export class KanbanProvider implements vscode.Disposable {
             this._panel.webview.postMessage({ type: 'updateAgentNames', agentNames });
             this._panel.webview.postMessage({ type: 'visibleAgents', agents: visibleAgents });
 
-            const effectiveModes: Record<string, 'cli' | 'prompt'> = {};
+            const effectiveModes: Record<string, 'cli' | 'prompt' | 'disabled'> = {};
             for (const col of columns) {
-                effectiveModes[col.id] = this._columnDragDropModes[col.id] || col.dragDropMode || 'cli';
+                // Built-in 'disabled' is a hard constraint — never let a persisted override
+                // reinstate CLI dispatch for columns like CONTEXT GATHERER.
+                effectiveModes[col.id] = col.dragDropMode === 'disabled'
+                    ? 'disabled'
+                    : (this._columnDragDropModes[col.id] || col.dragDropMode || 'cli');
             }
             this._panel.webview.postMessage({ type: 'updateColumnDragDropModes', modes: effectiveModes });
 
@@ -1511,9 +2033,10 @@ export class KanbanProvider implements vscode.Disposable {
                 this._panel.webview.postMessage({ type: 'updatePairProgrammingMode', mode: this._autobanState.pairProgrammingMode });
             }
 
-            const wsRoot = this._currentWorkspaceRoot;
-            if (wsRoot) {
-                void this._postIntegrationStates(wsRoot);
+            // Use resolvedWorkspaceRoot (not this._currentWorkspaceRoot) to avoid
+            // desync: _resolveWorkspaceRoot no longer auto-switches _currentWorkspaceRoot.
+            if (resolvedWorkspaceRoot) {
+                void this._postIntegrationStates(resolvedWorkspaceRoot);
             }
         } catch (e) {
             console.error('[KanbanProvider] Failed to refresh board with data:', e);
@@ -1573,70 +2096,762 @@ export class KanbanProvider implements vscode.Disposable {
         }).join('\n');
     }
 
-    private _cardsToPromptPlans(cards: KanbanCard[], workspaceRoot: string): BatchPromptPlan[] {
-        return cards.map(card => ({
-            topic: card.topic,
-            absolutePath: this._resolvePlanFilePath(workspaceRoot, card.planFile),
-            complexity: card.complexity
-        }));
+    private async _cardsToPromptPlans(
+        cards: KanbanCard[],
+        workspaceRoot: string,
+        repoScopeMap?: Map<string, string>  // sessionId → repoScope
+    ): Promise<BatchPromptPlan[]> {
+        const db = this._getKanbanDb(workspaceRoot);
+        const hasDb = db && await db.ensureReady();
+
+        let safetySessionPath: string | undefined;
+        if (hasDb) {
+            const activeBranch = await db.getMeta('active_safety_session_branch');
+            if (activeBranch && activeBranch !== '') {
+                safetySessionPath = await db.getMeta('active_safety_session_path') || undefined;
+            }
+        }
+
+        const promptPlans: BatchPromptPlan[] = [];
+        for (const card of cards) {
+            const cardKey = this._cardId(card);
+            const repoScope = repoScopeMap?.get(cardKey) || '';
+            const workingDir = repoScope
+                ? resolveWorkingDir(workspaceRoot, repoScope)
+                : '';
+            
+            promptPlans.push({
+                topic: card.topic,
+                absolutePath: this._resolvePlanFilePath(workspaceRoot, card.planFile),
+                complexity: card.complexity,
+                workingDir,
+                sessionId: cardKey,
+                worktreePath: safetySessionPath
+            });
+        }
+        return promptPlans;
     }
 
     private async _getDefaultPromptOverrides(
         workspaceRoot: string
     ): Promise<Partial<Record<string, import('./agentConfig').DefaultPromptOverride>>> {
         const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
+        let overrides: Partial<Record<string, import('./agentConfig').DefaultPromptOverride>> = {};
         try {
             const content = await fs.promises.readFile(statePath, 'utf8');
             const state = JSON.parse(content);
-            return parseDefaultPromptOverrides(state.defaultPromptOverrides);
-        } catch { return {}; }
+            overrides = parseDefaultPromptOverrides(state.defaultPromptOverrides);
+        } catch { /* file may not exist or be invalid */ }
+
+        // Merge with roleConfigs from workspaceState
+        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'splitter'];
+        for (const role of roles) {
+            const config: any = this._getRoleConfig(role);
+            if (config && config.prompt?.trim()) {
+                overrides[role] = {
+                    text: config.prompt.trim(),
+                    mode: 'replace'
+                };
+            }
+        }
+        return overrides;
     }
 
-    private async _generateBatchPlannerPrompt(cards: KanbanCard[], workspaceRoot: string): Promise<string> {
-        const aggressivePairProgramming = this._autobanState?.aggressivePairProgramming ?? false;
+    private async _saveDefaultPromptOverrides(
+        workspaceRoot: string,
+        overrides: Partial<Record<string, import('./agentConfig').DefaultPromptOverride>>
+    ): Promise<void> {
+        const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
+        try {
+            let state: any = {};
+            try {
+                const content = await fs.promises.readFile(statePath, 'utf8');
+                state = JSON.parse(content);
+            } catch { /* file may not exist */ }
+            state.defaultPromptOverrides = overrides;
+            await fs.promises.writeFile(statePath, JSON.stringify(state, null, 2), 'utf8');
+            this._panel?.webview.postMessage({ type: 'saveDefaultPromptOverridesResult', success: true });
+        } catch (err) {
+            console.error('[KanbanProvider] Failed to save default prompt overrides:', err);
+            this._panel?.webview.postMessage({ type: 'saveDefaultPromptOverridesResult', success: false });
+        }
+    }
+
+    private async _buildRepoScopeMap(
+        cards: KanbanCard[],
+        workspaceRoot: string
+    ): Promise<Map<string, string>> {
+        const repoScopeMap = new Map<string, string>();
+        const db = this._getKanbanDb(workspaceRoot);
+        if (await db.ensureReady()) {
+            for (const card of cards) {
+                const cardKey = this._cardId(card);
+                const plan = await db.getPlanBySessionId(cardKey);
+                if (plan?.repoScope) {
+                    repoScopeMap.set(cardKey, plan.repoScope);
+                }
+            }
+        }
+        return repoScopeMap;
+    }
+
+    /**
+     * Derive the source column display label for a role, matching the labels
+     * used by actual dispatch (from DEFAULT_KANBAN_COLUMNS in agentConfig.ts).
+     */
+    private _getSourceColumnLabelForRole(role: string): string | undefined {
+        switch (role) {
+            case 'planner': return 'New';           // CREATED → "New"
+            case 'lead':
+            case 'coder':
+            case 'intern': return 'Planned';        // PLAN REVIEWED → "Planned"
+            case 'reviewer': return 'Lead Coder';   // LEAD CODED → "Lead Coder" (primary)
+            case 'tester': return 'Reviewed';        // CODE REVIEWED → "Reviewed"
+            default: return undefined;
+        }
+    }
+
+    private async _getDefaultPromptPreviews(
+        workspaceRoot: string
+    ): Promise<Record<string, string>> {
+        // Generate preview prompts for each role
+        const previews: Record<string, string> = {};
+        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'code_researcher'];
+        for (const role of roles) {
+            try {
+                // Context-aware plan filtering
+                let plans: BatchPromptPlan[] = [];
+                const cards = this._lastCards.filter(c => {
+                    if (c.workspaceRoot !== workspaceRoot) return false;
+                    switch (role) {
+                        case 'planner':
+                            return c.column === 'CREATED';
+                        case 'lead':
+                        case 'coder':
+                        case 'intern': {
+                            if (c.column !== 'PLAN REVIEWED') return false;
+                            if (!this._dynamicComplexityRoutingEnabled) {
+                                return role === 'lead';
+                            }
+                            const score = parseComplexityScore(c.complexity || '');
+                            const resolvedRole = this.resolveRoutedRole(score);
+                            return resolvedRole === role;
+                        }
+                        case 'reviewer':
+                            return c.column === 'LEAD CODED' || c.column === 'CODER CODED' || c.column === 'INTERN CODED';
+                        case 'tester':
+                            return c.column === 'CODE REVIEWED';
+                        default:
+                            return false;
+                    }
+                });
+
+                if (cards.length > 0) {
+                    const repoScopeMap = await this._buildRepoScopeMap(cards, workspaceRoot);
+                    plans = await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap);
+                }
+
+                // Delegate to generateUnifiedPrompt for config resolution + prompt building
+                const sourceColumnLabel = this._getSourceColumnLabelForRole(role);
+                const instruction = (role === 'coder' || role === 'intern') ? 'low-complexity' : undefined;
+                previews[role] = await this.generateUnifiedPrompt(role, plans, workspaceRoot, {
+                    sourceColumnLabel,
+                    instruction
+                });
+            } catch {
+                previews[role] = 'Preview not available';
+            }
+        }
+        return previews;
+    }
+
+    private async _getStartupCommands(workspaceRoot: string): Promise<any> {
+        const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
+        try {
+            const content = await fs.promises.readFile(statePath, 'utf8');
+            const state = JSON.parse(content);
+            return {
+                commands: state.startupCommands || {},
+                visibleAgents: state.visibleAgents || {},
+                julesAutoSyncEnabled: state.julesAutoSyncEnabled ?? false,
+                autoCommitOnCodeReview: state.autoCommitOnCodeReview ?? true
+            };
+        } catch {
+            return { commands: {}, visibleAgents: {}, julesAutoSyncEnabled: false, autoCommitOnCodeReview: true };
+        }
+    }
+
+    public async getAutoCommitOnCodeReview(workspaceRoot: string): Promise<boolean> {
+        const state = await this._getStartupCommands(workspaceRoot);
+        return state.autoCommitOnCodeReview ?? true;
+    }
+
+    private async _saveStartupCommands(workspaceRoot: string, msg: any): Promise<void> {
+        const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
+        try {
+            let state: any = {};
+            try {
+                const content = await fs.promises.readFile(statePath, 'utf8');
+                state = JSON.parse(content);
+            } catch { /* file may not exist */ }
+            if (msg.commands) state.startupCommands = msg.commands;
+            if (msg.visibleAgents) state.visibleAgents = { ...(state.visibleAgents || {}), ...msg.visibleAgents };
+            if (typeof msg.julesAutoSyncEnabled === 'boolean') state.julesAutoSyncEnabled = msg.julesAutoSyncEnabled;
+            if (typeof msg.autoCommitOnCodeReview === 'boolean') state.autoCommitOnCodeReview = msg.autoCommitOnCodeReview;
+            await fs.promises.writeFile(statePath, JSON.stringify(state, null, 2), 'utf8');
+        } catch (err) {
+            console.error('[KanbanProvider] Failed to save startup commands:', err);
+        }
+    }
+
+    private async _resolveGlobalDesignDoc(workspaceRoot: string): Promise<{ designDocLink?: string; designDocContent?: string }> {
         const config = vscode.workspace.getConfiguration('switchboard');
         const designDocEnabled = config.get<boolean>('planner.designDocEnabled', false);
         const designDocLink = designDocEnabled ? (config.get<string>('planner.designDocLink', '') || '').trim() : undefined;
+        if (!designDocLink) return {};
         let designDocContent: string | undefined;
-        if (designDocEnabled && designDocLink && (designDocLink.includes('notion.so') || designDocLink.includes('notion.site'))) {
+        if (designDocLink.includes('notion.so') || designDocLink.includes('notion.site')) {
             try {
                 const notionService = this._getNotionService(workspaceRoot);
                 designDocContent = (await notionService.loadCachedContent()) || undefined;
-            } catch { /* non-fatal — fallback to URL */ }
+            } catch { /* non-fatal */ }
         }
-        const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
-        return buildKanbanBatchPrompt('planner', this._cardsToPromptPlans(cards, workspaceRoot), {
-            aggressivePairProgramming,
-            designDocLink: designDocLink || undefined,
-            designDocContent,
-            defaultPromptOverrides
-        });
+        return { designDocLink, designDocContent };
     }
 
-    private async _generateBatchExecutionPrompt(cards: KanbanCard[], workspaceRoot: string, overrideRole?: 'lead' | 'coder'): Promise<string> {
-        let role: 'lead' | 'coder';
-        let instruction: string | undefined;
-        if (overrideRole) {
-            role = overrideRole;
-            instruction = overrideRole === 'coder' ? 'low-complexity' : undefined;
-        } else {
-            const hasHighComplexity = this._dynamicComplexityRoutingEnabled
-                ? cards.some(card => !this._isLowComplexity(card))
-                : true;  // When disabled, treat all as high complexity → route to lead
-            role = hasHighComplexity ? 'lead' : 'coder';
-            instruction = hasHighComplexity ? undefined : 'low-complexity';
+    private async _resolveDesignSystemDoc(workspaceRoot: string): Promise<{ designSystemDocLink?: string; designSystemDocContent?: string }> {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        const designSystemDocEnabled = config.get<boolean>('planner.designSystemDocEnabled', false);
+        const designSystemDocLink = designSystemDocEnabled ? (config.get<string>('planner.designSystemDocLink', '') || '').trim() : undefined;
+        if (!designSystemDocLink) return {};
+        // Design system doc does NOT support Notion pre-fetching in this iteration
+        return { designSystemDocLink };
+    }
+
+    public async generateUnifiedPrompt(
+        role: string,
+        plans: BatchPromptPlan[],
+        workspaceRoot: string,
+        overrides?: Partial<PromptBuilderOptions>
+    ): Promise<string> {
+        if (role.startsWith('custom_agent_')) {
+            const customAgents = await this._getCustomAgents(workspaceRoot);
+            const agentId = role.replace('custom_agent_', '');
+            const agentConfig = customAgents.find(a => a.id === agentId || a.role === role);
+            const roleConfigAddons = this._getRoleConfig(role)?.addons;
+            const mergedAddons = {
+                ...agentConfig?.addons,
+                ...(roleConfigAddons || {}),
+            };
+            if (mergedAddons.designDoc) {
+                const { designDocLink, designDocContent } = await this._resolveGlobalDesignDoc(workspaceRoot);
+                mergedAddons.designDocLink = designDocLink;
+                mergedAddons.designDocContent = designDocContent;
+            }
+            if (mergedAddons.designSystemDoc) {
+                const { designSystemDocLink } = await this._resolveDesignSystemDoc(workspaceRoot);
+                mergedAddons.designSystemDocLink = designSystemDocLink;
+            }
+            const promptTab = this._getRoleConfig(role)?.prompt?.trim() || '';
+            const instructions = promptTab || agentConfig?.promptInstructions || '';
+            return buildCustomAgentPrompt(
+                plans,
+                instructions || undefined,
+                mergedAddons,
+                workspaceRoot
+            );
         }
-        // Accuracy mode is NOT included in copy-to-clipboard prompts — it requires MCP tools
-        // only available in CLI terminal sessions (autoban dispatch handles accuracy separately).
-        const pairProgrammingEnabled = (this._autobanState?.pairProgrammingMode ?? 'off') !== 'off';
-        const aggressivePairProgramming = this._autobanState?.aggressivePairProgramming ?? false;
+
+        const promptsConfig = await this._getPromptsConfig(workspaceRoot);
         const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
-        return buildKanbanBatchPrompt(role, this._cardsToPromptPlans(cards, workspaceRoot), {
-            instruction,
-            pairProgrammingEnabled,
-            aggressivePairProgramming,
-            defaultPromptOverrides
-        });
+        const config = vscode.workspace.getConfiguration('switchboard');
+
+        const resolvedOptions: PromptBuilderOptions = {
+            clearAntigravityContext: promptsConfig.clearAntigravityContextByRole?.[role] ?? false,
+            cavemanOutputEnabled: promptsConfig.cavemanOutputByRole?.[role] ?? false,
+            skipCompilation: promptsConfig.skipCompilationByRole?.[role] ?? false,
+            skipTests: promptsConfig.skipTestsByRole?.[role] ?? false,
+            suppressWalkthroughEnabled: promptsConfig.suppressWalkthroughByRole?.[role] ?? false,
+            useSubagentsEnabled: promptsConfig.useSubagentsByRole?.[role] ?? false,
+            noSubagentsEnabled: promptsConfig.noSubagentsByRole?.[role] ?? false,
+            customSubagentName: promptsConfig.customSubagentNameByRole?.[role] || undefined,
+            useWorktreesPerPlanEnabled: promptsConfig.useWorktreesPerPlanByRole?.[role] ?? false,
+            switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role] ?? true,
+            gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.[role] ?? true,
+            workflowFilePathEnabled: promptsConfig.workflowFilePathEnabledByRole?.[role] ?? false,
+            workflowFilePath: promptsConfig.workflowFilePathByRole?.[role] || '',
+            defaultPromptOverrides,
+            workspaceRoot,
+            routingMapConfig: this._routingMapConfig,
+        };
+
+        if (role === 'planner') {
+            resolvedOptions.aggressivePairProgramming = promptsConfig.aggressivePairProgramming;
+            resolvedOptions.plannerWorkflowPath = promptsConfig.plannerWorkflowPath;
+            resolvedOptions.workflowFilePathEnabled = promptsConfig.workflowFilePathEnabledByRole?.planner !== false;
+
+            const { designDocLink, designDocContent } = await this._resolveGlobalDesignDoc(workspaceRoot);
+            resolvedOptions.designDocLink = designDocLink;
+            resolvedOptions.designDocContent = designDocContent;
+            const { designSystemDocLink } = await this._resolveDesignSystemDoc(workspaceRoot);
+            resolvedOptions.designSystemDocLink = designSystemDocLink;
+        } else if (role === 'lead' || role === 'coder' || role === 'intern') {
+            resolvedOptions.instruction = (role === 'coder' || role === 'intern') ? 'low-complexity' : undefined;
+            resolvedOptions.pairProgrammingEnabled = (this._autobanState?.pairProgrammingMode ?? 'off') !== 'off';
+            resolvedOptions.accurateCodingEnabled = promptsConfig.accurateCodingEnabledByRole?.[role] ?? false;
+            resolvedOptions.aggressivePairProgramming = promptsConfig.aggressivePairProgramming;
+            if (role === 'lead') {
+                resolvedOptions.includeInlineChallenge = promptsConfig.leadChallengeEnabled ?? false;
+            }
+        } else if (role === 'reviewer') {
+            resolvedOptions.advancedReviewerEnabled = promptsConfig.advancedReviewerEnabled;
+            resolvedOptions.reviewerConciseModeEnabled = promptsConfig.reviewerConciseModeEnabled;
+            resolvedOptions.reviewerCompactPlanUpdateEnabled = promptsConfig.reviewerCompactPlanUpdateEnabled;
+        } else if (role === 'tester') {
+            const { designDocLink, designDocContent } = await this._resolveGlobalDesignDoc(workspaceRoot);
+            if (!designDocLink) {
+                throw new Error('Acceptance Tester requires a Planning Epic to be enabled and attached in Setup.');
+            }
+            resolvedOptions.designDocLink = designDocLink;
+            resolvedOptions.designDocContent = designDocContent;
+        } else if (role === 'researcher' || role === 'code_researcher') {
+            resolvedOptions.researchDepth = role === 'code_researcher' ? promptsConfig.codeResearcher?.researchDepth : promptsConfig.researchDepth;
+            resolvedOptions.saveToLocalDocs = role === 'researcher' ? promptsConfig.saveToLocalDocs : undefined;
+            resolvedOptions.localDocsPath = role === 'researcher' ? promptsConfig.localDocsPath : undefined;
+        } else if (role === 'ticket_updater') {
+            resolvedOptions.ticketUpdateMode = promptsConfig.ticketUpdateMode;
+        } else if (role === 'splitter') {
+            resolvedOptions.complexityScoringSkill = promptsConfig.complexityScoringSkill;
+        } else if (role === 'chat') {
+            resolvedOptions.chatPlanDestinations = this._taskViewerProvider?.resolveChatPlanDestinations(workspaceRoot);
+        }
+
+        const mergedOptions = {
+            ...resolvedOptions,
+            ...overrides,
+        };
+
+        return buildKanbanBatchPrompt(role, plans, mergedOptions);
+    }
+
+    private async _getPromptsConfig(workspaceRoot: string): Promise<any> {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        
+        // Load role-based configs from workspaceState / state.json
+        const plannerConfig: any = this._getRoleConfig('planner');
+        const coderConfig: any = this._getRoleConfig('coder');
+        const leadConfig: any = this._getRoleConfig('lead');
+        const reviewerConfig: any = this._getRoleConfig('reviewer');
+        const testerConfig: any = this._getRoleConfig('tester');
+        const internConfig: any = this._getRoleConfig('intern');
+        const analystConfig: any = this._getRoleConfig('analyst');
+        const researcherConfig: any = this._getRoleConfig('researcher');
+        const splitterConfig: any = this._getRoleConfig('splitter');
+        const ticketUpdaterConfig: any = this._getRoleConfig('ticket_updater');
+        const codeResearcherConfig: any = this._getRoleConfig('code_researcher')
+            ?? this._getRoleConfig('research_planner');
+        const gathererConfig: any = this._getRoleConfig('gatherer');
+
+        return {
+            workflowFilePathEnabledByRole: {
+                planner: plannerConfig?.addons?.workflowFilePathEnabled ?? true,
+                lead: leadConfig?.addons?.workflowFilePathEnabled ?? false,
+                coder: coderConfig?.addons?.workflowFilePathEnabled ?? false,
+                reviewer: reviewerConfig?.addons?.workflowFilePathEnabled ?? false,
+                tester: testerConfig?.addons?.workflowFilePathEnabled ?? false,
+                intern: internConfig?.addons?.workflowFilePathEnabled ?? false,
+                analyst: analystConfig?.addons?.workflowFilePathEnabled ?? false,
+                researcher: researcherConfig?.addons?.workflowFilePathEnabled ?? false,
+                splitter: splitterConfig?.addons?.workflowFilePathEnabled ?? false,
+                ticket_updater: ticketUpdaterConfig?.addons?.workflowFilePathEnabled ?? false,
+                code_researcher: codeResearcherConfig?.addons?.workflowFilePathEnabled ?? false,
+                gatherer: gathererConfig?.addons?.workflowFilePathEnabled ?? false,
+            },
+            workflowFilePathByRole: {
+                planner: plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agent/workflows/improve-plan.md'),
+                lead: leadConfig?.addons?.workflowFilePath || '',
+                coder: coderConfig?.addons?.workflowFilePath || '',
+                reviewer: reviewerConfig?.addons?.workflowFilePath || '',
+                tester: testerConfig?.addons?.workflowFilePath || '',
+                intern: internConfig?.addons?.workflowFilePath || '',
+                analyst: analystConfig?.addons?.workflowFilePath || '',
+                researcher: researcherConfig?.addons?.workflowFilePath || '',
+                splitter: splitterConfig?.addons?.workflowFilePath || '',
+                ticket_updater: ticketUpdaterConfig?.addons?.workflowFilePath || '',
+                code_researcher: codeResearcherConfig?.addons?.workflowFilePath || '',
+                gatherer: gathererConfig?.addons?.workflowFilePath || '',
+            },
+            accurateCodingEnabledByRole: {
+                lead: leadConfig?.addons?.accurateCoding ?? config.get<boolean>('accurateCoding.enabled', false),
+                coder: coderConfig?.addons?.accurateCoding ?? config.get<boolean>('accurateCoding.enabled', false),
+                intern: internConfig?.addons?.accurateCoding ?? false,
+            },
+            pairProgrammingEnabled: {
+                lead: leadConfig?.addons?.pairProgramming ?? false,
+                coder: coderConfig?.addons?.pairProgramming ?? false,
+                intern: internConfig?.addons?.pairProgramming ?? false,
+            },
+            advancedReviewerEnabled: reviewerConfig?.addons?.advancedRegression ?? config.get<boolean>('reviewer.advancedMode', false),
+            reviewerConciseModeEnabled: reviewerConfig?.addons?.reviewerConciseMode ?? false,
+            reviewerCompactPlanUpdateEnabled: reviewerConfig?.addons?.reviewerCompactPlanUpdate ?? false,
+            leadChallengeEnabled: leadConfig?.addons?.leadChallenge ?? config.get<boolean>('leadCoder.inlineChallenge', false),
+            aggressivePairProgramming: plannerConfig?.addons?.aggressivePairProgramming ?? config.get<boolean>('aggressivePairProgramming.enabled', false),
+            designDocEnabled: plannerConfig?.addons?.designDoc ?? config.get<boolean>('planner.designDocEnabled', false),
+            designDocLink: config.get<string>('planner.designDocLink', ''),
+            designSystemDocEnabled: plannerConfig?.addons?.designSystemDoc ?? config.get<boolean>('planner.designSystemDocEnabled', false),
+            designSystemDocLink: config.get<string>('planner.designSystemDocLink', ''),
+            plannerWorkflowPath: plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agent/workflows/improve-plan.md'),
+            skipCompilationByRole: {
+                planner: plannerConfig?.addons?.skipCompilation ?? false,
+                lead: leadConfig?.addons?.skipCompilation ?? true,
+                coder: coderConfig?.addons?.skipCompilation ?? true,
+                reviewer: reviewerConfig?.addons?.skipCompilation ?? true,
+                tester: testerConfig?.addons?.skipCompilation ?? false,
+                intern: internConfig?.addons?.skipCompilation ?? true,
+                analyst: analystConfig?.addons?.skipCompilation ?? false,
+                researcher: researcherConfig?.addons?.skipCompilation ?? false,
+                splitter: splitterConfig?.addons?.skipCompilation ?? false,
+                ticket_updater: ticketUpdaterConfig?.addons?.skipCompilation ?? false,
+                code_researcher: codeResearcherConfig?.addons?.skipCompilation ?? false,
+            },
+            skipTestsByRole: {
+                planner: plannerConfig?.addons?.skipTests ?? false,
+                lead: leadConfig?.addons?.skipTests ?? true,
+                coder: coderConfig?.addons?.skipTests ?? true,
+                reviewer: reviewerConfig?.addons?.skipTests ?? true,
+                tester: testerConfig?.addons?.skipTests ?? false,
+                intern: internConfig?.addons?.skipTests ?? true,
+                analyst: analystConfig?.addons?.skipTests ?? false,
+                researcher: researcherConfig?.addons?.skipTests ?? false,
+                splitter: splitterConfig?.addons?.skipTests ?? false,
+                ticket_updater: ticketUpdaterConfig?.addons?.skipTests ?? false,
+                code_researcher: codeResearcherConfig?.addons?.skipTests ?? false,
+            },
+            gitProhibitionEnabled: plannerConfig?.addons?.gitProhibition ?? config.get<boolean>('planner.gitProhibitionEnabled', false),
+            codeResearcher: {
+                researchDepth: codeResearcherConfig?.researchComplexity || 'deep',
+            },
+            researchDepth: researcherConfig?.researchComplexity || 'deep',
+            saveToLocalDocs: researcherConfig?.saveToLocalDocs ?? false,
+            localDocsPath: config.get<string[]>('research.localFolderPaths', [])[0] ?? undefined,
+            gitProhibitionByRole: {
+                planner: plannerConfig?.addons?.gitProhibition ?? config.get<boolean>('planner.gitProhibitionEnabled', false),
+                lead: leadConfig?.addons?.gitProhibition ?? true,
+                coder: coderConfig?.addons?.gitProhibition ?? true,
+                reviewer: reviewerConfig?.addons?.gitProhibition ?? true,
+                tester: testerConfig?.addons?.gitProhibition ?? true,
+                intern: internConfig?.addons?.gitProhibition ?? true,
+                analyst: analystConfig?.addons?.gitProhibition ?? true,
+                researcher: researcherConfig?.addons?.gitProhibition ?? true,
+                splitter: splitterConfig?.addons?.gitProhibition ?? true,
+                ticket_updater: ticketUpdaterConfig?.addons?.gitProhibition ?? true,
+                code_researcher: codeResearcherConfig?.addons?.gitProhibition ?? true,
+            },
+            switchboardSafeguardsByRole: {
+                planner: plannerConfig?.addons?.switchboardSafeguards ?? true,
+                lead: leadConfig?.addons?.switchboardSafeguards ?? true,
+                coder: coderConfig?.addons?.switchboardSafeguards ?? true,
+                reviewer: reviewerConfig?.addons?.switchboardSafeguards ?? true,
+                tester: testerConfig?.addons?.switchboardSafeguards ?? true,
+                intern: internConfig?.addons?.switchboardSafeguards ?? true,
+                analyst: analystConfig?.addons?.switchboardSafeguards ?? true,
+                researcher: researcherConfig?.addons?.switchboardSafeguards ?? true,
+                splitter: splitterConfig?.addons?.switchboardSafeguards ?? true,
+                ticket_updater: ticketUpdaterConfig?.addons?.switchboardSafeguards ?? true,
+                code_researcher: codeResearcherConfig?.addons?.switchboardSafeguards ?? true,
+            },
+            useSubagentsByRole: {
+                planner: plannerConfig?.addons?.subagentPolicy === 'useSubagents' || (plannerConfig?.addons?.subagentPolicy === undefined && plannerConfig?.addons?.useSubagents === true),
+                lead: leadConfig?.addons?.subagentPolicy === 'useSubagents' || (leadConfig?.addons?.subagentPolicy === undefined && leadConfig?.addons?.useSubagents === true),
+                coder: coderConfig?.addons?.subagentPolicy === 'useSubagents' || (coderConfig?.addons?.subagentPolicy === undefined && coderConfig?.addons?.useSubagents === true),
+                reviewer: reviewerConfig?.addons?.subagentPolicy === 'useSubagents' || (reviewerConfig?.addons?.subagentPolicy === undefined && reviewerConfig?.addons?.useSubagents === true),
+                tester: testerConfig?.addons?.subagentPolicy === 'useSubagents' || (testerConfig?.addons?.subagentPolicy === undefined && testerConfig?.addons?.useSubagents === true),
+                intern: internConfig?.addons?.subagentPolicy === 'useSubagents' || (internConfig?.addons?.subagentPolicy === undefined && internConfig?.addons?.useSubagents === true),
+                analyst: analystConfig?.addons?.subagentPolicy === 'useSubagents' || (analystConfig?.addons?.subagentPolicy === undefined && analystConfig?.addons?.useSubagents === true),
+                researcher: researcherConfig?.addons?.subagentPolicy === 'useSubagents' || (researcherConfig?.addons?.subagentPolicy === undefined && researcherConfig?.addons?.useSubagents === true),
+                splitter: splitterConfig?.addons?.subagentPolicy === 'useSubagents' || (splitterConfig?.addons?.subagentPolicy === undefined && splitterConfig?.addons?.useSubagents === true),
+                ticket_updater: ticketUpdaterConfig?.addons?.subagentPolicy === 'useSubagents' || (ticketUpdaterConfig?.addons?.subagentPolicy === undefined && ticketUpdaterConfig?.addons?.useSubagents === true),
+                code_researcher: codeResearcherConfig?.addons?.subagentPolicy === 'useSubagents' || (codeResearcherConfig?.addons?.subagentPolicy === undefined && codeResearcherConfig?.addons?.useSubagents === true),
+                gatherer: gathererConfig?.addons?.subagentPolicy === 'useSubagents' || (gathererConfig?.addons?.subagentPolicy === undefined && gathererConfig?.addons?.useSubagents === true),
+            },
+            noSubagentsByRole: {
+                planner: plannerConfig?.addons?.subagentPolicy === 'noSubagents',
+                lead: leadConfig?.addons?.subagentPolicy === 'noSubagents',
+                coder: coderConfig?.addons?.subagentPolicy === 'noSubagents',
+                reviewer: reviewerConfig?.addons?.subagentPolicy === 'noSubagents',
+                tester: testerConfig?.addons?.subagentPolicy === 'noSubagents',
+                intern: internConfig?.addons?.subagentPolicy === 'noSubagents',
+                analyst: analystConfig?.addons?.subagentPolicy === 'noSubagents',
+                researcher: researcherConfig?.addons?.subagentPolicy === 'noSubagents',
+                splitter: splitterConfig?.addons?.subagentPolicy === 'noSubagents',
+                ticket_updater: ticketUpdaterConfig?.addons?.subagentPolicy === 'noSubagents',
+                code_researcher: codeResearcherConfig?.addons?.subagentPolicy === 'noSubagents',
+                gatherer: gathererConfig?.addons?.subagentPolicy === 'noSubagents',
+            },
+            customSubagentNameByRole: {
+                planner: plannerConfig?.addons?.subagentPolicy === 'customSubagent' ? (plannerConfig?.addons?.customSubagentName || '') : '',
+                lead: leadConfig?.addons?.subagentPolicy === 'customSubagent' ? (leadConfig?.addons?.customSubagentName || '') : '',
+                coder: coderConfig?.addons?.subagentPolicy === 'customSubagent' ? (coderConfig?.addons?.customSubagentName || '') : '',
+                reviewer: reviewerConfig?.addons?.subagentPolicy === 'customSubagent' ? (reviewerConfig?.addons?.customSubagentName || '') : '',
+                tester: testerConfig?.addons?.subagentPolicy === 'customSubagent' ? (testerConfig?.addons?.customSubagentName || '') : '',
+                intern: internConfig?.addons?.subagentPolicy === 'customSubagent' ? (internConfig?.addons?.customSubagentName || '') : '',
+                analyst: analystConfig?.addons?.subagentPolicy === 'customSubagent' ? (analystConfig?.addons?.customSubagentName || '') : '',
+                researcher: researcherConfig?.addons?.subagentPolicy === 'customSubagent' ? (researcherConfig?.addons?.customSubagentName || '') : '',
+                splitter: splitterConfig?.addons?.subagentPolicy === 'customSubagent' ? (splitterConfig?.addons?.customSubagentName || '') : '',
+                ticket_updater: ticketUpdaterConfig?.addons?.subagentPolicy === 'customSubagent' ? (ticketUpdaterConfig?.addons?.customSubagentName || '') : '',
+                code_researcher: codeResearcherConfig?.addons?.subagentPolicy === 'customSubagent' ? (codeResearcherConfig?.addons?.customSubagentName || '') : '',
+                gatherer: gathererConfig?.addons?.subagentPolicy === 'customSubagent' ? (gathererConfig?.addons?.customSubagentName || '') : '',
+            },
+            useWorktreesPerPlanByRole: {
+                lead: leadConfig?.addons?.useWorktreesPerPlan === true,
+                coder: coderConfig?.addons?.useWorktreesPerPlan === true,
+                intern: internConfig?.addons?.useWorktreesPerPlan === true,
+            },
+            clearAntigravityContextByRole: {
+                planner: plannerConfig?.addons?.clearAntigravityContext ?? false,
+                lead: leadConfig?.addons?.clearAntigravityContext ?? false,
+                coder: coderConfig?.addons?.clearAntigravityContext ?? false,
+                reviewer: reviewerConfig?.addons?.clearAntigravityContext ?? false,
+                tester: testerConfig?.addons?.clearAntigravityContext ?? false,
+                intern: internConfig?.addons?.clearAntigravityContext ?? false,
+                analyst: analystConfig?.addons?.clearAntigravityContext ?? false,
+                researcher: researcherConfig?.addons?.clearAntigravityContext ?? false,
+                splitter: splitterConfig?.addons?.clearAntigravityContext ?? false,
+                ticket_updater: ticketUpdaterConfig?.addons?.clearAntigravityContext ?? false,
+                code_researcher: codeResearcherConfig?.addons?.clearAntigravityContext ?? false,
+                gatherer: gathererConfig?.addons?.clearAntigravityContext ?? false,
+            },
+            cavemanOutputByRole: {
+                planner: plannerConfig?.addons?.cavemanOutput ?? true,
+                lead: leadConfig?.addons?.cavemanOutput ?? true,
+                coder: coderConfig?.addons?.cavemanOutput ?? true,
+                reviewer: reviewerConfig?.addons?.cavemanOutput ?? true,
+                tester: testerConfig?.addons?.cavemanOutput ?? false,
+                intern: internConfig?.addons?.cavemanOutput ?? true,
+                analyst: analystConfig?.addons?.cavemanOutput ?? false,
+                researcher: researcherConfig?.addons?.cavemanOutput ?? false,
+                splitter: splitterConfig?.addons?.cavemanOutput ?? false,
+                ticket_updater: ticketUpdaterConfig?.addons?.cavemanOutput ?? false,
+                code_researcher: codeResearcherConfig?.addons?.cavemanOutput ?? false,
+                gatherer: gathererConfig?.addons?.cavemanOutput ?? false,
+            },
+            suppressWalkthroughByRole: {
+                lead: leadConfig?.addons?.suppressWalkthrough ?? false,
+                coder: coderConfig?.addons?.suppressWalkthrough ?? false,
+                intern: internConfig?.addons?.suppressWalkthrough ?? false,
+            },
+            ticketUpdateMode: ticketUpdaterConfig?.addons?.ticketUpdateMode
+                ?? (ticketUpdaterConfig?.addons?.ticketUpdateEnabled === true ? 'comment-only'
+                    : ticketUpdaterConfig?.addons?.ticketUpdateEnabled === false ? 'disabled'
+                    : 'disabled'),
+            complexityScoringSkill: splitterConfig?.addons?.complexityScoringSkill ?? true,
+        };
+    }
+
+    private async _generateAntigravityPrompt(agentName: string, workspaceRoot: string, column: string = 'CREATED', batchSize?: number): Promise<void> {
+        try {
+            if (!agentName) {
+                this._panel?.webview.postMessage({
+                    type: 'antigravityPrompt',
+                    prompt: null,
+                    error: 'No agent specified'
+                });
+                return;
+            }
+
+            // Get the oldest plan in the specified column
+            const db = this._getKanbanDb(workspaceRoot);
+            if (!await db.ensureReady()) {
+                this._panel?.webview.postMessage({
+                    type: 'antigravityPrompt',
+                    prompt: null,
+                    error: 'Database not available'
+                });
+                return;
+            }
+
+            const workspaceId = await this._readWorkspaceId(workspaceRoot)
+                || await db.getWorkspaceId()
+                || await db.getDominantWorkspaceId();
+
+            if (!workspaceId) {
+                this._panel?.webview.postMessage({
+                    type: 'antigravityPrompt',
+                    prompt: null,
+                    error: 'No workspace ID found'
+                });
+                return;
+            }
+
+            // Query for plans in the specified column
+            const columnPlans = await db.getPlansByColumn(workspaceId, column, this._projectFilter);
+
+            if (!columnPlans || columnPlans.length === 0) {
+                this._panel?.webview.postMessage({
+                    type: 'antigravityPrompt',
+                    prompt: null,
+                    error: `No plans found in ${column} column`
+                });
+                return;
+            }
+
+            // Map agent name to role (for custom agents, use their role)
+            let role = agentName;
+            const customAgents = await this._getCustomAgents(workspaceRoot);
+            const customAgent = customAgents.find(a => a.name === agentName);
+            if (customAgent && customAgent.role) {
+                role = customAgent.role;
+            }
+
+
+            let schedulingBlock = '';
+            let batchBlock = '';
+            let oldestPlan: any;
+            let batchPlans: any[] = [];
+            let resolvedNextColumn: string | null = null;
+            let sqlInstruction = '';
+
+            if (batchSize !== undefined) {
+                batchPlans = columnPlans.slice(-batchSize);
+                oldestPlan = batchPlans[batchPlans.length - 1];
+                resolvedNextColumn = await this._getNextColumnId(column, workspaceRoot);
+                
+                batchBlock = `\n\n---\n\nProcess the ${batchPlans.length} oldest plans in the **${column}** column using subagent delegation.\n\nFor each plan:\n1. Read the plan file from .switchboard/plans/\n2. Delegate execution to a subagent with the full plan context (use invoke_subagent)\n3. Wait for the subagent to complete\n4. Move the plan to the next column in the workflow\n5. Track completion status\n\nAfter all plans are processed, provide a summary:\n- Plans completed successfully\n- Plans that failed or need attention\n- Next column each plan was moved to\n\nAgent role for delegation context: **${role}**\nCancel this task immediately if no plans remain in **${column}**.\n\nIMPORTANT: Process plans in parallel using invoke_subagent for each plan simultaneously, not sequentially.`;
+
+                sqlInstruction = resolvedNextColumn === null
+                    ? `
+
+---
+
+**NOTE: No next column could be determined for the \`${column}\` column in this workspace's pipeline.**
+
+Do NOT run a SQL UPDATE to move the plans — the target column is unknown and writing an incorrect value would corrupt the kanban board. Instead, manually verify the plans' final state in Switchboard and move them via the UI.
+
+To inspect the current plans:
+
+\`\`\`bash
+sqlite3 "${db.dbPath}" "SELECT plan_file, kanban_column, status FROM plans WHERE session_id IN (${batchPlans.map(p => `'${p.sessionId}'`).join(', ')}) AND workspace_id = '${workspaceId}';"
+\`\`\`
+`
+                    : `
+
+---
+
+**IMPORTANT: After completing the coding work for these plans, update the kanban database to move them to the next column.**
+
+Run the following command (uses the sqlite3 CLI — it must be installed):
+
+\`\`\`bash
+sqlite3 "${db.dbPath}" "UPDATE plans SET kanban_column = '${resolvedNextColumn}', updated_at = datetime('now') WHERE session_id IN (${batchPlans.map(p => `'${p.sessionId}'`).join(', ')}) AND workspace_id = '${workspaceId}'; SELECT changes();"
+\`\`\`
+
+Verify that the output matches the number of updated rows.
+
+Database: \`${db.dbPath}\`
+Target column: \`${resolvedNextColumn}\`
+
+This step is what moves the plans forward in the Switchboard pipeline.
+`;
+            } else {
+                schedulingBlock = `\n\n---\n\nYou are running on a scheduled Antigravity timer to process plans in the **${column}** column.\n\nEach time you run:\n1. Use skill: "query_switchboard_kanban" to get all plans currently in the **${column}** column\n2. If no plans exist in the column:\n   a. Call manage_task with action: 'list' to find this schedule's TaskId\n   b. Call manage_task with action: 'kill' and that TaskId to cancel all future runs\n   c. Stop.\n3. Identify the oldest plan by creation timestamp\n4. Process that plan as a **${role}** using your standard workflow\n5. When complete, move the plan to the next column in the pipeline\n\nAgent configuration: **${role}**\nTarget column: **${column}**`;
+
+                oldestPlan = columnPlans[columnPlans.length - 1]; // oldest by updated_at (ORDER BY updated_at DESC)
+                resolvedNextColumn = await this._getNextColumnId(column, workspaceRoot);
+                // Guard: if _getNextColumnId returns null the source column is at the end of the
+                // pipeline (e.g. CODE REVIEWED without an acceptance tester). Emitting a SQL UPDATE
+                // with a made-up fallback column would silently corrupt the plan record, so we emit
+                // a warning instruction instead.
+                sqlInstruction = resolvedNextColumn === null
+                    ? `
+
+---
+
+**NOTE: No next column could be determined for the \`${column}\` column in this workspace's pipeline.**
+
+Do NOT run a SQL UPDATE to move the plan — the target column is unknown and writing an incorrect value would corrupt the kanban board. Instead, manually verify the plan's final state in Switchboard and move it via the UI.
+
+To inspect the current plan record:
+
+\`\`\`bash
+sqlite3 "${db.dbPath}" "SELECT plan_file, kanban_column, status FROM plans WHERE plan_file = '${oldestPlan.planFile}' AND workspace_id = '${workspaceId}';"
+\`\`\`
+`
+                    : `
+
+---
+
+**IMPORTANT: After completing the coding work for this plan, update the kanban database to move it to the next column.**
+
+Run the following command (uses the sqlite3 CLI — it must be installed):
+
+\`\`\`bash
+sqlite3 "${db.dbPath}" "UPDATE plans SET kanban_column = '${resolvedNextColumn}', updated_at = datetime('now') WHERE plan_file = '${oldestPlan.planFile}' AND workspace_id = '${workspaceId}'; SELECT changes();"
+\`\`\`
+
+Verify that the output is \`1\` (one row updated). If it is \`0\`, the plan_file path may not match — check the DB with:
+
+\`\`\`bash
+sqlite3 "${db.dbPath}" "SELECT plan_file, kanban_column FROM plans WHERE workspace_id = '${workspaceId}';"
+\`\`\`
+
+Database: \`${db.dbPath}\`
+Target column: \`${resolvedNextColumn}\`
+
+This step is what moves the plan forward in the Switchboard pipeline.
+`;
+            }
+
+            let prompt: string;
+            const targetBlock = batchSize !== undefined ? batchBlock : schedulingBlock;
+            // Build the role-configuration preamble via generateUnifiedPrompt (handles
+            // both built-in roles and custom agents), then strip the trailing empty
+            // "PLANS TO PROCESS:" section (produced when plans=[] — it's replaced
+            // by the scheduling block below and would be contradictory noise).
+            let preamble = await this.generateUnifiedPrompt(role, [], workspaceRoot);
+            preamble = preamble.replace(/\n*PLANS TO PROCESS:\n?\s*$/, '').trimEnd();
+            prompt = preamble + targetBlock + sqlInstruction;
+
+            this._panel?.webview.postMessage({
+                type: 'antigravityPrompt',
+                prompt
+            });
+        } catch (error) {
+            console.error('[KanbanProvider] Failed to generate antigravity prompt:', error);
+            this._panel?.webview.postMessage({
+                type: 'antigravityPrompt',
+                prompt: null,
+                error: String(error)
+            });
+        }
+    }
+
+    private async _savePromptsConfig(workspaceRoot: string, msg: any): Promise<void> {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        try {
+            if (typeof msg.accurateCodingEnabled === 'boolean') {
+                await config.update('accurateCoding.enabled', msg.accurateCodingEnabled, true);
+            }
+            if (typeof msg.advancedReviewerEnabled === 'boolean') {
+                await config.update('reviewer.advancedMode', msg.advancedReviewerEnabled, true);
+            }
+            if (typeof msg.leadChallengeEnabled === 'boolean') {
+                await config.update('leadCoder.inlineChallenge', msg.leadChallengeEnabled, true);
+            }
+            if (typeof msg.aggressivePairProgramming === 'boolean') {
+                await config.update('aggressivePairProgramming.enabled', msg.aggressivePairProgramming, true);
+            }
+            if (typeof msg.designDocEnabled === 'boolean') {
+                await config.update('planner.designDocEnabled', msg.designDocEnabled, true);
+            }
+            if (typeof msg.designDocLink === 'string') {
+                await config.update('planner.designDocLink', msg.designDocLink, true);
+            }
+            if (typeof msg.gitProhibitionEnabled === 'boolean') {
+                await config.update('planner.gitProhibitionEnabled', msg.gitProhibitionEnabled, true);
+            }
+        } catch (err) {
+            console.error('[KanbanProvider] Failed to save prompts config:', err);
+        }
     }
 
     private async _dispatchWithPairProgrammingIfNeeded(
@@ -1645,25 +2860,28 @@ export class KanbanProvider implements vscode.Disposable {
     ): Promise<void> {
         const mode = this._autobanState?.pairProgrammingMode ?? 'off';
         if (mode === 'off') { return; }
+
+        const repoScopeMap = new Map<string, string>();
+        const db = this._getKanbanDb(workspaceRoot);
+        if (await db.ensureReady()) {
+            for (const card of cards) {
+                const cardKey = this._cardId(card);
+                const plan = await db.getPlanBySessionId(cardKey);
+                if (plan?.repoScope) {
+                    repoScopeMap.set(cardKey, plan.repoScope);
+                }
+            }
+        }
+        
+        const promptsConfig = await this._getPromptsConfig(workspaceRoot);
         const coderUsesIde = mode === 'cli-ide' || mode === 'ide-ide';
-        const accurateCodingEnabled = !coderUsesIde
-            && vscode.workspace.getConfiguration('switchboard').get<boolean>('accurateCoding.enabled', true);
-        const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
-        const coderPrompt = buildKanbanBatchPrompt('coder', this._cardsToPromptPlans(cards, workspaceRoot), {
+        const accurateCodingEnabled = !coderUsesIde && (promptsConfig.accurateCodingEnabledByRole?.coder ?? false);
+        const plans = await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap);
+        const coderPrompt = await this.generateUnifiedPrompt('coder', plans, workspaceRoot, {
             pairProgrammingEnabled: true,
-            accurateCodingEnabled,
-            defaultPromptOverrides
+            accurateCodingEnabled
         });
         if (coderUsesIde) {
-            const handoffDir = path.join(workspaceRoot, '.switchboard', 'handoff');
-            const sessionIds = cards.map(c => c.sessionId);
-            const backupPath = path.join(handoffDir, `coder_prompt_${sessionIds.join('_')}_${Date.now()}.md`);
-            try {
-                if (!fs.existsSync(handoffDir)) { fs.mkdirSync(handoffDir, { recursive: true }); }
-                fs.writeFileSync(backupPath, coderPrompt, 'utf8');
-            } catch (err) {
-                console.error('[KanbanProvider] Failed to write Coder prompt backup:', err);
-            }
             const choice = await vscode.window.showInformationMessage(
                 'Pair Programming: Routine tasks identified. Click to copy Coder prompt.',
                 'Copy Coder Prompt'
@@ -1671,7 +2889,6 @@ export class KanbanProvider implements vscode.Disposable {
             if (choice === 'Copy Coder Prompt') {
                 await vscode.env.clipboard.writeText(coderPrompt);
                 vscode.window.showInformationMessage('Coder prompt copied to clipboard.');
-                try { fs.unlinkSync(backupPath); } catch { /* ignore */ }
             }
         } else {
             await vscode.commands.executeCommand('switchboard.dispatchToCoderTerminal', coderPrompt);
@@ -1681,21 +2898,38 @@ export class KanbanProvider implements vscode.Disposable {
     /** Get the next column ID in the pipeline, or null for the last column. */
     private async _getNextColumnId(column: string, workspaceRoot: string): Promise<string | null> {
         const normalizedColumn = this._normalizeLegacyKanbanColumn(column);
-        const acceptanceTesterActive = await this._isAcceptanceTesterActive(workspaceRoot);
         const [customAgents, customKanbanColumns] = await Promise.all([
             this._getCustomAgents(workspaceRoot),
             this._getCustomKanbanColumns(workspaceRoot)
         ]);
-        const allColumns = this._buildKanbanColumns(customAgents, customKanbanColumns);
+        const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+        const acceptanceTesterActive = visibleAgents.tester !== false && this._isAcceptanceTesterDesignDocConfigured();
+        const allColumns = await this._buildKanbanColumns(customAgents, customKanbanColumns);
+
         const idx = allColumns.findIndex(c => c.id === normalizedColumn);
         if (idx < 0 || idx >= allColumns.length - 1) { return null; }
+
+        /** Returns true if the column should NOT be considered a next step. */
+        const shouldSkip = (col: typeof allColumns[0]): boolean => {
+            if (col.id === 'ACCEPTANCE TESTED' && !acceptanceTesterActive) {
+                return true;
+            }
+            if (col.dragDropMode === 'disabled') {
+                return true;
+            }
+            if (col.hideWhenNoAgent && col.role && visibleAgents[col.role] === false) {
+                return true;
+            }
+            return false;
+        };
+
         if (!this._isParallelCodedLane(normalizedColumn)) {
             for (let i = idx + 1; i < allColumns.length; i++) {
                 const candidate = allColumns[i];
                 if (!candidate) {
                     continue;
                 }
-                if (candidate.id === 'ACCEPTANCE TESTED' && !acceptanceTesterActive) {
+                if (shouldSkip(candidate)) {
                     continue;
                 }
                 if (normalizedColumn === 'CODE REVIEWED' && candidate.id === 'COMPLETED' && !acceptanceTesterActive) {
@@ -1710,7 +2944,7 @@ export class KanbanProvider implements vscode.Disposable {
             if (!candidate) {
                 continue;
             }
-            if (candidate.id === 'ACCEPTANCE TESTED' && !acceptanceTesterActive) {
+            if (shouldSkip(candidate)) {
                 continue;
             }
             if (!this._isParallelCodedLane(candidate.id)) {
@@ -1720,40 +2954,112 @@ export class KanbanProvider implements vscode.Disposable {
         return null;
     }
 
-    /** Determine the appropriate workflow name for advancing from a given column. */
-    private async _workflowForColumn(column: string, workspaceRoot: string): Promise<string | null> {
-        switch (column) {
-            case 'CREATED': return 'improve-plan';
-            case 'PLAN REVIEWED': return 'handoff';
-            case 'TEAM LEAD CODED': return 'review';
-            case 'LEAD CODED': return 'review';
-            case 'CODER CODED': return 'review';
-            case 'CODE REVIEWED':
-                return await this._isAcceptanceTesterActive(workspaceRoot) ? 'tester-pass' : null;
-            default: return 'handoff';
-        }
-    }
+
 
     /** Generate a prompt appropriate for the given source column and cards. */
-    private async _generatePromptForColumn(cards: KanbanCard[], column: string, workspaceRoot: string): Promise<string> {
-        // PLAN REVIEWED requires complexity-based role selection
-        if (column === 'PLAN REVIEWED') {
-            return await this._generateBatchExecutionPrompt(cards, workspaceRoot);
+    private async _generatePromptForColumn(
+        cards: KanbanCard[],
+        column: string,
+        workspaceRoot: string,
+        destinationColumn?: string
+    ): Promise<string> {
+        const [customAgents, customKanbanColumns] = await Promise.all([
+            this._getCustomAgents(workspaceRoot),
+            this._getCustomKanbanColumns(workspaceRoot)
+        ]);
+        const allColumns = await this._buildKanbanColumns(customAgents, customKanbanColumns);
+
+        // When advancing to a destination column, the prompt should be for the
+        // DESTINATION agent who receives the plans, not the source column agent.
+        const roleSourceColumn = destinationColumn || column;
+        const roleSourceDef = allColumns.find(c => c.id === roleSourceColumn);
+
+        // sourceColumnLabel is kept from the ORIGINAL source column for context
+        const sourceColumnDef = allColumns.find(c => c.id === column);
+        const sourceColumnLabel = sourceColumnDef?.label || column;
+
+        let role: string | null = null;
+
+        if (roleSourceDef?.role) {
+            // PLAN REVIEWED's role ('planner') is for destination dispatch (moving TO it).
+            // When it is the source (and we are not moving to it), we want execution (role=null).
+            if (column === 'PLAN REVIEWED' && destinationColumn !== 'PLAN REVIEWED') {
+                role = null;
+            } else {
+                role = roleSourceDef.role;
+            }
         }
-        
-        const role = columnToPromptRole(column);
-        if (role === 'planner') {
-            return await this._generateBatchPlannerPrompt(cards, workspaceRoot);
+
+        // The original source column PLAN REVIEWED requires complexity-based role selection (role=null)
+        // when advancing to implementation stages (coded lanes). This overrides the explicit 
+        // role ('lead' or 'coder') of the destination column.
+        if (column === 'PLAN REVIEWED' && destinationColumn && destinationColumn !== 'PLAN REVIEWED') {
+            if (roleSourceDef?.kind === 'coded') {
+                role = null;
+            }
         }
-        // Coded columns (LEAD CODED, CODER CODED) advance to reviewer, not to another coder lane
-        if (role === 'reviewer') {
-            const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
-            return buildKanbanBatchPrompt('reviewer', this._cardsToPromptPlans(cards, workspaceRoot), { defaultPromptOverrides });
+
+        if (!role && roleSourceDef) {
+            // When source is PLAN REVIEWED and destination is coded, we want execution (role=null)
+            // Do not fall back to 'reviewer' for coded kind in this case
+            if (column === 'PLAN REVIEWED' && roleSourceDef.kind === 'coded') {
+                role = null; // Keep null for complexity-based execution routing
+            } else {
+                switch (roleSourceDef.kind) {
+                    case 'created': role = 'planner'; break;
+                    case 'coded': role = 'reviewer'; break;
+                    case 'reviewed': role = 'tester'; break;
+                    case 'review': role = null; break; // execution fallback
+                    case 'custom-user': role = null; break; // custom-user columns have role set via columnDef.role
+                    case 'custom-agent': role = null; break; // custom-agent columns have role set via columnDef.role
+                    case 'completed': role = null; break; // not a source column
+                }
+            }
         }
-        if (role === 'tester') {
-            return await this._generateBatchTesterPrompt(cards, workspaceRoot);
+
+        // Final fallback for unknowns. Skip when source is PLAN REVIEWED to prevent
+        // the legacy columnToPromptRole mapping from forcing a hardcoded 'lead'/'reviewer'
+        // role via the destination column name, which would bypass complexity routing.
+        if (!role && column !== 'PLAN REVIEWED') {
+            role = columnToPromptRole(roleSourceColumn);
         }
-        return await this._generateBatchExecutionPrompt(cards, workspaceRoot);
+
+        return this._generatePromptForDestinationRole(cards, role, workspaceRoot, sourceColumnLabel);
+    }
+
+    private async _generatePromptForDestinationRole(
+        cards: KanbanCard[],
+        role: string | null,
+        workspaceRoot: string,
+        sourceColumnLabel?: string
+    ): Promise<string> {
+        let targetRole = role;
+        if (!targetRole || (
+            targetRole !== 'lead' && targetRole !== 'coder' && targetRole !== 'intern' &&
+            targetRole !== 'planner' && targetRole !== 'reviewer' && targetRole !== 'tester' &&
+            targetRole !== 'researcher' && targetRole !== 'splitter' && targetRole !== 'analyst' &&
+            targetRole !== 'ticket_updater' && targetRole !== 'code_researcher' && targetRole !== 'gatherer' &&
+            !targetRole.startsWith('custom_agent_')
+        )) {
+            const hasHighComplexity = this._dynamicComplexityRoutingEnabled
+                ? cards.some(card => !this._isLowComplexity(card))
+                : true;
+            targetRole = hasHighComplexity ? 'lead' : 'coder';
+        }
+
+        const repoScopeMap = new Map<string, string>();
+        const db = this._getKanbanDb(workspaceRoot);
+        if (await db.ensureReady()) {
+            for (const card of cards) {
+                const cardKey = this._cardId(card);
+                const plan = await db.getPlanBySessionId(cardKey);
+                if (plan?.repoScope) {
+                    repoScopeMap.set(cardKey, plan.repoScope);
+                }
+            }
+        }
+        const plans = await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap);
+        return this.generateUnifiedPrompt(targetRole, plans, workspaceRoot, { sourceColumnLabel });
     }
 
     private async _getEligibleSessionIds(sessionIds: string[], expectedColumn: string, workspaceRoot?: string): Promise<string[]> {
@@ -1780,7 +3086,7 @@ export class KanbanProvider implements vscode.Disposable {
         return eligible;
     }
 
-    private async _advanceSessionsInColumn(sessionIds: string[], expectedColumn: string, workflow: string, workspaceRoot?: string): Promise<string[]> {
+    private async _advanceSessionsInColumn(sessionIds: string[], expectedColumn: string, workflow: string | undefined, workspaceRoot?: string): Promise<string[]> {
         const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedWorkspaceRoot || sessionIds.length === 0) {
             return [];
@@ -1826,10 +3132,24 @@ export class KanbanProvider implements vscode.Disposable {
                 const newColumn = deriveKanbanColumn(updatedEvents, customAgents);
                 const normalizedColumn = this._normalizeLegacyKanbanColumn(newColumn);
                 if (normalizedColumn) {
-                    const db = this._getKanbanDb(resolvedWorkspaceRoot);
-                    await db.updateColumn(sessionId, normalizedColumn);
-                    _schedulePlanStateWrite(db, resolvedWorkspaceRoot, sessionId, normalizedColumn,
-                        normalizedColumn === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
+                    await this.moveCardToColumn(resolvedWorkspaceRoot, sessionId, normalizedColumn);
+
+                    // Sync complexity from plan file to DB so the kanban label updates immediately
+                    try {
+                        const planFile = sheet.planFile || updatedSheet?.planFile;
+                        if (planFile) {
+                            const complexity = await this.getComplexityFromPlan(resolvedWorkspaceRoot, planFile);
+                            if (complexity && complexity !== 'Unknown') {
+                                const db = this._getKanbanDb(resolvedWorkspaceRoot);
+                                const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+                                if (workspaceId) {
+                                    await db.updateComplexityByPlanFile(planFile, workspaceId, complexity);
+                                }
+                            }
+                        }
+                    } catch (err) {
+                        console.error('[KanbanProvider] Failed to sync complexity during column advance:', err);
+                    }
                 }
                 advanced.push(sessionId);
             }
@@ -1861,23 +3181,46 @@ export class KanbanProvider implements vscode.Disposable {
             this._getCustomAgents(workspaceRoot),
             this._getCustomKanbanColumns(workspaceRoot)
         ]);
-        const column = this._buildKanbanColumns(customAgents, customKanbanColumns)
+        const column = (await this._buildKanbanColumns(customAgents, customKanbanColumns))
             .find((entry) => entry.id === targetColumn);
+        if (!column) {
+            return null;
+        }
+
+        const effectiveMode = this._columnDragDropModes[column.id] || column.dragDropMode || 'cli';
+
+        // For prompt mode, infer role from column ID if no custom agent is assigned
+        // Clarification: Prompt mode only needs a role for template selection, not for CLI dispatch
+        if (effectiveMode === 'prompt' && !column.role) {
+            const inferredRole = this._columnToRole(targetColumn);
+            if (!inferredRole) {
+                // No mapping for this column - cannot generate prompt
+                return null;
+            }
+            return {
+                targetColumn: column.id,
+                role: inferredRole,
+                source: column.source,
+                dragDropMode: effectiveMode,
+                triggerPrompt: column.triggerPrompt
+            };
+        }
+
         if (!column?.role) {
             return null;
         }
+
         return {
             targetColumn: column.id,
             role: column.role,
             source: column.source,
-            dragDropMode: this._columnDragDropModes[column.id] || column.dragDropMode || 'cli',
+            dragDropMode: effectiveMode,
             triggerPrompt: column.triggerPrompt
         };
     }
 
     private _isParallelCodedLane(columnId: string): boolean {
-        return columnId === 'TEAM LEAD CODED'
-            || columnId === 'LEAD CODED'
+        return columnId === 'LEAD CODED'
             || columnId === 'CODER CODED'
             || columnId === 'INTERN CODED';
     }
@@ -1895,8 +3238,8 @@ export class KanbanProvider implements vscode.Disposable {
             this._kanbanOrderOverrides = {};
             this._columnDragDropModes = {};
             await Promise.all([
-                this._context.workspaceState.update('kanban.orderOverrides', this._kanbanOrderOverrides),
-                this._context.workspaceState.update('kanban.columnDragDropModes', this._columnDragDropModes)
+                this._updateSetting('kanban.orderOverrides', this._kanbanOrderOverrides),
+                this._updateSetting('kanban.columnDragDropModes', this._columnDragDropModes)
             ]);
             this._scheduleBoardRefresh(resolvedWorkspaceRoot);
             return;
@@ -1906,7 +3249,7 @@ export class KanbanProvider implements vscode.Disposable {
             this._getCustomAgents(resolvedWorkspaceRoot),
             this._getCustomKanbanColumns(resolvedWorkspaceRoot)
         ]);
-        const columns = this._buildKanbanColumns(customAgents, customKanbanColumns);
+        const columns = await this._buildKanbanColumns(customAgents, customKanbanColumns);
         const validIds = new Set(columns.map((column) => column.id));
 
         const nextOrderOverrides = Object.fromEntries(
@@ -1914,7 +3257,7 @@ export class KanbanProvider implements vscode.Disposable {
         );
         const nextDragDropModes = Object.fromEntries(
             Object.entries(this._columnDragDropModes).filter(([id]) => validIds.has(id))
-        ) as Record<string, 'cli' | 'prompt'>;
+        ) as Record<string, 'cli' | 'prompt' | 'disabled'>;
 
         for (const column of columns) {
             if (column.source !== 'built-in') {
@@ -1926,15 +3269,15 @@ export class KanbanProvider implements vscode.Disposable {
         this._columnDragDropModes = nextDragDropModes;
 
         await Promise.all([
-            this._context.workspaceState.update('kanban.orderOverrides', this._kanbanOrderOverrides),
-            this._context.workspaceState.update('kanban.columnDragDropModes', this._columnDragDropModes)
+            this._updateSetting('kanban.orderOverrides', this._kanbanOrderOverrides),
+            this._updateSetting('kanban.columnDragDropModes', this._columnDragDropModes)
         ]);
         this._scheduleBoardRefresh(resolvedWorkspaceRoot);
     }
 
     private async _getAgentNames(workspaceRoot: string): Promise<Record<string, string>> {
+        const configuredNames: Record<string, string> = {};
         const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
-        const result: Record<string, string> = {};
         const builtInRoles = buildKanbanColumns([])
             .map(column => column.role)
             .filter((role): role is string => Boolean(role));
@@ -1956,28 +3299,51 @@ export class KanbanProvider implements vscode.Disposable {
                     if (cmd) {
                         const binary = cmd.split(/\s+/)[0];
                         const name = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase();
-                        result[role] = `${name} CLI`;
+                        configuredNames[role] = `${name} CLI`;
                     } else {
-                        result[role] = 'No agent assigned';
+                        configuredNames[role] = 'No agent assigned';
                     }
                 }
             } else {
                 for (const role of fallbackRoles) {
-                    result[role] = 'No agent assigned';
+                    configuredNames[role] = 'No agent assigned';
                 }
             }
         } catch (e) {
             console.error('[KanbanProvider] Failed to read agent names from state:', e);
             for (const role of fallbackRoles) {
-                result[role] = 'No agent assigned';
+                configuredNames[role] = 'No agent assigned';
             }
         }
-        return result;
+
+        // 2. Fetch actual running terminal agent names from the task viewer provider (workspace-agnostic cache)
+        const terminalAgentNames = this._taskViewerProvider?.getActualTerminalAgentNames() || {};
+
+        // 3. Merge: prioritize alive terminal names (locked to the active processes), fall back to configured names
+        const merged: Record<string, string> = { ...configuredNames };
+        for (const [role, terminalName] of Object.entries(terminalAgentNames)) {
+            merged[role] = terminalName;
+        }
+
+        return merged;
     }
 
     private async _getVisibleAgents(workspaceRoot: string): Promise<Record<string, boolean>> {
-        const defaults: Record<string, boolean> = { lead: true, coder: true, intern: true, reviewer: true, tester: false, planner: true, analyst: true, 'team-lead': false, jules: true };
-        const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
+        const defaults: Record<string, boolean> = {
+            lead: true,
+            coder: true,
+            intern: true,
+            reviewer: true,
+            tester: false,
+            planner: true,
+            analyst: true,
+            jules: false,
+            gatherer: false,
+            ticket_updater: false,
+            researcher: false,
+            splitter: false,
+            code_researcher: false
+        };        const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
         try {
             if (fs.existsSync(statePath)) {
                 const content = await fs.promises.readFile(statePath, 'utf8');
@@ -2055,11 +3421,13 @@ export class KanbanProvider implements vscode.Disposable {
         }
 
         return {
+            planId: sheet.planId || sheet.sessionId || '',
             sessionId: sheet.sessionId || '',
             topic: sheet.topic || sheet.planFile || 'Untitled',
             planFile: sheet.planFile || '',
             column,
             lastActivity,
+            createdAt: sheet.createdAt || '',
             complexity,
             workspaceRoot
         };
@@ -2079,7 +3447,7 @@ export class KanbanProvider implements vscode.Disposable {
 
             // Highest priority: explicit manual complexity override (user-set via dropdown).
             // Supports both numeric ('7') and legacy ('Low'/'High') formats.
-            const overrideMatch = content.match(/\*\*Manual Complexity Override:\*\*\s*(\d{1,2}|Low|High|Unknown)/i);
+            const overrideMatch = content.match(/^[\s\-\*\>]*(?:\d+\.\s*)?\*\*Manual Complexity Override:\*\*\s*(\d{1,2}|Low|High|Unknown)/im);
             if (overrideMatch) {
                 const val = overrideMatch[1];
                 if (val.toLowerCase() === 'unknown') {
@@ -2115,7 +3483,7 @@ export class KanbanProvider implements vscode.Disposable {
 
             // Check ## Metadata section for explicit **Complexity:** field.
             // Supports both numeric ('7') and legacy ('Low'/'High') formats.
-            const metadataComplexity = content.match(/\*\*Complexity:\*\*\s*(\d{1,2}|Low|High)/i);
+            const metadataComplexity = content.match(/^[\s\-\*\>]*(?:\d+\.\s*)?\*\*Complexity:\*\*\s*(\d{1,2}|Low|High)/im);
             if (metadataComplexity) {
                 const val = metadataComplexity[1];
                 const num = parseInt(val, 10);
@@ -2138,7 +3506,7 @@ export class KanbanProvider implements vscode.Disposable {
 
             const auditStart = auditMatch.index! + auditMatch[0].length;
             const afterAudit = content.slice(auditStart);
-            const bandBMatch = afterAudit.match(/^\s*(?:#{1,4}\s+|\*\*)?(?:Classification[\s:]*)?(?:\*\*)?\s*(?:Band\s+B|Complex)\b/im);
+            const bandBMatch = afterAudit.match(/^\s*(?:#{1,4}\s+|\*\*)?(?:Classification[\s:]*)?(?:\*\*)?\s*(?:Band\s+B|Complex\s*(?:\/\s*Risky)?|Complex)\b/im);
             if (!bandBMatch) return '3';
 
             const bandBStart = bandBMatch.index! + bandBMatch[0].length;
@@ -2200,105 +3568,254 @@ export class KanbanProvider implements vscode.Disposable {
         }
     }
 
-    public async getDependenciesFromPlan(workspaceRoot: string, planPath: string): Promise<string> {
+
+    /**
+     * Map a workspace root to the effective root where `.switchboard/` lives.
+     * In single-workspace mode this is an identity function.
+     * In control-plane mode the explicit root supersedes the per-child workspaceRoot
+     * intentionally — all child repos share the same control-plane DB, so every call
+     * returns the same resolved path regardless of which child was passed in.
+     */
+    public resolveEffectiveWorkspaceRoot(workspaceRoot: string): string {
+        // First check explicit control plane root (legacy mechanism)
+        const explicit = this._context.workspaceState.get<string>('kanban.controlPlaneRoot');
+        if (explicit && explicit.trim()) {
+            return path.resolve(explicit.trim());
+        }
+
+        // Check workspaceDatabaseMappings configuration via mapping index
+        return resolveEffectiveWorkspaceRootFromMappings(workspaceRoot);
+    }
+
+    public async ensureControlPlaneSelection(workspaceRoot: string): Promise<void> {
+        const explicit = this._context.workspaceState.get<string>('kanban.controlPlaneRoot');
+        if (!explicit) return;
+        const resolved = path.resolve(explicit);
+        if (!fs.existsSync(resolved)) {
+            console.warn(`[KanbanProvider] Stored control-plane root no longer exists: ${resolved}. Clearing.`);
+            await this._context.workspaceState.update('kanban.controlPlaneRoot', undefined);
+        }
+    }
+
+    public getControlPlaneSelectionStatus(workspaceRoot?: string): ControlPlaneSelectionStatus {
+        const resolvedRoot: string = this._resolveWorkspaceRoot(workspaceRoot) || '';
+        const explicit = this._context.workspaceState.get<string>('kanban.controlPlaneRoot');
+        const effectiveRoot = (explicit && explicit.trim()) ? path.resolve(explicit.trim()) : resolvedRoot;
+        const base = {
+            effectiveWorkspaceRoot: effectiveRoot,
+            explicitControlPlaneRoot: explicit || null,
+            manualControlPlaneRoot: null as string | null,
+            autoCandidateRoot: null as string | null,
+            pendingCandidate: null as string | null,
+            repoScopeFilter: this._repoScopeFilter,
+            isRepoScoped: !!this._repoScopeFilter
+        };
+        if (explicit && explicit.trim()) {
+            return {
+                mode: 'explicit' as const,
+                controlPlaneRoot: path.resolve(explicit),
+                workspaceRoot: resolvedRoot,
+                ...base
+            };
+        }
+        return {
+            mode: 'auto' as const,
+            controlPlaneRoot: resolvedRoot,
+            workspaceRoot: resolvedRoot,
+            ...base
+        };
+    }
+
+    public async setExplicitControlPlaneRoot(
+        controlPlaneRoot: string | null,
+        workspaceRoot?: string
+    ): Promise<void> {
+        if (controlPlaneRoot === null) {
+            await this._context.workspaceState.update('kanban.controlPlaneRoot', undefined);
+            console.log('[KanbanProvider] Cleared explicit control-plane root.');
+        } else {
+            const resolved = path.resolve(controlPlaneRoot);
+            await this._context.workspaceState.update('kanban.controlPlaneRoot', resolved);
+            console.log(`[KanbanProvider] Set explicit control-plane root: ${resolved}`);
+        }
+        const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (resolvedWorkspaceRoot) {
+            this._scheduleBoardRefresh(resolvedWorkspaceRoot);
+        }
+    }
+
+    public async clearControlPlaneCache(workspaceRoot?: string): Promise<void> {
+        await this._context.workspaceState.update('kanban.controlPlaneRoot', undefined);
+        const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (resolvedWorkspaceRoot) {
+            this._scheduleBoardRefresh(resolvedWorkspaceRoot);
+        }
+        console.log('[KanbanProvider] Cleared control-plane cache.');
+    }
+
+    public async getRepoScopeFromPlan(workspaceRoot: string, planPath: string): Promise<string> {
         try {
             if (!planPath) return '';
-            const resolvedPlanPath = path.isAbsolute(planPath) ? planPath : path.join(workspaceRoot, planPath);
+            const resolvedPlanPath = path.isAbsolute(planPath)
+                ? planPath
+                : path.join(workspaceRoot, planPath);
             if (!fs.existsSync(resolvedPlanPath)) return '';
             const content = await fs.promises.readFile(resolvedPlanPath, 'utf8');
-
-            const sectionMatch = content.match(/^#{1,4}\s+Dependencies\b[^\n]*$/im);
-            if (!sectionMatch || sectionMatch.index === undefined) return '';
-
-            const afterHeading = content.slice(sectionMatch.index + sectionMatch[0].length);
-            const nextHeadingMatch = afterHeading.match(/^\s*#{1,4}\s+/m);
-            const sectionBody = nextHeadingMatch
-                ? afterHeading.slice(0, nextHeadingMatch.index)
-                : afterHeading;
-
-            const deps = sectionBody
-                .split(/\r?\n/)
-                .map(line => line.trim())
-                .map(line => line.replace(/^[-*+]\s+/, '').replace(/^\d+\.\s+/, '').trim())
-                .filter(line => line.length > 0)
-                .filter(line => !/^(none|n\/a|na|unknown)$/i.test(line));
-
-            return [...new Set(deps)].join(', ');
+            const repoMatch = content.match(/^\*\*Repo:\*\*\s*(.+)$/im);
+            if (!repoMatch) return '';
+            const raw = repoMatch[1].trim();
+            // Security: reject path-traversal values (same guard as sanitizeRepoScope in PlanFileImporter)
+            if (/[/\\]|\.\./.test(raw)) return '';
+            return raw;
         } catch {
             return '';
         }
     }
 
-    private _normalizeMcpTarget(target: string): string {
-        let normalized = String(target || '')
-            .toLowerCase()
-            .replace(/[_-]+/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim();
-
-        normalized = normalized.replace(/^to\s+/, '').trim();
-        normalized = normalized.replace(/^the\s+/, '').trim();
-        while (/\s+(column|lane|stage|queue|agent|role|terminal)$/.test(normalized)) {
-            normalized = normalized.replace(/\s+(column|lane|stage|queue|agent|role|terminal)$/, '').trim();
-        }
-        return normalized;
+    public getRepoScopeFilter(): string | null {
+        return this._repoScopeFilter;
     }
 
-    private _registerMcpTargetAlias(
-        aliases: Map<string, { role: string; usesComplexityRouting: boolean }>,
-        alias: string,
-        role: string,
-        usesComplexityRouting: boolean = false
-    ): void {
-        const normalized = this._normalizeMcpTarget(alias);
-        if (!normalized || aliases.has(normalized)) {
-            return;
-        }
-        aliases.set(normalized, { role, usesComplexityRouting });
+    public setRepoScopeFilter(filter: string | null): void {
+        this._repoScopeFilter = filter;
+    }
+    public getProjectFilter(): string | null {
+        return this._projectFilter;
     }
 
-    private _buildMcpTargetAliases(customAgents: CustomAgentConfig[]): Map<string, { role: string; usesComplexityRouting: boolean }> {
-        const aliases = new Map<string, { role: string; usesComplexityRouting: boolean }>();
-
-        this._registerMcpTargetAlias(aliases, 'planner', 'planner');
-        this._registerMcpTargetAlias(aliases, 'planned', 'planner');
-        this._registerMcpTargetAlias(aliases, 'plan reviewed', 'planner');
-        this._registerMcpTargetAlias(aliases, 'planning', 'planner');
-
-        this._registerMcpTargetAlias(aliases, 'reviewer', 'reviewer');
-        this._registerMcpTargetAlias(aliases, 'reviewed', 'reviewer');
-        this._registerMcpTargetAlias(aliases, 'review', 'reviewer');
-        this._registerMcpTargetAlias(aliases, 'code reviewed', 'reviewer');
-
-        this._registerMcpTargetAlias(aliases, 'lead', 'lead');
-        this._registerMcpTargetAlias(aliases, 'lead coder', 'lead');
-        this._registerMcpTargetAlias(aliases, 'coder', 'coder');
-        this._registerMcpTargetAlias(aliases, 'jules', 'jules');
-
-        this._registerMcpTargetAlias(aliases, 'team', 'team', true);
-        this._registerMcpTargetAlias(aliases, 'coded', 'lead', true);
-
-        for (const column of this._buildKanbanColumns(customAgents)) {
-            if (column.id === 'CREATED') {
-                continue;
+    public setProjectFilter(filter: string | null): void {
+        this._projectFilter = filter;
+        if (this._currentWorkspaceRoot) {
+            this._globalPlanWatcher?.setCurrentProject(this._currentWorkspaceRoot, filter);
+        }
+    }
+    public async queueIntegrationSyncForSession(
+        workspaceRoot: string,
+        sessionId: string,
+        targetColumn: string,
+        options?: { immediate?: boolean }
+    ): Promise<void> {
+        try {
+            const db = this._getKanbanDb(workspaceRoot);
+            if (!await db.ensureReady()) return;
+            const plan = await db.getPlanBySessionId(sessionId);
+            if (!plan) {
+                console.warn(`[KanbanProvider] queueIntegrationSyncForSession: no plan found for session ${sessionId}`);
+                return;
             }
-            const role = this._columnToRole(column.id);
-            if (!role) {
-                continue;
-            }
-            this._registerMcpTargetAlias(aliases, column.id, role);
-            this._registerMcpTargetAlias(aliases, column.label, role);
+            await Promise.allSettled([
+                this._queueClickUpSync(workspaceRoot, plan, targetColumn),
+                this._queueLinearSync(workspaceRoot, plan, targetColumn)
+            ]);
+        } catch (err) {
+            console.error('[KanbanProvider] queueIntegrationSyncForSession failed:', err);
         }
-
-        for (const agent of customAgents.filter(item => item.includeInKanban)) {
-            this._registerMcpTargetAlias(aliases, agent.role, agent.role);
-            this._registerMcpTargetAlias(aliases, agent.name, agent.role);
-        }
-
-        return aliases;
     }
 
-    private async _resolveComplexityRoutedRole(workspaceRoot: string, sessionId: string): Promise<'lead' | 'coder' | 'intern' | 'team-lead'> {
+    public async queueIntegrationSyncForPlanFile(
+        workspaceRoot: string,
+        planFile: string,
+        targetColumn: string,
+        options?: { immediate?: boolean }
+    ): Promise<void> {
+        try {
+            const db = this._getKanbanDb(workspaceRoot);
+            if (!await db.ensureReady()) return;
+            const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+            const plan = await db.getPlanByPlanFile(planFile, workspaceId);
+            if (!plan) {
+                console.warn(`[KanbanProvider] queueIntegrationSyncForPlanFile: no plan found for ${planFile}`);
+                return;
+            }
+            await Promise.allSettled([
+                this._queueClickUpSync(workspaceRoot, plan, targetColumn),
+                this._queueLinearSync(workspaceRoot, plan, targetColumn)
+            ]);
+        } catch (err) {
+            console.error('[KanbanProvider] queueIntegrationSyncForPlanFile failed:', err);
+        }
+    }
+
+    public setPlannerPromptWriter(writer: any): void {
+        this._plannerPromptWriter = writer;
+    }
+
+    private async _autoCommitIfCodeReviewTransition(
+        workspaceRoot: string,
+        sessionId: string,
+        targetColumn: string
+    ): Promise<void> {
+        if (targetColumn !== 'CODE REVIEWED') return;
+        const autoCommitEnabled = await this.getAutoCommitOnCodeReview(workspaceRoot);
+        if (!autoCommitEnabled) return;
+        if (!this._taskViewerProvider) return;
+        // Look up plan topic from DB for commit message
+        let planTopic = 'unknown';
+        try {
+            const db = this._getKanbanDb(workspaceRoot);
+            if (await db.ensureReady()) {
+                const record = await db.getPlanBySessionId(sessionId);
+                if (record?.topic) planTopic = record.topic;
+            }
+        } catch { /* use fallback topic */ }
+        await this._taskViewerProvider.autoCommitForCodeReview(workspaceRoot, planTopic);
+    }
+
+    public async moveCardToColumn(
+        workspaceRoot: string,
+        sessionId: string,
+        targetColumn: string
+    ): Promise<boolean> {
+        try {
+            const db = this._getKanbanDb(workspaceRoot);
+            if (!await db.ensureReady()) return false;
+
+            await this._autoCommitIfCodeReviewTransition(workspaceRoot, sessionId, targetColumn);
+
+            const moved = await db.updateColumn(sessionId, targetColumn);
+            if (moved) {
+                await this.queueIntegrationSyncForSession(workspaceRoot, sessionId, targetColumn);
+            }
+            return moved;
+        } catch (err) {
+            console.error(`[KanbanProvider] moveCardToColumn failed for session ${sessionId}:`, err);
+            return false;
+        }
+    }
+
+    public async moveCardToColumnByPlanFile(
+        workspaceRoot: string,
+        planFile: string,
+        targetColumn: string
+    ): Promise<boolean> {
+        try {
+            const db = this._getKanbanDb(workspaceRoot);
+            if (!await db.ensureReady()) return false;
+            const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+
+            const previousRecord = await db.getPlanByPlanFile(planFile, workspaceId);
+            const sessionId = previousRecord?.sessionId || null;
+
+            if (targetColumn === 'CODE REVIEWED') {
+                if (sessionId) {
+                    await this._autoCommitIfCodeReviewTransition(workspaceRoot, sessionId, targetColumn);
+                }
+            }
+
+            const moved = await db.updateColumnByPlanFile(planFile, workspaceId, targetColumn);
+            if (moved) {
+                await this.queueIntegrationSyncForPlanFile(workspaceRoot, planFile, targetColumn);
+            }
+            return moved;
+        } catch (err) {
+            console.error(`[KanbanProvider] moveCardToColumnByPlanFile failed for ${planFile}:`, err);
+            return false;
+        }
+    }
+
+
+
+    private async _resolveComplexityRoutedRole(workspaceRoot: string, sessionId: string): Promise<'lead' | 'coder' | 'intern'> {
         // When dynamic complexity routing is disabled, all tasks route to lead
         if (!this._dynamicComplexityRoutingEnabled) {
             return 'lead';
@@ -2351,7 +3868,7 @@ export class KanbanProvider implements vscode.Disposable {
             return;
         }
         try {
-            await this._context.workspaceState.update('kanban.routingMapConfig', config);
+            await this._updateSetting('kanban.routingMapConfig', config);
             this._routingMapConfig = config;
             console.log('[KanbanProvider] Routing config saved:', config);
         } catch (err) {
@@ -2363,9 +3880,8 @@ export class KanbanProvider implements vscode.Disposable {
     private async _partitionByComplexityRoute(
         workspaceRoot: string,
         sessionIds: string[]
-    ): Promise<Map<'lead' | 'coder' | 'intern' | 'team-lead', string[]>> {
-        const groups = new Map<'lead' | 'coder' | 'intern' | 'team-lead', string[]>([
-            ['team-lead', []],
+    ): Promise<Map<'lead' | 'coder' | 'intern', string[]>> {
+        const groups = new Map<'lead' | 'coder' | 'intern', string[]>([
             ['lead', []],
             ['coder', []],
             ['intern', []]
@@ -2389,7 +3905,7 @@ export class KanbanProvider implements vscode.Disposable {
         const filtered: string[] = [];
         let skippedCount = 0;
         for (const sid of sessionIds) {
-            const card = this._lastCards.find(c => c.sessionId === sid);
+            const card = this._lastCards.find(c => (c.planId || c.sessionId) === sid);
             const complexity = card?.complexity;
             if (complexity && complexity !== 'Unknown') {
                 const num = parseInt(complexity, 10);
@@ -2416,106 +3932,12 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     /** Map a resolved dispatch role to its target Kanban column. */
-    private _targetColumnForDispatchRole(role: 'lead' | 'coder' | 'intern' | 'team-lead'): string {
-        if (role === 'team-lead') return 'TEAM LEAD CODED';
+    private _targetColumnForDispatchRole(role: 'lead' | 'coder' | 'intern'): string {
         if (role === 'intern') return 'INTERN CODED';
         return role === 'coder' ? 'CODER CODED' : 'LEAD CODED';
     }
 
-    private async _resolveMcpMoveTarget(workspaceRoot: string, sessionId: string, target: string): Promise<McpMoveTargetResolution | null> {
-        const customAgents = await this._getCustomAgents(workspaceRoot);
-        const normalizedTarget = this._normalizeMcpTarget(target);
-        if (!normalizedTarget) {
-            return null;
-        }
 
-        const resolved = this._buildMcpTargetAliases(customAgents).get(normalizedTarget);
-        if (!resolved) {
-            return null;
-        }
-
-        if (!resolved.usesComplexityRouting) {
-            return {
-                role: resolved.role,
-                normalizedTarget,
-                usesComplexityRouting: false
-            };
-        }
-
-        return {
-            role: await this._resolveComplexityRoutedRole(workspaceRoot, sessionId),
-            normalizedTarget,
-            usesComplexityRouting: true
-        };
-    }
-
-    /** Called by the MCP server to conversationally route a plan through the Kanban dispatch path. */
-    public async handleMcpMove(sessionId: string, target: string, workspaceRoot?: string): Promise<boolean> {
-        const trimmedSessionId = String(sessionId || '').trim();
-        const trimmedTarget = String(target || '').trim();
-        const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
-
-        if (!resolvedWorkspaceRoot) {
-            vscode.window.showErrorMessage('No workspace folder found for kanban routing.');
-            return false;
-        }
-        if (!trimmedSessionId) {
-            vscode.window.showErrorMessage('Cannot route a kanban plan without a session ID.');
-            return false;
-        }
-        if (!trimmedTarget) {
-            vscode.window.showErrorMessage('Cannot route a kanban plan without a target.');
-            return false;
-        }
-
-        const log = this._getSessionLog(resolvedWorkspaceRoot);
-        const sheet = await log.getRunSheet(trimmedSessionId);
-        if (!sheet || sheet.completed === true) {
-            vscode.window.showErrorMessage(`Plan session '${trimmedSessionId}' was not found or is already completed.`);
-            return false;
-        }
-
-        const resolvedTarget = await this._resolveMcpMoveTarget(resolvedWorkspaceRoot, trimmedSessionId, trimmedTarget);
-        if (!resolvedTarget) {
-            vscode.window.showErrorMessage(`Unsupported kanban target '${trimmedTarget}'. Use a dispatchable column, built-in role, or kanban-enabled custom agent.`);
-            return false;
-        }
-
-        if (!(await this._canAssignRole(resolvedWorkspaceRoot, resolvedTarget.role))) {
-            vscode.window.showErrorMessage(`Agent for conversational target '${trimmedTarget}' resolved to '${resolvedTarget.role}', but that role is not assigned or visible.`);
-            return false;
-        }
-
-        const instruction = resolvedTarget.role === 'planner' ? 'improve-plan' : undefined;
-        const dispatched = await vscode.commands.executeCommand<boolean>(
-            'switchboard.triggerAgentFromKanban',
-            resolvedTarget.role,
-            trimmedSessionId,
-            instruction,
-            resolvedWorkspaceRoot
-        );
-
-        if (!dispatched) {
-            const routingLabel = resolvedTarget.usesComplexityRouting
-                ? `${trimmedTarget} -> ${resolvedTarget.role}`
-                : trimmedTarget;
-            vscode.window.showErrorMessage(`Failed to route plan '${trimmedSessionId}' via '${routingLabel}'.`);
-            return false;
-        }
-
-        // Record dispatch identity for MCP path (no terminal name available)
-        const roleToCol: Record<string, string> = {
-            'lead': 'LEAD CODED', 'coder': 'CODER CODED', 'intern': 'INTERN CODED',
-            'team-lead': 'TEAM LEAD CODED',
-            'planner': 'PLANNED', 'reviewer': 'CODE REVIEWED', 'tester': 'ACCEPTANCE TESTED',
-        };
-        const targetColumn = roleToCol[resolvedTarget.role];
-        if (targetColumn) {
-            await this._recordDispatchIdentity(resolvedWorkspaceRoot, trimmedSessionId, targetColumn);
-        }
-
-        return true;
-    }
 
     private async _handleMessage(msg: any) {
         switch (msg.type) {
@@ -2523,11 +3945,43 @@ export class KanbanProvider implements vscode.Disposable {
                 // Initial load: trigger full file→DB sync to ensure DB is populated,
                 // then kanbanProvider.refresh() is called by fullSync after syncing.
                 await vscode.commands.executeCommand('switchboard.fullSync');
+                {
+                    const currentTheme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
+                    this._panel?.webview.postMessage({ type: 'switchboardThemeNameSetting', theme: currentTheme });
+                }
+                if (this._pendingTab) {
+                    this._panel?.webview.postMessage({ type: 'switchToTab', tab: this._pendingTab });
+                    this._pendingTab = undefined;
+                }
                 break;
             case 'selectPlan': {
-                const { sessionId } = msg;
-                if (typeof sessionId === 'string' && sessionId.trim() && this._taskViewerProvider) {
-                    this._taskViewerProvider.selectSession(sessionId);
+                const resolvedSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
+                if (resolvedSessionId && this._taskViewerProvider) {
+                    this._taskViewerProvider.selectSession(resolvedSessionId);
+                }
+                break;
+            }
+            case 'openPlanByPath': {
+                const planPath = msg.planPath;
+                const workspaceRoot = this._currentWorkspaceRoot;
+                if (!workspaceRoot || typeof planPath !== 'string' || !planPath.trim()) break;
+                try {
+                    const fullPath = path.resolve(workspaceRoot, planPath);
+                    if (!fullPath.startsWith(workspaceRoot)) break;
+                    if (!fs.existsSync(fullPath)) {
+                        vscode.window.showWarningMessage(`Plan file not found: ${planPath}`);
+                        break;
+                    }
+                    const planContent = await fs.promises.readFile(fullPath, 'utf-8');
+                    const sessionIdMatch = planContent.match(/sessionId:\s*(sess_\d+)/);
+                    if (sessionIdMatch && this._taskViewerProvider) {
+                        this._taskViewerProvider.selectSession(sessionIdMatch[1]);
+                    } else {
+                        const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(fullPath));
+                        await vscode.window.showTextDocument(doc);
+                    }
+                } catch (err) {
+                    console.error('[KanbanProvider] openPlanByPath failed:', err);
                 }
                 break;
             }
@@ -2535,20 +3989,271 @@ export class KanbanProvider implements vscode.Disposable {
                 // "Sync Board" button: same full sync path.
                 await vscode.commands.executeCommand('switchboard.fullSync');
                 break;
+            case 'importPlans':
+                // Manual "Import plans": pick unclaimed plans (any age) to add to the board.
+                await vscode.commands.executeCommand('switchboard.importUnclaimedPlans');
+                break;
+            case 'reassignPlansWorkspace': {
+                const sessionIds: string[] = msg.sessionIds;
+                const targetWorkspaceRoot: string = msg.targetWorkspaceRoot;
+
+                if (!targetWorkspaceRoot || !Array.isArray(sessionIds) || sessionIds.length === 0) {
+                    break;
+                }
+
+                // Source workspace comes from the webview (derived from selected cards' workspaceRoot),
+                // NOT from this._currentWorkspaceRoot which may have changed when the user switched
+                // the dropdown to pick the target workspace.
+                const sourceWorkspaceRoot: string = msg.sourceWorkspaceRoot || this._currentWorkspaceRoot || '';
+                if (!sourceWorkspaceRoot) {
+                    vscode.window.showWarningMessage('Cannot determine source workspace for reassignment.');
+                    break;
+                }
+
+                // Prevent no-op reassignment to same workspace
+                if (path.resolve(sourceWorkspaceRoot) === path.resolve(targetWorkspaceRoot)) {
+                    vscode.window.showWarningMessage('Source and target workspaces are the same — no plans were moved.');
+                    break;
+                }
+
+                const sourceDb = this._getKanbanDb(sourceWorkspaceRoot);
+                const targetDb = this._getKanbanDb(targetWorkspaceRoot);
+
+                if (!(await sourceDb.ensureReady()) || !(await targetDb.ensureReady())) {
+                    vscode.window.showWarningMessage('Failed to access one or both workspace databases.');
+                    break;
+                }
+
+                const sourceWorkspaceId = await this._readWorkspaceId(sourceWorkspaceRoot)
+                    || await sourceDb.getWorkspaceId()
+                    || await sourceDb.getDominantWorkspaceId();
+
+                const targetWorkspaceId = await this._readWorkspaceId(targetWorkspaceRoot)
+                    || await targetDb.getWorkspaceId()
+                    || await targetDb.getDominantWorkspaceId();
+
+                if (!sourceWorkspaceId || !targetWorkspaceId) {
+                    vscode.window.showWarningMessage('Cannot determine workspace IDs for reassignment.');
+                    break;
+                }
+
+                let successCount = 0;
+                const totalCount = sessionIds.length;
+
+                for (const sessionId of sessionIds) {
+                    // Query from SOURCE database (where the plan actually lives).
+                    // Note: getPlanBySessionId has no workspace_id filter — validate the returned
+                    // record belongs to this workspace to guard against ghost records in mixed DBs.
+                    const plan = await sourceDb.getPlanBySessionId(sessionId);
+                    if (!plan) {
+                        console.warn(`[KanbanProvider] reassignPlansWorkspace: plan ${sessionId} not found in source workspace`);
+                        continue;
+                    }
+                    if (plan.workspaceId !== sourceWorkspaceId) {
+                        console.warn(`[KanbanProvider] reassignPlansWorkspace: plan ${sessionId} belongs to workspace ${plan.workspaceId}, not source ${sourceWorkspaceId} — skipping`);
+                        continue;
+                    }
+
+                    try {
+                        // Move the plan file from source to target workspace so the path stays
+                        // relative (portable across machines). Without this, the planFile would
+                        // be stored as an absolute path pointing to the source workspace, which
+                        // breaks on different machines and gets filtered out by ghost checks.
+                        const sourcePlanPath = path.isAbsolute(plan.planFile)
+                            ? plan.planFile
+                            : path.resolve(sourceWorkspaceRoot, plan.planFile);
+                        const planFileName = path.basename(sourcePlanPath);
+                        const targetPlansDir = path.join(targetWorkspaceRoot, '.switchboard', 'plans');
+                        const targetPlanPath = path.join(targetPlansDir, planFileName);
+                        let newPlanFile: string;
+
+                        if (fs.existsSync(sourcePlanPath)) {
+                            // Ensure target plans directory exists
+                            if (!fs.existsSync(targetPlansDir)) {
+                                fs.mkdirSync(targetPlansDir, { recursive: true });
+                            }
+                            // Move the file (rename is atomic on same filesystem, copy+delete fallback)
+                            try {
+                                fs.renameSync(sourcePlanPath, targetPlanPath);
+                            } catch (renameErr) {
+                                // Cross-filesystem rename fails — fall back to copy + delete
+                                fs.copyFileSync(sourcePlanPath, targetPlanPath);
+                                fs.unlinkSync(sourcePlanPath);
+                            }
+                            // Store as relative path — _ensureRelativePlanFile will strip the target root
+                            newPlanFile = targetPlanPath;
+                            console.log(`[KanbanProvider] reassignPlansWorkspace: moved plan file ${sourcePlanPath} -> ${targetPlanPath}`);
+                        } else {
+                            // File doesn't exist on disk — keep the original planFile (best effort)
+                            newPlanFile = plan.planFile;
+                            console.warn(`[KanbanProvider] reassignPlansWorkspace: plan file not found on disk: ${sourcePlanPath}, keeping original path`);
+                        }
+
+                        const ok = await targetDb.upsertPlan({
+                            ...plan,
+                            planFile: newPlanFile,
+                            workspaceId: targetWorkspaceId,
+                            project: msg.targetProject !== undefined ? msg.targetProject : plan.project,
+                            updatedAt: new Date().toISOString()
+                        });
+
+                        if (ok) {
+                            successCount++;
+                            // Soft-delete from source DB so the plan no longer appears on the source board.
+                            // If this fails, the plan will still be visible on the source board (acceptable fallback).
+                            await sourceDb.updateStatusByPlanFile(plan.planFile, sourceWorkspaceId, 'deleted');
+                        }
+                    } catch (err) {
+                        console.error(`[KanbanProvider] reassignPlansWorkspace: failed for session ${sessionId}:`, err);
+                    }
+                }
+
+                // Invalidate project cache — reassignment may change project assignments
+                this._allWorkspaceProjectsCache = null;
+
+                await this._refreshBoard(sourceWorkspaceRoot);
+
+                // Also refresh the target workspace board so moved plans appear immediately
+                // when the user switches to it (or if they're already viewing it in another panel)
+                if (path.resolve(sourceWorkspaceRoot) !== path.resolve(targetWorkspaceRoot)) {
+                    await this._refreshBoard(targetWorkspaceRoot);
+                }
+
+                if (successCount === 0) {
+                    vscode.window.showWarningMessage(
+                        `No plans were reassigned (0 of ${totalCount}). The plans may not exist in the source workspace.`
+                    );
+                } else if (successCount < totalCount) {
+                    vscode.window.showWarningMessage(
+                        `Reassigned ${successCount} of ${totalCount} plans. ${totalCount - successCount} plan(s) failed — check the developer console for details.`
+                    );
+                } else {
+                    vscode.window.showInformationMessage(
+                        `Successfully reassigned ${successCount} plan${successCount === 1 ? '' : 's'} to the target workspace.`
+                    );
+                }
+                break;
+            }
             case 'selectWorkspace':
                 if (typeof msg.workspaceRoot === 'string' && msg.workspaceRoot.trim()) {
-                    this._resolveWorkspaceRoot(msg.workspaceRoot);
+                    const prevWorkspaceRoot = this._currentWorkspaceRoot;
+                    this.setCurrentWorkspaceRoot(msg.workspaceRoot);
+                    // Only reset project filter if not explicitly provided
+                    if (msg.project === null || msg.project === undefined) {
+                        this.setProjectFilter(KanbanDatabase.UNASSIGNED_PROJECT_FILTER); // Reset project filter on workspace switch
+                    } else {
+                        this.setProjectFilter(msg.project); // Preserve selected project
+                    }
+
+                    // Determine if the selected workspace is a child workspace
+                    // or the parent workspace. Only child workspaces should trigger filtering.
+                    const effectiveRoot = this.resolveEffectiveWorkspaceRoot(msg.workspaceRoot);
+                    const isChildWorkspace = path.resolve(msg.workspaceRoot) !== effectiveRoot;
+
+                    if (isChildWorkspace) {
+                        // Child workspace: set repo scope filter to the folder name
+                        const repoScope = path.basename(path.resolve(msg.workspaceRoot));
+                        this._repoScopeFilter = repoScope;
+                    } else {
+                        // Parent workspace: clear the filter to show all cards
+                        this._repoScopeFilter = null;
+                    }
+
                     this._setupSessionWatcher();
-                    this._setupPlanContentWatcher();
+                    // Sync TaskViewerProvider's plan watcher to the new workspace
+                    this._taskViewerProvider?.reinitializePlanWatcher(msg.workspaceRoot);
+                    // Clear stale terminal dispatch references from the previous workspace.
+                    // Only clears when the workspace actually changes — same-workspace re-selection
+                    // must not wipe a valid dispatch map and force the user to re-register terminals.
+                    // _terminalAgentInfo is intentionally preserved (workspace-agnostic).
+                    if (prevWorkspaceRoot !== this._currentWorkspaceRoot) {
+                        this._taskViewerProvider?.clearRegisteredTerminalsMap();
+                    }
                     await this._refreshBoard(msg.workspaceRoot);
                 }
                 break;
+            case 'addProject': {
+                const workspaceRoot = msg.workspaceRoot || this._currentWorkspaceRoot;
+                if (workspaceRoot) {
+                    const projectName = await vscode.window.showInputBox({
+                        prompt: 'Enter project name',
+                        placeHolder: 'e.g. frontend, backend, infrastructure',
+                        validateInput: (v) => v.trim() ? null : 'Project name cannot be empty'
+                    });
+                    if (projectName?.trim()) {
+                        const workspaceId = await this._readWorkspaceId(workspaceRoot);
+                        if (workspaceId) {
+                            const db = this._getKanbanDb(workspaceRoot);
+                            await db.addProject(workspaceId, projectName.trim());
+                            this._allWorkspaceProjectsCache = null; // Invalidate cache
+                            await this._refreshBoard(workspaceRoot);
+                        }
+                    }
+                }
+                break;
+            }
+            case 'deleteProject': {
+                const workspaceRoot = msg.workspaceRoot || this._currentWorkspaceRoot;
+                if (workspaceRoot && typeof msg.projectName === 'string') {
+                    if (this._projectFilter === msg.projectName) {
+                        this.setProjectFilter(KanbanDatabase.UNASSIGNED_PROJECT_FILTER);
+                    }
+                    const workspaceId = await this._readWorkspaceId(workspaceRoot);
+                    if (workspaceId) {
+                        const db = this._getKanbanDb(workspaceRoot);
+                        await db.deleteProject(workspaceId, msg.projectName);
+                        this._allWorkspaceProjectsCache = null; // Invalidate cache
+                        await this._refreshBoard(workspaceRoot);
+                    }
+                }
+                break;
+            }
+            case 'setProjectFilter': {
+                const workspaceRoot = this._currentWorkspaceRoot;
+                if (workspaceRoot && (msg.project === null || typeof msg.project === 'string')) {
+                    this.setProjectFilter(msg.project ?? KanbanDatabase.UNASSIGNED_PROJECT_FILTER);
+                    await this._refreshBoard(workspaceRoot);
+                }
+                break;
+            }
+            case 'assignSelectedToProject': {
+                const workspaceRoot = this._currentWorkspaceRoot;
+                if (workspaceRoot && typeof msg.projectName === 'string' && Array.isArray(msg.planIds)) {
+                    const workspaceId = await this._readWorkspaceId(workspaceRoot);
+                    if (workspaceId) {
+                        const db = this._getKanbanDb(workspaceRoot);
+                        await db.assignPlansToProject(msg.planIds, msg.projectName, workspaceId);
+                        await this._refreshBoard(workspaceRoot);
+                    }
+                }
+                break;
+            }
+            case 'setAutomationMode': {
+                if (this._taskViewerProvider) {
+                    await this._taskViewerProvider.setAutomationModeFromKanban(msg);
+                }
+                break;
+            }
+            case 'updateAutobanConfig': {
+                if (this._taskViewerProvider && msg.state) {
+                    await this._taskViewerProvider.updateAutobanConfigFromKanban(msg.state);
+                }
+                break;
+            }
             case 'toggleAutoban': {
                 const enabled = !!msg.enabled;
                 if (this._autobanState) {
                     this._autobanState = { ...this._autobanState, enabled };
                 }
                 await vscode.commands.executeCommand('switchboard.setAutobanEnabledFromKanban', enabled);
+                break;
+            }
+            case 'resetAutobanTimers': {
+                await vscode.commands.executeCommand('switchboard.resetAutobanTimersFromKanban');
+                break;
+            }
+            case 'toggleAutobanPause': {
+                await vscode.commands.executeCommand('switchboard.setAutobanPausedFromKanban', !!msg.paused);
                 break;
             }
             case 'setPairProgrammingMode': {
@@ -2560,6 +4265,7 @@ export class KanbanProvider implements vscode.Disposable {
                 await vscode.commands.executeCommand('switchboard.setPairProgrammingModeFromKanban', mode);
                 break;
             }
+
             case 'triggerAction': {
                 if (!this._cliTriggersEnabled) {
                     break;
@@ -2590,7 +4296,7 @@ export class KanbanProvider implements vscode.Disposable {
                             workspaceRoot: workspaceRoot || undefined
                         });
                         if (dispatched && role === 'lead') {
-                            const card = this._lastCards.find(c => c.sessionId === sessionId && c.workspaceRoot === workspaceRoot);
+                            const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
                             if (card && !this._isLowComplexity(card) && card.complexity !== 'Unknown') {
                                 await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot);
                             }
@@ -2605,14 +4311,13 @@ export class KanbanProvider implements vscode.Disposable {
 
                     if (role === 'lead' && targetColumn === 'LEAD CODED' && leadUsesIde) {
                         // IDE Lead mode: copy lead prompt to clipboard instead of CLI dispatch
-                        const card = this._lastCards.find(c => c.sessionId === sessionId && c.workspaceRoot === workspaceRoot);
+                        const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
                         if (card && workspaceRoot) {
-                            const leadPrompt = await this._generateBatchExecutionPrompt([card], workspaceRoot, 'lead');
+                            const plans = await this._cardsToPromptPlans([card], workspaceRoot, new Map());
+                            const leadPrompt = await this.generateUnifiedPrompt('lead', plans, workspaceRoot);
                             await vscode.env.clipboard.writeText(leadPrompt);
                             vscode.window.showInformationMessage('Lead prompt copied to clipboard (IDE mode).');
-                            await this._getKanbanDb(workspaceRoot).updateColumn(sessionId, targetColumn);
-                            _schedulePlanStateWrite(this._getKanbanDb(workspaceRoot), workspaceRoot, sessionId, targetColumn,
-                                targetColumn === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
+                            await this.moveCardToColumn(workspaceRoot, sessionId, targetColumn);
                             await this._recordDispatchIdentity(workspaceRoot, sessionId, targetColumn, undefined, true);
                             if (!this._isLowComplexity(card) && card.complexity !== 'Unknown') {
                                 await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot);
@@ -2622,15 +4327,14 @@ export class KanbanProvider implements vscode.Disposable {
                         const instruction = role === 'planner' ? 'improve-plan' : undefined;
                         const dispatched = await vscode.commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot);
                         if (dispatched && workspaceRoot) {
-                            await this._getKanbanDb(workspaceRoot).updateColumn(sessionId, targetColumn);
-                            _schedulePlanStateWrite(this._getKanbanDb(workspaceRoot), workspaceRoot, sessionId, targetColumn,
-                                targetColumn === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
+                            // Record dispatch identity (TaskViewerProvider does NOT call this for drag-drop
+                            // because explicitTargetColumn is empty when triggerAgentFromKanban has no options)
                             await this._recordDispatchIdentity(workspaceRoot, sessionId, targetColumn);
 
                             // Pair programming: when a high-complexity card is dispatched to Lead,
                             // also dispatch the Coder terminal with the Routine prompt.
                             if (role === 'lead' && targetColumn === 'LEAD CODED') {
-                                const card = this._lastCards.find(c => c.sessionId === sessionId && c.workspaceRoot === workspaceRoot);
+                                const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
                                 if (card && !this._isLowComplexity(card) && card.complexity !== 'Unknown') {
                                     await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot);
                                 }
@@ -2673,54 +4377,11 @@ export class KanbanProvider implements vscode.Disposable {
                 const { sessionIds, targetColumn } = msg;
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (Array.isArray(sessionIds) && sessionIds.length > 0 && workspaceRoot) {
-                    // DB-first: update column immediately so it persists across refreshes
-                    const db = this._getKanbanDb(workspaceRoot);
-                    if (await db.ensureReady()) {
-                        for (const sid of sessionIds) {
-                            await db.updateColumn(sid, targetColumn);
-                            _schedulePlanStateWrite(db, workspaceRoot, sid, targetColumn,
-                                targetColumn === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
-                        }
+                    for (const sid of sessionIds) {
+                        await this.moveCardToColumn(workspaceRoot, sid, targetColumn);
+                        await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetColumn, 'backward', workspaceRoot);
                     }
-                    // Fast-path: push DB-accurate state to board before slow runsheet I/O.
-                    // kanbanBackwardMove will fire a second refreshUI after runsheet writes,
-                    // which is harmless — _isRefreshing/_refreshPending guards coalesce it.
                     this._scheduleBoardRefresh(workspaceRoot);
-                    // ClickUp sync hook — fire-and-forget, never blocks kanban moves
-                    try {
-                        const clickUp = this._getClickUpService(workspaceRoot);
-                        const clickUpConfig = await clickUp.loadConfig();
-                        if (clickUpConfig?.setupComplete) {
-                            const syncDb = this._getKanbanDb(workspaceRoot);
-                            for (const sid of sessionIds) {
-                                const plan = await syncDb.getPlanBySessionId(sid);
-                                if (plan) {
-                                    void this._queueClickUpSync(workspaceRoot, plan, targetColumn);
-                                }
-                            }
-                            if (clickUp.consecutiveFailures >= 3) {
-                                await this._postClickUpState(workspaceRoot, true);
-                            }
-                        }
-                    } catch { /* ClickUp sync failure must never block kanban operations */ }
-                    // Linear sync hook — fire-and-forget, never blocks kanban moves
-                    try {
-                        const linear = this._getLinearService(workspaceRoot);
-                        const linearConfig = await linear.loadConfig();
-                        if (linearConfig?.setupComplete) {
-                            const syncDb = this._getKanbanDb(workspaceRoot);
-                            for (const sid of sessionIds) {
-                                const plan = await syncDb.getPlanBySessionId(sid);
-                                if (plan) {
-                                    void this._queueLinearSync(workspaceRoot, plan, targetColumn);
-                                }
-                            }
-                            if (linear.consecutiveFailures >= 3) {
-                                await this._postLinearState(workspaceRoot, true);
-                            }
-                        }
-                    } catch { /* Linear sync failure must never block kanban operations */ }
-                    await vscode.commands.executeCommand('switchboard.kanbanBackwardMove', sessionIds, targetColumn, workspaceRoot);
                 }
                 break;
             }
@@ -2728,54 +4389,11 @@ export class KanbanProvider implements vscode.Disposable {
                 const { sessionIds, targetColumn } = msg;
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (Array.isArray(sessionIds) && sessionIds.length > 0 && workspaceRoot) {
-                    // DB-first: update column immediately so it persists across refreshes
-                    const db = this._getKanbanDb(workspaceRoot);
-                    if (await db.ensureReady()) {
-                        for (const sid of sessionIds) {
-                            await db.updateColumn(sid, targetColumn);
-                            _schedulePlanStateWrite(db, workspaceRoot, sid, targetColumn,
-                                targetColumn === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
-                        }
+                    for (const sid of sessionIds) {
+                        await this.moveCardToColumn(workspaceRoot, sid, targetColumn);
+                        await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetColumn, 'forward', workspaceRoot);
                     }
-                    // Fast-path: push DB-accurate state to board before slow runsheet I/O.
-                    // kanbanForwardMove will fire a second refreshUI after runsheet writes,
-                    // which is harmless — _isRefreshing/_refreshPending guards coalesce it.
                     this._scheduleBoardRefresh(workspaceRoot);
-                    // ClickUp sync hook — fire-and-forget, never blocks kanban moves
-                    try {
-                        const clickUp = this._getClickUpService(workspaceRoot);
-                        const clickUpConfig = await clickUp.loadConfig();
-                        if (clickUpConfig?.setupComplete) {
-                            const syncDb = this._getKanbanDb(workspaceRoot);
-                            for (const sid of sessionIds) {
-                                const plan = await syncDb.getPlanBySessionId(sid);
-                                if (plan) {
-                                    void this._queueClickUpSync(workspaceRoot, plan, targetColumn);
-                                }
-                            }
-                            if (clickUp.consecutiveFailures >= 3) {
-                                await this._postClickUpState(workspaceRoot, true);
-                            }
-                        }
-                    } catch { /* ClickUp sync failure must never block kanban operations */ }
-                    // Linear sync hook — fire-and-forget, never blocks kanban moves
-                    try {
-                        const linear = this._getLinearService(workspaceRoot);
-                        const linearConfig = await linear.loadConfig();
-                        if (linearConfig?.setupComplete) {
-                            const syncDb = this._getKanbanDb(workspaceRoot);
-                            for (const sid of sessionIds) {
-                                const plan = await syncDb.getPlanBySessionId(sid);
-                                if (plan) {
-                                    void this._queueLinearSync(workspaceRoot, plan, targetColumn);
-                                }
-                            }
-                            if (linear.consecutiveFailures >= 3) {
-                                await this._postLinearState(workspaceRoot, true);
-                            }
-                        }
-                    } catch { /* Linear sync failure must never block kanban operations */ }
-                    await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sessionIds, targetColumn, workspaceRoot);
                 }
                 break;
             }
@@ -2837,12 +4455,12 @@ export class KanbanProvider implements vscode.Disposable {
                 }
             case 'toggleCliTriggers':
                 this._cliTriggersEnabled = !!msg.enabled;
-                await this._context.workspaceState.update('kanban.cliTriggersEnabled', this._cliTriggersEnabled);
+                await this._updateSetting('kanban.cliTriggersEnabled', this._cliTriggersEnabled);
                 break;
             case 'toggleDynamicComplexityRouting':
                 this._dynamicComplexityRoutingEnabled = !!msg.enabled;
                 try {
-                    await this._context.workspaceState.update(
+                    await this._updateSetting(
                         'kanban.dynamicComplexityRoutingEnabled',
                         this._dynamicComplexityRoutingEnabled
                     );
@@ -2853,13 +4471,48 @@ export class KanbanProvider implements vscode.Disposable {
             case 'toggleAllowUnknownComplexityAutoMove':
                 this._allowUnknownComplexityAutoMove = !!msg.enabled;
                 try {
-                    await this._context.workspaceState.update(
+                    await this._updateSetting(
                         'kanban.allowUnknownComplexityAutoMove',
                         this._allowUnknownComplexityAutoMove
                     );
                 } catch (err) {
                     console.error('[KanbanProvider] Failed to persist allowUnknownComplexityAutoMove:', err);
                 }
+                break;
+            case 'toggleClearTerminalBeforePrompt':
+                this._clearTerminalBeforePrompt = !!msg.enabled;
+                try {
+                    await vscode.workspace.getConfiguration('switchboard').update(
+                        'terminal.clearBeforePrompt',
+                        this._clearTerminalBeforePrompt,
+                        true
+                    );
+                } catch (err) {
+                    console.error('[KanbanProvider] Failed to persist clearTerminalBeforePrompt:', err);
+                }
+                this._panel?.webview.postMessage({
+                    type: 'clearTerminalBeforePromptState',
+                    enabled: this._clearTerminalBeforePrompt,
+                    delay: this._clearTerminalBeforePromptDelay
+                });
+                break;
+
+            case 'updateClearTerminalBeforePromptDelay':
+                const clampedDelay = Math.min(Math.max(msg.delay ?? 2000, 0), 10000);
+                this._clearTerminalBeforePromptDelay = clampedDelay;
+                try {
+                    await vscode.workspace.getConfiguration('switchboard').update(
+                        'terminal.clearBeforePromptDelay',
+                        clampedDelay,
+                        true
+                    );
+                } catch (err) {
+                    console.error('[KanbanProvider] Failed to persist clearTerminalBeforePromptDelay:', err);
+                }
+                this._panel?.webview.postMessage({
+                    type: 'clearTerminalBeforePromptDelayState',
+                    delay: clampedDelay
+                });
                 break;
             case 'updateRoutingConfig':
                 if (msg.config && typeof msg.config === 'object') {
@@ -2870,12 +4523,12 @@ export class KanbanProvider implements vscode.Disposable {
                 const { columnId, mode } = msg;
                 if (columnId && (mode === 'cli' || mode === 'prompt')) {
                     this._columnDragDropModes[columnId] = mode;
-                    await this._context.workspaceState.update('kanban.columnDragDropModes', this._columnDragDropModes);
+                    await this._updateSetting('kanban.columnDragDropModes', this._columnDragDropModes);
                 }
                 break;
             }
             case 'recoverSelected': {
-                const sessionIds: string[] = msg.sessionIds || [];
+                const sessionIds = this._resolveSessionIds(msg.planIds, msg.sessionIds);
                 let recovered = 0;
                 for (const sid of sessionIds) {
                     try {
@@ -3013,7 +4666,7 @@ export class KanbanProvider implements vscode.Disposable {
 
                 await this._refreshBoard(workspaceRoot);
                 const sourceCards = this._lastCards.filter(card =>
-                    card.workspaceRoot === workspaceRoot && sessionIds.includes(card.sessionId)
+                    card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, sessionIds)
                 );
                 if (sourceCards.length === 0) {
                     this._panel?.webview.postMessage({ type: 'promptOnDropResult', sessionIds, success: false });
@@ -3021,7 +4674,8 @@ export class KanbanProvider implements vscode.Disposable {
                 }
 
                 const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, targetColumn);
-                if (dispatchSpec?.source === 'custom-user' && this._taskViewerProvider) {
+                const isPromptModeBuiltIn = dispatchSpec?.source === 'built-in' && dispatchSpec?.dragDropMode === 'prompt';
+                if ((dispatchSpec?.source === 'custom-user' || isPromptModeBuiltIn) && this._taskViewerProvider && dispatchSpec?.role) {
                     const instruction = dispatchSpec.role === 'planner' ? 'improve-plan' : undefined;
                     const dispatched = await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(dispatchSpec.role, sessionIds, {
                         targetColumn,
@@ -3039,7 +4693,7 @@ export class KanbanProvider implements vscode.Disposable {
                     await this._refreshBoard(workspaceRoot);
                     this._panel?.webview.postMessage({ type: 'promptOnDropResult', sessionIds, success: dispatched });
                     if (dispatched) {
-                        vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plan(s) to clipboard.`);
+                        this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plan(s) to clipboard.`, isError: false });
                     }
                     break;
                 }
@@ -3078,7 +4732,7 @@ export class KanbanProvider implements vscode.Disposable {
 
                 await this._refreshBoard(workspaceRoot);
                 this._panel?.webview.postMessage({ type: 'promptOnDropResult', sessionIds, success: true });
-                vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plan(s) to clipboard.`);
+                this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plan(s) to clipboard.`, isError: false });
                 break;
             }
             case 'batchPlannerPrompt': {
@@ -3092,11 +4746,12 @@ export class KanbanProvider implements vscode.Disposable {
                     vscode.window.showInformationMessage('No CREATED plans available for batch planner prompt.');
                     break;
                 }
-                const prompt = await this._generateBatchPlannerPrompt(sourceCards, workspaceRoot);
+                const plans = await this._cardsToPromptPlans(sourceCards, workspaceRoot, new Map());
+                const prompt = await this.generateUnifiedPrompt('planner', plans, workspaceRoot, { instruction: 'improve-plan' });
                 await vscode.env.clipboard.writeText(prompt);
-                const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => card.sessionId), 'CREATED', 'improve-plan', workspaceRoot);
+                const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => this._cardId(card)), 'CREATED', 'improve-plan', workspaceRoot);
                 await this._refreshBoard(workspaceRoot);
-                vscode.window.showInformationMessage(`Copied batch planner prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to PLAN REVIEWED.`);
+                this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied batch planner prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to PLAN REVIEWED.`, isError: false });
                 break;
             }
             case 'batchDispatchLow': {
@@ -3119,11 +4774,13 @@ export class KanbanProvider implements vscode.Disposable {
                     break;
                 }
                 // Explicit low-complexity button always uses coder role, bypassing the toggle
-                const prompt = await this._generateBatchExecutionPrompt(sourceCards, workspaceRoot, 'coder');
+                const repoScopeMap = await this._buildRepoScopeMap(sourceCards, workspaceRoot);
+                const plans = await this._cardsToPromptPlans(sourceCards, workspaceRoot, repoScopeMap);
+                const prompt = await this.generateUnifiedPrompt('coder', plans, workspaceRoot, { instruction: 'low-complexity' });
                 await vscode.env.clipboard.writeText(prompt);
-                const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => card.sessionId), 'PLAN REVIEWED', 'handoff', workspaceRoot);
+                const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => this._cardId(card)), 'PLAN REVIEWED', undefined, workspaceRoot);
                 await this._refreshBoard(workspaceRoot);
-                vscode.window.showInformationMessage(`Copied batch low-complexity prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to CODER CODED.`);
+                this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied batch low-complexity prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to CODER CODED.`, isError: false });
                 break;
             }
             case 'julesLowComplexity': {
@@ -3142,7 +4799,7 @@ export class KanbanProvider implements vscode.Disposable {
                     vscode.window.showInformationMessage('No LOW-complexity PLAN REVIEWED plans available for Jules dispatch.');
                     break;
                 }
-                const eligibleSessionIds = await this._getEligibleSessionIds(sourceCards.map(card => card.sessionId), 'PLAN REVIEWED', workspaceRoot);
+                const eligibleSessionIds = await this._getEligibleSessionIds(sourceCards.map(card => this._cardId(card)), 'PLAN REVIEWED', workspaceRoot);
                 let dispatchedCount = 0;
                 for (const sessionId of eligibleSessionIds) {
                     const dispatched = await vscode.commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', 'jules', sessionId, undefined, workspaceRoot);
@@ -3171,35 +4828,30 @@ export class KanbanProvider implements vscode.Disposable {
                     for (const [role, sids] of groups) {
                         if (sids.length === 0) { continue; }
                         const targetCol = this._targetColumnForDispatchRole(role);
-                        // DB-first: update column immediately
-                        const dbMs = this._getKanbanDb(workspaceRoot);
-                        if (await dbMs.ensureReady()) {
-                            for (const sid of sids) {
-                                await dbMs.updateColumn(sid, targetCol);
-                                _schedulePlanStateWrite(dbMs, workspaceRoot, sid, targetCol,
-                                    targetCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
-                            }
+                        for (const sid of sids) {
+                            await this.moveCardToColumn(workspaceRoot, sid, targetCol);
+                            await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
                         }
+                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sids, targetColumn: targetCol });
                         if (this._cliTriggersEnabled) {
                             if (sids.length === 1) {
                                 await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, sids[0], undefined, workspaceRoot);
                             } else {
                                 await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, sids, undefined, workspaceRoot);
                             }
-                        } else {
-                            await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sids, targetCol, workspaceRoot);
                         }
                         movedParts.push(`${sids.length} → ${targetCol}`);
                     }
                     if (movedParts.length > 0) {
                         const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} skipped — unknown complexity)` : '';
-                        vscode.window.showInformationMessage(`Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`);
+                        this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`, isError: false });
                     }
                 } else {
                     const nextCol = await this._getNextColumnId(column, workspaceRoot);
                     if (!nextCol) { break; }
                     const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, nextCol);
                     if (dispatchSpec?.source === 'custom-user' && this._taskViewerProvider) {
+                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: msg.sessionIds, targetColumn: nextCol });
                         if (dispatchSpec.dragDropMode === 'prompt' || this._cliTriggersEnabled) {
                             const instruction = dispatchSpec.role === 'planner' ? 'improve-plan' : undefined;
                             const dispatched = await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(dispatchSpec.role, msg.sessionIds, {
@@ -3211,7 +4863,7 @@ export class KanbanProvider implements vscode.Disposable {
                             });
                             if (dispatched && dispatchSpec.role === 'lead') {
                                 const leadCards = this._lastCards.filter(card =>
-                                    card.workspaceRoot === workspaceRoot && msg.sessionIds.includes(card.sessionId)
+                                    card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds)
                                 ).filter(card => !this._isLowComplexity(card) && card.complexity !== 'Unknown');
                                 if (leadCards.length > 0) {
                                     await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot);
@@ -3221,15 +4873,11 @@ export class KanbanProvider implements vscode.Disposable {
                             await vscode.commands.executeCommand('switchboard.kanbanForwardMove', msg.sessionIds, nextCol, workspaceRoot);
                         }
                     } else {
-                        // DB-first: update column immediately
-                        const dbMs2 = this._getKanbanDb(workspaceRoot);
-                        if (await dbMs2.ensureReady()) {
-                            for (const sid of msg.sessionIds) {
-                                await dbMs2.updateColumn(sid, nextCol);
-                                _schedulePlanStateWrite(dbMs2, workspaceRoot, sid, nextCol,
-                                    nextCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
-                            }
+                        for (const sid of msg.sessionIds) {
+                            await this.moveCardToColumn(workspaceRoot, sid, nextCol);
+                            await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
                         }
+                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: msg.sessionIds, targetColumn: nextCol });
                         if (this._cliTriggersEnabled) {
                             const role = this._columnToRole(nextCol);
                             if (role) {
@@ -3241,10 +4889,7 @@ export class KanbanProvider implements vscode.Disposable {
                                 }
                             } else {
                                 console.log(`[Kanban] Column '${nextCol}' has no role mapping, using visual move only`);
-                                await vscode.commands.executeCommand('switchboard.kanbanForwardMove', msg.sessionIds, nextCol, workspaceRoot);
                             }
-                        } else {
-                            await vscode.commands.executeCommand('switchboard.kanbanForwardMove', msg.sessionIds, nextCol, workspaceRoot);
                         }
                     }
                 }
@@ -3262,7 +4907,7 @@ export class KanbanProvider implements vscode.Disposable {
                     vscode.window.showInformationMessage(`No plans in ${column} to move.`);
                     break;
                 }
-                const sessionIds = sourceCards.map(card => card.sessionId);
+                const sessionIds = sourceCards.map(card => this._cardId(card));
 
                 // PLAN REVIEWED uses dynamic complexity routing per-session
                 if (column === 'PLAN REVIEWED') {
@@ -3276,34 +4921,29 @@ export class KanbanProvider implements vscode.Disposable {
                     for (const [role, sids] of groups) {
                         if (sids.length === 0) { continue; }
                         const targetCol = this._targetColumnForDispatchRole(role);
-                        // DB-first: update column immediately
-                        const dbMa = this._getKanbanDb(workspaceRoot);
-                        if (await dbMa.ensureReady()) {
-                            for (const sid of sids) {
-                                await dbMa.updateColumn(sid, targetCol);
-                                _schedulePlanStateWrite(dbMa, workspaceRoot, sid, targetCol,
-                                    targetCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
-                            }
+                        for (const sid of sids) {
+                            await this.moveCardToColumn(workspaceRoot, sid, targetCol);
+                            await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
                         }
+                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sids, targetColumn: targetCol });
                         if (this._cliTriggersEnabled) {
                             if (sids.length === 1) {
                                 await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, sids[0], undefined, workspaceRoot);
                             } else {
                                 await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, sids, undefined, workspaceRoot);
                             }
-                        } else {
-                            await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sids, targetCol, workspaceRoot);
                         }
                         movedParts.push(`${sids.length} → ${targetCol}`);
                     }
                     await this._refreshBoard(workspaceRoot);
                     const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} skipped — unknown complexity)` : '';
-                    vscode.window.showInformationMessage(`Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`);
+                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`, isError: false });
                 } else {
                     const nextCol = await this._getNextColumnId(column, workspaceRoot);
                     if (!nextCol) { break; }
                     const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, nextCol);
                     if (dispatchSpec?.source === 'custom-user' && this._taskViewerProvider) {
+                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sessionIds, targetColumn: nextCol });
                         if (dispatchSpec.dragDropMode === 'prompt' || this._cliTriggersEnabled) {
                             const instruction = dispatchSpec.role === 'planner' ? 'improve-plan' : undefined;
                             const dispatched = await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(dispatchSpec.role, sessionIds, {
@@ -3324,29 +4964,22 @@ export class KanbanProvider implements vscode.Disposable {
                             await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sessionIds, nextCol, workspaceRoot);
                         }
                     } else {
-                        // DB-first: update column immediately
-                        const dbMa2 = this._getKanbanDb(workspaceRoot);
-                        if (await dbMa2.ensureReady()) {
-                            for (const sid of sessionIds) {
-                                await dbMa2.updateColumn(sid, nextCol);
-                                _schedulePlanStateWrite(dbMa2, workspaceRoot, sid, nextCol,
-                                    nextCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
-                            }
+                        for (const sid of sessionIds) {
+                            await this.moveCardToColumn(workspaceRoot, sid, nextCol);
+                            await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
                         }
+                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sessionIds, targetColumn: nextCol });
                         if (this._cliTriggersEnabled) {
                             const role = this._columnToRole(nextCol);
                             if (role) {
                                 await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, sessionIds, undefined, workspaceRoot);
                             } else {
                                 console.log(`[Kanban] Column '${nextCol}' has no role mapping, using visual move only`);
-                                await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sessionIds, nextCol, workspaceRoot);
                             }
-                        } else {
-                            await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sessionIds, nextCol, workspaceRoot);
                         }
                     }
                     await this._refreshBoard(workspaceRoot);
-                    vscode.window.showInformationMessage(`Moved ${sourceCards.length} plans from ${column} to ${nextCol}.`);
+                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Moved ${sourceCards.length} plans from ${column} to ${nextCol}.`, isError: false });
                 }
                 break;
             }
@@ -3354,58 +4987,68 @@ export class KanbanProvider implements vscode.Disposable {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) { break; }
 
-                const chatWorkflowPath = '.agent/workflows/chat.md';
-                let planSection = '';
-
+                let chatPlans: BatchPromptPlan[] = [];
                 if (Array.isArray(msg.sessionIds) && msg.sessionIds.length > 0) {
-                    await this._refreshBoard(workspaceRoot);
                     const selectedCards = this._lastCards.filter(card =>
-                        card.workspaceRoot === workspaceRoot && msg.sessionIds.includes(card.sessionId)
+                        card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds)
                     );
-                    if (selectedCards.length > 0) {
-                        const planLines = selectedCards.map(card => {
-                            const absPath = this._resolvePlanFilePath(workspaceRoot, card.planFile);
-                            return `- [${card.topic}] Plan File: ${absPath}`;
-                        }).join('\n');
-                        planSection = `\n\n## Plans to Discuss\n${planLines}\n\nPlease read each plan file above before starting the discussion.`;
-                    }
+                    chatPlans = selectedCards.map(card => ({
+                        topic: card.topic,
+                        absolutePath: this._resolvePlanFilePath(workspaceRoot, card.planFile),
+                        sessionId: this._cardId(card),
+                    }));
                 }
 
-                const prompt = `/chat\n\nPlease enter the chat workflow defined at: ${chatWorkflowPath}\n\nWe will be discussing plans and requirements.${planSection}`;
-
+                const chatPlanDestinations = this._taskViewerProvider?.resolveChatPlanDestinations(workspaceRoot);
+                const prompt = buildKanbanBatchPrompt('chat', chatPlans, { workspaceRoot, chatPlanDestinations });
                 await vscode.env.clipboard.writeText(prompt);
-                const count = Array.isArray(msg.sessionIds) ? msg.sessionIds.length : 0;
+                const count = chatPlans.length;
                 const planWord = count > 0 ? ` for ${count} plan(s)` : '';
-                vscode.window.showInformationMessage(`Chat prompt copied to clipboard${planWord}.`);
+                vscode.window.showInformationMessage(`Planning chat prompt copied to clipboard${planWord}.`);
+                break;
+            }
+            case 'copyChatWorkflow': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) { break; }
+
+                const chatPlanDestinations = this._taskViewerProvider?.resolveChatPlanDestinations(workspaceRoot);
+                const prompt = buildKanbanBatchPrompt('chat', [], { workspaceRoot, chatPlanDestinations });
+                await vscode.env.clipboard.writeText(prompt);
+                this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'Copied planning chat prompt to clipboard.', isError: false });
                 break;
             }
             case 'promptSelected': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || !Array.isArray(msg.sessionIds) || msg.sessionIds.length === 0) { break; }
                 const column: string = msg.column;
-                await this._refreshBoard(workspaceRoot);
                 // When explicit sessionIds are provided, trust the IDs without column filtering.
                 // This is required for CODED_AUTO: the frontend resolves it to LEAD CODED,
                 // but selected cards may actually be in INTERN CODED or CODER CODED.
                 // This aligns with moveSelected (line 2046) which also trusts sessionIds directly.
-                const sourceCards = this._lastCards.filter(card => card.workspaceRoot === workspaceRoot && msg.sessionIds.includes(card.sessionId));
+                const sourceCards = this._lastCards.filter(card => card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds));
                 if (sourceCards.length === 0) {
                     vscode.window.showInformationMessage('No matching plans found for prompt generation.');
                     break;
                 }
-                const prompt = await this._generatePromptForColumn(sourceCards, column, workspaceRoot);
+
+                // Get next column BEFORE generating prompt so we can use destination role
+                const nextCol = await this._getNextColumnId(column, workspaceRoot);
+
+                // Generate prompt — if nextCol is a custom column, its role overrides source role
+                const prompt = await this._generatePromptForColumn(sourceCards, column, workspaceRoot, nextCol ?? undefined);
                 await vscode.env.clipboard.writeText(prompt);
 
-                // Prompt buttons are for IDE chat agents — use visual-only moves (no CLI triggers)
-                const nextCol = await this._getNextColumnId(column, workspaceRoot);
+                // If no next column, still copy the prompt but don't advance
                 if (!nextCol) {
-                    await this._refreshBoard(workspaceRoot);
                     vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans. No next column to advance to.`);
                     break;
                 }
 
                 const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, nextCol);
-                if (column !== 'PLAN REVIEWED' && dispatchSpec?.source === 'custom-user' && this._taskViewerProvider) {
+                // CHANGED: Removed `column !== 'PLAN REVIEWED'` condition — custom columns should
+                // be dispatched regardless of source column. When destination is custom-user and
+                // source is PLAN REVIEWED, the custom column's role should take precedence.
+                if (dispatchSpec?.source === 'custom-user' && this._taskViewerProvider) {
                     const instruction = dispatchSpec.role === 'planner' ? 'improve-plan' : undefined;
                     const dispatched = await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(dispatchSpec.role, msg.sessionIds, {
                         targetColumn: nextCol,
@@ -3421,50 +5064,38 @@ export class KanbanProvider implements vscode.Disposable {
                             await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot);
                         }
                     }
-                    await this._refreshBoard(workspaceRoot);
-                    vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`);
+                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: msg.sessionIds, targetColumn: nextCol });
+                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`, isError: false });
                     break;
                 }
 
                 // PLAN REVIEWED uses dynamic complexity routing per-session (visual move only)
-                if (column === 'PLAN REVIEWED') {
+                // This now only fires when destination is NOT a custom column
+                if (column === 'PLAN REVIEWED' && (!dispatchSpec || dispatchSpec.source === 'built-in')) {
                     const { filtered: knownIds, skippedCount } = this._filterUnknownComplexitySessions(msg.sessionIds);
                     if (knownIds.length > 0) {
                         const groups = await this._partitionByComplexityRoute(workspaceRoot, knownIds);
                         for (const [role, sids] of groups) {
                             if (sids.length === 0) { continue; }
                             const targetCol = this._targetColumnForDispatchRole(role);
-                            // DB-first
-                            const dbPs = this._getKanbanDb(workspaceRoot);
-                            if (await dbPs.ensureReady()) {
-                                for (const sid of sids) {
-                                    await dbPs.updateColumn(sid, targetCol);
-                                    _schedulePlanStateWrite(dbPs, workspaceRoot, sid, targetCol,
-                                        targetCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
-                                }
+                            for (const sid of sids) {
+                                await this.moveCardToColumn(workspaceRoot, sid, targetCol);
+                                await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
                             }
-                            await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sids, targetCol, workspaceRoot);
+                            this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sids, targetColumn: targetCol });
                         }
-                        await this._refreshBoard(workspaceRoot);
                         const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} skipped — unknown complexity)` : '';
-                        vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans. Advanced ${knownIds.length}.${skippedSuffix}`);
+                        this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans. Advanced ${knownIds.length}.${skippedSuffix}`, isError: false });
                     } else {
-                        await this._refreshBoard(workspaceRoot);
-                        vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans. No plans advanced (${skippedCount} skipped — unknown complexity).`);
+                        this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans. No plans advanced (${skippedCount} skipped — unknown complexity).`, isError: false });
                     }
                 } else {
-                    // DB-first
-                    const dbPs2 = this._getKanbanDb(workspaceRoot);
-                    if (await dbPs2.ensureReady()) {
-                        for (const sid of msg.sessionIds) {
-                            await dbPs2.updateColumn(sid, nextCol);
-                            _schedulePlanStateWrite(dbPs2, workspaceRoot, sid, nextCol,
-                                nextCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
-                        }
+                    for (const sid of msg.sessionIds) {
+                        await this.moveCardToColumn(workspaceRoot, sid, nextCol);
+                        await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
                     }
-                    await vscode.commands.executeCommand('switchboard.kanbanForwardMove', msg.sessionIds, nextCol, workspaceRoot);
-                    await this._refreshBoard(workspaceRoot);
-                    vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans and advanced to next stage.`);
+                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: msg.sessionIds, targetColumn: nextCol });
+                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to next stage.`, isError: false });
                 }
                 break;
             }
@@ -3472,24 +5103,26 @@ export class KanbanProvider implements vscode.Disposable {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) { break; }
                 const column: string = msg.column;
-                await this._refreshBoard(workspaceRoot);
                 const sourceCards = this._lastCards.filter(card => card.workspaceRoot === workspaceRoot && card.column === column);
                 if (sourceCards.length === 0) {
                     vscode.window.showInformationMessage(`No plans in ${column} for prompt generation.`);
                     break;
                 }
-                const prompt = await this._generatePromptForColumn(sourceCards, column, workspaceRoot);
+
+                // Get next column BEFORE generating prompt so we can use destination role
+                const nextCol = await this._getNextColumnId(column, workspaceRoot);
+
+                // Generate prompt — if nextCol is a custom column, its role overrides source role
+                const prompt = await this._generatePromptForColumn(sourceCards, column, workspaceRoot, nextCol ?? undefined);
                 await vscode.env.clipboard.writeText(prompt);
 
                 // Prompt buttons are for IDE chat agents — use visual-only moves (no CLI triggers)
-                const nextCol = await this._getNextColumnId(column, workspaceRoot);
                 if (!nextCol) {
-                    await this._refreshBoard(workspaceRoot);
                     vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans. No next column to advance to.`);
                     break;
                 }
 
-                const sessionIds = sourceCards.map(card => card.sessionId);
+                const sessionIds = sourceCards.map(card => this._cardId(card));
 
                 const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, nextCol);
                 if (dispatchSpec?.source === 'custom-user' && this._taskViewerProvider) {
@@ -3508,13 +5141,14 @@ export class KanbanProvider implements vscode.Disposable {
                             await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot);
                         }
                     }
-                    await this._refreshBoard(workspaceRoot);
-                    vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`);
+                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sessionIds, targetColumn: nextCol });
+                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`, isError: false });
                     break;
                 }
 
                 // PLAN REVIEWED uses dynamic complexity routing per-session (visual move only)
-                if (column === 'PLAN REVIEWED') {
+                // This now only fires when destination is NOT a custom column
+                if (column === 'PLAN REVIEWED' && (!dispatchSpec || dispatchSpec.source === 'built-in')) {
                     const { filtered: knownIds, skippedCount } = this._filterUnknownComplexitySessions(sessionIds);
                     if (knownIds.length > 0) {
                         const groups = await this._partitionByComplexityRoute(workspaceRoot, knownIds);
@@ -3531,14 +5165,13 @@ export class KanbanProvider implements vscode.Disposable {
                                         targetCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
                                 }
                             }
+                            this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sids, targetColumn: targetCol });
                             await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sids, targetCol, workspaceRoot);
                             movedParts.push(`${sids.length} → ${targetCol}`);
                         }
-                        await this._refreshBoard(workspaceRoot);
-                        vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans. Advanced ${knownIds.length}: ${movedParts.join(', ')}.`);
+                        this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans. Advanced ${knownIds.length}: ${movedParts.join(', ')}.`, isError: false });
                     } else {
-                        await this._refreshBoard(workspaceRoot);
-                        vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans. No plans advanced.`);
+                        this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans. No plans advanced.`, isError: false });
                     }
                     this._notifySkippedUnknownComplexity(skippedCount, knownIds.length);
                 } else {
@@ -3551,9 +5184,9 @@ export class KanbanProvider implements vscode.Disposable {
                                 nextCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
                         }
                     }
+                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sessionIds, targetColumn: nextCol });
                     await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sessionIds, nextCol, workspaceRoot);
-                    await this._refreshBoard(workspaceRoot);
-                    vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`);
+                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`, isError: false });
                 }
                 break;
             }
@@ -3577,23 +5210,52 @@ export class KanbanProvider implements vscode.Disposable {
                 vscode.window.showInformationMessage(`Dispatched ${dispatchedCount} plans to Jules.`);
                 break;
             }
-            case 'completePlan':
-                if (msg.sessionId) {
+            case 'splitterSelected': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || !Array.isArray(msg.sessionIds) || msg.sessionIds.length === 0) {
+                    vscode.window.showWarningMessage('Please select at least one plan to split.');
+                    break;
+                }
+                const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+                if (visibleAgents.splitter === false) {
+                    vscode.window.showWarningMessage('Splitter agent is currently disabled in setup.');
+                    break;
+                }
+                const eligibleSessionIds = await this._getEligibleSessionIds(msg.sessionIds, 'PLAN REVIEWED', workspaceRoot);
+                if (eligibleSessionIds.length === 0) {
+                    vscode.window.showWarningMessage('No selected plans are currently in the Planned column.');
+                    break;
+                }
+                await vscode.commands.executeCommand(
+                    'switchboard.triggerBatchAgentFromKanban',
+                    'splitter',
+                    eligibleSessionIds,
+                    undefined,
+                    workspaceRoot
+                );
+                await this._refreshBoard(workspaceRoot);
+                vscode.window.showInformationMessage(`Dispatched ${eligibleSessionIds.length} plan(s) to Splitter.`);
+                break;
+            }
+            case 'completePlan': {
+                const resolvedSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
+                if (resolvedSessionId) {
                     // DB-first: mark as completed immediately
                     const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                     if (workspaceRoot) {
                         const db = this._getKanbanDb(workspaceRoot);
                         if (await db.ensureReady()) {
-                            await db.updateColumn(msg.sessionId, 'COMPLETED');
-                            _schedulePlanStateWrite(db, workspaceRoot, msg.sessionId, 'COMPLETED',
+                            await db.updateColumn(resolvedSessionId, 'COMPLETED');
+                            _schedulePlanStateWrite(db, workspaceRoot, resolvedSessionId, 'COMPLETED',
                                 'completed').catch(() => { /* fire-and-forget */ });
-                            await db.updateStatus(msg.sessionId, 'completed');
+                            await db.updateStatus(resolvedSessionId, 'completed');
                         }
                     }
-                    await vscode.commands.executeCommand('switchboard.completePlanFromKanban', msg.sessionId, msg.workspaceRoot);
+                    await vscode.commands.executeCommand('switchboard.completePlanFromKanban', resolvedSessionId, msg.workspaceRoot);
                     await this._refreshBoard(msg.workspaceRoot);
                 }
                 break;
+            }
             case 'completeSelected': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || !Array.isArray(msg.sessionIds) || msg.sessionIds.length === 0) { break; }
@@ -3629,15 +5291,17 @@ export class KanbanProvider implements vscode.Disposable {
                 const dbAll = this._getKanbanDb(workspaceRoot);
                 if (await dbAll.ensureReady()) {
                     for (const card of reviewedCards) {
-                        await dbAll.updateColumn(card.sessionId, 'COMPLETED');
-                        _schedulePlanStateWrite(dbAll, workspaceRoot, card.sessionId, 'COMPLETED',
+                        const cardKey = this._cardId(card);
+                        await dbAll.updateColumn(cardKey, 'COMPLETED');
+                        _schedulePlanStateWrite(dbAll, workspaceRoot, cardKey, 'COMPLETED',
                             'completed').catch(() => { /* fire-and-forget */ });
-                        await dbAll.updateStatus(card.sessionId, 'completed');
+                        await dbAll.updateStatus(cardKey, 'completed');
                     }
                 }
                 let successCount = 0;
                 for (const card of reviewedCards) {
-                    const ok = await vscode.commands.executeCommand<boolean>('switchboard.completePlanFromKanban', card.sessionId, workspaceRoot);
+                    const cardKey = this._cardId(card);
+                    const ok = await vscode.commands.executeCommand<boolean>('switchboard.completePlanFromKanban', cardKey, workspaceRoot);
                     if (ok) { successCount++; }
                 }
                 await this._refreshBoard(workspaceRoot);
@@ -3682,18 +5346,26 @@ export class KanbanProvider implements vscode.Disposable {
                 vscode.window.showInformationMessage(`Recovered ${successCount} of ${msg.sessionIds.length} plans.`);
                 break;
             }
-            case 'reviewPlan':
-                if (msg.sessionId) {
-                    await vscode.commands.executeCommand('switchboard.reviewPlanFromKanban', msg.sessionId, msg.workspaceRoot);
+            case 'reviewPlan': {
+                const reviewSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
+                if (reviewSessionId && this._planningPanelProvider) {
+                    this._planningPanelProvider.reveal();
+                    this._planningPanelProvider.postMessageToWebview({
+                        type: 'activateKanbanTabAndSelectPlan',
+                        sessionId: reviewSessionId,
+                        planFile: msg.planFile || '',
+                        workspaceRoot: msg.workspaceRoot || ''
+                    });
                 }
                 break;
+            }
             case 'pauseLiveSync':
-                if (msg.sessionId) {
+                if (msg.sessionId && this._continuousSync) {
                     this._continuousSync.pausePlan(msg.sessionId);
                 }
                 break;
             case 'resumeLiveSync': {
-                if (msg.sessionId) {
+                if (msg.sessionId && this._continuousSync) {
                     const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                     if (workspaceRoot) {
                         this._continuousSync.resumePlan(msg.sessionId, workspaceRoot);
@@ -3701,17 +5373,33 @@ export class KanbanProvider implements vscode.Disposable {
                 }
                 break;
             }
-            case 'copyPlanLink':
-                if (msg.sessionId) {
-                    const success = await vscode.commands.executeCommand<boolean>('switchboard.copyPlanFromKanban', msg.sessionId, msg.column, msg.workspaceRoot);
-                    this._panel?.webview.postMessage({ type: 'copyPlanLinkResult', sessionId: msg.sessionId, success });
+            case 'copyPlanLink': {
+                const copySessionId = this._resolveSessionId(msg.planId, msg.sessionId);
+                if (copySessionId) {
+                    const success = await vscode.commands.executeCommand<boolean>('switchboard.copyPlanFromKanban', copySessionId, msg.column, msg.workspaceRoot);
+                    this._panel?.webview.postMessage({ type: 'copyPlanLinkResult', planId: msg.planId || '', sessionId: copySessionId, success });
                 }
                 break;
+            }
             case 'createPlan':
                 if (this._showingBacklog) {
                     this._showingBacklog = false;
                     this._panel?.webview.postMessage({ type: 'backlogViewState', showing: false });
                 }
+
+                // LAZY CHANGE: Ensure DB exists before plan creation
+                try {
+                    const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
+                    if (workspaceRoot) {
+                        const db = this._getKanbanDb(workspaceRoot);
+                        if (db) {
+                            await db.createIfMissing();
+                        }
+                    }
+                } catch (e) {
+                    console.error('[KanbanProvider] DB creation before plan creation failed:', e);
+                }
+
                 await vscode.commands.executeCommand('switchboard.initiatePlan');
                 break;
             case 'toggleBacklogView':
@@ -3722,9 +5410,11 @@ export class KanbanProvider implements vscode.Disposable {
             case 'sendToBacklog': {
                 const resolvedRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!resolvedRoot) break;
+                const resolvedSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
+                if (!resolvedSessionId) break;
                 const db = this._getKanbanDb(resolvedRoot);
-                await db.updateColumn(msg.sessionId, 'BACKLOG');
-                _schedulePlanStateWrite(db, resolvedRoot, msg.sessionId, 'BACKLOG',
+                await db.updateColumn(resolvedSessionId, 'BACKLOG');
+                _schedulePlanStateWrite(db, resolvedRoot, resolvedSessionId, 'BACKLOG',
                     'active').catch(() => { /* fire-and-forget */ });
                 this.refresh();
                 break;
@@ -3732,53 +5422,58 @@ export class KanbanProvider implements vscode.Disposable {
             case 'sendToNew': {
                 const resolvedRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!resolvedRoot) break;
+                const resolvedSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
+                if (!resolvedSessionId) break;
                 const db = this._getKanbanDb(resolvedRoot);
-                await db.updateColumn(msg.sessionId, 'CREATED');
-                _schedulePlanStateWrite(db, resolvedRoot, msg.sessionId, 'CREATED',
+                await db.updateColumn(resolvedSessionId, 'CREATED');
+                _schedulePlanStateWrite(db, resolvedRoot, resolvedSessionId, 'CREATED',
                     'active').catch(() => { /* fire-and-forget */ });
                 this.refresh();
                 break;
             }
             case 'importFromClipboard':
-                await vscode.commands.executeCommand('switchboard.importPlanFromClipboard');
+                await vscode.commands.executeCommand('switchboard.importPlanFromClipboard', msg.markdownText);
                 break;
             case 'pairProgramCard': {
-                const card = this._lastCards.find(c => c.sessionId === msg.sessionId);
+                const resolvedSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
+                const card = this._lastCards.find(c => (c.planId || c.sessionId) === resolvedSessionId);
                 if (!card || !this._currentWorkspaceRoot) { break; }
                 if (card.column !== 'PLAN REVIEWED') {
                     vscode.window.showWarningMessage('Pair Program is only available for PLAN REVIEWED cards.');
                     break;
                 }
 
-                const plans = this._cardsToPromptPlans([card], this._currentWorkspaceRoot);
-                const aggressivePairProgramming = this._autobanState?.aggressivePairProgramming ?? false;
+                const repoScopeMap = new Map<string, string>();
+                const db = this._getKanbanDb(this._currentWorkspaceRoot);
+                if (await db.ensureReady()) {
+                    const cardKey = this._cardId(card);
+                    const plan = await db.getPlanBySessionId(cardKey);
+                    if (plan?.repoScope) {
+                        repoScopeMap.set(cardKey, plan.repoScope);
+                    }
+                }
 
+                const plans = await this._cardsToPromptPlans([card], this._currentWorkspaceRoot, repoScopeMap);
+                const promptsConfig = await this._getPromptsConfig(this._currentWorkspaceRoot);
                 // Resolve effective Coder routing from Pair Programming mode
                 const ppMode = this._autobanState?.pairProgrammingMode ?? 'off';
                 const coderUsesIde = ppMode === 'cli-ide' || ppMode === 'ide-ide';
-                const accurateCodingEnabled = !coderUsesIde && vscode.workspace.getConfiguration('switchboard').get<boolean>('accurateCoding.enabled', true);
-
-                const defaultPromptOverrides = await this._getDefaultPromptOverrides(this._currentWorkspaceRoot);
+                const accurateCodingEnabled = !coderUsesIde && (promptsConfig.accurateCodingEnabledByRole?.coder ?? false);
 
                 // Build lead (Complex) prompt — with pair programming note
-                const leadPrompt = buildKanbanBatchPrompt('lead', plans, { pairProgrammingEnabled: true, aggressivePairProgramming, defaultPromptOverrides });
+                const leadPrompt = await this.generateUnifiedPrompt('lead', plans, this._currentWorkspaceRoot, {
+                    pairProgrammingEnabled: true
+                });
 
                 // Build coder (Routine) prompt
-                const coderPrompt = buildKanbanBatchPrompt('coder', plans, { pairProgrammingEnabled: true, accurateCodingEnabled, defaultPromptOverrides });
+                const coderPrompt = await this.generateUnifiedPrompt('coder', plans, this._currentWorkspaceRoot, {
+                    pairProgrammingEnabled: true,
+                    accurateCodingEnabled
+                });
 
                 if (coderUsesIde) {
                     // IDE Coder: Two-stage clipboard — Lead prompt first, Coder prompt on demand
                     await vscode.env.clipboard.writeText(leadPrompt);
-
-                    // Write Coder prompt backup to .switchboard/handoff/ in case notification is dismissed
-                    const handoffDir = path.join(this._currentWorkspaceRoot, '.switchboard', 'handoff');
-                    const backupPath = path.join(handoffDir, `coder_prompt_${msg.sessionId}.md`);
-                    try {
-                        if (!fs.existsSync(handoffDir)) { fs.mkdirSync(handoffDir, { recursive: true }); }
-                        fs.writeFileSync(backupPath, coderPrompt, 'utf8');
-                    } catch (err) {
-                        console.error('[KanbanProvider] Failed to write Coder prompt backup:', err);
-                    }
 
                     // Advance the card to LEAD CODED (before awaiting notification — don't block board update)
                     await vscode.commands.executeCommand('switchboard.kanbanForwardMove', [msg.sessionId], 'LEAD CODED', this._currentWorkspaceRoot);
@@ -3791,11 +5486,6 @@ export class KanbanProvider implements vscode.Disposable {
                     if (choice === 'Copy Coder Prompt') {
                         await vscode.env.clipboard.writeText(coderPrompt);
                         vscode.window.showInformationMessage('Coder prompt copied to clipboard.');
-                        // Clean up backup file after successful copy
-                        try { fs.unlinkSync(backupPath); } catch { /* ignore */ }
-                    } else {
-                        // User dismissed — backup file remains as safety net
-                        console.log(`[KanbanProvider] Pair programming: user dismissed Coder prompt notification. Backup at: ${backupPath}`);
                     }
                 } else {
                     // CLI Coder: Lead prompt to clipboard, Coder prompt to terminal
@@ -3881,7 +5571,7 @@ export class KanbanProvider implements vscode.Disposable {
 
                 await this._refreshBoard(workspaceRoot);
                 const sourceCards = this._lastCards.filter(card =>
-                    card.workspaceRoot === workspaceRoot && msg.sessionIds.includes(card.sessionId)
+                    card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds)
                 );
                 if (sourceCards.length === 0) {
                     vscode.window.showInformationMessage('No matching plans found.');
@@ -3943,7 +5633,714 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 }
                 break;
             }
+            case 'addAutobanTerminal': {
+                const role = String(msg.role || '');
+                if (role) {
+                    await vscode.commands.executeCommand('switchboard.addAutobanTerminalFromKanban', role);
+                }
+                break;
+            }
+            case 'removeAutobanTerminal': {
+                const role = String(msg.role || '');
+                const terminalName = String(msg.terminalName || '');
+                if (role && terminalName) {
+                    await vscode.commands.executeCommand('switchboard.removeAutobanTerminalFromKanban', role, terminalName);
+                }
+                break;
+            }
+            case 'resetAutobanPools': {
+                await vscode.commands.executeCommand('switchboard.resetAutobanPoolsFromKanban');
+                break;
+            }
+
+            case 'focusTerminal': {
+                const terminalName = String(msg.terminalName || '');
+                if (terminalName) {
+                    await vscode.commands.executeCommand('switchboard.focusTerminalByName', terminalName);
+                }
+                break;
+            }
+            case 'getStartupCommands': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) { break; }
+                const startupState = await this._getStartupCommands(workspaceRoot);
+                this._panel?.webview.postMessage({ type: 'startupCommands', ...startupState });
+                break;
+            }
+            case 'saveStartupCommands': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) { break; }
+                await this._saveStartupCommands(workspaceRoot, msg);
+                break;
+            }
+
+            case 'getPromptsConfig': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) { break; }
+                const promptsConfig = await this._getPromptsConfig(workspaceRoot);
+                this._panel?.webview.postMessage({ type: 'promptsConfig', ...promptsConfig });
+                break;
+            }
+            case 'savePromptsConfig': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) { break; }
+                await this._savePromptsConfig(workspaceRoot, msg);
+                break;
+            }
+            case 'getDefaultPromptOverrides': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) { break; }
+                const overrides = await this._getDefaultPromptOverrides(workspaceRoot);
+                this._panel?.webview.postMessage({ type: 'defaultPromptOverrides', overrides });
+                break;
+            }
+            case 'saveDefaultPromptOverrides': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) { break; }
+                await this._saveDefaultPromptOverrides(workspaceRoot, msg.overrides);
+                break;
+            }
+            case 'fileExists': {
+                const filePath = msg.path;
+                if (typeof filePath !== 'string' || !filePath.trim()) break;
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    this._panel?.webview.postMessage({ type: 'fileExistsResult', exists: false });
+                    break;
+                }
+                const resolvedPath = path.resolve(workspaceRoot, filePath);
+                if (!resolvedPath.startsWith(workspaceRoot)) {
+                    this._panel?.webview.postMessage({ type: 'fileExistsResult', exists: false });
+                    break;
+                }
+                const exists = fs.existsSync(resolvedPath);
+                this._panel?.webview.postMessage({ type: 'fileExistsResult', exists });
+                break;
+            }
+            case 'saveSetting': {
+                const { key, value } = msg;
+                if (typeof key !== 'string') break;
+                const fullKey = `switchboard.prompts.${key}`;
+                
+                // selectedRole is ephemeral UI state and should remain workspace-scoped
+                if (key === 'selectedRole') {
+                    await this._context.workspaceState.update(fullKey, value);
+                    break;
+                }
+
+                if (key.startsWith('roleConfig_') && this._taskViewerProvider) {
+                    await this._taskViewerProvider.saveRoleConfig(key, value);
+                } else {
+                    await this._updateSetting(fullKey, value);
+                }
+                break;
+            }
+            case 'getSetting': {
+                const { key } = msg;
+                if (typeof key !== 'string') break;
+                const fullKey = `switchboard.prompts.${key}`;
+                
+                let value: any;
+                if (key === 'selectedRole') {
+                    // selectedRole is ephemeral UI state and should remain workspace-scoped
+                    value = this._context.workspaceState.get(fullKey);
+                } else if (key.startsWith('roleConfig_') && this._taskViewerProvider) {
+                    value = this._taskViewerProvider.getRoleConfig(key);
+                } else {
+                    value = this._getSetting(fullKey, undefined);
+                }
+                
+                this._panel?.webview.postMessage({ type: 'settingResult', key, value });
+                break;
+            }
+            case 'getDefaultPromptPreviews': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) { break; }
+                const previews = await this._getDefaultPromptPreviews(workspaceRoot);
+                this._panel?.webview.postMessage({ type: 'defaultPromptPreviews', previews });
+                break;
+            }
+            case 'getPromptPreview': {
+                const { role, sessionIds } = msg;
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || typeof role !== 'string') break;
+                try {
+
+
+                    let plans: BatchPromptPlan[] = [];
+                    let planCount = 0;
+
+                    if (Array.isArray(sessionIds) && sessionIds.length > 0) {
+                        const cards = this._lastCards.filter(c =>
+                            c.workspaceRoot === workspaceRoot && this._cardMatchesIds(c, sessionIds)
+                        );
+                        const repoScopeMap = await this._buildRepoScopeMap(cards, workspaceRoot);
+                        plans = await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap);
+                        planCount = plans.length;
+                    } else {
+                        const cards = this._lastCards.filter(c => {
+                            if (c.workspaceRoot !== workspaceRoot) return false;
+                            switch (role) {
+                                case 'planner':
+                                    return c.column === 'CREATED';
+                                case 'lead':
+                                case 'coder':
+                                case 'intern': {
+                                    if (c.column !== 'PLAN REVIEWED') return false;
+                                    if (!this._dynamicComplexityRoutingEnabled) {
+                                        return role === 'lead';
+                                    }
+                                    const score = parseComplexityScore(c.complexity || '');
+                                    const resolvedRole = this.resolveRoutedRole(score);
+                                    return resolvedRole === role;
+                                }
+                                case 'reviewer':
+                                    return c.column === 'LEAD CODED' || c.column === 'CODER CODED' || c.column === 'INTERN CODED';
+                                case 'tester':
+                                    return c.column === 'CODE REVIEWED';
+                                default:
+                                    return false;
+                            }
+                        });
+
+                        if (cards.length > 0) {
+                            const repoScopeMap = await this._buildRepoScopeMap(cards, workspaceRoot);
+                            plans = await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap);
+                            planCount = plans.length;
+                        }
+                    }
+
+                    // Source column label (matching actual dispatch)
+                    const sourceColumnLabel = this._getSourceColumnLabelForRole(role);
+                    const preview = await this.generateUnifiedPrompt(role, plans, workspaceRoot, {
+                        sourceColumnLabel,
+                        instruction: (role === 'coder' || role === 'intern') ? 'low-complexity' : undefined
+                    });
+                    this._panel?.webview.postMessage({ type: 'promptPreviewResult', role, preview, planCount });
+                } catch (err) {
+                    this._panel?.webview.postMessage({ type: 'promptPreviewResult', role, preview: 'Error generating preview: ' + (err as Error).message, planCount: 0 });
+                }
+                break;
+            }
+            case 'generateAntigravityPrompt': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || typeof msg.agent !== 'string') break;
+                const column = typeof msg.column === 'string' && msg.column.trim() ? msg.column.trim() : 'CREATED';
+                const batchSize = typeof msg.batchSize === 'number' && msg.batchSize > 0 ? msg.batchSize : undefined;
+                await this._generateAntigravityPrompt(msg.agent, workspaceRoot, column, batchSize);
+                break;
+            }
+            case 'getPersonaForRole': {
+                const { role } = msg;
+                if (typeof role !== 'string' || !this._taskViewerProvider) {
+                    this._panel?.webview.postMessage({ type: 'personaContent', role, content: null, error: 'Invalid request' });
+                    break;
+                }
+                try {
+                    const content = await this._taskViewerProvider.getPersonaForRole(role);
+                    this._panel?.webview.postMessage({ type: 'personaContent', role, content: content ?? null });
+                } catch (error: any) {
+                    this._panel?.webview.postMessage({ type: 'personaContent', role, content: null, error: error?.message || 'Unknown error' });
+                }
+                break;
+            }
+            case 'copyGatherPrompt': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const resolvedSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
+                if (!workspaceRoot || !resolvedSessionId) { break; }
+                const card = this._lastCards.find(c => (c.planId || c.sessionId) === resolvedSessionId);
+                if (!card) { break; }
+                try {
+                    const prompt = await this._generatePromptForColumn([card], card.column, workspaceRoot);
+                    if (prompt) {
+                        await vscode.env.clipboard.writeText(prompt);
+                        console.log(`[KanbanProvider] Gather prompt copied for ${resolvedSessionId}`);
+                    }
+                } catch (error) {
+                    console.error('[KanbanProvider] Failed to copy gather prompt:', error);
+                }
+                break;
+            }
+            case 'copyExecutePrompt': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || !msg.sessionId) { break; }
+                const card = this._lastCards.find(c => (c.planId || c.sessionId) === msg.sessionId);
+                if (!card) { break; }
+                try {
+                    const prompt = await this._generatePromptForColumn([card], card.column, workspaceRoot, msg.targetColumn);
+                    if (prompt) {
+                        await vscode.env.clipboard.writeText(prompt);
+                        console.log(`[KanbanProvider] Execute prompt copied for ${msg.sessionId}`);
+                    }
+                } catch (error) {
+                    console.error('[KanbanProvider] Failed to copy execute prompt:', error);
+                }
+                break;
+            }
+            case 'getKanbanStructure': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || !this._taskViewerProvider) { break; }
+                const structure = await this._taskViewerProvider.handleGetKanbanStructure(workspaceRoot);
+                const customColumns = await this._taskViewerProvider.handleGetCustomKanbanColumns(workspaceRoot);
+                this._panel?.webview.postMessage({ type: 'kanbanStructure', structure, customColumns });
+                break;
+            }
+            case 'updateKanbanStructure': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || !this._taskViewerProvider || !Array.isArray(msg.sequence)) { break; }
+                await this._taskViewerProvider.handleUpdateKanbanStructure(msg.sequence, workspaceRoot);
+                const structure = await this._taskViewerProvider.handleGetKanbanStructure(workspaceRoot);
+                const customColumns = await this._taskViewerProvider.handleGetCustomKanbanColumns(workspaceRoot);
+                this._panel?.webview.postMessage({ type: 'kanbanStructure', structure, customColumns });
+                break;
+            }
+            case 'saveKanbanColumn': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || !this._taskViewerProvider || !msg.column) { break; }
+                await this._taskViewerProvider.handleSaveKanbanColumn(msg.column, workspaceRoot);
+                const structure = await this._taskViewerProvider.handleGetKanbanStructure(workspaceRoot);
+                const customColumns = await this._taskViewerProvider.handleGetCustomKanbanColumns(workspaceRoot);
+                this._panel?.webview.postMessage({ type: 'kanbanStructure', structure, customColumns });
+                await vscode.commands.executeCommand('switchboard.refreshUI');
+                break;
+            }
+            case 'deleteKanbanColumn': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || !this._taskViewerProvider || !msg.id) { break; }
+                await this._taskViewerProvider.handleDeleteKanbanColumn(msg.id, workspaceRoot);
+                const structure = await this._taskViewerProvider.handleGetKanbanStructure(workspaceRoot);
+                const customColumns = await this._taskViewerProvider.handleGetCustomKanbanColumns(workspaceRoot);
+                this._panel?.webview.postMessage({ type: 'kanbanStructure', structure, customColumns });
+                await vscode.commands.executeCommand('switchboard.refreshUI');
+                break;
+            }
+            case 'restoreKanbanDefaults': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || !this._taskViewerProvider) { break; }
+                await this._taskViewerProvider.handleRestoreKanbanDefaults(workspaceRoot);
+                const structure = await this._taskViewerProvider.handleGetKanbanStructure(workspaceRoot);
+                const customColumns = await this._taskViewerProvider.handleGetCustomKanbanColumns(workspaceRoot);
+                this._panel?.webview.postMessage({ type: 'kanbanStructure', structure, customColumns });
+                await vscode.commands.executeCommand('switchboard.refreshUI');
+                break;
+            }
+            case 'toggleKanbanColumnVisibility': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || !this._taskViewerProvider || !msg.id) { break; }
+                await this._taskViewerProvider.handleToggleKanbanColumnVisibility(msg.id, msg.visible, workspaceRoot);
+                const structure = await this._taskViewerProvider.handleGetKanbanStructure(workspaceRoot);
+                const customColumns = await this._taskViewerProvider.handleGetCustomKanbanColumns(workspaceRoot);
+                this._panel?.webview.postMessage({ type: 'kanbanStructure', structure, customColumns });
+                await vscode.commands.executeCommand('switchboard.refreshUI');
+                break;
+            }
+            case 'saveCustomAgent': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || !msg.agent || typeof msg.agent !== 'object') {
+                    this._panel?.webview.postMessage({ type: 'saveCustomAgentResult', success: false, error: 'Missing agent data or workspace' });
+                    break;
+                }
+                try {
+                    await this._taskViewerProvider?.handleSaveCustomAgent(msg.agent, workspaceRoot);
+                    this._panel?.webview.postMessage({ type: 'saveCustomAgentResult', success: true });
+                    await this._refreshBoard(workspaceRoot);
+                } catch (e: any) {
+                    this._panel?.webview.postMessage({ type: 'saveCustomAgentResult', success: false, error: e.message || 'Failed to save custom agent' });
+                }
+                break;
+            }
+            case 'deleteCustomAgent': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || typeof msg.agentId !== 'string') {
+                    this._panel?.webview.postMessage({ type: 'deleteCustomAgentResult', success: false, error: 'Missing agent ID or workspace' });
+                    break;
+                }
+                try {
+                    await this._taskViewerProvider?.handleDeleteCustomAgent(msg.agentId, workspaceRoot);
+                    this._panel?.webview.postMessage({ type: 'deleteCustomAgentResult', success: true });
+                    await this._refreshBoard(workspaceRoot);
+                } catch (e: any) {
+                    this._panel?.webview.postMessage({ type: 'deleteCustomAgentResult', success: false, error: e.message || 'Failed to delete custom agent' });
+                }
+                break;
+            }
+            case 'getCustomAgents': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    this._panel?.webview.postMessage({ type: 'customAgents', customAgents: [], workspaceRoot });
+                    break;
+                }
+                try {
+                    const customAgents = await this._taskViewerProvider?.getCustomAgents(workspaceRoot) ?? [];
+                    this._panel?.webview.postMessage({ type: 'customAgents', customAgents, workspaceRoot });
+                } catch {
+                    this._panel?.webview.postMessage({ type: 'customAgents', customAgents: [], workspaceRoot });
+                }
+                break;
+            }
+            case 'getUATData': {
+                const workspaceRoot = this._currentWorkspaceRoot;
+                if (workspaceRoot) {
+                    const db = this._getKanbanDb(workspaceRoot);
+                    const workspaceId = await this._readWorkspaceId(workspaceRoot) || await db.getWorkspaceId() || await db.getDominantWorkspaceId();
+                    if (workspaceId) {
+                        const reviewedPlans = await db.getPlansByColumn(workspaceId, 'CODE REVIEWED', this._projectFilter);
+                        const acceptancePlans = await db.getPlansByColumn(workspaceId, 'ACCEPTANCE TESTED', this._projectFilter);
+                        const allPlans = [...reviewedPlans, ...acceptancePlans];
+                        const plansWithSteps = [];
+                        for (const plan of allPlans) {
+                            if (plan.planFile) {
+                                try {
+                                    const resolvedPath = path.isAbsolute(plan.planFile)
+                                        ? plan.planFile
+                                        : path.join(workspaceRoot, plan.planFile);
+                                    if (fs.existsSync(resolvedPath)) {
+                                        const content = await fs.promises.readFile(resolvedPath, 'utf-8');
+                                        const steps = this._parseVerificationSteps(content);
+                                        // Merge persisted checkbox state
+                                        const stateKey = `uat_state_${plan.sessionId}`;
+                                        const savedState = await db.getMeta(stateKey);
+                                        const checkedMap = savedState ? JSON.parse(savedState) : {};
+                                        const stepsWithState = steps.map((s, i) => ({
+                                            text: s,
+                                            checked: !!checkedMap[i]
+                                        }));
+                                        plansWithSteps.push({
+                                            sessionId: plan.sessionId,
+                                            topic: plan.topic,
+                                            kanbanColumn: plan.kanbanColumn,
+                                            steps: stepsWithState
+                                        });
+                                    } else {
+                                        plansWithSteps.push({
+                                            sessionId: plan.sessionId,
+                                            topic: plan.topic,
+                                            kanbanColumn: plan.kanbanColumn,
+                                            steps: []
+                                        });
+                                    }
+                                } catch (err) {
+                                    console.error('[KanbanProvider] getUATData failed to read file:', plan.planFile, err);
+                                    plansWithSteps.push({
+                                        sessionId: plan.sessionId,
+                                        topic: plan.topic,
+                                        kanbanColumn: plan.kanbanColumn,
+                                        steps: []
+                                    });
+                                }
+                            } else {
+                                plansWithSteps.push({
+                                    sessionId: plan.sessionId,
+                                    topic: plan.topic,
+                                    kanbanColumn: plan.kanbanColumn,
+                                    steps: []
+                                });
+                            }
+                        }
+                        this._panel?.webview.postMessage({ type: 'uatData', plans: plansWithSteps });
+                    }
+                }
+                break;
+            }
+            case 'setUATCheckState': {
+                const workspaceRoot = this._currentWorkspaceRoot;
+                const { sessionId, stepIndex, checked } = msg;
+                if (workspaceRoot && sessionId !== undefined && stepIndex !== undefined) {
+                    const db = this._getKanbanDb(workspaceRoot);
+                    const stateKey = `uat_state_${sessionId}`;
+                    const savedState = await db.getMeta(stateKey);
+                    const checkedMap = savedState ? JSON.parse(savedState) : {};
+                    if (checked) {
+                        checkedMap[stepIndex] = true;
+                    } else {
+                        delete checkedMap[stepIndex];
+                    }
+                    await db.setMeta(stateKey, JSON.stringify(checkedMap));
+                }
+                break;
+            }
+            case 'getWorktreeConfig':
+            case 'getSafetySession': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const config = await this._getWorktreeConfigData(workspaceRoot);
+                this._panel?.webview.postMessage({
+                    type: 'worktreeConfig',
+                    ...config
+                });
+                // Backward compatibility
+                this._panel?.webview.postMessage({
+                    type: 'safetySession',
+                    session: config?.hasActiveSession ? {
+                        branch: config.branch,
+                        path: config.path,
+                        startedAt: config.startedAt,
+                        pathExists: config.pathExists
+                    } : null
+                });
+                break;
+            }
+            case 'createWorktree':
+            case 'startSafetySession': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                if (db && await db.ensureReady()) {
+                    try {
+                        const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot);
+                        await db.setMeta('active_safety_session_branch', branch);
+                        await db.setMeta('active_safety_session_started_at', new Date().toISOString());
+                        await db.setMeta('active_safety_session_path', wtPath);
+
+                        const agentBehaviour = msg.agentBehaviour || 'worktreeNew';
+                        const rememberChoice = msg.rememberChoice || false;
+                        const cpStatus = this.getControlPlaneSelectionStatus(workspaceRoot);
+                        const effectiveCpRoot = cpStatus.effectiveWorkspaceRoot || workspaceRoot;
+
+                        if (agentBehaviour === 'existing') {
+                            const config = await this._getWorktreeConfigData(workspaceRoot);
+                            if (config && config.activeTerminalCount === 0) {
+                                vscode.window.showWarningMessage('No active agent terminals found. Consider creating new agents instead.');
+                            }
+                        } else if (agentBehaviour === 'controlPlaneNew') {
+                            await vscode.commands.executeCommand('switchboard.createAgentGrid', { cwdOverride: effectiveCpRoot });
+                        } else if (agentBehaviour === 'worktreeReset') {
+                            await vscode.commands.executeCommand('switchboard.disposeAllGridTerminals');
+                            await vscode.commands.executeCommand('switchboard.createAgentGrid', { cwdOverride: wtPath });
+                        } else if (agentBehaviour === 'worktreeNew') {
+                            await vscode.commands.executeCommand('switchboard.createAgentGrid', { cwdOverride: wtPath });
+                        }
+
+                        if (rememberChoice) {
+                            await db.setMeta('worktree_agent_behaviour', agentBehaviour);
+                            await db.setMeta('worktree_remembered_path', wtPath);
+                            await db.setMeta('worktree_remember_enabled', 'true');
+                        }
+
+                        const config = await this._getWorktreeConfigData(workspaceRoot);
+                        this._panel?.webview.postMessage({
+                            type: 'worktreeConfig',
+                            ...config
+                        });
+                        this._panel?.webview.postMessage({
+                            type: 'safetySession',
+                            session: config?.hasActiveSession ? {
+                                branch: config.branch,
+                                path: config.path,
+                                startedAt: config.startedAt,
+                                pathExists: config.pathExists
+                            } : null
+                        });
+                        vscode.window.showInformationMessage(`Worktree created: ${branch}`);
+                    } catch (e: any) {
+                        vscode.window.showErrorMessage(`Failed to create worktree: ${e.message}`);
+                    }
+                }
+                break;
+            }
+            case 'clearRememberedWorktreeChoice': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                if (db && await db.ensureReady()) {
+                    await db.setMeta('worktree_agent_behaviour', '');
+                    await db.setMeta('worktree_remembered_path', '');
+                    await db.setMeta('worktree_remember_enabled', '');
+                    vscode.window.showInformationMessage('Remembered worktree choice cleared.');
+                }
+                break;
+            }
+            case 'mergeSafetySession': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                if (db && await db.ensureReady()) {
+                    const branch = await db.getMeta('active_safety_session_branch');
+                    const fullPath = await db.getMeta('active_safety_session_path');
+                    if (!branch || !fullPath) {
+                        vscode.window.showErrorMessage('No active safety session found.');
+                        break;
+                    }
+                    if (!fs.existsSync(fullPath)) {
+                        const clearAction = 'Clear Session Record Only';
+                        const result = await vscode.window.showErrorMessage(
+                            `Worktree directory not found: ${fullPath}`,
+                            { modal: false },
+                            clearAction
+                        );
+                        if (result === clearAction) {
+                            await db.setMeta('active_safety_session_branch', '');
+                            await db.setMeta('active_safety_session_started_at', '');
+                            await db.setMeta('active_safety_session_path', '');
+                            await db.setMeta('worktree_agent_behaviour', '');
+                            await db.setMeta('worktree_remembered_path', '');
+                            await db.setMeta('worktree_remember_enabled', '');
+                            this._panel?.webview.postMessage({ type: 'safetySession', session: null });
+                            vscode.window.showInformationMessage('Worktree record cleared.');
+                        }
+                        break;
+                    }
+                    try {
+                        const execFileAsync = promisify(cp.execFile);
+                        await execFileAsync('git', ['merge', '--no-ff', branch], { cwd: workspaceRoot });
+                        await execFileAsync('git', ['worktree', 'remove', '--force', fullPath], { cwd: workspaceRoot });
+                        await execFileAsync('git', ['branch', '-D', branch], { cwd: workspaceRoot });
+                        
+                        await db.setMeta('active_safety_session_branch', '');
+                        await db.setMeta('active_safety_session_started_at', '');
+                        await db.setMeta('active_safety_session_path', '');
+                        await db.setMeta('worktree_agent_behaviour', '');
+                        await db.setMeta('worktree_remembered_path', '');
+                        await db.setMeta('worktree_remember_enabled', '');
+
+                        this._panel?.webview.postMessage({
+                            type: 'safetySession',
+                            session: null
+                        });
+                        vscode.window.showInformationMessage('Worktree merged successfully.');
+                    } catch (e: any) {
+                        vscode.window.showErrorMessage(`Merge failed: ${e.message}`);
+                    }
+                }
+                break;
+            }
+            case 'abandonSafetySession': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                if (db && await db.ensureReady()) {
+                    const branch = await db.getMeta('active_safety_session_branch');
+                    const fullPath = await db.getMeta('active_safety_session_path');
+                    
+                    const execFileAsync = promisify(cp.execFile);
+                    if (fullPath && fs.existsSync(fullPath)) {
+                        try {
+                            await execFileAsync('git', ['worktree', 'remove', '--force', fullPath], { cwd: workspaceRoot });
+                        } catch (e: any) {
+                            console.warn(`Failed to remove worktree: ${e.message}`);
+                        }
+                    }
+                    if (branch) {
+                        try {
+                            await execFileAsync('git', ['branch', '-D', branch], { cwd: workspaceRoot });
+                        } catch (e: any) {
+                            console.warn(`Failed to delete branch: ${e.message}`);
+                        }
+                    }
+                    await db.setMeta('active_safety_session_branch', '');
+                    await db.setMeta('active_safety_session_started_at', '');
+                    await db.setMeta('active_safety_session_path', '');
+                    await db.setMeta('worktree_agent_behaviour', '');
+                    await db.setMeta('worktree_remembered_path', '');
+                    await db.setMeta('worktree_remember_enabled', '');
+
+                    this._panel?.webview.postMessage({
+                        type: 'safetySession',
+                        session: null
+                    });
+                    vscode.window.showInformationMessage('Worktree abandoned.');
+                }
+                break;
+            }
+            case 'clearSafetySessionRecord': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                if (db && await db.ensureReady()) {
+                    await db.setMeta('active_safety_session_branch', '');
+                    await db.setMeta('active_safety_session_started_at', '');
+                    await db.setMeta('active_safety_session_path', '');
+                    await db.setMeta('worktree_agent_behaviour', '');
+                    await db.setMeta('worktree_remembered_path', '');
+                    await db.setMeta('worktree_remember_enabled', '');
+                    this._panel?.webview.postMessage({
+                        type: 'safetySession',
+                        session: null
+                    });
+                    vscode.window.showInformationMessage('Worktree record cleared.');
+                }
+                break;
+            }
         }
+    }
+
+    private _parseVerificationSteps(content: string): string[] {
+        const steps: string[] = [];
+
+        // Pattern 1: "### Manual Verification/Testing/Checklist" section with numbered steps or checkboxes
+        // Updated to accept optional "Steps" suffix and "Checklist" keyword
+        const manualVerifMatch = content.match(/###\s*Manual\s+(?:Verification|Testing|Checklist)(?:\s+Steps)?\s*\n([\s\S]*?)(?=\n###|\n##|$)/i);
+        if (manualVerifMatch) {
+            const lines = manualVerifMatch[1].split('\n');
+            for (const line of lines) {
+                const numberedMatch = line.match(/^\s*\d+\.\s+(.+)/);
+                if (numberedMatch) {
+                    steps.push(numberedMatch[1].trim());
+                } else {
+                    const checkboxMatch = line.match(/^\s*- \[[ x]\]\s+(.+)/i);
+                    if (checkboxMatch) {
+                        steps.push(checkboxMatch[1].trim());
+                    }
+                }
+            }
+        }
+
+        // Pattern 2: "## Testing Checklist" section with "- [ ]" items
+        const testingChecklistMatch = content.match(/##\s*Testing\s+Checklist\s*\n([\s\S]*?)(?=\n##|$)/i);
+        if (testingChecklistMatch) {
+            const lines = testingChecklistMatch[1].split('\n');
+            for (const line of lines) {
+                const checkboxMatch = line.match(/^\s*- \[[ x]\]\s+(.+)/i);
+                if (checkboxMatch) {
+                    steps.push(checkboxMatch[1].trim());
+                }
+            }
+        }
+
+        // Pattern 3: "## Verification Plan/Steps" section (typo-tolerant: matches "Verificaton", "Verificaiton", etc.)
+        // Only runs if Patterns 1 and 2 didn't find any steps (dedup guard)
+        // Steps directly under the header are captured by default (inManualStepsSection starts true).
+        // Any ### subheading resets the flag to false, excluding automated sections.
+        // The manual-specific trigger (e.g., "Manual verification steps:") re-enables capture after a subheading.
+        if (steps.length === 0) {
+            const verificationPlanMatch = content.match(/##\s*Verific[a-z]*\s+(?:Plan|Steps)\s*\n([\s\S]*?)(?=\n##|$)/i);
+            if (verificationPlanMatch) {
+                const lines = verificationPlanMatch[1].split('\n');
+                let inManualStepsSection = true;
+
+                for (const line of lines) {
+                    // Look for manual-specific subheadings that indicate manual steps follow
+                    // Accepts: "Manual verification steps:", "Manual testing steps:", "Manual verification:", etc.
+                    if (/(?:^|\s)manual\s*(?:verification|testing)(?:\s+steps?)?\s*:/i.test(line)) {
+                        inManualStepsSection = true;
+                        continue;
+                    }
+
+                    // Stop extraction if we hit a non-manual subheading (### or ## level)
+                    if (/^#{1,3}\s/i.test(line)) {
+                        inManualStepsSection = false;
+                        continue;
+                    }
+
+                    // Extract numbered steps or checkbox items ONLY if we're in a manual steps section
+                    if (inManualStepsSection) {
+                        const numberedMatch = line.match(/^\s*\d+\.\s+(.+)/);
+                        if (numberedMatch) {
+                            steps.push(numberedMatch[1].trim());
+                        } else {
+                            const checkboxMatch = line.match(/^\s*- \[[ x]\]\s+(.+)/i);
+                            if (checkboxMatch) {
+                                steps.push(checkboxMatch[1].trim());
+                            }
+                        }
+                        // Note: we do NOT reset inManualStepsSection on empty lines,
+                        // because blank lines commonly appear between subheading and first step.
+                    }
+                }
+            }
+        }
+
+        return steps;
     }
 
     /**
@@ -3952,17 +6349,19 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
     private _columnToRole(column: string): string | null {
         switch (column) {
             case 'PLAN REVIEWED': return 'planner';
-            case 'TEAM LEAD CODED': return 'team-lead';
             case 'LEAD CODED': return 'lead';
             case 'CODER CODED': return 'coder';
             case 'INTERN CODED': return 'intern';
             case 'CODED': return 'lead';
             case 'CODE REVIEWED': return 'reviewer';
             case 'ACCEPTANCE TESTED': return 'tester';
+            case 'CONTEXT GATHERER': return 'gatherer';
             case 'COMPLETED': return null;
             default: return column.startsWith('custom_agent_') ? column : null;
         }
     }
+
+
 
     private _isAcceptanceTesterDesignDocConfigured(): boolean {
         const config = vscode.workspace.getConfiguration('switchboard');
@@ -3975,31 +6374,9 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         return visibleAgents.tester !== false && this._isAcceptanceTesterDesignDocConfigured();
     }
 
-    private async _generateBatchTesterPrompt(cards: KanbanCard[], workspaceRoot: string): Promise<string> {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const designDocEnabled = config.get<boolean>('planner.designDocEnabled', false);
-        const designDocLink = (config.get<string>('planner.designDocLink', '') || '').trim();
-        if (!designDocEnabled || !designDocLink) {
-            throw new Error('Acceptance Tester requires a Design Doc / PRD to be enabled and attached in Setup.');
-        }
 
-        let designDocContent: string | undefined;
-        if (designDocLink.includes('notion.so') || designDocLink.includes('notion.site')) {
-            try {
-                const notionService = this._getNotionService(workspaceRoot);
-                designDocContent = (await notionService.loadCachedContent()) || undefined;
-            } catch {
-                designDocContent = undefined;
-            }
-        }
 
-        const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
-        return buildKanbanBatchPrompt('tester', this._cardsToPromptPlans(cards, workspaceRoot), {
-            designDocLink,
-            designDocContent,
-            defaultPromptOverrides
-        });
-    }
+
 
     private async _getHtml(webview: vscode.Webview): Promise<string> {
         const paths = [
@@ -4032,11 +6409,25 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         content = content.replace('<head>', `<head>\n    ${csp}`);
         content = content.replace(/<script>/g, `<script nonce="${nonce}">`);
 
+        // Inject shared defaults
+        const sharedDefaultsUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'sharedDefaults.js')).toString();
+        content = content.replace('<!-- SHARED_DEFAULTS_SCRIPT -->', `<script src="${sharedDefaultsUri}" nonce="${nonce}"></script>`);
+
+        // Inject initial workspace root as a data attribute on <body>
+        const workspaceRoot = this._resolveWorkspaceRoot();
+        if (workspaceRoot) {
+            content = content.replace(
+                '<body',
+                `<body data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}"`
+            );
+        }
+
         // Inject icon URIs for column button area
         const iconDir = vscode.Uri.joinPath(this._extensionUri, 'icons');
         const iconMap: Record<string, string> = {
-            '{{ICON_22}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-22.png')).toString(),
-            '{{ICON_28}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-28.png')).toString(),
+            '{{ICON_22}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-78.png')).toString(),
+            '{{ICON_COLLAPSE_CODERS}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-66 copy.png')).toString(),
+            '{{ICON_28}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-24.png')).toString(),
             '{{ICON_53}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-53.png')).toString(),
             '{{ICON_54}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-54.png')).toString(),
             '{{ICON_115}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-101-150 Sci-Fi Flat icons-115.png')).toString(),
@@ -4050,12 +6441,103 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             '{{ICON_77}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-77.png')).toString(),
             '{{ICON_59}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-59.png')).toString(),
             '{{ICON_41}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-41.png')).toString(),
+            '{{ICON_DELETE_PROJECT}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-46.png')).toString(),
+            '{{ICON_IMPORT_PLANS}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-67.png')).toString(),
             '{{ICON_CODE_MAP}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-90.png')).toString(),
+            '{{ICON_WORKTREE_ACTIVE}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, 'worktree-active.svg')).toString(),
+            '{{ICON_WORKTREE_MERGED}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, 'worktree-merged.svg')).toString(),
         };
         for (const [placeholder, uri] of Object.entries(iconMap)) {
             content = content.replace(new RegExp(placeholder.replace(/[{}]/g, '\\$&'), 'g'), uri);
         }
 
         return content;
+    }
+
+    private async _createSafetyWorktree(workspaceRoot: string): Promise<{ branch: string; path: string }> {
+        const timestamp = new Date().toISOString().slice(0, 10);
+        let branch = `switchboard-safety-${timestamp}`;
+        const execFileAsync = promisify(cp.execFile);
+        
+        // Handle duplicate branch name by appending -2, -3, etc.
+        let suffix = 2;
+        while (true) {
+            try {
+                const dirName = branch;
+                const fullPath = path.join(workspaceRoot, dirName);
+                await execFileAsync('git', ['worktree', 'add', '-b', branch, fullPath], { cwd: workspaceRoot });
+                return { branch, path: fullPath };
+            } catch (e: any) {
+                if (e.message?.includes('already exists') || e.message?.includes('already used')) {
+                    branch = `switchboard-safety-${timestamp}-${suffix}`;
+                    suffix++;
+                } else {
+                    throw e;
+                }
+            }
+        }
+    }
+
+    private async _getWorktreeConfigData(workspaceRoot: string): Promise<any> {
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !await db.ensureReady()) return null;
+        const branch = await db.getMeta('active_safety_session_branch');
+        const sessionPath = await db.getMeta('active_safety_session_path');
+        const startedAt = await db.getMeta('active_safety_session_started_at');
+        const agentBehaviour = await db.getMeta('worktree_agent_behaviour');
+        const rememberedPath = await db.getMeta('worktree_remembered_path');
+        const rememberEnabled = await db.getMeta('worktree_remember_enabled');
+
+        const hasActiveSession = !!(branch && sessionPath);
+        const pathExists = sessionPath ? fs.existsSync(sessionPath) : false;
+
+        // Count active grid terminals by checking visible agents
+        let activeTerminalCount = 0;
+        try {
+            const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+            const customAgents = await this._getCustomAgents(workspaceRoot);
+            const allAgentNames = [
+                'Planner', 'Lead Coder', 'Coder', 'Intern', 'Reviewer', 'Analyst',
+                ...customAgents.map(a => a.name)
+            ];
+            if (visibleAgents.jules !== false) { allAgentNames.push('Jules Monitor'); }
+            const normalize = (s: string | undefined) => (s || '').trim();
+            const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            for (const terminal of vscode.window.terminals) {
+                if (terminal.exitStatus !== undefined) continue;
+                const tName = normalize(terminal.name);
+                const cName = normalize((terminal.creationOptions as vscode.TerminalOptions | undefined)?.name);
+                for (const agentName of allAgentNames) {
+                    const pattern = new RegExp(`^${escapeRegex(agentName)}(?: \\(\\d+\\))?$`);
+                    if (pattern.test(tName) || pattern.test(cName)) {
+                        activeTerminalCount++;
+                        break;
+                    }
+                }
+            }
+        } catch { /* ignore */ }
+
+        return {
+            branch: branch || '',
+            path: sessionPath || '',
+            startedAt: startedAt || '',
+            pathExists,
+            hasActiveSession,
+            agentBehaviour: agentBehaviour || '',
+            rememberedPath: rememberedPath || '',
+            rememberEnabled: rememberEnabled === 'true',
+            activeTerminalCount
+        };
+    }
+
+    private async _getSafetySessionData(workspaceRoot: string): Promise<{ branch: string; path: string; startedAt: string; pathExists: boolean } | null> {
+        const config = await this._getWorktreeConfigData(workspaceRoot);
+        if (!config || !config.hasActiveSession) return null;
+        return {
+            branch: config.branch,
+            path: config.path,
+            startedAt: config.startedAt,
+            pathExists: config.pathExists
+        };
     }
 }

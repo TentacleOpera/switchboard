@@ -8,7 +8,7 @@ export type LegacyKanbanSnapshotRow = {
     kanbanColumn: string;
     complexity: string;
     tags: string;
-    dependencies: string;
+    repoScope: string;
     workspaceId: string;
     createdAt: string;
     updatedAt: string;
@@ -33,12 +33,12 @@ export class KanbanMigration {
     }
 
     private static _toKanbanPlanRecords(snapshotRows: LegacyKanbanSnapshotRow[]): KanbanPlanRecord[] {
-        return snapshotRows.map(row => ({
+        return snapshotRows.map((row) => ({
             ...row,
             kanbanColumn: KanbanMigration._normalizeLegacyCodedColumn(row.kanbanColumn, row.lastAction),
             status: 'active',
             tags: row.tags || '',
-            dependencies: row.dependencies || '',
+            repoScope: row.repoScope || '',
             brainSourcePath: (row as any).brainSourcePath || '',
             mirrorPath: (row as any).mirrorPath || '',
             routedTo: '',
@@ -110,31 +110,31 @@ export class KanbanMigration {
         snapshotRows: LegacyKanbanSnapshotRow[],
         resolveComplexity?: (planFile: string) => Promise<string>,
         resolveTags?: (planFile: string) => Promise<string>,
-        resolveDependencies?: (planFile: string) => Promise<string>
+        resolveRepoScope?: (planFile: string) => Promise<string>
     ): Promise<boolean> {
         const ready = await db.ensureReady();
         if (!ready) return false;
 
         if (snapshotRows.length > 0) {
-            const existingIds = await db.getSessionIdSet();
+            const existingPlanFiles = await db.getPlanFileSet();
             const newRows: LegacyKanbanSnapshotRow[] = [];
             const metadataUpdates: Array<{
-                sessionId: string;
-                topic: string;
                 planFile: string;
+                workspaceId: string;
+                topic: string;
                 complexity?: string;
                 tags?: string;
-                dependencies?: string;
+                repoScope?: string;
             }> = [];
-            const deletedRowsToRevive = new Set<string>();
+            const deletedRowsToRevive: Array<{ planFile: string; workspaceId: string }> = [];
 
             for (const row of snapshotRows) {
-                if (!existingIds.has(row.sessionId)) {
+                if (!existingPlanFiles.has(row.planFile)) {
                     newRows.push(row);
                 } else {
-                    const existingRow = await db.getPlanBySessionId(row.sessionId);
+                    const existingRow = await db.getPlanByPlanFile(row.planFile, row.workspaceId);
                     if (existingRow?.status === 'deleted') {
-                        deletedRowsToRevive.add(row.sessionId);
+                        deletedRowsToRevive.push({ planFile: row.planFile, workspaceId: row.workspaceId });
                     }
                     let resolvedComplexity: string | undefined;
                     if (row.complexity && row.complexity !== 'Unknown') {
@@ -149,20 +149,20 @@ export class KanbanMigration {
                         const parsed = await resolveTags(row.planFile);
                         resolvedTags = parsed || undefined;
                     }
-                    let resolvedDependencies: string | undefined;
-                    if (row.dependencies) {
-                        resolvedDependencies = row.dependencies;
-                    } else if (resolveDependencies) {
-                        const parsed = await resolveDependencies(row.planFile);
-                        resolvedDependencies = parsed || undefined;
+                    let resolvedRepoScope: string | undefined;
+                    if (row.repoScope) {
+                        resolvedRepoScope = row.repoScope;
+                    } else if (resolveRepoScope) {
+                        const parsed = await resolveRepoScope(row.planFile);
+                        resolvedRepoScope = parsed || undefined;
                     }
                     metadataUpdates.push({
-                        sessionId: row.sessionId,
-                        topic: row.topic,
                         planFile: row.planFile,
+                        workspaceId: row.workspaceId,
+                        topic: row.topic,
                         complexity: resolvedComplexity,
                         tags: resolvedTags,
-                        dependencies: resolvedDependencies
+                        repoScope: resolvedRepoScope
                     });
                 }
             }
@@ -174,12 +174,12 @@ export class KanbanMigration {
             }
 
             if (metadataUpdates.length > 0) {
-                const updated = await db.updateMetadataBatch(metadataUpdates, { preserveTimestamps: true });
+                const updated = await db.updateMetadataBatchByPlanFile(metadataUpdates, { preserveTimestamps: true });
                 if (!updated) return false;
             }
 
-            if (deletedRowsToRevive.size > 0) {
-                const revived = await db.reviveDeletedPlans([...deletedRowsToRevive]);
+            if (deletedRowsToRevive.length > 0) {
+                const revived = await db.reviveDeletedPlansByPlanFile(deletedRowsToRevive);
                 if (!revived) return false;
             }
         }

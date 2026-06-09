@@ -81,7 +81,7 @@ async function run() {
         'TaskViewerProvider should not post stale airlock modal save messages'
     );
     assert.ok(
-        providerSource.includes("await this._openPlanInReviewPanel(sessionId, planFileAbsolute, title);"),
+        providerSource.includes("await this._openPlanInReviewPanel(planFileAbsolute, title);"),
         'draft ticket helper should open the review panel immediately'
     );
     assert.ok(

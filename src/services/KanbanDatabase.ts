@@ -3,6 +3,16 @@ import * as crypto from 'crypto';
 import { createRequire } from 'module';
 import * as os from 'os';
 import * as path from 'path';
+import { isAllowedSwitchboardLocation } from '../utils/switchboardLocationGuard';
+
+export interface WorkspaceDatabaseMapping {
+    id: string;
+    name: string;
+    dbPath: string;
+    parentFolder?: string;
+    workspaceFolders: string[];
+    mode?: 'create' | 'connect';
+}
 
 export type KanbanPlanStatus = 'active' | 'archived' | 'completed' | 'deleted';
 
@@ -15,7 +25,8 @@ export interface KanbanPlanRecord {
     status: KanbanPlanStatus;
     complexity: string; // 'Unknown' or string integer '1'-'10'
     tags: string;
-    dependencies: string;
+    repoScope: string;
+    project?: string;
     workspaceId: string;
     createdAt: string;
     updatedAt: string;
@@ -28,12 +39,41 @@ export interface KanbanPlanRecord {
     dispatchedIde: string;   // IDE name: 'Visual Studio Code', 'Cursor', 'Windsurf', etc.
     clickupTaskId?: string;
     linearIssueId?: string;
+    worktreeId?: number;
+    worktreeStatus?: string; // 'none' | 'active' | 'merged' | 'deleted'
+}
+
+export interface ImportedDocEntry {
+    slugPrefix: string;
+    sourceId: string;
+    remoteDocId?: string;
+    docName: string;
+    parentDocName?: string;
+    filePath: string;
+    importedAt: string;
+    lastSyncedAt?: string;
+    contentHash?: string;
+    workspaceId: string;
+    displayOrder?: number;
+}
+
+export interface HealResult {
+    orphanedEntries: number;
+    orphanedFiles: number;
+    healedEntries: number;
+}
+
+export interface DuplicateCheckResult {
+    isDuplicate: boolean;
+    matchType?: 'exact_name' | 'case_insensitive_name' | 'same_doc_id';
+    existingDoc?: ImportedDocEntry;
 }
 
 type SqlJsDatabase = {
     exec: (sql: string) => void;
     run: (sql: string, params?: unknown[]) => void;
     prepare: (sql: string, params?: unknown[]) => {
+        bind: (params?: unknown[]) => boolean;
         step: () => boolean;
         getAsObject: () => Record<string, unknown>;
         free: () => void;
@@ -49,7 +89,7 @@ type SqlJsStatic = {
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS plans (
     plan_id       TEXT PRIMARY KEY,
-    session_id    TEXT UNIQUE NOT NULL,
+    session_id    TEXT NOT NULL,
     topic         TEXT NOT NULL,
     plan_file     TEXT,
     kanban_column TEXT NOT NULL DEFAULT 'CREATED',
@@ -57,6 +97,8 @@ CREATE TABLE IF NOT EXISTS plans (
     complexity    TEXT DEFAULT 'Unknown',
     tags          TEXT DEFAULT '',
     dependencies  TEXT DEFAULT '',
+    repo_scope    TEXT DEFAULT '',
+    project       TEXT DEFAULT '',
     workspace_id  TEXT NOT NULL,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
@@ -68,11 +110,14 @@ CREATE TABLE IF NOT EXISTS plans (
     dispatched_agent  TEXT DEFAULT '',
     dispatched_ide    TEXT DEFAULT '',
     clickup_task_id   TEXT DEFAULT '',
-    linear_issue_id   TEXT DEFAULT ''
+    linear_issue_id   TEXT DEFAULT '',
+    worktree_id       INTEGER,
+    worktree_status   TEXT DEFAULT 'none'
 );
 CREATE INDEX IF NOT EXISTS idx_plans_column ON plans(kanban_column);
 CREATE INDEX IF NOT EXISTS idx_plans_workspace ON plans(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_plans_plan_file_workspace ON plans(plan_file, workspace_id);
 CREATE TABLE IF NOT EXISTS config (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -81,6 +126,23 @@ CREATE TABLE IF NOT EXISTS migration_meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(name, workspace_id)
+);
+CREATE INDEX IF NOT EXISTS idx_projects_workspace ON projects(workspace_id);
+CREATE TABLE IF NOT EXISTS worktrees (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    branch TEXT NOT NULL,
+    coder_agent_id TEXT,
+    workspace_id TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(branch, workspace_id)
+);
+CREATE INDEX IF NOT EXISTS idx_worktrees_workspace ON worktrees(workspace_id);
 `;
 
 // Migration SQL to add new columns to existing databases
@@ -142,6 +204,246 @@ const MIGRATION_V12_SQL = [
     `CREATE INDEX IF NOT EXISTS idx_plans_linear_issue ON plans(workspace_id, linear_issue_id)`,
 ];
 
+const MIGRATION_V13_SQL = [
+    `ALTER TABLE plans ADD COLUMN repo_scope TEXT DEFAULT ''`,
+    `CREATE INDEX IF NOT EXISTS idx_plans_repo_scope ON plans(workspace_id, repo_scope)`,
+];
+
+const MIGRATION_V14_SQL = [
+    `CREATE TABLE IF NOT EXISTS kanban_meta (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    )`,
+];
+
+const MIGRATION_V15_SQL = [
+    `CREATE TABLE IF NOT EXISTS imported_docs (
+        slug_prefix TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        remote_doc_id TEXT,
+        doc_name TEXT NOT NULL,
+        parent_doc_name TEXT,
+        file_path TEXT NOT NULL,
+        imported_at TEXT NOT NULL,
+        last_synced_at TEXT,
+        content_hash TEXT,
+        workspace_id TEXT NOT NULL,
+        display_order INTEGER DEFAULT 0,
+        PRIMARY KEY (slug_prefix, workspace_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_imported_docs_source ON imported_docs(source_id, workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_imported_docs_parent ON imported_docs(parent_doc_name, workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_imported_docs_workspace ON imported_docs(workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_imported_docs_doc_name ON imported_docs(doc_name, workspace_id)`,
+    `CREATE TABLE IF NOT EXISTS import_sync_meta (
+        workspace_id TEXT PRIMARY KEY,
+        last_heal_scan_at TEXT,
+        orphaned_entries INTEGER DEFAULT 0,
+        orphaned_files INTEGER DEFAULT 0
+    )`
+];
+
+const MIGRATION_V16_SQL = [
+    `UPDATE plans SET repo_scope = '' WHERE repo_scope = 'switchboard'`,
+];
+
+const MIGRATION_V17_SQL = [
+    // Sentinel column: mark records whose plan_file needs absolute-path resolution.
+    // The actual fix is applied in _fixRelativePaths() during initialization.
+    `ALTER TABLE plans ADD COLUMN needs_path_fix INTEGER DEFAULT 0`,
+    // Pre-populate: mark any record whose plan_file does not begin with '/'
+    // (covers macOS/Linux; Windows paths not applicable to this workspace).
+    `UPDATE plans SET needs_path_fix = 1 WHERE plan_file NOT LIKE '/%' AND plan_file != ''`,
+];
+
+const MIGRATION_V18_SQL = [
+    // Sentinel column: mark records whose plan_file needs relative-path conversion.
+    // The actual fix is applied in _convertAbsoluteToRelativePaths() during initialization.
+    // After this migration, _fixRelativePaths() (V17) becomes a permanent no-op for these records:
+    // V17 only fires when needs_path_fix=1 (relative→absolute), which V18 then reverses (absolute→relative).
+    // Invariant post-V18: all plan_file values in DB are relative; absolute only in memory after _readRows().
+    `ALTER TABLE plans ADD COLUMN needs_relative_conversion INTEGER DEFAULT 0`,
+    // Pre-populate: mark any record whose plan_file begins with '/' (absolute path)
+    `UPDATE plans SET needs_relative_conversion = 1 WHERE plan_file LIKE '/%' AND plan_file != ''`,
+];
+
+const MIGRATION_V19_SQL = [
+    // Step 1: Deduplicate by session_id — prefer non-CREATED column, then latest updated_at.
+    // Logs each deleted row for auditability.
+    `DELETE FROM plans
+     WHERE rowid NOT IN (
+         SELECT rowid FROM plans AS p1
+         WHERE p1.rowid = (
+             SELECT p2.rowid FROM plans AS p2
+             WHERE p2.session_id = p1.session_id
+             ORDER BY
+                 CASE p2.kanban_column WHEN 'CREATED' THEN 1 ELSE 0 END ASC,
+                 p2.updated_at DESC
+             LIMIT 1
+         )
+     )
+     AND session_id != ''`,
+    // Step 2: Enforce session_id uniqueness at the index level.
+    // Defensive: the schema already has session_id TEXT UNIQUE NOT NULL (line 87),
+    // but this index ensures uniqueness even for DBs created before that constraint
+    // was added or that skipped the V11 table recreation.
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_plans_session_id_unique ON plans(session_id)`
+];
+
+const MIGRATION_V20_SQL = [
+    // V20: Remove UNIQUE constraint from session_id; add UNIQUE(plan_file, workspace_id).
+    // SQLite does not support ALTER TABLE DROP CONSTRAINT, so we recreate the tables.
+    // IMPORTANT: This migration is run inside a transaction by _runMigrations.
+    // A failure at any step rolls back the entire migration safely.
+
+    // Step 1: Create new plans table without session_id UNIQUE and with (plan_file, workspace_id) UNIQUE.
+    `CREATE TABLE plans_v20 (
+        plan_id       TEXT PRIMARY KEY,
+        session_id    TEXT NOT NULL,
+        topic         TEXT NOT NULL,
+        plan_file     TEXT,
+        kanban_column TEXT NOT NULL DEFAULT 'CREATED',
+        status        TEXT NOT NULL DEFAULT 'active',
+        complexity    TEXT DEFAULT 'Unknown',
+        tags          TEXT DEFAULT '',
+        dependencies  TEXT DEFAULT '',
+        repo_scope    TEXT DEFAULT '',
+        workspace_id  TEXT NOT NULL,
+        created_at    TEXT NOT NULL,
+        updated_at    TEXT NOT NULL,
+        last_action   TEXT,
+        source_type   TEXT DEFAULT 'local',
+        brain_source_path TEXT DEFAULT '',
+        mirror_path       TEXT DEFAULT '',
+        routed_to         TEXT DEFAULT '',
+        dispatched_agent  TEXT DEFAULT '',
+        dispatched_ide    TEXT DEFAULT '',
+        clickup_task_id   TEXT DEFAULT '',
+        linear_issue_id   TEXT DEFAULT '',
+        needs_path_fix INTEGER DEFAULT 0,
+        needs_relative_conversion INTEGER DEFAULT 0
+    )`,
+    // Step 2: Copy data from old plans table with deduplication.
+    // For duplicate (plan_file, workspace_id) pairs, keep the most recently updated row.
+    // For rows with NULL or empty plan_file, fabricate a unique value from session_id
+    // so the UNIQUE(plan_file, workspace_id) constraint is not violated.
+    `INSERT INTO plans_v20
+     SELECT * FROM plans
+     WHERE rowid IN (
+         SELECT MAX(rowid) FROM plans
+         GROUP BY COALESCE(NULLIF(plan_file, ''), '_orphan_' || session_id), workspace_id
+     )`,
+    // Step 3: Patch any remaining NULL/empty plan_file values with a fabricated unique key.
+    // These are orphan records (no plan file on disk) that must still be preserved.
+    `UPDATE plans_v20
+     SET plan_file = '_orphan_' || session_id
+     WHERE plan_file IS NULL OR plan_file = ''`,
+    // Step 4: Drop old plans table.
+    `DROP TABLE plans`,
+    // Step 5: Rename new table.
+    `ALTER TABLE plans_v20 RENAME TO plans`,
+    // Step 6: Recreate indexes.
+    `CREATE INDEX IF NOT EXISTS idx_plans_column ON plans(kanban_column)`,
+    `CREATE INDEX IF NOT EXISTS idx_plans_workspace ON plans(workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status)`,
+    `CREATE INDEX IF NOT EXISTS idx_plans_repo_scope ON plans(workspace_id, repo_scope)`,
+    `CREATE INDEX IF NOT EXISTS idx_plans_clickup_task ON plans(workspace_id, clickup_task_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_plans_linear_issue ON plans(workspace_id, linear_issue_id)`,
+    // Step 7: Create new unique index on (plan_file, workspace_id).
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_plans_plan_file_workspace ON plans(plan_file, workspace_id)`,
+    // Step 8: Drop old session_id unique index if it exists.
+    `DROP INDEX IF EXISTS idx_plans_session_id_unique`,
+    // Step 9: Recreate plan_events with FK referencing plan_id instead of session_id.
+    `CREATE TABLE plan_events_v20 (
+        event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        plan_id TEXT,
+        event_type TEXT NOT NULL,
+        workflow TEXT,
+        action TEXT,
+        timestamp TEXT NOT NULL,
+        device_id TEXT DEFAULT '',
+        vector_clock TEXT DEFAULT '',
+        payload TEXT DEFAULT '{}',
+        FOREIGN KEY (plan_id) REFERENCES plans(plan_id)
+    )`,
+    // Step 10: Backfill plan_id from session_id via plans lookup.
+    `INSERT INTO plan_events_v20 (plan_id, event_type, workflow, action, timestamp, device_id, vector_clock, payload)
+     SELECT p.plan_id, e.event_type, e.workflow, e.action, e.timestamp, e.device_id, e.vector_clock, e.payload
+     FROM plan_events e
+     LEFT JOIN plans p ON e.session_id = p.session_id`,
+    // Step 11: Drop old plan_events.
+    `DROP TABLE plan_events`,
+    // Step 12: Rename new plan_events.
+    `ALTER TABLE plan_events_v20 RENAME TO plan_events`,
+    // Step 13: Recreate plan_events indexes.
+    `CREATE INDEX IF NOT EXISTS idx_events_plan ON plan_events(plan_id, timestamp)`,
+    `CREATE INDEX IF NOT EXISTS idx_events_time ON plan_events(timestamp)`
+];
+
+const MIGRATION_V23_SQL = [
+    // Add projects table (workspace-scoped)
+    `CREATE TABLE IF NOT EXISTS projects (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(name, workspace_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_projects_workspace ON projects(workspace_id)`,
+    // Add project column to plans table
+    `ALTER TABLE plans ADD COLUMN project TEXT DEFAULT ''`,
+    `CREATE INDEX IF NOT EXISTS idx_plans_project ON plans(workspace_id, project)`,
+];
+
+// V24: Remove path column from worktrees table — paths are derived from git at read time.
+// Feature was never used, so just drop and recreate with new schema.
+const MIGRATION_V24_SQL = [
+    `DROP TABLE IF EXISTS worktrees`,
+    `CREATE TABLE IF NOT EXISTS worktrees (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        branch TEXT NOT NULL,
+        coder_agent_id TEXT,
+        workspace_id TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(branch, workspace_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_worktrees_workspace ON worktrees(workspace_id)`,
+];
+
+// V25: Safety net — if V24 dropped worktrees without recreating it (early broken version),
+// recreate it now. Harmless no-op if the table already exists.
+const MIGRATION_V25_SQL = [
+    `CREATE TABLE IF NOT EXISTS worktrees (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        branch TEXT NOT NULL,
+        coder_agent_id TEXT,
+        workspace_id TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(branch, workspace_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_worktrees_workspace ON worktrees(workspace_id)`,
+];
+
+// V26: Add worktree_id column to plans table (was in SCHEMA_SQL but never added to existing DBs).
+const MIGRATION_V26_SQL = [
+    `ALTER TABLE plans ADD COLUMN worktree_id INTEGER`,
+    `CREATE INDEX IF NOT EXISTS idx_plans_worktree ON plans(worktree_id)`,
+];
+
+// V27: Add worktree_status column to plans table
+const MIGRATION_V27_SQL = [
+    `ALTER TABLE plans ADD COLUMN worktree_status TEXT DEFAULT 'none'`,
+    // Backfill: plans that already have a worktree assigned should start as 'active'
+    `UPDATE plans SET worktree_status = 'active' WHERE worktree_id IS NOT NULL`,
+];
+
+// V28: Normalize project sentinel values stored as '__unassigned__' to empty string.
+// The sentinel is a UI filter value that must never appear in the plans.project column.
+const MIGRATION_V28_SQL = [
+    `UPDATE plans SET project = '' WHERE project = '__unassigned__'`,
+];
+
+
 /**
  * Generic plan upsert. On conflict, updates metadata fields and allows the
  * narrow deleted -> active recovery needed when a live local plan file is
@@ -150,13 +452,12 @@ const MIGRATION_V12_SQL = [
  */
 const UPSERT_PLAN_SQL = `
 INSERT INTO plans (
-    plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies,
-    workspace_id, created_at, updated_at, last_action, source_type,
+    plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
+    repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
     brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-    clickup_task_id, linear_issue_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(plan_id) DO UPDATE SET
-    session_id = excluded.session_id,
+    clickup_task_id, linear_issue_id, worktree_id
+ ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     topic = excluded.topic,
     plan_file = excluded.plan_file,
     status = CASE
@@ -165,7 +466,8 @@ ON CONFLICT(plan_id) DO UPDATE SET
     END,
     complexity = excluded.complexity,
     tags = excluded.tags,
-    dependencies = excluded.dependencies,
+    repo_scope = excluded.repo_scope,
+    project = excluded.project,
     workspace_id = excluded.workspace_id,
     updated_at = excluded.updated_at,
     last_action = excluded.last_action,
@@ -176,21 +478,42 @@ ON CONFLICT(plan_id) DO UPDATE SET
     dispatched_agent = excluded.dispatched_agent,
     dispatched_ide = excluded.dispatched_ide,
     clickup_task_id = excluded.clickup_task_id,
-    linear_issue_id = excluded.linear_issue_id
+    linear_issue_id = excluded.linear_issue_id,
+    worktree_id = excluded.worktree_id
 `;
 
 const MIGRATION_VERSION_KEY = 'kanban_db_migration_version';
 const ORPHAN_PURGE_CONFIRMATION_DELAY_MS = 350;
 
-const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies,
-                      workspace_id, created_at, updated_at, last_action, source_type,
-                      brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-                      clickup_task_id, linear_issue_id`;
+const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
+                       repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
+                       brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
+                       clickup_task_id, linear_issue_id, worktree_id, worktree_status`;
+
+// Parse column definitions from SCHEMA_SQL's plans table for schema reconciliation.
+// This ensures that databases created before a column was added to SCHEMA_SQL
+// get the missing column added, since CREATE TABLE IF NOT EXISTS silently
+// skips tables that already exist (leaving them with the old schema).
+const SCHEMA_PLAN_COLUMN_DEFS: Array<{ name: string; def: string }> = (() => {
+    const match = SCHEMA_SQL.match(/CREATE TABLE IF NOT EXISTS plans\s*\(\s*([\s\S]*?)\s*\)\s*;/);
+    if (!match) return [];
+    const body = match[1];
+    return body
+        .split('\n')
+        .map(line => line.trim().replace(/,\s*$/, ''))
+        .filter(line => line.length > 0)
+        .map(line => {
+            const m = line.match(/^(\w+)\s+(.*)$/);
+            if (!m) return null;
+            return { name: m[1], def: m[2] };
+        })
+        .filter((x): x is { name: string; def: string } => x !== null);
+})();
 
 const runtimeRequire = createRequire(__filename);
 
-const VALID_KANBAN_COLUMNS = new Set([
-    'CREATED', 'BACKLOG', 'PLAN REVIEWED', 'LEAD CODED', 'CODER CODED', 'CODE REVIEWED', 'CODED', 'COMPLETED'
+export const VALID_KANBAN_COLUMNS = new Set([
+    'CREATED', 'BACKLOG', 'CONTEXT GATHERER', 'PLAN REVIEWED', 'LEAD CODED', 'CODER CODED', 'CODE REVIEWED', 'CODED', 'COMPLETED'
 ]);
 // VALID_COMPLEXITIES is now handled by isValidComplexityValue() in complexityScale.ts
 const VALID_STATUSES = new Set(['active', 'archived', 'completed', 'deleted']);
@@ -203,45 +526,160 @@ function delay(ms: number): Promise<void> {
 }
 
 export class KanbanDatabase {
+    public static readonly UNASSIGNED_PROJECT_FILTER = '__unassigned__';
     private static _instances = new Map<string, KanbanDatabase>();
+    private static _instancesByDbPath = new Map<string, KanbanDatabase>();
+    private static _warnedUnmappedRoots = new Set<string>();
     private static _sqlJsPromise: Promise<SqlJsStatic> | null = null;
 
+    /**
+     * Expand ~ to home directory. Shared by _redirectToParentIfMapped and forWorkspace.
+     */
+    private static _expandHome(p: string): string {
+        const trimmed = p.trim();
+        const expanded = trimmed.startsWith('~')
+            ? path.join(os.homedir(), trimmed.slice(1))
+            : trimmed;
+            
+        if (!path.isAbsolute(expanded)) {
+            console.warn(`[KanbanDatabase] Warning: Relative path "${p}" used in mapping. It will resolve unpredictably against process.cwd(). Please use absolute paths or ~.`);
+        }
+        
+        return expanded;
+    }
+
+    /**
+     * Redirects a child workspace root to its parent when workspaceDatabaseMappings
+     * is configured. When a mapping has parentFolder, uses that; otherwise falls back
+     * to the first workspaceFolders entry (consistent with resolveEffectiveWorkspaceRoot).
+     * Returns the original path if no mapping matches or if outside the extension host.
+     */
+    private static _redirectToParentIfMapped(resolvedRoot: string): string {
+        try {
+            // Require dynamically to avoid circular dependency
+            const { resolveEffectiveWorkspaceRootFromMappings } = require('./WorkspaceIdentityService');
+            return resolveEffectiveWorkspaceRootFromMappings(resolvedRoot);
+        } catch { /* outside extension host */ }
+        return resolvedRoot;
+    }
+
+    public static writeDbPointer(parentFolder: string, dbPath: string): void {
+        try {
+            const resolvedParent = path.resolve(parentFolder);
+            const switchboardDir = path.join(resolvedParent, '.switchboard');
+            if (!fs.existsSync(switchboardDir)) {
+                fs.mkdirSync(switchboardDir, { recursive: true });
+            }
+            const pointerFile = path.join(switchboardDir, 'db-pointer');
+            fs.writeFileSync(pointerFile, `${path.resolve(dbPath)}\n`, 'utf8');
+            console.log(`[KanbanDatabase] Wrote db-pointer to ${pointerFile} pointing to ${dbPath}`);
+        } catch (error) {
+            console.error(`[KanbanDatabase] Failed to write db-pointer for parentFolder ${parentFolder}:`, error);
+        }
+    }
+
+    public static readDbPointer(workspaceRoot: string): string | null {
+        try {
+            const resolvedRoot = path.resolve(workspaceRoot);
+            const pointerFile = path.join(resolvedRoot, '.switchboard', 'db-pointer');
+            if (fs.existsSync(pointerFile)) {
+                const content = fs.readFileSync(pointerFile, 'utf8').trim();
+                if (content) {
+                    const expanded = KanbanDatabase._expandHome(content);
+                    if (fs.existsSync(expanded)) {
+                        return expanded;
+                    }
+                }
+            }
+        } catch (error) {
+            console.warn(`[KanbanDatabase] Failed to read db-pointer for ${workspaceRoot}:`, error);
+        }
+        return null;
+    }
+
+    public async getWorkspaceMappings(): Promise<{ enabled: boolean; mappings: WorkspaceDatabaseMapping[] }> {
+        try {
+            const val = await this.getConfig('workspace_mappings');
+            console.log(`[KanbanDatabase] getWorkspaceMappings: dbPath=${this._dbPath}, hasVal=${!!val}, dbReady=${!!this._db}`);
+            if (val) {
+                const parsed = JSON.parse(val);
+                if (parsed && typeof parsed === 'object') {
+                    return {
+                        enabled: parsed.enabled ?? false,
+                        mappings: Array.isArray(parsed.mappings) ? parsed.mappings : []
+                    };
+                }
+            }
+        } catch (error) {
+            console.error('[KanbanDatabase] Failed to parse workspace_mappings from DB:', error);
+        }
+        return { enabled: false, mappings: [] };
+    }
+
+    public async setWorkspaceMappings(mappings: { enabled: boolean; mappings: WorkspaceDatabaseMapping[] }): Promise<boolean> {
+        try {
+            const val = JSON.stringify(mappings);
+            return await this.setConfig('workspace_mappings', val);
+        } catch (error) {
+            console.error('[KanbanDatabase] Failed to stringify workspace_mappings:', error);
+            return false;
+        }
+    }
+
     public static forWorkspace(workspaceRoot: string, customDbPath?: string): KanbanDatabase {
-        const stable = path.resolve(workspaceRoot);
+        const validation = KanbanDatabase.isValidWorkspaceRoot(workspaceRoot);
+        if (!validation.valid) {
+            throw new Error(`Invalid workspace root: ${validation.error}`);
+        }
+        let stable = KanbanDatabase._redirectToParentIfMapped(validation.resolved!);
+
         const existing = KanbanDatabase._instances.get(stable);
         if (existing) {
             return existing;
         }
 
-        // Resolve the DB path — either from explicit parameter, VS Code setting, or default
-        let resolvedDbPath: string;
-        if (customDbPath !== undefined && customDbPath.trim() !== '') {
-            const trimmed = customDbPath.trim();
-            const expanded = trimmed.startsWith('~')
-                ? path.join(require('os').homedir(), trimmed.slice(1))
-                : trimmed;
-            resolvedDbPath = path.isAbsolute(expanded) ? expanded : path.join(stable, expanded);
-        } else {
-            // Try reading from VS Code settings (safe to fail outside extension host)
-            let settingValue = '';
-            try {
-                const vscode = require('vscode');
-                settingValue = String(vscode.workspace.getConfiguration('switchboard').get('kanban.dbPath') || '').trim();
-            } catch {
-                // Outside extension host (e.g. unit tests) — use default
-            }
-            if (settingValue) {
-                const expanded = settingValue.startsWith('~')
-                    ? path.join(require('os').homedir(), settingValue.slice(1))
-                    : settingValue;
+        let resolvedDbPath: string | undefined;
+        
+        // Check for .switchboard/db-pointer in the workspace root
+        const pointerPath = KanbanDatabase.readDbPointer(stable);
+        if (pointerPath) {
+            resolvedDbPath = pointerPath;
+            console.log(`[KanbanDatabase] Resolved DB path from db-pointer: ${stable} -> ${resolvedDbPath}`);
+        }
+
+        // Fallback to customDbPath, kanban.dbPath setting, or default
+        if (!resolvedDbPath) {
+            if (customDbPath !== undefined && customDbPath.trim() !== '') {
+                const expanded = KanbanDatabase._expandHome(customDbPath.trim());
                 resolvedDbPath = path.isAbsolute(expanded) ? expanded : path.join(stable, expanded);
             } else {
-                resolvedDbPath = path.join(stable, '.switchboard', 'kanban.db');
+                // Check kanban.dbPath VS Code setting (per-workspace DB location override)
+                let settingValue = '';
+                try {
+                    const vscode = require('vscode');
+                    settingValue = String(vscode.workspace.getConfiguration('switchboard').get('kanban.dbPath') || '').trim();
+                } catch {
+                    // Outside extension host (e.g. unit tests) — use default
+                }
+                if (settingValue) {
+                    const expanded = KanbanDatabase._expandHome(settingValue);
+                    resolvedDbPath = path.isAbsolute(expanded) ? expanded : path.join(stable, expanded);
+                } else {
+                    resolvedDbPath = path.join(stable, '.switchboard', 'kanban.db');
+                }
             }
+        }
+
+        // Cache by resolved dbPath to prevent multiple instances writing to the same file
+        const cached = KanbanDatabase._instancesByDbPath.get(resolvedDbPath);
+        if (cached) {
+            KanbanDatabase._instances.set(stable, cached);
+            return cached;
         }
 
         const created = new KanbanDatabase(stable, resolvedDbPath);
         KanbanDatabase._instances.set(stable, created);
+        KanbanDatabase._instancesByDbPath.set(resolvedDbPath, created);
         return created;
     }
 
@@ -251,15 +689,26 @@ export class KanbanDatabase {
      * Drains any in-flight writes before tearing down to prevent silent data loss.
      */
     public static async invalidateWorkspace(workspaceRoot: string): Promise<void> {
-        const stable = path.resolve(workspaceRoot);
+        const stable = KanbanDatabase._redirectToParentIfMapped(path.resolve(workspaceRoot));
         const existing = KanbanDatabase._instances.get(stable);
         if (existing) {
             // Drain in-flight writes before nulling _db to prevent silent data loss
             try { await existing._writeTail; } catch { /* swallow — chain keeps alive internally */ }
             existing._db = null;
             existing._initPromise = null;
+            // Also remove from dbPath cache to prevent stale instances
+            KanbanDatabase._instancesByDbPath.delete(existing.dbPath);
             KanbanDatabase._instances.delete(stable);
             console.log(`[KanbanDatabase] Invalidated cached instance for ${stable}`);
+            
+            // Re-sync workspace identity to capture any database path changes
+            try {
+                // Must require dynamically to avoid circular dependencies
+                const { ensureWorkspaceIdentity } = require('./WorkspaceIdentityService');
+                await ensureWorkspaceIdentity(stable);
+            } catch (e) {
+                console.error(`[KanbanDatabase] Failed to sync workspace identity after invalidation:`, e);
+            }
         }
     }
 
@@ -287,6 +736,38 @@ export class KanbanDatabase {
                 return { valid: false, error: `Directory is not writable: ${dir}` };
             }
             return { valid: true };
+        } catch (e: any) {
+            return { valid: false, error: e.message };
+        }
+    }
+
+    /**
+     * Validates a workspace root path. Rejects non-existent paths, non-directories,
+     * and numeric IDs that might be passed incorrectly by integration services.
+     */
+    private static isValidWorkspaceRoot(workspaceRoot: string): { valid: boolean; error?: string; resolved?: string } {
+        if (!workspaceRoot || typeof workspaceRoot !== 'string' || workspaceRoot.trim() === '') {
+            return { valid: false, error: 'Workspace root path cannot be empty.' };
+        }
+        try {
+            const resolved = path.resolve(workspaceRoot);
+            
+            // Reject paths that look like ClickUp or other numeric IDs
+            const basename = path.basename(resolved);
+            if (/^\d{8,}$/.test(basename)) {
+                return { valid: false, error: `Path looks like an ID: ${resolved}`, resolved };
+            }
+
+            if (!fs.existsSync(resolved)) {
+                return { valid: false, error: `Path does not exist: ${resolved}`, resolved };
+            }
+            
+            const stat = fs.statSync(resolved);
+            if (!stat.isDirectory()) {
+                return { valid: false, error: `Path is not a directory: ${resolved}`, resolved };
+            }
+            
+            return { valid: true, resolved };
         } catch (e: any) {
             return { valid: false, error: e.message };
         }
@@ -325,6 +806,16 @@ export class KanbanDatabase {
                 }
             }
 
+            // Guard: validate that the target location is allowed to contain .switchboard
+            const targetDir = path.dirname(targetPath); // e.g. /path/to/workspace/.switchboard
+            const switchboardParent = path.dirname(targetDir); // e.g. /path/to/workspace
+            // Derive workspaceRoot from the source path for the guard check
+            const sourceDir = path.dirname(sourcePath);
+            const sourceWorkspaceRoot = path.dirname(sourceDir);
+            if (!isAllowedSwitchboardLocation(switchboardParent, sourceWorkspaceRoot)) {
+                console.warn(`[KanbanDatabase] Blocked migration to ${targetPath} — not an allowed .switchboard location`);
+                return { migrated: false, skipped: 'invalid_target_location' };
+            }
             await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
             await fs.promises.copyFile(sourcePath, targetPath);
             console.log(`[KanbanDatabase] Migrated DB from ${sourcePath} to ${targetPath}`);
@@ -453,6 +944,10 @@ export class KanbanDatabase {
                     chkStmt.free();
                     if (skip) continue;
 
+                    // NOTE: plan_file values from source DB are not normalized here.
+                    // If source is pre-V18 (absolute paths), the V18 startup sweep will repair
+                    // them on next initialization. See _convertAbsoluteToRelativePaths().
+
                     // Build ordered values array from the intersection columns
                     const values = columns.map(c => srcRow[c] ?? null);
                     const placeholders = columns.map(() => '?').join(', ');
@@ -499,8 +994,19 @@ export class KanbanDatabase {
     private static readonly STAT_DEBOUNCE_MS = 500; // Don't re-stat more often than this
     private static _lastLoadedMtimes = new Map<string, number>();
 
+    private get _stateFilePath(): string {
+        return path.join(this._workspaceRoot, '.switchboard', 'kanban-board.md');
+    }
+
     private constructor(private readonly _workspaceRoot: string, resolvedDbPath: string) {
         this._dbPath = resolvedDbPath;
+    }
+
+    public dispose(): void {
+        // No timer to clear — writes are synchronous fire-and-forget
+        // Optional: final flush on deactivation
+        void this.exportStateToFile();
+        void this._writeKanbanStateBackup();
     }
 
     public get lastInitError(): string | null {
@@ -511,21 +1017,94 @@ export class KanbanDatabase {
         return this._dbPath;
     }
 
-    public async ensureReady(): Promise<boolean> {
+    public async ensureReady(forceReload: boolean = false): Promise<boolean> {
         if (this._db) {
             // Check if another IDE has modified the DB file since we loaded it
-            await this._reloadIfStale();
+            await this._reloadIfStale(forceReload);
             return true;
         }
         if (!this._initPromise) {
+            console.log(`[KanbanDatabase.ensureReady] No _db and no _initPromise for ${this._dbPath}, calling _initialize()`);
             this._initPromise = this._initialize().then((ready) => {
+                console.log(`[KanbanDatabase.ensureReady] _initialize() returned ${ready} for ${this._dbPath}, lastError=${this._lastInitError}`);
                 if (!ready) {
                     this._initPromise = null;
                 }
                 return ready;
             });
+        } else {
+            console.log(`[KanbanDatabase.ensureReady] Reusing existing _initPromise for ${this._dbPath}`);
         }
         return this._initPromise;
+    }
+
+    public async refreshFromDisk(forceReload: boolean = true): Promise<boolean> {
+        if (!this._db) {
+            return this.ensureReady(forceReload);
+        }
+        await this._reloadIfStale(forceReload);
+        return true;
+    }
+
+    /**
+     * Explicitly create the database file if it doesn't exist.
+     * Called by intentional initialization flows (setup wizard, plan creation, etc.)
+     * @returns true if DB now exists (created or already present), false on error
+     */
+    public async createIfMissing(): Promise<boolean> {
+        // Idempotent: already initialized
+        if (this._db) {
+            return true;
+        }
+
+        // If file exists, just load it normally
+        if (fs.existsSync(this._dbPath)) {
+            return await this.ensureReady();
+        }
+
+        try {
+            // CRITICAL: Validate that we aren't in a mapped child workspace.
+            // Even though forWorkspace() redirects, an instance could theoretically be
+            // created directly or the configuration could have changed.
+            const resolvedRoot = path.resolve(this._workspaceRoot);
+            const redirectedRoot = KanbanDatabase._redirectToParentIfMapped(resolvedRoot);
+            if (redirectedRoot !== resolvedRoot) {
+                console.error(`[KanbanDatabase] Refusing to create database in mapped child workspace: ${resolvedRoot}. It should be redirected to ${redirectedRoot}`);
+                return false;
+            }
+
+            // Create parent directory
+            await fs.promises.mkdir(path.resolve(path.dirname(this._dbPath)), { recursive: true });
+
+            // Initialize SQL.js and create empty database
+            const SQL = await KanbanDatabase._loadSqlJs();
+            this._db = new SQL.Database();
+
+            // Execute schema and migrations
+            this._db.exec(SCHEMA_SQL);
+            await this._runMigrations();
+            this._ensureSchemaColumns();
+
+            // Persist to disk
+            await this._persist();
+
+            this._lastInitError = null;
+            console.log(`[KanbanDatabase] Explicitly created new DB at ${this._dbPath}`);
+
+            // V15: Trigger background migration from JSON registry if needed
+            let wsId = await this.getWorkspaceId();
+            if (!wsId) {
+                wsId = crypto.createHash('sha256').update(this._workspaceRoot).digest('hex').slice(0, 16);
+            }
+            void this.migrateFromJsonRegistry(this._workspaceRoot, wsId);
+
+            return true;
+        } catch (error) {
+            this._db = null;
+            this._lastInitError = error instanceof Error ? error.message : String(error);
+            console.error('[KanbanDatabase] Explicit creation failed:', error);
+            return false;
+        }
     }
 
     public async getMigrationVersion(): Promise<number> {
@@ -558,24 +1137,26 @@ export class KanbanDatabase {
                     record.planId,        // 1
                     record.sessionId,     // 2
                     record.topic,         // 3
-                    this._normalizePath(record.planFile), // 4
+                    this._ensureRelativePlanFile(record.planFile), // 4
                     record.kanbanColumn,  // 5
                     record.status,        // 6
                     record.complexity,    // 7
                     record.tags || '',    // 8
-                    record.dependencies || '', // 9
-                    record.workspaceId,   // 10
-                    record.createdAt,     // 11
-                    record.updatedAt,     // 12
-                    record.lastAction,    // 13
-                    record.sourceType,    // 14
-                    this._normalizePath(record.brainSourcePath), // 15
-                    this._normalizePath(record.mirrorPath), // 16
-                    record.routedTo || '',       // 17
-                    record.dispatchedAgent || '', // 18
-                    record.dispatchedIde || '',   // 19
-                    record.clickupTaskId || '',   // 20
-                    record.linearIssueId || ''    // 21
+                    record.repoScope || '', // 9
+                    record.project || '',   // 10
+                    record.workspaceId,   // 11
+                    record.createdAt,     // 12
+                    record.updatedAt,     // 13
+                    record.lastAction,    // 14
+                    record.sourceType,    // 15
+                    this._ensureRelativePlanFile(record.brainSourcePath), // 16
+                    this._ensureRelativePlanFile(record.mirrorPath), // 17
+                    record.routedTo || '',       // 18
+                    record.dispatchedAgent || '', // 19
+                    record.dispatchedIde || '',   // 20
+                    record.clickupTaskId || '',   // 21
+                    record.linearIssueId || '',    // 22
+                    record.worktreeId ?? null       // 23
                 ]);
             }
             this._db.run('COMMIT');
@@ -585,6 +1166,14 @@ export class KanbanDatabase {
             return false;
         }
         return this._persist();
+    }
+
+    /**
+     * Upsert a single plan record. Convenience wrapper around upsertPlans().
+     * Used by NotionBackupService restore flow.
+     */
+    public async upsertPlan(record: KanbanPlanRecord): Promise<boolean> {
+        return this.upsertPlans([record]);
     }
 
     public async hasActivePlans(workspaceId: string): Promise<boolean> {
@@ -600,9 +1189,10 @@ export class KanbanDatabase {
         }
     }
 
-    public async hasPlan(sessionId: string): Promise<boolean> {
+    public async hasPlanByPlanFile(planFile: string, workspaceId: string): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
-        const stmt = this._db.prepare('SELECT 1 FROM plans WHERE session_id = ? LIMIT 1', [sessionId]);
+        const normalized = this._ensureRelativePlanFile(planFile);
+        const stmt = this._db.prepare('SELECT 1 FROM plans WHERE plan_file = ? AND workspace_id = ? LIMIT 1', [normalized, workspaceId]);
         try {
             return stmt.step();
         } finally {
@@ -610,43 +1200,117 @@ export class KanbanDatabase {
         }
     }
 
-    public async updateColumn(sessionId: string, newColumn: string): Promise<boolean> {
+    /** @deprecated session_id is no longer the unique key; use hasPlanByPlanFile instead. */
+    public async hasPlan(sessionId: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        // Try session_id first
+        const stmt = this._db.prepare('SELECT 1 FROM plans WHERE session_id = ? LIMIT 1', [sessionId]);
+        try {
+            if (stmt.step()) return true;
+        } finally {
+            stmt.free();
+        }
+        // Fallback: sessionId might actually be a planId
+        const stmt2 = this._db.prepare('SELECT 1 FROM plans WHERE plan_id = ? LIMIT 1', [sessionId]);
+        try {
+            return stmt2.step();
+        } finally {
+            stmt2.free();
+        }
+    }
+
+    public async reassignWorkspaceByPlanFile(
+        planFile: string, 
+        oldWorkspaceId: string, 
+        newWorkspaceId: string
+    ): Promise<boolean> {
+        const normalized = this._ensureRelativePlanFile(planFile);
+        console.log(`[KanbanDatabase] reassignWorkspaceByPlanFile: planFile=${normalized}, oldWorkspaceId=${oldWorkspaceId}, newWorkspaceId=${newWorkspaceId}`);
+        return this._persistedUpdate(
+            'UPDATE plans SET workspace_id = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+            [newWorkspaceId, new Date().toISOString(), normalized, oldWorkspaceId]
+        );
+    }
+
+    public async updateColumnByPlanFile(planFile: string, workspaceId: string, newColumn: string): Promise<boolean> {
         if (!VALID_KANBAN_COLUMNS.has(newColumn) && !SAFE_COLUMN_NAME_RE.test(newColumn)) {
             console.error(`[KanbanDatabase] Rejected invalid column name: ${newColumn}`);
             return false;
         }
-        console.log(`[KanbanDatabase] updateColumn: sessionId=${sessionId}, newColumn=${newColumn}`);
+        const normalized = this._ensureRelativePlanFile(planFile);
+        console.log(`[KanbanDatabase] updateColumnByPlanFile: planFile=${normalized}, workspaceId=${workspaceId}, newColumn=${newColumn}`);
         const result = await this._persistedUpdate(
-            'UPDATE plans SET kanban_column = ?, updated_at = ? WHERE session_id = ?',
-            [newColumn, new Date().toISOString(), sessionId]
+            'UPDATE plans SET kanban_column = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+            [newColumn, new Date().toISOString(), normalized, workspaceId]
         );
         // Verify the update took effect
         if (this._db) {
             try {
-                const stmt = this._db.prepare('SELECT kanban_column FROM plans WHERE session_id = ?', [sessionId]);
+                const stmt = this._db.prepare('SELECT kanban_column FROM plans WHERE plan_file = ? AND workspace_id = ?', [normalized, workspaceId]);
                 if (stmt.step()) {
                     const row = stmt.getAsObject();
-                    console.log(`[KanbanDatabase] updateColumn VERIFY: sessionId=${sessionId}, column now=${row.kanban_column}`);
+                    console.log(`[KanbanDatabase] updateColumnByPlanFile VERIFY: planFile=${normalized}, column now=${row.kanban_column}`);
                 } else {
-                    console.warn(`[KanbanDatabase] updateColumn VERIFY: sessionId=${sessionId} NOT FOUND in DB`);
+                    console.warn(`[KanbanDatabase] updateColumnByPlanFile VERIFY: planFile=${normalized} NOT FOUND in DB`);
                 }
                 stmt.free();
             } catch (e) {
-                console.error(`[KanbanDatabase] updateColumn VERIFY failed:`, e);
+                console.error(`[KanbanDatabase] updateColumnByPlanFile VERIFY failed:`, e);
             }
         }
         return result;
     }
 
+    /** @deprecated session_id is no longer the unique key; use updateColumnByPlanFile instead. */
+    public async updateColumn(sessionId: string, newColumn: string): Promise<boolean> {
+        const plan = await this.getPlanBySessionId(sessionId);
+        if (!plan) { return false; }
+        return this.updateColumnByPlanFile(plan.planFile, plan.workspaceId, newColumn);
+    }
+
     /**
-     * Returns the stored plan_file path for a given session ID, or null if not found.
-     * Used by the kanban state write hook to locate the plan file for state section updates.
+     * Atomic update of plan column and optional plan file path.
      */
-    async getPlanFilePath(sessionId: string): Promise<string | null> {
+    public async movePlanByPlanFile(planFile: string, workspaceId: string, newColumn: string, newPlanFile?: string): Promise<boolean> {
+        if (!VALID_KANBAN_COLUMNS.has(newColumn) && !SAFE_COLUMN_NAME_RE.test(newColumn)) {
+            console.error(`[KanbanDatabase] Rejected invalid column name: ${newColumn}`);
+            return false;
+        }
+
+        const normalized = this._ensureRelativePlanFile(planFile);
+        console.log(`[KanbanDatabase] movePlanByPlanFile: planFile=${normalized}, workspaceId=${workspaceId}, newColumn=${newColumn}, newPlanFile=${newPlanFile}`);
+        
+        const now = new Date().toISOString();
+        let sql: string;
+        let params: unknown[];
+
+        if (newPlanFile) {
+            sql = 'UPDATE plans SET kanban_column = ?, plan_file = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?';
+            params = [newColumn, this._ensureRelativePlanFile(newPlanFile), now, normalized, workspaceId];
+        } else {
+            sql = 'UPDATE plans SET kanban_column = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?';
+            params = [newColumn, now, normalized, workspaceId];
+        }
+
+        return this._persistedUpdate(sql, params);
+    }
+
+    /** @deprecated session_id is no longer the unique key; use movePlanByPlanFile instead. */
+    public async movePlan(sessionId: string, newColumn: string, planFile?: string): Promise<boolean> {
+        const plan = await this.getPlanBySessionId(sessionId);
+        if (!plan) { return false; }
+        return this.movePlanByPlanFile(plan.planFile, plan.workspaceId, newColumn, planFile);
+    }
+
+    /**
+     * Returns the stored plan_file path for a given plan file and workspace, or null if not found.
+     */
+    async getPlanFilePathByPlanFile(planFile: string, workspaceId: string): Promise<string | null> {
         if (!(await this.ensureReady()) || !this._db) {
             return null;
         }
-        const stmt = this._db.prepare('SELECT plan_file FROM plans WHERE session_id = ?', [sessionId]);
+        const normalized = this._ensureRelativePlanFile(planFile);
+        const stmt = this._db.prepare('SELECT plan_file FROM plans WHERE plan_file = ? AND workspace_id = ?', [normalized, workspaceId]);
         try {
             if (stmt.step()) {
                 const row = stmt.getAsObject();
@@ -658,78 +1322,157 @@ export class KanbanDatabase {
         }
     }
 
-    public async updateComplexity(sessionId: string, complexity: string): Promise<boolean> {
-        // Import or use local validation to avoid circular dependency if possible, 
-        // but here we are in a central service.
+    /** @deprecated session_id is no longer the unique key; use getPlanFilePathByPlanFile instead. */
+    async getPlanFilePath(sessionId: string): Promise<string | null> {
+        if (!(await this.ensureReady()) || !this._db) {
+            return null;
+        }
+        // Try session_id first
+        const stmt = this._db.prepare('SELECT plan_file FROM plans WHERE session_id = ?', [sessionId]);
+        try {
+            if (stmt.step()) {
+                const row = stmt.getAsObject();
+                return (row.plan_file as string) || null;
+            }
+        } finally {
+            stmt.free();
+        }
+        // Fallback: sessionId might actually be a planId
+        const stmt2 = this._db.prepare('SELECT plan_file FROM plans WHERE plan_id = ?', [sessionId]);
+        try {
+            if (stmt2.step()) {
+                const row = stmt2.getAsObject();
+                return (row.plan_file as string) || null;
+            }
+            return null;
+        } finally {
+            stmt2.free();
+        }
+    }
+
+    public async updateComplexityByPlanFile(planFile: string, workspaceId: string, complexity: string): Promise<boolean> {
         const { isValidComplexityValue } = require('./complexityScale');
         if (!isValidComplexityValue(complexity)) {
             console.error(`[KanbanDatabase] Rejected invalid complexity value: ${complexity}`);
             return false;
         }
+        const normalized = this._ensureRelativePlanFile(planFile);
         return this._persistedUpdate(
-            'UPDATE plans SET complexity = ?, updated_at = ? WHERE session_id = ?',
-            [complexity, new Date().toISOString(), sessionId]
+            'UPDATE plans SET complexity = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+            [complexity, new Date().toISOString(), normalized, workspaceId]
         );
     }
 
+    /** @deprecated session_id is no longer the unique key; use updateComplexityByPlanFile instead. */
+    public async updateComplexity(sessionId: string, complexity: string): Promise<boolean> {
+        const plan = await this.getPlanBySessionId(sessionId);
+        if (!plan) { return false; }
+        return this.updateComplexityByPlanFile(plan.planFile, plan.workspaceId, complexity);
+    }
+
+    /** Update complexity directly by plan_id primary key. */
+    public async updateComplexityByPlanId(planId: string, complexity: string): Promise<boolean> {
+        const { isValidComplexityValue } = require('./complexityScale');
+        if (!planId || !isValidComplexityValue(complexity)) {
+            console.error(`[KanbanDatabase] Rejected updateComplexityByPlanId: planId=${planId}, complexity=${complexity}`);
+            return false;
+        }
+        return this._persistedUpdate(
+            'UPDATE plans SET complexity = ?, updated_at = ? WHERE plan_id = ?',
+            [complexity, new Date().toISOString(), planId]
+        );
+    }
+
+    public async updateTagsByPlanFile(planFile: string, workspaceId: string, tags: string): Promise<boolean> {
+        const normalized = this._ensureRelativePlanFile(planFile);
+        return this._persistedUpdate(
+            'UPDATE plans SET tags = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+            [tags, new Date().toISOString(), normalized, workspaceId]
+        );
+    }
+
+    /** @deprecated session_id is no longer the unique key; use updateTagsByPlanFile instead. */
     public async updateTags(sessionId: string, tags: string): Promise<boolean> {
-        return this._persistedUpdate(
-            'UPDATE plans SET tags = ?, updated_at = ? WHERE session_id = ?',
-            [tags, new Date().toISOString(), sessionId]
-        );
+        const plan = await this.getPlanBySessionId(sessionId);
+        if (!plan) { return false; }
+        return this.updateTagsByPlanFile(plan.planFile, plan.workspaceId, tags);
     }
 
-    public async updateDependencies(sessionId: string, dependencies: string): Promise<boolean> {
-        return this._persistedUpdate(
-            'UPDATE plans SET dependencies = ?, updated_at = ? WHERE session_id = ?',
-            [dependencies, new Date().toISOString(), sessionId]
-        );
-    }
 
-    public async getDependencyStatus(
-        dependenciesCsv: string
-    ): Promise<Array<{ planId: string; sessionId: string; topic: string; column: string; ready: boolean }>> {
-        if (!(await this.ensureReady()) || !this._db) return [];
-        const deps = dependenciesCsv.split(',').map(d => d.trim()).filter(Boolean);
-        if (deps.length === 0) return [];
-
-        const results: Array<{ planId: string; sessionId: string; topic: string; column: string; ready: boolean }> = [];
-        for (const depId of deps) {
-            const stmt = this._db.prepare(
-                `SELECT plan_id, session_id, topic, kanban_column FROM plans
-                 WHERE plan_id = ? OR session_id = ? OR LOWER(topic) = LOWER(?)
-                 LIMIT 1`,
-                [depId, depId, depId]
-            );
+    public async getMeta(key: string): Promise<string | null> {
+        if (!(await this.ensureReady()) || !this._db) return null;
+        const stmt = this._db.prepare('SELECT value FROM kanban_meta WHERE key = ?', [key]);
+        try {
             if (stmt.step()) {
                 const row = stmt.getAsObject();
-                const column = String(row.kanban_column || 'CREATED');
-                results.push({
-                    planId: String(row.plan_id || depId),
-                    sessionId: String(row.session_id || ''),
-                    topic: String(row.topic || depId),
-                    column,
-                    ready: column === 'COMPLETED' || column === 'CODE REVIEWED'
-                });
-            } else {
-                results.push({ planId: depId, sessionId: '', topic: depId, column: 'UNKNOWN', ready: true });
+                return String(row.value ?? '');
             }
+            return null;
+        } finally {
             stmt.free();
         }
-        return results;
     }
 
-    public async updateStatus(sessionId: string, status: KanbanPlanStatus): Promise<boolean> {
+    public async setMeta(key: string, value: string): Promise<boolean> {
+        return this._persistedUpdate(
+            `INSERT INTO kanban_meta(key, value) VALUES(?, ?)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+            [key, value]
+        );
+    }
+
+
+
+
+    public async updateStatusByPlanFile(planFile: string, workspaceId: string, status: KanbanPlanStatus): Promise<boolean> {
         if (!VALID_STATUSES.has(status)) {
             console.error(`[KanbanDatabase] Rejected invalid status value: ${status}`);
             return false;
         }
+        const normalized = this._ensureRelativePlanFile(planFile);
         return this._persistedUpdate(
-            'UPDATE plans SET status = ?, updated_at = ? WHERE session_id = ?',
-            [status, new Date().toISOString(), sessionId]
+            'UPDATE plans SET status = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+            [status, new Date().toISOString(), normalized, workspaceId]
         );
     }
 
+    /** @deprecated session_id is no longer the unique key; use updateStatusByPlanFile instead. */
+    public async updateStatus(sessionId: string, status: KanbanPlanStatus): Promise<boolean> {
+        const plan = await this.getPlanBySessionId(sessionId);
+        if (!plan) { return false; }
+        return this.updateStatusByPlanFile(plan.planFile, plan.workspaceId, status);
+    }
+
+    public async reviveDeletedPlansByPlanFile(planFiles: Array<{ planFile: string; workspaceId: string }>): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        const uniqueEntries = [...new Map(
+            planFiles
+                .map((e) => ({ planFile: String(e.planFile || '').trim(), workspaceId: String(e.workspaceId || '').trim() }))
+                .filter((e) => e.planFile.length > 0 && e.workspaceId.length > 0)
+                .map((e) => [`${e.planFile}|${e.workspaceId}`, e])
+        ).values()];
+        if (uniqueEntries.length === 0) return true;
+
+        const now = new Date().toISOString();
+        this._db.run('BEGIN');
+        try {
+            for (const { planFile, workspaceId } of uniqueEntries) {
+                const normalized = this._ensureRelativePlanFile(planFile);
+                this._db.run(
+                    "UPDATE plans SET status = 'active', updated_at = ? WHERE plan_file = ? AND workspace_id = ? AND status = 'deleted'",
+                    [now, normalized, workspaceId]
+                );
+            }
+            this._db.run('COMMIT');
+        } catch (error) {
+            try { this._db.run('ROLLBACK'); } catch { }
+            console.error('[KanbanDatabase] Failed to revive deleted plans:', error);
+            return false;
+        }
+        return this._persist();
+    }
+
+    /** @deprecated session_id is no longer the unique key; use reviveDeletedPlansByPlanFile instead. */
     public async reviveDeletedPlans(sessionIds: string[]): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
         const uniqueSessionIds = [...new Set(
@@ -743,9 +1486,11 @@ export class KanbanDatabase {
         this._db.run('BEGIN');
         try {
             for (const sessionId of uniqueSessionIds) {
+                const plan = await this.getPlanBySessionId(sessionId);
+                if (!plan) continue;
                 this._db.run(
-                    "UPDATE plans SET status = 'active', updated_at = ? WHERE session_id = ? AND status = 'deleted'",
-                    [now, sessionId]
+                    "UPDATE plans SET status = 'active', updated_at = ? WHERE plan_id = ? AND status = 'deleted'",
+                    [now, plan.planId]
                 );
             }
             this._db.run('COMMIT');
@@ -757,32 +1502,507 @@ export class KanbanDatabase {
         return this._persist();
     }
 
+    public async updateLastActionByPlanFile(planFile: string, workspaceId: string, lastAction: string): Promise<boolean> {
+        const normalized = this._ensureRelativePlanFile(planFile);
+        return this._persistedUpdate(
+            'UPDATE plans SET last_action = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+            [lastAction, new Date().toISOString(), normalized, workspaceId]
+        );
+    }
+
+    /** @deprecated session_id is no longer the unique key; use updateLastActionByPlanFile instead. */
     public async updateLastAction(sessionId: string, lastAction: string): Promise<boolean> {
+        const plan = await this.getPlanBySessionId(sessionId);
+        if (!plan) { return false; }
+        return this.updateLastActionByPlanFile(plan.planFile, plan.workspaceId, lastAction);
+    }
+
+    public async updateTopicByPlanFile(planFile: string, workspaceId: string, topic: string): Promise<boolean> {
+        const normalized = this._ensureRelativePlanFile(planFile);
         return this._persistedUpdate(
-            'UPDATE plans SET last_action = ?, updated_at = ? WHERE session_id = ?',
-            [lastAction, new Date().toISOString(), sessionId]
+            'UPDATE plans SET topic = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+            [topic, new Date().toISOString(), normalized, workspaceId]
         );
     }
 
+    /** @deprecated session_id is no longer the unique key; use updateTopicByPlanFile instead. */
     public async updateTopic(sessionId: string, topic: string): Promise<boolean> {
+        const plan = await this.getPlanBySessionId(sessionId);
+        if (!plan) { return false; }
+        return this.updateTopicByPlanFile(plan.planFile, plan.workspaceId, topic);
+    }
+
+    /** @deprecated plan_file is now the unique key; file renames create new plans. */
+    public async updatePlanFile(sessionId: string, planFile: string, skipTimestampUpdate?: boolean): Promise<boolean> {
+        console.log(`[KanbanDatabase] updatePlanFile: sessionId=${sessionId}, planFile=${planFile}, skipTimestampUpdate=${skipTimestampUpdate}`);
+        const plan = await this.getPlanBySessionId(sessionId);
+        if (!plan) return false;
+        const sql = skipTimestampUpdate
+            ? 'UPDATE plans SET plan_file = ? WHERE plan_id = ?'
+            : 'UPDATE plans SET plan_file = ?, updated_at = ? WHERE plan_id = ?';
+        const params = skipTimestampUpdate
+            ? [this._ensureRelativePlanFile(planFile), plan.planId]
+            : [this._ensureRelativePlanFile(planFile), new Date().toISOString(), plan.planId];
+        const result = this._persistedUpdate(sql, params);
+        if (this._db) {
+            try {
+                const stmt = this._db.prepare('SELECT plan_file FROM plans WHERE plan_id = ?', [plan.planId]);
+                if (stmt.step()) {
+                    const row = stmt.getAsObject();
+                    console.log(`[KanbanDatabase] updatePlanFile VERIFY: planId=${plan.planId}, plan_file now=${row.plan_file}`);
+                }
+                stmt.free();
+            } catch (e) {
+                console.error(`[KanbanDatabase] updatePlanFile VERIFY failed:`, e);
+            }
+        }
+        return result;
+    }
+
+    public async updateSessionId(oldSessionId: string, newSessionId: string): Promise<boolean> {
+        console.log(`[KanbanDatabase] updateSessionId: oldSessionId=${oldSessionId}, newSessionId=${newSessionId}`);
+        const plan = await this.getPlanBySessionId(oldSessionId);
+        if (!plan) return false;
+        const sql = 'UPDATE plans SET session_id = ?, updated_at = ? WHERE plan_id = ?';
+        const params = [newSessionId, new Date().toISOString(), plan.planId];
+        const result = this._persistedUpdate(sql, params);
+        return result;
+    }
+
+
+    public async updateLinearIssueIdByPlanFile(planFile: string, workspaceId: string, linearIssueId: string): Promise<boolean> {
+        const normalizedIssueId = String(linearIssueId || '').trim();
+        const normalized = this._ensureRelativePlanFile(planFile);
+        const persisted = await this._persistedUpdate(
+            'UPDATE plans SET linear_issue_id = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+            [normalizedIssueId, new Date().toISOString(), normalized, workspaceId]
+        );
+        if (!persisted) {
+            return false;
+        }
+
+        const updatedPlan = await this.getPlanByPlanFile(planFile, workspaceId);
+        if (!updatedPlan) {
+            console.error(`[KanbanDatabase] Failed to update linear_issue_id for missing plan ${planFile}.`);
+            return false;
+        }
+        if (String(updatedPlan.linearIssueId || '').trim() !== normalizedIssueId) {
+            console.error(
+                `[KanbanDatabase] Failed to verify linear_issue_id update for plan ${planFile}. ` +
+                `Expected "${normalizedIssueId}", found "${String(updatedPlan.linearIssueId || '').trim()}".`
+            );
+            return false;
+        }
+        return true;
+    }
+
+    /** @deprecated session_id is no longer the unique key; use updateLinearIssueIdByPlanFile instead. */
+    public async updateLinearIssueId(sessionId: string, linearIssueId: string): Promise<boolean> {
+        const plan = await this.getPlanBySessionId(sessionId);
+        if (!plan) { return false; }
+        return this.updateLinearIssueIdByPlanFile(plan.planFile, plan.workspaceId, linearIssueId);
+    }
+
+    public async updateClickUpTaskIdByPlanFile(planFile: string, workspaceId: string, clickupTaskId: string): Promise<boolean> {
+        const normalizedTaskId = String(clickupTaskId || '').trim();
+        const normalized = this._ensureRelativePlanFile(planFile);
+        const persisted = await this._persistedUpdate(
+            'UPDATE plans SET clickup_task_id = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+            [normalizedTaskId, new Date().toISOString(), normalized, workspaceId]
+        );
+        if (!persisted) {
+            return false;
+        }
+
+        const updatedPlan = await this.getPlanByPlanFile(planFile, workspaceId);
+        if (!updatedPlan) {
+            console.error(`[KanbanDatabase] Failed to update clickup_task_id for missing plan ${planFile}.`);
+            return false;
+        }
+        if (String(updatedPlan.clickupTaskId || '').trim() !== normalizedTaskId) {
+            console.error(
+                `[KanbanDatabase] Failed to verify clickup_task_id update for plan ${planFile}. ` +
+                `Expected "${normalizedTaskId}", found "${String(updatedPlan.clickupTaskId || '').trim()}".`
+            );
+            return false;
+        }
+        return true;
+    }
+
+    /** @deprecated session_id is no longer the unique key; use updateClickUpTaskIdByPlanFile instead. */
+    public async updateClickUpTaskId(sessionId: string, clickupTaskId: string): Promise<boolean> {
+        const plan = await this.getPlanBySessionId(sessionId);
+        if (!plan) { return false; }
+        return this.updateClickUpTaskIdByPlanFile(plan.planFile, plan.workspaceId, clickupTaskId);
+    }
+
+    public async deletePlanByPlanFile(planFile: string, workspaceId: string): Promise<boolean> {
+        const normalized = this._ensureRelativePlanFile(planFile);
         return this._persistedUpdate(
-            'UPDATE plans SET topic = ?, updated_at = ? WHERE session_id = ?',
-            [topic, new Date().toISOString(), sessionId]
+            'DELETE FROM plans WHERE plan_file = ? AND workspace_id = ?',
+            [normalized, workspaceId]
         );
     }
 
-    public async updatePlanFile(sessionId: string, planFile: string): Promise<boolean> {
-        return this._persistedUpdate(
-            'UPDATE plans SET plan_file = ?, updated_at = ? WHERE session_id = ?',
-            [this._normalizePath(planFile), new Date().toISOString(), sessionId]
-        );
-    }
-
+    /** @deprecated session_id is no longer the unique key; use deletePlanByPlanFile instead. */
     public async deletePlan(sessionId: string): Promise<boolean> {
+        const plan = await this.getPlanBySessionId(sessionId);
+        if (!plan) return false;
         return this._persistedUpdate(
-            'DELETE FROM plans WHERE session_id = ?',
-            [sessionId]
+            'DELETE FROM plans WHERE plan_id = ?',
+            [plan.planId]
         );
+    }
+
+    /** Delete a plan directly by its plan_id primary key. */
+    public async deletePlanByPlanId(planId: string): Promise<boolean> {
+        if (!planId) return false;
+        return this._persistedUpdate(
+            'DELETE FROM plans WHERE plan_id = ?',
+            [planId]
+        );
+    }
+
+    // Core CRUD for imported documents
+    public async registerImport(entry: ImportedDocEntry): Promise<void> {
+        if (!(await this.ensureReady()) || !this._db) return;
+        this._db.run(
+            `INSERT OR REPLACE INTO imported_docs 
+             (slug_prefix, source_id, remote_doc_id, doc_name, parent_doc_name, 
+              file_path, imported_at, last_synced_at, content_hash, workspace_id, display_order)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                entry.slugPrefix,
+                entry.sourceId,
+                entry.remoteDocId || null,
+                entry.docName,
+                entry.parentDocName || entry.docName,
+                entry.filePath,
+                entry.importedAt,
+                entry.lastSyncedAt || null,
+                entry.contentHash || null,
+                entry.workspaceId,
+                entry.displayOrder ?? 0
+            ]
+        );
+        await this._persist();
+    }
+
+    public async removeImport(slugPrefix: string, workspaceId: string): Promise<void> {
+        if (!(await this.ensureReady()) || !this._db) return;
+        this._db.run(
+            'DELETE FROM imported_docs WHERE slug_prefix = ? AND workspace_id = ?',
+            [slugPrefix, workspaceId]
+        );
+        await this._persist();
+    }
+
+    public async getImportedDocs(workspaceId: string): Promise<ImportedDocEntry[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const stmt = this._db.prepare(
+            `SELECT * FROM imported_docs WHERE workspace_id = ? ORDER BY imported_at DESC`,
+            [workspaceId]
+        );
+        
+        const results: ImportedDocEntry[] = [];
+        try {
+            while (stmt.step()) {
+                const row = stmt.getAsObject() as any;
+                results.push({
+                    slugPrefix: String(row.slug_prefix),
+                    sourceId: String(row.source_id),
+                    remoteDocId: row.remote_doc_id ? String(row.remote_doc_id) : undefined,
+                    docName: String(row.doc_name),
+                    parentDocName: row.parent_doc_name ? String(row.parent_doc_name) : undefined,
+                    filePath: String(row.file_path),
+                    importedAt: String(row.imported_at),
+                    lastSyncedAt: row.last_synced_at ? String(row.last_synced_at) : undefined,
+                    contentHash: row.content_hash ? String(row.content_hash) : undefined,
+                    workspaceId: String(row.workspace_id),
+                    displayOrder: row.display_order ? Number(row.display_order) : 0
+                });
+            }
+        } finally {
+            stmt.free();
+        }
+        return results;
+    }
+
+    public async getImportBySlug(slugPrefix: string, workspaceId: string): Promise<ImportedDocEntry | null> {
+        if (!(await this.ensureReady()) || !this._db) return null;
+        const stmt = this._db.prepare(
+            'SELECT * FROM imported_docs WHERE slug_prefix = ? AND workspace_id = ? LIMIT 1',
+            [slugPrefix, workspaceId]
+        );
+        try {
+            if (!stmt.step()) return null;
+            const row = stmt.getAsObject();
+            return {
+                slugPrefix: String(row.slug_prefix),
+                sourceId: String(row.source_id),
+                remoteDocId: row.remote_doc_id ? String(row.remote_doc_id) : undefined,
+                docName: String(row.doc_name),
+                parentDocName: row.parent_doc_name ? String(row.parent_doc_name) : undefined,
+                filePath: String(row.file_path),
+                importedAt: String(row.imported_at),
+                lastSyncedAt: row.last_synced_at ? String(row.last_synced_at) : undefined,
+                contentHash: row.content_hash ? String(row.content_hash) : undefined,
+                workspaceId: String(row.workspace_id)
+            };
+        } finally {
+            stmt.free();
+        }
+    }
+
+    // Healing / consistency
+    public async healImports(workspaceRoot: string, workspaceId: string): Promise<HealResult> {
+        if (!(await this.ensureReady()) || !this._db) {
+            return { orphanedEntries: 0, orphanedFiles: 0, healedEntries: 0 };
+        }
+        
+        const docsDir = path.join(workspaceRoot, '.switchboard', 'docs');
+        let files: string[] = [];
+        try {
+            files = await fs.promises.readdir(docsDir);
+        } catch {
+            return { orphanedEntries: 0, orphanedFiles: 0, healedEntries: 0 };
+        }
+        
+        const dbEntries = await this.getImportedDocs(workspaceId);
+        const fileSet = new Set(files.filter(f => f.endsWith('.md')));
+        
+        // Find orphaned DB entries (file deleted, entry remains)
+        const orphanedEntries = dbEntries.filter(e => !fileSet.has(path.basename(e.filePath)));
+        
+        // Find orphaned files (file exists, no DB entry)
+        const dbFileSet = new Set(dbEntries.map(e => path.basename(e.filePath)));
+        const orphanedFiles = files.filter(f => f.endsWith('.md') && !dbFileSet.has(f));
+        
+        // Auto-cleanup orphaned entries
+        let healedEntries = 0;
+        for (const entry of orphanedEntries) {
+            await this.removeImport(entry.slugPrefix, workspaceId);
+            healedEntries++;
+        }
+        
+        // Update sync meta
+        const now = new Date().toISOString();
+        this._db.run(
+            `INSERT OR REPLACE INTO import_sync_meta 
+             (workspace_id, last_heal_scan_at, orphaned_entries, orphaned_files)
+             VALUES (?, ?, ?, ?)`,
+            [workspaceId, now, orphanedEntries.length, orphanedFiles.length]
+        );
+        // Also set kanban_meta key for the 1-hour throttle in PlanningPanelProvider
+        await this.setMeta('last_heal_scan_' + workspaceId, now);
+        await this._persist();
+        
+        return { 
+            orphanedEntries: orphanedEntries.length, 
+            orphanedFiles: orphanedFiles.length,
+            healedEntries
+        };
+    }
+
+    public async checkForDuplicate(
+        docName: string, 
+        sourceId: string, 
+        workspaceId: string, 
+        docId?: string
+    ): Promise<DuplicateCheckResult> {
+        if (!(await this.ensureReady()) || !this._db) return { isDuplicate: false };
+        
+        const entries = await this.getImportedDocs(workspaceId);
+        const lowerName = docName.toLowerCase();
+        
+        for (const entry of entries) {
+            if (entry.docName.toLowerCase() === lowerName) {
+                // Same source + same docId = idempotent re-import, not a duplicate
+                if (entry.sourceId === sourceId && entry.remoteDocId === docId) {
+                    continue;
+                }
+                return {
+                    isDuplicate: true,
+                    matchType: entry.docName === docName ? 'exact_name' : 'case_insensitive_name',
+                    existingDoc: entry
+                };
+            }
+            if (docId && entry.remoteDocId === docId && entry.sourceId !== sourceId) {
+                return {
+                    isDuplicate: true,
+                    matchType: 'same_doc_id',
+                    existingDoc: entry
+                };
+            }
+        }
+        
+        return { isDuplicate: false };
+    }
+
+    // Batch operations for subpages
+    public async registerImportBatch(entries: ImportedDocEntry[]): Promise<{ succeeded: number; failed: number }> {
+        if (!(await this.ensureReady()) || !this._db) return { succeeded: 0, failed: entries.length };
+        
+        let succeeded = 0;
+        let failed = 0;
+        
+        this._db.run('BEGIN');
+        try {
+            for (const entry of entries) {
+                try {
+                    this._db.run(
+                        `INSERT OR REPLACE INTO imported_docs 
+                         (slug_prefix, source_id, remote_doc_id, doc_name, parent_doc_name, 
+                          file_path, imported_at, last_synced_at, content_hash, workspace_id)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        [
+                            entry.slugPrefix,
+                            entry.sourceId,
+                            entry.remoteDocId || null,
+                            entry.docName,
+                            entry.parentDocName || entry.docName,
+                            entry.filePath,
+                            entry.importedAt,
+                            entry.lastSyncedAt || null,
+                            entry.contentHash || null,
+                            entry.workspaceId
+                        ]
+                    );
+                    succeeded++;
+                } catch {
+                    failed++;
+                }
+            }
+            this._db.run('COMMIT');
+        } catch {
+            try { this._db.run('ROLLBACK'); } catch {}
+            return { succeeded: 0, failed: entries.length };
+        }
+        
+        await this._persist();
+        return { succeeded, failed };
+    }
+
+    // Migration from legacy JSON registry
+    public async migrateFromJsonRegistry(workspaceRoot: string, workspaceId: string): Promise<{ migrated: number; skipped: number }> {
+        if (!(await this.ensureReady()) || !this._db) return { migrated: 0, skipped: 0 };
+
+        const legacyPath = path.join(workspaceRoot, '.switchboard', 'imported-docs.json');
+        if (!fs.existsSync(legacyPath)) {
+            return { migrated: 0, skipped: 0 };
+        }
+        
+        // Check if already migrated
+        const alreadyMigrated = await this.getConfig('import_registry_migrated');
+        if (alreadyMigrated === 'true') {
+            return { migrated: 0, skipped: 0 };
+        }
+        
+        const raw = await fs.promises.readFile(legacyPath, 'utf8');
+        const legacy: Record<string, any> = JSON.parse(raw);
+        const docsDir = path.join(workspaceRoot, '.switchboard', 'docs');
+        
+        let migrated = 0;
+        let skipped = 0;
+        
+        // Prepare migration entries outside transaction to avoid blocking
+        const entriesToMigrate: any[] = [];
+        
+        let filesInDocsDir: string[] = [];
+        try {
+            filesInDocsDir = await fs.promises.readdir(docsDir);
+        } catch (err) {
+            console.warn(`[KanbanDatabase] Failed to read docs directory:`, err);
+        }
+
+        for (const [slugPrefix, entry] of Object.entries(legacy)) {
+            // Find file starting with slugPrefix (could have _hash suffix)
+            const matches = filesInDocsDir.filter(f => f.startsWith(slugPrefix) && f.endsWith('.md'));
+            
+            // Skip if file doesn't exist (orphaned entry)
+            if (matches.length === 0) {
+                skipped++;
+                continue;
+            }
+            
+            // Use the most recently modified if multiple
+            let latest = matches[0];
+            let latestMtime = 0;
+            for (const match of matches) {
+                try {
+                    const stat = await fs.promises.stat(path.join(docsDir, match));
+                    if (stat.mtimeMs > latestMtime) {
+                        latestMtime = stat.mtimeMs;
+                        latest = match;
+                    }
+                } catch {}
+            }
+            
+            const filePath = path.join(docsDir, latest);
+            
+            try {
+                // Calculate content hash from existing file
+                const content = await fs.promises.readFile(filePath, 'utf8');
+                const contentWithoutFm = content.replace(/^---\n[\s\S]*?\n---\n*/, '');
+                const hash = crypto.createHash('sha256').update(contentWithoutFm).digest('hex');
+                
+                entriesToMigrate.push({
+                    slugPrefix,
+                    sourceId: entry.sourceId,
+                    docId: entry.docId || null,
+                    docName: entry.docName,
+                    parentDocName: entry.parentDocName || entry.docName,
+                    filePath,
+                    importedAt: entry.importedAt,
+                    lastSyncedAt: entry.lastSyncedAt || null,
+                    hash: entry.remoteContentHash || hash
+                });
+            } catch (err) {
+                console.error(`[KanbanDatabase] Failed to read legacy doc ${slugPrefix}:`, err);
+                skipped++;
+            }
+        }
+        
+        this._db.run('BEGIN');
+        try {
+            for (const item of entriesToMigrate) {
+                this._db.run(
+                    `INSERT OR IGNORE INTO imported_docs 
+                     (slug_prefix, source_id, remote_doc_id, doc_name, parent_doc_name, 
+                      file_path, imported_at, last_synced_at, content_hash, workspace_id)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [
+                        item.slugPrefix,
+                        item.sourceId,
+                        item.docId,
+                        item.docName,
+                        item.parentDocName,
+                        item.filePath,
+                        item.importedAt,
+                        item.lastSyncedAt,
+                        item.hash,
+                        workspaceId
+                    ]
+                );
+                migrated++;
+            }
+            this._db.run('COMMIT');
+        } catch {
+            try { this._db.run('ROLLBACK'); } catch {}
+            return { migrated: 0, skipped: Object.keys(legacy).length };
+        }
+        
+        await this._persist();
+        await this.setConfig('import_registry_migrated', 'true');
+        
+        // Rename legacy file to .migrated
+        try {
+            await fs.promises.rename(legacyPath, legacyPath + '.migrated');
+        } catch (err) {
+            console.warn(`[KanbanDatabase] Failed to rename legacy registry ${legacyPath}:`, err);
+        }
+        
+        return { migrated, skipped };
     }
 
     public async getBoard(workspaceId: string): Promise<KanbanPlanRecord[]> {
@@ -796,16 +2016,143 @@ export class KanbanDatabase {
         return this._readRows(stmt);
     }
 
-    public async getPlansByColumn(workspaceId: string, column: string): Promise<KanbanPlanRecord[]> {
+    public async getBoardFiltered(workspaceId: string, repoScope: string | null): Promise<KanbanPlanRecord[]> {
+        if (!repoScope) {
+            return this.getBoard(workspaceId);
+        }
         if (!(await this.ensureReady()) || !this._db) return [];
         const stmt = this._db.prepare(
             `SELECT ${PLAN_COLUMNS} FROM plans
-             WHERE workspace_id = ? AND status = 'active' AND kanban_column = ?
-             ORDER BY updated_at ASC`,
-            [workspaceId, column]
+             WHERE workspace_id = ? AND status = 'active' AND repo_scope IN (?, '')
+             ORDER BY updated_at DESC`,
+            [workspaceId, repoScope]
         );
         return this._readRows(stmt);
     }
+
+    public async getProjects(workspaceId: string): Promise<string[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const stmt = this._db.prepare(
+            'SELECT name FROM projects WHERE workspace_id = ? ORDER BY name',
+            [workspaceId]
+        );
+        const rows: any[] = [];
+        while (stmt.step()) {
+            rows.push(stmt.getAsObject());
+        }
+        stmt.free();
+        return rows.map((r: any) => String(r.name || ''));
+    }
+
+    public async addProject(workspaceId: string, projectName: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        try {
+            this._db.run(
+                'INSERT INTO projects (name, workspace_id) VALUES (?, ?)',
+                [projectName, workspaceId]
+            );
+            return await this._persist();
+        } catch (e) {
+            console.debug('[KanbanDatabase] addProject failed (might already exist):', e);
+            return false;
+        }
+    }
+
+    public async deleteProject(workspaceId: string, projectName: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        try {
+            this._db.run(
+                'DELETE FROM projects WHERE workspace_id = ? AND name = ?',
+                [workspaceId, projectName]
+            );
+            this._db.run(
+                "UPDATE plans SET project = '' WHERE workspace_id = ? AND project = ?",
+                [workspaceId, projectName]
+            );
+            return await this._persist();
+        } catch (e) {
+            console.error('[KanbanDatabase] deleteProject failed:', e);
+            return false;
+        }
+    }
+
+    public async assignPlansToProject(
+        planIds: string[],
+        projectName: string,
+        workspaceId: string
+    ): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db || planIds.length === 0) return false;
+        const effectiveProjectName = projectName === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : projectName;
+        try {
+            this._db.run('BEGIN');
+            for (const planId of planIds) {
+                this._db.run(
+                    "UPDATE plans SET project = ? WHERE (plan_id = ? OR session_id = ?) AND workspace_id = ?",
+                    [effectiveProjectName, planId, planId, workspaceId]
+                );
+            }
+            this._db.run('COMMIT');
+            return await this._persist();
+        } catch (e) {
+            try { this._db.run('ROLLBACK'); } catch { }
+            console.error('[KanbanDatabase] assignPlansToProject failed:', e);
+            return false;
+        }
+    }
+
+    public async getBoardFilteredByProject(
+        workspaceId: string,
+        project: string | null,
+        repoScope: string | null
+    ): Promise<KanbanPlanRecord[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        // Translate sentinel to empty-string filter for unassigned plans
+        const effectiveProject = project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : project;
+        if (effectiveProject === null && !repoScope) {
+            return this.getBoard(workspaceId);
+        }
+        let sql = `SELECT ${PLAN_COLUMNS} FROM plans WHERE workspace_id = ? AND status = 'active'`;
+        const params: unknown[] = [workspaceId];
+        if (effectiveProject !== null && effectiveProject !== undefined) {
+            sql += ' AND project = ?';
+            params.push(effectiveProject);
+        }
+        if (repoScope) {
+            sql += " AND repo_scope IN (?, '')";
+            params.push(repoScope);
+        }
+        sql += ' ORDER BY updated_at DESC';
+        const stmt = this._db.prepare(sql, params);
+        return this._readRows(stmt);
+    }
+
+    public async getPlansByColumn(
+        workspaceId: string,
+        column: string,
+        projectFilter?: string | null
+    ): Promise<KanbanPlanRecord[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        // For COMPLETED column, show status='completed' plans
+        // For other columns, show status='active' plans
+        const statusFilter = column === 'COMPLETED'
+            ? `status = 'completed'`
+            : `status = 'active'`;
+        const effectiveProject = projectFilter === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : projectFilter;
+
+        let sql = `SELECT ${PLAN_COLUMNS} FROM plans
+                   WHERE workspace_id = ? AND ${statusFilter} AND kanban_column = ?`;
+        const params: unknown[] = [workspaceId, column];
+
+        if (effectiveProject !== null && effectiveProject !== undefined) {
+            sql += ' AND project = ?';
+            params.push(effectiveProject);
+        }
+
+        sql += ' ORDER BY updated_at DESC';
+        const stmt = this._db.prepare(sql, params);
+        return this._readRows(stmt);
+    }
+
 
     public async getCompletedPlans(workspaceId: string, limit: number = 100): Promise<KanbanPlanRecord[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
@@ -819,15 +2166,75 @@ export class KanbanDatabase {
         return this._readRows(stmt);
     }
 
+    /** @deprecated Superseded by getCompletedPlansFilteredByProject which also accepts a project filter. */
+    public async getCompletedPlansFiltered(
+        workspaceId: string,
+        repoScope: string | null,
+        limit: number = 100
+    ): Promise<KanbanPlanRecord[]> {
+        if (!repoScope) {
+            return this.getCompletedPlans(workspaceId, limit);
+        }
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE workspace_id = ? AND status = 'completed' AND repo_scope IN (?, '')
+             ORDER BY updated_at DESC
+             LIMIT ?`,
+            [workspaceId, repoScope, limit]
+        );
+        return this._readRows(stmt);
+    }
+
+    public async getCompletedPlansFilteredByProject(
+        workspaceId: string,
+        project: string | null,
+        repoScope: string | null,
+        limit: number = 100
+    ): Promise<KanbanPlanRecord[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const effectiveProject = project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : project;
+        if (effectiveProject === null && !repoScope) {
+            return this.getCompletedPlans(workspaceId, limit);
+        }
+        let sql = `SELECT ${PLAN_COLUMNS} FROM plans WHERE workspace_id = ? AND status = 'completed'`;
+        const params: unknown[] = [workspaceId];
+        if (effectiveProject !== null && effectiveProject !== undefined) {
+            sql += ' AND project = ?';
+            params.push(effectiveProject);
+        }
+        if (repoScope) {
+            sql += " AND repo_scope IN (?, '')";
+            params.push(repoScope);
+        }
+        sql += ' ORDER BY updated_at DESC LIMIT ?';
+        params.push(limit);
+        const stmt = this._db.prepare(sql, params);
+        return this._readRows(stmt);
+    }
+
+    /** @deprecated session_id is no longer the unique key; use getPlanByPlanFile instead. */
     public async getPlanBySessionId(sessionId: string): Promise<KanbanPlanRecord | null> {
         if (!(await this.ensureReady()) || !this._db) return null;
+        // First try session_id (legacy path)
         const stmt = this._db.prepare(
             `SELECT ${PLAN_COLUMNS} FROM plans
              WHERE session_id = ? LIMIT 1`,
             [sessionId]
         );
         const rows = this._readRows(stmt);
-        return rows.length > 0 ? rows[0] : null;
+        if (rows.length > 0) { return rows[0]; }
+        // Fallback: sessionId might actually be a planId for file-based plans (sessionId is empty)
+        if (sessionId) {
+            const stmt2 = this._db.prepare(
+                `SELECT ${PLAN_COLUMNS} FROM plans
+                 WHERE plan_id = ? LIMIT 1`,
+                [sessionId]
+            );
+            const rows2 = this._readRows(stmt2);
+            return rows2.length > 0 ? rows2[0] : null;
+        }
+        return null;
     }
 
     public async findPlanByClickUpTaskId(
@@ -889,7 +2296,7 @@ export class KanbanDatabase {
 
     public async getPlanByPlanFile(planFile: string, workspaceId: string): Promise<KanbanPlanRecord | null> {
         if (!(await this.ensureReady()) || !this._db) return null;
-        const normalized = this._normalizePath(planFile);
+        const normalized = this._ensureRelativePlanFile(planFile);
         const stmt = this._db.prepare(
             `SELECT ${PLAN_COLUMNS} FROM plans
              WHERE plan_file = ? AND workspace_id = ?
@@ -908,7 +2315,64 @@ export class KanbanDatabase {
         return rows.length > 0 ? rows[0] : null;
     }
 
-    /** Returns all session IDs in the DB (any status) in a single query. */
+    public async getPlanByBrainSourcePath(brainSourcePath: string, workspaceId: string): Promise<KanbanPlanRecord | null> {
+        if (!(await this.ensureReady()) || !this._db) return null;
+        const normalized = this._ensureRelativePlanFile(brainSourcePath);
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE workspace_id = ? AND status = 'active' AND brain_source_path = ?
+             ORDER BY updated_at DESC LIMIT 1`,
+            [workspaceId, normalized]
+        );
+        const rows = this._readRows(stmt);
+        return rows.length > 0 ? rows[0] : null;
+    }
+
+    public async getPlanByTopic(topic: string, workspaceId: string): Promise<KanbanPlanRecord | null> {
+        if (!(await this.ensureReady()) || !this._db) return null;
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE LOWER(topic) = LOWER(?)
+               AND workspace_id = ?
+               AND status = 'active'
+             LIMIT 1`,
+            [topic, workspaceId]
+        );
+        const rows = this._readRows(stmt);
+        return rows.length > 0 ? rows[0] : null;
+    }
+
+    public async getPlanByTopicAndColumn(topic: string, kanbanColumn: string, workspaceId: string): Promise<KanbanPlanRecord | null> {
+        if (!(await this.ensureReady()) || !this._db) return null;
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE LOWER(topic) = LOWER(?)
+               AND kanban_column = ?
+               AND workspace_id = ?
+               AND status = 'active'
+             LIMIT 1`,
+            [topic, kanbanColumn, workspaceId]
+        );
+        const rows = this._readRows(stmt);
+        return rows.length > 0 ? rows[0] : null;
+    }
+
+    /** Returns all plan files in the DB (any status) in a single query. */
+    public async getPlanFileSet(): Promise<Set<string>> {
+        if (!(await this.ensureReady()) || !this._db) return new Set();
+        const stmt = this._db.prepare('SELECT plan_file FROM plans');
+        const ids = new Set<string>();
+        try {
+            while (stmt.step()) {
+                ids.add(String(stmt.getAsObject().plan_file));
+            }
+        } finally {
+            stmt.free();
+        }
+        return ids;
+    }
+
+    /** @deprecated Use getPlanFileSet instead. */
     public async getSessionIdSet(): Promise<Set<string>> {
         if (!(await this.ensureReady()) || !this._db) return new Set();
         const stmt = this._db.prepare('SELECT session_id FROM plans');
@@ -924,20 +2388,20 @@ export class KanbanDatabase {
     }
 
     /**
-     * Batch-update topic, planFile, and (optionally) complexity, tags, and dependencies
+     * Batch-update topic, planFile, and (optionally) complexity, tags, and repoScope
      * for multiple plans in one transaction + persist.
      *
      * @param options.preserveTimestamps - Pass `true` for background/system operations
      *   (e.g. self-healing complexity or tags). Pass `false` (or omit) ONLY for genuine
      *   user-initiated actions that should update the "last edited" timestamp.
      */
-    public async updateMetadataBatch(updates: Array<{
-        sessionId: string;
-        topic: string;
+    public async updateMetadataBatchByPlanFile(updates: Array<{
         planFile: string;
+        workspaceId: string;
+        topic: string;
         complexity?: string;
         tags?: string;
-        dependencies?: string;
+        repoScope?: string;
     }>, options?: { preserveTimestamps?: boolean }): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
         if (updates.length === 0) return true;
@@ -946,7 +2410,7 @@ export class KanbanDatabase {
         try {
             for (const u of updates) {
                 const setClauses = ['topic = ?', 'plan_file = ?'];
-                const params: unknown[] = [u.topic, this._normalizePath(u.planFile)];
+                const params: unknown[] = [u.topic, this._ensureRelativePlanFile(u.planFile)];
 
                 if (!options?.preserveTimestamps) {
                     const now = new Date().toISOString();
@@ -962,14 +2426,70 @@ export class KanbanDatabase {
                     setClauses.push('tags = ?');
                     params.push(u.tags);
                 }
-                if (typeof u.dependencies === 'string') {
-                    setClauses.push('dependencies = ?');
-                    params.push(u.dependencies);
+                if (typeof u.repoScope === 'string') {
+                    setClauses.push('repo_scope = ?');
+                    params.push(u.repoScope);
                 }
 
-                params.push(u.sessionId);
+                const normalized = this._ensureRelativePlanFile(u.planFile);
+                params.push(normalized);
+                params.push(u.workspaceId);
                 this._db.run(
-                    `UPDATE plans SET ${setClauses.join(', ')} WHERE session_id = ?`,
+                    `UPDATE plans SET ${setClauses.join(', ')} WHERE plan_file = ? AND workspace_id = ?`,
+                    params
+                );
+            }
+            this._db.run('COMMIT');
+        } catch (error) {
+            try { this._db.run('ROLLBACK'); } catch { }
+            console.error('[KanbanDatabase] Failed to batch update metadata:', error);
+            return false;
+        }
+        return this._persist();
+    }
+
+    /** @deprecated session_id is no longer the unique key; use updateMetadataBatchByPlanFile instead. */
+    public async updateMetadataBatch(updates: Array<{
+        sessionId: string;
+        topic: string;
+        planFile: string;
+        complexity?: string;
+        tags?: string;
+        repoScope?: string;
+    }>, options?: { preserveTimestamps?: boolean }): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        if (updates.length === 0) return true;
+
+        this._db.run('BEGIN');
+        try {
+            for (const u of updates) {
+                const plan = await this.getPlanBySessionId(u.sessionId);
+                if (!plan) continue;
+                const setClauses = ['topic = ?', 'plan_file = ?'];
+                const params: unknown[] = [u.topic, this._ensureRelativePlanFile(u.planFile)];
+
+                if (!options?.preserveTimestamps) {
+                    const now = new Date().toISOString();
+                    setClauses.push('updated_at = ?');
+                    params.push(now);
+                }
+
+                if (u.complexity && u.complexity !== 'Unknown') {
+                    setClauses.push('complexity = ?');
+                    params.push(u.complexity);
+                }
+                if (typeof u.tags === 'string') {
+                    setClauses.push('tags = ?');
+                    params.push(u.tags);
+                }
+                if (typeof u.repoScope === 'string') {
+                    setClauses.push('repo_scope = ?');
+                    params.push(u.repoScope);
+                }
+
+                params.push(plan.planId);
+                this._db.run(
+                    `UPDATE plans SET ${setClauses.join(', ')} WHERE plan_id = ?`,
                     params
                 );
             }
@@ -983,6 +2503,30 @@ export class KanbanDatabase {
     }
 
     /** Batch-complete multiple plans in one transaction + persist. */
+    public async completeMultipleByPlanFile(entries: Array<{ planFile: string; workspaceId: string }>): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        if (entries.length === 0) return true;
+
+        const now = new Date().toISOString();
+        this._db.run('BEGIN');
+        try {
+            for (const { planFile, workspaceId } of entries) {
+                const normalized = this._ensureRelativePlanFile(planFile);
+                this._db.run(
+                    'UPDATE plans SET status = ?, kanban_column = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+                    ['completed', 'COMPLETED', now, normalized, workspaceId]
+                );
+            }
+            this._db.run('COMMIT');
+        } catch (error) {
+            try { this._db.run('ROLLBACK'); } catch { }
+            console.error('[KanbanDatabase] Failed to batch-complete plans:', error);
+            return false;
+        }
+        return this._persist();
+    }
+
+    /** @deprecated session_id is no longer the unique key; use completeMultipleByPlanFile instead. */
     public async completeMultiple(sessionIds: string[]): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
         if (sessionIds.length === 0) return true;
@@ -991,9 +2535,11 @@ export class KanbanDatabase {
         this._db.run('BEGIN');
         try {
             for (const sessionId of sessionIds) {
+                const plan = await this.getPlanBySessionId(sessionId);
+                if (!plan) continue;
                 this._db.run(
-                    'UPDATE plans SET status = ?, kanban_column = ?, updated_at = ? WHERE session_id = ?',
-                    ['completed', 'COMPLETED', now, sessionId]
+                    'UPDATE plans SET status = ?, kanban_column = ?, updated_at = ? WHERE plan_id = ?',
+                    ['completed', 'COMPLETED', now, plan.planId]
                 );
             }
             this._db.run('COMMIT');
@@ -1093,24 +2639,23 @@ export class KanbanDatabase {
         if (!(await this.ensureReady()) || !this._db) return 0;
 
         const stmt = this._db.prepare(
-            `SELECT session_id, plan_file, source_type FROM plans
+            `SELECT plan_file, source_type FROM plans
              WHERE workspace_id = ? AND status = 'active' AND plan_file IS NOT NULL AND plan_file != ''`,
             [workspaceId]
         );
-        const rows: Array<{ session_id: string; plan_file: string; source_type: string }> = [];
+        const rows: Array<{ plan_file: string; source_type: string }> = [];
         while (stmt.step()) {
             rows.push(stmt.getAsObject() as any);
         }
         stmt.free();
 
-        const missingCandidates: Array<{ session_id: string; plan_file: string; absPath: string }> = [];
+        const missingCandidates: Array<{ plan_file: string; absPath: string }> = [];
         for (const row of rows) {
             if (row.source_type === 'brain') continue;
             const absPath = resolvePath(row.plan_file);
             try {
                 if (!fs.existsSync(absPath)) {
                     missingCandidates.push({
-                        session_id: row.session_id,
                         plan_file: row.plan_file,
                         absPath
                     });
@@ -1132,11 +2677,11 @@ export class KanbanDatabase {
             try {
                 if (!fs.existsSync(candidate.absPath)) {
                     this._db.run(
-                        "UPDATE plans SET status = 'deleted', updated_at = ? WHERE session_id = ? AND workspace_id = ?",
-                        [now, candidate.session_id, workspaceId]
+                        "UPDATE plans SET status = 'deleted', updated_at = ? WHERE plan_file = ? AND workspace_id = ?",
+                        [now, candidate.plan_file, workspaceId]
                     );
                     purged++;
-                    console.log(`[KanbanDatabase] Tombstoned orphaned plan after confirmation delay: ${candidate.session_id} (missing file: ${candidate.plan_file})`);
+                    console.log(`[KanbanDatabase] Tombstoned orphaned plan after confirmation delay: ${candidate.plan_file}`);
                 }
             } catch {
                 // If we can't check the file, skip it — don't tombstone on error
@@ -1299,6 +2844,68 @@ export class KanbanDatabase {
             console.log(`[KanbanDatabase] Removed ${emptyCount} brain plan(s) with empty plan_file`);
         }
 
+        // Delete rows with malformed plan_file containing absolute-looking path segments directly after plans/ or at the root
+        const malformedPlanFileStmt = this._db.prepare(
+            `SELECT COUNT(*) as cnt FROM plans
+             WHERE workspace_id = ? AND status = 'active'
+               AND (
+                 plan_file LIKE '/Users/%' OR plan_file LIKE 'Users/%' OR
+                 plan_file LIKE '/home/%' OR plan_file LIKE 'home/%' OR
+                 plan_file LIKE '.switchboard/plans/Users/%' OR plan_file LIKE '.switchboard/plans/home/%'
+               )`,
+            [workspaceId]
+        );
+        let malformedPlanFileCount = 0;
+        try {
+            if (malformedPlanFileStmt.step()) {
+                malformedPlanFileCount = (malformedPlanFileStmt.getAsObject() as any).cnt as number;
+            }
+        } finally {
+            malformedPlanFileStmt.free();
+        }
+        if (malformedPlanFileCount > 0) {
+            this._db.run(
+                `DELETE FROM plans
+                 WHERE workspace_id = ? AND status = 'active'
+                   AND (
+                     plan_file LIKE '/Users/%' OR plan_file LIKE 'Users/%' OR
+                     plan_file LIKE '/home/%' OR plan_file LIKE 'home/%' OR
+                     plan_file LIKE '.switchboard/plans/Users/%' OR plan_file LIKE '.switchboard/plans/home/%'
+                   )`,
+                [workspaceId]
+            );
+            removed += malformedPlanFileCount;
+            console.log(`[KanbanDatabase] Removed ${malformedPlanFileCount} plan(s) with malformed plan_file`);
+        }
+
+        // Delete rows where mirror_path contains path separators (not a basename)
+        const malformedMirrorStmt = this._db.prepare(
+            `SELECT COUNT(*) as cnt FROM plans
+             WHERE workspace_id = ? AND status = 'active'
+               AND mirror_path IS NOT NULL AND mirror_path != ''
+               AND mirror_path LIKE '%/%'`,
+            [workspaceId]
+        );
+        let malformedMirrorCount = 0;
+        try {
+            if (malformedMirrorStmt.step()) {
+                malformedMirrorCount = (malformedMirrorStmt.getAsObject() as any).cnt as number;
+            }
+        } finally {
+            malformedMirrorStmt.free();
+        }
+        if (malformedMirrorCount > 0) {
+            this._db.run(
+                `DELETE FROM plans
+                 WHERE workspace_id = ? AND status = 'active'
+                   AND mirror_path IS NOT NULL AND mirror_path != ''
+                   AND mirror_path LIKE '%/%'`,
+                [workspaceId]
+            );
+            removed += malformedMirrorCount;
+            console.log(`[KanbanDatabase] Removed ${malformedMirrorCount} plan(s) with malformed mirror_path`);
+        }
+
         if (removed > 0) {
             await this._persist();
         }
@@ -1392,7 +2999,7 @@ export class KanbanDatabase {
     public async updateBrainPaths(sessionId: string, brainSourcePath: string, mirrorPath: string): Promise<boolean> {
         return this._persistedUpdate(
             'UPDATE plans SET brain_source_path = ?, mirror_path = ?, updated_at = ? WHERE session_id = ?',
-            [this._normalizePath(brainSourcePath), this._normalizePath(mirrorPath), new Date().toISOString(), sessionId]
+            [this._ensureRelativePlanFile(brainSourcePath), this._ensureRelativePlanFile(mirrorPath), new Date().toISOString(), sessionId]
         );
     }
 
@@ -1430,11 +3037,11 @@ export class KanbanDatabase {
      * If so, reload the entire in-memory database from disk.
      * Debounced to avoid excessive fs.stat() calls during rapid query bursts.
      */
-    private async _reloadIfStale(): Promise<void> {
+    private async _reloadIfStale(forceReload: boolean = false): Promise<void> {
         if (!this._db) return; // Not initialized yet — _initialize() will load fresh
 
         const now = Date.now();
-        if (now - this._lastStatCheckMs < KanbanDatabase.STAT_DEBOUNCE_MS) return;
+        if (!forceReload && now - this._lastStatCheckMs < KanbanDatabase.STAT_DEBOUNCE_MS) return;
         this._lastStatCheckMs = now;
 
         try {
@@ -1458,8 +3065,26 @@ export class KanbanDatabase {
             this._db = new SQL.Database(new Uint8Array(fileBuffer));
 
             // Re-apply schema and migrations (idempotent — safe to re-run)
-            this._db.exec(SCHEMA_SQL);
-            this._runMigrations();
+            try {
+                this._safeExec('SCHEMA_SQL (reload)', SCHEMA_SQL);
+            } catch (schemaErr) {
+                const msg = schemaErr instanceof Error ? schemaErr.message : String(schemaErr);
+                if (msg.includes('UNIQUE constraint failed: plans.plan_file')) {
+                    console.warn('[KanbanDatabase] SCHEMA_SQL reload: duplicate plan_file rows detected, deduplicating before retry');
+                    this._db.run(
+                        `DELETE FROM plans WHERE rowid NOT IN (
+                            SELECT MAX(rowid) FROM plans
+                            WHERE plan_file IS NOT NULL AND plan_file != ''
+                            GROUP BY plan_file, workspace_id
+                        ) AND plan_file IS NOT NULL AND plan_file != ''`
+                    );
+                    this._safeExec('SCHEMA_SQL retry (reload)', SCHEMA_SQL);
+                } else {
+                    throw schemaErr;
+                }
+            }
+            await this._runMigrations();
+            this._ensureSchemaColumns();
 
             this._loadedMtime = currentMtime;
             KanbanDatabase._lastLoadedMtimes.set(this._dbPath, currentMtime);
@@ -1471,10 +3096,20 @@ export class KanbanDatabase {
 
     private async _initialize(): Promise<boolean> {
         try {
-            await fs.promises.mkdir(path.dirname(this._dbPath), { recursive: true });
             const SQL = await KanbanDatabase._loadSqlJs();
+            console.log(`[KanbanDatabase._initialize] sql.js loaded, checking ${this._dbPath}, exists=${fs.existsSync(this._dbPath)}`);
 
             if (fs.existsSync(this._dbPath)) {
+                // Guard: only create directories within .switchboard or workspace root
+                const parentDir = path.resolve(path.dirname(this._dbPath));
+                const switchboardDir = path.resolve(path.join(this._workspaceRoot, '.switchboard'));
+                const workspaceRoot = path.resolve(this._workspaceRoot);
+                if (parentDir !== switchboardDir && parentDir !== workspaceRoot && !parentDir.startsWith(switchboardDir + path.sep)) {
+                    console.error(`[KanbanDatabase] Refusing to create directory outside .switchboard: ${parentDir}`);
+                    this._lastInitError = `Database parent directory outside .switchboard: ${parentDir}`;
+                    return false;
+                }
+                await fs.promises.mkdir(parentDir, { recursive: true });
                 const stats = await fs.promises.stat(this._dbPath);
                 const fileMtime = stats.mtimeMs;
 
@@ -1497,19 +3132,40 @@ export class KanbanDatabase {
                 this._db = new SQL.Database(new Uint8Array(existing));
                 console.log(`[KanbanDatabase] Loaded existing DB from ${this._dbPath} (${existing.length} bytes)`);
             } else {
+                // LAZY CHANGE: Don't create the DB file - just mark as unavailable
                 KanbanDatabase._lastLoadedMtimes.delete(this._dbPath);
                 this._loadedMtime = 0;
-                this._db = new SQL.Database();
-                console.log(`[KanbanDatabase] Created new empty DB at ${this._dbPath}`);
+                this._db = null;
+                this._lastInitError = 'Database file does not exist (not auto-creating)';
+                console.log(`[KanbanDatabase] No DB exists at ${this._dbPath} - not creating`);
+                return false;  // <-- Key change: return false instead of creating
             }
 
             if (!this._db) {
                 throw new Error('Failed to initialize SQLite database instance.');
             }
-            this._db.exec(SCHEMA_SQL);
+            try {
+                this._safeExec('SCHEMA_SQL', SCHEMA_SQL);
+            } catch (schemaErr) {
+                const msg = schemaErr instanceof Error ? schemaErr.message : String(schemaErr);
+                if (msg.includes('UNIQUE constraint failed: plans.plan_file')) {
+                    console.warn('[KanbanDatabase] SCHEMA_SQL: duplicate plan_file rows detected, deduplicating before retry');
+                    this._db.run(
+                        `DELETE FROM plans WHERE rowid NOT IN (
+                            SELECT MAX(rowid) FROM plans
+                            WHERE plan_file IS NOT NULL AND plan_file != ''
+                            GROUP BY plan_file, workspace_id
+                        ) AND plan_file IS NOT NULL AND plan_file != ''`
+                    );
+                    this._safeExec('SCHEMA_SQL retry', SCHEMA_SQL);
+                } else {
+                    throw schemaErr;
+                }
+            }
 
             // Run migrations for existing databases
-            this._runMigrations();
+            await this._runMigrations();
+            this._ensureSchemaColumns();
 
             // Persist migration changes (new tables/columns) to disk
             await this._persist();
@@ -1539,6 +3195,15 @@ export class KanbanDatabase {
             }
 
             this._lastInitError = null;
+
+            // V15: Trigger background migration from JSON registry if needed
+            let wsId = await this.getWorkspaceId();
+            if (!wsId) {
+                // Fallback: derived from root if not yet in config
+                wsId = crypto.createHash('sha256').update(this._workspaceRoot).digest('hex').slice(0, 16);
+            }
+            void this.migrateFromJsonRegistry(this._workspaceRoot, wsId);
+
             return true;
         } catch (error) {
             this._db = null;
@@ -1554,6 +3219,14 @@ export class KanbanDatabase {
             }
             this._lastInitError = errorMessage;
             console.error('[KanbanDatabase] Initialization failed:', error);
+            console.error('[KanbanDatabase] Init failure stack:', error instanceof Error ? error.stack : 'no stack');
+            try {
+                const vscode = require('vscode');
+                const channel = vscode.window.createOutputChannel('Switchboard');
+                channel.appendLine(`[KanbanDatabase] INIT FAILED for ${this._dbPath}: ${errorMessage}`);
+                channel.appendLine(`[KanbanDatabase] Stack: ${error instanceof Error ? error.stack : 'no stack'}`);
+                channel.show();
+            } catch {}
             return false;
         }
     }
@@ -1580,7 +3253,94 @@ export class KanbanDatabase {
         }
     }
 
-    private _runMigrations(): void {
+    /**
+     * Fix any plan_file values stored as relative paths by resolving them to
+     * absolute paths using this._workspaceRoot.
+     *
+     * Called once per initialization, after _runMigrations().
+     * Wraps all writes in a single transaction for atomicity.
+     * Safe to call on a fully-fixed database (reads 0 rows → exits early).
+     */
+    private async _fixRelativePaths(): Promise<void> {
+        // DISABLED: This method converted relative plan_file paths to absolute,
+        // which conflicts with the V20+ invariant that plan_file must be relative
+        // (the watcher always queries with relative paths). V21 migration handles
+        // any remaining absolute paths.
+        console.log('[KanbanDatabase] _fixRelativePaths: disabled — plan_file must stay relative');
+    }
+
+    /**
+     * Convert absolute plan_file paths to relative paths by stripping workspace root.
+     *
+     * Called once per initialization, after _fixRelativePaths() (V17).
+     * Wraps all writes in a single transaction for atomicity.
+     * Safe to call on a fully-converted database (reads 0 rows → exits early).
+     *
+     * Note on V17/V18 interaction: _fixRelativePaths() (V17) converts relative→absolute.
+     * This method (V18) converts absolute→relative. V17 only fires on records with
+     * needs_path_fix=1. Once those records are converted to absolute by V17, V18 picks
+     * them up via needs_relative_conversion=1. After V18 processes a record, both
+     * sentinel columns are 0, so neither sweep touches it again. Safe steady state.
+     */
+    private async _convertAbsoluteToRelativePaths(): Promise<void> {
+        if (!this._db) return;
+
+        // Guard: only run if V18 migration has been applied (column exists)
+        if (!this._planTableHasColumn('needs_relative_conversion')) {
+            console.log('[KanbanDatabase] _convertAbsoluteToRelativePaths: needs_relative_conversion column missing, skipping sweep');
+            return;
+        }
+
+        const workspaceId = await this.getWorkspaceId();
+
+        // Read all records flagged for conversion (scoped to this workspace)
+        const stmt = this._db.prepare(
+            `SELECT plan_file, workspace_id FROM plans
+         WHERE needs_relative_conversion = 1
+           AND (workspace_id = ? OR workspace_id IS NULL)`,
+            [workspaceId]
+        );
+
+        const toConvert: Array<{ planFile: string; rowWorkspaceId: string }> = [];
+        try {
+            while (stmt.step()) {
+                const row = stmt.getAsObject();
+                toConvert.push({
+                    planFile: String(row.plan_file || ''),
+                    rowWorkspaceId: String(row.workspace_id || '')
+                });
+            }
+        } finally {
+            stmt.free();
+        }
+
+        if (toConvert.length === 0) {
+            console.log('[KanbanDatabase] _convertAbsoluteToRelativePaths: no records need conversion');
+            return;
+        }
+
+        this._db.run('BEGIN');
+        try {
+            for (const { planFile, rowWorkspaceId } of toConvert) {
+                const relativePath = this._ensureRelativePlanFile(planFile);
+                this._db.run(
+                    'UPDATE plans SET plan_file = ?, needs_relative_conversion = 0, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+                    [relativePath, new Date().toISOString(), planFile, rowWorkspaceId]
+                );
+                console.log(`[KanbanDatabase] Converted absolute to relative: ${planFile} → ${relativePath}`);
+            }
+            this._db.run('COMMIT');
+        } catch (err) {
+            try { this._db.run('ROLLBACK'); } catch { /* best effort */ }
+            console.error('[KanbanDatabase] _convertAbsoluteToRelativePaths: transaction rolled back', err);
+            return;
+        }
+
+        await this._persist();
+        console.log(`[KanbanDatabase] _convertAbsoluteToRelativePaths: converted ${toConvert.length} record(s)`);
+    }
+
+    private async _runMigrations(): Promise<void> {
         if (!this._db) return;
 
         // V2: add brain_source_path, mirror_path columns + config table + status index
@@ -1597,41 +3357,39 @@ export class KanbanDatabase {
             );
         } catch { /* best effort */ }
 
-        // V3: consolidate workspace_ids — if config has no workspace_id but plans exist,
-        // adopt the most-used workspace_id and unify all plans under it
+        // V3: consolidate workspace_ids — config is authoritative.
+        // If config has no workspace_id, generate a stable SHA256 from workspaceRoot
+        // and unify ALL plans under it (plans must follow config, not vice versa).
         try {
             const cfgStmt = this._db.prepare("SELECT value FROM config WHERE key = 'workspace_id'");
             const hasWsId = cfgStmt.step();
             cfgStmt.free();
 
-            if (!hasWsId) {
-                const domStmt = this._db.prepare(
-                    "SELECT workspace_id FROM plans GROUP BY workspace_id ORDER BY COUNT(*) DESC LIMIT 1"
+            let canonicalWsId = '';
+            if (hasWsId) {
+                canonicalWsId = String(this._db.prepare("SELECT value FROM config WHERE key = 'workspace_id'").getAsObject().value);
+            } else {
+                // Generate stable SHA256 from workspaceRoot (same as V15 new DB path)
+                canonicalWsId = crypto.createHash('sha256').update(this._workspaceRoot).digest('hex').slice(0, 16);
+                this._db.run(
+                    "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
+                    ['workspace_id', canonicalWsId]
                 );
-                if (domStmt.step()) {
-                    const dominantWsId = String(domStmt.getAsObject().workspace_id);
-                    domStmt.free();
-                    // Set it in config
-                    this._db.run(
-                        "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
-                        ['workspace_id', dominantWsId]
-                    );
-                    // Unify all plans under the dominant workspace_id
-                    this._db.run(
-                        "UPDATE plans SET workspace_id = ? WHERE workspace_id != ?",
-                        [dominantWsId, dominantWsId]
-                    );
-                    console.log(`[KanbanDatabase] V3 migration: consolidated workspace_id to ${dominantWsId}`);
-                } else {
-                    domStmt.free();
-                }
+            }
+
+            if (canonicalWsId) {
+                this._db.run(
+                    "UPDATE plans SET workspace_id = ? WHERE workspace_id != ?",
+                    [canonicalWsId, canonicalWsId]
+                );
+                console.log(`[KanbanDatabase] V3 migration: unified all plans under config workspace_id ${canonicalWsId}`);
             }
         } catch (e) {
             console.error('[KanbanDatabase] V3 migration workspace consolidation failed:', e);
         }
 
-        // V6: fix workspace_id mismatch — if config workspace_id exists but doesn't match the
-        // dominant plans workspace_id, update config to match the plans (the plans are authoritative)
+        // V6: fix workspace_id mismatch — config is authoritative.
+        // If any plans have a different workspace_id than config, update plans to match config.
         try {
             const cfgStmt = this._db.prepare("SELECT value FROM config WHERE key = 'workspace_id'");
             const hasCfgWsId = cfgStmt.step();
@@ -1639,27 +3397,11 @@ export class KanbanDatabase {
             cfgStmt.free();
 
             if (cfgWsId) {
-                const domStmt = this._db.prepare(
-                    "SELECT workspace_id, COUNT(*) as cnt FROM plans GROUP BY workspace_id ORDER BY cnt DESC LIMIT 1"
+                this._db.run(
+                    "UPDATE plans SET workspace_id = ? WHERE workspace_id != ?",
+                    [cfgWsId, cfgWsId]
                 );
-                if (domStmt.step()) {
-                    const dominantWsId = String(domStmt.getAsObject().workspace_id);
-                    domStmt.free();
-                    if (dominantWsId && dominantWsId !== cfgWsId) {
-                        // Config has a stale/wrong workspace_id; unify under the dominant one
-                        this._db.run(
-                            "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
-                            ['workspace_id', dominantWsId]
-                        );
-                        this._db.run(
-                            "UPDATE plans SET workspace_id = ? WHERE workspace_id != ?",
-                            [dominantWsId, dominantWsId]
-                        );
-                        console.log(`[KanbanDatabase] V6 migration: corrected workspace_id from ${cfgWsId} to ${dominantWsId}`);
-                    }
-                } else {
-                    domStmt.free();
-                }
+                console.log(`[KanbanDatabase] V6 migration: unified all plans under config workspace_id ${cfgWsId}`);
             }
         } catch (e) {
             console.error('[KanbanDatabase] V6 migration workspace_id fix failed:', e);
@@ -1722,16 +3464,389 @@ export class KanbanDatabase {
             console.error('[KanbanDatabase] V10 completed-status repair failed:', e);
         }
 
-        // V11: remove abandoned internal ClickUp automation fields.
-        try {
-            this._dropLegacyClickUpAutomationColumns();
-        } catch (e) {
-            console.error('[KanbanDatabase] V11 ClickUp automation cleanup failed:', e);
-        }
-
         // V12: add Linear issue tracking field and lookup index.
         for (const sql of MIGRATION_V12_SQL) {
             try { this._db.exec(sql); } catch { /* column/index already exists */ }
+        }
+
+        // V13: add repo-scope metadata and filtered-query index.
+        for (const sql of MIGRATION_V13_SQL) {
+            try { this._db.exec(sql); } catch { /* column/index already exists */ }
+        }
+
+        // V14: add kanban_meta table for parser versioning and backfill tracking.
+        for (const sql of MIGRATION_V14_SQL) {
+            try { this._db.exec(sql); } catch { /* table already exists */ }
+        }
+
+        // V15: add imported_docs and import_sync_meta tables for centralized import registry.
+        for (const sql of MIGRATION_V15_SQL) {
+            try { this._db.exec(sql); } catch (e) { 
+                /* table/index already exists */ 
+                console.debug('[KanbanDatabase] V15 migration part skipped:', e);
+            }
+        }
+
+        // V16: clear incorrect repo_scope values from Bug 2.
+        for (const sql of MIGRATION_V16_SQL) {
+            try { this._db.exec(sql); } catch (e) {
+                console.debug('[KanbanDatabase] V16 migration failed:', e);
+            }
+        }
+
+        // V17: add needs_path_fix sentinel and mark relative-path records for runtime repair.
+        for (const sql of MIGRATION_V17_SQL) {
+            try { this._db.exec(sql); } catch (e) {
+                // 'needs_path_fix' column may already exist if migration was previously applied.
+                console.debug('[KanbanDatabase] V17 migration step skipped (already applied):', e);
+            }
+        }
+
+        // V18: add needs_relative_conversion sentinel and mark absolute-path records for runtime conversion.
+        // After V18, the invariant is: DB stores relative paths only; _readRows() expands to absolute.
+        for (const sql of MIGRATION_V18_SQL) {
+            try { this._db.exec(sql); } catch (e) {
+                // 'needs_relative_conversion' column may already exist if migration was previously applied.
+                console.debug('[KanbanDatabase] V18 migration step skipped (already applied):', e);
+            }
+        }
+
+        // V19: deduplicate plans by session_id and enforce unique index.
+        // Version-gated because the DELETE is destructive and non-idempotent.
+        // (Deviation from try/catch pattern used by V2–V18: those migrations are
+        // idempotent or add-only, so re-execution is safe. V19's DELETE is not.)
+        const v19 = await this.getMigrationVersion();
+        if (v19 < 19) {
+            for (const sql of MIGRATION_V19_SQL) {
+                try { this._db.exec(sql); } catch (e) {
+                    console.debug('[KanbanDatabase] V19 migration step skipped or failed:', e);
+                }
+            }
+            await this.setMigrationVersion(19);
+        }
+
+        // V20: Remove session_id UNIQUE constraint; add UNIQUE(plan_file, workspace_id).
+        // Recreates plans and plan_events tables. Version-gated because destructive.
+        // Wrapped in a transaction so any step failure rolls back safely.
+        const v20 = await this.getMigrationVersion();
+        if (v20 < 20) {
+            try {
+                this._db.exec('BEGIN');
+                let step = 0;
+                for (const sql of MIGRATION_V20_SQL) {
+                    step++;
+                    try {
+                        console.log(`[KanbanDatabase] V20 step ${step}: ${sql.substring(0, 100)}...`);
+                        this._db.exec(sql);
+                    } catch (stepErr) {
+                        console.error(`[KanbanDatabase] V20 step ${step} FAILED: ${sql.substring(0, 200)}... Error:`, stepErr);
+                        throw stepErr;
+                    }
+                }
+                this._db.exec('COMMIT');
+                await this.setMigrationVersion(20);
+                console.log('[KanbanDatabase] V20 migration completed: session_id no longer unique, plan_file+workspace_id is unique key');
+            } catch (e) {
+                try { this._db.exec('ROLLBACK'); } catch { /* rollback best-effort */ }
+                console.error('[KanbanDatabase] V20 migration FAILED — rolled back. DB unchanged. Error:', e);
+                // Do NOT stamp version 20 — migration will retry on next load.
+            }
+        }
+
+        // V21: Normalize absolute plan_file paths to relative.
+        // Some DBs (especially those that ran V20 before the path normalization fix)
+        // have plan_file stored as absolute paths like /Users/alice/.../plans/foo.md.
+        // The watcher always queries with relative paths, so it can't find these rows,
+        // tries to insert, and hits the UNIQUE(plan_file, workspace_id) constraint.
+        // This migration deduplicates collisions first, then normalizes the survivors.
+        const v21 = await this.getMigrationVersion();
+        if (v21 < 21) {
+            try {
+                this._db.exec('BEGIN');
+                const workspaceRoot = this._workspaceRoot?.replace(/\\/g, '/');
+                if (workspaceRoot) {
+                    const prefix = workspaceRoot.endsWith('/') ? workspaceRoot : workspaceRoot + '/';
+                    const prefixLen = prefix.length;
+
+                    // Step 1: Count how many absolute paths exist (for logging)
+                    const countStmt = this._db.prepare(
+                        `SELECT count(*) as cnt FROM plans WHERE plan_file LIKE ?`,
+                        [prefix + '%']
+                    );
+                    let absCount = 0;
+                    try {
+                        if (countStmt.step()) {
+                            absCount = Number(countStmt.getAsObject().cnt || 0);
+                        }
+                    } finally { countStmt.free(); }
+
+                    if (absCount > 0) {
+                        // Step 2: Deduplicate BEFORE normalizing.
+                        // Find groups where multiple absolute paths will collapse to the same
+                        // relative path + workspace_id. Keep the most recently updated row.
+                        // We do this by computing the would-be relative path and deleting
+                        // all but the newest row per (relative_path, workspace_id) group.
+                        //
+                        // First, delete duplicates among absolute-path rows only.
+                        // Two absolute paths that share the same suffix after the prefix
+                        // and the same workspace_id are duplicates.
+                        this._db.run(
+                            `DELETE FROM plans WHERE rowid IN (
+                                SELECT rowid FROM plans WHERE plan_file LIKE ?
+                                EXCEPT
+                                SELECT MAX(rowid) FROM plans WHERE plan_file LIKE ?
+                                GROUP BY substr(plan_file, ?), workspace_id
+                            )`,
+                            [prefix + '%', prefix + '%', prefixLen + 1]
+                        );
+
+                        // Also delete any absolute-path row that collides with an existing
+                        // relative-path row (same suffix, same workspace_id).
+                        this._db.run(
+                            `DELETE FROM plans WHERE rowid IN (
+                                SELECT a.rowid FROM plans a
+                                JOIN plans b ON a.workspace_id = b.workspace_id
+                                    AND substr(a.plan_file, ?) = b.plan_file
+                                WHERE a.plan_file LIKE ? AND b.plan_file NOT LIKE ?
+                            )`,
+                            [prefixLen + 1, prefix + '%', prefix + '%']
+                        );
+
+                        // Step 3: Now safe to normalize — no more collisions possible.
+                        this._db.run(
+                            `UPDATE plans SET plan_file = substr(plan_file, ?) WHERE plan_file LIKE ?`,
+                            [prefixLen + 1, prefix + '%']
+                        );
+
+                        console.log(`[KanbanDatabase] V21 migration: normalized ${absCount} absolute plan_file paths to relative`);
+                    } else {
+                        console.log('[KanbanDatabase] V21 migration: no absolute paths found, nothing to normalize');
+                    }
+                } else {
+                    console.warn('[KanbanDatabase] V21 migration: no workspaceRoot, skipping path normalization');
+                }
+                this._db.exec('COMMIT');
+                await this.setMigrationVersion(21);
+                console.log('[KanbanDatabase] V21 migration completed: plan_file paths normalized to relative');
+            } catch (e) {
+                try { this._db.exec('ROLLBACK'); } catch { /* rollback best-effort */ }
+                console.error('[KanbanDatabase] V21 migration FAILED — rolled back. DB unchanged. Error:', e);
+                // Do NOT stamp version 21 — migration will retry on next load.
+            }
+        }
+
+        // V22: Repair workspace_id fragmentation and invalid kanban_column values.
+        // Some DBs have plans stored with multiple workspace_ids (timestamps, UUIDs)
+        // instead of the single config workspace_id. This causes the board query
+        // (WHERE workspace_id = ?) to miss most plans, showing empty columns.
+        const v22 = await this.getMigrationVersion();
+        if (v22 < 22) {
+            try {
+                this._db.exec('BEGIN');
+
+                // Step 1: Get the canonical workspace_id from config.
+                const wsStmt = this._db.prepare("SELECT value FROM config WHERE key = 'workspace_id' LIMIT 1");
+                let canonicalWsId = '';
+                try {
+                    if (wsStmt.step()) {
+                        canonicalWsId = String(wsStmt.getAsObject().value || '');
+                    }
+                } finally { wsStmt.free(); }
+
+                if (!canonicalWsId) {
+                    console.warn('[KanbanDatabase] V22 migration: no workspace_id in config, skipping repair');
+                    this._db.exec('COMMIT');
+                    await this.setMigrationVersion(22);
+                } else {
+                    // Step 2: Count how many rows have a different workspace_id.
+                    const countStmt = this._db.prepare(
+                        'SELECT count(*) as cnt FROM plans WHERE workspace_id != ?',
+                        [canonicalWsId]
+                    );
+                    let mismatchedCount = 0;
+                    try {
+                        if (countStmt.step()) {
+                            mismatchedCount = Number(countStmt.getAsObject().cnt || 0);
+                        }
+                    } finally { countStmt.free(); }
+
+                    if (mismatchedCount > 0) {
+                        console.log(`[KanbanDatabase] V22 migration: found ${mismatchedCount} plans with mismatched workspace_id, repairing...`);
+
+                        // Step 3: Deduplicate BEFORE updating workspace_id.
+                        // If the same plan_file exists with multiple workspace_ids,
+                        // keep the most recently updated row and delete the rest.
+                        this._db.run(
+                            `DELETE FROM plans WHERE rowid IN (
+                                SELECT rowid FROM plans p1
+                                WHERE EXISTS (
+                                    SELECT 1 FROM plans p2
+                                    WHERE p2.plan_file = p1.plan_file
+                                      AND p2.plan_file IS NOT NULL AND p2.plan_file != ''
+                                      AND p2.workspace_id != p1.workspace_id
+                                )
+                                AND p1.rowid NOT IN (
+                                    SELECT MAX(rowid) FROM plans
+                                    WHERE plan_file IS NOT NULL AND plan_file != ''
+                                    GROUP BY plan_file
+                                )
+                            )`
+                        );
+
+                        // Step 4: Update all remaining plans to the canonical workspace_id.
+                        this._db.run(
+                            'UPDATE plans SET workspace_id = ? WHERE workspace_id != ?',
+                            [canonicalWsId, canonicalWsId]
+                        );
+
+                        console.log(`[KanbanDatabase] V22 migration: normalized ${mismatchedCount} plan workspace_ids to ${canonicalWsId}`);
+                    } else {
+                        console.log('[KanbanDatabase] V22 migration: no workspace_id fragmentation found');
+                    }
+
+                    // Step 5: Repair corrupted kanban_column values.
+                    const validColumns = ['CREATED', 'BACKLOG', 'PLAN REVIEWED', 'LEAD CODER ASSIGNED', 'CODER ASSIGNED', 'INTERN ASSIGNED', 'CODED', 'INTERN CODED', 'CODE REVIEWED', 'TESTED', 'UAT', 'COMPLETED'];
+                    const validList = validColumns.map(c => `'${c}'`).join(',');
+                    const repairStmt = this._db.prepare(
+                        `UPDATE plans SET kanban_column = 'CREATED' WHERE kanban_column NOT IN (${validList})`
+                    );
+                    let repairedColumns = 0;
+                    try {
+                        repairStmt.step();
+                        // sql.js exec doesn't return changes; we'll estimate from before/after counts
+                    } finally { repairStmt.free(); }
+                    // For sql.js, run() gives us the info object but step() doesn't. Re-run with run:
+                    this._db.run(`UPDATE plans SET kanban_column = 'CREATED' WHERE kanban_column NOT IN (${validList})`);
+
+                    this._db.exec('COMMIT');
+                    await this.setMigrationVersion(22);
+                    console.log('[KanbanDatabase] V22 migration completed: workspace_id normalized, kanban_column values repaired');
+                }
+            } catch (e) {
+                try { this._db.exec('ROLLBACK'); } catch { /* rollback best-effort */ }
+                console.error('[KanbanDatabase] V22 migration FAILED — rolled back. Error:', e);
+            }
+        }
+
+        // V23: add projects table and project column to plans for project-level grouping/filtering.
+        const v23 = await this.getMigrationVersion();
+        if (v23 < 23) {
+            let v23Failed = false;
+            for (const sql of MIGRATION_V23_SQL) {
+                try { this._db.exec(sql); } catch (e) {
+                    const msg = e instanceof Error ? e.message : String(e);
+                    // Distinguish "already exists" (harmless) from real failures
+                    if (msg.includes('already exists') || msg.includes('duplicate column')) {
+                        console.debug('[KanbanDatabase] V23 migration step skipped (already exists):', msg);
+                    } else {
+                        console.error('[KanbanDatabase] V23 migration step FAILED:', msg);
+                        v23Failed = true;
+                    }
+                }
+            }
+            if (!v23Failed) {
+                await this.setMigrationVersion(23);
+                console.log('[KanbanDatabase] V23 migration completed: projects table and plans.project column added');
+            } else {
+                console.error('[KanbanDatabase] V23 migration had failures — version NOT stamped. _ensureSchemaColumns() will reconcile.');
+            }
+        }
+
+        // V24: Remove path column from worktrees table — paths derived from git at read time
+        // Feature was never used, so just drop and recreate with new schema.
+        const v24 = await this.getMigrationVersion();
+        if (v24 < 24) {
+            for (const sql of MIGRATION_V24_SQL) {
+                try { this._db.exec(sql); } catch { /* ignore */ }
+            }
+            await this.setMigrationVersion(24);
+            console.log('[KanbanDatabase] V24 migration completed: worktrees table recreated without path column');
+        }
+
+        // V25: Safety net — ensures worktrees table exists even if V24's broken early version
+        // dropped it without recreating. Harmless no-op if table already exists (CREATE IF NOT EXISTS).
+        const v25 = await this.getMigrationVersion();
+        if (v25 < 25) {
+            for (const sql of MIGRATION_V25_SQL) {
+                try { this._db.exec(sql); } catch { /* ignore */ }
+            }
+            await this.setMigrationVersion(25);
+            console.log('[KanbanDatabase] V25 migration completed: worktrees table ensured');
+        }
+
+        // V26: Add worktree_id column to plans table.
+        // This column was declared in SCHEMA_SQL but never added to existing DBs
+        // (CREATE TABLE IF NOT EXISTS silently skips existing tables).
+        // Without this, the index CREATE INDEX idx_plans_worktree fails with
+        // "no such column: worktree_id", which crashes _initialize().
+        const v26 = await this.getMigrationVersion();
+        if (v26 < 26) {
+            for (const sql of MIGRATION_V26_SQL) {
+                try { this._db.exec(sql); } catch (e) {
+                    // Column already exists — harmless
+                    const msg = e instanceof Error ? e.message : String(e);
+                    if (!msg.includes('duplicate column') && !msg.includes('already exists')) {
+                        console.warn('[KanbanDatabase] V26 migration step failed:', msg);
+                    }
+                }
+            }
+            await this.setMigrationVersion(26);
+            console.log('[KanbanDatabase] V26 migration completed: worktree_id column added to plans');
+        }
+
+        // V27: add worktree_status column to plans table
+        const v27 = await this.getMigrationVersion();
+        if (v27 < 27) {
+            for (const sql of MIGRATION_V27_SQL) {
+                try { this._db.exec(sql); } catch (e) {
+                    console.debug('[KanbanDatabase] V27 migration step skipped (already applied):', e);
+                }
+            }
+            await this.setMigrationVersion(27);
+            console.log('[KanbanDatabase] V27 migration completed: worktree_status column added');
+        }
+
+        // V28: Normalize project sentinel values from '__unassigned__' to ''
+        const v28 = await this.getMigrationVersion();
+        if (v28 < 28) {
+            for (const sql of MIGRATION_V28_SQL) {
+                try { this._db.exec(sql); } catch (e) {
+                    console.debug('[KanbanDatabase] V28 migration step skipped:', e);
+                }
+            }
+            await this.setMigrationVersion(28);
+            console.log('[KanbanDatabase] V28 migration completed: project values normalized from __unassigned__ to empty string');
+        }
+
+
+
+    }
+
+    /**
+     * Schema reconciliation: ensure all columns defined in SCHEMA_SQL's plans table
+     * actually exist in the database. This fixes the gap where CREATE TABLE IF NOT EXISTS
+     * silently skips existing tables that are missing columns added in later schema versions.
+     *
+     * Runs after _runMigrations() so that version-gated ALTER TABLE steps have already
+     * had their chance. Any columns still missing are added here as a safety net.
+     */
+    private _ensureSchemaColumns(): void {
+        if (!this._db) return;
+
+        let addedCount = 0;
+        for (const { name, def } of SCHEMA_PLAN_COLUMN_DEFS) {
+            if (!this._planTableHasColumn(name)) {
+                try {
+                    this._db.exec(`ALTER TABLE plans ADD COLUMN ${name} ${def}`);
+                    console.warn(`[KanbanDatabase] Schema reconciliation: added missing column '${name}' to plans table`);
+                    addedCount++;
+                } catch (e) {
+                    console.error(`[KanbanDatabase] Schema reconciliation: failed to add column '${name}':`, e);
+                }
+            }
+        }
+        if (addedCount > 0) {
+            console.log(`[KanbanDatabase] Schema reconciliation: added ${addedCount} missing column(s) to plans table`);
         }
     }
 
@@ -1747,6 +3862,17 @@ export class KanbanDatabase {
             return false;
         } finally {
             stmt.free();
+        }
+    }
+
+    private _safeExec(label: string, sql: string): void {
+        if (!this._db) return;
+        try {
+            console.log(`[KanbanDatabase] ${label}: ${sql.substring(0, 200)}...`);
+            this._db.exec(sql);
+        } catch (err) {
+            console.error(`[KanbanDatabase] ${label} FAILED: ${sql.substring(0, 200)}... Error:`, err);
+            throw err;
         }
     }
 
@@ -1826,6 +3952,189 @@ FROM plans
         }
     }
 
+    private get _kanbanStateBackupPath(): string {
+        return path.join(this._workspaceRoot, '.switchboard', 'kanban-state-backup.json');
+    }
+
+    private async _writeKanbanStateBackup(): Promise<void> {
+        if (!this._workspaceRoot || !this._db) return;
+        try {
+            const workspaceId = await this.getWorkspaceId();
+            if (!workspaceId) return;
+
+            const stmt = this._db.prepare(
+                `SELECT plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
+                        repo_scope, workspace_id, created_at, updated_at, last_action, source_type,
+                        brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
+                        clickup_task_id, linear_issue_id` +
+                ` FROM plans WHERE workspace_id = ? AND status = 'active'`,
+                [workspaceId]
+            );
+            const plans: any[] = [];
+            while (stmt.step()) {
+                plans.push(stmt.getAsObject());
+            }
+            stmt.free();
+
+            const backup = {
+                workspaceId,
+                exportedAt: new Date().toISOString(),
+                version: 1,
+                plans
+            };
+
+            const tmpPath = this._kanbanStateBackupPath + '.tmp';
+            await fs.promises.writeFile(tmpPath, JSON.stringify(backup, null, 2), 'utf8');
+            await fs.promises.rename(tmpPath, this._kanbanStateBackupPath);
+        } catch (error) {
+            console.error('[KanbanDatabase] Failed to write kanban state backup:', error);
+        }
+    }
+
+    public async restoreFromBackup(backupPath: string): Promise<{ restored: number; skipped: number }> {
+        if (!(await this.ensureReady()) || !this._db) return { restored: 0, skipped: 0 };
+
+        try {
+            await fs.promises.access(backupPath);
+        } catch {
+            return { restored: 0, skipped: 0 };
+        }
+
+        let backup: any;
+        try {
+            const raw = await fs.promises.readFile(backupPath, 'utf8');
+            backup = JSON.parse(raw);
+        } catch {
+            return { restored: 0, skipped: 0 };
+        }
+
+        const plans = Array.isArray(backup.plans) ? backup.plans : [];
+        if (plans.length === 0) return { restored: 0, skipped: 0 };
+
+        let restored = 0;
+        let skipped = 0;
+        const workspaceId = await this.getWorkspaceId();
+        if (!workspaceId) return { restored: 0, skipped: plans.length };
+
+        const now = new Date().toISOString();
+
+        this._db.run('BEGIN');
+        try {
+            for (const p of plans) {
+                const planFile = p.plan_file || p.planFile || '';
+                // Validate the plan file still exists on disk
+                const absolutePath = planFile && !path.isAbsolute(planFile)
+                    ? path.join(this._workspaceRoot, planFile)
+                    : planFile;
+                
+                if (planFile) {
+                    try {
+                        await fs.promises.access(absolutePath);
+                    } catch {
+                        skipped++;
+                        continue;
+                    }
+                }
+
+                const record: KanbanPlanRecord = {
+                    planId: p.plan_id || p.planId || '',
+                    sessionId: p.session_id || p.sessionId || '',
+                    topic: p.topic || '',
+                    planFile: planFile.replace(/\\/g, '/'),
+                    kanbanColumn: p.kanban_column || p.kanbanColumn || 'CREATED',
+                    status: 'active',
+                    complexity: p.complexity || 'Unknown',
+                    tags: p.tags || '',
+                    repoScope: p.repo_scope || p.repoScope || '',
+                    project: p.project || p.project || '',
+                    workspaceId,
+                    createdAt: p.created_at || p.createdAt || now,
+                    updatedAt: now,
+                    lastAction: 'restored_from_backup',
+                    sourceType: p.source_type || p.sourceType || 'local',
+                    brainSourcePath: p.brain_source_path || p.brainSourcePath || '',
+                    mirrorPath: p.mirror_path || p.mirrorPath || '',
+                    routedTo: p.routed_to || p.routedTo || '',
+                    dispatchedAgent: p.dispatched_agent || p.dispatchedAgent || '',
+                    dispatchedIde: p.dispatched_ide || p.dispatchedIde || '',
+                    clickupTaskId: p.clickup_task_id || p.clickupTaskId || '',
+                    linearIssueId: p.linear_issue_id || p.linearIssueId || '',
+                    worktreeId: p.worktree_id ?? p.worktreeId ?? undefined
+                };
+
+                try {
+                    this._db.run(UPSERT_PLAN_SQL, [
+                        record.planId, record.sessionId, record.topic, record.planFile, record.kanbanColumn,
+                        record.status, record.complexity, record.tags, record.repoScope,
+                        record.project,
+                        record.workspaceId, record.createdAt, record.updatedAt, record.lastAction, record.sourceType,
+                        record.brainSourcePath, record.mirrorPath, record.routedTo, record.dispatchedAgent,
+                        record.dispatchedIde, record.clickupTaskId, record.linearIssueId, record.worktreeId ?? null
+                    ]);
+                    restored++;
+                } catch (e) {
+                    console.error(`[KanbanDatabase] Failed to restore plan ${record.planFile}:`, e);
+                    skipped++;
+                }
+            }
+            this._db.run('COMMIT');
+        } catch (e) {
+            try { this._db.run('ROLLBACK'); } catch { }
+            console.error('[KanbanDatabase] Bulk restore failed:', e);
+            return { restored: 0, skipped: plans.length };
+        }
+
+        await this._persist();
+        return { restored, skipped };
+    }
+
+    private async exportStateToFile(): Promise<void> {
+        if (!this._workspaceRoot || !this._db) return;
+        try {
+            const workspaceId = await this.getWorkspaceId();
+            if (!workspaceId) return;
+
+            const allPlans = await this.getBoard(workspaceId);
+            const columns = new Map<string, KanbanPlanRecord[]>();
+            for (const col of VALID_KANBAN_COLUMNS) {
+                columns.set(col, []);
+            }
+            for (const plan of allPlans) {
+                const list = columns.get(plan.kanbanColumn);
+                if (list) list.push(plan);
+            }
+
+            let md = `# Kanban Board\n\n`;
+            md += `*Workspace: ${workspaceId}* · *Updated: ${new Date().toISOString()}*\n\n`;
+            for (const [col, plans] of columns) {
+                md += `## ${col}\n\n`;
+                if (plans.length === 0) {
+                    md += `_No plans_\n\n`;
+                } else {
+                    for (const plan of plans) {
+                        const filePath = path.isAbsolute(plan.planFile)
+                            ? plan.planFile
+                            : path.join(this._workspaceRoot, plan.planFile);
+                        md += `- [${plan.planFile}](${filePath}) — ${plan.topic}\n`;
+                    }
+                    md += `\n`;
+                }
+            }
+
+            // One-time cleanup of old JSON file
+            const oldJsonPath = path.join(this._workspaceRoot, '.switchboard', 'kanban-state.json');
+            if (fs.existsSync(oldJsonPath)) {
+                await fs.promises.unlink(oldJsonPath);
+            }
+
+            const tmpPath = this._stateFilePath + '.tmp';
+            await fs.promises.writeFile(tmpPath, md, 'utf8');
+            await fs.promises.rename(tmpPath, this._stateFilePath);
+        } catch (error) {
+            console.error('[KanbanDatabase] Failed to export state to file:', error);
+        }
+    }
+
     private async _persist(): Promise<boolean> {
         if (!this._db) return false;
         const data = this._db.export();
@@ -1854,6 +4163,12 @@ FROM plans
         const nextWrite = this._writeTail.then(async () => { result = await writeOperation(); });
         this._writeTail = nextWrite.catch(() => { /* swallow to keep chain alive */ });
         await nextWrite;
+
+        if (result) {
+            void this.exportStateToFile(); // fire-and-forget, no debounce
+            void this._writeKanbanStateBackup(); // fire-and-forget backup JSON
+        }
+
         return result;
     }
 
@@ -1871,7 +4186,7 @@ FROM plans
     /**
      * Append a plan event (workflow start, column change, completion, etc.)
      */
-    public async appendPlanEvent(sessionId: string, event: {
+    public async appendPlanEventByPlanId(planId: string, event: {
         eventType: string;
         workflow?: string;
         action?: string;
@@ -1880,10 +4195,10 @@ FROM plans
     }): Promise<boolean> {
         const deviceId = os.hostname();
         return this._persistedUpdate(
-            `INSERT INTO plan_events (session_id, event_type, workflow, action, timestamp, device_id, payload)
+            `INSERT INTO plan_events (plan_id, event_type, workflow, action, timestamp, device_id, payload)
              VALUES (?, ?, ?, ?, ?, ?, ?)`,
             [
-                sessionId,
+                planId,
                 event.eventType,
                 event.workflow || '',
                 event.action || '',
@@ -1894,15 +4209,28 @@ FROM plans
         );
     }
 
+    /** @deprecated plan_events now keys by plan_id; use appendPlanEventByPlanId instead. */
+    public async appendPlanEvent(sessionId: string, event: {
+        eventType: string;
+        workflow?: string;
+        action?: string;
+        timestamp?: string;
+        payload?: string;
+    }): Promise<boolean> {
+        const plan = await this.getPlanBySessionId(sessionId);
+        const planId = plan?.planId || '';
+        return this.appendPlanEventByPlanId(planId, event);
+    }
+
     /**
-     * Get plan events for a session, ordered by timestamp
+     * Get plan events for a plan, ordered by timestamp
      */
-    public async getPlanEvents(sessionId: string): Promise<any[]> {
+    public async getPlanEventsByPlanId(planId: string): Promise<any[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
         try {
             const stmt = this._db.prepare(
-                `SELECT * FROM plan_events WHERE session_id = ? ORDER BY timestamp ASC`,
-                [sessionId]
+                `SELECT * FROM plan_events WHERE plan_id = ? ORDER BY timestamp ASC`,
+                [planId]
             );
             const results: any[] = [];
             while (stmt.step()) {
@@ -1914,6 +4242,13 @@ FROM plans
             console.error('[KanbanDatabase] Failed to get plan events:', error);
             return [];
         }
+    }
+
+    /** @deprecated plan_events now keys by plan_id; use getPlanEventsByPlanId instead. */
+    public async getPlanEvents(sessionId: string): Promise<any[]> {
+        const plan = await this.getPlanBySessionId(sessionId);
+        const planId = plan?.planId || '';
+        return this.getPlanEventsByPlanId(planId);
     }
 
     /**
@@ -1974,14 +4309,14 @@ FROM plans
     }
 
     /**
-     * Get a run sheet (session event history) from the database.
-     * Returns null if no events found for this session.
+     * Get a run sheet (plan event history) from the database.
+     * Returns null if no events found for this plan.
      */
-    public async getRunSheet(sessionId: string): Promise<any | null> {
-        const events = await this.getPlanEvents(sessionId);
+    public async getRunSheetByPlanId(planId: string): Promise<any | null> {
+        const events = await this.getPlanEventsByPlanId(planId);
         if (events.length === 0) return null;
         return {
-            sessionId,
+            planId,
             events: events.map(e => {
                 try { return JSON.parse(e.payload); }
                 catch { return { workflow: e.workflow, action: e.action, timestamp: e.timestamp }; }
@@ -1989,18 +4324,29 @@ FROM plans
         };
     }
 
+    /** @deprecated plan_events now keys by plan_id; use getRunSheetByPlanId instead. */
+    public async getRunSheet(sessionId: string): Promise<any | null> {
+        const plan = await this.getPlanBySessionId(sessionId);
+        const planId = plan?.planId || '';
+        return this.getRunSheetByPlanId(planId);
+    }
+
     /**
      * Migrate events from a session file into the plan_events table.
-     * Returns number of events migrated. Skips if events already exist for this session.
+     * Returns number of events migrated. Skips if events already exist for this plan.
      */
     public async migrateSessionEvents(sessionId: string, events: any[]): Promise<number> {
         if (!(await this.ensureReady()) || !this._db) return 0;
 
-        // Skip if session already has events in DB
+        const plan = await this.getPlanBySessionId(sessionId);
+        const planId = plan?.planId;
+        if (!planId) return 0;
+
+        // Skip if plan already has events in DB
         try {
             const checkStmt = this._db.prepare(
-                `SELECT COUNT(*) as cnt FROM plan_events WHERE session_id = ?`,
-                [sessionId]
+                `SELECT COUNT(*) as cnt FROM plan_events WHERE plan_id = ?`,
+                [planId]
             );
             if (checkStmt.step()) {
                 const count = checkStmt.getAsObject().cnt;
@@ -2016,10 +4362,10 @@ FROM plans
         for (const event of events) {
             try {
                 this._db.run(
-                    `INSERT INTO plan_events (session_id, event_type, workflow, action, timestamp, device_id, payload)
+                    `INSERT INTO plan_events (plan_id, event_type, workflow, action, timestamp, device_id, payload)
                      VALUES (?, ?, ?, ?, ?, ?, ?)`,
                     [
-                        sessionId,
+                        planId,
                         'workflow_event',
                         event.workflow || '',
                         event.action || '',
@@ -2030,7 +4376,7 @@ FROM plans
                 );
                 migrated++;
             } catch (e) {
-                console.error(`[KanbanDatabase] Failed to migrate event for ${sessionId}:`, e);
+                console.error(`[KanbanDatabase] Failed to migrate event for ${sessionId} (planId=${planId}):`, e);
             }
         }
         if (migrated > 0) {
@@ -2040,13 +4386,20 @@ FROM plans
     }
 
     /**
-     * Delete all plan events for a session (used by deleteRunSheet).
+     * Delete all plan events for a plan (used by deleteRunSheet).
      */
-    public async deletePlanEvents(sessionId: string): Promise<boolean> {
+    public async deletePlanEventsByPlanId(planId: string): Promise<boolean> {
         return this._persistedUpdate(
-            'DELETE FROM plan_events WHERE session_id = ?',
-            [sessionId]
+            'DELETE FROM plan_events WHERE plan_id = ?',
+            [planId]
         );
+    }
+
+    /** @deprecated plan_events now keys by plan_id; use deletePlanEventsByPlanId instead. */
+    public async deletePlanEvents(sessionId: string): Promise<boolean> {
+        const plan = await this.getPlanBySessionId(sessionId);
+        const planId = plan?.planId || '';
+        return this.deletePlanEventsByPlanId(planId);
     }
 
     /**
@@ -2062,21 +4415,117 @@ FROM plans
     /**
      * Update dispatch identity fields for a plan (routing analytics).
      */
+    public async updateDispatchInfoByPlanFile(planFile: string, workspaceId: string, info: {
+        routedTo: string;
+        dispatchedAgent: string;
+        dispatchedIde: string;
+    }): Promise<boolean> {
+        const normalized = this._ensureRelativePlanFile(planFile);
+        return this._persistedUpdate(
+            'UPDATE plans SET routed_to = ?, dispatched_agent = ?, dispatched_ide = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+            [info.routedTo, info.dispatchedAgent, info.dispatchedIde, new Date().toISOString(), normalized, workspaceId]
+        );
+    }
+
+    /** @deprecated session_id is no longer the unique key; use updateDispatchInfoByPlanFile instead. */
     public async updateDispatchInfo(sessionId: string, info: {
         routedTo: string;
         dispatchedAgent: string;
         dispatchedIde: string;
     }): Promise<boolean> {
-        return this._persistedUpdate(
-            'UPDATE plans SET routed_to = ?, dispatched_agent = ?, dispatched_ide = ?, updated_at = ? WHERE session_id = ?',
-            [info.routedTo, info.dispatchedAgent, info.dispatchedIde, new Date().toISOString(), sessionId]
-        );
+        const plan = await this.getPlanBySessionId(sessionId);
+        if (!plan) { return false; }
+        return this.updateDispatchInfoByPlanFile(plan.planFile, plan.workspaceId, info);
     }
 
     /** Normalize paths to use forward slashes for cross-platform compatibility */
     private _normalizePath(filePath: string): string {
         if (!filePath) return '';
         return filePath.replace(/\\/g, '/');
+    }
+
+    /**
+     * Resolve plan_file to an absolute path and normalise to forward slashes.
+     * If planFile is already absolute, only forward-slash normalisation is applied.
+     * If planFile is relative, it is resolved relative to this._workspaceRoot.
+     * Returns '' if planFile is empty.
+     *
+     * USAGE: This method is ONLY for:
+     *   1. The READ boundary (_readRows()) — expanding stored relative paths to absolute for in-memory use.
+     * For DB writes and lookup key normalisation (e.g. getPlanByPlanFile), use _ensureRelativePlanFile() instead.
+     *
+     * Security: if the resolved path escapes workspaceRoot, the original value is
+     * returned unchanged and a warning is logged (prevents path-traversal via
+     * crafted relative paths in the database).
+     */
+    private _resolveAbsolutePlanFile(planFile: string): string {
+        if (!planFile) return '';
+        const normalized = planFile.replace(/\\/g, '/');
+        if (path.isAbsolute(normalized)) return normalized;
+
+        // Resolve relative path against workspace root
+        const absolute = path.resolve(this._workspaceRoot, normalized).replace(/\\/g, '/');
+
+        // Boundary check — must remain within the workspace
+        const workspaceNormalized = this._workspaceRoot.replace(/\\/g, '/');
+        if (!absolute.startsWith(workspaceNormalized)) {
+            console.warn(
+                `[KanbanDatabase] _resolveAbsolutePlanFile: resolved path escapes workspace, ` +
+                `leaving unchanged. planFile=${planFile}`
+            );
+            return normalized; // return at least the forward-slash normalized form
+        }
+        return absolute;
+    }
+
+    /**
+     * Convert plan_file to a relative path (workspace-relative) for DB storage.
+     * If planFile is absolute and starts with workspaceRoot, strip the prefix.
+     * If planFile is already relative, return it unchanged.
+     * Returns '' if planFile is empty.
+     *
+     * USAGE: This is the authoritative normalizer for ALL DB write boundaries.
+     * For reading from DB back into memory, use _resolveAbsolutePlanFile() instead.
+     *
+     * Security: if _workspaceRoot is unset, logs warning and returns path unchanged.
+     * If path is absolute but outside workspace, logs warning and returns path as-is.
+     */
+    private _ensureRelativePlanFile(planFile: string): string {
+        if (!planFile) return '';
+        if (!this._workspaceRoot) {
+            console.warn('[KanbanDatabase] _ensureRelativePlanFile: _workspaceRoot not set, returning path unchanged');
+            return planFile;
+        }
+        const normalized = planFile.replace(/\\/g, '/');
+        if (!path.isAbsolute(normalized)) {
+            // Reject paths that contain absolute-looking segments after .switchboard/plans
+            const segments = normalized.split('/');
+            if (segments.length > 3) {
+                const afterPrefix = segments.slice(2);
+                if (afterPrefix.some(s => /^(Users|home|[A-Za-z]:)$/.test(s) || s === '..')) {
+                    console.warn(
+                        `[KanbanDatabase] _ensureRelativePlanFile: malformed path with absolute-looking segment, ` +
+                        `returning empty. planFile=${planFile}`
+                    );
+                    return '';
+                }
+            }
+            return normalized;
+        }
+
+        const workspaceNormalized = this._workspaceRoot.replace(/\\/g, '/');
+        if (normalized.startsWith(workspaceNormalized)) {
+            const relative = normalized.slice(workspaceNormalized.length);
+            // Remove leading slash if present
+            return relative.startsWith('/') ? relative.slice(1) : relative;
+        }
+
+        // Path is absolute but outside workspace — log warning and return as-is
+        console.warn(
+            `[KanbanDatabase] _ensureRelativePlanFile: absolute path outside workspace, ` +
+            `storing as-is. planFile=${planFile}, workspaceRoot=${this._workspaceRoot}`
+        );
+        return normalized;
     }
 
     private _readRows(stmt: ReturnType<SqlJsDatabase['prepare']>): KanbanPlanRecord[] {
@@ -2088,12 +4537,13 @@ FROM plans
                     planId: String(row.plan_id || ""),
                     sessionId: String(row.session_id || ""),
                     topic: String(row.topic || ""),
-                    planFile: this._normalizePath(String(row.plan_file || "")),
+                    planFile: this._resolveAbsolutePlanFile(String(row.plan_file || "")),
                     kanbanColumn: String(row.kanban_column || "CREATED"),
                     status: String(row.status || "active") as KanbanPlanStatus,
                     complexity: String(row.complexity || "Unknown"),
                     tags: String(row.tags || ""),
-                    dependencies: String(row.dependencies || ""),
+                    repoScope: String(row.repo_scope || ""),
+                    project: String(row.project || ""),
                     workspaceId: String(row.workspace_id || ""),
                     createdAt: String(row.created_at || ""),
                     updatedAt: String(row.updated_at || ""),
@@ -2104,13 +4554,15 @@ FROM plans
                             ? st
                             : 'local';
                     })(),
-                    brainSourcePath: this._normalizePath(String(row.brain_source_path || "")),
-                    mirrorPath: this._normalizePath(String(row.mirror_path || "")),
+                    brainSourcePath: this._resolveAbsolutePlanFile(String(row.brain_source_path || "")),
+                    mirrorPath: this._resolveAbsolutePlanFile(String(row.mirror_path || "")),
                     routedTo: String(row.routed_to || ""),
                     dispatchedAgent: String(row.dispatched_agent || ""),
                     dispatchedIde: String(row.dispatched_ide || ""),
                     clickupTaskId: String(row.clickup_task_id || ""),
-                    linearIssueId: String(row.linear_issue_id || "")
+                    linearIssueId: String(row.linear_issue_id || ""),
+                    worktreeId: row.worktree_id !== null && row.worktree_id !== undefined ? Number(row.worktree_id) : undefined,
+                    worktreeStatus: String(row.worktree_status || 'none') as 'none' | 'active' | 'merged' | 'deleted'
                 });
             }
         } finally {
@@ -2122,15 +4574,21 @@ FROM plans
     private static async _loadSqlJs(): Promise<SqlJsStatic> {
         if (!KanbanDatabase._sqlJsPromise) {
             KanbanDatabase._sqlJsPromise = (async () => {
+                console.log('[KanbanDatabase._loadSqlJs] Starting sql.js load...');
                 const sqlJsModulePath = KanbanDatabase._resolveSqlJsModulePath();
+                console.log(`[KanbanDatabase._loadSqlJs] Module path: ${sqlJsModulePath}`);
                 const initSqlJsModule = runtimeRequire(sqlJsModulePath) as ((config?: { wasmBinary?: Uint8Array }) => Promise<SqlJsStatic>) | { default?: (config?: { wasmBinary?: Uint8Array }) => Promise<SqlJsStatic> };
                 const initSqlJs = typeof initSqlJsModule === 'function' ? initSqlJsModule : initSqlJsModule.default;
                 if (!initSqlJs) {
                     throw new Error('sql.js module did not expose an initializer function.');
                 }
                 const wasmPath = KanbanDatabase._resolveSqlWasmPath();
+                console.log(`[KanbanDatabase._loadSqlJs] WASM path: ${wasmPath}`);
                 const wasmBinary = new Uint8Array(await fs.promises.readFile(wasmPath));
-                return initSqlJs({ wasmBinary });
+                console.log(`[KanbanDatabase._loadSqlJs] WASM loaded (${wasmBinary.length} bytes), initializing...`);
+                const result = await initSqlJs({ wasmBinary });
+                console.log('[KanbanDatabase._loadSqlJs] sql.js initialized successfully');
+                return result;
             })().catch((error) => {
                 KanbanDatabase._sqlJsPromise = null;
                 throw error;

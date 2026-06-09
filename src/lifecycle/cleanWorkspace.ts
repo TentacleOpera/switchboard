@@ -4,10 +4,10 @@ import * as fs from 'fs';
 import * as lockfile from 'proper-lockfile';
 
 /** Transient directories that are safe to wipe on activation. */
-const TRANSIENT_DIRS = ['inbox', 'outbox', 'cooldowns', 'MCP'];
+const TRANSIENT_DIRS = ['inbox', 'outbox', 'cooldowns', 'MCP', 'handoff'];
 
 /** Transient files that are safe to delete on activation. */
-const TRANSIENT_FILES = ['bridge_debug.log'];
+const TRANSIENT_FILES = ['bridge_debug.log', '.mcp_server.pid', '.mcp_version.json', 'housekeeping.policy.json'];
 
 /**
  * Canonical initial state matching state-manager.js INITIAL_STATE.
@@ -75,7 +75,7 @@ async function readPersistedFields(statePath: string): Promise<Record<string, un
         if (state.autoban && typeof state.autoban === 'object') {
             persisted.autoban = state.autoban;
         }
-
+        
         // Preserve plan ingestion target
         if (typeof state.planIngestionFolder === 'string') {
             persisted.planIngestionFolder = state.planIngestionFolder;

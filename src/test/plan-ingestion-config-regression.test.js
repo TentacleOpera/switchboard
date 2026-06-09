@@ -53,7 +53,7 @@ function run() {
         providerSource.includes('private _getManagedImportMirrorFilename(sourcePath: string): string {') &&
         providerSource.includes('private async _syncConfiguredPlanFolder(planFolder: string, workspaceRoot: string, cleanupMissingManagedImports: boolean = false): Promise<void> {') &&
         providerSource.includes('const mirrorFilename = this._getManagedImportMirrorFilename(filePath);') &&
-        providerSource.includes('await this._handlePlanCreation(mirrorUri, workspaceRoot, true);'),
+        providerSource.includes('await this._handlePlanCreation(mirrorUri, workspaceRoot, true, false, filePath);'),
         'Expected configured folder ingestion to mirror into the existing .switchboard plan pipeline.'
     );
     assert.doesNotMatch(

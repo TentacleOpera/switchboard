@@ -66,17 +66,76 @@ export class NotionFetchService {
   /**
    * Authenticated HTTPS request to Notion REST API.
    * Notion requires: Authorization: Bearer {token}, Notion-Version header.
+   *
+   * 429 handling:
+   *   - Max 3 attempts total (2 retries). Worst-case without server guidance: ~1.5s.
+   *   - Honours the `Retry-After` response header (seconds) when present, capped at 5s
+   *     per retry to avoid UI stalls. Falls back to exponential backoff otherwise.
    */
   async httpRequest(
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'DELETE' | 'PATCH',
     apiPath: string,
     body?: Record<string, unknown>,
-    timeoutMs = 10000
+    timeoutMs = 10000,
+    signal?: AbortSignal
   ): Promise<{ status: number; data: any }> {
     const token = await this.getApiToken();
     if (!token) { throw new Error('Notion API token not configured'); }
 
+    const maxAttempts = 3;
+    const baseDelayMs = 500;
+    const retryAfterCapMs = 5000;
+    let attempt = 0;
+
+    while (attempt < maxAttempts) {
+      const result = await this._makeRequest(method, apiPath, body, timeoutMs, signal, token);
+
+      // If not a 429 error, return immediately
+      if (result.status !== 429) {
+        return { status: result.status, data: result.data };
+      }
+
+      attempt++;
+      if (attempt >= maxAttempts) {
+        return { status: result.status, data: result.data }; // Give up after max attempts
+      }
+
+      // Prefer server-suggested delay when present & parseable as seconds, else exponential backoff.
+      let delayMs: number;
+      const serverHintSec = result.retryAfterSec;
+      if (typeof serverHintSec === 'number' && isFinite(serverHintSec) && serverHintSec > 0) {
+        delayMs = Math.min(serverHintSec * 1000, retryAfterCapMs);
+      } else {
+        delayMs = baseDelayMs * Math.pow(2, attempt - 1) + Math.random() * 250;
+      }
+      await this._delay(delayMs);
+    }
+
+    // Should never reach here, but TypeScript needs it
+    throw new Error('Max retry attempts exceeded');
+  }
+
+  private async _makeRequest(
+    method: 'GET' | 'POST' | 'DELETE' | 'PATCH',
+    apiPath: string,
+    body: Record<string, unknown> | undefined,
+    timeoutMs: number,
+    signal: AbortSignal | undefined,
+    token: string
+  ): Promise<{ status: number; data: any; retryAfterSec?: number }> {
     return new Promise((resolve, reject) => {
+      let settled = false;
+      const safeResolve = (value: { status: number; data: any; retryAfterSec?: number }) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      const safeReject = (err: Error) => {
+        if (settled) return;
+        settled = true;
+        reject(err);
+      };
+
       const payload = body ? JSON.stringify(body) : undefined;
       const req = https.request({
         hostname: 'api.notion.com',
@@ -91,17 +150,41 @@ export class NotionFetchService {
         timeout: timeoutMs
       }, (res) => {
         let raw = '';
+        // Notion returns Retry-After as delta-seconds on 429 responses. Parse once per response.
+        const retryHeader = res.headers?.['retry-after'];
+        const retryHeaderStr = Array.isArray(retryHeader) ? retryHeader[0] : retryHeader;
+        const retryAfterSec = typeof retryHeaderStr === 'string' ? Number(retryHeaderStr) : undefined;
+        const retryAfter = typeof retryAfterSec === 'number' && isFinite(retryAfterSec) && retryAfterSec >= 0
+          ? retryAfterSec
+          : undefined;
+
+        res.on('error', (err) => safeReject(new Error(`Notion response stream error: ${err.message}`)));
+        res.on('aborted', () => safeReject(new Error('Notion response aborted by server')));
         res.on('data', (chunk: Buffer) => { raw += chunk.toString(); });
         res.on('end', () => {
           try {
-            resolve({ status: res.statusCode || 0, data: JSON.parse(raw) });
+            safeResolve({ status: res.statusCode || 0, data: JSON.parse(raw), retryAfterSec: retryAfter });
           } catch {
-            resolve({ status: res.statusCode || 0, data: raw });
+            safeResolve({ status: res.statusCode || 0, data: raw, retryAfterSec: retryAfter });
           }
         });
       });
-      req.on('timeout', () => { req.destroy(); reject(new Error('Notion request timed out')); });
-      req.on('error', reject);
+      req.on('timeout', () => { req.destroy(); safeReject(new Error('Notion request timed out')); });
+      req.on('error', (err) => safeReject(err));
+
+      if (signal) {
+        if (signal.aborted) {
+          req.destroy(new Error('AbortError'));
+          return safeReject(new Error('AbortError'));
+        }
+        const abortHandler = () => {
+          req.destroy(new Error('AbortError'));
+          safeReject(new Error('AbortError'));
+        };
+        signal.addEventListener('abort', abortHandler);
+        req.on('close', () => signal.removeEventListener('abort', abortHandler));
+      }
+
       if (payload) { req.write(payload); }
       req.end();
     });
@@ -467,6 +550,58 @@ export class NotionFetchService {
 
   private _delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Update a Notion page content by replacing its block children.
+   * This is used for sync-to-source functionality.
+   */
+  async updatePageContent(pageId: string, content: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      // Size guard
+      const MAX_CONTENT_SIZE = 1024 * 1024; // 1MB
+      if (Buffer.byteLength(content, 'utf8') > MAX_CONTENT_SIZE) {
+        return { success: false, error: 'Content exceeds 1MB size limit for sync' };
+      }
+
+      // For v1, we'll use a simple approach: delete all existing blocks and append new ones
+      // In a more sophisticated implementation, we would parse markdown and convert to Notion blocks
+      
+      // First, delete existing block children
+      const deleteResult = await this.httpRequest('DELETE', `/blocks/${pageId}/children`);
+      if (deleteResult.status !== 200) {
+        return { success: false, error: `Failed to clear page blocks (HTTP ${deleteResult.status})` };
+      }
+
+      // For v1, we'll append the content as a single paragraph block
+      // This is a simplification - a full implementation would parse markdown to blocks
+      const blockPayload = {
+        children: [
+          {
+            object: 'block',
+            type: 'paragraph',
+            paragraph: {
+              rich_text: [
+                {
+                  type: 'text',
+                  text: {
+                    content: content.substring(0, 2000) // Notion has limits on block size
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      };
+
+      const appendResult = await this.httpRequest('PATCH', `/blocks/${pageId}/children`, blockPayload);
+      if (appendResult.status >= 200 && appendResult.status < 300) {
+        return { success: true };
+      }
+      return { success: false, error: `Failed to append content (HTTP ${appendResult.status})` };
+    } catch (err: any) {
+      return { success: false, error: String(err) };
+    }
   }
 
   get configPath(): string { return this._configPath; }

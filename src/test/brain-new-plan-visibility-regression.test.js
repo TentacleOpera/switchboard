@@ -32,7 +32,7 @@ describe('brain new-plan visibility regressions', () => {
         );
         assert.match(
             source,
-            /const shouldAutoClaim = !eligibility\.eligible && \(allowAutoClaim \|\| isFreshUnregisteredCandidate\) && !existingEntry;/,
+            /const wouldAutoClaim = !eligibility\.eligible && \(allowAutoClaim \|\| isFreshUnregisteredCandidate\) && !existingEntry;[\s\S]*const canClaim = wouldAutoClaim[\s\S]*const shouldAutoClaim = wouldAutoClaim && canClaim;/,
             'Expected _mirrorBrainPlan to keep auto-claim enabled for fresh follow-up change events after the initial create event.'
         );
     });

@@ -31,7 +31,7 @@ suite('Kanban timestamp preservation', () => {
             );
             await db._persist();
 
-            // Self-heal call with preserveTimestamps: true — should NOT change updated_at
+            // Background update with preserveTimestamps: true — should NOT change updated_at
             await db.updateMetadataBatch([{
                 sessionId,
                 topic: 'Test Plan',

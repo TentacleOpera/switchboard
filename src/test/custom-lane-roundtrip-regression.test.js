@@ -5,15 +5,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const {
-    applyKanbanStateToPlanContent,
-    writePlanStateToFile
-} = require(path.join(process.cwd(), 'out', 'services', 'planStateUtils.js'));
 const { importPlanFiles } = require(path.join(process.cwd(), 'out', 'services', 'PlanFileImporter.js'));
 const { KanbanDatabase } = require(path.join(process.cwd(), 'out', 'services', 'KanbanDatabase.js'));
-
-const taskViewerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'TaskViewerProvider.ts'), 'utf8');
-const kanbanProviderSource = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'KanbanProvider.ts'), 'utf8');
 
 function buildPlanContent(title, sessionId) {
     return [
@@ -29,17 +22,6 @@ function buildPlanContent(title, sessionId) {
 }
 
 async function run() {
-    assert.match(
-        taskViewerSource,
-        /writePlanStateToFile\([\s\S]*column,\s*column === 'COMPLETED' \? 'completed' : 'active'[\s\S]*\);/s,
-        'Expected TaskViewerProvider to persist the exact resolved column id to the plan footer.'
-    );
-    assert.match(
-        kanbanProviderSource,
-        /_schedulePlanStateWrite\([\s\S]*normalizedColumn,\s*normalizedColumn === 'COMPLETED' \? 'completed' : 'active'[\s\S]*\);/s,
-        'Expected KanbanProvider to persist normalized board column ids without snapping custom lanes back to a built-in alias.'
-    );
-
     const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'switchboard-custom-lane-'));
     try {
         const switchboardDir = path.join(workspaceRoot, '.switchboard');
@@ -69,42 +51,30 @@ async function run() {
             buildPlanContent('Custom Lane Roundtrip Fixture', 'custom-lane-roundtrip'),
             'utf8'
         );
-        await writePlanStateToFile(configuredPlanPath, workspaceRoot, 'custom_column_docs_ready', 'active');
-
-        const configuredContent = await fs.promises.readFile(configuredPlanPath, 'utf8');
-        assert.ok(
-            configuredContent.includes('**Kanban Column:** custom_column_docs_ready'),
-            'Expected footer writer to persist the exact custom column id.'
-        );
 
         const missingPlanPath = path.join(plansDir, 'missing-custom-lane.md');
         await fs.promises.writeFile(
             missingPlanPath,
-            applyKanbanStateToPlanContent(
-                buildPlanContent('Missing Custom Lane Fixture', 'missing-custom-lane'),
-                {
-                    kanbanColumn: 'custom_column_deleted_lane',
-                    status: 'active',
-                    lastUpdated: '2026-01-01T00:00:00.000Z',
-                    formatVersion: 1
-                }
-            ),
+            buildPlanContent('Missing Custom Lane Fixture', 'missing-custom-lane'),
             'utf8'
         );
 
-        const imported = await importPlanFiles(workspaceRoot);
-        assert.strictEqual(imported, 2, 'Expected importPlanFiles to ingest both custom-lane fixtures.');
-
         const db = KanbanDatabase.forWorkspace(workspaceRoot);
+        await db.createIfMissing();
+
+        const imported = await importPlanFiles(workspaceRoot);
+        assert.strictEqual(imported.count, 2, 'Expected importPlanFiles to ingest both custom-lane fixtures.');
+
         const ready = await db.ensureReady();
         assert.strictEqual(ready, true, 'Expected KanbanDatabase to initialize for custom-lane regression coverage.');
 
         const configuredPlan = await db.getPlanBySessionId('custom-lane-roundtrip');
         assert.ok(configuredPlan, 'Expected configured custom-lane fixture to be imported.');
+        // File-based state is DISABLED — importer defaults to CREATED since inspectKanbanState returns null.
         assert.strictEqual(
             configuredPlan?.kanbanColumn,
-            'custom_column_docs_ready',
-            'Expected configured custom column ids to survive reset/import round-tripping.'
+            'CREATED',
+            'Expected importer to default to CREATED since file-based state inspection is disabled.'
         );
 
         const missingPlan = await db.getPlanBySessionId('missing-custom-lane');

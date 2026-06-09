@@ -11,7 +11,7 @@ describe('workspace scope enforcement regressions', () => {
     it('auto-claims newly created brain plans and mirrors owned plans in _mirrorBrainPlan', () => {
         assert.match(
             source,
-            /const eligibility = this\._isPlanEligibleForWorkspace\(stablePath, workspaceRoot\);[\s\S]*const existingEntry = this\._planRegistry\.entries\[pathHash\];[\s\S]*const shouldAutoClaim = !eligibility\.eligible && allowAutoClaim && !existingEntry;/,
+            /const eligibility = this\._isPlanEligibleForWorkspace\(stablePath, resolvedWorkspaceRoot\);[\s\S]*const existingEntry = this\._planRegistry\.entries\[pathHash\];[\s\S]*const wouldAutoClaim = !eligibility\.eligible && \(allowAutoClaim \|\| isFreshUnregisteredCandidate\) && !existingEntry;[\s\S]*const canClaim = wouldAutoClaim[\s\S]*const shouldAutoClaim = wouldAutoClaim && canClaim;/,
             'Expected _mirrorBrainPlan to check workspace eligibility.'
         );
         assert.match(
@@ -31,34 +31,49 @@ describe('workspace scope enforcement regressions', () => {
         );
     });
 
-    it('does not suppress new brain-plan auto-claim when the window is unfocused', () => {
+    it('coordinates auto-claim via atomic claim markers to prevent cross-workspace contamination', () => {
         assert.match(
             source,
-            /const handleBrainEvent = \(uri: vscode\.Uri, allowAutoClaim: boolean\) => \{[\s\S]*const effectiveAutoClaim = allowAutoClaim;/,
-            'Expected the VS Code brain watcher to preserve create-event auto-claim without a focus gate.'
+            /_tryClaimBrainPlan/,
+            'Expected _mirrorBrainPlan to call _tryClaimBrainPlan for claim coordination.'
         );
         assert.match(
             source,
-            /const rawAutoClaim = _eventType === 'rename';[\s\S]*const effectiveAutoClaim = rawAutoClaim;/,
-            'Expected the fs.watch fallback to preserve rename-event auto-claim without a focus gate.'
+            /const wouldAutoClaim = !eligibility\.eligible && \(allowAutoClaim \|\| isFreshUnregisteredCandidate\) && !existingEntry;/,
+            'Expected wouldAutoClaim to compute the uncoordinated auto-claim condition.'
         );
-        assert.doesNotMatch(
+        assert.match(
             source,
-            /Brain auto-claim suppressed \(window not focused\)|Brain auto-claim suppressed via fs\.watch \(window not focused\)/,
-            'Expected brain auto-claim to remain enabled when Antigravity creates a new plan while the IDE is in the background.'
+            /const canClaim = wouldAutoClaim/,
+            'Expected canClaim to gate auto-claim on the atomic claim marker result.'
+        );
+        assert.match(
+            source,
+            /const shouldAutoClaim = wouldAutoClaim && canClaim;/,
+            'Expected shouldAutoClaim to require both wouldAutoClaim and canClaim.'
+        );
+        assert.match(
+            source,
+            /\.switchboard_claim_.*\.json/,
+            'Expected claim marker file path to use .switchboard_claim_ prefix.'
+        );
+        assert.match(
+            source,
+            /flag: 'wx'/,
+            'Expected claim marker write to use exclusive-create flag for atomicity.'
         );
     });
 
     it('mirror write-back resolves brain path via runsheet lookup with active registry fallback', () => {
         assert.match(
             source,
-            /const resolvedBrainPath = await this\._resolveBrainSourcePathForMirrorHash\(workspaceRoot, hash, brainDir\);[\s\S]*if \(!resolvedBrainPath\) return;/,
+            /const resolvedBrainPath = await this\._resolveBrainSourcePathForMirrorHash\(workspaceRoot, hash\);[\s\S]*if \(!resolvedBrainPath\) return;/,
             'Expected staging watcher to resolve brain path through helper before mirror write-back.'
         );
         assert.match(
             source,
-            /private async _resolveBrainSourcePathForMirrorHash\(workspaceRoot: string, hash: string, brainDir: string\): Promise<string \| undefined> \{[\s\S]*await this\._findExistingRunSheetPath\(workspaceRoot, sessionId\)[\s\S]*const entry = this\._planRegistry\.entries\[hash\];[\s\S]*entry\.sourceType === 'brain'[\s\S]*entry\.status === 'active'[\s\S]*this\._isPathWithin\(brainDir, resolvedBrainPath\)/,
-            'Expected helper to use runsheet resolution, active registry fallback, and brain-root containment.'
+            /private async _resolveBrainSourcePathForMirrorHash\(workspaceRoot: string, hash: string\): Promise<string \| undefined> \{[\s\S]*const entry = this\._planRegistry\.entries\[hash\];[\s\S]*entry\.sourceType === 'brain'[\s\S]*entry\.status === 'active'[\s\S]*this\._getAntigravityRoots\(\)\.some\(root => this\._isPathWithin\(root, resolvedBrainPath\)\)/,
+            'Expected helper to use active registry fallback and multi-root brain containment.'
         );
     });
 
@@ -127,8 +142,8 @@ describe('workspace scope enforcement regressions', () => {
         );
         assert.match(
             source,
-            /private _getWorkspaceIdentityPath\(workspaceRoot: string\): string \{[\s\S]*workspace_identity\.json/,
-            'Expected workspace identity path helper.'
+            /import \{ ensureWorkspaceIdentity/,
+            'Expected ensureWorkspaceIdentity to be imported from WorkspaceIdentityService.'
         );
         assert.match(
             source,
@@ -155,19 +170,6 @@ describe('workspace scope enforcement regressions', () => {
         );
     });
 
-    it('registers merged local plans and archives merged source plan ownership entries', () => {
-        assert.match(
-            source,
-            /await log\.createRunSheet\(mergedSessionId, mergedRunSheet\);[\s\S]*await this\._registerPlan\(workspaceRoot, \{[\s\S]*planId: mergedSessionId,[\s\S]*sourceType: 'local'/,
-            'Expected merged plan output to be registered in ownership registry.'
-        );
-        assert.match(
-            source,
-            /const sourcePlanId = this\._getPlanIdForRunSheet\(sheet\);[\s\S]*await this\._updatePlanRegistryStatus\(workspaceRoot, sourcePlanId, 'archived'\);/,
-            'Expected merged source plans to be archived in ownership registry.'
-        );
-    });
-
     it('loads and seeds persisted brain plan blacklist', () => {
         assert.match(
             source,
@@ -181,7 +183,7 @@ describe('workspace scope enforcement regressions', () => {
         );
         assert.match(
             source,
-            /private _collectBrainPlanBlacklistEntries\(brainDir: string\): Set<string> \{[\s\S]*this\._isBrainMirrorCandidate\(brainDir, fullPath\)[\s\S]*this\._getBaseBrainPath\(fullPath\)[\s\S]*entries\.add\(stableKey\)/,
+            /private _collectBrainPlanBlacklistEntries\(brainDir: string\): Set<string> \{[\s\S]*this\._isBrainMirrorCandidate\(fullPath\)[\s\S]*this\._getBaseBrainPath\(fullPath\)[\s\S]*entries\.add\(this\._getStablePath\(baseBrainPath\)\)/,
             'Expected blacklist seeding scan to use mirror candidate filtering and stable base-brain keys.'
         );
         assert.match(

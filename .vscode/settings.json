@@ -2,20 +2,7 @@
 	"switchboard.silentScaffolding": false,
 	"switchboard.archive.dbPath": ".switchboard/archive.duckdb",
 	"switchboard.archive.autoArchiveCompleted": true,
-	"mcpServers": {
-		"switchboard": {
-			"command": "node",
-			"args": [
-				"/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/MCP/mcp-server.js"
-			],
-			"env": {
-				"SWITCHBOARD_WORKSPACE_ROOT": "/Users/patrickvuleta/Documents/GitHub/switchboard"
-			},
-			"disabled": false,
-			"alwaysAllow": []
-		}
-	},
-	"switchboard.accurateCoding.enabled": false,
+	"switchboard.accurateCoding.enabled": true,
 	"switchboard.review.strictPrompts": false,
 	"switchboard.planner.strictPrompts": false,
 	"switchboard.workspaceBrainPaths": [
@@ -28,5 +15,20 @@
 	"switchboard.reviewer.advancedMode": false,
 	"switchboard.planner.designDocEnabled": false,
 	"switchboard.workspace.ignoreStrategy": "targetedGitignore",
-	"switchboard.workspace.ignoreRules": []
+	"switchboard.workspace.ignoreRules": [],
+	"switchboard.ollama.intern.enabled": true,
+	"switchboard.ollama.intern.mode": "cloud",
+	"switchboard.ollama.intern.model": "gemma4:31b-cloud",
+	"switchboard.ollama.intern.baseUrl": "https://ollama.com/api",
+	"switchboard.integrations.preferredProvider": "clickup",
+	"switchboard.research.localFolderPath": "/Users/patrickvuleta/Documents/Claude/Projects",
+	"switchboard.planner.designDocLink": "/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/docs/technical_documentation_gaps_c3c1aa74.md",
+	"switchboard.preventAgentFileOpening": false,
+	"switchboard.research.htmlFolderPaths": [
+		"/Users/patrickvuleta/Documents/GitHub/patrickwork/designs"
+	],
+	"switchboard.statusBar.showTerminalControls": true,
+	"switchboard.statusBar.showKanbanButton": true,
+	"switchboard.statusBar.showArtifactsButton": true,
+	"switchboard.theme.name": "afterburner_updated"
 }

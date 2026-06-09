@@ -1,0 +1,71 @@
+@@ -113,7 +113,32 @@
+                        return { status: 'failed', reason: 'Detected malformed managed protocol markers in AGENTS.md; fix markers before rerunning setup' };
+                }
+ 
+-               if ((hasBlockStart && hasBlockEnd) || protocolHeaderRegex.test(targetContent)) {
++               if (hasBlockStart && hasBlockEnd) {
++                       // Extract existing block content
++                       const existingBlockContent = targetContent.substring(
++                               blockStartIndex + BLOCK_START.length,
++                               blockEndIndex
++                       ).trim();
++
++                       // Compare with bundled source (trimmed to avoid whitespace differences)
++                       if (existingBlockContent === SOURCE_CONTENT.trim()) {
++                               return { status: 'skipped', reason: 'Switchboard protocol block already up-to-date' };
++                       }
++
++                       // Content differs — simulate in-place update
++                       const before = targetContent.substring(0, blockStartIndex);
++                       const after = targetContent.substring(blockEndIndex + BLOCK_END.length);
++                       const updated = before + managedBlock + after;
++                       // Verify updated content preserves user content outside markers
++                       assert.ok(updated.startsWith(before), 'User content before markers must be preserved');
++                       assert.ok(updated.endsWith(after), 'User content after markers must be preserved');
++                       assert.ok(updated.includes(BLOCK_START), 'Updated content must include block start marker');
++                       assert.ok(updated.includes(BLOCK_END), 'Updated content must include block end marker');
++
++                       return { status: 'updated', reason: 'Switchboard protocol block updated to latest bundled version' };
++               }
++
++               if (protocolHeaderRegex.test(targetContent)) {
+                        return { status: 'skipped', reason: 'Switchboard protocol block already present' };
+                }
+ 
+@@ -142,10 +167,11 @@
+                assert.strictEqual(result.status, 'skipped');
+        });
+ 
+-       test('Target exists with block start marker → no duplicate append', () => {
+-               const existing = `# My Rules\n\n${BLOCK_START}\nold protocol\n${BLOCK_END}`;
++       test('Target exists with block markers (current content) → skipped as up-to-date', () => {
++               const existing = `# My Rules\n\n${BLOCK_START}\n${SOURCE_CONTENT.trimEnd()}\n${BLOCK_END}`;
+                const result = simulateScaffold(true, existing);
+                assert.strictEqual(result.status, 'skipped');
++               assert.ok(result.reason.includes('up-to-date'));
+        });
+ 
+        test('Source missing → returns failed status, does not crash', () => {
+@@ -177,4 +203,22 @@
+                const result = simulateScaffold(true, prose);
+                assert.strictEqual(result.status, 'appended');
+        });
++
++       test('Block markers with stale content → returns updated, content matches new source', () => {
++               const oldContent = `${PROTOCOL_HEADER}\n\nOld version without workspace detection.`;
++               const existing = `# My Rules\n\n${BLOCK_START}\n${oldContent.trimEnd()}\n${BLOCK_END}`;
++               const result = simulateScaffold(true, existing);
++               assert.strictEqual(result.status, 'updated');
++               assert.ok(result.reason.includes('updated to latest bundled version'));
++       });
++
++       test('Block markers with stale content + user content outside → user content preserved, block updated', () => {
++               const oldContent = `${PROTOCOL_HEADER}\n\nOld version without workspace detection.`;
++               const userContentBefore = '# My Custom Rules\n\nThese are my rules.\n\n';
++               const userContentAfter = '\n## Additional Notes\n\nCustom notes here.';
++               const existing = `${userContentBefore}${BLOCK_START}\n${oldContent.trimEnd()}\n${BLOCK_END}${userContentAfter}`;
++               const result = simulateScaffold(true, existing);
++               assert.strictEqual(result.status, 'updated');
++               assert.ok(result.reason.includes('updated to latest bundled version'));
++       });
+ });

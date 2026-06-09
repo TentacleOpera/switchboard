@@ -13,7 +13,7 @@ The key difference between this and other kanban tools is that it triggers agent
 3. Dynamic complexity routing: a terminal running Copilot Opus gets complex work while GLM gets routine work, so you save quota by not asking Opus to do simple changes
 4. Work batching: Drag and drop multiple plans at once to automatically trigger subagents from tools that have them
 Customization: Comes with a preset agent team, but you can fully customize agent behaviour and automation rules to make Switchboard work with other frameworks 
-5. Database state: Switchboard is powered by a structured database of plan metadata. This makes it easy to share state between developers, and trivially easy to keep Switchboard synced to JIRA/Clickup/whatever using their official MCP tools 
+5. Database state: Switchboard is powered by a structured database of plan metadata. This makes it easy to share state between developers.
 
 
 **Installation**
@@ -40,6 +40,6 @@ Switchboard routes all 10 plans according to Opus' complexity scoring and depend
 
 6. If manual testing fails, I select the offending plan(s) and press the ‘Report’ button. I enter a strongly worded complaint in all caps and press a button to send the plans back to the lead coder.
 
-7. Clickup sync: At the end of a session I ask Windsurf to sync the Switchboard state with Clickup to maintain project management. Windsurf uses the Switchboard MCP to read the current Kanban state and then the official Clickup MCP to update tickets with the work states, code review findings and implementation details.
+7. Clickup sync: At the end of a session I ask Windsurf to sync the Switchboard state with Clickup to maintain project management. Windsurf uses Switchboard skills to read the current Kanban state and update tickets with the work states, code review findings and implementation details.
 
 The last 3 steps means that it's super easy to stop work and pickup at any time. You don't need to do session management or ask an agent to regather context when you find a bug.

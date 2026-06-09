@@ -21,7 +21,6 @@ export interface PlanRecord {
     lastAction: string;
     sourceType: string;
     tags: string;
-    dependencies: string;
     routedTo: string;
     dispatchedAgent: string;
     dispatchedIde: string;
@@ -110,7 +109,6 @@ export class ArchiveManager {
 
         // Ensure new columns exist on legacy archives
         const newDispatchCols = [
-            { name: 'dependencies', default: "''" },
             { name: 'routed_to', default: "''" },
             { name: 'dispatched_agent', default: "''" },
             { name: 'dispatched_ide', default: "''" },
@@ -156,14 +154,13 @@ export class ArchiveManager {
 
         const daysToCompletion = this._computeDaysToCompletion(plan.createdAt, plan.updatedAt);
 
-        const sql = `INSERT INTO plans (plan_id, session_id, topic, plan_file, kanban_column, status, complexity, workspace_id, created_at, updated_at, last_action, source_type, tags, dependencies, routed_to, dispatched_agent, dispatched_ide, archived_at, days_to_completion)
-VALUES (${this._escapeDuckDb(plan.planId)}, ${this._escapeDuckDb(plan.sessionId)}, ${this._escapeDuckDb(plan.topic)}, ${this._escapeDuckDb(plan.planFile)}, ${this._escapeDuckDb(plan.kanbanColumn)}, ${this._escapeDuckDb(plan.status)}, ${this._escapeDuckDb(plan.complexity)}, ${this._escapeDuckDb(plan.workspaceId)}, ${this._escapeDuckDb(plan.createdAt)}, ${this._escapeDuckDb(plan.updatedAt)}, ${this._escapeDuckDb(plan.lastAction)}, ${this._escapeDuckDb(plan.sourceType)}, ${this._escapeDuckDb(plan.tags)}, ${this._escapeDuckDb(plan.dependencies || '')}, ${this._escapeDuckDb(plan.routedTo || '')}, ${this._escapeDuckDb(plan.dispatchedAgent || '')}, ${this._escapeDuckDb(plan.dispatchedIde || '')}, CURRENT_TIMESTAMP, ${daysToCompletion})
+        const sql = `INSERT INTO plans (plan_id, session_id, topic, plan_file, kanban_column, status, complexity, workspace_id, created_at, updated_at, last_action, source_type, tags, routed_to, dispatched_agent, dispatched_ide, archived_at, days_to_completion)
+VALUES (${this._escapeDuckDb(plan.planId)}, ${this._escapeDuckDb(plan.sessionId)}, ${this._escapeDuckDb(plan.topic)}, ${this._escapeDuckDb(plan.planFile)}, ${this._escapeDuckDb(plan.kanbanColumn)}, ${this._escapeDuckDb(plan.status)}, ${this._escapeDuckDb(plan.complexity)}, ${this._escapeDuckDb(plan.workspaceId)}, ${this._escapeDuckDb(plan.createdAt)}, ${this._escapeDuckDb(plan.updatedAt)}, ${this._escapeDuckDb(plan.lastAction)}, ${this._escapeDuckDb(plan.sourceType)}, ${this._escapeDuckDb(plan.tags)}, ${this._escapeDuckDb(plan.routedTo || '')}, ${this._escapeDuckDb(plan.dispatchedAgent || '')}, ${this._escapeDuckDb(plan.dispatchedIde || '')}, CURRENT_TIMESTAMP, ${daysToCompletion})
 ON CONFLICT (plan_id) DO UPDATE SET
     status = EXCLUDED.status,
     kanban_column = EXCLUDED.kanban_column,
     updated_at = EXCLUDED.updated_at,
     last_action = EXCLUDED.last_action,
-    dependencies = EXCLUDED.dependencies,
     routed_to = EXCLUDED.routed_to,
     dispatched_agent = EXCLUDED.dispatched_agent,
     dispatched_ide = EXCLUDED.dispatched_ide,

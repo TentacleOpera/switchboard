@@ -66,6 +66,19 @@ function installVsCodeMock() {
                     }
                 };
             }
+        },
+        workspace: {
+            getConfiguration: () => ({
+                get: (key, defaultValue) => defaultValue
+            })
+        },
+        commands: {
+            executeCommand: async (command, ...args) => {
+                return undefined;
+            },
+            registerCommand: (command, callback) => {
+                return { dispose: () => {} };
+            }
         }
     };
 

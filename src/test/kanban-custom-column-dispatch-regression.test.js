@@ -27,12 +27,6 @@ function run() {
         'Expected configured dispatches to append the saved triggerPrompt as additional instructions.'
     );
     assert.match(
-        taskViewerSource,
-        /private async _updateKanbanColumnForSession\(workspaceRoot: string, sessionId: string, column: string \| null\): Promise<void> \{[\s\S]*await db\.updateColumn\(sessionId, column\);[\s\S]*await writePlanStateToFile\([\s\S]*column === 'COMPLETED' \? 'completed' : 'active'[\s\S]*\);/s,
-        'Expected explicit target-column dispatches to persist the plan-file Switchboard State after updating the DB column.'
-    );
-
-    assert.match(
         kanbanProviderSource,
         /private async _resolveKanbanDispatchSpec\([\s\S]*source:\s*column\.source[\s\S]*triggerPrompt:\s*column\.triggerPrompt/,
         'Expected KanbanProvider.ts to resolve a full dispatch spec from the target column.'

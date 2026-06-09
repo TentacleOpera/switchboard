@@ -1,0 +1,3544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'nonce-{{NONCE}}' 'unsafe-inline' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'unsafe-inline'; img-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: data:; font-src {{WEBVIEW_CSP_SOURCE}} https:; connect-src https:; frame-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: http: about:srcdoc blob: data:;">
+    <title>Switchboard Research</title>
+    <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        @font-face {
+            font-family: 'GeistPixel';
+            src: url('{{GEIST_PIXEL_FONT_URI}}') format('woff2');
+            font-weight: normal;
+            font-style: normal;
+        }
+        :root {
+            /* Kanban dark theme - matching kanban screen */
+            --kanban-bg: #000000;
+            --panel-bg: #000000;
+            --panel-bg2: #0a0a0a;
+            --border-color: #333333;
+            --border-bright: #444444;
+
+            /* Accent colors - matching kanban screen */
+            --accent-teal: #3ddbd9;
+            --accent-teal-dim: color-mix(in srgb, var(--accent-teal) 40%, transparent);
+            --accent-teal-bright: #5ce8e6;
+            --accent-orange: #d18616;
+            --accent-neon: var(--accent-teal);
+            --glow-teal: 0 0 10px color-mix(in srgb, var(--accent-teal) 50%, transparent);
+
+            /* Card/container backgrounds */
+            --card-bg: #0d0d0d;
+            --card-bg-hover: #1a1a1a;
+            --card-border: 1px solid #333333;
+
+            /* Semantic text colors */
+            --text-primary: #e0e0e0;
+            --text-secondary: #888888;
+            --font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+            --font-mono: var(--vscode-editor-font-family, 'SF Mono', Monaco, 'Cascadia Code', monospace);
+
+            /* Spacing rhythm */
+            --spacing-unit: 8px;
+            --spacing-xs: calc(var(--spacing-unit) / 2);  /* 4px */
+            --spacing-sm: var(--spacing-unit);            /* 8px */
+            --spacing-md: calc(var(--spacing-unit) * 1.5); /* 12px */
+            --spacing-lg: calc(var(--spacing-unit) * 2);  /* 16px */
+
+            /* Shadows for depth */
+            --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.2);
+            --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25);
+
+        }
+
+        /* Claude Terracotta — warm terracotta accent on professional dark surfaces */
+        body.theme-claude-terracotta {
+            --panel-bg: #121212;          /* Sidebar/Panels — Left sidebar and bottom terminal */
+            --panel-bg2: #1A1A1A;         /* Secondary surface */
+            --border-color: #2D2D2D;      /* Section Dividers */
+            --border-bright: #2D2D2D;
+            --accent-teal: #D97757;
+            --accent-teal-dim: color-mix(in srgb, #D97757 40%, transparent);
+            --accent-teal-bright: #E08868;
+            --glow-teal: 0 0 10px color-mix(in srgb, #D97757 50%, transparent);
+            --accent-orange: #D97757;
+            --card-bg: #121212;
+            --card-bg-hover: #1A1A1A;
+            --card-border: 1px solid #2D2D2D;
+            --text-primary: #FFFFFF;      /* Headings/Active Text */
+            --text-secondary: #A0A0A0;   /* Secondary/Body Text */
+        }
+        /* Claude Terracotta — button/action element overrides in planning panel */
+        body.theme-claude-terracotta .action-btn {
+            background: #A35941;          /* Muted Terracotta solid fill */
+            border-color: #A35941;
+            color: #FFFFFF;
+        }
+        body.theme-claude-terracotta .action-btn:hover:not(:disabled) {
+            background: #D97757;          /* Primary Terracotta on hover */
+            border-color: #D97757;
+        }
+        body.theme-claude-terracotta .secondary-btn {
+            border-color: color-mix(in srgb, #D97757 60%, transparent);  /* Ghost style at 60% opacity */
+            color: #D97757;
+        }
+        body.theme-claude-terracotta .secondary-btn:hover:not(:disabled) {
+            background: color-mix(in srgb, #D97757 10%, transparent);
+            border-color: #D97757;
+            color: #FFFFFF;
+        }
+
+        /* Slightly Darker Black — minimalist monochrome with tonal depth and luminance */
+        body.theme-slightly-darker-black {
+            --panel-bg: #0A0A0A;          /* Deepest black */
+            --panel-bg2: #141414;         /* Secondary Surface — Slightly lighter for sidebars and terminal panels */
+            --border-color: #1F1F1F;      /* Subtle Dividers */
+            --border-bright: #333333;     /* Interactive Outlines */
+            --accent-teal: #E0E0E0;       /* Active States — Light gray for active tabs/borders */
+            --accent-teal-dim: color-mix(in srgb, #E0E0E0 40%, transparent);
+            --accent-teal-bright: #FFFFFF;
+            --glow-teal: 0 0 10px color-mix(in srgb, #E0E0E0 30%, transparent);
+            --accent-orange: #E0E0E0;
+            --card-bg: #0A0A0A;
+            --card-bg-hover: #141414;
+            --card-border: 1px solid #1F1F1F;
+            --text-primary: #F5F5F5;      /* Primary Text — High contrast */
+            --text-secondary: #666666;    /* De-emphasized Text — Metadata, timestamps, inactive labels */
+        }
+        /* Slightly Darker Black — button/action element overrides in planning panel */
+        body.theme-slightly-darker-black .action-btn {
+            background: #FFFFFF;          /* White on black for primary CTAs */
+            border-color: #FFFFFF;
+            color: #0A0A0A;
+        }
+        body.theme-slightly-darker-black .action-btn:hover:not(:disabled) {
+            background: #E0E0E0;
+            border-color: #E0E0E0;
+            color: #0A0A0A;
+        }
+        body.theme-slightly-darker-black .secondary-btn {
+            border-color: #333333;        /* Interactive Outlines */
+            color: #E0E0E0;
+        }
+        body.theme-slightly-darker-black .secondary-btn:hover:not(:disabled) {
+            background: rgba(255, 255, 255, 0.05);  /* Semi-transparent white overlay for hover on dark surfaces */
+            border-color: #E0E0E0;
+            color: #F5F5F5;
+        }
+        /* Slightly Darker Black — special hover effects */
+        body.theme-slightly-darker-black .strip-btn:hover:not(:disabled),
+        body.theme-slightly-darker-black .tab-btn:hover,
+        body.theme-slightly-darker-black .db-radio-option:hover,
+        body.theme-slightly-darker-black .db-action-btn:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        /* Afterburner Updated — Hanken Grotesk font only */
+        body.theme-afterburner-updated {
+            --font-family: 'Hanken Grotesk', var(--vscode-font-family), -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        /* Afterburner Updated — body matches prototype (#101414) so glass effect works */
+        body.theme-afterburner-updated.cyber-theme-enabled {
+            background-color: #101414;
+            background-image:
+                linear-gradient(rgba(0, 229, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 229, 255, 0.03) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+        }
+        /* Afterburner Updated — scanline overlay at spec 7% opacity (default is 15%) */
+        body.theme-afterburner-updated.cyber-theme-enabled .cyber-scanlines {
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0, 0, 0, 0.07) 2px,
+                rgba(0, 0, 0, 0.07) 4px
+            );
+        }
+        /* Afterburner Updated — sweep beam uses #00e5ff instead of hardcoded #3ddbd9 */
+        body.theme-afterburner-updated.cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
+            background: linear-gradient(
+                to bottom,
+                rgba(255, 255, 255, 0) 0%,
+                rgba(0, 229, 255, 0.03) 10%,
+                rgba(0, 229, 255, 0.07) 50%,
+                rgba(0, 229, 255, 0.03) 90%,
+                rgba(255, 255, 255, 0) 100%
+            );
+        }
+        /* Afterburner Updated — cyber glassmorphism borders updated to #00e5ff */
+        body.theme-afterburner-updated.cyber-theme-enabled .research-tab-bar {
+            border-bottom-color: rgba(0, 229, 255, 0.25);
+        }
+        body.theme-afterburner-updated.cyber-theme-enabled .controls-strip {
+            border-bottom-color: rgba(0, 229, 255, 0.20);
+        }
+        body.theme-afterburner-updated.cyber-theme-enabled #tree-pane,
+        body.theme-afterburner-updated.cyber-theme-enabled #tree-pane-online,
+        body.theme-afterburner-updated.cyber-theme-enabled #tree-pane-design,
+        body.theme-afterburner-updated.cyber-theme-enabled #tree-pane-html,
+        body.theme-afterburner-updated.cyber-theme-enabled #tree-pane-tickets {
+            border-right-color: rgba(0, 229, 255, 0.20);
+        }
+        /* Afterburner Updated — preview pane grid lines updated to #00e5ff */
+        body.theme-afterburner-updated.cyber-theme-enabled #preview-pane,
+        body.theme-afterburner-updated.cyber-theme-enabled #preview-pane-online,
+        body.theme-afterburner-updated.cyber-theme-enabled #preview-pane-design,
+        body.theme-afterburner-updated.cyber-theme-enabled #preview-pane-html,
+        body.theme-afterburner-updated.cyber-theme-enabled #preview-pane-tickets {
+            background-image:
+                linear-gradient(rgba(0, 229, 255, 0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 229, 255, 0.08) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+        }
+        body.theme-afterburner-updated.cyber-theme-enabled #kanban-preview-pane,
+        body.theme-afterburner-updated.cyber-theme-enabled #markdown-preview-tickets {
+            background-image:
+                linear-gradient(rgba(0, 229, 255, 0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 229, 255, 0.08) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+        }
+        /* Afterburner Updated — planning card borders updated to #00e5ff */
+        body.theme-afterburner-updated.cyber-theme-enabled .planning-card {
+            border-color: rgba(0, 229, 255, 0.20);
+            box-shadow: 0 0 12px rgba(0, 229, 255, 0.06), 0 4px 12px rgba(0, 0, 0, 0.4);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: var(--font-family);
+            font-size: 13px;
+            color: var(--text-primary);
+            background: var(--panel-bg);
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 40px);
+        }
+
+        /* Tab Bar - Kanban Dark Theme */
+        .research-tab-bar {
+            display: flex;
+            flex-direction: row;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+            height: 40px;
+            overflow-x: auto;
+        }
+
+        .research-tab-btn {
+            flex-shrink: 0;
+            white-space: nowrap;
+            padding: 0 16px;
+            font-size: 11px;
+            font-family: var(--font-mono);
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid transparent;
+            border-bottom: none;
+            border-radius: 3px 3px 0 0;
+            position: relative;
+            top: 1px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .research-tab-btn:hover {
+            color: var(--text-primary);
+            background: color-mix(in srgb, var(--accent-teal) 5%, transparent);
+        }
+
+        .research-tab-btn.active {
+            color: var(--accent-teal);
+            background: var(--panel-bg2);
+            border-color: var(--border-color);
+            border-bottom-color: var(--panel-bg2);
+        }
+
+        /* Tab Content Areas */
+        .research-tab-content {
+            display: none;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .research-tab-content.active {
+            display: block;
+        }
+
+        #local-content,
+        #online-content,
+        #kanban-content,
+        #design-content,
+        #html-preview-content,
+        #tickets-content {
+            display: none;
+            flex-direction: column;
+            height: calc(100vh - 40px);
+            background: var(--panel-bg);
+        }
+
+        #local-content.active,
+        #online-content.active,
+        #kanban-content.active,
+        #design-content.active,
+        #html-preview-content.active,
+        #tickets-content.active {
+            display: flex;
+        }
+
+        .controls-strip {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            background: var(--panel-bg2);
+            border-bottom: 1px solid var(--border-color);
+            flex-shrink: 0;
+        }
+
+        .workspace-filter-select {
+            font-size: 11px;
+            font-family: var(--font-mono);
+            letter-spacing: 0.5px;
+            padding: 3px 8px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            cursor: pointer;
+            max-width: 160px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .workspace-filter-select:hover {
+            border-color: var(--accent-teal-dim);
+        }
+        .workspace-filter-select:focus {
+            outline: 1px solid var(--accent-teal);
+        }
+
+        .strip-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-family: var(--font-family);
+            font-size: 10px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            padding: 4px 10px;
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+        }
+
+        .strip-btn:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+            border-color: var(--accent-teal-dim);
+            color: var(--accent-teal);
+        }
+
+        .strip-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            border-color: var(--border-color);
+            color: var(--text-secondary);
+        }
+
+        .content-row {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+        .content-row > * {
+            transition: flex 0.2s ease;
+        }
+        .content-row > :first-child {
+            flex: 1;
+            overflow-y: auto;
+        }
+        .content-row > :last-child {
+            flex: 3;
+            overflow-y: auto;
+        }
+
+        .content-row.collapsed > :first-child {
+            flex: 0 0 40px !important;
+        }
+        .content-row.collapsed > :last-child {
+            flex: 1 !important;
+        }
+
+        .content-row.collapsed #tree-pane,
+        .content-row.collapsed #tree-pane-online,
+        .content-row.collapsed #tree-pane-design,
+        .content-row.collapsed #tree-pane-html,
+        .content-row.collapsed #tree-pane-tickets {
+            padding: 4px;
+            overflow: hidden;
+        }
+
+        .content-row.collapsed .file-name,
+        .content-row.collapsed .label,
+        .content-row.collapsed .folder-subheader,
+        .content-row.collapsed .source-header,
+        .content-row.collapsed .folder-config,
+        .content-row.collapsed .source-header-row,
+        .content-row.collapsed .imported-docs-header,
+        .content-row.collapsed .imported-docs-doc-subheader,
+        .content-row.collapsed .last-synced,
+        .content-row.collapsed .sync-btn,
+        .content-row.collapsed .source-badge,
+        .content-row.collapsed .card-text,
+        .content-row.collapsed .card-actions,
+        .content-row.collapsed .card-subtitle {
+            display: none !important;
+        }
+
+        .content-row.collapsed .tree-node-container {
+            margin-left: 0 !important;
+        }
+
+        .content-row.collapsed .tree-node {
+            justify-content: center;
+            padding: 8px 0;
+            margin-left: 0 !important;
+        }
+
+        .content-row.collapsed .tree-node .icon {
+            margin: 0;
+            font-size: 16px;
+        }
+
+        .sidebar-toggle-row {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .sidebar-toggle-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 14px;
+            line-height: 1;
+            transition: all 0.15s;
+        }
+
+        .sidebar-folders-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-family: var(--font-family);
+            line-height: 1.2;
+            transition: all 0.15s;
+            margin-right: auto;
+            display: flex;
+            align-items: center;
+        }
+
+        .cyber-theme-enabled .sidebar-folders-btn:hover {
+            color: var(--accent-neon);
+            border-color: var(--accent-neon);
+            box-shadow: 0 0 5px color-mix(in srgb, var(--accent-neon) 40%, transparent);
+            background: color-mix(in srgb, var(--accent-neon) 10%, transparent);
+        }
+
+        .sidebar-folders-btn:hover {
+            color: var(--accent-teal);
+            border-color: var(--accent-teal-dim);
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+        }
+
+        .sidebar-toggle-btn:hover {
+            color: var(--accent-teal);
+            border-color: var(--accent-teal-dim);
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+        }
+
+        .content-row.collapsed .sidebar-toggle-row {
+            position: static;
+            display: flex;
+            justify-content: center;
+            margin-bottom: 8px;
+        }
+
+        .content-row.collapsed .sidebar-folders-btn {
+            display: none !important;
+        }
+
+        /* Active Design Doc Header */
+        .active-doc-banner {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 12px;
+            background: var(--accent-teal-dim);
+            border-bottom: 1px solid var(--accent-teal);
+            flex-shrink: 0;
+        }
+
+        .active-doc-banner.inactive {
+            background: var(--panel-bg2);
+            border-bottom-color: var(--border-color);
+        }
+
+        .active-doc-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+        }
+
+        .active-doc-label {
+            color: var(--text-secondary);
+        }
+
+        .active-doc-name {
+            color: var(--accent-teal);
+            font-weight: 500;
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .active-doc-banner.inactive .active-doc-name {
+            color: var(--text-secondary);
+        }
+
+        .btn-disable-doc {
+            background: transparent;
+            border: 1px solid var(--accent-teal);
+            color: var(--accent-teal);
+            font-size: 10px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            padding: 3px 10px;
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+        }
+
+        .btn-disable-doc:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+        }
+
+        .active-doc-banner.inactive .btn-disable-doc {
+            display: none;
+        }
+
+        /* Tickets banner actions — extend active-doc-banner for ticket action buttons */
+        .tickets-banner-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .active-doc-banner.inactive .tickets-banner-actions {
+            display: none;
+        }
+
+        .html-banner-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .active-doc-banner.inactive .html-banner-actions {
+            display: none;
+        }
+
+        /* Tickets detail meta inside active-doc-banner */
+        .tickets-detail-meta {
+            display: flex;
+            gap: 8px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            margin-left: 8px;
+        }
+
+        /* Subtask navigation — matches Online Docs .page-navigation pattern */
+        #tickets-subtasks-nav {
+            margin-bottom: 16px;
+            padding: 12px;
+            background: var(--panel-bg2);
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 4px;
+        }
+        #tickets-subtasks-nav .subtasks-header {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--accent-teal);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        #tickets-subtasks-nav .subtask-nav-item {
+            padding: 6px 8px;
+            cursor: pointer;
+            border-radius: 3px;
+            transition: background 0.1s;
+            font-size: 13px;
+            color: var(--accent-teal);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        #tickets-subtasks-nav .subtask-nav-item:hover {
+            background: var(--accent-teal-dim);
+        }
+        #tickets-subtasks-nav .subtask-nav-item.selected {
+            background: var(--accent-teal-dim);
+        }
+        #tickets-subtasks-nav .subtask-nav-status {
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+        }
+
+        #notebook-content {
+            flex-direction: column;
+            padding: 16px;
+            gap: 16px;
+            overflow-y: auto;
+            height: 100%;
+            background: var(--panel-bg);
+        }
+
+        #notebook-content.active {
+            display: flex;
+        }
+
+        /* Planning Cards */
+        .planning-card {
+            border: var(--card-border);
+            border-radius: 6px;
+            padding: 16px;
+            background: var(--card-bg);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            box-shadow: var(--shadow-md);
+            margin-bottom: 16px;
+            transition: all 0.15s;
+        }
+
+
+        .planning-card-header {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--accent-teal);
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--accent-teal-dim);
+        }
+
+        .planning-card-description {
+            font-size: 12px;
+            line-height: 1.5;
+            color: var(--text-primary);
+        }
+
+        .planning-card-section {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        /* Add separator between consecutive card sections */
+        .planning-card-section + .planning-card-section {
+            margin-top: 8px;
+            border-top: 1px solid var(--accent-teal-dim);
+            padding-top: 16px;
+        }
+
+        .planning-card-section-title {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--accent-teal);
+            margin-top: 12px;
+            margin-bottom: 8px;
+        }
+
+        .planning-status {
+            font-size: 10px;
+            color: var(--text-secondary);
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            padding: 4px 0;
+        }
+
+        /* Controls & Buttons */
+        .planning-controls {
+            display: flex;
+            flex-direction: row;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 12px;
+            justify-content: flex-start;
+        }
+
+        .planning-button {
+            padding: 8px 16px;
+            font-size: 11px;
+            font-family: var(--font-family);
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            border: 1px solid var(--accent-teal-dim);
+            background: var(--panel-bg2);
+            color: var(--accent-teal);
+            cursor: pointer;
+            border-radius: 3px;
+            transition: all 0.15s;
+        }
+
+        .planning-button:active {
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+        }
+
+        .planning-button:hover:not(:disabled) {
+            background: var(--accent-teal);
+            color: #111111;
+            box-shadow: var(--glow-teal);
+        }
+
+        .planning-button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            border-color: var(--border-color);
+            color: var(--text-secondary);
+        }
+
+        .planning-button.secondary {
+            border: 1px solid var(--border-color);
+            background: var(--card-bg);
+            color: var(--text-primary);
+        }
+
+        .planning-button.secondary:hover:not(:disabled) {
+            background: var(--card-bg-hover);
+            color: var(--text-primary);
+            box-shadow: none;
+        }
+
+        /* Form Elements */
+        .planning-select {
+            flex: 1;
+            font-size: 12px;
+            padding: 4px 8px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+        }
+
+        .planning-input {
+            width: 100%;
+            font-size: 12px;
+            padding: 4px 8px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            box-sizing: border-box;
+        }
+
+        .planning-custom-row {
+            padding: 4px 0;
+        }
+
+        .planning-hint {
+            font-size: 9px;
+            color: var(--text-secondary);
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            padding: 4px 0;
+        }
+
+        .planning-preview {
+            margin: 4px 0;
+            font-size: 10px;
+            color: var(--text-secondary);
+            padding: 8px;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            white-space: pre-line;
+            line-height: 1.4;
+        }
+
+        .empty-state {
+            padding: 12px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            text-align: center;
+            font-style: italic;
+        }
+
+        .planning-error {
+            min-height: 0;
+            padding: 4px 0;
+            color: #f14c4c;
+            font-size: 10px;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+        }
+
+        #tree-pane,
+        #tree-pane-online,
+        #tree-pane-html,
+        #tree-pane-tickets {
+            position: relative;
+            background: var(--panel-bg2);
+            border-right: 1px solid var(--border-color);
+            overflow-y: auto;
+            padding: 12px;
+            min-height: 100%;
+        }
+
+        .source-header {
+            font-weight: 600;
+            padding: 8px 0 4px 0;
+            margin-top: 8px;
+            margin-bottom: 8px;
+            color: var(--text-primary);
+            text-transform: uppercase;
+            font-size: 10px;
+            letter-spacing: 1px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .source-header:first-of-type {
+            margin-top: 0;
+        }
+
+        .folder-subheader {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 12px 8px 4px 8px;
+            margin-top: 8px;
+        }
+
+        .folder-subheader:first-of-type {
+            margin-top: 0;
+            padding-top: 8px;
+        }
+
+        .source-folder-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--accent-teal);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin: 8px 0 4px 0;
+        }
+
+        .folder-import-btn {
+            font-size: 11px;
+            padding: 2px 6px;
+            background: transparent;
+            color: var(--accent-teal);
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.15s;
+            margin-left: auto;
+            line-height: 1;
+        }
+        .folder-import-btn:hover {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border-color: var(--accent-teal);
+        }
+
+        .source-header-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 10px;
+            background: color-mix(in srgb, var(--accent-teal) 6%, var(--panel-bg2));
+            border-bottom: 1px solid var(--accent-teal-dim);
+            border-left: 3px solid var(--accent-teal-dim);
+            border-radius: 3px;
+            margin: 4px 0;
+        }
+
+        .source-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .source-refresh-btn {
+            font-size: 11px;
+            padding: 2px 6px;
+            background: transparent;
+            color: var(--accent-teal);
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .source-refresh-btn:hover {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border-color: var(--accent-teal);
+        }
+        .source-folder-header:first-of-type {
+            margin-top: 4px;
+        }
+
+        /* Reset margin on first folder-subheader after a source-folder header */
+        .source-folder-header + .folder-subheader {
+            margin-top: 0;
+            padding-top: 8px;
+        }
+
+        .file-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            cursor: pointer;
+            border-radius: 2px;
+            font-size: 12px;
+            color: var(--text-primary);
+        }
+
+        .file-item:hover {
+            background: var(--card-bg-hover);
+        }
+
+        .file-item .file-icon {
+            flex-shrink: 0;
+            font-size: 12px;
+        }
+
+        .file-item .file-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .tree-node-container {
+            /* No visual styling — purely structural wrapper */
+        }
+
+        .tree-node {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 10px;
+            border-radius: 4px;
+            margin: 3px 0;
+            border: 1px solid var(--border-color);
+            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            border-left: 3px solid var(--accent-teal-dim);
+            cursor: pointer;
+            user-select: none;
+            font-size: 12px;
+            line-height: 1.4;
+            transition: all 0.15s;
+        }
+
+        .tree-node:hover {
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
+        }
+
+        .tree-node.selected {
+            border-color: var(--accent-teal);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 35%, transparent),
+                        inset 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            color: var(--accent-teal);
+        }
+
+        /* Document cards: vertical column layout matching Kanban plan cards */
+        .tree-node:has(.card-text) {
+            flex-direction: column;
+            align-items: stretch;
+            padding: 10px 12px;
+            gap: 8px;
+        }
+        .tree-node:has(.card-text) .card-actions {
+            margin-top: 0;
+        }
+
+        .tree-node.folder-subheader {
+            background: transparent;
+            border: none;
+            border-left: none;
+            box-shadow: none;
+            padding: 12px 8px 4px 8px;
+            margin: 0;
+            border-radius: 0;
+        }
+        .tree-node.folder-subheader:hover {
+            background: transparent;
+            border-color: transparent;
+            border-left-color: transparent;
+            box-shadow: none;
+        }
+
+        .tree-node .icon {
+            flex-shrink: 0;
+            width: 16px;
+            height: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+        }
+
+        .tree-node .label {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .tree-children {
+            margin-left: 16px;
+        }
+
+        .tree-placeholder {
+            color: var(--text-secondary);
+            font-style: italic;
+            padding: 4px 8px;
+            font-size: 12px;
+        }
+
+        #preview-pane,
+        #preview-pane-online,
+        #preview-pane-tickets {
+            display: flex;
+            flex-direction: column;
+            background: var(--panel-bg, #000000);
+            /* Removed dot-pattern — VS Code preview uses solid backgrounds */
+            overflow-y: auto;
+            padding: 0 16px 16px 16px;
+            height: 100%;
+        }
+
+        #preview-pane-design {
+            background: var(--panel-bg);
+        }
+        #preview-pane-html {
+            background: var(--panel-bg);
+        }
+
+        .preview-content-wrapper {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+        }
+
+        #status {
+            margin-left: auto;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        /* Custom Scrollbars for Dark Mode Immersion */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--vscode-scrollbarSlider-background, var(--border-bright));
+            border-radius: 3px;
+            border: none;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--vscode-scrollbarSlider-hoverBackground, var(--text-secondary));
+        }
+
+        /* Sidebar Hierarchy Fix */
+        .imported-docs-header {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-secondary); /* Subdued from accent-teal */
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        /* Unified Markdown Preview Styling (Local, Online & Design) */
+        #markdown-preview,
+        #markdown-preview-online,
+        #markdown-preview-design,
+        #markdown-preview-tickets {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0 26px; /* Match VS Code's markdown.css default */
+            max-width: 800px; /* Clarification: kept for readability, VS Code uses full width */
+            margin: 0 auto;
+            font-family: var(--font-family);
+            font-size: 13px;
+            line-height: 1.5;
+            word-wrap: break-word;
+            color: var(--vscode-editor-foreground, #cccccc);
+        }
+
+        /* Kanban preview pane: inherits font/text styling but keeps its own layout */
+        #kanban-preview-pane {
+            font-family: var(--font-family);
+            font-size: 13px;
+            line-height: 1.5;
+            word-wrap: break-word;
+            color: var(--vscode-editor-foreground, #cccccc);
+            padding: 8px 16px;
+        }
+
+        #markdown-preview h1, #markdown-preview h2, #markdown-preview h3, #markdown-preview h4, #markdown-preview h5, #markdown-preview h6,
+        #markdown-preview-online h1, #markdown-preview-online h2, #markdown-preview-online h3, #markdown-preview-online h4, #markdown-preview-online h5, #markdown-preview-online h6,
+        #markdown-preview-design h1, #markdown-preview-design h2, #markdown-preview-design h3, #markdown-preview-design h4, #markdown-preview-design h5, #markdown-preview-design h6,
+        #kanban-preview-pane h1, #kanban-preview-pane h2, #kanban-preview-pane h3, #kanban-preview-pane h4, #kanban-preview-pane h5, #kanban-preview-pane h6,
+        #markdown-preview-tickets h1, #markdown-preview-tickets h2, #markdown-preview-tickets h3, #markdown-preview-tickets h4, #markdown-preview-tickets h5, #markdown-preview-tickets h6 {
+            margin-top: 24px;
+            margin-bottom: 12px;
+            font-weight: 600;
+            line-height: 1.25;
+            color: #ffffff;
+        }
+
+        /* Afterburner Updated — doc preview matches prototype */
+        body.theme-afterburner-updated #markdown-preview,
+        body.theme-afterburner-updated #markdown-preview-online,
+        body.theme-afterburner-updated #markdown-preview-design,
+        body.theme-afterburner-updated #markdown-preview-tickets {
+            font-family: 'Hanken Grotesk', sans-serif;
+            padding: 26px;
+        }
+        body.theme-afterburner-updated #kanban-preview-pane,
+        body.theme-afterburner-updated #markdown-preview-tickets {
+            font-family: 'Hanken Grotesk', var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", system-ui, "Ubuntu", "Droid Sans", sans-serif);
+        }
+        body.theme-afterburner-updated #markdown-preview h1, body.theme-afterburner-updated #markdown-preview h2, body.theme-afterburner-updated #markdown-preview h3, body.theme-afterburner-updated #markdown-preview h4, body.theme-afterburner-updated #markdown-preview h5, body.theme-afterburner-updated #markdown-preview h6,
+        body.theme-afterburner-updated #markdown-preview-online h1, body.theme-afterburner-updated #markdown-preview-online h2, body.theme-afterburner-updated #markdown-preview-online h3, body.theme-afterburner-updated #markdown-preview-online h4, body.theme-afterburner-updated #markdown-preview-online h5, body.theme-afterburner-updated #markdown-preview-online h6,
+        body.theme-afterburner-updated #markdown-preview-design h1, body.theme-afterburner-updated #markdown-preview-design h2, body.theme-afterburner-updated #markdown-preview-design h3, body.theme-afterburner-updated #markdown-preview-design h4, body.theme-afterburner-updated #markdown-preview-design h5, body.theme-afterburner-updated #markdown-preview-design h6,
+        body.theme-afterburner-updated #kanban-preview-pane h1, body.theme-afterburner-updated #kanban-preview-pane h2, body.theme-afterburner-updated #kanban-preview-pane h3, body.theme-afterburner-updated #kanban-preview-pane h4, body.theme-afterburner-updated #kanban-preview-pane h5, body.theme-afterburner-updated #kanban-preview-pane h6,
+        body.theme-afterburner-updated #markdown-preview-tickets h1, body.theme-afterburner-updated #markdown-preview-tickets h2, body.theme-afterburner-updated #markdown-preview-tickets h3, body.theme-afterburner-updated #markdown-preview-tickets h4, body.theme-afterburner-updated #markdown-preview-tickets h5, body.theme-afterburner-updated #markdown-preview-tickets h6 {
+            font-family: 'GeistPixel', 'Hanken Grotesk', sans-serif;
+            letter-spacing: -0.05em;
+            font-stretch: 90%;
+            line-height: 1.1;
+        }
+        /* Afterburner Updated — doc preview h2-h6 use brighter cyan like prototype */
+        body.theme-afterburner-updated #markdown-preview h2, body.theme-afterburner-updated #markdown-preview h3, body.theme-afterburner-updated #markdown-preview h4, body.theme-afterburner-updated #markdown-preview h5, body.theme-afterburner-updated #markdown-preview h6,
+        body.theme-afterburner-updated #markdown-preview-online h2, body.theme-afterburner-updated #markdown-preview-online h3, body.theme-afterburner-updated #markdown-preview-online h4, body.theme-afterburner-updated #markdown-preview-online h5, body.theme-afterburner-updated #markdown-preview-online h6,
+        body.theme-afterburner-updated #markdown-preview-design h2, body.theme-afterburner-updated #markdown-preview-design h3, body.theme-afterburner-updated #markdown-preview-design h4, body.theme-afterburner-updated #markdown-preview-design h5, body.theme-afterburner-updated #markdown-preview-design h6,
+        body.theme-afterburner-updated #kanban-preview-pane h2, body.theme-afterburner-updated #kanban-preview-pane h3, body.theme-afterburner-updated #kanban-preview-pane h4, body.theme-afterburner-updated #kanban-preview-pane h5, body.theme-afterburner-updated #kanban-preview-pane h6,
+        body.theme-afterburner-updated #markdown-preview-tickets h2, body.theme-afterburner-updated #markdown-preview-tickets h3, body.theme-afterburner-updated #markdown-preview-tickets h4, body.theme-afterburner-updated #markdown-preview-tickets h5, body.theme-afterburner-updated #markdown-preview-tickets h6 {
+            color: #00e5ff;
+        }
+
+        #markdown-preview h1,
+        #markdown-preview-online h1,
+        #markdown-preview-design h1,
+        #kanban-preview-pane h1,
+        #markdown-preview-tickets h1 {
+            font-size: 2em; /* 2em relative to 13px base = 26px */
+            margin-top: 0;
+            padding-bottom: 0.3em;
+            border-bottom: 1px solid var(--accent-teal-dim);
+            border-left: 3px solid var(--accent-teal-dim);
+            padding-left: 8px;
+            text-transform: uppercase;
+        }
+
+        #markdown-preview h2,
+        #markdown-preview-online h2,
+        #markdown-preview-design h2,
+        #kanban-preview-pane h2,
+        #markdown-preview-tickets h2 {
+            font-size: 1.5em; /* 1.5em relative to 13px base = 19.5px */
+            padding-bottom: 0.3em;
+            border-bottom: 1px solid var(--accent-teal-dim);
+            border-left: 2px solid var(--accent-teal-dim);
+            padding-left: 6px;
+            text-transform: uppercase;
+            color: var(--accent-teal);
+        }
+
+        #markdown-preview h3,
+        #markdown-preview-online h3,
+        #markdown-preview-design h3,
+        #kanban-preview-pane h3,
+        #markdown-preview h4,
+        #markdown-preview-online h4,
+        #markdown-preview-design h4,
+        #kanban-preview-pane h4,
+        #markdown-preview h5,
+        #markdown-preview-online h5,
+        #markdown-preview-design h5,
+        #kanban-preview-pane h5,
+        #markdown-preview h6,
+        #markdown-preview-online h6,
+        #markdown-preview-design h6,
+        #kanban-preview-pane h6,
+        #markdown-preview-tickets h3, #markdown-preview-tickets h4, #markdown-preview-tickets h5, #markdown-preview-tickets h6 {
+            text-transform: uppercase;
+            color: var(--accent-teal);
+        }
+
+        #markdown-preview h3,
+        #markdown-preview-online h3,
+        #markdown-preview-design h3,
+        #kanban-preview-pane h3,
+        #markdown-preview-tickets h3 {
+            font-size: 1.25em; /* 1.25em relative to 13px base = 16.25px */
+        }
+
+        #markdown-preview h4,
+        #markdown-preview-online h4,
+        #markdown-preview-design h4,
+        #kanban-preview-pane h4,
+        #markdown-preview-tickets h4 {
+            font-size: 1em;
+        }
+
+        #markdown-preview h5,
+        #markdown-preview-online h5,
+        #markdown-preview-design h5,
+        #kanban-preview-pane h5,
+        #markdown-preview-tickets h5 {
+            font-size: 0.875em;
+        }
+
+        #markdown-preview h6,
+        #markdown-preview-online h6,
+        #markdown-preview-design h6,
+        #kanban-preview-pane h6,
+        #markdown-preview-tickets h6 {
+            font-size: 0.85em;
+        }
+
+        #markdown-preview p,
+        #markdown-preview-online p,
+        #markdown-preview-design p,
+        #kanban-preview-pane p,
+        #markdown-preview-tickets p {
+            margin-bottom: 16px;
+            line-height: inherit; /* Inherits from container's 1.5 */
+            color: var(--text-primary, #e0e0e0);
+            font-size: inherit; /* Inherits from container's 13px */
+        }
+
+        #markdown-preview li,
+        #markdown-preview-online li,
+        #markdown-preview-design li,
+        #kanban-preview-pane li,
+        #markdown-preview-tickets li {
+            margin-bottom: 6px; /* Tighter list item spacing */
+            line-height: inherit;
+            color: var(--vscode-editor-foreground, #cccccc);
+            font-size: inherit;
+        }
+
+        #markdown-preview li p,
+        #markdown-preview-online li p,
+        #markdown-preview-design li p,
+        #kanban-preview-pane li p,
+        #markdown-preview-tickets li p {
+            margin-bottom: 0; /* Paragraphs inside list items: zero extra margin (li already spaced) */
+        }
+
+        #markdown-preview pre,
+        #markdown-preview-online pre,
+        #markdown-preview-design pre,
+        #kanban-preview-pane pre,
+        #markdown-preview-tickets pre {
+            background-color: var(--vscode-textCodeBlock-background, rgba(255,255,255,0.04));
+            border: 1px solid var(--vscode-widget-border, rgba(127, 127, 127, 0.35));
+            border-radius: 3px;
+            overflow-x: auto;
+            padding: 16px; /* VS Code default */
+            margin: 16px 0;
+        }
+
+        #markdown-preview pre code,
+        #markdown-preview-online pre code,
+        #markdown-preview-design pre code,
+        #kanban-preview-pane pre code,
+        #markdown-preview-tickets pre code {
+            background: none;
+            padding: 0;
+            border: none;
+            display: inline-block;
+            color: var(--vscode-editor-foreground, #cccccc);
+            tab-size: 4;
+        }
+
+        #markdown-preview code,
+        #markdown-preview-online code,
+        #markdown-preview-design code,
+        #kanban-preview-pane code,
+        #markdown-preview-tickets code {
+            font-family: var(--vscode-editor-font-family, 'SF Mono', Monaco, Menlo, Consolas, monospace);
+            font-size: 1em; /* Match VS Code: inline code is same size as surrounding text */
+            line-height: 1.357em;
+            color: var(--accent-teal);
+            background-color: color-mix(in srgb, var(--accent-teal) 12%, transparent);
+            border: 1px solid var(--accent-teal-dim);
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+
+        #markdown-preview blockquote,
+        #markdown-preview-online blockquote,
+        #markdown-preview-design blockquote,
+        #kanban-preview-pane blockquote,
+        #markdown-preview-tickets blockquote {
+            margin: 0;
+            padding: 0 16px 0 10px; /* Match VS Code's markdown.css */
+            border-left: 5px solid var(--vscode-textBlockQuote-border, var(--border-color));
+            border-radius: 2px;
+            color: var(--vscode-editor-foreground, var(--text-secondary));
+            background: transparent;
+        }
+
+        #markdown-preview ul, #markdown-preview ol,
+        #markdown-preview-online ul, #markdown-preview-online ol,
+        #markdown-preview-design ul, #markdown-preview-design ol,
+        #kanban-preview-pane ul, #kanban-preview-pane ol,
+        #markdown-preview-tickets ul, #markdown-preview-tickets ol {
+            margin-bottom: 16px; /* Match VS Code's tighter list spacing */
+            padding-left: 2em;
+        }
+
+        /* Table Styling */
+        #markdown-preview table,
+        #markdown-preview-online table,
+        #markdown-preview-design table,
+        #kanban-preview-pane table,
+        #markdown-preview-tickets table {
+            border-collapse: collapse;
+            margin-bottom: 0.7em;
+            font-size: inherit; /* Inherits from container */
+        }
+
+        #markdown-preview th,
+        #markdown-preview-online th,
+        #markdown-preview-design th,
+        #kanban-preview-pane th,
+        #markdown-preview-tickets th {
+            text-align: left;
+            border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.69));
+            font-weight: 600;
+            padding: 5px 10px;
+        }
+
+        #markdown-preview td,
+        #markdown-preview-online td,
+        #markdown-preview-design td,
+        #kanban-preview-pane td,
+        #markdown-preview-tickets td {
+            padding: 5px 10px;
+            border-top: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
+            color: var(--vscode-editor-foreground, var(--text-primary));
+        }
+
+        #markdown-preview tr:hover td,
+        #markdown-preview-online tr:hover td,
+        #markdown-preview-design tr:hover td,
+        #kanban-preview-pane tr:hover td,
+        #markdown-preview-tickets tr:hover td {
+            background: var(--vscode-list-hoverBackground, var(--card-bg-hover));
+        }
+
+        #markdown-preview .table-wrapper,
+        #markdown-preview-online .table-wrapper,
+        #markdown-preview-design .table-wrapper,
+        #kanban-preview-pane .table-wrapper,
+        #markdown-preview-tickets .table-wrapper {
+            overflow-x: auto;
+            max-width: 100%;
+            margin-bottom: 16px;
+        }
+
+        /* Subtle, Interactive Links */
+        #markdown-preview a,
+        #markdown-preview-online a,
+        #markdown-preview-design a,
+        #kanban-preview-pane a,
+        #markdown-preview-tickets a {
+            color: var(--vscode-textLink-foreground, var(--accent-teal));
+            text-decoration: none;
+        }
+
+        #markdown-preview a:hover,
+        #markdown-preview-online a:hover,
+        #markdown-preview-design a:hover,
+        #kanban-preview-pane a:hover,
+        #markdown-preview-tickets a:hover {
+            color: var(--vscode-textLink-activeForeground, var(--accent-teal-bright));
+            text-decoration: underline;
+        }
+
+        #markdown-preview hr,
+        #markdown-preview-online hr,
+        #markdown-preview-design hr,
+        #kanban-preview-pane hr,
+        #markdown-preview-tickets hr {
+            border: 0;
+            height: 1px;
+            border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
+        }
+
+        #markdown-preview img,
+        #markdown-preview-online img,
+        #markdown-preview-design img,
+        #kanban-preview-pane img,
+        #markdown-preview-tickets img {
+            max-width: 100%;
+            max-height: 100%;
+        }
+
+        #markdown-preview .empty-state,
+        #markdown-preview-online .empty-state,
+        #markdown-preview-design .empty-state,
+        #kanban-preview-pane .empty-state,
+        #markdown-preview-tickets .empty-state {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--vscode-editor-foreground, var(--text-secondary));
+            font-size: inherit; /* Inherits from container's 14px */
+            opacity: 0.5;
+        }
+
+        .error-state {
+            color: #f14c4c;
+            padding: 16px;
+        }
+
+        .filter-row {
+            padding: 4px 4px 8px 4px;
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            gap: 6px;
+        }
+
+        .filter-select {
+            flex: 1;
+            font-size: 12px;
+            padding: 2px 4px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: var(--font-family);
+        }
+
+        .folder-config {
+            padding: 4px 4px 8px 4px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .folder-config input {
+            flex: 1;
+            font-size: 12px;
+            padding: 2px 4px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: var(--font-family);
+        }
+
+        .folder-config button {
+            font-size: 11px;
+            padding: 2px 8px;
+            border: 1px solid var(--border-color);
+            background: var(--card-bg);
+            color: var(--text-primary);
+            cursor: pointer;
+            border-radius: 2px;
+        }
+
+        .folder-config button:hover {
+            background: var(--card-bg-hover);
+        }
+
+        .folder-list {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            max-height: 120px;
+            overflow-y: auto;
+            margin-top: 4px;
+        }
+
+        .folder-list-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--panel-bg2);
+            padding: 3px 6px;
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            font-size: 11px;
+            gap: 8px;
+        }
+
+        .folder-path {
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: var(--text-primary);
+        }
+
+        .folder-list-remove-btn {
+            background: transparent;
+            border: none;
+            color: #ff5555;
+            cursor: pointer;
+            font-size: 10px;
+            padding: 2px 4px;
+            border-radius: 2px;
+        }
+
+        .folder-list-remove-btn:hover {
+            background: rgba(255, 85, 85, 0.1);
+        }
+
+        .folder-list-empty {
+            font-size: 11px;
+            color: var(--text-secondary);
+            padding: 6px;
+            text-align: center;
+            font-style: italic;
+        }
+
+        .source-doc-list {
+            margin-left: 0;
+        }
+
+        /* Imported Docs Section */
+        .imported-docs-section {
+            margin-top: 16px;
+            padding-top: 12px;
+            border-top: 1px solid var(--accent-teal-dim);
+        }
+
+        .imported-docs-header {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-secondary);
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .imported-docs-doc-subheader {
+            padding: 6px 8px 2px;
+            font-size: 11px;
+            color: var(--text-primary);
+            font-weight: 500;
+            border-top: 1px solid var(--border-color);
+            margin-top: 4px;
+        }
+
+        .imported-doc-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            border-radius: 2px;
+            font-size: 12px;
+        }
+
+        .imported-doc-row:hover {
+            background: var(--card-bg-hover);
+        }
+
+        .source-badge {
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--accent-teal);
+            background: var(--panel-bg2);
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 3px;
+            padding: 1px 4px;
+            flex-shrink: 0;
+        }
+
+        .imported-doc-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .last-synced {
+            font-size: 10px;
+            color: var(--text-secondary);
+            flex-shrink: 0;
+        }
+
+        .sync-btn {
+            font-size: 10px;
+            padding: 2px 8px;
+            border: 1px solid var(--accent-teal-dim);
+            background: var(--panel-bg2);
+            color: var(--accent-teal);
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+            flex-shrink: 0;
+        }
+
+        .sync-btn:hover:not(:disabled) {
+            background: var(--accent-teal);
+            color: #111111;
+        }
+
+        .sync-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            border-color: var(--border-color);
+            color: var(--text-secondary);
+        }
+
+        /* Duplicate Modal */
+        .duplicate-modal {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .duplicate-modal .modal-content {
+            background: var(--panel-bg);
+            padding: 24px;
+            border-radius: 8px;
+            max-width: 400px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+        .duplicate-modal .modal-content h3 { margin: 0 0 12px 0; color: var(--text-primary); }
+        .duplicate-modal .modal-content p { margin: 0 0 8px 0; color: var(--text-secondary); }
+        .duplicate-modal .modal-actions { display: flex; gap: 12px; margin-top: 16px; }
+        .duplicate-modal button {
+            flex: 1; padding: 8px 16px;
+            border: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border-radius: 4px; cursor: pointer; font-size: 13px;
+        }
+        .duplicate-modal button:hover { background: var(--accent-teal-dim); }
+        .duplicate-modal .modal-btn-replace { border-color: var(--accent-teal); color: var(--accent-teal); }
+
+        /* Research Tab Content */
+        #research-content {
+            flex-direction: column;
+            padding: 16px;
+            gap: 16px;
+            overflow-y: auto;
+            height: 100%;
+            background: var(--panel-bg);
+        }
+
+        #research-content.active {
+            display: flex;
+        }
+
+        /* Prompt Buttons Container */
+        .prompt-buttons-container {
+            display: flex;
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        /* Segmented Control */
+        .segmented-control {
+            display: flex;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 12px;
+        }
+
+        .segmented-btn {
+            flex: 1;
+            padding: 8px 16px;
+            background: var(--panel-bg2);
+            border: none;
+            border-right: 1px solid var(--border-color);
+            cursor: pointer;
+            font-size: 13px;
+            color: var(--text-secondary);
+            transition: all 0.15s;
+        }
+
+        .segmented-btn:last-child {
+            border-right: none;
+        }
+
+        .segmented-btn.active {
+            background: var(--accent-teal-dim);
+            color: var(--accent-teal);
+            font-weight: 600;
+        }
+
+        .segmented-btn:hover:not(.active) {
+            background: var(--card-bg-hover);
+        }
+
+        /* Radio Group */
+        .radio-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .radio-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            color: var(--text-primary);
+        }
+
+        .radio-option input[type="radio"] {
+            cursor: pointer;
+            accent-color: var(--accent-teal);
+        }
+
+        /* Toggle Switch */
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 24px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: var(--border-color);
+            transition: 0.2s;
+            border-radius: 24px;
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: var(--text-primary);
+            transition: 0.2s;
+            border-radius: 50%;
+        }
+
+        .toggle-switch input:checked + .toggle-slider {
+            background-color: var(--accent-teal-dim);
+        }
+
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(20px);
+            background-color: var(--accent-teal);
+        }
+
+        .toggle-label {
+            font-size: 13px;
+            color: var(--text-primary);
+        }
+
+        .antigravity-artifact-node {
+            margin-left: 12px; /* Indent under date header */
+        }
+
+        .planning-card-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-family: var(--font-family);
+            font-size: 9px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            padding: 2px 6px;
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+        .planning-card-btn:hover {
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+            border-color: var(--accent-teal-dim);
+            color: var(--accent-teal);
+        }
+        .planning-card-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        .card-icon-btn {
+            flex-shrink: 0;
+            width: 22px;
+            height: 22px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            line-height: 1;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .card-icon-btn:hover {
+            color: var(--accent-teal);
+            border-color: var(--accent-teal-dim);
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+        }
+        .card-icon-btn.card-delete-btn:hover {
+            background: #f14c4c;
+            border-color: #f14c4c;
+            color: white;
+        }
+        .card-icon-btn[title*="browser"]:hover {
+            color: var(--accent-teal);
+        }
+        .card-icon-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        /* HTML-specific icon+text hybrid buttons — override fixed width */
+        .card-icon-btn.html-serve-btn,
+        .card-icon-btn.html-link-btn {
+            width: auto;
+            min-width: 22px;
+            padding: 0 4px;
+            gap: 2px;
+        }
+        .card-icon-btn .btn-label {
+            font-size: 10px;
+            margin-left: 2px;
+            display: inline;
+        }
+        .content-row.collapsed .card-icon-btn .btn-label {
+            display: none;
+        }
+        .antigravity-date-subheader {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 12px 8px 4px 8px;
+            margin-top: 8px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .antigravity-date-subheader:first-child {
+            margin-top: 0;
+            padding-top: 4px;
+        }
+        .tree-node .card-title {
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-primary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .tree-node .card-subtitle {
+            font-size: 10px;
+            color: var(--text-secondary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .tree-node .card-actions {
+            display: flex;
+            gap: 4px;
+            margin-top: 4px;
+            flex-wrap: wrap;
+        }
+        .tree-node .card-text {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        details.planning-card summary.planning-card-header {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+        details.planning-card[open] summary.planning-card-header {
+            border-bottom: 1px solid var(--accent-teal-dim);
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+        }
+
+        /* Kanban Plans Tab */
+        .kanban-controls-strip {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px;
+            border-bottom: 1px solid var(--border-color, rgba(255,255,255,0.08));
+        }
+        .kanban-controls-strip select,
+        .kanban-controls-strip input {
+            background: var(--input-bg, rgba(255,255,255,0.06));
+            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+            color: inherit;
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 12px;
+        }
+        #kanban-search { flex: 1; }
+        #kanban-refresh-btn {
+            background: transparent;
+            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+            color: inherit;
+            border-radius: 4px;
+            cursor: pointer;
+            padding: 4px 8px;
+        }
+        #kanban-content-row { display: flex; gap: 0; height: 100%; overflow: hidden; }
+        #kanban-list-pane { flex: 1; overflow-y: auto; }
+        .kanban-preview-pane { overflow-y: auto; padding: 12px; border-left: 1px solid var(--border-color, rgba(255,255,255,0.08)); background: var(--panel-bg, #000000); }
+        .kanban-plan-item {
+            position: relative;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 10px 12px;
+            border-radius: 4px;
+            margin: 4px 0;
+            border: 1px solid var(--border-color);
+            /* Match kanban board card gradient */
+            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            border-left: 3px solid var(--accent-teal-dim);
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .kanban-plan-item:hover {
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
+        }
+        .kanban-plan-item.selected {
+            border-color: var(--accent-teal);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 35%, transparent),
+                        inset 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+        .kanban-plan-topic { font-size: 13px; font-weight: 500; flex: 1; }
+        .kanban-column-badge {
+            font-size: 10px;
+            padding: 2px 7px;
+            border-radius: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            /* Neutral grey/black for all status labels */
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--text-secondary);
+            border: 1px solid var(--border-color);
+        }
+        .kanban-column-badge[data-column="CREATED"] { background: rgba(61, 219, 217, 0.2); color: #3ddbd9; border-color: rgba(61, 219, 217, 0.3); }
+        .kanban-column-badge[data-column="PLAN_REVIEWED"] { background: rgba(187, 134, 252, 0.2); color: #bb86fc; border-color: rgba(187, 134, 252, 0.3); }
+        .kanban-column-badge[data-column="CODED"] { background: rgba(255, 183, 77, 0.2); color: #ffb74d; border-color: rgba(255, 183, 77, 0.3); }
+        .kanban-column-badge[data-column="CODE_REVIEWED"] { background: rgba(255, 138, 101, 0.2); color: #ff8a65; border-color: rgba(255, 138, 101, 0.3); }
+        .kanban-column-badge[data-column="COMPLETED"] { background: rgba(102, 187, 106, 0.2); color: #66bb6a; border-color: rgba(102, 187, 106, 0.3); }
+        /* Fallback for custom columns */
+        .kanban-column-badge:not([data-column="CREATED"]):not([data-column="PLAN_REVIEWED"]):not([data-column="CODED"]):not([data-column="CODE_REVIEWED"]):not([data-column="COMPLETED"]) {
+            background: rgba(255, 255, 255, 0.08); color: var(--text-secondary); border: 1px solid var(--border-color);
+        }
+
+        .markdown-alert { padding: 8px 12px; border-left: 4px solid; border-radius: 4px; margin: 12px 0; }
+        .markdown-alert-title { font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+        .alert-note { border-left-color: var(--accent-teal); background: color-mix(in srgb, var(--accent-teal) 8%, transparent); }
+        .alert-note .markdown-alert-title { color: var(--accent-teal); }
+        .alert-tip { border-left-color: #66bb6a; background: rgba(102, 187, 106, 0.08); }
+        .alert-tip .markdown-alert-title { color: #66bb6a; }
+        .alert-important { border-left-color: #bb86fc; background: rgba(187, 134, 252, 0.08); }
+        .alert-important .markdown-alert-title { color: #bb86fc; }
+        .alert-warning { border-left-color: #ffb74d; background: rgba(255, 183, 77, 0.08); }
+        .alert-warning .markdown-alert-title { color: #ffb74d; }
+        .alert-caution { border-left-color: #ff8a65; background: rgba(255, 138, 101, 0.08); }
+        .alert-caution .markdown-alert-title { color: #ff8a65; }
+
+        .cyber-scanlines {
+            display: none; /* Hidden by default; shown only when .cyber-theme-enabled is on body */
+            position: absolute;
+            inset: 0;
+            pointer-events: none; /* CRITICAL: must not block interaction with content below */
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0, 0, 0, 0.15) 2px,
+                rgba(0, 0, 0, 0.15) 4px
+            );
+            z-index: 5;
+        }
+        .cyber-theme-enabled .cyber-scanlines { display: block; }
+
+        /* Animated CRT rolling sweep beam — only active when animation is not disabled */
+        .cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
+            content: " ";
+            display: block;
+            position: absolute;
+            background: linear-gradient(
+                to bottom,
+                rgba(255, 255, 255, 0) 0%,
+                rgba(61, 219, 217, 0.03) 10%,
+                rgba(61, 219, 217, 0.07) 50%,
+                rgba(61, 219, 217, 0.03) 90%,
+                rgba(255, 255, 255, 0) 100%
+            );
+            width: 100%;
+            height: 80px;
+            pointer-events: none;
+            z-index: 6;
+            animation: scanline-sweep 8s linear infinite;
+        }
+
+        @keyframes scanline-sweep {
+            0% { transform: translateY(-80px); }
+            100% { transform: translateY(100vh); }
+        }
+
+        /* Respect reduced-motion preference — suppress ONLY the sweep animation,
+           not the static scanline texture. Selector matches the animated rule precisely. */
+        @media (prefers-reduced-motion: reduce) {
+            .cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
+                animation: none;
+                display: none;
+            }
+        }
+
+        /* Zoomable content wrapper */
+        .zoomable-container {
+            position: relative;
+            flex: 1;
+            overflow: hidden;
+            cursor: grab;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .zoomable-container.panning {
+            cursor: grabbing;
+        }
+        .zoomable-viewport {
+            transform-origin: top left;
+            will-change: transform;
+        }
+
+        /* Class-based scanline suppression — toggled by JS */
+        .preview-panel-wrapper.scanlines-suppressed > .cyber-scanlines {
+            display: none !important;
+        }
+
+        /* Floating zoom toolbar */
+        .zoom-toolbar {
+            position: absolute;
+            bottom: 12px;
+            right: 12px;
+            display: flex;
+            gap: 4px;
+            z-index: 10;
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(4px);
+            padding: 4px;
+            border-radius: 4px;
+            border: 1px solid var(--border-color);
+        }
+        .zoom-btn {
+            width: 28px;
+            height: 28px;
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 14px;
+            line-height: 1;
+            cursor: pointer;
+            border-radius: 3px;
+            transition: all 0.15s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .zoom-btn:hover {
+            border-color: var(--accent-teal-dim);
+            color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+        }
+
+        /* ── Cyber Panel Theme: Neon Glow Effects ── */
+        /* Headings: bright teal glow */
+        .cyber-theme-enabled .preview-panel-wrapper h1 {
+            text-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 60%, transparent),
+                         0 0 20px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+        .cyber-theme-enabled .preview-panel-wrapper h2 {
+            text-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 50%, transparent),
+                         0 0 16px color-mix(in srgb, var(--accent-teal) 25%, transparent);
+        }
+        .cyber-theme-enabled .preview-panel-wrapper h3 {
+            text-shadow: 0 0 6px color-mix(in srgb, var(--accent-teal) 40%, transparent);
+        }
+
+        /* Preview panel wrapper: subtle outer glow border */
+        .cyber-theme-enabled .preview-panel-wrapper {
+            box-shadow: inset 0 0 30px color-mix(in srgb, var(--accent-teal) 6%, transparent);
+        }
+
+        /* Inline code: neon glow */
+        .cyber-theme-enabled #markdown-preview code,
+        .cyber-theme-enabled #markdown-preview-online code,
+        .cyber-theme-enabled #markdown-preview-design code,
+        .cyber-theme-enabled #kanban-preview-pane code,
+        .cyber-theme-enabled #markdown-preview-tickets code {
+            box-shadow: 0 0 6px color-mix(in srgb, var(--accent-teal) 25%, transparent);
+        }
+
+        /* Code blocks: subtle glow border */
+        .cyber-theme-enabled #markdown-preview pre,
+        .cyber-theme-enabled #markdown-preview-online pre,
+        .cyber-theme-enabled #markdown-preview-design pre,
+        .cyber-theme-enabled #kanban-preview-pane pre,
+        .cyber-theme-enabled #markdown-preview-tickets pre {
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent),
+                        inset 0 0 12px rgba(0, 0, 0, 0.3);
+        }
+
+        /* Blockquotes: glowing left border */
+        .cyber-theme-enabled #markdown-preview blockquote,
+        .cyber-theme-enabled #markdown-preview-online blockquote,
+        .cyber-theme-enabled #markdown-preview-design blockquote,
+        .cyber-theme-enabled #kanban-preview-pane blockquote,
+        .cyber-theme-enabled #markdown-preview-tickets blockquote {
+            border-left-color: var(--accent-teal);
+            box-shadow: -4px 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent);
+        }
+
+        /* Markdown alerts: enhanced glow */
+        .cyber-theme-enabled .alert-note { box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent); }
+        .cyber-theme-enabled .alert-tip { box-shadow: 0 0 8px rgba(102, 187, 106, 0.15); }
+        .cyber-theme-enabled .alert-important { box-shadow: 0 0 8px rgba(187, 134, 252, 0.15); }
+        .cyber-theme-enabled .alert-warning { box-shadow: 0 0 8px rgba(255, 183, 77, 0.15); }
+        .cyber-theme-enabled .alert-caution { box-shadow: 0 0 8px rgba(255, 138, 101, 0.15); }
+
+        /* Kanban plan items: neon glow on selection/hover */
+        .cyber-theme-enabled .kanban-plan-item.selected {
+            box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 40%, transparent),
+                        inset 0 0 6px color-mix(in srgb, var(--accent-teal) 15%, transparent);
+        }
+        .cyber-theme-enabled .kanban-plan-item:hover {
+            box-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+
+        /* Tree node items: neon glow on selection/hover */
+        .cyber-theme-enabled .tree-node.selected {
+            box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 40%, transparent),
+                        inset 0 0 6px color-mix(in srgb, var(--accent-teal) 15%, transparent);
+        }
+        .cyber-theme-enabled .tree-node:hover {
+            box-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+
+        /* Column badges: neon glow matching their color */
+        .cyber-theme-enabled .kanban-column-badge[data-column="CREATED"] { box-shadow: 0 0 6px rgba(61, 219, 217, 0.3); }
+        .cyber-theme-enabled .kanban-column-badge[data-column="PLAN_REVIEWED"] { box-shadow: 0 0 6px rgba(187, 134, 252, 0.3); }
+        .cyber-theme-enabled .kanban-column-badge[data-column="CODED"] { box-shadow: 0 0 6px rgba(255, 183, 77, 0.3); }
+        .cyber-theme-enabled .kanban-column-badge[data-column="CODE_REVIEWED"] { box-shadow: 0 0 6px rgba(255, 138, 101, 0.3); }
+        .cyber-theme-enabled .kanban-column-badge[data-column="COMPLETED"] { box-shadow: 0 0 6px rgba(102, 187, 106, 0.3); }
+
+        /* Active tab: glow accent */
+        .cyber-theme-enabled .research-tab-btn.active {
+            box-shadow: 0 -2px 8px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+
+        /* Controls strip buttons: glow on hover */
+        .cyber-theme-enabled .strip-btn:hover:not(:disabled) {
+            box-shadow: var(--glow-teal);
+        }
+
+        /* ── Cyber Panel Theme: Immersive Background ── */
+        /* NOTE: body.cyber-theme-enabled (not .cyber-theme-enabled body) because the class is
+           applied directly to document.body via classList.add — body cannot be a descendant of itself. */
+        body.cyber-theme-enabled {
+            background-color: #1a1a1a;
+            background-image:
+                /* Subtle cyan grid lines */
+                linear-gradient(rgba(61, 219, 217, 0.04) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(61, 219, 217, 0.04) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+        }
+
+        /* Tab bar */
+        .cyber-theme-enabled .research-tab-bar {
+            background: rgba(10, 10, 10, 0.65);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-bottom-color: rgba(61, 219, 217, 0.25);
+        }
+
+        /* Controls strip */
+        .cyber-theme-enabled .controls-strip {
+            background: rgba(10, 10, 10, 0.65);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-bottom-color: rgba(61, 219, 217, 0.20);
+        }
+
+        /* Sidebar tree panes */
+        .cyber-theme-enabled #tree-pane,
+        .cyber-theme-enabled #tree-pane-online,
+        .cyber-theme-enabled #tree-pane-design,
+        .cyber-theme-enabled #tree-pane-html,
+        .cyber-theme-enabled #tree-pane-tickets {
+            background: rgba(10, 10, 10, 0.70);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border-right-color: rgba(61, 219, 217, 0.20);
+        }
+
+        /* Kanban list pane */
+        .cyber-theme-enabled #kanban-list-pane {
+            background: rgba(10, 10, 10, 0.70);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        }
+
+        /* Preview panel wrapper — transparent passthrough in cyber mode.
+           The wrapper has overflow: hidden (base CSS) which kills backdrop-filter on children;
+           we make it a transparent container and apply glass directly on the scroll panes. */
+        .cyber-theme-enabled .preview-panel-wrapper {
+            background: transparent;
+        }
+
+        /* Apply glassmorphism directly on the scroll containers where overflow-y:auto is set.
+           These sit directly above the body grid with no opaque ancestor in the way. */
+        .cyber-theme-enabled #preview-pane,
+        .cyber-theme-enabled #preview-pane-online,
+        .cyber-theme-enabled #preview-pane-design,
+        .cyber-theme-enabled #preview-pane-html,
+        .cyber-theme-enabled #preview-pane-tickets {
+            background-color: rgba(255, 255, 255, 0.015);
+            background-image:
+                linear-gradient(rgba(61, 219, 217, 0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(61, 219, 217, 0.08) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+        }
+
+        /* Kanban preview — same direct-glass approach */
+        .cyber-theme-enabled #kanban-preview-pane,
+        .cyber-theme-enabled #markdown-preview-tickets {
+            background-color: rgba(255, 255, 255, 0.015);
+            background-image:
+                linear-gradient(rgba(61, 219, 217, 0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(61, 219, 217, 0.08) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+        }
+
+        /* Tab content wrappers — solid backgrounds that block the body grid */
+        .cyber-theme-enabled #research-content,
+        .cyber-theme-enabled #notebook-content {
+            background: transparent;
+        }
+
+        /* Kanban board content area */
+        .cyber-theme-enabled #kanban-content {
+            background: transparent;
+        }
+
+        /* Local and online content views */
+        .cyber-theme-enabled #local-content,
+        .cyber-theme-enabled #online-content,
+        .cyber-theme-enabled #design-content,
+        .cyber-theme-enabled #html-preview-content {
+            background: transparent;
+        }
+
+        /* Planning cards */
+        .cyber-theme-enabled .planning-card {
+            background: rgba(13, 13, 13, 0.60);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border-color: rgba(61, 219, 217, 0.20);
+            box-shadow: 0 0 12px rgba(61, 219, 217, 0.06), 0 4px 12px rgba(0, 0, 0, 0.4);
+        }
+
+        /* Duplicate modal */
+        .cyber-theme-enabled .duplicate-modal .modal-content {
+            background: rgba(10, 10, 10, 0.88);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(61, 219, 217, 0.25);
+            box-shadow: 0 0 24px rgba(61, 219, 217, 0.12), 0 8px 32px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Folder modal */
+        .cyber-theme-enabled .folder-modal .modal-content {
+            background: rgba(10, 10, 10, 0.88);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-color: rgba(61, 219, 217, 0.25);
+            box-shadow: 0 0 24px rgba(61, 219, 217, 0.12), 0 8px 32px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Primary planning buttons: brighter neon border in cyber mode */
+        .cyber-theme-enabled .planning-button {
+            border-color: rgba(61, 219, 217, 0.45);
+            box-shadow: 0 0 6px rgba(61, 219, 217, 0.10);
+        }
+        .cyber-theme-enabled .planning-button:hover:not(:disabled) {
+            box-shadow: 0 0 14px rgba(61, 219, 217, 0.45);
+        }
+
+        /* Secondary planning buttons */
+        .cyber-theme-enabled .planning-button.secondary {
+            border-color: rgba(61, 219, 217, 0.20);
+            background: rgba(10, 10, 10, 0.50);
+        }
+        .cyber-theme-enabled .planning-button.secondary:hover:not(:disabled) {
+            border-color: rgba(61, 219, 217, 0.35);
+            background: rgba(61, 219, 217, 0.06);
+        }
+
+        /* Select and input controls */
+        .cyber-theme-enabled .planning-select,
+        .cyber-theme-enabled .planning-input {
+            background: rgba(10, 10, 10, 0.70);
+            border-color: rgba(61, 219, 217, 0.20);
+        }
+        .cyber-theme-enabled .planning-select:focus,
+        .cyber-theme-enabled .planning-input:focus {
+            border-color: rgba(61, 219, 217, 0.50);
+            box-shadow: 0 0 8px rgba(61, 219, 217, 0.15);
+        }
+
+        /* Cyan scrollbar thumbs in cyber mode */
+        .cyber-theme-enabled ::-webkit-scrollbar-thumb {
+            background: rgba(61, 219, 217, 0.25);
+        }
+        .cyber-theme-enabled ::-webkit-scrollbar-thumb:hover {
+            background: rgba(61, 219, 217, 0.45);
+        }
+
+        .cyber-theme-enabled .kanban-controls-strip {
+            background: transparent;
+        }
+
+        .cyber-theme-enabled .markdown-editor {
+            background: transparent;
+        }
+
+        .preview-panel-wrapper {
+            position: relative;
+            flex: 3;
+            height: 100%;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .kanban-plan-meta { font-size: 11px; opacity: 0.55; }
+        .kanban-plan-actions { display: flex; gap: 6px; margin-top: 4px; }
+        .kanban-plan-copy-link {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 10px;
+            font-family: var(--font-family);
+            padding: 2px 7px;
+            cursor: pointer;
+            border-radius: 10px;
+            transition: all 0.15s;
+            margin-left: auto;
+            white-space: nowrap;
+        }
+        .kanban-plan-copy-link:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+            border-color: var(--accent-teal);
+        }
+        .kanban-plan-copy-prompt {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 10px;
+            font-family: var(--font-family);
+            padding: 2px 8px;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+        .kanban-plan-copy-prompt:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+            border-color: var(--accent-teal);
+        }
+        .kanban-column-badge.clickable {
+            cursor: pointer;
+        }
+        .kanban-column-badge.clickable:hover {
+            opacity: 0.8;
+        }
+        .kanban-column-dropdown {
+            position: absolute;
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 2px;
+            z-index: 100;
+            font-size: 11px;
+            color: var(--text-primary);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        .kanban-empty-state { padding: 32px; text-align: center; opacity: 0.5; font-size: 13px; }
+
+        .markdown-editor {
+            width: 100%;
+            height: 100%;
+            background: var(--panel-bg);
+            color: var(--text-primary);
+            font-family: var(--font-mono);
+            font-size: 13px;
+            border: none;
+            padding: 16px;
+            resize: none;
+            outline: none;
+            white-space: pre;
+            tab-size: 4;
+            box-sizing: border-box;
+        }
+        #json-preview-container-design {
+            font-size: 12px;
+            line-height: 1.6;
+        }
+        .json-node { margin-left: 16px; }
+        .json-row { display: flex; gap: 4px; padding: 1px 0; }
+        .json-key { color: #9cdcfe; }
+        .json-string { color: #ce9178; }
+        .json-number { color: #b5cea8; }
+        .json-boolean { color: #569cd6; }
+        .json-null { color: #569cd6; font-style: italic; }
+        .json-bracket { color: #d4d4d4; cursor: pointer; }
+        .json-error { color: var(--vscode-errorForeground, #ff6b6b); padding: 12px; }
+        .json-error button { margin-top: 8px; padding: 4px 12px; cursor: pointer; }
+        .edit-mode #markdown-preview,
+        .edit-mode #markdown-preview-design,
+        .edit-mode #kanban-preview-content {
+            display: none !important;
+        }
+        .edit-mode #image-preview-container-design,
+        .edit-mode #json-preview-container-design {
+            display: none !important;
+        }
+        .edit-mode .markdown-editor {
+            display: block !important;
+        }
+        .comment-popup {
+            position: fixed;
+            z-index: 999;
+            width: min(420px, calc(100vw - 24px));
+            background: var(--panel-bg, #000000);
+            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+            border-radius: 6px;
+            padding: 10px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+            display: none;
+        }
+        .comment-popup.visible {
+            display: block;
+        }
+        .popup-label {
+            font-size: 11px;
+            color: var(--text-secondary, #888);
+            margin-bottom: 6px;
+            font-family: var(--font-mono, monospace);
+        }
+        .selected-preview {
+            font-size: 12px;
+            color: var(--text-primary, #ccc);
+            background: rgba(61, 219, 217, 0.08);
+            border: 1px solid rgba(61, 219, 217, 0.22);
+            border-radius: 4px;
+            padding: 8px;
+            margin-bottom: 8px;
+            max-height: 80px;
+            overflow: auto;
+        }
+        .comment-popup textarea {
+            width: 100%;
+            min-height: 76px;
+            resize: vertical;
+            background: var(--input-bg, rgba(255,255,255,0.06));
+            color: var(--text-primary, #ccc);
+            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+            border-radius: 4px;
+            padding: 8px;
+            font-family: var(--font-family, sans-serif);
+            font-size: 13px;
+            margin-bottom: 10px;
+        }
+        .popup-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+        .popup-actions button {
+            background: transparent;
+            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+            color: var(--text-secondary, #888);
+            padding: 4px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .popup-actions button.primary {
+            background: var(--accent-teal, #3ddbd9);
+            color: #000;
+            border-color: var(--accent-teal, #3ddbd9);
+        }
+        /* Folder Modal */
+        .folder-modal {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .folder-modal .modal-content {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+        }
+        .folder-modal .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .folder-modal .modal-header h3 {
+            margin: 0;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .folder-modal .modal-close-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 24px;
+            cursor: pointer;
+            padding: 0;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            transition: all 0.15s;
+        }
+        .folder-modal .modal-close-btn:hover {
+            background: var(--card-bg-hover);
+            color: var(--text-primary);
+        }
+        .folder-modal .modal-body {
+            padding: 20px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        .folder-modal .modal-section {
+            margin-bottom: 20px;
+        }
+        .folder-modal .modal-section:last-child {
+            margin-bottom: 0;
+        }
+        .folder-modal .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+        .folder-modal .section-title {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+        }
+        .folder-modal .section-actions {
+            display: flex;
+            gap: 8px;
+        }
+        .folder-modal .folder-list {
+            max-height: none;
+        }
+
+        /* Tickets Tab Styles */
+        #controls-strip-tickets input {
+            flex: 1;
+            min-width: 200px;
+            padding: 6px 10px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+        }
+
+        #controls-strip-tickets input:focus {
+            outline: none;
+            border-color: var(--accent-teal);
+        }
+
+        #controls-strip-tickets select {
+            padding: 6px 10px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+        }
+
+        .ticket-node {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            padding: 10px 12px;
+            border-radius: 4px;
+            margin: 4px 0;
+            border: 1px solid var(--border-color);
+            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            border-left: 3px solid var(--accent-teal-dim);
+            cursor: pointer;
+            user-select: none;
+            font-size: 12px;
+            line-height: 1.4;
+            transition: all 0.15s;
+        }
+
+        .ticket-node:hover {
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
+        }
+
+        .ticket-node.selected {
+            border-color: var(--accent-teal);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 35%, transparent),
+                        inset 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            color: var(--accent-teal);
+        }
+
+        .cyber-theme-enabled .ticket-node.selected {
+            box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 40%, transparent),
+                        inset 0 0 6px color-mix(in srgb, var(--accent-teal) 15%, transparent);
+        }
+        .cyber-theme-enabled .ticket-node:hover {
+            box-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+
+        .ticket-node .tickets-issue-title {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .ticket-node .tickets-issue-meta {
+            font-size: 11px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+            font-family: var(--font-mono);
+        }
+
+        .ticket-node .tickets-issue-import-btn {
+            display: inline-block;
+            background: transparent;
+            color: var(--accent-teal);
+            border: 1px solid var(--accent-teal);
+            padding: 2px 8px;
+            font-size: 9px;
+            font-family: var(--font-mono);
+            cursor: pointer;
+            letter-spacing: 0.5px;
+        }
+
+        .ticket-node .tickets-issue-import-btn:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+        }
+
+        .ticket-node .tickets-issue-import-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        /* ── Ticket Detail Preview Pane ── */
+        /* Matches #markdown-preview typography and spacing */
+        #preview-pane-tickets {
+            font-size: 13px;
+            line-height: 1.5;
+            color: var(--text-primary);
+            padding: 0;
+        }
+
+        /* Section headers inside ticket preview — match markdown h2/h3 */
+        .tickets-section-header {
+            font-size: 1.25em;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-top: 24px;
+            margin-bottom: 12px;
+            padding-bottom: 0.3em;
+            border-bottom: 1px solid var(--accent-teal-dim);
+            letter-spacing: 0.3px;
+        }
+
+        /* Comment items — clean list style */
+        .tickets-comment-item {
+            padding: 8px 12px;
+            margin-bottom: 8px;
+            border-left: 3px solid var(--accent-teal-dim);
+            border-radius: 0 4px 4px 0;
+            background: color-mix(in srgb, var(--accent-teal) 6%, var(--panel-bg));
+        }
+
+        .tickets-comment-author {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--accent-teal);
+        }
+
+        .tickets-comment-date {
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            margin-left: 8px;
+        }
+
+        .tickets-comment-body {
+            font-size: 13px;
+            color: var(--text-primary);
+            line-height: 1.5;
+            margin-top: 4px;
+        }
+
+        /* Attachment items — inline link style */
+        .tickets-attachment-item {
+            display: inline-block;
+            padding: 4px 10px;
+            margin: 0 4px 4px 0;
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 3px;
+            background: transparent;
+            color: var(--accent-teal);
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .tickets-attachment-item:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+            border-color: var(--accent-teal);
+        }
+
+        /* Cyber theme overrides for ticket detail preview */
+        .cyber-theme-enabled #tickets-subtasks-nav .subtask-nav-item {
+            background: rgba(13, 13, 13, 0.40);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+        }
+        .cyber-theme-enabled #tickets-subtasks-nav .subtask-nav-item:hover {
+            box-shadow: 0 0 6px color-mix(in srgb, var(--accent-teal) 20%, transparent);
+        }
+
+        .cyber-theme-enabled .tickets-comment-item {
+            background: rgba(13, 13, 13, 0.40);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+        }
+
+        .cyber-theme-enabled .tickets-attachment-item {
+            box-shadow: 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+
+        /* Hierarchy nav styles */
+        .tickets-hierarchy-nav {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .tickets-hierarchy-nav select {
+            padding: 4px 8px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: var(--font-mono);
+            font-size: 10px;
+        }
+
+        .tickets-hierarchy-nav button {
+            padding: 4px 8px;
+            background: transparent;
+            color: var(--accent-teal);
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 2px;
+            cursor: pointer;
+            font-size: 9px;
+            font-family: var(--font-mono);
+        }
+
+        .tickets-hierarchy-nav button:hover {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border-color: var(--accent-teal);
+        }
+
+        /* Complexity dot — coloured circle indicator */
+        .complexity-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            flex-shrink: 0;
+            vertical-align: middle;
+        }
+        .complexity-dot.unknown { background: #7f848e; }
+        .complexity-dot.very-low { background: var(--accent-teal); }
+        .complexity-dot.low { background: #98c379; }
+        .complexity-dot.medium { background: var(--accent-orange); }
+        .complexity-dot.high { background: #da3633; }
+        .complexity-dot.very-high { background: #ff00ff; }
+
+        /* Kanban preview meta bar */
+        #kanban-preview-meta-bar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 6px 10px;
+            border-bottom: 1px solid var(--border-color, #333);
+            background: var(--panel-bg2, #1a1a2e);
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-secondary);
+            flex-wrap: wrap;
+        }
+        .kanban-meta-group {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .kanban-meta-label {
+            color: var(--text-secondary);
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .kanban-meta-value {
+            color: var(--accent-teal);
+            cursor: pointer;
+            padding: 1px 4px;
+            border-radius: 2px;
+            border: 1px solid transparent;
+        }
+        .kanban-meta-value:hover {
+            border-color: var(--accent-teal-dim);
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+        .kanban-meta-dropdown {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            background: var(--panel-bg, #0d1117);
+            color: var(--accent-teal);
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 2px;
+            padding: 2px 4px;
+            outline: none;
+        }
+        .kanban-meta-dropdown:focus {
+            border-color: var(--accent-teal);
+        }
+
+        /* Kanban plan log modal overlay */
+        .kanban-log-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+        }
+        .kanban-log-modal {
+            background: var(--panel-bg, #0d1117);
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 6px;
+            padding: 16px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 70vh;
+            display: flex;
+            flex-direction: column;
+            font-family: var(--font-mono);
+            font-size: 11px;
+        }
+        .kanban-log-modal h3 {
+            margin: 0 0 12px 0;
+            color: var(--accent-teal);
+            font-size: 13px;
+        }
+        .kanban-log-entries {
+            overflow-y: auto;
+            flex: 1;
+        }
+        .kanban-log-entry {
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border-color, #222);
+            line-height: 1.4;
+        }
+        .kanban-log-entry:last-child { border-bottom: none; }
+        .kanban-log-timestamp {
+            color: var(--text-secondary);
+            font-size: 10px;
+        }
+        .kanban-log-workflow {
+            color: var(--accent-teal);
+        }
+        .kanban-log-details {
+            color: var(--text-primary, #ccc);
+        }
+        .kanban-log-close {
+            margin-top: 12px;
+            align-self: flex-end;
+            padding: 4px 12px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            background: transparent;
+            border: 1px solid var(--accent-teal-dim);
+            color: var(--accent-teal);
+            border-radius: 2px;
+            cursor: pointer;
+        }
+        .kanban-log-close:hover {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border-color: var(--accent-teal);
+        }
+    </style>
+</head>
+<body class="cyber-theme-enabled">
+    <div id="research-tab-bar" class="research-tab-bar">
+        <button class="research-tab-btn active" data-tab="local">LOCAL DOCS</button>
+        <button class="research-tab-btn" data-tab="online">ONLINE DOCS</button>
+        <button class="research-tab-btn" data-tab="kanban">KANBAN PLANS</button>
+        <button class="research-tab-btn" data-tab="html-preview">HTML PREVIEWS</button>
+        <button class="research-tab-btn" data-tab="tickets">TICKETS</button>
+        <button class="research-tab-btn" data-tab="research">RESEARCH</button>
+        <button class="research-tab-btn" data-tab="design">DESIGN SYSTEM</button>
+        <button class="research-tab-btn" data-tab="notebook">NotebookLM</button>
+    </div>
+    <div class="container">
+        <!-- Local Docs Tab: breadcrumb on top, then sidebar + content -->
+        <div id="local-content" class="research-tab-content active">
+            <div class="active-doc-banner inactive" id="active-doc-banner-local">
+                <div class="active-doc-info">
+                    <span class="active-doc-label">Active Planning Epic:</span>
+                    <span class="active-doc-name" id="active-doc-name-local">None</span>
+                </div>
+                <button class="btn-disable-doc" id="btn-disable-doc-local">Turn off</button>
+            </div>
+            <div class="controls-strip" id="controls-strip-local">
+                <select id="local-workspace-filter" class="workspace-filter-select">
+                    <option value="">All Workspaces</option>
+                </select>
+                <button id="btn-set-active-context-local" class="strip-btn" disabled>Set as Active Planning Context</button>
+                <button id="btn-import-full-doc" class="strip-btn" disabled style="display: none;">Import</button>
+                <button id="btn-export-to-source" class="strip-btn" disabled style="display: none;">Export to Source</button>
+                <button id="btn-edit-local" class="strip-btn" disabled>Edit</button>
+                <button id="btn-save-local" class="strip-btn" style="display:none;">Save</button>
+                <button id="btn-cancel-local" class="strip-btn" style="display:none;">Cancel</button>
+                <span id="status"></span>
+
+            </div>
+            <div class="content-row">
+                <div id="tree-pane">
+                    <div class="sidebar-toggle-row">
+                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                    </div>
+                    <div class="empty-state">Loading local docs...</div>
+                </div>
+                <div class="preview-panel-wrapper">
+                    <div id="preview-pane" style="flex: 1; width: 100%; box-sizing: border-box;">
+                        <div class="preview-content-wrapper">
+                            <style>
+                                .page-navigation { margin-bottom: 16px; padding: 12px; background: var(--panel-bg2); border: 1px solid var(--accent-teal-dim); border-radius: 4px; }
+                                .page-item { padding: 6px 8px; cursor: pointer; border-radius: 3px; transition: background 0.1s; font-size: 13px; color: var(--accent-teal); }
+                                .page-item:hover { background: var(--accent-teal-dim); }
+                                .page-item.selected { background: var(--accent-teal-dim); }
+                            </style>
+                            <div id="markdown-preview">
+                                <div class="empty-state">Select a document from the sidebar to preview</div>
+                            </div>
+                            <textarea id="markdown-editor-local" class="markdown-editor" style="display:none;"></textarea>
+                        </div>
+                    </div>
+                    <div class="cyber-scanlines"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Online Docs Tab: same structure -->
+        <div id="online-content" class="research-tab-content">
+            <div class="active-doc-banner inactive" id="active-doc-banner-online">
+                <div class="active-doc-info">
+                    <span class="active-doc-label">Active Planning Epic:</span>
+                    <span class="active-doc-name" id="active-doc-name-online">None</span>
+                </div>
+                <button class="btn-disable-doc" id="btn-disable-doc-online">Turn off</button>
+            </div>
+            <div class="controls-strip" id="controls-strip-online">
+                <button id="btn-import-full-doc-online" class="strip-btn" disabled>Import</button>
+                <button id="btn-append-to-prompts-online" class="strip-btn" disabled>Set as active planning context</button>
+                <button id="btn-link-to-doc-online" class="strip-btn" disabled>Link to Document</button>
+                <button id="btn-edit-online" class="strip-btn" disabled style="display:none;" title="Editing not available for remote docs">Edit</button>
+                <span id="status-online"></span>
+            </div>
+            <div class="content-row">
+                <div id="tree-pane-online">
+                    <div class="sidebar-toggle-row">
+                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                    </div>
+                    <div class="empty-state">Loading online docs...</div>
+                </div>
+                <div class="preview-panel-wrapper">
+                    <div id="preview-pane-online" style="flex: 1; width: 100%; box-sizing: border-box;">
+                        <div class="preview-content-wrapper">
+                            <div id="markdown-preview-online">
+                                <div class="empty-state">Select a document from the sidebar to preview</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="cyber-scanlines"></div>
+                </div>
+            </div>
+        </div>
+        <div id="notebook-content" class="research-tab-content">
+            <!-- NotebookLM Card -->
+            <div class="planning-card">
+                <div class="planning-card-header">NOTEBOOKLM INTEGRATION</div>
+                <div class="planning-card-description">NotebookLM integration allows you to upload all your code into NotebookLM to access unlimited Gemini quota for planning features and diagnosing bugs.</div>
+
+                <div id="webai-status" class="planning-status"></div>
+
+                <div class="planning-card-section">
+                    <div class="planning-card-section-title">1. BUNDLE CODE</div>
+                    <div class="planning-card-description">Package code into docx files for NotebookLM compatibility.</div>
+                    <button id="btn-bundle-code" class="planning-button">BUNDLE CODE</button>
+                </div>
+
+                <div class="planning-card-section">
+                    <div class="planning-card-section-title">2. UPLOAD TO NOTEBOOKLM</div>
+                    <div class="planning-card-description">Create new Notebook and upload all files in the integration folder as sources.</div>
+                    <div class="planning-controls">
+                        <button id="btn-open-notebooklm" class="planning-button">OPEN NOTEBOOKLM</button>
+                        <button id="btn-open-airlock-folder" class="planning-button secondary">OPEN FOLDER</button>
+                    </div>
+                </div>
+
+                <div class="planning-card-section">
+                    <div class="planning-card-section-title">3. COPY SPRINT PLANNING PROMPT</div>
+                    <div class="planning-card-description">Generate a prompt for NotebookLM to write expanded plans for every plan in the NEW Kanban column. Copy the output and use Step 4 below to import.</div>
+                    <button id="btn-copy-sprint-prompt" class="planning-button secondary">COPY SPRINT PROMPT</button>
+                </div>
+
+                <div class="planning-card-section">
+                    <div class="planning-card-section-title">4. IMPORT PLANS</div>
+                    <div class="planning-card-description">
+                        Paste your expanded plans from NotebookLM. Plans matching titles in the NEW column will overwrite the originals; others will be created as new plans.
+                    </div>
+                    <button id="btn-import-notebooklm-plans" class="planning-button secondary">IMPORT PLANS</button>
+                </div>
+            </div>
+        </div>
+        <div id="research-content" class="research-tab-content">
+            <div style="margin-bottom: 16px; font-size: 12px; color: var(--text-secondary); line-height: 1.4;">
+                Switchboard Research offers an easy way to use Google AI Studio to quickly perform high quality research, and get the results back into your workspace as a fully formatted document.
+            </div>
+            <!-- Step 1: Draft Research Prompt -->
+            <div class="planning-card">
+                <div class="planning-card-header">STEP 1: DRAFT RESEARCH PROMPT</div>
+                <div class="planning-card-description">Copy a meta-prompt to your clipboard. Paste it into your IDE agent to draft a detailed research prompt for Google AI Studio.</div>
+
+                <div class="planning-card-section-title" style="margin-top: 12px;">Central Question / Topic</div>
+                <textarea id="research-prompt-input" class="planning-input" rows="4" placeholder="Enter research topic..." style="margin-top: 12px;"></textarea>
+
+                <div class="prompt-buttons-container" style="margin-top: 16px; display: flex; gap: 8px;">
+                    <button id="btn-copy-research-prompt" class="planning-button">COPY PROMPT TEMPLATE</button>
+                    <button id="btn-draft-with-analyst" class="planning-button secondary">DRAFT WITH ANALYST AGENT</button>
+                </div>
+            </div>
+
+            <!-- Step 2: Run Research in Google AI Studio -->
+            <div class="planning-card">
+                <div class="planning-card-header">STEP 2: RUN RESEARCH IN GOOGLE AI STUDIO</div>
+                <div class="planning-card-description">
+                    <ol style="margin-left: 16px; margin-top: 8px; display: flex; flex-direction: column; gap: 6px; padding-left: 0; list-style-position: inside;">
+                        <li>Open <span id="btn-open-ai-studio" style="color: var(--accent-teal); text-decoration: underline; cursor: pointer;">Google AI Studio (aistudio.google.com)</span>.</li>
+                        <li>Paste the drafted prompt.</li>
+                        <li>Enable <strong>Search Grounding</strong> for web search access.</li>
+                        <li>Run the prompt and use the response menu at the top right to copy as markdown.</li>
+                    </ol>
+                </div>
+            </div>
+
+            <!-- Step 3: Import Research Document -->
+            <div class="planning-card">
+                <div class="planning-card-header">STEP 3: IMPORT RESEARCH DOCUMENT</div>
+                <div class="planning-card-description">Import the research findings copied from Google AI Studio.</div>
+
+                <div class="planning-card-section" style="margin-top: 8px;">
+                    <div class="planning-card-description" style="margin-bottom: 4px;">Custom Document Title (optional)</div>
+                    <input type="text" id="research-doc-title" class="planning-input" placeholder="e.g. Technical Research on API">
+                </div>
+
+                <div class="planning-card-section" style="margin-top: 12px;">
+                    <div id="research-no-folders-warning" style="display: none; color: var(--accent-orange); font-size: 11px; margin-bottom: 6px;">No destination folders set — add folders in Local Docs or click MANAGE FOLDERS.</div>
+                    <div class="planning-card-description" style="margin-bottom: 4px;">Destination Folder</div>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <select id="research-destination-folder" class="planning-input" style="flex: 1; background-color: var(--input-bg); color: var(--input-fg); border: 1px solid var(--border-color); border-radius: 4px; padding: 6px 8px;">
+                        </select>
+                        <button id="btn-manage-research-folders" class="planning-button secondary" style="margin: 0; padding: 6px 12px; white-space: nowrap; height: auto;">MANAGE FOLDERS</button>
+                    </div>
+                </div>
+
+                <div class="planning-controls" style="margin-top: 16px;">
+                    <button id="btn-import-research-doc-clipboard" class="planning-button">IMPORT FROM CLIPBOARD</button>
+                </div>
+                <div id="research-import-status" class="planning-status"></div>
+            </div>
+        </div>
+        <!-- Kanban Plans Content -->
+        <div id="kanban-content" class="research-tab-content">
+
+            <!-- Controls strip -->
+            <div class="kanban-controls-strip">
+                <select id="kanban-workspace-filter">
+                    <option value="">All Workspaces</option>
+                </select>
+                <select id="kanban-project-filter">
+                    <option value="">All Projects</option>
+                </select>
+                <select id="kanban-column-filter">
+                    <option value="">All Columns</option>
+                </select>
+                <input type="text" id="kanban-search" placeholder="Search plans..." />
+                <button id="kanban-refresh-btn" title="Refresh">↻</button>
+                <button id="btn-import-kanban-plans" class="strip-btn" title="Scan configured AI IDE folders and pick unclaimed plans to add (any age, bypasses the auto-claim window)">Import</button>
+                <button id="btn-kanban-log" class="strip-btn" disabled title="View action log for selected plan">Log</button>
+                <button id="btn-edit-kanban" class="strip-btn" disabled>Edit</button>
+                <button id="btn-review-kanban" class="strip-btn" disabled title="Review plan - select text and submit comment to planner">Review</button>
+                <button id="btn-save-kanban" class="strip-btn" style="display:none;">Save</button>
+                <button id="btn-cancel-kanban" class="strip-btn" style="display:none;">Cancel</button>
+            </div>
+            <!-- Split pane: list + preview -->
+            <div class="content-row" id="kanban-content-row">
+                <div id="kanban-list-pane">
+                    <!-- Plan rows rendered by JS -->
+                </div>
+                <div class="preview-panel-wrapper">
+                    <div id="kanban-preview-pane" class="kanban-preview-pane" style="flex: 1; height: 100%; width: 100%; box-sizing: border-box;">
+                        <div id="kanban-preview-meta-bar" style="display:none;"></div>
+                        <div id="kanban-preview-content">
+                            <!-- Markdown preview rendered by JS -->
+                        </div>
+                        <textarea id="kanban-editor" class="markdown-editor" style="display:none;"></textarea>
+                    </div>
+                    <div class="cyber-scanlines"></div>
+                </div>
+            </div>
+        </div>
+        <div id="design-content" class="research-tab-content">
+            <div class="active-doc-banner inactive" id="active-doc-banner-design">
+                <div class="active-doc-info">
+                    <span class="active-doc-label">Active Design Doc:</span>
+                    <span class="active-doc-name" id="active-doc-name-design">None</span>
+                </div>
+                <button class="btn-disable-doc" id="btn-disable-doc-design">Turn off</button>
+            </div>
+            <div class="controls-strip" id="controls-strip-design">
+                <select id="design-workspace-filter" class="workspace-filter-select">
+                    <option value="">All Workspaces</option>
+                </select>
+                <button id="btn-set-active-context-design" class="strip-btn" disabled>Set as Active Planning Context</button>
+                <button id="btn-link-to-doc-design" class="strip-btn" disabled>Link to Document</button>
+                <button id="btn-edit-design" class="strip-btn" disabled>Edit</button>
+                <button id="btn-save-design" class="strip-btn" style="display:none;">Save</button>
+                <button id="btn-cancel-design" class="strip-btn" style="display:none;">Cancel</button>
+                <button id="btn-manage-design-folders" class="strip-btn">Manage Folders</button>
+                <span id="status-design"></span>
+            </div>
+            <div class="content-row">
+                <div id="tree-pane-design">
+                    <div class="sidebar-toggle-row">
+                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                    </div>
+                    <div class="empty-state">Loading design docs...</div>
+                </div>
+                <div class="preview-panel-wrapper">
+                    <div id="preview-pane-design" style="flex: 1; width: 100%; box-sizing: border-box; overflow: auto; height: 100%;">
+                        <div class="preview-content-wrapper" style="height: 100%; display: flex; flex-direction: column;">
+                            <div id="markdown-preview-design">
+                                <div class="empty-state">Select a design document, image, JSON, or YAML file from the sidebar to preview</div>
+                            </div>
+                            <textarea id="markdown-editor-design" class="markdown-editor" style="display:none; width: 100%; height: 100%; box-sizing: border-box; resize: none;"></textarea>
+                            <div id="image-preview-container-design" class="zoomable-container" style="display: none; padding: 0;">
+                                <div class="zoomable-viewport">
+                                    <img id="image-preview-img-design" alt="Image preview" style="display: block;" />
+                                </div>
+                                <div class="zoom-toolbar">
+                                    <button class="zoom-btn" data-action="zoom-in" title="Zoom In (Cmd+Scroll)">+</button>
+                                    <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (Cmd+Scroll)">−</button>
+                                    <button class="zoom-btn" data-action="reset" title="Reset Zoom">⟲</button>
+                                    <button class="zoom-btn" data-action="fit" title="Fit to View">⤢</button>
+                                </div>
+                            </div>
+                            <div id="json-preview-container-design"
+                                 style="display: none; flex: 1; overflow: auto; padding: 16px; font-family: var(--font-mono);">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="cyber-scanlines"></div>
+                </div>
+            </div>
+        </div>
+        <div id="html-preview-content" class="research-tab-content">
+            <div class="controls-strip" id="controls-strip-html">
+                <select id="html-workspace-filter" class="workspace-filter-select">
+                    <option value="">All Workspaces</option>
+                </select>
+                <span id="status-html" style="margin-left: 0; font-size: 12px; color: var(--text-secondary);">No folder configured</span>
+            </div>
+            <div class="content-row">
+                <div id="tree-pane-html">
+                    <div class="sidebar-toggle-row">
+                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                    </div>
+                    <div class="empty-state">Configure a folder to browse HTML files</div>
+                </div>
+                <div class="preview-panel-wrapper">
+                    <div id="preview-pane-html" style="flex: 1; width: 100%; box-sizing: border-box; height: 100%; display: flex; flex-direction: column; overflow: hidden;">
+                        <div class="active-doc-banner inactive" id="active-doc-banner-html">
+                            <div class="active-doc-info">
+                                <span class="active-doc-label">Active File:</span>
+                                <span class="active-doc-name" id="active-doc-name-html">None</span>
+                            </div>
+                            <div class="html-banner-actions">
+                                <button id="btn-open-browser-html" class="strip-btn" disabled>Open in Browser</button>
+                                <button id="btn-copy-link-html" class="strip-btn" disabled>Copy Link</button>
+                            </div>
+                        </div>
+                        <div id="html-initial-state" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 32px; color: var(--text-secondary);">
+                            <span style="font-size: 48px; opacity: 0.5;">🌐</span>
+                            <div style="text-align: center;">
+                                <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px;">HTML & Asset Previewer</div>
+                                <div style="font-size: 12px; max-width: 320px; line-height: 1.5;">Select a file from the sidebar to preview HTML pages, SVGs, and images. Configure folders using the Manage Folders button.</div>
+                            </div>
+                        </div>
+                        <div id="html-loading-state" style="flex: 1; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 32px; color: var(--text-secondary);">
+                            <div style="width: 32px; height: 32px; border: 3px solid var(--border-color); border-top-color: var(--accent-teal); border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+                            <div style="font-size: 12px;">Loading preview...</div>
+                        </div>
+                        <div id="html-preview-wrapper" class="zoomable-container" style="display: none; flex: 1;">
+                            <div class="zoomable-viewport" style="width: 100%; height: 100%;">
+                                <iframe id="html-preview-frame" sandbox="allow-scripts allow-same-origin" style="border: none; background: var(--panel-bg); width: 100%; height: 100%; display: block;"></iframe>
+                            </div>
+                            <div class="zoom-toolbar">
+                                <button class="zoom-btn" data-action="zoom-in" title="Zoom In (Cmd+Scroll)">+</button>
+                                <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (Cmd+Scroll)">−</button>
+                                <button class="zoom-btn" data-action="reset" title="Reset Zoom">⟲</button>
+                                <button class="zoom-btn" data-action="fit" title="Fit to View">⤢</button>
+                            </div>
+                        </div>
+                        <div id="image-preview-container" class="zoomable-container" style="display: none; padding: 0;">
+                            <div class="zoomable-viewport">
+                                <img id="image-preview-img" alt="Image preview" style="display: block;" />
+                            </div>
+                            <div class="zoom-toolbar">
+                                <button class="zoom-btn" data-action="zoom-in" title="Zoom In (Cmd+Scroll)">+</button>
+                                <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (Cmd+Scroll)">−</button>
+                                <button class="zoom-btn" data-action="reset" title="Reset Zoom">⟲</button>
+                                <button class="zoom-btn" data-action="fit" title="Fit to View">⤢</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="cyber-scanlines"></div>
+                </div>
+            </div>
+        </div>
+        <div id="tickets-content" class="research-tab-content">
+            <div class="controls-strip" id="controls-strip-tickets">
+                <input id="tickets-search" type="text" placeholder="Search tickets..." />
+                <select id="tickets-project-picker" style="display:none"></select>
+                <select id="tickets-state-filter" style="display:none"></select>
+                <select id="tickets-status-filter" style="display:none"></select>
+                <button id="tickets-create" class="strip-btn" disabled title="Configure an integration in Setup first">+ New Ticket</button>
+                <button id="tickets-refresh" class="strip-btn">Refresh</button>
+                <div id="tickets-hierarchy-nav" style="display:none; flex-wrap: wrap;"></div>
+            </div>
+            <div class="content-row">
+                <div id="tree-pane-tickets">
+                    <div class="sidebar-toggle-row">
+                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                    </div>
+                    <div id="tickets-empty-state" class="empty-state">No tickets loaded.</div>
+                    <div id="tickets-issues-container"></div>
+                    <button id="tickets-load-more" class="planning-button" style="display:none">Load More</button>
+                </div>
+                <div class="preview-panel-wrapper">
+                    <div id="preview-pane-tickets" style="flex: 1; width: 100%; box-sizing: border-box;">
+                        <div class="preview-content-wrapper">
+                            <!-- Active ticket banner matching local docs active-doc-banner pattern -->
+                            <div class="active-doc-banner inactive" id="active-doc-banner-tickets">
+                                <div class="active-doc-info">
+                                    <span class="active-doc-label">Active Ticket:</span>
+                                    <span class="active-doc-name" id="active-doc-name-tickets">None</span>
+                                    <span class="tickets-detail-meta" id="tickets-detail-meta" style="display:none">
+                                        <span id="tickets-detail-status"></span>
+                                        <span id="tickets-detail-assignee"></span>
+                                    </span>
+                                </div>
+                                <div class="tickets-banner-actions">
+                                    <button id="tickets-detail-import" class="strip-btn" disabled>Import</button>
+                                    <button id="tickets-detail-refine" class="strip-btn" disabled>Refine</button>
+                                    <button id="tickets-detail-ask-agent" class="strip-btn" disabled>Ask Agent</button>
+                                    <button id="tickets-back-to-parent" class="strip-btn" style="display:none">Back to Parent</button>
+                                </div>
+                            </div>
+                            <!-- Markdown preview container matching local docs -->
+                            <div id="markdown-preview-tickets">
+                                <div id="tickets-empty-preview" class="empty-state">Select a ticket to preview</div>
+                                <!-- Subtasks navigation (injected at TOP by JS) -->
+                                <div id="tickets-subtasks-nav" style="display:none"></div>
+                                <!-- Ticket detail content (description + comments + attachments) -->
+                                <div id="tickets-detail-content"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="cyber-scanlines"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="comment-popup" id="kanban-comment-popup">
+        <div class="popup-label">Comment on selection</div>
+        <div class="selected-preview" id="kanban-selected-preview"></div>
+        <textarea id="kanban-comment-input" placeholder="Add your contextual feedback..."></textarea>
+        <div class="popup-actions">
+            <button id="kanban-cancel-comment">Cancel</button>
+            <button class="primary" id="kanban-submit-comment">Submit Comment</button>
+        </div>
+    </div>
+
+    <div class="folder-modal" id="folder-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="folder-modal-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="folder-modal-title">Manage Local Docs Folders</h3>
+                <button class="modal-close-btn" id="btn-close-folder-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Antigravity toggle section -->
+                <div class="modal-section">
+                    <div class="toggle-container" style="display: flex; align-items: center; gap: 10px;">
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="antigravity-toggle-modal">
+                            <span class="toggle-slider"></span>
+                        </label>
+                        <span class="toggle-label" style="font-size:11px; letter-spacing:0.5px; text-transform:uppercase; color:var(--text-secondary);">Show Antigravity Brain</span>
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-secondary); margin-top: 4px; margin-left: 40px; opacity: 0.8;">
+                        Shows Antigravity App, IDE and CLI folders
+                    </div>
+                </div>
+                
+                <!-- Folder list section -->
+                <div class="modal-section">
+                    <div class="section-header">
+                        <span class="section-title">Configured Folders</span>
+                        <div class="section-actions">
+                            <button id="btn-refresh-folders-modal" class="strip-btn" title="Refresh folders">&#8635;</button>
+                            <button id="btn-add-folder-modal" class="strip-btn">Add Folder</button>
+                        </div>
+                    </div>
+                    <div id="folder-list-modal" class="folder-list">
+                        <!-- Folder items rendered by JS -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="folder-modal" id="folder-modal-html" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="folder-modal-html-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="folder-modal-html-title">Manage HTML Preview Folders</h3>
+                <button class="modal-close-btn" id="btn-close-html-folder-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-section">
+                    <div class="section-header">
+                        <span class="section-title">Configured Folders</span>
+                        <div class="section-actions">
+                            <button id="btn-refresh-html-folders-modal" class="strip-btn" title="Refresh folders">&#8635;</button>
+                            <button id="btn-add-html-folder-modal" class="strip-btn">Add Folder</button>
+                        </div>
+                    </div>
+                    <div id="html-folder-list-modal" class="folder-list">
+                        <!-- Folder items rendered by JS -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="folder-modal" id="folder-modal-design" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="folder-modal-design-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="folder-modal-design-title">Manage Design System Folders</h3>
+                <button class="modal-close-btn" id="btn-close-design-folder-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-section">
+                    <div class="section-header">
+                        <span class="section-title">Configured Folders</span>
+                        <div class="section-actions">
+                            <button id="btn-refresh-design-folders-modal" class="strip-btn" title="Refresh folders">&#8635;</button>
+                            <button id="btn-add-design-folder-modal" class="strip-btn">Add Folder</button>
+                        </div>
+                    </div>
+                    <div id="design-folder-list-modal" class="folder-list">
+                        <!-- Folder items rendered by JS -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="folder-modal" id="create-ticket-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="create-ticket-modal-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="create-ticket-modal-title">Create New Ticket</h3>
+                <button class="modal-close-btn" id="btn-close-create-ticket-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px;">
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label for="create-ticket-title" style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Title *</label>
+                    <input type="text" id="create-ticket-title" class="planning-input" placeholder="Enter ticket title" required style="width: 100%; box-sizing: border-box;" />
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label for="create-ticket-description" style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Description</label>
+                    <textarea id="create-ticket-description" class="planning-input" placeholder="Enter ticket description (optional)" style="width: 100%; height: 100px; resize: vertical; box-sizing: border-box; font-family: inherit;"></textarea>
+                </div>
+                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
+                    <button id="btn-cancel-create-ticket" class="strip-btn">Cancel</button>
+                    <button id="btn-submit-create-ticket" class="planning-button" style="margin: 0; padding: 4px 12px;">Create</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script nonce="{{NONCE}}" src="{{PLANNING_JS_URI}}"></script>
+</body>
+</html>

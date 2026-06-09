@@ -178,8 +178,8 @@ async function run() {
             assert.strictEqual(firstPoll.writeBacks, 0);
             assert.strictEqual(firstPoll.errors.length, 0);
 
-            const importedCount = await importPlanFiles(workspaceRoot);
-            assert.strictEqual(importedCount, 1, 'Expected the generated ClickUp automation plan file to import cleanly.');
+            const importResult = await importPlanFiles(workspaceRoot);
+            assert.strictEqual(importResult.count, 1, 'Expected the generated ClickUp automation plan file to import cleanly.');
 
             const db = KanbanDatabase.forWorkspace(workspaceRoot);
             await db.ensureReady();
@@ -200,7 +200,12 @@ async function run() {
             const planContent = readText(createdPlan.planFile);
             assert.ok(planContent.includes('**ClickUp Task ID:** task-bug'));
             assert.ok(planContent.includes('**Automation Rule:** Bug Summary'));
-            assert.ok(planContent.includes('**Kanban Column:** CREATED'));
+            assert.ok(!planContent.includes('## Goal'));
+            assert.ok(!planContent.includes('## Proposed Changes'));
+            assert.ok(!planContent.includes('## ClickUp Task Notes'));
+            assert.ok(!planContent.includes('## Switchboard State'));
+            assert.ok(!planContent.includes('## Metadata'));
+            assert.ok(planContent.includes('The app crashes on launch.'));
             assert.ok(!planContent.includes('**Internal Plan:** true'));
             assert.ok(!planContent.includes('**Pipeline ID:**'));
 
@@ -251,6 +256,7 @@ async function run() {
             assert.match(updateRequest.jsonBody.description, /Switchboard Automation Result/);
             assert.match(updateRequest.jsonBody.description, /Automation Rule:\*\* Bug Summary/);
             assert.match(updateRequest.jsonBody.description, /Investigate bug/);
+            assert.match(updateRequest.jsonBody.description, /The app crashes on launch./);
             assert.doesNotMatch(updateRequest.jsonBody.description, /Pipeline:/);
 
             const updatedPlan = await db.getPlanBySessionId(createdPlan.sessionId);

@@ -9,14 +9,12 @@ This document describes how the plugin currently works in code, not how older do
 Switchboard is a local orchestration stack with three main layers:
 
 1. VS Code extension host (`src/extension.ts`)
-2. Bundled MCP server child process (`src/mcp-server/mcp-server.js`)
-3. Workspace protocol/state surface (`.agent/` and `.switchboard/`)
+2. Workspace protocol/state surface (`.agent/` and `.switchboard/`)
 
 At runtime:
 
 - The extension owns UI, terminal references, startup/setup workflows, and file watchers.
-- The MCP server owns tool APIs (`send_message`, `start_workflow`, etc.), workflow enforcement, and persistent shared state updates.
-- Agents coordinate through filesystem artifacts and inbox messages under `.switchboard/`.
+- Agents coordinate through direct terminal push and filesystem artifacts under `.switchboard/`.
 
 ## 2) Persistent filesystem model
 
@@ -28,43 +26,27 @@ At runtime:
 ### `.switchboard/` (core runtime data)
 
 - `state.json`: canonical shared state for session/workflow/agent data
-- `inbox/<agent>/`: incoming durable messages (JSON)
-- `outbox/<agent>/`: legacy/deprecated path still referenced by some tooling
 - `sessions/`: run sheets and `activity.jsonl` audit stream
 - `plans/`: locally created feature plans and mirrored Antigravity brain plans (unified root)
 - `brain_plan_blacklist.json`: setup-seeded blacklist of pre-existing Antigravity brain plan stable paths (hard excluded from mirror adoption and sidebar visibility)
   - persisted schema: `{ version, generatedAt, entries[] }` where `entries` are stable canonical base-plan paths
 - `context-maps/`: analyst-generated context map artifacts for planner handoff
 - `plan_tombstones.json`: deterministic hash tombstones used to block resurrecting archived/deleted Antigravity plan sessions
-- `handoff/`: staged delegation artifacts
-- `archive/YYYY-MM/...`: archived inbox/results/plan/session artifacts
+- `archive/YYYY-MM/...`: archived plan/session/log artifacts
 - `cooldowns/`: sender-recipient-action dispatch lock files
-- `housekeeping.policy.json`: retention policy
 
 ## 3) Activation and bootstrap (`activate`)
 
 On startup, the extension does all of the following:
 
-1. Reads enforced security/runtime settings:
-   - `switchboard.security.strictInboxAuth` (application scope)
+1. Reads enforced runtime settings:
    - `switchboard.runtime.workspaceMode` (application scope)
-2. Creates/loads a persistent dispatch signing key in `ExtensionContext.secrets`.
-3. Sets process env for child components:
-   - `SWITCHBOARD_STRICT_INBOX_AUTH`
-   - `SWITCHBOARD_DISPATCH_SIGNING_KEY`
-4. Runs lifecycle cleanup:
-   - removes transient dirs/files (`inbox`, `outbox`, `cooldowns`, debug log)
+2. Runs lifecycle cleanup:
+   - removes transient dirs/files (`inbox`, `outbox`, `cooldowns`, `handoff`, debug log, `housekeeping.policy.json`)
    - resets `state.json` baseline (preserving `startupCommands`)
    - disposes likely orphaned Switchboard terminals
-5. Initializes `TaskViewerProvider` and sidebar webview.
-6. Starts `InboxWatcher`.
-7. Spawns bundled MCP server via `fork(..., stdio + ipc)` in workspace context.
-8. Starts health monitoring:
-   - initial delayed probe
-   - steady-state poll every 120s
-   - degraded poll every 15s
-   - auto-heal restart after repeated degraded checks
-9. Starts heartbeat registration loop for local terminals (updates `lastSeen`).
+3. Initializes `TaskViewerProvider` and sidebar webview.
+4. Starts heartbeat registration loop for local terminals (updates `lastSeen`).
 
 Setup wizard behavior (current):
 
@@ -75,35 +57,73 @@ Setup wizard behavior (current):
   - `switchboard.review.strictPrompts = false`
 - Setup seeds `.switchboard/brain_plan_blacklist.json` by scanning `~/.gemini/antigravity/brain` using the same mirror-candidate rules and stable base-path normalization used by runtime mirroring.
 
-## 4) Extension <-> MCP IPC contract
 
-The extension handles MCP child-process IPC message types:
+## 4.5) Agent Access to Integrations
 
-- `createTerminal`
-- `focusTerminal`
-- `sendToTerminal`
-- `renameTerminal`
-- `registerTerminal`
-- `registerTerminalsBatch`
-- `pruneTerminal`
-- `healthProbe`
+Agents can access Switchboard's Linear and ClickUp integrations through **Skill-based Invocations**: Run curl commands against the LocalApiServer.
 
-Key safety behavior on `sendToTerminal`:
+### Smart Output (Default: Compact)
+By default, skills return **compact, AI-readable output**:
+- Issue/task lists are rendered as **markdown tables** with key fields only (no raw JSON dumps)
+- Descriptions are truncated to 500 chars
+- Custom fields and empty arrays are stripped
+- Use `format="raw"` to get full unprocessed API responses when needed
 
-- Requires valid terminal name and string payload.
-- Requires source metadata (`source.actor`, `source.tool`).
-- Blocks rapid fan-out broadcast to different targets unless `allowBroadcast=true`.
-- Falls back to live VS Code terminal lookup if registry is stale.
+### Composite Queries
+- **ClickUp**: Set `subtasks=true` on a task GET to automatically fetch and embed subtasks in one call (saves a round-trip)
+- **Linear**: Use GraphQL to fetch issues with children (sub-issues) in a single query
 
-## 5) MCP server runtime internals
+### State Tracking
+The integrations automatically cache frequently used IDs (team_id, space_id, list_id, project_id) in `api_state.json` under the Switchboard state root. This reduces the need to navigate the hierarchy on every call.
 
-`mcp-server.js` runs stdio MCP transport and registers tools from `register-tools.js`.
+### Security Model
+- Skills only work with Linear/ClickUp API tokens configured in VS Code settings.
+- The client passes the API auth token configured in VS Code settings (`switchboard.apiToken`) in the `Authorization: Bearer <token>` header.
+- To prevent credentials exposure, there is no HTTP endpoint to retrieve the token from the LocalApiServer.
+- If no `switchboard.apiToken` is configured, read-only requests (`GET` and `/resolve` endpoints) are allowed without authentication for development convenience, while write operations (POST/PUT/DELETE) are strictly denied.
 
-Notable runtime behavior:
+### Linear Integration Examples
 
-- Lifecycle hooks for `SIGTERM`, `SIGINT`, `disconnect`, `uncaughtException`, `unhandledRejection`.
-- Hourly stale-terminal warning sweep ("ZombieReaper").
-- Internal IPC handler supports terminal registration, batch registration, prune, and health probe response.
+#### Skill-based Invocations (Preferred)
+```bash
+# Get port and call API with authorization header
+PORT=$(cat .switchboard/api-server-port.txt)
+TOKEN="your_switchboard_api_token" # Retrieve from secure config
+
+curl -s -X POST http://localhost:$PORT/api/linear \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "query { issues(first: 10) { nodes { id title state { name } } } }",
+    "variables": {},
+    "format": "compact"
+  }'
+```
+
+
+### ClickUp Integration Examples
+
+#### Skill-based Invocations (Preferred)
+```bash
+# Get port and call API with authorization header
+PORT=$(cat .switchboard/api-server-port.txt)
+TOKEN="your_switchboard_api_token"
+
+curl -s -X POST http://localhost:$PORT/api/clickup \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "method": "GET",
+    "endpoint": "/v2/task/abc123",
+    "query": {},
+    "body": null,
+    "subtasks": true,
+    "format": "compact"
+  }'
+```
+
+
+These skills work in standalone mode without requiring IPC bridging, providing a unified integration experience across all IDEs.
 
 ## 6) State management model (`state-manager.js`)
 
@@ -127,14 +147,11 @@ Baseline state shape:
 Runtime workflows currently registered:
 
 - `accuracy` (5 phases)
-- `handoff-lead` (3 phases)
-- `handoff` (3 phases)
-- `handoff-chat` (3 phases)
-- `handoff-relay` (2 phases)
 - `improve-plan` (3 phases)
-- `challenge` (5 phases)
 - `chat` (4 phases)
 - `review` (used by Kanban CODE REVIEWED advance)
+
+> **Note:** `handoff`, `handoff-lead`, `handoff-chat`, `handoff-relay`, and `challenge` workflows are blocklisted during setup and removed from the workspace. They remain in the runtime registry for backward compatibility but are not distributed to new workspaces.
 
 Workflow state can be session-level or agent-level (`targetAgent`).
 
@@ -158,7 +175,6 @@ Primary tools:
 - `start_workflow`, `get_workflow_state`, `stop_workflow`
 - `run_in_terminal`
 - `get_team_roster`, `set_agent_status`, `handoff_clipboard`
-- `send_message`, `check_inbox`
 - `complete_workflow_phase`
 
 Dynamic schema note:
@@ -167,15 +183,10 @@ Dynamic schema note:
 
 Action-level workflow gates:
 
-- `execute` allowed only in: `handoff`, `challenge`, `handoff-lead`
+- `execute` allowed only in: `handoff`, `challenge`, `handoff-lead`, `improve-plan`
 - `delegate_task` allowed only in: `handoff`
 
-## 9) Dispatch pipeline (`send_message`)
-
-`send_message` only accepts actions:
-
-- `execute`
-- `delegate_task`
+## 9) Dispatch pipeline
 
 Pipeline:
 
@@ -183,64 +194,10 @@ Pipeline:
 2. Resolve recipient from workflow action routing.
 3. Enforce workflow + phase gate + recipient lock rules.
 4. Apply cooldown lock by sender/recipient/action (unless opt-out).
-5. Build metadata:
-   - normalized `phase_gate`
-   - dispatch metadata (`dispatch_id`, TTL, expires, queue mode)
-6. Inject security fields for dispatch actions:
-   - `sessionToken`
-   - `auth` envelope with `hmac-sha256-v1`, nonce, payloadHash, signature
-7. Attempt direct terminal push over IPC for `execute`.
-8. If direct push fails or not attempted, persist message to `.switchboard/inbox/<recipient>/msg_*.json`.
+5. Attempt direct terminal push over IPC for `execute`.
+6. If direct push fails, display warning notification.
 
-Important current behavior:
 
-- Message payload is intentionally kept raw (no persona/guardrail wrapping in payload text).
-- Persona and dispatch metadata travel in message fields/metadata.
-
-## 10) Inbox read semantics (`check_inbox`)
-
-`check_inbox` supports:
-
-- `box`: `inbox` or `outbox` (default currently `outbox`)
-- `filter`: `all` / `delegate_task` / `execute`
-- `since`, `limit`, `verbose`
-
-It reads message JSON files and truncates payload previews unless verbose mode is requested.
-
-## 11) Inbox execution path (`InboxWatcher`)
-
-Detection stack:
-
-- VS Code file watcher on inbox tree
-- native `fs.watch` fallback (gitignored path resilience)
-- periodic poll (60s heartbeat)
-
-Message handling:
-
-- Parses `msg_*.json` in each inbox folder.
-- Strict mode auth checks for dispatch actions:
-  - requires session token
-  - validates token against active session
-  - validates HMAC envelope
-  - replay protection via nonce cache (execute path)
-  - stale timestamp rejection for execute (>5 minutes)
-
-Action handling:
-
-- `execute`:
-  - resolves target terminal with role/name fallbacks
-  - sanitizes payload leading mode-trigger chars
-  - warns on shell metacharacters
-  - sends with robust pacing/chunking
-  - writes `.result.json`, then deletes original message
-- `delegate_task`:
-  - intentionally left in recipient inbox for file-based pickup (no greedy re-routing)
-
-Housekeeping:
-
-- archives processed and stale unprocessed inbox messages
-- prunes empty non-static dirs
-- rotates stale signals and old log artifacts
 
 ## 12) Sidebar/webview subsystem (`TaskViewerProvider`)
 
@@ -254,10 +211,8 @@ Core responsibilities:
 
 Dispatch behavior in sidebar:
 
-- tries direct terminal push first for local terminals
-- falls back to inbox message write for cross-window/offline delivery
-- attaches session token and signed auth envelope on file dispatch
-- internal dispatch path (`_handleTriggerAgentActionInternal`) returns success/failure so higher-level automation can fail fast
+- tries direct terminal push first for local terminals; if terminal not found, shows warning notification
+- internal dispatch path (`_handleTriggerAgentActionInternal`) returns success/failure so higher-level automation can fail fast and roll back column move on failure
 
 Role-driven payload construction:
 
@@ -269,7 +224,6 @@ Role-driven payload construction:
   - final verdict guardrail:
     - "Not Ready" is for unresolved defects/unmet requirements, not purely blocked test environments
 - `lead`/`coder`: execution payload with plan anchor and focus directives
-- `coder` (workflow helper mode): supports `create-signal-file` instruction for Coder -> Reviewer handoff (`.switchboard/inbox/Reviewer/<sessionId>.md`)
 - `team`: splits by plan Band A/B signals and dispatches to lead/coder targets
 - `jules`: triggers remote cloud session after git push verification checks
 
@@ -389,9 +343,6 @@ Key inbound messages from the Kanban webview:
 - `CODE REVIEWED` → `reviewer`
 - Custom agent columns → their role ID
 
-### MCP integration
-
-`handleMcpMove(sessionId, target)` is the entry point for conversational Kanban routing via the `move_kanban_card` MCP tool. It resolves natural-language targets (e.g. "lead coder", "reviewer", column labels) through a normalized alias map built from built-in roles, column definitions, and custom agents. Complexity-routed targets (`team`, `coded`) resolve dynamically per-session based on plan complexity.
 
 ## 15) Complexity classification and auto-routing
 
@@ -409,7 +360,6 @@ Auto-routing behavior:
 - `_targetColumnForDispatchRole()`: `intern` → `INTERN CODED`, `coder` → `CODER CODED`, `lead` → `LEAD CODED`, `team-lead` → `TEAM LEAD CODED`
 - Both `moveSelected` and `moveAll` use this partition when the source column is `PLAN REVIEWED`
 
-The same complexity classification logic is duplicated in `register-tools.js` for the MCP `get_kanban_state` tool (kept aligned via the `normalizeBandBLine` helper).
 
 ### Team Lead routing override
 
@@ -524,25 +474,21 @@ The Review panel supports inline editing of plan metadata:
 - **Topic**: plan title
 - **Plan text**: full markdown editing with optimistic concurrency via `expectedMtimeMs`
 
-## 18) MCP Kanban tools
+## 18) Kanban skills
 
-### `get_kanban_state`
+Agents use direct database access via skills.
 
-Registered in `register-tools.js`. Returns the full Kanban board state or a filtered single-column view.
+### `query_switchboard_kanban` skill
 
-- **Parameters**: `column` (optional) — supports internal IDs (`CREATED`, `PLAN REVIEWED`, etc.) and UI labels (`New`, `Planned`, etc.)
-- **Column resolution**: `resolveRequestedKanbanColumn()` normalizes input through alias map (`KANBAN_COLUMN_ALIASES`), exact match, and label match
-- **Data source**: tries SQLite DB first via `readKanbanStateFromDb()`, falls back to file-derived state from run-sheets + plan registry
-- **Response format**: JSON map of column ID → `{ id, label, items[] }` where each item has `topic`, `sessionId`, `createdAt`
-- Custom agent columns are dynamically included via `getKanbanColumnDefinitions()` which merges built-in columns with `customAgents` from `state.json`
+Located at `.agent/skills/query_switchboard_kanban.md`. Provides direct SQL access to `kanban.db` for state queries only (read-only). Kanban column transitions are system-managed.
 
-### `move_kanban_card`
+- Agents read the database path from `.switchboard/workspace-id` (line 2).
+- Example read: `sqlite3 <db_path> "SELECT session_id, topic, kanban_column FROM plans WHERE kanban_column = 'CREATED';"`
 
-Registered in `register-tools.js`. Routes a plan to a target agent/column via the Kanban dispatch pipeline.
+### `query_archive` skill
 
-- **Parameters**: `sessionId` (required), `target` (required) — conversational destination string
-- **Dispatch path**: delegates to `KanbanProvider.handleMcpMove()` which resolves the target through the normalized alias map, checks role visibility/assignment, and dispatches via `switchboard.triggerAgentFromKanban`
-- **Complexity routing**: targets like `team` and `coded` use dynamic per-session complexity resolution
+Located at `.agent/skills/query_archive/`. Documents direct DuckDB CLI commands for archive queries.
+
 
 ## 19) Batch prompt builder (`agentPromptBuilder.ts`)
 
@@ -550,7 +496,7 @@ All prompt-generation paths route through `buildKanbanBatchPrompt()` to ensure i
 
 ### Prompt structure by role
 
-- **Planner**: improve/enhance instructions referencing `.agent/rules/how_to_plan.md`, with plan file list
+- **Planner**: improve/enhance instructions referencing `.agent/workflows/improve-plan.md`, with plan file list
 - **Lead Coder**: execution payload with focus directive, batch execution rules, optional inline adversarial challenge block, plan file list
 - **Coder**: same as lead but with optional `low-complexity` instruction hint and accuracy mode workflow reference (`.agent/workflows/accuracy.md`)
 - **Reviewer**: reviewer-executor payload with mode directive (no auxiliary workflow), plan file list
@@ -585,7 +531,7 @@ Audit and activity telemetry is local-only:
 
 - `.switchboard/sessions/activity.jsonl` for workflow/dispatch events
 - session run-sheet event streams
-- output channels for extension/MCP/Jules diagnostics
+- output channels for extension/Jules diagnostics
 
 Payload sanitization is applied to audit logs for sensitive keys.
 
@@ -595,9 +541,7 @@ Useful regression tests in `src/test`:
 
 - `workflow-contract-consistency.test.js`
 - `workflow-controls.test.js`
-- `send-message-guards.test.js`
 - `state-manager.test.js`
-- `inbox-watcher.test.js`
 - `session-action-log.test.ts`
 - `interactive-orchestrator.test.ts`
 - `pipeline-orchestrator-regression.test.js`
@@ -610,7 +554,6 @@ Typical maintainer checks:
 - `npx tsc -p . --noEmit`
 - `node src/test/workflow-contract-consistency.test.js`
 - `node src/test/workflow-controls.test.js`
-- `node src/test/send-message-guards.test.js`
 - `node src/test/pipeline-orchestrator-regression.test.js`
 - `node src/test/coder-reviewer-workflow.test.js`
 - `node src/test/tombstone-registry-regression.test.js`
@@ -620,25 +563,23 @@ Typical maintainer checks:
 
 1. Workflow registry drift:
    - `.agent/workflows/enhance.md` exists but `enhance` is not in runtime `WORKFLOWS`.
-   - `register-tools.js` still contains references to non-runtime workflows (`autoplan`, `julesplan` aliases/guards).
-2. Inbox/outbox semantic drift:
-   - `send_message` is inbox-first with direct terminal push optimization.
-   - `check_inbox` still defaults `box='outbox'` and retains stale `request_review` filtering logic.
+
 3. Duplicate robust terminal send implementations:
    - one in `extension.ts`
    - another in `services/terminalUtils.ts`
    - behavior is similar but not identical (newline pacing differences).
-4. Persona payload formatting drift:
-   - MCP `send_message` keeps raw payload + metadata/persona fields.
-   - Sidebar local/remote execute helpers can still inline persona wrappers in payload text.
+3. Persona payload formatting drift:
+    - Sidebar local execute helper can still inline persona wrappers in payload text.
 5. Setup template drift:
-   - default generated setup text in `extension.ts` still documents legacy/removed tool/workflow names.
+   - default generated setup text in `extension.ts` still documents legacy/removed tool/workflow names (partially addressed — `send_message`/`check_inbox` removed from agent-facing docs, but `.cursorrules` and some doc references may persist).
 
-6. Complexity classification duplication:
-   - `KanbanProvider.getComplexityFromPlan()` and `register-tools.js` `getComplexityFromPlan()` implement the same logic independently.
+6. Complexity classification:
    - The Band B parsing, agent recommendation regex, and manual override regex must be kept in sync manually.
 7. Kanban DB vs file-derived state:
    - The SQLite DB is authoritative for column positions when available, but the file-derived fallback uses `deriveKanbanColumn()` which may disagree after manual DB column moves.
-   - `get_kanban_state` MCP tool has its own DB read path separate from `KanbanProvider._refreshBoard()`.
+   - The `query_switchboard_kanban` skill provides direct DB access for agents.
 
 These drifts are maintenance risks and should be addressed before adding new protocol features.
+
+
+

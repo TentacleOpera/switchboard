@@ -74,10 +74,6 @@ function deriveKanbanColumn(events, customAgents) {
             case 'sidebar-review':
                 return 'PLAN REVIEWED';
 
-            case 'handoff':
-            case 'handoff-lead':
-            case 'handoff-chat':
-            case 'handoff-relay':
             case 'implementation':
                 return 'CODED';
 
@@ -90,7 +86,6 @@ function deriveKanbanColumn(events, customAgents) {
 
             // Workflows that do not determine column position — skip
             case 'accuracy':
-            case 'challenge':
             case 'chat':
                 continue;
 

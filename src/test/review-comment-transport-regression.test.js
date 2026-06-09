@@ -111,7 +111,7 @@ function run() {
     test('shared helper preserves CLI submit behavior with repeated terminal submits', () => {
         assert.match(
             sharedHelperSource,
-            /const\s+isCliAgent\s*=\s*\/\\b\(copilot\|gemini\|claude\|windsurf\|cursor\|cortex\)\\b\/i\.test\(terminal\.name\);/,
+            /const\s+isCliAgent\s*=\s*\/\\b\(copilot\|gemini\|agy\|claude\|windsurf\|cursor\|cortex\)\\b\/i\.test\(terminal\.name\);/,
             'Expected shared helper to detect known CLI terminals that need extra submit behavior.'
         );
         assert.match(

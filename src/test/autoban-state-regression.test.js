@@ -18,7 +18,6 @@ async function run() {
         batchSize: 3,
         complexityFilter: 'all',
         routingMode: 'dynamic',
-        maxSendsPerTerminal: 7,
         globalSessionCap: 50,
         sessionSendCount: 9,
         sendCounts: { Reviewer: 4 },
@@ -27,6 +26,7 @@ async function run() {
         poolCursor: { reviewer: 1 },
         rules: {
             CREATED: { enabled: true, intervalMinutes: 10 },
+            'INTERN CODED': { enabled: true, intervalMinutes: 15 },
             'LEAD CODED': { enabled: true, intervalMinutes: 15 },
             'CODER CODED': { enabled: true, intervalMinutes: 15 }
         }
@@ -34,6 +34,7 @@ async function run() {
 
     const broadcast = buildAutobanBroadcastState(baseState, new Map([
         ['CREATED', 1000],
+        ['INTERN CODED', 1500],
         ['LEAD CODED', 2000],
         ['CODER CODED', 3000]
     ]).entries());
@@ -42,7 +43,6 @@ async function run() {
     assert.strictEqual(broadcast.batchSize, 3, 'batch size should be preserved');
     assert.strictEqual(broadcast.complexityFilter, 'all', 'complexity filter should be preserved');
     assert.strictEqual(broadcast.routingMode, 'dynamic', 'routing mode should be preserved');
-    assert.strictEqual(broadcast.maxSendsPerTerminal, 7, 'per-terminal send caps should be preserved');
     assert.strictEqual(broadcast.globalSessionCap, 50, 'global session cap should be preserved');
     assert.strictEqual(broadcast.sessionSendCount, 9, 'session send count should be preserved');
     assert.deepStrictEqual(broadcast.sendCounts, { Reviewer: 4 }, 'send counters should be preserved');
@@ -51,7 +51,7 @@ async function run() {
     assert.deepStrictEqual(broadcast.poolCursor, { reviewer: 1 }, 'pool cursor should be preserved');
     assert.deepStrictEqual(
         broadcast.lastTickAt,
-        { CREATED: 1000, 'LEAD CODED': 2000, 'CODER CODED': 3000 },
+        { CREATED: 1000, 'INTERN CODED': 1500, 'LEAD CODED': 2000, 'CODER CODED': 3000 },
         'lastTickAt should be merged into broadcast state'
     );
 
@@ -71,13 +71,12 @@ async function run() {
             CREATED: { enabled: false, intervalMinutes: 5 }
         }
     });
-    assert.strictEqual(normalizedLegacy.batchSize, 3, 'legacy states should fall back to the default batch size when persisted data is invalid');
+    assert.strictEqual(normalizedLegacy.batchSize, 1, 'legacy states should fall back to the default batch size when persisted data is invalid');
     assert.strictEqual(normalizeAutobanBatchSize(2), 2, 'batch-size normalization should preserve 2');
     assert.strictEqual(normalizeAutobanBatchSize(4), 4, 'batch-size normalization should preserve 4');
     assert.strictEqual(normalizeAutobanBatchSize(9), 5, 'batch-size normalization should clamp oversized values to 5');
     assert.strictEqual(normalizedLegacy.complexityFilter, 'all', 'legacy states should default complexity filtering to all');
     assert.strictEqual(normalizedLegacy.routingMode, 'dynamic', 'legacy states should default routing mode to dynamic');
-    assert.strictEqual(normalizedLegacy.maxSendsPerTerminal, 10, 'legacy states should default per-terminal autoban caps to 10');
     assert.strictEqual(normalizedLegacy.globalSessionCap, 200, 'legacy states should default the global autoban session cap to 200');
     assert.strictEqual(normalizedLegacy.sessionSendCount, 0, 'legacy states should default the session send count to 0');
     assert.deepStrictEqual(normalizedLegacy.sendCounts, {}, 'legacy states should default send counters to an empty record');
@@ -88,6 +87,11 @@ async function run() {
         normalizedLegacy.rules['PLAN REVIEWED'],
         { enabled: true, intervalMinutes: 20 },
         'legacy states should restore missing default column rules'
+    );
+    assert.deepStrictEqual(
+        normalizedLegacy.rules['INTERN CODED'],
+        { enabled: true, intervalMinutes: 15 },
+        'legacy states should restore the intern coded autoban rule with default 15-minute interval'
     );
     assert.deepStrictEqual(
         normalizedLegacy.rules['LEAD CODED'],
@@ -115,10 +119,14 @@ async function run() {
         { enabled: false, intervalMinutes: 9 },
         'legacy CODED autoban rules should be remapped onto CODER CODED'
     );
+    assert.deepStrictEqual(
+        normalizedLegacyCodedRule.rules['INTERN CODED'],
+        { enabled: true, intervalMinutes: 15 },
+        'legacy CODED autoban rules should NOT remap onto INTERN CODED (intern column postdates the split)'
+    );
 
     const normalizedNewConfig = normalizeAutobanConfigState({
         batchSize: 8,
-        maxSendsPerTerminal: 999,
         globalSessionCap: 0,
         sendCounts: { Reviewer: 2.9, '': 4 },
         terminalPools: { reviewer: ['Reviewer', 'Reviewer Backup', 'Reviewer', '', 'Three', 'Four', 'Five', 'Six'] },
@@ -126,7 +134,6 @@ async function run() {
         poolCursor: { reviewer: 2.4 }
     });
     assert.strictEqual(normalizedNewConfig.batchSize, 5, 'batch size should clamp to the supported 1..5 contract');
-    assert.strictEqual(normalizedNewConfig.maxSendsPerTerminal, 100, 'per-terminal caps should clamp to the supported UI range');
     assert.strictEqual(normalizedNewConfig.globalSessionCap, 200, 'invalid global caps should fall back to the default safety cap');
     assert.deepStrictEqual(normalizedNewConfig.sendCounts, { Reviewer: 2 }, 'send counts should be normalized to non-negative integers');
     assert.deepStrictEqual(
@@ -144,10 +151,11 @@ async function run() {
     assert.deepStrictEqual(
         getEnabledSharedReviewerAutobanColumns({
             'LEAD CODED': { enabled: true, intervalMinutes: 15 },
-            'CODER CODED': { enabled: false, intervalMinutes: 15 }
+            'CODER CODED': { enabled: true, intervalMinutes: 15 },
+            'INTERN CODED': { enabled: true, intervalMinutes: 15 }
         }),
-        ['LEAD CODED'],
-        'shared reviewer lane helpers should only include enabled coded columns'
+        ['LEAD CODED', 'CODER CODED', 'INTERN CODED'],
+        'shared reviewer lane helpers should include all three enabled coded columns'
     );
     assert.strictEqual(
         shouldSkipSharedReviewerAutobanDispatch(
@@ -191,7 +199,6 @@ async function run() {
 
     assert.ok(
         providerSource.includes('_selectAutobanTerminal(') &&
-        providerSource.includes('updateAutobanMaxSends') &&
         providerSource.includes('addAutobanTerminal') &&
         providerSource.includes('resetAutobanPools'),
         'TaskViewerProvider should keep the pooled-autoban selection helper and new pool-management message handlers'
@@ -218,11 +225,10 @@ async function run() {
         'autoban add-terminal flow should auto-name backups in the extension instead of prompting in the webview or VS Code'
     );
     assert.ok(
-        providerSource.includes('private _getAutobanReviewerLaneColumns(sourceColumn: string): string[]') &&
-        providerSource.includes("const reviewerLaneColumns = this._getAutobanReviewerLaneColumns(sourceColumn);") &&
-        providerSource.includes("this._collectKanbanCardsInColumns(workspaceRoot, reviewerLaneColumns)") &&
-        providerSource.includes("this._autobanLaneLastDispatchAt.set('coded-reviewer', Date.now());"),
-        'TaskViewerProvider should coordinate LEAD CODED and CODER CODED as one shared reviewer autoban lane'
+        providerSource.includes('private _autobanColumnToRole(column: string): string | null') &&
+        providerSource.includes('return columnToPromptRole(column);') &&
+        providerSource.includes('With strict column isolation, each column ticks independently'),
+        'TaskViewerProvider should delegate column-to-role mapping to columnToPromptRole and use strict column isolation for autoban ticks'
     );
     assert.ok(
         providerSource.includes('private async _reconcileAutobanPoolState(') &&
@@ -243,11 +249,10 @@ async function run() {
         'CLEAR & RESET should re-run autoban pool reconciliation after closing managed backup terminals'
     );
     assert.ok(
-        implementationSource.includes('MAX SENDS / TERMINAL') &&
         implementationSource.includes('TERMINAL POOLS') &&
         implementationSource.includes('CLEAR & RESET') &&
         implementationSource.includes("type: 'addAutobanTerminal'"),
-        'implementation.html should render the send-cap control and terminal-pool management actions'
+        'implementation.html should render the terminal-pool management actions'
     );
     assert.match(
         implementationSource,

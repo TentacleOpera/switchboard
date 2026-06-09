@@ -27,7 +27,7 @@ function run() {
     );
     assert.match(
         providerSource,
-        /await Promise\.all\(\[\s*this\._postSidebarConfigurationState\(activeWorkspaceRoot\),\s*this\.postSetupPanelState\(activeWorkspaceRoot\)\s*\]\);/s,
+        /await Promise\.all\(\[\s*this\._postSidebarConfigurationState\((?:activeWorkspaceRoot|resolvedWorkspaceRoot|resolvedRoot)\),\s*this\.postSetupPanelState\((?:activeWorkspaceRoot|resolvedWorkspaceRoot|resolvedRoot)\)\s*\]\);/s,
         'Expected autosave to keep rebroadcasting refreshed state to both webviews after save.'
     );
 

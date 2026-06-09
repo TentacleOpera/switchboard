@@ -1,14 +1,57 @@
-export type BuiltInAgentRole = 'lead' | 'coder' | 'intern' | 'reviewer' | 'tester' | 'planner' | 'analyst' | 'team-lead';
+export type BuiltInAgentRole = 'lead' | 'coder' | 'intern' | 'reviewer' | 'tester' | 'planner' | 'analyst' | 'ticket_updater' | 'researcher' | 'splitter' | 'gatherer';
+
+export interface CustomAgentAddons {
+    // Core
+    gitProhibitionEnabled?: boolean;
+    workspaceTypeDetection?: boolean;
+    switchboardSafeguards?: boolean;
+
+    // Role-style add-ons
+    includeInlineChallenge?: boolean;
+    accurateCodingEnabled?: boolean;
+    pairProgrammingEnabled?: boolean;
+    aggressivePairProgramming?: boolean;
+    advancedReviewerEnabled?: boolean;
+    reviewerConciseModeEnabled?: boolean;
+    reviewerCompactPlanUpdateEnabled?: boolean;
+    researchEnabled?: boolean; // NEW: enable deep research mode
+    complexityScoringSkill?: boolean; // NEW: invoke complexity scoring before split
+    ticketUpdateMode?: 'disabled' | 'comment-only' | 'refine-ticket' | 'research-and-refine';
+    suppressWalkthrough?: boolean;
+    cavemanOutput?: boolean;
+    useSubagents?: boolean;
+    subagentPolicy?: 'default' | 'noSubagents' | 'useSubagents' | 'customSubagent';
+    customSubagentName?: string;
+    useWorktreesPerPlan?: boolean;
+
+    // Design doc (planning epic)
+    designDoc?: boolean;
+    designDocLink?: string;
+    designDocContent?: string;
+
+    // Design System Doc
+    designSystemDoc?: boolean;
+    designSystemDocLink?: string;
+    designSystemDocContent?: string;
+
+    // Workflow
+    workflowFilePathEnabled?: boolean;
+    workflowFilePath?: string;
+
+    // Prompt override (applied LAST, after all directives)
+    defaultPromptOverride?: DefaultPromptOverride;
+}
 
 export interface CustomAgentConfig {
     id: string;
     role: string;
     name: string;
     startupCommand: string;
-    promptInstructions: string;
+    promptInstructions?: string;
     includeInKanban: boolean;
     kanbanOrder: number;
-    dragDropMode: 'cli' | 'prompt';
+    dragDropMode: 'cli' | 'prompt' | 'disabled';
+    addons?: CustomAgentAddons;
 }
 
 export interface CustomKanbanColumnConfig {
@@ -17,7 +60,7 @@ export interface CustomKanbanColumnConfig {
     role: string;
     triggerPrompt: string;
     order: number;
-    dragDropMode: 'cli' | 'prompt';
+    dragDropMode: 'cli' | 'prompt' | 'disabled';
 }
 
 export interface KanbanColumnDefinition {
@@ -25,10 +68,10 @@ export interface KanbanColumnDefinition {
     label: string;
     role?: string;
     order: number;
-    kind: 'created' | 'review' | 'coded' | 'reviewed' | 'custom-agent' | 'custom-user' | 'completed';
+    kind: 'created' | 'review' | 'gather' | 'coded' | 'reviewed' | 'merge' | 'custom-agent' | 'custom-user' | 'completed';
     source: 'built-in' | 'custom-agent' | 'custom-user';
     autobanEnabled: boolean;
-    dragDropMode: 'cli' | 'prompt';
+    dragDropMode: 'cli' | 'prompt' | 'disabled';
     hideWhenNoAgent?: boolean;
     triggerPrompt?: string;
 }
@@ -38,25 +81,31 @@ export interface KanbanColumnBuildOverrides {
 }
 
 export const BUILT_IN_AGENT_LABELS: Record<BuiltInAgentRole, string> = {
+    gatherer: 'Context Gatherer',
+    planner: 'Planner',
+    splitter: 'Splitter Agent',
     lead: 'Lead Coder',
     coder: 'Coder',
     intern: 'Intern',
     reviewer: 'Reviewer',
     tester: 'Acceptance Tester',
-    planner: 'Planner',
     analyst: 'Analyst',
-    'team-lead': 'Team Lead'
+    ticket_updater: 'Ticket Updater',
+    researcher: 'Researcher',
 };
 
 const DEFAULT_KANBAN_COLUMNS: KanbanColumnDefinition[] = [
     { id: 'CREATED', label: 'New', order: 0, kind: 'created', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
+    { id: 'RESEARCHER', label: 'Researcher', role: 'researcher', order: 90, kind: 'review', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt', hideWhenNoAgent: true },
     { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner', order: 100, kind: 'review', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
-    { id: 'TEAM LEAD CODED', label: 'Team Lead', role: 'team-lead', order: 170, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli', hideWhenNoAgent: true },
+    { id: 'SPLITTER', label: 'Splitter', role: 'splitter', order: 110, kind: 'review', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt', hideWhenNoAgent: true },
+    { id: 'CONTEXT GATHERER', label: 'Context Gatherer', role: 'gatherer', order: 50, kind: 'review', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli', hideWhenNoAgent: true },
     { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 180, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'INTERN CODED', label: 'Intern', role: 'intern', order: 200, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli', hideWhenNoAgent: true },
     { id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer', order: 300, kind: 'reviewed', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli' },
     { id: 'ACCEPTANCE TESTED', label: 'Acceptance Tested', role: 'tester', order: 350, kind: 'reviewed', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli', hideWhenNoAgent: true },
+    { id: 'TICKET UPDATER', label: 'Ticket Updater', role: 'ticket_updater', order: 9000, kind: 'reviewed', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt', hideWhenNoAgent: true },
     { id: 'COMPLETED', label: 'Completed', order: 9999, kind: 'completed', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli' },
 ];
 
@@ -103,6 +152,68 @@ export function isCustomAgentRole(role: string | undefined | null): boolean {
     return typeof role === 'string' && role.startsWith('custom_agent_');
 }
 
+export function parseCustomAgentAddons(raw: unknown): CustomAgentAddons | undefined {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) { return undefined; }
+    const s = raw as Record<string, unknown>;
+    const a: CustomAgentAddons = {};
+    if (s.gitProhibitionEnabled === true) a.gitProhibitionEnabled = true;
+    if (s.workspaceTypeDetection === true) a.workspaceTypeDetection = true;
+    if (s.switchboardSafeguards === true) a.switchboardSafeguards = true;
+    if (s.includeInlineChallenge === true) a.includeInlineChallenge = true;
+    if (s.accurateCodingEnabled === true) a.accurateCodingEnabled = true;
+    if (s.pairProgrammingEnabled === true) a.pairProgrammingEnabled = true;
+    if (s.aggressivePairProgramming === true) a.aggressivePairProgramming = true;
+    if (s.advancedReviewerEnabled === true) a.advancedReviewerEnabled = true;
+    if (s.reviewerConciseModeEnabled === true) a.reviewerConciseModeEnabled = true;
+    if (s.reviewerCompactPlanUpdateEnabled === true) a.reviewerCompactPlanUpdateEnabled = true;
+    if (s.researchEnabled === true) a.researchEnabled = true;
+    if (s.complexityScoringSkill === true) a.complexityScoringSkill = true;
+    if (s.ticketUpdateMode && ['disabled', 'comment-only', 'refine-ticket', 'research-and-refine'].includes(s.ticketUpdateMode as string)) {
+        a.ticketUpdateMode = s.ticketUpdateMode as any;
+    } else if (s.ticketUpdateEnabled === true) {
+        // Migration: map old boolean to new enum
+        a.ticketUpdateMode = 'comment-only';
+    } else if (s.ticketUpdateEnabled === false) {
+        a.ticketUpdateMode = 'disabled';
+    }
+    if (s.suppressWalkthrough === true) a.suppressWalkthrough = true;
+    if (s.cavemanOutput === true) a.cavemanOutput = true;
+    if (s.useSubagents === false) a.useSubagents = false;
+    if (s.subagentPolicy && ['default', 'noSubagents', 'useSubagents', 'customSubagent'].includes(s.subagentPolicy as string)) {
+        a.subagentPolicy = s.subagentPolicy as 'default' | 'noSubagents' | 'useSubagents' | 'customSubagent';
+    }
+    if (s.customSubagentName && typeof s.customSubagentName === 'string') {
+        const sanitized = String(s.customSubagentName).replace(/[^a-zA-Z0-9_]/g, '').trim();
+        if (sanitized) a.customSubagentName = sanitized;
+    }
+    if (s.useWorktreesPerPlan === true) a.useWorktreesPerPlan = true;
+    if (s.designDoc === true) a.designDoc = true;
+    if (s.designDocLink) a.designDocLink = String(s.designDocLink).trim();
+    if (!a.designDoc && s.designDocLink) a.designDoc = true;
+    if (s.designDocContent) {
+        const content = String(s.designDocContent).trim();
+        a.designDocContent = content.length > 50000 ? content.slice(0, 50000) + '\n[TRUNCATED]' : content;
+    }
+    if (s.designSystemDoc === true) a.designSystemDoc = true;
+    if (s.designSystemDocLink) a.designSystemDocLink = String(s.designSystemDocLink).trim();
+    if (!a.designSystemDoc && s.designSystemDocLink) a.designSystemDoc = true;
+    if (s.designSystemDocContent) {
+        const content = String(s.designSystemDocContent).trim();
+        a.designSystemDocContent = content.length > 50000 ? content.slice(0, 50000) + '\n[TRUNCATED]' : content;
+    }
+    if (s.workflowFilePathEnabled === true) a.workflowFilePathEnabled = true;
+    if (typeof s.workflowFilePath === 'string' && s.workflowFilePath.trim()) a.workflowFilePath = s.workflowFilePath.trim();
+    if (s.defaultPromptOverride && typeof s.defaultPromptOverride === 'object') {
+        const o = s.defaultPromptOverride as Record<string, unknown>;
+        const mode = String(o.mode || '');
+        const text = String(o.text || '').trim();
+        if (text && ['append', 'prepend', 'replace'].includes(mode)) {
+            a.defaultPromptOverride = { mode: mode as PromptOverrideMode, text };
+        }
+    }
+    return Object.keys(a).length > 0 ? a : undefined;
+}
+
 export function parseCustomAgents(raw: unknown): CustomAgentConfig[] {
     if (!Array.isArray(raw)) {
         return [];
@@ -140,6 +251,7 @@ export function parseCustomAgents(raw: unknown): CustomAgentConfig[] {
             includeInKanban: source.includeInKanban === true,
             kanbanOrder,
             dragDropMode: (source.dragDropMode === 'prompt' ? 'prompt' : 'cli') as 'cli' | 'prompt',
+            addons: parseCustomAgentAddons(source.addons)
         });
         seenRoles.add(role);
     }
@@ -230,19 +342,6 @@ export function buildKanbanColumns(
         };
     });
 
-    const customColumns = customAgents
-        .filter(agent => agent.includeInKanban)
-        .map(agent => ({
-            id: agent.role,
-            label: agent.name,
-            role: agent.role,
-            order: agent.kanbanOrder,
-            kind: 'custom-agent' as const,
-            source: 'custom-agent' as const,
-            autobanEnabled: false,
-            dragDropMode: agent.dragDropMode,
-        }));
-
     const userColumns = customKanbanColumns.map(column => ({
         id: column.id,
         label: column.label,
@@ -255,7 +354,7 @@ export function buildKanbanColumns(
         triggerPrompt: column.triggerPrompt
     }));
 
-    return [...defaultColumns, ...customColumns, ...userColumns].sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
+    return [...defaultColumns, ...userColumns].sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
 }
 
 export function getBuiltInAgentLabels(): Record<BuiltInAgentRole, string> {
@@ -283,7 +382,7 @@ export function parseDefaultPromptOverrides(
 ): Partial<Record<BuiltInAgentRole, DefaultPromptOverride>> {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
     const result: Partial<Record<BuiltInAgentRole, DefaultPromptOverride>> = {};
-    const VALID_ROLES: BuiltInAgentRole[] = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'team-lead'];
+    const VALID_ROLES: BuiltInAgentRole[] = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'splitter', 'gatherer'];
     const VALID_MODES: PromptOverrideMode[] = ['append', 'prepend', 'replace'];
     for (const role of VALID_ROLES) {
         const entry = (raw as Record<string, unknown>)[role];

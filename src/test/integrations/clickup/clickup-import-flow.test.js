@@ -86,16 +86,19 @@ async function run() {
             const childContent = readText(path.join(plansDir, 'clickup_import_task-child.md'));
             const backlogContent = readText(path.join(plansDir, 'clickup_import_task-backlog.md'));
 
-            assert.ok(parentContent.includes('## ClickUp Ticket Notes'));
+            assert.ok(!parentContent.includes('## ClickUp Ticket Notes'));
             assert.ok(parentContent.includes('**ClickUp Task ID:** task-parent'));
-            assert.ok(parentContent.includes('**Subtasks (each imported as a separate plan):**'));
-            assert.ok(parentContent.includes('clickup_import_task-child.md'));
-            assert.ok(parentContent.includes('**Custom Fields:**'));
-            assert.ok(parentContent.includes('**Kanban Column:** CREATED'));
+            assert.ok(!parentContent.includes('**Subtasks (each imported as a separate plan):**'));
+            assert.ok(!parentContent.includes('clickup_import_task-child.md'));
+            assert.ok(!parentContent.includes('**Custom Fields:**'));
+            assert.ok(!parentContent.includes('## Goal'));
+            assert.ok(!parentContent.includes('## Proposed Changes'));
+            assert.ok(!parentContent.includes('TODO'));
 
             assert.ok(childContent.includes('> **Parent Task:** Parent Task'));
-            assert.ok(childContent.includes('## Goal'));
-            assert.ok(backlogContent.includes('**Kanban Column:** BACKLOG'));
+            assert.ok(!childContent.includes('## Goal'));
+            assert.ok(!childContent.includes('## Proposed Changes'));
+            assert.ok(!childContent.includes('TODO'));
         } finally {
             http.restore();
         }

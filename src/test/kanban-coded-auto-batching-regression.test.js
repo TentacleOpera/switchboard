@@ -22,6 +22,10 @@ function run() {
     const codedAutoBlock = getCodedAutoDropBlock(source);
 
     assert.ok(
+        codedAutoBlock.includes("const dropMode = columnDragDropModes['CODED_AUTO'] || 'cli';"),
+        "Expected CODED_AUTO drop handler to use the synthetic column's mode toggle state."
+    );
+    assert.ok(
         codedAutoBlock.includes('const dispatchGroups = new Map();'),
         'Expected CODED_AUTO drop handler to group dispatches before posting messages.'
     );

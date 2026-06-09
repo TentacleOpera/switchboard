@@ -78,7 +78,7 @@ function run() {
     const dispatchMethodSource = extractMethodBody(taskViewerSource, '_handleTriggerAgentActionInternal');
 
     test('DEFAULT_KANBAN_COLUMNS includes expected built-in roles', () => {
-        for (const role of ['planner', 'lead', 'coder', 'intern', 'reviewer', 'tester', 'team-lead']) {
+        for (const role of ['planner', 'lead', 'coder', 'intern', 'reviewer', 'tester']) {
             assert.ok(builtInRoles.includes(role), `Expected DEFAULT_KANBAN_COLUMNS to include '${role}'`);
         }
     });
@@ -117,14 +117,6 @@ function run() {
         );
     });
 
-    test('_handleTriggerAgentActionInternal includes team-lead dispatch prompt', () => {
-        assert.match(
-            dispatchMethodSource,
-            /else if \(role === 'team-lead'\)[\s\S]{0,300}buildKanbanBatchPrompt\('team-lead'/,
-            'Expected team-lead branch to dispatch via buildKanbanBatchPrompt'
-        );
-    });
-
     test('_handleTriggerAgentActionInternal includes tester dispatch prompt', () => {
         assert.match(
             dispatchMethodSource,
@@ -133,17 +125,7 @@ function run() {
         );
     });
 
-    test('_workflowNameForDispatchRole includes intern and team-lead', () => {
-        assert.match(
-            taskViewerSource,
-            /'team-lead'\s*:\s*'handoff-lead'/,
-            "Expected workflowMap to include 'team-lead': 'handoff-lead'"
-        );
-        assert.match(
-            taskViewerSource,
-            /'intern'\s*:\s*'handoff'/,
-            "Expected workflowMap to include 'intern': 'handoff'"
-        );
+    test('_workflowNameForDispatchRole includes tester', () => {
         assert.match(
             taskViewerSource,
             /'tester'\s*:\s*'tester-pass'/,

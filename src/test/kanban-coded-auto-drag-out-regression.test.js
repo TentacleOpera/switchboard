@@ -10,13 +10,13 @@ function run() {
 
     assert.match(
         source,
-        /function getSelectedInRenderedContainer\(cardEl\)\s*\{\s*const container = cardEl \? cardEl\.closest\('\.column-body'\) : null;\s*if \(!container\) return \[\];\s*return Array\.from\(container\.querySelectorAll\('\.kanban-card\.selected'\)\)\s*\.map\(el => el\.dataset\.session\)\s*\.filter\(Boolean\);\s*\}/s,
+        /function getSelectedInRenderedContainer\(cardEl\)\s*\{\s*const container = cardEl \? cardEl\.closest\('\.column-body'\) : null;\s*if \(!container\) return \[\];\s*return Array\.from\(container\.querySelectorAll\('\.kanban-card\.selected'\)\)\s*\.map\(el => el\.dataset\.planId || el\.dataset\.session || ''\)\s*\.filter\(Boolean\);\s*\}/s,
         'Expected kanban.html to gather selected cards from the dragged card\'s rendered column container.'
     );
 
     assert.match(
         source,
-        /function handleDragStart\(e\) \{[\s\S]*const draggedCardEl =[\s\S]*const draggedId = draggedCardEl\?\.dataset\.session;[\s\S]*if \(selectedCards\.has\(draggedId\) && selectedCards\.size > 1\) \{[\s\S]*const selectedInRenderedContainer = getSelectedInRenderedContainer\(draggedCardEl\);[\s\S]*if \(selectedInRenderedContainer\.length > 1 && selectedInRenderedContainer\.includes\(draggedId\)\) \{[\s\S]*idsToTransfer = selectedInRenderedContainer;[\s\S]*\}[\s\S]*\}/s,
+        /function handleDragStart\(e\) \{[\s\S]*const draggedCardEl =[\s\S]*const draggedId = draggedCardEl\?\.dataset\.planId || draggedCardEl\?\.dataset\.session;[\s\S]*if \(selectedCards\.has\(draggedId\) && selectedCards\.size > 1\) \{[\s\S]*const selectedInRenderedContainer = getSelectedInRenderedContainer\(draggedCardEl\);[\s\S]*if \(selectedInRenderedContainer\.length > 1 && selectedInRenderedContainer\.includes\(draggedId\)\) \{[\s\S]*idsToTransfer = selectedInRenderedContainer;[\s\S]*\}[\s\S]*\}/s,
         'Expected handleDragStart() to package visible multi-selection from the dragged card\'s rendered container.'
     );
 

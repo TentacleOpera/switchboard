@@ -10,6 +10,32 @@ function withClipboardLock<T>(fn: () => Promise<T>): Promise<T> {
     return next;
 }
 
+// Named timing constants for clipboard paste operations
+const PRE_PASTE_SETTLE_MS = 200;
+const POST_PASTE_SETTLE_MS = 800;
+
+/**
+ * Paste text to terminal via clipboard to bypass PTY line-buffer limits.
+ * Saves existing clipboard content, writes new text, pastes, then restores.
+ */
+export async function pasteTextViaClipboard(
+    terminal: vscode.Terminal,
+    text: string
+): Promise<void> {
+    await withClipboardLock(async () => {
+        let previousClipboard = '';
+        try { previousClipboard = await vscode.env.clipboard.readText(); } catch { /* ignore */ }
+
+        await vscode.env.clipboard.writeText(text);
+        terminal.show(false);
+        await new Promise(r => setTimeout(r, PRE_PASTE_SETTLE_MS));
+        await vscode.commands.executeCommand('workbench.action.terminal.paste');
+
+        await new Promise(r => setTimeout(r, POST_PASTE_SETTLE_MS));
+        try { await vscode.env.clipboard.writeText(previousClipboard); } catch { /* ignore */ }
+    });
+}
+
 /**
  * Normalize a filesystem path for consistent cross-platform hashing.
  * On Windows, lowercases the path for case-insensitive comparison.
@@ -32,7 +58,7 @@ export function getAntigravityHash(rawPath: string): string {
 
 /**
  * Sends text to a terminal with chunking and pacing to prevent input corruption.
- * Shared by InboxWatcher (inbox-based delivery) and TaskViewerProvider (direct push).
+ * Used by TaskViewerProvider for direct terminal push.
  */
 export async function sendRobustText(
     terminal: vscode.Terminal,
@@ -44,7 +70,7 @@ export async function sendRobustText(
     const CHUNK_DELAY = 50; // ms between chunks
     const NEWLINE_DELAY = paced ? 1000 : 100; // adaptive delay before submission
     const CLI_CONFIRM_ENTER_DELAY = paced ? 350 : 150;
-    const isCliAgent = /\b(copilot|gemini|claude|windsurf|cursor|cortex)\b/i.test(terminal.name);
+    const isCliAgent = /\b(copilot|gemini|agy|claude|windsurf|cursor|cortex)\b/i.test(terminal.name);
     const _log = (msg: string) => { log?.(msg); console.log(`[sendRobustText] ${msg}`); };
 
     // For most payloads, use clipboard paste to bypass PTY line-buffer limits
@@ -55,21 +81,9 @@ export async function sendRobustText(
     if (text.length > CLIPBOARD_PASTE_THRESHOLD) {
         _log(`Large payload (${text.length} chars) for '${terminal.name}', using clipboard paste delivery.`);
         try {
-            await withClipboardLock(async () => {
-                let previousClipboard = '';
-                try { previousClipboard = await vscode.env.clipboard.readText(); } catch { /* ignore */ }
+            await pasteTextViaClipboard(terminal, text);
 
-                await vscode.env.clipboard.writeText(text);
-                terminal.show(false);
-                await new Promise(r => setTimeout(r, 200));
-                await vscode.commands.executeCommand('workbench.action.terminal.paste');
-
-                // Wait for paste to settle, then restore clipboard
-                await new Promise(r => setTimeout(r, 800));
-                try { await vscode.env.clipboard.writeText(previousClipboard); } catch { /* ignore */ }
-            });
-
-            // Submit the pasted content (clipboard paste doesn't need CLI confirmation Enter)
+            // Submit the pasted content
             await new Promise(r => setTimeout(r, NEWLINE_DELAY));
             terminal.sendText('', true);
             _log(`Clipboard paste complete for '${terminal.name}', Enter sent.`);

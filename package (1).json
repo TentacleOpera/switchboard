@@ -1,0 +1,484 @@
+{
+  "name": "switchboard",
+  "displayName": "Switchboard",
+  "description": "Drag and drop to trigger AI agent teams. No prompts, no API keys, one hand free.",
+  "icon": "icon.png",
+  "keywords": [
+    "switchboard",
+    "ai agents",
+    "orchestration",
+    "mcp",
+    "multi-agent"
+  ],
+  "version": "1.5.7",
+  "main": "./dist/extension.js",
+  "publisher": "TurnZero",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TentacleOpera/switchboard.git"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "AI"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "switchboard-sidebar",
+          "title": "Switchboard",
+          "icon": "icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "switchboard-sidebar": [
+        {
+          "type": "webview",
+          "id": "switchboard-view",
+          "name": "Switchboard",
+          "icon": "icon.svg"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "switchboard.setup",
+        "title": "Switchboard: Setup AI Protocol Files"
+      },
+      {
+        "command": "switchboard.connectMcp",
+        "title": "Switchboard: Connect MCP"
+      },
+      {
+        "command": "switchboard.copyMcpConfig",
+        "title": "Switchboard: Copy MCP Config to Clipboard"
+      },
+      {
+        "command": "switchboard.recheckMcp",
+        "title": "Switchboard: Recheck MCP Connection"
+      },
+      {
+        "command": "switchboard.createAgentGrid",
+        "title": "Switchboard: Open Agent Terminals"
+      },
+      {
+        "command": "switchboard.deregisterAllTerminals",
+        "title": "Switchboard: Reset Agent Terminals"
+      },
+      {
+        "command": "switchboard.cleanWorkspace",
+        "title": "Switchboard: Clean Working Memory"
+      },
+      {
+        "command": "switchboard.openKanban",
+        "title": "Switchboard: Open AUTOBAN"
+      },
+      {
+        "command": "switchboard.openSetupPanel",
+        "title": "Switchboard: Open Setup"
+      },
+      {
+        "command": "switchboard.scaffoldMultiRepo",
+        "title": "Multi-Repo: Scaffold Control Plane",
+        "category": "Switchboard"
+      },
+      {
+        "command": "switchboard.setupControlPlane",
+        "title": "Switchboard: Set Up Control Plane"
+      },
+      {
+        "command": "switchboard.clearControlPlaneCache",
+        "title": "Switchboard: Clear Control Plane Cache"
+      },
+      {
+        "command": "switchboard.reviewPlan",
+        "title": "Switchboard: Review Plan"
+      },
+      {
+        "command": "switchboard.resetKanbanDb",
+        "title": "Switchboard: Reset Kanban Database"
+      },
+      {
+        "command": "switchboard.reconcileKanbanDbs",
+        "title": "Switchboard: Reconcile Kanban Databases"
+      },
+      {
+        "command": "switchboard.archiveCurrentPlan",
+        "title": "Switchboard: Archive Current Plan"
+      },
+      {
+        "command": "switchboard.queryArchive",
+        "title": "Switchboard: Query Plan Archive"
+      },
+      {
+        "command": "switchboard.exportAllToArchive",
+        "title": "Switchboard: Export All Completed Plans to Archive"
+      },
+      {
+        "command": "switchboard.setClickUpToken",
+        "title": "Set ClickUp API Token",
+        "category": "Switchboard"
+      },
+      {
+        "command": "switchboard.importFromClickUp",
+        "title": "Switchboard: Import Tasks from ClickUp",
+        "category": "Switchboard"
+      },
+      {
+        "command": "switchboard.importFromLinear",
+        "title": "Switchboard: Import Issues from Linear",
+        "category": "Switchboard"
+      },
+      {
+        "command": "switchboard.setLinearToken",
+        "title": "Set Linear API Token",
+        "category": "Switchboard"
+      },
+      {
+        "command": "switchboard.setNotionToken",
+        "title": "Set Notion API Token",
+        "category": "Switchboard"
+      },
+      {
+        "command": "switchboard.fetchNotionDesignDoc",
+        "title": "Fetch Notion Design Doc",
+        "category": "Switchboard"
+      },
+      {
+        "command": "switchboard.openResearchPanel",
+        "title": "Switchboard: Open Research Panel",
+        "category": "Switchboard"
+      }
+    ],
+    "configuration": {
+      "title": "Switchboard",
+      "properties": {
+        "switchboard.defaultMode": {
+          "type": "string",
+          "enum": [
+            "action",
+            "plan"
+          ],
+          "default": "action",
+          "description": "Default mode for switchboard commands"
+        },
+        "switchboard.controlPlane.onboardingDismissed": {
+          "type": "boolean",
+          "default": false,
+          "description": "Suppress the one-time Control Plane onboarding offer for the current workspace after it has been dismissed."
+        },
+        "switchboard.cli.command": {
+          "type": "string",
+          "default": "",
+          "description": "CLI command to launch for handoff workflows (e.g. gemini, claude)"
+        },
+        "switchboard.cli.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Default arguments for CLI agent"
+        },
+        "switchboard.cli.yolo": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable auto-approve mode (appends yolo flags)"
+        },
+        "switchboard.cli.yoloFlags": {
+          "type": "object",
+          "default": {
+            "gemini": [
+              "--sandbox"
+            ],
+            "claude": [
+              "--dangerously-skip-permissions"
+            ],
+            "codex": [
+              "--approve-mode",
+              "full-auto"
+            ]
+          },
+          "description": "Auto-approve flags per CLI provider"
+        },
+        "switchboard.polling.initialWait": {
+          "type": "integer",
+          "default": 120,
+          "description": "Initial wait duration (seconds) before the first check in workflows"
+        },
+        "switchboard.polling.interval": {
+          "type": "integer",
+          "default": 60,
+          "description": "Subsequent polling interval (seconds) for workflow checks"
+        },
+        "switchboard.accurateCoding.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "When enabled, coder prompts from sidebar actions include instructions to follow the accuracy.md workflow."
+        },
+        "switchboard.leadCoder.inlineChallenge": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, Lead Coder execution prompts include an inline challenge step before implementation."
+        },
+        "switchboard.reviewer.advancedMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, reviewer prompts include deep regression analysis instructions (caller tracing, race condition checks, orphaned reference detection). Token-intensive — off by default."
+        },
+        "switchboard.pairProgramming.aggressive": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, the planner classifies more tasks as Band A (routine), shifting work to the cheaper Coder agent. Only genuinely complex work stays on the Lead."
+        },
+        "switchboard.jules.autoSync": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, automatically runs git add/commit/push before sending plans to Jules. Defaults to OFF."
+        },
+        "switchboard.planner.designDocEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, appends a Design Doc / PRD link to all planner prompts for consistent context delivery."
+        },
+        "switchboard.planner.designDocLink": {
+          "type": "string",
+          "default": "",
+          "description": "URL or path to the Design Doc / PRD to append to planner prompts. Only used when designDocEnabled is true."
+        },
+        "switchboard.integrations.preferredProvider": {
+          "type": "string",
+          "enum": [
+            "linear",
+            "clickup"
+          ],
+          "default": "linear",
+          "description": "Primary project management integration provider. Controls which configuration section is visible in the Setup panel.",
+          "enumDescriptions": [
+            "Show Linear configuration section in the Setup panel",
+            "Show ClickUp configuration section in the Setup panel"
+          ]
+        },
+        "switchboard.team.strictPrompts": {
+          "type": "boolean",
+          "default": false,
+          "description": "Unified team prompt rigor. When enabled, both planner and reviewer prompts use strict mode. Default is light mode."
+        },
+        "switchboard.review.strictPrompts": {
+          "type": "boolean",
+          "default": false,
+          "description": "Deprecated: use team.strictPrompts instead. Kept for backward compatibility.",
+          "deprecationMessage": "Use switchboard.team.strictPrompts instead."
+        },
+        "switchboard.planner.strictPrompts": {
+          "type": "boolean",
+          "default": false,
+          "description": "Deprecated: use team.strictPrompts instead. Kept for backward compatibility.",
+          "deprecationMessage": "Use switchboard.team.strictPrompts instead."
+        },
+        "switchboard.plans.defaultOpenMode": {
+          "type": "string",
+          "enum": [
+            "preview",
+            "edit"
+          ],
+          "default": "preview",
+          "description": "Default mode for opening plans from the sidebar."
+        },
+        "switchboard.security.strictInboxAuth": {
+          "type": "boolean",
+          "default": true,
+          "description": "Require session token authentication for all inbox dispatch messages. Disable only for development.",
+          "scope": "application"
+        },
+        "switchboard.runtime.workspaceMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "(Dev only) Allow MCP server to run from mutable workspace copy instead of immutable extension bundle.",
+          "scope": "application"
+        },
+        "switchboard.ollama.intern.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable the Ollama-backed intern launch target for this workspace.",
+          "scope": "resource"
+        },
+        "switchboard.ollama.intern.mode": {
+          "type": "string",
+          "enum": [
+            "cloud",
+            "local"
+          ],
+          "default": "cloud",
+          "description": "Preferred Ollama runtime for the intern profile in this workspace.",
+          "scope": "resource"
+        },
+        "switchboard.ollama.intern.model": {
+          "type": "string",
+          "default": "gemma4:31b-cloud",
+          "description": "Saved Ollama model for the intern profile in this workspace.",
+          "scope": "resource"
+        },
+        "switchboard.ollama.intern.baseUrl": {
+          "type": "string",
+          "default": "https://ollama.com/api",
+          "description": "Resolved Ollama API base URL for the saved intern profile.",
+          "scope": "resource"
+        },
+        "mcpServers": {
+          "type": "object",
+          "default": {},
+          "description": "Configuration for Model Context Protocol (MCP) servers",
+          "scope": "resource"
+        },
+        "switchboard.research.localFolderPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the local folder containing research files (.md, .txt, .markdown, .rst, .adoc). Used by the Research panel's Cowork/local source.",
+          "scope": "resource"
+        },
+        "switchboard.kanban.completedLimit": {
+          "type": "integer",
+          "default": 100,
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Maximum number of cards shown in the Kanban Completed column (1–500). Higher values may slow rendering.",
+          "scope": "resource"
+        },
+        "switchboard.kanban.dbPath": {
+          "type": "string",
+          "default": "",
+          "description": "Custom file path for the Kanban database (e.g., ~/Google Drive/Switchboard/kanban.db). If empty, uses the default .switchboard/kanban.db in the workspace root. Use this to store the DB in a cloud-synced folder for multi-machine handover.",
+          "scope": "resource"
+        },
+        "switchboard.kanban.controlPlaneRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Explicit Control Plane folder override. Must point to a folder containing .switchboard/kanban.db. Leave empty to use auto-detect.",
+          "scope": "resource"
+        },
+        "switchboard.workspace.ignoreStrategy": {
+          "type": "string",
+          "enum": [
+            "targetedGitignore",
+            "localExclude",
+            "custom",
+            "none"
+          ],
+          "default": "targetedGitignore",
+          "enumDescriptions": [
+            "Write targeted rules to .gitignore while keeping shared plans, reviews, sessions, and workflow files tracked (recommended)",
+            "Write rules to .git/info/exclude (local only, not committed)",
+            "Write your own rules to .gitignore (editable)",
+            "Do not manage ignore rules (manual management required)"
+          ],
+          "description": "Strategy for excluding Switchboard files from git tracking.",
+          "scope": "resource"
+        },
+        "switchboard.workspace.ignoreRules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Stored ignore rules used by the localExclude preset and the editable custom preset. Each entry is appended as a separate line.",
+          "scope": "resource"
+        },
+        "switchboard.archive.dbPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to DuckDB archive database for historical plan research (e.g., ~/GoogleDrive/SwitchboardArchives/{workspace}.duckdb). Leave empty to disable archiving.",
+          "scope": "resource"
+        },
+        "switchboard.archive.autoArchiveCompleted": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically archive plans when moved to COMPLETED column.",
+          "scope": "resource"
+        },
+        "switchboard.relay.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable Windsurf Relay — automatic clipboard prompts for two-stage context gathering",
+          "scope": "resource"
+        },
+        "switchboard.relay.mode": {
+          "type": "string",
+          "enum": ["settings-only", "context-gatherer-column"],
+          "enumDescriptions": [
+            "Moving to coding column auto-copies gather prompt",
+            "Dedicated 'Context Gatherer' column for visible workflow"
+          ],
+          "default": "settings-only",
+          "description": "Relay workflow mode — how the automatic clipboard copy is triggered",
+          "scope": "resource"
+        },
+        "switchboard.relay.gathererAgent": {
+          "type": "string",
+          "default": "intern",
+          "description": "Agent name for context gathering stage (e.g., 'intern', 'ollama')",
+          "scope": "resource"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "webpack",
+    "watch": "webpack --watch",
+    "package": "webpack --mode production --devtool hidden-source-map",
+    "compile-tests": "tsc -p tsconfig.test.json",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test",
+    "test:integration:notion": "node src/test/integrations/run-integration-tests.js notion",
+    "test:integration:clickup": "node src/test/integrations/run-integration-tests.js clickup",
+    "test:integration:linear": "node src/test/integrations/run-integration-tests.js linear",
+    "test:regression:plan-sync": "node src/test/plan-creation-integration-sync-regression.test.js",
+    "test:regression:native-project-api": "node src/test/native-project-api-commands-regression.test.js",
+    "test:contract:research-modal": "node src/test/research-modal-contract.test.js",
+    "test:contract:request-id-wire": "node src/test/research-modal-request-id-wire-contract.test.js",
+    "test:regression:token-env": "node src/test/build-switchboard-mcp-env.test.js",
+    "test:integration:all": "npm run test:regression:plan-sync && npm run test:regression:native-project-api && node src/test/integrations/run-integration-tests.js all",
+    "clean:switchboard": "node -e \"const fs=require('fs'),p=require('path'),d=p.join('.switchboard');['inbox','outbox','cooldowns'].forEach(f=>{try{fs.rmSync(p.join(d,f),{recursive:true,force:true})}catch{}});['bridge_debug.log','auth_token'].forEach(f=>{try{fs.unlinkSync(p.join(d,f))}catch{}});console.log('Switchboard transient state cleaned.')\""
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.7",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "@types/sinon": "^21.0.1",
+    "@types/vscode": "^1.90.0",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2",
+    "copy-webpack-plugin": "^12.0.2",
+    "sinon": "^21.0.3",
+    "ts-loader": "^9.5.4",
+    "typescript-eslint": "^8.54.0",
+    "webpack": "^5.105.4",
+    "webpack-cli": "^6.0.1"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.3",
+    "@types/dompurify": "^3.0.5",
+    "@types/jsdom": "^27.0.0",
+    "@types/proper-lockfile": "^4.1.4",
+    "@types/uuid": "^10.0.0",
+    "@vscode/codicons": "^0.0.44",
+    "adm-zip": "^0.5.16",
+    "docx": "^9.6.0",
+    "dompurify": "^3.3.1",
+    "jsdom": "^28.0.0",
+    "mermaid": "^11.14.0",
+    "proper-lockfile": "^4.1.2",
+    "sql.js": "^1.14.1",
+    "uuid": "^9.0.1",
+    "zod": "^3.23.8"
+  }
+}

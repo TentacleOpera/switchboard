@@ -43,6 +43,25 @@ const extensionConfig = {
                         }
                     }
                 ]
+            },
+            // jsdom's style-rules.js reads default-stylesheet.css via fs.readFileSync at require() time
+            // using __dirname-relative path resolution. When webpack bundles jsdom, __dirname gets
+            // rewritten to the output directory, so the CSS file can't be found at runtime.
+            // Solution: intercept the CSS file import and inline it as a string constant.
+            {
+                test: /jsdom\/lib\/jsdom\/browser\/default-stylesheet\.css$/,
+                type: 'asset/source'
+            },
+            // Transform jsdom's style-rules.js at build time: replace the fs.readFileSync(__dirname-relative)
+            // call with a require() that webpack can resolve and inline. The loader lives in webpack-loaders/
+            // and transforms the actual jsdom source each build — no static copy checked in.
+            {
+                test: /jsdom\/lib\/jsdom\/living\/helpers\/style-rules\.js$/,
+                use: [
+                    {
+                        loader: path.resolve(__dirname, 'webpack-loaders', 'jsdom-css-inline-loader.js')
+                    }
+                ]
             }
         ]
     },
@@ -62,6 +81,11 @@ const extensionConfig = {
                     to: 'webview/[name][ext]'
                 },
                 {
+                    from: 'src/webview/*.js',
+                    to: 'webview/[name][ext]',
+                    noErrorOnMissing: true
+                },
+                {
                     from: path.resolve(__dirname, 'node_modules', 'sql.js', 'dist', 'sql-wasm.js'),
                     to: 'sql-wasm.js'
                 },
@@ -73,56 +97,4 @@ const extensionConfig = {
         })
     ]
 };
-
-/** @type WebpackConfig */
-const mcpServerConfig = {
-    target: 'node',
-    mode: 'none',
-    entry: './src/mcp-server/mcp-server.js',
-    output: {
-        path: path.resolve(__dirname, 'dist', 'mcp-server'),
-        filename: 'mcp-server.js',
-        libraryTarget: 'commonjs'
-    },
-    resolve: {
-        extensions: ['.ts', '.js']
-    },
-    // Do NOT exclude node_modules here - we want to bundle them!
-    // But we must exclude vscode as it's not available in the MCP process
-    externals: {
-        vscode: 'commonjs vscode'
-    },
-    module: {
-        rules: [
-            {
-                test: /\.ts$/,
-                exclude: /node_modules/,
-                use: [{
-                    loader: 'ts-loader',
-                    options: {
-                        compilerOptions: {
-                            noEmit: false
-                        }
-                    }
-                }]
-            }
-        ]
-    },
-    plugins: [
-        new CopyPlugin({
-            patterns: [
-                {
-                    from: path.resolve(__dirname, 'node_modules', 'sql.js', 'dist', 'sql-wasm.js'),
-                    to: 'sql-wasm.js'
-                },
-                {
-                    from: path.resolve(__dirname, 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
-                    to: 'sql-wasm.wasm'
-                }
-            ]
-        })
-    ],
-    devtool: 'nosources-source-map'
-};
-
-module.exports = [extensionConfig, mcpServerConfig];
+module.exports = extensionConfig;

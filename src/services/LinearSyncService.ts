@@ -3,7 +3,9 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as https from 'https';
 import { CANONICAL_COLUMNS } from './ClickUpSyncService';
+import { KanbanDatabase } from './KanbanDatabase';
 import type { AutoPullIntervalMinutes } from './IntegrationAutoPullService';
+import { DEFAULT_LIVE_SYNC_CONFIG } from '../models/LiveSyncTypes';
 import {
   type LinearAutomationRule,
   normalizeLinearAutomationRules
@@ -12,7 +14,8 @@ import {
 export interface LinearConfig {
   teamId: string;
   teamName: string;
-  projectId?: string;
+  includeProjectNames?: string[];
+  excludeProjectNames?: string[];
   columnToStateId: Record<string, string>;
   switchboardLabelId: string;
   setupComplete: boolean;
@@ -21,14 +24,77 @@ export interface LinearConfig {
   autoPullEnabled: boolean;
   pullIntervalMinutes: AutoPullIntervalMinutes;
   automationRules: LinearAutomationRule[];
+  deleteSyncEnabled?: boolean;  // default: false — archive Linear issue when plan is deleted (opt-in)
+  completeSyncEnabled?: boolean;  // default: true — sync completed status to Linear
+  excludeBacklog?: boolean;  // default: true — exclude backlog issues from sync
+  selectedProjectName: string;  // Persisted project picker value for sidebar filter
 }
 
 export interface LinearApplyOptions {
   mapColumns: boolean;
   createLabel: boolean;
-  scopeProject: boolean;
+  includeProjectNames?: string[];
+  excludeProjectNames?: string[];
   enableRealtimeSync: boolean;
   enableAutoPull: boolean;
+  deleteSyncEnabled?: boolean;
+  enableCompleteSync?: boolean;
+  excludeBacklog?: boolean;  // NEW: exclude backlog issues from sync
+}
+
+export interface LinearIssue {
+  id: string;
+  identifier: string;
+  title: string;
+  description: string;
+  state: { id: string; name: string; type: string } | null;
+  priority: number | null;
+  assignee: { id: string; name: string; email: string } | null;
+  project: { id: string; name: string } | null;
+  labels: Array<{ id: string; name: string }>;
+  createdAt: string;
+  updatedAt: string;
+  url: string;
+  parentId: string | null;
+}
+
+export interface LinearComment {
+  id: string;
+  body: string;
+  user: { name: string; email?: string } | null;
+  createdAt: string;
+}
+
+export interface LinearAttachment {
+  id: string;
+  title: string;
+  url: string;
+  filename?: string;
+  filesize?: number;
+  mimeType?: string;
+}
+
+export type LinearIssueFilter = {
+  team: { id: { eq: string } };
+  project?: { id: { eq: string } };
+};
+
+export function buildLinearIssueFilter(teamId: string, projectId?: string): LinearIssueFilter {
+  const normalizedTeamId = String(teamId || '').trim();
+  if (!normalizedTeamId) {
+    throw new Error('Linear issue list queries require a team ID.');
+  }
+
+  const normalizedProjectId = String(projectId || '').trim();
+  const filter: LinearIssueFilter = {
+    team: { id: { eq: normalizedTeamId } }
+  };
+
+  if (normalizedProjectId) {
+    filter.project = { id: { eq: normalizedProjectId } };
+  }
+
+  return filter;
 }
 
 export { CANONICAL_COLUMNS };
@@ -47,6 +113,43 @@ export class LinearSyncService {
   private _consecutiveFailures = 0;
   private _debounceTimers: Map<string, NodeJS.Timeout> = new Map();
   private readonly _maxRetries = 3;
+  private _lastRequestTime = 0;
+  private readonly _minDelayMs = 50;
+
+  // Cache service for issue caching
+  private _cacheService: import('./PlanningPanelCacheService').PlanningPanelCacheService | null = null;
+
+  // Reverse map: issueId -> projectId for efficient cache invalidation
+  private _issueProjectIndex: Map<string, string> = new Map();
+  private _cachedProjects: { id: string; name: string }[] | null = null;
+
+  private static readonly _transientMarkers = [
+    'socket hang up',
+    'ETIMEDOUT',
+    'ECONNRESET',
+    'ECONNREFUSED',
+    'EPIPE',
+    'EAI_AGAIN',
+    'timeout',
+    'network error',
+    '429',
+    'rate limit',
+    'too many requests'
+  ];
+
+  private _isTransientError(error: unknown): boolean {
+    const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+    return LinearSyncService._transientMarkers.some(marker => message.includes(marker.toLowerCase()));
+  }
+
+  private async _throttle(): Promise<void> {
+    const now = Date.now();
+    const elapsed = now - this._lastRequestTime;
+    if (elapsed < this._minDelayMs) {
+      await this.delay(this._minDelayMs - elapsed);
+    }
+    this._lastRequestTime = Date.now();
+  }
 
   constructor(workspaceRoot: string, secretStorage: vscode.SecretStorage) {
     this._workspaceRoot = workspaceRoot;
@@ -55,13 +158,21 @@ export class LinearSyncService {
     this._secretStorage = secretStorage;
   }
 
+  /**
+   * Inject the cache service for issue caching.
+   */
+  public setCacheService(cacheService: import('./PlanningPanelCacheService').PlanningPanelCacheService): void {
+    this._cacheService = cacheService;
+  }
+
   // ── Config I/O ───────────────────────────────────────────────
 
   private _createEmptyConfig(): LinearConfig {
     return {
       teamId: '',
       teamName: '',
-      projectId: undefined,
+      includeProjectNames: undefined,
+      excludeProjectNames: undefined,
       columnToStateId: {},
       switchboardLabelId: '',
       setupComplete: false,
@@ -69,7 +180,11 @@ export class LinearSyncService {
       realTimeSyncEnabled: false,
       autoPullEnabled: false,
       pullIntervalMinutes: 60,
-      automationRules: []
+      automationRules: [],
+      deleteSyncEnabled: false,  // default false — require explicit opt-in
+      completeSyncEnabled: true,
+      excludeBacklog: true,  // default to excluding backlog for lightweight sync
+      selectedProjectName: ''  // default to no project selected
     };
   }
 
@@ -82,10 +197,19 @@ export class LinearSyncService {
     const normalizedInterval: AutoPullIntervalMinutes =
       interval === 5 || interval === 15 || interval === 30 || interval === 60 ? interval : 60;
 
+    const normalizeNameArray = (arr: unknown): string[] | undefined => {
+      if (!Array.isArray(arr)) return undefined;
+      const normalized = arr
+        .map((item: unknown) => String(item || '').trim())
+        .filter((name: string) => name.length > 0);
+      return normalized.length > 0 ? normalized : undefined;
+    };
+
     return {
       teamId: raw.teamId || '',
       teamName: raw.teamName || '',
-      projectId: raw.projectId || undefined,
+      includeProjectNames: normalizeNameArray(raw.includeProjectNames),
+      excludeProjectNames: normalizeNameArray(raw.excludeProjectNames),
       columnToStateId: raw.columnToStateId || {},
       switchboardLabelId: raw.switchboardLabelId || '',
       setupComplete: raw.setupComplete === true,
@@ -95,14 +219,41 @@ export class LinearSyncService {
         : raw.realTimeSyncEnabled === true,
       autoPullEnabled: raw.autoPullEnabled === true,
       pullIntervalMinutes: normalizedInterval,
-      automationRules: normalizeLinearAutomationRules(raw.automationRules)
+      automationRules: normalizeLinearAutomationRules(raw.automationRules),
+      deleteSyncEnabled: raw.deleteSyncEnabled === undefined
+        ? false  // Changed from (raw.setupComplete === true) — require explicit opt-in for ALL users
+        : raw.deleteSyncEnabled === true,
+      completeSyncEnabled: raw.completeSyncEnabled !== false,  // default true
+      excludeBacklog: raw.excludeBacklog !== false,  // default true — exclude backlog issues
+      selectedProjectName: raw.selectedProjectName || ''  // normalize missing/undefined to empty string
     };
   }
 
   async loadConfig(): Promise<LinearConfig | null> {
     try {
       const content = await fs.promises.readFile(this._configPath, 'utf8');
-      const normalized = this._normalizeConfig(JSON.parse(content));
+      const raw = JSON.parse(content);
+
+      // Migration: legacy projectId → includeProjectNames
+      if (raw.projectId && (!raw.includeProjectNames || raw.includeProjectNames.length === 0)) {
+        try {
+          const resolvedName = await this._resolveProjectIdToName(raw.projectId);
+          if (resolvedName) {
+            console.log(`[LinearSync] Migrating legacy projectId to includeProjectNames: ${resolvedName}`);
+            raw.includeProjectNames = [resolvedName];
+            delete raw.projectId;
+            // Save migrated config
+            await fs.promises.mkdir(path.dirname(this._configPath), { recursive: true });
+            await fs.promises.writeFile(this._configPath, JSON.stringify(raw, null, 2));
+          } else {
+            console.warn(`[LinearSync] Failed to resolve legacy projectId to name, deferring migration. API may be unavailable.`);
+          }
+        } catch (error) {
+          console.warn(`[LinearSync] Migration deferred due to error:`, error);
+        }
+      }
+
+      const normalized = this._normalizeConfig(raw);
       this._config = normalized;
       return normalized;
     } catch { return null; }
@@ -116,6 +267,7 @@ export class LinearSyncService {
     await fs.promises.mkdir(path.dirname(this._configPath), { recursive: true });
     await fs.promises.writeFile(this._configPath, JSON.stringify(normalized, null, 2));
     this._config = normalized;
+    this._cachedProjects = null;
   }
 
   async saveAutomationSettings(
@@ -176,7 +328,859 @@ export class LinearSyncService {
     };
   }
 
-  // ── Local Sync Map (sessionId → Linear issueId) ──────────────
+  private _normalizeLinearIssue(raw: any): LinearIssue {
+    return {
+      id: String(raw?.id || '').trim(),
+      identifier: String(raw?.identifier || '').trim(),
+      title: String(raw?.title || '').trim(),
+      description: String(raw?.description || ''),
+      state: raw?.state
+        ? {
+          id: String(raw.state.id || '').trim(),
+          name: String(raw.state.name || '').trim(),
+          type: String(raw.state.type || '').trim()
+        }
+        : null,
+      priority: raw?.priority === undefined || raw?.priority === null ? null : Number(raw.priority),
+      assignee: raw?.assignee
+        ? {
+          id: String(raw.assignee.id || '').trim(),
+          name: String(raw.assignee.name || '').trim(),
+          email: String(raw.assignee.email || '').trim()
+        }
+        : null,
+      project: raw?.project
+        ? {
+          id: String(raw.project.id || '').trim(),
+          name: String(raw.project.name || '').trim()
+        }
+        : null,
+      labels: Array.isArray(raw?.labels?.nodes)
+        ? raw.labels.nodes.map((label: any) => ({
+          id: String(label?.id || '').trim(),
+          name: String(label?.name || '').trim()
+        })).filter((label: { id: string; name: string }) => label.id.length > 0 || label.name.length > 0)
+        : [],
+      createdAt: String(raw?.createdAt || '').trim(),
+      updatedAt: String(raw?.updatedAt || '').trim(),
+      url: String(raw?.url || '').trim(),
+      parentId: String(raw?.parent?.id || '').trim() || null
+    };
+  }
+
+  private _normalizeLinearComment(raw: any): LinearComment {
+    return {
+      id: String(raw?.id || '').trim(),
+      body: String(raw?.body || ''),
+      user: raw?.user
+        ? {
+          name: String(raw.user.name || '').trim(),
+          email: String(raw.user.email || '').trim() || undefined
+        }
+        : null,
+      createdAt: String(raw?.createdAt || '').trim()
+    };
+  }
+
+  private _normalizeLinearAttachment(raw: any): LinearAttachment {
+    const title = String(raw?.title || '').trim();
+    const url = String(raw?.url || '').trim();
+    const metadata = raw?.metadata && typeof raw.metadata === 'object' ? raw.metadata : {};
+    const subtitle = String(raw?.subtitle || '').trim();
+    const derivedFilename = subtitle
+      || title
+      || (url ? url.split('/').filter(Boolean).pop() || '' : '');
+    const filesizeValue = Number(metadata?.size);
+    return {
+      id: String(raw?.id || '').trim(),
+      title,
+      url,
+      filename: derivedFilename || undefined,
+      filesize: Number.isFinite(filesizeValue) && filesizeValue > 0 ? filesizeValue : undefined,
+      mimeType: String(metadata?.contentType || metadata?.mimeType || '').trim() || undefined
+    };
+  }
+
+  private _buildIssueListQuery(): string {
+    return `
+      query($filter: IssueFilter!, $after: String, $first: Int!) {
+        issues(
+          filter: $filter
+          after: $after
+          first: $first
+        ) {
+          nodes {
+            id
+            identifier
+            title
+            description
+            state { id name type }
+            priority
+            assignee { id name email }
+            project { id name }
+            labels { nodes { id name } }
+            parent { id }
+            createdAt
+            updatedAt
+            url
+          }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    `;
+  }
+
+  private _isIssueIdentifier(value: string): boolean {
+    return /^[A-Z][A-Z0-9_]*-\d+$/.test(value);
+  }
+
+  private _buildFallbackDescription(planFile: string): string {
+    return `Managed by Switchboard.\n\nPlan file: \`${planFile}\`\n\nDo not edit the title — it is synced from Switchboard.`;
+  }
+
+  private _truncateInitialDescription(markdownContent: string): string {
+    const maxBytes = DEFAULT_LIVE_SYNC_CONFIG.maxContentSizeBytes;
+    const suffix = '\n\n... (truncated by Switchboard before Linear issue creation)';
+
+    if (Buffer.byteLength(markdownContent, 'utf8') <= maxBytes) {
+      return markdownContent;
+    }
+
+    let end = markdownContent.length;
+    while (end > 0 && Buffer.byteLength(`${markdownContent.slice(0, end)}${suffix}`, 'utf8') > maxBytes) {
+      end--;
+    }
+
+    return `${markdownContent.slice(0, end)}${suffix}`;
+  }
+
+  /**
+   * Strip a leading ATX H1 header from markdown content.
+   * Only strips if the first non-blank line starts with '# ' at column 0.
+   * Also skips blank lines immediately after the H1 to avoid a leading blank line.
+   * Does NOT handle Setext-style H1s (underlined with ===).
+   */
+  private _stripH1Header(markdownContent: string): string {
+    const lines = markdownContent.split(/\r?\n/);
+
+    // Find the first non-blank line
+    let h1LineIndex = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].trim() === '') {
+        continue;
+      }
+      // Check if this line is an ATX H1: starts with '# ' at column 0
+      if (/^# /.test(lines[i])) {
+        h1LineIndex = i;
+      }
+      // Whether or not it's an H1, stop scanning — we only strip if H1 is the very first non-blank line
+      break;
+    }
+
+    if (h1LineIndex === -1) {
+      // No leading H1 found — return content unchanged
+      return markdownContent;
+    }
+
+    // Skip the H1 line and any blank lines immediately after it
+    let startIndex = h1LineIndex + 1;
+    while (startIndex < lines.length && lines[startIndex].trim() === '') {
+      startIndex++;
+    }
+
+    return lines.slice(startIndex).join('\n');
+  }
+
+  private async _buildInitialIssueDescription(planFile: string): Promise<string> {
+    const fallback = this._buildFallbackDescription(planFile);
+    try {
+      const planFilePath = path.isAbsolute(planFile)
+        ? planFile
+        : path.join(this._workspaceRoot, planFile);
+      const markdownContent = await fs.promises.readFile(planFilePath, 'utf8');
+      const contentWithoutH1 = this._stripH1Header(markdownContent);
+      return this._truncateInitialDescription(contentWithoutH1);
+    } catch (error) {
+      console.warn(`[LinearSync] Failed to read plan file ${planFile}:`, error);
+      return fallback;
+    }
+  }
+
+  // ── Project Filter Helpers ───────────────────────────────────────
+
+  public async getAvailableProjects(): Promise<{ id: string; name: string }[]> {
+    if (this._cachedProjects) {
+      return this._cachedProjects;
+    }
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || !config.teamId) {
+      throw new Error('Linear not configured');
+    }
+
+    const result = await this.graphqlRequest(`
+      query($teamId: String!) { team(id: $teamId) { projects { nodes { id name } } } }
+    `, { teamId: config.teamId });
+
+    const projects = Array.isArray(result.data?.team?.projects?.nodes)
+      ? result.data.team.projects.nodes
+      : [];
+    const mapped = projects.map((project: any) => ({
+      id: String(project?.id || '').trim(),
+      name: String(project?.name || '').trim()
+    })).filter((project: { id: string; name: string }) => project.id.length > 0 && project.name.length > 0);
+    this._cachedProjects = mapped;
+    return mapped;
+  }
+
+  public async resolveSingleIncludeProjectId(config?: LinearConfig): Promise<string | undefined> {
+    const cfg = config || await this.loadConfig();
+    if (!cfg) {
+      return undefined;
+    }
+    const includeNames = cfg.includeProjectNames || [];
+    const excludeNames = cfg.excludeProjectNames || [];
+    if (includeNames.length !== 1 || excludeNames.length > 0) {
+      return undefined;
+    }
+    const projectName = includeNames[0];
+    const projects = await this.getAvailableProjects();
+    const project = projects.find(p => p.name.toLowerCase() === projectName.toLowerCase());
+    return project?.id;
+  }
+
+  private async _resolveProjectIdToName(projectId: string): Promise<string | null> {
+    try {
+      const projects = await this.getAvailableProjects();
+      const match = projects.find((p) => p.id === projectId);
+      return match?.name || null;
+    } catch (error) {
+      console.warn(`[LinearSync] Failed to resolve project ID to name:`, error);
+      return null;
+    }
+  }
+
+  private _applyProjectNameFilters(issues: LinearIssue[], config: LinearConfig): LinearIssue[] {
+    const includeNames = config.includeProjectNames || [];
+    const excludeNames = config.excludeProjectNames || [];
+
+    if (includeNames.length === 0 && excludeNames.length === 0) {
+      return issues;
+    }
+
+    const includeLower = includeNames.map((n) => n.toLowerCase());
+    const excludeLower = excludeNames.map((n) => n.toLowerCase());
+
+    return issues.filter((issue) => {
+      const projectName = issue.project?.name || '';
+
+      // Issues with no project: exclude if include filter is set, include otherwise
+      if (!projectName) {
+        return includeNames.length === 0;
+      }
+
+      const projectNameLower = projectName.toLowerCase();
+
+      // Apply exclude filter
+      if (excludeLower.includes(projectNameLower)) {
+        return false;
+      }
+
+      // Apply include filter
+      if (includeNames.length > 0) {
+        return includeLower.includes(projectNameLower);
+      }
+
+      return true;
+    });
+  }
+
+  private async _resolveSingleIncludeProjectId(config: LinearConfig): Promise<string | undefined> {
+    const includeNames = config.includeProjectNames || [];
+    const excludeNames = config.excludeProjectNames || [];
+
+    // Only use server-side filter for single include with no excludes
+    if (includeNames.length === 1 && excludeNames.length === 0) {
+      try {
+        const projects = await this.getAvailableProjects();
+        const match = projects.find((p) => p.name.toLowerCase() === includeNames[0].toLowerCase());
+        return match?.id;
+      } catch (error) {
+        console.warn(`[LinearSync] Failed to resolve single include project ID, falling back to client-side filtering:`, error);
+        return undefined;
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Generate a fingerprint for issue filter options to use in cache keys.
+   */
+  private _fingerprintIssueFilter(options: {
+    search?: string;
+    stateId?: string;
+    assigneeId?: string;
+    projectId?: string;
+    limit?: number;
+  }): string {
+    const parts: string[] = [];
+    if (options.search) {
+      parts.push(`search:${options.search}`);
+    }
+    if (options.stateId) {
+      parts.push(`state:${options.stateId}`);
+    }
+    if (options.assigneeId) {
+      parts.push(`assignee:${options.assigneeId}`);
+    }
+    if (options.projectId) {
+      parts.push(`project:${options.projectId}`);
+    }
+    if (options.limit !== undefined) {
+      parts.push(`limit:${options.limit}`);
+    }
+    return parts.length > 0 ? parts.join('|') : 'default';
+  }
+
+  /**
+   * Generate a fingerprint for the LinearConfig filter inputs (include/exclude
+   * project names and team) so that cache keys do not collide across config
+   * changes. Without this, two callers with the same options but different
+   * include/exclude lists would share a cache entry and serve cross-config
+   * data.
+   */
+  private _fingerprintLinearFilterConfig(config: LinearConfig): string {
+    const inc = (config.includeProjectNames || []).slice().sort().join(',');
+    const exc = (config.excludeProjectNames || []).slice().sort().join(',');
+    const team = String(config.teamId || '').trim();
+    return `inc=${inc}|exc=${exc}|team=${team}`;
+  }
+
+  /**
+   * Clear the issueId → projectId reverse index. Used by manual cache
+   * refresh to avoid stale invalidation hints after the cache is wiped.
+   */
+  public clearIssueProjectIndex(): void {
+    this._issueProjectIndex.clear();
+  }
+
+  public async queryIssues(options: {
+    search?: string;
+    stateId?: string;
+    stateName?: string;
+    assigneeId?: string;
+    projectId?: string;
+    limit?: number;
+  }): Promise<LinearIssue[]> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || !config.teamId) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedSearch = String(options.search || '').trim().toLowerCase();
+    const normalizedStateId = String(options.stateId || '').trim();
+    const normalizedStateName = String(options.stateName || '').trim().toLowerCase();
+    const normalizedAssigneeId = String(options.assigneeId || '').trim();
+    const normalizedProjectId = String(options.projectId || '').trim();
+    const requestedLimit = Number(options.limit);
+    const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
+      ? Math.min(Math.floor(requestedLimit), 100)
+      : 50;
+
+    // Determine if this is a "simple" query that can use cache
+    // Simple: no search, stateId, stateName, or assigneeId filters (project comes from config)
+    const isSimpleQuery = !normalizedSearch && !normalizedStateId && !normalizedStateName && !normalizedAssigneeId;
+    // Cache key MUST include the filter-config fingerprint so that include/
+    // exclude project name changes invalidate the cache via key divergence.
+    const configFingerprint = this._fingerprintLinearFilterConfig(config);
+    const cacheKey = isSimpleQuery && normalizedProjectId
+      ? `project:${normalizedProjectId}:${this._fingerprintIssueFilter(options)}|cfg=${configFingerprint}`
+      : `linear:${this._fingerprintIssueFilter(options)}|cfg=${configFingerprint}`;
+
+    // Try cache first for simple queries
+    if (isSimpleQuery && this._cacheService) {
+      try {
+        const cached = this._cacheService.getCachedTasks<LinearIssue>('linear', cacheKey);
+        if (cached) {
+          return cached;
+        }
+      } catch (e) {
+        // Fail-open: continue to API fetch
+        console.warn('[LinearSync] Cache read failed, falling back to API:', e);
+      }
+    }
+
+    // Hybrid optimization: use server-side filter for single include, no excludes
+    const resolvedProjectId = await this._resolveSingleIncludeProjectId(config);
+    const filter = buildLinearIssueFilter(config.teamId, resolvedProjectId || undefined);
+
+    const issues: LinearIssue[] = [];
+    let cursor: string | null = null;
+    const query = this._buildIssueListQuery();
+    let pageCount = 0;
+    const maxPages = 10; // Hard cap to prevent runaway pagination
+
+    while (issues.length < limit && pageCount < maxPages) {
+      const result = await this.graphqlRequest(query, {
+        filter,
+        after: cursor,
+        first: Math.min(50, limit - issues.length)
+      });
+
+      const page = result.data?.issues;
+      const nodes = Array.isArray(page?.nodes) ? page.nodes : [];
+      for (const node of nodes) {
+        const issue = this._normalizeLinearIssue(node);
+        if (normalizedStateId && issue.state?.id !== normalizedStateId) {
+          continue;
+        }
+        if (normalizedStateName && String(issue.state?.name || '').toLowerCase() !== normalizedStateName) {
+          continue;
+        }
+        if (normalizedAssigneeId && issue.assignee?.id !== normalizedAssigneeId) {
+          continue;
+        }
+        if (normalizedSearch) {
+          const searchableText = [
+            issue.identifier,
+            issue.title,
+            issue.description
+          ].join('\n').toLowerCase();
+          if (!searchableText.includes(normalizedSearch)) {
+            continue;
+          }
+        }
+        issues.push(issue);
+        if (issues.length >= limit) {
+          break;
+        }
+      }
+
+      if (!page?.pageInfo?.hasNextPage) {
+        break;
+      }
+      cursor = String(page.pageInfo.endCursor || '').trim() || null;
+      if (!cursor) {
+        break;
+      }
+      pageCount++;
+      if (pageCount >= maxPages) {
+        console.warn(`[LinearSync] Reached maximum page cap (${maxPages}) for queryIssues. Some issues may be omitted.`);
+      }
+      await this.delay(200);
+    }
+
+    // Apply client-side project name filters
+    const filteredIssues = this._applyProjectNameFilters(issues, config);
+
+    // Update cache and reverse map for simple queries
+    if (isSimpleQuery && this._cacheService) {
+      try {
+        this._cacheService.cacheTasks('linear', cacheKey, filteredIssues);
+        // Update reverse map: issueId -> projectId
+        for (const issue of filteredIssues) {
+          if (issue.id && normalizedProjectId) {
+            this._issueProjectIndex.set(issue.id, normalizedProjectId);
+          }
+        }
+      } catch (e) {
+        // Fail-open: cache errors are non-fatal
+        console.warn('[LinearSync] Cache write failed:', e);
+      }
+    }
+
+    return filteredIssues;
+  }
+
+  public async getIssue(issueIdOrIdentifier: string): Promise<LinearIssue | null> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || !config.teamId) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedLookup = String(issueIdOrIdentifier || '').trim();
+    if (!normalizedLookup) {
+      throw new Error('Linear issue lookup requires an issue ID or identifier.');
+    }
+
+    if (!this._isIssueIdentifier(normalizedLookup)) {
+      const result = await this.graphqlRequest(`
+        query($issueId: String!) {
+          issue(id: $issueId) {
+            id
+            identifier
+            title
+            description
+            state { id name type }
+            priority
+            assignee { id name email }
+            project { id name }
+            labels { nodes { id name } }
+            parent { id }
+            createdAt
+            updatedAt
+            url
+          }
+        }
+      `, { issueId: normalizedLookup });
+
+      return result.data?.issue ? this._normalizeLinearIssue(result.data.issue) : null;
+    }
+
+    const query = this._buildIssueListQuery();
+    const resolvedProjectId = await this._resolveSingleIncludeProjectId(config);
+    const filter = buildLinearIssueFilter(config.teamId, resolvedProjectId || undefined);
+    let cursor: string | null = null;
+    while (true) {
+      const result = await this.graphqlRequest(query, {
+        filter,
+        after: cursor,
+        first: 50
+      });
+
+      const page = result.data?.issues;
+      const nodes = Array.isArray(page?.nodes) ? page.nodes : [];
+      const match = nodes.find((node: any) =>
+        String(node?.identifier || '').trim().toUpperCase() === normalizedLookup.toUpperCase()
+      );
+      if (match) {
+        const issue = this._normalizeLinearIssue(match);
+        // Apply client-side project name filters
+        const filtered = this._applyProjectNameFilters([issue], config);
+        return filtered.length > 0 ? filtered[0] : null;
+      }
+
+      if (!page?.pageInfo?.hasNextPage) {
+        break;
+      }
+      cursor = String(page.pageInfo.endCursor || '').trim() || null;
+      if (!cursor) {
+        break;
+      }
+      await this.delay(200);
+    }
+
+    return null;
+  }
+
+  public async getSubtasks(issueId: string): Promise<LinearIssue[]> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || !config.teamId) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedIssueId = String(issueId || '').trim();
+    if (!normalizedIssueId) {
+      throw new Error('Linear subtasks lookup requires an issue ID.');
+    }
+
+    const result = await this.graphqlRequest(`
+      query($issueId: String!) {
+        issue(id: $issueId) {
+          children {
+            nodes {
+              id
+              identifier
+              title
+              description
+              state { id name type }
+              priority
+              assignee { id name email }
+              project { id name }
+              labels { nodes { id name } }
+              createdAt
+              updatedAt
+              url
+            }
+          }
+        }
+      }
+    `, { issueId: normalizedIssueId });
+
+    const children = Array.isArray(result.data?.issue?.children?.nodes)
+      ? result.data.issue.children.nodes
+      : [];
+    return children.map((child: any) => this._normalizeLinearIssue(child));
+  }
+
+  public async getComments(issueId: string): Promise<LinearComment[]> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || !config.teamId) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedIssueId = String(issueId || '').trim();
+    if (!normalizedIssueId) {
+      throw new Error('Linear comment lookup requires an issue ID.');
+    }
+
+    const result = await this.graphqlRequest(`
+      query($issueId: String!) {
+        issue(id: $issueId) {
+          comments {
+            nodes {
+              id
+              body
+              createdAt
+              user { name email }
+            }
+          }
+        }
+      }
+    `, { issueId: normalizedIssueId });
+
+    const comments = Array.isArray(result.data?.issue?.comments?.nodes)
+      ? result.data.issue.comments.nodes
+      : [];
+    return comments.map((comment: any) => this._normalizeLinearComment(comment));
+  }
+
+  public async getAttachments(issueId: string): Promise<LinearAttachment[]> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || !config.teamId) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedIssueId = String(issueId || '').trim();
+    if (!normalizedIssueId) {
+      throw new Error('Linear attachment lookup requires an issue ID.');
+    }
+
+    const result = await this.graphqlRequest(`
+      query($issueId: String!) {
+        issue(id: $issueId) {
+          attachments {
+            nodes {
+              id
+              title
+              url
+            }
+          }
+        }
+      }
+    `, { issueId: normalizedIssueId });
+
+    const attachments = Array.isArray(result.data?.issue?.attachments?.nodes)
+      ? result.data.issue.attachments.nodes
+      : [];
+    return attachments.map((attachment: any) => this._normalizeLinearAttachment(attachment));
+  }
+
+  public async updateIssueState(issueId: string, stateId: string): Promise<void> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedIssueId = String(issueId || '').trim();
+    const normalizedStateId = String(stateId || '').trim();
+    if (!normalizedIssueId || !normalizedStateId) {
+      throw new Error('Linear state updates require both an issue ID and a state ID.');
+    }
+
+    const result = await this.graphqlRequest(`
+      mutation($id: String!, $stateId: String!) {
+        issueUpdate(id: $id, input: { stateId: $stateId }) { success }
+      }
+    `, { id: normalizedIssueId, stateId: normalizedStateId });
+
+    if (!result.data?.issueUpdate?.success) {
+      throw new Error(`Linear issue ${normalizedIssueId} rejected the requested state update.`);
+    }
+
+    // Invalidate cache for the project containing this issue
+    if (this._cacheService) {
+      const projectId = this._issueProjectIndex.get(normalizedIssueId);
+      if (projectId) {
+        this._cacheService.invalidateTaskCache('linear', `project:${projectId}`);
+      } else {
+        // Fallback: invalidate all Linear cache if project unknown
+        this._cacheService.invalidateTaskCache('linear');
+      }
+    }
+  }
+
+  public async addIssueComment(issueId: string, comment: string): Promise<void> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedIssueId = String(issueId || '').trim();
+    const normalizedComment = String(comment || '').trim();
+    if (!normalizedIssueId || !normalizedComment) {
+      throw new Error('Linear comments require both an issue ID and non-empty comment text.');
+    }
+
+    const result = await this.graphqlRequest(`
+      mutation($issueId: String!, $body: String!) {
+        commentCreate(input: { issueId: $issueId, body: $body }) {
+          success
+        }
+      }
+    `, { issueId: normalizedIssueId, body: normalizedComment });
+
+    if (!result.data?.commentCreate?.success) {
+      throw new Error(`Linear issue ${normalizedIssueId} rejected the requested comment.`);
+    }
+  }
+
+  public async uploadAttachment(issueId: string, buffer: Buffer, fileName: string): Promise<{ url: string }> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('Linear not configured');
+    }
+
+    // 1. Request upload URL
+    const uploadRequestResult = await this.graphqlRequest(`
+      mutation($filename: String!, $contentType: String!, $size: Int!) {
+        fileUpload(filename: $filename, contentType: $contentType, size: $size) {
+          uploadPageResponse {
+            headers { key value }
+            uploadUrl
+          }
+          assetUrl
+        }
+      }
+    `, {
+      filename: fileName,
+      contentType: 'application/octet-stream',
+      size: buffer.length
+    });
+
+    const uploadData = uploadRequestResult.data?.fileUpload;
+    if (!uploadData?.uploadPageResponse) {
+      throw new Error('Failed to request Linear upload URL');
+    }
+
+    const { uploadUrl, headers } = uploadData.uploadPageResponse;
+    const assetUrl = uploadData.assetUrl;
+
+    // 2. Upload file
+    await new Promise((resolve, reject) => {
+      const parsedUrl = new URL(uploadUrl);
+      const options = {
+        hostname: parsedUrl.hostname,
+        path: parsedUrl.pathname + parsedUrl.search,
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': buffer.length
+        }
+      };
+
+      // Add custom headers from Linear
+      if (Array.isArray(headers)) {
+        for (const { key, value } of headers) {
+          (options.headers as any)[key] = value;
+        }
+      }
+
+      const req = https.request(options, (res) => {
+        if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+          resolve(true);
+        } else {
+          let raw = '';
+          res.on('data', chunk => raw += chunk);
+          res.on('end', () => reject(new Error(`File upload failed with status ${res.statusCode}: ${raw}`)));
+        }
+      });
+
+      req.on('error', reject);
+      req.write(buffer);
+      req.end();
+    });
+
+    // 3. Create attachment
+    const attachmentCreateResult = await this.graphqlRequest(`
+      mutation($issueId: String!, $url: String!, $title: String!) {
+        attachmentCreate(input: { issueId: $issueId, url: $url, title: $title }) {
+          success
+          attachment { id url }
+        }
+      }
+    `, {
+      issueId,
+      url: assetUrl,
+      title: fileName
+    });
+
+    if (!attachmentCreateResult.data?.attachmentCreate?.success) {
+      throw new Error('Failed to create Linear attachment link');
+    }
+
+    return { url: assetUrl };
+  }
+
+  public async updateIssueDescription(issueId: string, description: string): Promise<void> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedIssueId = String(issueId || '').trim();
+    const normalizedDescription = String(description || '').trim();
+    if (!normalizedIssueId || !normalizedDescription) {
+      throw new Error('Linear description updates require both an issue ID and non-empty content.');
+    }
+
+    const result = await this.graphqlRequest(`
+      mutation($id: String!, $description: String!) {
+        issueUpdate(id: $id, input: { description: $description }) { success }
+      }
+    `, { id: normalizedIssueId, description: normalizedDescription });
+
+    if (!result.data?.issueUpdate?.success) {
+      throw new Error(`Linear issue ${normalizedIssueId} rejected the requested description update.`);
+    }
+
+    // Invalidate cache for the project containing this issue
+    if (this._cacheService) {
+      const projectId = this._issueProjectIndex.get(normalizedIssueId);
+      if (projectId) {
+        this._cacheService.invalidateTaskCache('linear', `project:${projectId}`);
+      } else {
+        // Fallback: invalidate all Linear cache if project unknown
+        this._cacheService.invalidateTaskCache('linear');
+      }
+    }
+  }
+
+  async archiveIssue(issueId: string): Promise<{ success: boolean; error?: string }> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      return { success: false, error: 'Linear not configured' };
+    }
+
+    const normalizedIssueId = String(issueId || '').trim();
+    if (!normalizedIssueId) {
+      return { success: false, error: 'Issue ID is required' };
+    }
+
+    try {
+      const result = await this.graphqlRequest(`
+        mutation($id: String!, $archivedAt: DateTime!) {
+          issueUpdate(id: $id, input: { archivedAt: $archivedAt }) {
+            success
+          }
+        }
+      `, {
+        id: normalizedIssueId,
+        archivedAt: new Date().toISOString()
+      });
+
+      if (result.data?.issueUpdate?.success) {
+        console.log(`[LinearSync] Archived Linear issue ${normalizedIssueId}`);
+        return { success: true };
+      } else {
+        return { success: false, error: `Linear issue ${normalizedIssueId} rejected the archive request.` };
+      }
+    } catch (error) {
+      return { success: false, error: `Failed to archive Linear issue: ${error instanceof Error ? error.message : String(error)}` };
+    }
+  }
+
+  // ── Local Sync Map (planFile → Linear issueId) ──────────────
 
   async loadSyncMap(): Promise<Record<string, string>> {
     try {
@@ -190,14 +1194,14 @@ export class LinearSyncService {
     await fs.promises.writeFile(this._syncMapPath, JSON.stringify(map, null, 2));
   }
 
-  async getIssueIdForPlan(sessionId: string): Promise<string | null> {
+  async getIssueIdForPlan(planFile: string): Promise<string | null> {
     const map = await this.loadSyncMap();
-    return map[sessionId] || null;
+    return map[planFile] || null;
   }
 
-  async setIssueIdForPlan(sessionId: string, issueId: string): Promise<void> {
+  async setIssueIdForPlan(planFile: string, issueId: string): Promise<void> {
     const map = await this.loadSyncMap();
-    map[sessionId] = issueId;
+    map[planFile] = issueId;
     await this.saveSyncMap(map);
   }
 
@@ -212,6 +1216,41 @@ export class LinearSyncService {
   // ── GraphQL Client ───────────────────────────────────────────
 
   /**
+   * Generic GraphQL request wrapper for LocalApiServer proxy.
+   */
+  async makeGraphQLRequest(query: string, variables?: Record<string, unknown>): Promise<any> {
+    const result = await this.graphqlRequest(query, variables);
+    return result;
+  }
+
+  /**
+   * Resolve an issue title or identifier to its ID.
+   */
+  async resolveNameToId(name: string): Promise<string | null> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedName = name.trim().toLowerCase();
+
+    // 1. Check if it's an identifier (e.g., LIN-123)
+    if (this._isIssueIdentifier(name)) {
+      const issue = await this.getIssue(name);
+      return issue ? issue.id : null;
+    }
+
+    // 2. Search for issues by title
+    const issues = await this.queryIssues({ search: name });
+    if (issues.length > 0) {
+      const exactMatch = issues.find(i => i.title.toLowerCase() === normalizedName);
+      return exactMatch ? exactMatch.id : issues[0].id;
+    }
+
+    return null;
+  }
+
+  /**
    * Authenticated GraphQL request to Linear API.
    * Linear always returns HTTP 200; errors are in response.errors.
    * Throws if HTTP status != 200 OR if response.errors is non-empty.
@@ -219,12 +1258,26 @@ export class LinearSyncService {
   async graphqlRequest(
     query: string,
     variables?: Record<string, unknown>,
-    timeoutMs = 10000
+    timeoutMs = 30000,
+    signal?: AbortSignal
   ): Promise<{ data: any }> {
+    await this._throttle();
     const token = await this.getApiToken();
     if (!token) { throw new Error('Linear API token not configured'); }
 
     return new Promise((resolve, reject) => {
+      let settled = false;
+      const safeResolve = (value: { data: any }) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      const safeReject = (err: Error) => {
+        if (settled) return;
+        settled = true;
+        reject(err);
+      };
+
       const payload = JSON.stringify({ query, variables });
       const req = https.request({
         hostname: LINEAR_API_HOST,
@@ -238,24 +1291,44 @@ export class LinearSyncService {
         timeout: timeoutMs
       }, (res) => {
         let raw = '';
+        // Node emits socket errors/aborts on `res` (not `req`) once response
+        // headers have arrived. Without these listeners the Promise orphans
+        // forever on mid-stream failures — the primary hang root cause.
+        res.on('error', (err) => safeReject(new Error(`Linear response stream error: ${err.message}`)));
+        res.on('aborted', () => safeReject(new Error('Linear response aborted by server')));
         res.on('data', (chunk: Buffer) => { raw += chunk.toString(); });
         res.on('end', () => {
           if (res.statusCode !== 200) {
-            return reject(new Error(`Linear API HTTP ${res.statusCode}`));
+            return safeReject(new Error(`Linear API HTTP ${res.statusCode}`));
           }
           try {
             const parsed = JSON.parse(raw);
             if (parsed.errors?.length) {
-              return reject(new Error(`Linear GraphQL error: ${parsed.errors[0].message}`));
+              return safeReject(new Error(`Linear GraphQL error: ${parsed.errors[0].message}`));
             }
-            resolve({ data: parsed.data });
+            safeResolve({ data: parsed.data });
           } catch {
-            reject(new Error('Failed to parse Linear API response'));
+            safeReject(new Error('Failed to parse Linear API response'));
           }
         });
       });
-      req.on('timeout', () => { req.destroy(); reject(new Error('Linear request timed out')); });
-      req.on('error', reject);
+      req.on('timeout', () => { req.destroy(); safeReject(new Error('Linear request timed out')); });
+      req.on('error', (err) => safeReject(err));
+
+      // Wire up AbortController cancellation
+      if (signal) {
+        if (signal.aborted) {
+          req.destroy(new Error('AbortError'));
+          return safeReject(new Error('AbortError'));
+        }
+        const abortHandler = () => {
+          req.destroy(new Error('AbortError'));
+          safeReject(new Error('AbortError'));
+        };
+        signal.addEventListener('abort', abortHandler);
+        req.on('close', () => signal.removeEventListener('abort', abortHandler));
+      }
+
       req.write(payload);
       req.end();
     });
@@ -267,7 +1340,7 @@ export class LinearSyncService {
     try {
       const token = await this.getApiToken();
       if (!token) { return false; }
-      await this.graphqlRequest('{ viewer { id } }', undefined, 2000);
+      await this.graphqlRequest('{ viewer { id } }', undefined, 10000);
       return true;
     } catch { return false; }
   }
@@ -304,29 +1377,6 @@ export class LinearSyncService {
     config.teamId = selectedTeam.id;
     config.teamName = selectedTeam.label;
     return { id: config.teamId, label: config.teamName };
-  }
-
-  private async _selectProjectScope(teamId: string): Promise<string | undefined> {
-    const projectsResult = await this.graphqlRequest(`
-      query($teamId: String!) { team(id: $teamId) { projects { nodes { id name } } } }
-    `, { teamId });
-    const projects = Array.isArray(projectsResult.data?.team?.projects?.nodes)
-      ? projectsResult.data.team.projects.nodes
-      : [];
-    const projectOptions = [
-      { label: '(All issues in team)', id: '' },
-      ...projects.map((project: any) => ({
-        label: String(project?.name || '').trim(),
-        id: String(project?.id || '').trim()
-      })).filter((project: { label: string; id: string }) => project.label.length > 0)
-    ];
-    const selectedProject = await vscode.window.showQuickPick(projectOptions, {
-      placeHolder: 'Scope to a project? (optional)'
-    });
-    if (selectedProject === undefined) {
-      throw new Error('No Linear project scope selected.');
-    }
-    return selectedProject.id || undefined;
   }
 
   private async _mapColumnsToStates(teamId: string): Promise<Record<string, string>> {
@@ -407,21 +1457,15 @@ export class LinearSyncService {
         return { success: false, error: 'Linear token is invalid. Get a valid token at linear.app/settings/api' };
       }
 
-      const needsTeamSelection = options.mapColumns || options.createLabel || options.scopeProject || options.enableRealtimeSync || options.enableAutoPull;
+      const needsTeamSelection = options.mapColumns || options.createLabel || (options.includeProjectNames && options.includeProjectNames.length > 0) || (options.excludeProjectNames && options.excludeProjectNames.length > 0) || options.enableRealtimeSync || options.enableAutoPull;
       const hasExistingSetup = !!config.teamId || !!config.switchboardLabelId || Object.keys(config.columnToStateId || {}).length > 0 || config.setupComplete;
-      if (!hasExistingSetup && !needsTeamSelection) {
-        return { success: false, error: 'Select at least one Linear option to apply.' };
-      }
 
       if (needsTeamSelection && !config.teamId) {
         await this._selectTeam(config);
       }
 
-      if (options.scopeProject) {
-        config.projectId = await this._selectProjectScope(config.teamId);
-      } else {
-        config.projectId = undefined;
-      }
+      config.includeProjectNames = options.includeProjectNames;
+      config.excludeProjectNames = options.excludeProjectNames;
 
       if (options.mapColumns) {
         config.columnToStateId = await this._mapColumnsToStates(config.teamId);
@@ -449,6 +1493,9 @@ export class LinearSyncService {
 
       config.realTimeSyncEnabled = options.enableRealtimeSync === true;
       config.autoPullEnabled = options.enableAutoPull === true;
+      config.deleteSyncEnabled = options.deleteSyncEnabled === true;
+      config.completeSyncEnabled = options.enableCompleteSync !== false;
+      config.excludeBacklog = options.excludeBacklog !== false;  // default true
       config.setupComplete = true;
       await this.saveConfig(config);
       return { success: true };
@@ -473,18 +1520,22 @@ export class LinearSyncService {
     return 4;
   }
 
-  async syncPlan(plan: { sessionId: string; topic: string; planFile: string; complexity: string }, newColumn: string): Promise<void> {
+  async syncPlan(plan: { planFile: string; topic: string; complexity: string }, newColumn: string): Promise<void> {
     const config = await this.loadConfig();
     if (!config?.setupComplete) { return; }
 
     const stateId = config.columnToStateId[newColumn];
-    if (!stateId) { return; } // column not mapped
+    if (!stateId) {
+      console.warn(`[LinearSync] No Linear state mapped for column "${newColumn}" - skipping sync for plan ${plan.planFile}`);
+      return;
+    } // column not mapped
 
-    const existingIssueId = await this.getIssueIdForPlan(plan.sessionId);
+    const existingIssueId = await this.getIssueIdForPlan(plan.planFile);
     const priority = this._complexityToPriority(plan.complexity);
 
     try {
       if (existingIssueId) {
+        console.log(`[LinearSync] Updating existing Linear issue ${existingIssueId} for plan ${plan.planFile} to state ${stateId}`);
         const result = await this.retry(() => this.graphqlRequest(`
           mutation($id: String!, $stateId: String!) {
             issueUpdate(id: $id, input: { stateId: $stateId }) { success }
@@ -492,13 +1543,16 @@ export class LinearSyncService {
         `, { id: existingIssueId, stateId }));
 
         if (!result.data.issueUpdate.success) {
-          await this._createIssue(plan, stateId, priority, config);
+          console.warn(`[LinearSync] Issue update failed for ${existingIssueId}, attempting to recreate`);
+          await this.createIssue(plan, stateId, priority, config);
+        } else {
+          console.log(`[LinearSync] Successfully updated Linear issue ${existingIssueId} for plan ${plan.planFile}`);
         }
       } else {
-        await this._createIssue(plan, stateId, priority, config);
+        await this.createIssue(plan, stateId, priority, config);
       }
     } catch (error) {
-      console.warn(`[LinearSync] Failed to sync plan ${plan.sessionId}:`, error);
+      console.warn(`[LinearSync] Failed to sync plan ${plan.planFile}:`, error);
       throw error;
     }
   }
@@ -508,12 +1562,15 @@ export class LinearSyncService {
    * Used by ContinuousSyncService for live updates.
    * Does NOT change issue state or other fields.
    */
-  async syncPlanContent(issueId: string, markdownContent: string): Promise<{ success: boolean; error?: string }> {
+  async syncPlanContent(issueId: string, markdownContent: string, signal?: AbortSignal): Promise<{ success: boolean; error?: string }> {
     try {
       const config = await this.loadConfig();
       if (!config?.setupComplete) {
         return { success: false, error: 'Linear not set up' };
       }
+
+      // Strip H1 header before syncing to description
+      const contentWithoutH1 = this._stripH1Header(markdownContent);
 
       // Use existing graphqlRequest helper (line 192) — handles token, timeouts, error formatting
       const mutation = `
@@ -527,8 +1584,8 @@ export class LinearSyncService {
 
       const result = await this.graphqlRequest(mutation, {
         id: issueId,
-        description: markdownContent
-      });
+        description: contentWithoutH1
+      }, 30000, signal);
 
       if (result.data?.issueUpdate?.success) {
         return { success: true };
@@ -540,45 +1597,136 @@ export class LinearSyncService {
     }
   }
 
-  private async _createIssue(
-    plan: { sessionId: string; topic: string; planFile: string },
+  /**
+   * Internal implementation for creating a Linear issue.
+   * Public to match ClickUpSyncService.createTask().
+   */
+  public async createIssue(
+    plan: { planFile: string; topic: string },
     stateId: string,
     priority: number,
     config: LinearConfig
   ): Promise<void> {
-    const description = `Managed by Switchboard.\n\nPlan file: \`${plan.planFile}\`\n\nDo not edit the title — it is synced from Switchboard.`;
+    console.log(`[LinearSync] Creating Linear issue for plan ${plan.planFile} with title "${plan.topic}"`);
+    const description = await this._buildInitialIssueDescription(plan.planFile);
+
+    // Pre-mark in sync map BEFORE GraphQL call to prevent automation race condition.
+    // Marker format: `creating_${planFile}_${timestamp}`. The timestamp is used by the
+    // stale-marker sweep in importIssuesFromLinear to age out abandoned markers.
+    const tempMarker = `creating_${plan.planFile}_${Date.now()}`;
+    await this.setIssueIdForPlan(plan.planFile, tempMarker);
+
+    const resolvedProjectId = await this._resolveSingleIncludeProjectId(config);
+    let issueCreated = false;
+    try {
+      const result = await this.retry(() => this.graphqlRequest(`
+        mutation($input: IssueCreateInput!) {
+          issueCreate(input: $input) { success issue { id identifier } }
+        }
+      `, {
+        input: {
+          teamId: config.teamId,
+          title: plan.topic,
+          stateId,
+          priority,
+          labelIds: config.switchboardLabelId ? [config.switchboardLabelId] : [],
+          description,
+          ...(resolvedProjectId ? { projectId: resolvedProjectId } : {})
+        }
+      }));
+
+      if (result.data.issueCreate.success) {
+        const issueId = result.data.issueCreate.issue.id;
+        const identifier = result.data.issueCreate.issue.identifier;
+        // Overwrite the temp marker with the real issue ID — this is the race-free handoff.
+        await this.setIssueIdForPlan(plan.planFile, issueId);
+        issueCreated = true;
+        const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
+        const ready = await db.ensureReady();
+        if (!ready) {
+          throw new Error(`Kanban database unavailable while linking Linear issue ${issueId} to plan ${plan.planFile}.`);
+        }
+        const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+        const persisted = await db.updateLinearIssueIdByPlanFile(plan.planFile, workspaceId, issueId);
+        if (!persisted) {
+          throw new Error(`Failed to persist Linear issue ${issueId} for plan ${plan.planFile}.`);
+        }
+        console.log(`[LinearSync] Created Linear issue ${identifier} (ID: ${issueId}) for plan ${plan.planFile}`);
+      } else {
+        console.error(`[LinearSync] Failed to create Linear issue for plan ${plan.planFile}`);
+        throw new Error(`Failed to create Linear issue for plan ${plan.planFile}.`);
+      }
+    } finally {
+      // Guaranteed cleanup: if the temp marker is still present (we never replaced it
+      // with the real issue ID), remove it. Covers success-that-failed-to-link,
+      // GraphQL mutation returning success=false, and retry() exhaustion throws.
+      if (!issueCreated) {
+        try {
+          const map = await this.loadSyncMap();
+          if (map[plan.planFile] === tempMarker) {
+            delete map[plan.planFile];
+            await this.saveSyncMap(map);
+          }
+        } catch (cleanupErr) {
+          console.warn(`[LinearSync] Failed to clean up temp marker for ${plan.planFile}:`, cleanupErr);
+        }
+      }
+    }
+  }
+
+  public async createIssueSimple(params: {
+    title: string;
+    description?: string;
+    projectId?: string;
+    stateId?: string;
+  }): Promise<{ id: string; identifier: string }> {
+    const config = await this.loadConfig();
+    if (!config || !config.setupComplete || !config.teamId) {
+      throw new Error("Linear integration not configured. Complete setup in the Setup panel first.");
+    }
     const result = await this.retry(() => this.graphqlRequest(`
       mutation($input: IssueCreateInput!) {
-        issueCreate(input: $input) { success issue { id identifier } }
+        issueCreate(input: $input) {
+          success
+          issue {
+            id
+            identifier
+          }
+        }
       }
     `, {
       input: {
         teamId: config.teamId,
-        title: plan.topic,
-        stateId,
-        priority,
+        title: params.title,
+        description: params.description || '',
         labelIds: config.switchboardLabelId ? [config.switchboardLabelId] : [],
-        description,
-        ...(config.projectId ? { projectId: config.projectId } : {})
+        ...(params.projectId ? { projectId: params.projectId } : {}),
+        ...(params.stateId ? { stateId: params.stateId } : {})
       }
     }));
 
-    if (result.data.issueCreate.success) {
-      await this.setIssueIdForPlan(plan.sessionId, result.data.issueCreate.issue.id);
+    if (result.data?.issueCreate?.success) {
+      return {
+        id: result.data.issueCreate.issue.id,
+        identifier: result.data.issueCreate.issue.identifier
+      };
+    } else {
+      throw new Error("Failed to create Linear issue.");
     }
   }
 
   // ── Debounced Sync ───────────────────────────────────────────
 
-  debouncedSync(sessionId: string, plan: any, column: string): void {
-    const existing = this._debounceTimers.get(sessionId);
+  debouncedSync(planFile: string, plan: any, column: string): void {
+    const existing = this._debounceTimers.get(planFile);
     if (existing) { clearTimeout(existing); }
-    this._debounceTimers.set(sessionId, setTimeout(async () => {
-      this._debounceTimers.delete(sessionId);
+    this._debounceTimers.set(planFile, setTimeout(async () => {
+      this._debounceTimers.delete(planFile);
       try {
         await this.syncPlan(plan, column);
         this._consecutiveFailures = 0;
-      } catch {
+      } catch (error) {
+        console.error(`[LinearSync] Failed to sync plan ${planFile} to column ${column}:`, error);
         this._consecutiveFailures++;
       }
     }, 500));
@@ -611,7 +1759,11 @@ export class LinearSyncService {
       try { return await fn(); }
       catch (error) {
         if (i === retries - 1) { throw error; }
-        await this.delay(Math.pow(2, i) * 1000);
+        // Fast-fail on permanent errors (auth, config, GraphQL validation)
+        if (!this._isTransientError(error)) { throw error; }
+        const jitterMs = Math.floor(Math.random() * 400);
+        const backoffMs = Math.min(Math.pow(2, i) * 1000, 5000) + jitterMs;
+        await this.delay(backoffMs);
       }
     }
     throw new Error('Max retries exceeded');
@@ -626,20 +1778,54 @@ export class LinearSyncService {
     }
 
     try {
+      // --- Stale marker sweep (TTL = 60s) ------------------------------------
+      // A `creating_${planFile}_${timestamp}` marker older than 60s is assumed
+      // to be abandoned (extension restart mid-create, network stall past retry
+      // budget, etc.). Removing it unblocks auto-pull for that session.
+      const STALE_MARKER_TTL_MS = 60_000;
+      const nowTs = Date.now();
+      {
+        const map = await this.loadSyncMap();
+        let dirty = false;
+        for (const [sid, val] of Object.entries(map)) {
+          if (typeof val === 'string' && val.startsWith('creating_')) {
+            const m = val.match(/^creating_(.+)_(\d+)$/);
+            const ts = m ? parseInt(m[2], 10) : NaN;
+            if (!Number.isFinite(ts) || (nowTs - ts) > STALE_MARKER_TTL_MS) {
+              delete map[sid];
+              dirty = true;
+            }
+          }
+        }
+        if (dirty) { await this.saveSyncMap(map); }
+      }
+
       const syncMap = await this.loadSyncMap();
       const syncMapIssueIds = new Set(Object.values(syncMap));
+
+      // Plans with a live (non-stale) creating_* marker. An inbound issue
+      // whose title matches one of these plans is our own outbound create
+      // still in flight — skip it to avoid a duplicate.
+      const planFilesBeingCreated = new Set<string>(
+        Object.entries(syncMap)
+          .filter(([, v]) => typeof v === 'string' && v.startsWith('creating_'))
+          .map(([pf]) => pf)
+      );
+
+      // Resolve DB handle + workspaceId once for the scoped title fallback.
+      const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
+      const ready = await db.ensureReady();
+      const workspaceId = ready ? (await db.getWorkspaceId()) || '' : '';
 
       const allIssues: any[] = [];
       let cursor: string | null = null;
 
-      const projectFilter = config.projectId ? '\n              project: { id: { eq: $projectId } }' : '';
+      const resolvedProjectId = await this._resolveSingleIncludeProjectId(config);
+      const filter = buildLinearIssueFilter(config.teamId, resolvedProjectId || undefined);
       const QUERY = `
-        query($teamId: String!${config.projectId ? ', $projectId: String!' : ''}, $after: String) {
+        query($filter: IssueFilter!, $after: String) {
           issues(
-            filter: {
-              team: { id: { eq: $teamId } }
-              ${projectFilter}
-            }
+            filter: $filter
             after: $after
             first: 50
           ) {
@@ -663,8 +1849,7 @@ export class LinearSyncService {
 
       while (true) {
         const result = await this.graphqlRequest(QUERY, {
-          teamId: config.teamId,
-          ...(config.projectId ? { projectId: config.projectId } : {}),
+          filter,
           after: cursor
         });
         const page = result.data.issues;
@@ -674,8 +1859,11 @@ export class LinearSyncService {
         await this.delay(200);
       }
 
-      const subIssues = allIssues.flatMap((issue: any) => issue.children?.nodes || []);
-      const allTasks = [...new Map([...allIssues, ...subIssues].map((t: any) => [t.id, t])).values()];
+      // Apply client-side project name filters
+      const filteredIssues = this._applyProjectNameFilters(allIssues, config);
+
+      const subIssues = filteredIssues.flatMap((issue: any) => issue.children?.nodes || []);
+      const allTasks = [...new Map([...filteredIssues, ...subIssues].map((t: any) => [t.id, t])).values()];
 
       const issueNameById = new Map<string, string>(allTasks.map((t: any) => [t.id, `${t.title} (${t.identifier})`]));
       const subIssuesByParentId = new Map<string, any[]>();
@@ -694,12 +1882,34 @@ export class LinearSyncService {
       for (const issue of allTasks) {
         if (syncMapIssueIds.has(issue.id)) { skipped++; continue; }
 
+        // Scoped title fallback: only suppress if a local session is actively
+        // being created AND its topic matches this issue's title. Global title
+        // matching is explicitly avoided to prevent silent import loss.
+        if (planFilesBeingCreated.size > 0 && ready && workspaceId) {
+          const localPlan = await db.getPlanByTopic(issue.title || '', workspaceId);
+          if (localPlan && planFilesBeingCreated.has(localPlan.planFile)) {
+            skipped++;
+            continue;
+          }
+        }
+
         const stateType = (issue.state?.type || '').toLowerCase();
-        if (stateType === 'completed' || stateType === 'cancelled') { skipped++; continue; }
+        // Always filter out completed/cancelled/archived issues
+        if (stateType === 'completed' || stateType === 'cancelled' || stateType === 'canceled' || stateType === 'archived') {
+          skipped++;
+          continue;
+        }
+
+        // Filter out backlog if configured (default: true)
+        if (config.excludeBacklog !== false && stateType === 'backlog') {
+          skipped++;
+          continue;
+        }
 
         const planFile = path.join(plansDir, `linear_import_${issue.id}.md`);
         try { await fs.promises.access(planFile); skipped++; continue; } catch { /* proceed */ }
 
+        // Note: backlog issues reach here only when excludeBacklog is explicitly false
         const kanbanColumn = stateType === 'backlog' ? 'BACKLOG' : 'CREATED';
         const priority = ['', 'urgent', 'high', 'normal', 'low'][issue.priority] || '';
         const dueDate = issue.dueDate || '';
@@ -719,48 +1929,12 @@ export class LinearSyncService {
           issue.state?.name ? `> **State:** ${issue.state.name}`    : '',
         ].filter(Boolean).join('\n');
 
-        const subIssuesList = subIssuesByParentId.get(issue.id) || [];
-        const subIssueLines = subIssuesList.map((s: any) =>
-          `- ${s.title} (\`${s.identifier}\`) — see \`linear_import_${s.id}.md\``
-        );
-
-        const commentLines = (issue.comments?.nodes || []).map((c: any) =>
-          `- **${c.user?.name || 'Unknown'} (${c.createdAt?.slice(0, 10) || ''}):** ${c.body}`
-        );
-
-        const attachmentLines = (issue.attachments?.nodes || []).map((a: any) =>
-          `- [${a.title}](${a.url})`
-        );
-
-        const notesLines = [
-          '## Linear Issue Notes',
-          '',
-          `**State:** ${issue.state?.name || ''} (${stateType})`,
-          issue.estimate !== null && issue.estimate !== undefined ? `**Estimate:** ${issue.estimate} points` : '',
-          issue.project?.name ? `**Project:** ${issue.project.name}` : '',
-          issue.cycle?.name   ? `**Cycle:** ${issue.cycle.name} (#${issue.cycle.number})` : '',
-          `**Created:** ${issue.createdAt?.slice(0, 10) || ''}`,
-          ...(subIssueLines.length > 0 ? ['', '**Sub-issues (each imported as a separate plan):**', ...subIssueLines] : []),
-          ...(commentLines.length > 0 ? ['', '**Comments:**', ...commentLines] : []),
-          ...(attachmentLines.length > 0 ? ['', '**Attachments:**', ...attachmentLines] : []),
-        ].filter(s => s !== '').join('\n');
-
         const stub = [
           `# ${issue.title || `Linear Issue ${issue.identifier}`}`,
           '',
           metaLines,
           '',
-          '## Goal',
-          '',
-          description || 'TODO',
-          '',
-          '## Proposed Changes',
-          '',
-          'TODO',
-          '',
-          notesLines,
-          '',
-          `## Switchboard State\n\n**Kanban Column:** ${kanbanColumn}\n**Status:** active\n`,
+          description || '',
         ].join('\n');
 
         await fs.promises.writeFile(planFile, stub, 'utf8');

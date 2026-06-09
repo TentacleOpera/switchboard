@@ -1,3 +1,4 @@
+<!-- switchboard:agents-protocol:start -->
 # AGENTS.md - Switchboard Protocol
 
 ## 🚨 STRICT PROTOCOL ENFORCEMENT 🚨
@@ -15,11 +16,8 @@ This project relies on **Switchboard Workflows** defined in `.agent/workflows`.
 | Trigger Words | Workflow File | Description |
 | :--- | :--- | :--- |
 | `/accuracy` | **`accuracy.md`** | High accuracy mode with self-review (Standard Protocol). |
-| `/improve-plan` | **`improve-plan.md`** | Deep planning, dependency checks, and adversarial review. |
-| `/challenge`, `/challenge --self` | **`challenge.md`** | Internal adversarial review workflow (no delegation). |
+| `/improve-plan` | **`improve-plan.md`** | Deep planning with optional dependency checks and adversarial review. |
 | `/chat` | **`chat.md`** | Activate chat consultation workflow. |
-| `/archive` | **`archive.md`** | Query or search the plan archive. |
-| `/export` | **`export.md`** | Export current conversation to archive. |
 
 
 ### ⚠️ MANDATORY PRE-FLIGHT CHECK
@@ -29,7 +27,7 @@ Before EVERY response, you MUST:
 1. **Scan** the user's message for explicit workflow commands from the table above (prefer `/workflow` forms).
 2. **Do not auto-trigger on generic language** (for example: "review this", "delegate this", "quick start") unless the user explicitly asks to run that workflow.
 3. **If a command match is found**: Read the workflow file with `view_file .agent/workflows/[WORKFLOW].md` and execute it step-by-step. Do NOT improvise an alternative approach.
-4. **Fast Kanban Resolution**: If the user asks about plans in specific Kanban columns (e.g. "update all created plans"), you MUST use the `get_kanban_state` MCP tool to instantly identify the target plans.
+4. **Fast Kanban Resolution**: If the user asks about plans in specific Kanban columns (e.g. "update all created plans"), you MUST use the `query_switchboard_kanban` skill (read `.switchboard/workspace-id` for ID and DB path, then query with sqlite3) to instantly identify the target plans.
 5. **If no match is found**: Respond normally.
 
 ### Execution Rules
@@ -58,14 +56,14 @@ Sending to non-existent recipients is always rejected (even when auto-routed).
 User ──► Switchboard Operator (chat.md)
               │  Plans captured in .switchboard/plans/
               │
-              ├──► /improve-plan   Deep planning, dependency checks, and adversarial review
+              ├──► /improve-plan   Deep planning with optional dependency checks and adversarial review
               └──► Kanban Board    Plans moved through workflow stages (Created → Coded → Reviewed → Done)
 
 All file writes to .switchboard/ MUST use IsArtifact: false.
 Plans are executed via Kanban board workflow, not delegation.
 ```
 
-Conversational routing: when the intent is to advance a kanban card or send a plan to the next agent/stage, prefer `move_kanban_card(sessionId, target)` over raw `send_message`. The `target` may be a kanban column label, a built-in role, or a kanban-enabled custom agent name; generic conversational `coded` / `team` targets are smart-routed by plan complexity.
+Kanban column transitions are handled automatically by the system/host. Execution agents must NEVER attempt to update kanban columns directly via SQL or any other method during normal workflow execution. The `query_switchboard_kanban` skill is for QUERYING kanban state only (e.g., identifying plans in specific columns). To manually move a card when explicitly requested by the user, use the `kanban_operations` skill.
 
 ### 📚 Available Skills
 
@@ -74,9 +72,45 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | Skill | When to Use |
 |-------|-------------|
 | `archive` | User asks to "search archives", "query archives", "find old plans", "export conversation" |
+| `clickup_api` | Direct ClickUp API access via LocalApiServer proxy (replaces call_clickup_api) |
+| `clickup_attach` | Attach files to ClickUp tasks via LocalApiServer (replaces clickup_attach) |
+| `clickup_create_subpage` | Create doc pages in ClickUp via LocalApiServer (replaces clickup_create_subpage) |
+| `clickup_create_task` | Create ClickUp tasks with optional subtasks via LocalApiServer (replaces clickup_create_task) |
+| `clickup_fetch` | Fetch ClickUp tasks/lists with name resolution (replaces clickup_fetch) |
+| `clickup_modify_task` | Update ClickUp task properties via LocalApiServer (replaces clickup_modify_task) |
+| `generate_diagram` | Generate architectural diagrams via LocalApiServer (replaces generate_architectural_diagram) |
 | `review` | User asks to review code changes, a PR, or specific files |
+| `query_switchboard_kanban` | Query kanban state via direct SQL access to kanban.db (read-only) |
+| `kanban_operations` | Move kanban cards via move-card.js — MANUAL FALLBACK ONLY, use only when user explicitly requests a card move |
+| `query_archive` | Query the DuckDB archive directly using duckdb CLI |
+| `complexity_scoring` | Assess and assign numeric complexity scores (1-10) to plans and tasks |
+| `linear_api` | Direct Linear API access via LocalApiServer proxy (replaces call_linear_api) |
+| `web_research` | User asks to "research X", "investigate Y", or needs authoritative sources |
+| `deep_planning` | User requests complex code changes requiring architecture understanding |
 
 **Usage**: Call `skill: "archive"` before performing archive operations to access detailed tool documentation and examples.
 
 **Skill Files Location**: `.agent/skills/` (distributed with plugin)
 
+### 📝 Plan Authoring & Problem Analysis Protocol
+
+When creating or improving any implementation plan (including via `/improve-plan`):
+- You MUST explicitly document the core problems, background context, and root cause analysis.
+- This details should be placed directly inside or immediately below the `## Goal` section to ensure the plan remains self-contained without violating workflow section requirements.
+- The `improve-plan` required section schema must never be used as a reason to drop the problem analysis.
+
+### 📂 Workspace Detection for Plan Creation
+
+When creating plan files in multi-workspace setups, use this decision tree to determine which workspace's `.switchboard/plans/` directory to target:
+
+1. **Primary signal: Active IDE workspace** — If the user's active editor or focused workspace folder is within a specific workspace root, write plans to that workspace's `.switchboard/plans/` directory. This is the most reliable signal.
+
+2. **Secondary signal: Task content keywords** — If the active workspace signal is ambiguous (e.g., the user is in a generic file), look for project-specific keywords in the task description. This is a hint, not a rule.
+
+3. **Tertiary signal: `.switchboard/` existence** — Confirm the selected workspace has a `.switchboard/plans/` directory before writing. If it doesn't exist, the workspace may not be a Switchboard-managed project.
+
+4. **Fallback: Ask the user** — If detection is ambiguous (multiple signals conflict or no signal matches), ask the user which workspace to use. Do NOT silently default to any workspace.
+
+**Edge case**: If the user has multiple workspace folders open in VS Code, the active editor's containing workspace folder is the strongest signal.
+<!-- switchboard:agents-protocol:end -->
+<!-- switchboard:agents-protocol:end -->

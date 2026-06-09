@@ -1,9 +1,9 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { deriveKanbanColumn } = require(path.join(__dirname, '..', '..', 'src', 'services', 'kanbanColumnDerivation.js'));
+const { deriveKanbanColumn } = require(path.join(__dirname, '..', '..', 'out', 'services', 'kanbanColumnDerivation.js'));
 
-const workspaceRoot = process.cwd();
+const workspaceRoot = process.argv[2] || process.cwd();
 const sbDir = path.join(workspaceRoot, '.switchboard');
 const registryPath = path.join(sbDir, 'plan_registry.json');
 const identityPath = path.join(sbDir, 'workspace_identity.json');

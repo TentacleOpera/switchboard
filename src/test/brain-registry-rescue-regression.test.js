@@ -11,7 +11,7 @@ describe('brain registry rescue regressions', () => {
     it('normalizes loaded brain registry ids and rewrites stale rows through registerPlan', () => {
         assert.match(
             source,
-            /const normalizedPlanId = this\._normalizeRegistryPlanId\(p\.planId \|\| p\.sessionId, p\.sourceType\);[\s\S]*entries\[normalizedPlanId\] = \{[\s\S]*planId: normalizedPlanId[\s\S]*if \(staleEntries\.length > 0\) \{[\s\S]*await this\._registerPlan\(workspaceRoot, staleEntry\);/,
+            /const normalizedPlanId = this\._normalizeRegistryPlanId\(effectivePlanId, effectiveSourceType\);[\s\S]*entries\[normalizedPlanId\] = \{[\s\S]*planId: normalizedPlanId[\s\S]*if \(staleEntries\.length > 0\) \{[\s\S]*await this\._registerPlan\(workspaceRoot, staleEntry\);/,
             'Expected _loadPlanRegistry to normalize brain plan ids and rewrite stale DB rows.'
         );
     });

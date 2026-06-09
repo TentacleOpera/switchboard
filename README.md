@@ -26,7 +26,7 @@ What this shows: Using the pair programming mode, Windsurf Opus reported token s
 - **Assign by complexity** — put an Opus subscription in the Planner slot and it will organise which tasks can be sent to cheap agents based on a complexity threshold you set
 - **Amplify other tools** — put Claude Code, OpenCode, Copilot Squads, or anything else into the kanban to route between them
 - **No repo pollution** — kanban state, routing rules and archived plans live in a multi-repo database on Google Drive, so you can share across machines and between developers without random files appearing in every commit
-- **Sync to project management tools** — plan state is stored in a structured database, making it trivially easy to sync Switchboard to JIRA, Clickup, or any other PM tool using their official MCP servers
+- **Sync to project management tools** — plan state is stored in a structured database, making it easy to sync Switchboard to JIRA, Clickup, or any other PM tool
 
 ---
 
@@ -165,7 +165,7 @@ Use these within Antigravity or Windsurf chat:
 
 | Command | What it does |
 | :--- | :--- |
-| `/chat` | Starts a planning conversation / product-manager style consultation. Use it for shaping scope and writing plans without jumping straight into code. |
+| `/switchboard-chat` | Starts a planning conversation / product-manager style consultation. Use it for shaping scope and writing plans without jumping straight into code. |
 | `/improve-plan` | Deep planning, dependency checks, and adversarial review in one pass |
 | `/archive` | Query or search the historical DuckDB plan archive |
 | `/export` | Export the current conversation to the plan archive database |
@@ -180,7 +180,7 @@ If you want to ingest plans from another tool or directory, use the **Plan Inges
 
 ### Collaborative planning
 
-The `/chat` workflow is useful when you want to refine a task before implementation:
+The `/switchboard-chat` workflow is useful when you want to refine a task before implementation:
 
 - break work into executable steps
 - assign complexity and likely routing
@@ -325,11 +325,10 @@ Coordination uses the official VS Code `terminal.sendText` API to automate agent
 ## Architecture
 
 - **VS Code Extension** — manages terminals, sidebar UI, AUTOBAN, plan watcher, and inbox watcher
-- **Bundled MCP Server** — exposes tools to agents (`send_message`, `check_inbox`, `get_kanban_state`, `start_workflow`, `run_in_terminal`)
 - **Local database** — stores plans, routing state, and complexity classifications locally with optional Google Drive sync for multi-developer sharing
 - **DuckDB archive** — stores completed plans for historical querying
 - **File Protocol** — all coordination happens via `.switchboard/` in your workspace — transparent, auditable, and entirely local
-- **PM tool sync** — structured plan metadata makes it easy to sync state to JIRA, Clickup, or any PM tool using their official MCP servers
+- **PM tool sync** — structured plan metadata makes it easy to sync state to JIRA, Clickup, or any PM tool
 
 ---
 
