@@ -10,7 +10,7 @@ import { KanbanProvider } from './services/KanbanProvider';
 import { GlobalPlanWatcherService } from './services/GlobalPlanWatcherService';
 import { KanbanDatabase, type WorkspaceDatabaseMapping } from './services/KanbanDatabase';
 import { SetupPanelProvider } from './services/SetupPanelProvider';
-import { ReviewProvider, ReviewCommentRequest, ReviewCommentResult, ReviewOpenPlanOption, ReviewPlanContext, ReviewTicketData, ReviewTicketUpdateRequest, ReviewTicketUpdateResult } from './services/ReviewProvider';
+import { ReviewCommentRequest, ReviewCommentResult } from './services/reviewTypes';
 import { sendRobustText } from './services/terminalUtils';
 import { importPlanFiles } from './services/PlanFileImporter';
 import { ClickUpSyncService } from './services/ClickUpSyncService';
@@ -678,10 +678,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Kanban Board
     const setupPanelProvider = new SetupPanelProvider(context.extensionUri);
-    const reviewProvider = new ReviewProvider(context.extensionUri);
     context.subscriptions.push(kanbanProvider);
     context.subscriptions.push(setupPanelProvider);
-    context.subscriptions.push(reviewProvider);
     taskViewerProvider.setKanbanProvider(kanbanProvider);
     taskViewerProvider.setSetupPanelProvider(setupPanelProvider);
     kanbanProvider!.setTaskViewerProvider(taskViewerProvider);
@@ -763,6 +761,7 @@ export async function activate(context: vscode.ExtensionContext) {
         context
     );
     context.subscriptions.push(planningPanelProvider);
+    kanbanProvider!.setPlanningPanelProvider(planningPanelProvider);
     const openPlanningPanelDisposable = vscode.commands.registerCommand(
         'switchboard.openPlanningPanel',
         async () => { await planningPanelProvider.open(); }
@@ -1080,13 +1079,6 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     );
     context.subscriptions.push(moveKanbanCardByPlanFileDisposable);
-
-    const reviewPlanFromKanbanDisposable = vscode.commands.registerCommand('switchboard.reviewPlanFromKanban', async (sessionId: string, workspaceRoot?: string) => {
-        taskViewerProvider.handleKanbanReviewPlan(sessionId, workspaceRoot);
-    });
-    context.subscriptions.push(reviewPlanFromKanbanDisposable);
-
-
 
     const setAutobanFromKanbanDisposable = vscode.commands.registerCommand('switchboard.setAutobanEnabledFromKanban', async (enabled: boolean) => {
         await taskViewerProvider.setAutobanEnabledFromKanban(!!enabled);
@@ -2073,60 +2065,6 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(openPlanDisposable);
 
-    const reviewPlanDisposable = vscode.commands.registerCommand('switchboard.reviewPlan', async (target: ReviewPlanContext | vscode.Uri | string) => {
-        if (!target) return;
-
-        let planFileAbsolute = '';
-        let sessionId: string | undefined;
-        let topic: string | undefined;
-        let workspaceRoot: string | undefined;
-
-        if (typeof target === 'object' && !(target instanceof vscode.Uri) && 'planFileAbsolute' in target) {
-            const candidate = target as ReviewPlanContext;
-            planFileAbsolute = String(candidate.planFileAbsolute || '').trim();
-            sessionId = candidate.sessionId;
-            topic = candidate.topic;
-            workspaceRoot = typeof candidate.workspaceRoot === 'string' ? candidate.workspaceRoot.trim() : undefined;
-            target = candidate;
-        } else if (target instanceof vscode.Uri) {
-            planFileAbsolute = target.fsPath;
-        } else if (typeof target === 'string') {
-            planFileAbsolute = target.trim();
-        }
-
-        if (!planFileAbsolute) {
-            vscode.window.showErrorMessage('Failed to open review panel: invalid plan path.');
-            return;
-        }
-
-        const absolutePath = path.resolve(planFileAbsolute);
-        const resolvedWorkspaceRoot = workspaceRoot || findWorkspaceRootForPath(absolutePath);
-        if (!resolvedWorkspaceRoot) {
-            vscode.window.showErrorMessage('Failed to open review panel: no workspace folder found.');
-            return;
-        }
-        if (!isPathWithinRoot(absolutePath, resolvedWorkspaceRoot)) {
-            vscode.window.showErrorMessage('Review plan path is outside the workspace boundary.');
-            return;
-        }
-
-        try {
-            await reviewProvider.open({
-                sessionId,
-                topic,
-                planFileAbsolute: absolutePath,
-                workspaceRoot: resolvedWorkspaceRoot,
-                initialMode: typeof target === 'object' && !(target instanceof vscode.Uri) && 'initialMode' in target
-                    ? target.initialMode
-                    : undefined
-            });
-        } catch (e) {
-            const message = e instanceof Error ? e.message : String(e);
-            vscode.window.showErrorMessage(`Failed to open review panel: ${message}`);
-        }
-    });
-    context.subscriptions.push(reviewPlanDisposable);
-
     const sendReviewCommentDisposable = vscode.commands.registerCommand(
         'switchboard.sendReviewComment',
         async (request: ReviewCommentRequest): Promise<ReviewCommentResult> => {
@@ -2226,38 +2164,6 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     );
     context.subscriptions.push(sendReviewCommentDisposable);
-
-    const getReviewTicketDataDisposable = vscode.commands.registerCommand(
-        'switchboard.getReviewTicketData',
-        async (sessionId: string): Promise<ReviewTicketData> => {
-            return taskViewerProvider.getReviewTicketData(sessionId);
-        }
-    );
-    context.subscriptions.push(getReviewTicketDataDisposable);
-
-    const updateReviewTicketDisposable = vscode.commands.registerCommand(
-        'switchboard.updateReviewTicket',
-        async (request: ReviewTicketUpdateRequest): Promise<ReviewTicketUpdateResult> => {
-            return taskViewerProvider.updateReviewTicket(request);
-        }
-    );
-    context.subscriptions.push(updateReviewTicketDisposable);
-
-    const getReviewOpenPlansDisposable = vscode.commands.registerCommand(
-        'switchboard.getReviewOpenPlans',
-        async (sessionId: string): Promise<ReviewOpenPlanOption[]> => {
-            return taskViewerProvider.getReviewOpenPlans(sessionId);
-        }
-    );
-    context.subscriptions.push(getReviewOpenPlansDisposable);
-
-    const reviewSendToAgentDisposable = vscode.commands.registerCommand(
-        'switchboard.reviewSendToAgent',
-        async (sessionId: string): Promise<{ ok: boolean; message: string }> => {
-            return taskViewerProvider.sendReviewTicketToNextAgent(sessionId);
-        }
-    );
-    context.subscriptions.push(reviewSendToAgentDisposable);
 
     async function createAgentGrid() {
         const currentWorkspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot()

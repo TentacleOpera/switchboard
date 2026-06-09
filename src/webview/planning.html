@@ -2867,7 +2867,7 @@
         <div id="local-content" class="research-tab-content active">
             <div class="active-doc-banner inactive" id="active-doc-banner-local">
                 <div class="active-doc-info">
-                    <span class="active-doc-label">Active Design Doc:</span>
+                    <span class="active-doc-label">Active Planning Epic:</span>
                     <span class="active-doc-name" id="active-doc-name-local">None</span>
                 </div>
                 <button class="btn-disable-doc" id="btn-disable-doc-local">Turn off</button>
@@ -2916,7 +2916,7 @@
         <div id="online-content" class="research-tab-content">
             <div class="active-doc-banner inactive" id="active-doc-banner-online">
                 <div class="active-doc-info">
-                    <span class="active-doc-label">Active Design Doc:</span>
+                    <span class="active-doc-label">Active Planning Epic:</span>
                     <span class="active-doc-name" id="active-doc-name-online">None</span>
                 </div>
                 <button class="btn-disable-doc" id="btn-disable-doc-online">Turn off</button>
@@ -3053,7 +3053,8 @@
                 </select>
                 <input type="text" id="kanban-search" placeholder="Search plans..." />
                 <button id="kanban-refresh-btn" title="Refresh">↻</button>
-                <button id="btn-import-kanban-plans" class="strip-btn" title="Scan configured AI IDE folders and pick unclaimed plans to add (any age, bypasses the auto-claim window)">Import Plans</button>
+                <button id="btn-import-kanban-plans" class="strip-btn" title="Scan configured AI IDE folders and pick unclaimed plans to add (any age, bypasses the auto-claim window)">Import</button>
+                <button id="btn-kanban-log" class="strip-btn" disabled title="View action log for selected plan">Log</button>
                 <button id="btn-edit-kanban" class="strip-btn" disabled>Edit</button>
                 <button id="btn-review-kanban" class="strip-btn" disabled title="Review plan - select text and submit comment to planner">Review</button>
                 <button id="btn-save-kanban" class="strip-btn" style="display:none;">Save</button>
@@ -3066,6 +3067,7 @@
                 </div>
                 <div class="preview-panel-wrapper">
                     <div id="kanban-preview-pane" class="kanban-preview-pane" style="flex: 1; height: 100%; width: 100%; box-sizing: border-box;">
+                        <div id="kanban-preview-meta-bar" style="display:none;"></div>
                         <div id="kanban-preview-content">
                             <!-- Markdown preview rendered by JS -->
                         </div>

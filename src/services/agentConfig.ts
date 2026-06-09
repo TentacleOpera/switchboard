@@ -24,10 +24,15 @@ export interface CustomAgentAddons {
     customSubagentName?: string;
     useWorktreesPerPlan?: boolean;
 
-    // Design doc
+    // Design doc (planning epic)
     designDoc?: boolean;
     designDocLink?: string;
     designDocContent?: string;
+
+    // Design System Doc
+    designSystemDoc?: boolean;
+    designSystemDocLink?: string;
+    designSystemDocContent?: string;
 
     // Workflow
     workflowFilePathEnabled?: boolean;
@@ -188,6 +193,13 @@ export function parseCustomAgentAddons(raw: unknown): CustomAgentAddons | undefi
     if (s.designDocContent) {
         const content = String(s.designDocContent).trim();
         a.designDocContent = content.length > 50000 ? content.slice(0, 50000) + '\n[TRUNCATED]' : content;
+    }
+    if (s.designSystemDoc === true) a.designSystemDoc = true;
+    if (s.designSystemDocLink) a.designSystemDocLink = String(s.designSystemDocLink).trim();
+    if (!a.designSystemDoc && s.designSystemDocLink) a.designSystemDoc = true;
+    if (s.designSystemDocContent) {
+        const content = String(s.designSystemDocContent).trim();
+        a.designSystemDocContent = content.length > 50000 ? content.slice(0, 50000) + '\n[TRUNCATED]' : content;
     }
     if (s.workflowFilePathEnabled === true) a.workflowFilePathEnabled = true;
     if (typeof s.workflowFilePath === 'string' && s.workflowFilePath.trim()) a.workflowFilePath = s.workflowFilePath.trim();

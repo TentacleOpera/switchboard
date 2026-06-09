@@ -17,7 +17,9 @@ import { LinearDocsAdapter } from './LinearDocsAdapter';
 import { ClickUpDocsAdapter } from './ClickUpDocsAdapter';
 import { PlanningPanelCacheService } from './PlanningPanelCacheService';
 import { buildKanbanColumns, KanbanColumnDefinition, CustomKanbanColumnConfig, CustomAgentConfig, parseCustomAgents } from './agentConfig';
-import { ReviewCommentRequest, ReviewCommentResult } from './ReviewProvider';
+import { ReviewCommentRequest, ReviewCommentResult } from './reviewTypes';
+import { isValidComplexityValue, legacyToScore } from './complexityScale';
+import { formatReviewLogEntries } from './reviewLogUtils';
 
 
 export interface PlanningPanelAdapterFactories {
@@ -41,6 +43,7 @@ interface KanbanPlanSummary {
     repoScope: string;      // '' if no repo scope
     mtime: number;
     planFile: string;
+    complexity: string;
 }
 
 export class PlanningPanelProvider {
@@ -80,6 +83,8 @@ export class PlanningPanelProvider {
     private _watcherGeneration: number = 0;
     private _activeDesignDocSourceId: string | null = null;
     private _activeDesignDocId: string | null = null;
+    private _activeDesignSystemDocSourceId: string | null = null;
+    private _activeDesignSystemDocId: string | null = null;
     private _htmlServers = new Map<string, { server: http.Server; port: number; timeoutId: NodeJS.Timeout }>();
 
     private _resolvedConfigCache: {
@@ -342,6 +347,18 @@ export class PlanningPanelProvider {
 
         // Send initial active design doc state
         await this._sendActiveDesignDocState();
+    }
+
+    public reveal(): void {
+        if (this._panel) {
+            this._panel.reveal(vscode.ViewColumn.One);
+        } else {
+            void this.open();
+        }
+    }
+
+    public postMessageToWebview(message: any): void {
+        this._panel?.webview.postMessage(message);
     }
 
     private _setupDocsFolderWatcher(workspaceRoot: string | undefined): void {
@@ -1439,7 +1456,7 @@ export class PlanningPanelProvider {
                 break;
             }
             case 'disableDesignDoc': {
-                await this._handleDisableDesignDoc();
+                await this._handleDisableDesignDoc(msg.docType);
                 break;
             }
             case 'setActivePlanningContext': {
@@ -1796,6 +1813,84 @@ export class PlanningPanelProvider {
                     this._panel?.webview.postMessage({ type: 'kanbanPlanColumnChanged', success: !!moved, error: moved ? undefined : 'Column update failed' });
                 } catch (err) {
                     this._panel?.webview.postMessage({ type: 'kanbanPlanColumnChanged', success: false, error: String(err) });
+                }
+                break;
+            }
+            case 'planShown': {
+                const sessionId = String(msg.sessionId || '');
+                if (sessionId) {
+                    await vscode.commands.executeCommand('switchboard.selectSession', sessionId);
+                }
+                break;
+            }
+            case 'setKanbanPlanComplexity': {
+                const planId = String(msg.planId || '');
+                const complexity = String(msg.complexity || '');
+                const wsRoot = String(msg.workspaceRoot || workspaceRoot);
+                if (!planId) {
+                    this._panel?.webview.postMessage({ type: 'kanbanPlanComplexityChanged', success: false, error: 'Missing planId' });
+                    break;
+                }
+                let normalizedComplexity = complexity;
+                if (!isValidComplexityValue(complexity)) {
+                    const score = legacyToScore(complexity);
+                    normalizedComplexity = score > 0 ? String(score) : 'Unknown';
+                }
+                try {
+                    const { KanbanDatabase } = require('./KanbanDatabase');
+                    const db = KanbanDatabase.forWorkspace(wsRoot);
+                    await db.updatePlan(planId, { complexity: normalizedComplexity });
+                    const allPlans = await this._getKanbanPlans(wsRoot);
+                    this._panel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, requestId: Date.now() });
+                    this._panel?.webview.postMessage({ type: 'kanbanPlanComplexityChanged', success: true });
+                } catch (err) {
+                    this._panel?.webview.postMessage({ type: 'kanbanPlanComplexityChanged', success: false, error: String(err) });
+                }
+                break;
+            }
+            case 'deleteKanbanPlan': {
+                const planId = String(msg.planId || '');
+                const planFile = String(msg.planFile || '');
+                const wsRoot = String(msg.workspaceRoot || workspaceRoot);
+                if (!planId || !wsRoot) {
+                    this._panel?.webview.postMessage({ type: 'kanbanPlanDeleted', success: false, error: 'Missing planId or workspaceRoot' });
+                    break;
+                }
+                if (planFile) {
+                    const resolvedPlanFile = path.resolve(planFile);
+                    const resolvedRoot = path.resolve(wsRoot);
+                    const rel = path.relative(resolvedRoot, resolvedPlanFile);
+                    if (rel.startsWith('..') || path.isAbsolute(rel)) {
+                        this._panel?.webview.postMessage({ type: 'kanbanPlanDeleted', success: false, error: 'Plan file is outside workspace root' });
+                        break;
+                    }
+                }
+                try {
+                    const { KanbanDatabase } = require('./KanbanDatabase');
+                    const db = KanbanDatabase.forWorkspace(wsRoot);
+                    await db.deletePlan(planId);
+                    this._panel?.webview.postMessage({ type: 'kanbanPlanDeleted', success: true, planId });
+                } catch (err) {
+                    this._panel?.webview.postMessage({ type: 'kanbanPlanDeleted', success: false, error: String(err) });
+                }
+                break;
+            }
+            case 'fetchKanbanPlanLog': {
+                const sessionId = String(msg.sessionId || '');
+                const wsRoot = String(msg.workspaceRoot || workspaceRoot);
+                if (!sessionId || !wsRoot) {
+                    this._panel?.webview.postMessage({ type: 'kanbanPlanLogReady', entries: [], error: 'Missing sessionId or workspaceRoot' });
+                    break;
+                }
+                try {
+                    const { SessionActionLog } = require('./SessionActionLog');
+                    const log = new SessionActionLog(wsRoot);
+                    const sheet = await log.getRunSheet(sessionId);
+                    const events: any[] = Array.isArray(sheet?.events) ? sheet.events : [];
+                    const entries = formatReviewLogEntries(events);
+                    this._panel?.webview.postMessage({ type: 'kanbanPlanLogReady', entries });
+                } catch (err) {
+                    this._panel?.webview.postMessage({ type: 'kanbanPlanLogReady', entries: [], error: String(err) });
                 }
                 break;
             }
@@ -2512,21 +2607,36 @@ export class PlanningPanelProvider {
         }
     }
 
-    private async _handleDisableDesignDoc(): Promise<void> {
+    private async _handleDisableDesignDoc(docType: 'planning-epic' | 'design-system' = 'planning-epic'): Promise<void> {
         try {
-            await vscode.workspace.getConfiguration('switchboard').update(
-                'planner.designDocEnabled',
-                false,
-                vscode.ConfigurationTarget.Workspace
-            );
-            // Clear the designDocLink to remove stale references
-            await vscode.workspace.getConfiguration('switchboard').update(
-                'planner.designDocLink',
-                undefined,
-                vscode.ConfigurationTarget.Workspace
-            );
-            this._activeDesignDocSourceId = null;
-            this._activeDesignDocId = null;
+            if (docType === 'design-system') {
+                await vscode.workspace.getConfiguration('switchboard').update(
+                    'planner.designSystemDocEnabled',
+                    false,
+                    vscode.ConfigurationTarget.Workspace
+                );
+                await vscode.workspace.getConfiguration('switchboard').update(
+                    'planner.designSystemDocLink',
+                    undefined,
+                    vscode.ConfigurationTarget.Workspace
+                );
+                this._activeDesignSystemDocSourceId = null;
+                this._activeDesignSystemDocId = null;
+            } else {
+                await vscode.workspace.getConfiguration('switchboard').update(
+                    'planner.designDocEnabled',
+                    false,
+                    vscode.ConfigurationTarget.Workspace
+                );
+                // Clear the designDocLink to remove stale references
+                await vscode.workspace.getConfiguration('switchboard').update(
+                    'planner.designDocLink',
+                    undefined,
+                    vscode.ConfigurationTarget.Workspace
+                );
+                this._activeDesignDocSourceId = null;
+                this._activeDesignDocId = null;
+            }
             // Send updated state back to panel
             await this._sendActiveDesignDocState();
         } catch (err) {
@@ -2534,7 +2644,7 @@ export class PlanningPanelProvider {
             this._panel?.webview.postMessage({
                 type: 'activeDesignDocUpdated',
                 enabled: true,
-                docName: this._getDesignDocName(),
+                docName: this._getPlanningEpicName(),
                 error: String(err)
             });
         }
@@ -2595,15 +2705,25 @@ export class PlanningPanelProvider {
                 return;
             }
 
-            await vscode.workspace.getConfiguration('switchboard').update(
-                'planner.designDocLink', docPath, vscode.ConfigurationTarget.Workspace
-            );
-            await vscode.workspace.getConfiguration('switchboard').update(
-                'planner.designDocEnabled', true, vscode.ConfigurationTarget.Workspace
-            );
-
-            this._activeDesignDocSourceId = sourceId;
-            this._activeDesignDocId = docId;
+            if (sourceId === 'design-folder') {
+                await vscode.workspace.getConfiguration('switchboard').update(
+                    'planner.designSystemDocLink', docPath, vscode.ConfigurationTarget.Workspace
+                );
+                await vscode.workspace.getConfiguration('switchboard').update(
+                    'planner.designSystemDocEnabled', true, vscode.ConfigurationTarget.Workspace
+                );
+                this._activeDesignSystemDocSourceId = sourceId;
+                this._activeDesignSystemDocId = docId;
+            } else {
+                await vscode.workspace.getConfiguration('switchboard').update(
+                    'planner.designDocLink', docPath, vscode.ConfigurationTarget.Workspace
+                );
+                await vscode.workspace.getConfiguration('switchboard').update(
+                    'planner.designDocEnabled', true, vscode.ConfigurationTarget.Workspace
+                );
+                this._activeDesignDocSourceId = sourceId;
+                this._activeDesignDocId = docId;
+            }
             await this._sendActiveDesignDocState();
 
             this._panel?.webview.postMessage({ type: 'activeContextSet', success: true });
@@ -2758,23 +2878,30 @@ export class PlanningPanelProvider {
         }
     }
 
-    private _getDesignDocName(): string | null {
+    private _getPlanningEpicName(): string | null {
         const config = vscode.workspace.getConfiguration('switchboard');
         const designDocLink = config.get<string>('planner.designDocLink');
         if (!designDocLink) return null;
         return path.basename(designDocLink, '.md');
     }
 
+    private _getDesignSystemDocName(): string | null {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        const designSystemDocLink = config.get<string>('planner.designSystemDocLink');
+        if (!designSystemDocLink) return null;
+        return path.basename(designSystemDocLink, '.md');
+    }
+
     private async _sendActiveDesignDocState(): Promise<void> {
         const config = vscode.workspace.getConfiguration('switchboard');
         const enabled = config.get<boolean>('planner.designDocEnabled', false);
-        const docName = enabled ? this._getDesignDocName() : null;
+        const docName = enabled ? this._getPlanningEpicName() : null;
+        const dsEnabled = config.get<boolean>('planner.designSystemDocEnabled', false);
+        const dsDocName = dsEnabled ? this._getDesignSystemDocName() : null;
         this._panel?.webview.postMessage({
             type: 'activeDesignDocUpdated',
-            enabled,
-            docName: docName || 'None',
-            sourceId: this._activeDesignDocSourceId,
-            docId: this._activeDesignDocId
+            planningEpic: { enabled, docName: docName || 'None', sourceId: this._activeDesignDocSourceId, docId: this._activeDesignDocId },
+            designSystemDoc: { enabled: dsEnabled, docName: dsDocName || 'None', sourceId: this._activeDesignSystemDocSourceId, docId: this._activeDesignSystemDocId }
         });
     }
 
@@ -4629,7 +4756,8 @@ export class PlanningPanelProvider {
             project: r.project || '',
             repoScope: r.repoScope || '',
             mtime: r.updatedAt ? new Date(r.updatedAt).getTime() : 0,
-            planFile: r.planFile || ''
+            planFile: r.planFile || '',
+            complexity: r.complexity || 'Unknown'
         }));
     }
 

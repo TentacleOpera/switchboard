@@ -3138,6 +3138,35 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 }
                 break;
             }
+            case 'kanbanPlanLogReady': {
+                if (msg.entries && msg.entries.length) {
+                    const lines = msg.entries.map(e => `[${e.timestamp}] ${e.workflow}: ${e.details}`).join('\n');
+                    window.alert('Action Log\n\n' + lines);
+                } else {
+                    window.alert('Action Log\n\nNo entries found.');
+                }
+                break;
+            }
+            case 'kanbanPlanDeleted': {
+                if (msg.success) {
+                    _kanbanSelectedPlan = null;
+                    const metaBar = document.getElementById('kanban-preview-meta-bar');
+                    if (metaBar) metaBar.style.display = 'none';
+                    if (kanbanPreviewContent) {
+                        kanbanPreviewContent.innerHTML = '<div class="kanban-empty-state">Select a plan to preview</div>';
+                    }
+                    vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+                } else {
+                    console.error('[Kanban Sidebar] Failed to delete plan:', msg.error);
+                }
+                break;
+            }
+            case 'activateKanbanTabAndSelectPlan': {
+                _pendingKanbanSelection = { sessionId: msg.sessionId, planFile: msg.planFile, workspaceRoot: msg.workspaceRoot };
+                activateKanbanTab();
+                vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+                break;
+            }
             case 'commentResult': {
                 const { ok, message } = msg;
                 if (ok) {
@@ -3752,47 +3781,59 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     }
 
     function updateActiveDocBanner(msg) {
+        // Support both old flat format and new nested format
+        const planningEpic = msg.planningEpic || { enabled: msg.enabled, docName: msg.docName, sourceId: msg.sourceId, docId: msg.docId };
+        const designSystemDoc = msg.designSystemDoc || { enabled: false, docName: null };
+
         const bannerLocal = document.getElementById('active-doc-banner-local');
         const bannerOnline = document.getElementById('active-doc-banner-online');
         const nameLocal = document.getElementById('active-doc-name-local');
         const nameOnline = document.getElementById('active-doc-name-online');
 
-        const isActive = msg.enabled && msg.docName;
-        const docName = msg.docName || 'None';
+        const isEpicActive = planningEpic.enabled && planningEpic.docName;
+        const epicName = planningEpic.docName || 'None';
 
         if (bannerLocal) {
-            bannerLocal.classList.toggle('inactive', !isActive);
-            if (nameLocal) nameLocal.textContent = docName;
+            bannerLocal.classList.toggle('inactive', !isEpicActive);
+            if (nameLocal) nameLocal.textContent = epicName;
         }
         if (bannerOnline) {
-            bannerOnline.classList.toggle('inactive', !isActive);
-            if (nameOnline) nameOnline.textContent = docName;
+            bannerOnline.classList.toggle('inactive', !isEpicActive);
+            if (nameOnline) nameOnline.textContent = epicName;
         }
+
         const bannerDesign = document.getElementById('active-doc-banner-design');
         const nameDesign = document.getElementById('active-doc-name-design');
+        const isDsActive = designSystemDoc.enabled && designSystemDoc.docName;
+        const dsName = designSystemDoc.docName || 'None';
         if (bannerDesign) {
-            bannerDesign.classList.toggle('inactive', !isActive);
-            if (nameDesign) nameDesign.textContent = docName;
+            bannerDesign.classList.toggle('inactive', !isDsActive);
+            if (nameDesign) nameDesign.textContent = dsName;
         }
-        state.activeDesignDocEnabled = msg.enabled || false;
-        state.activeDesignDocSourceId = msg.sourceId || null;
-        state.activeDesignDocId = msg.docId || null;
+
+        state.activeDesignDocEnabled = planningEpic.enabled || false;
+        state.activeDesignDocSourceId = planningEpic.sourceId || null;
+        state.activeDesignDocId = planningEpic.docId || null;
         updateLocalActiveContextButtonState();
     }
 
-    function handleDisableDesignDoc() {
-        vscode.postMessage({ type: 'disableDesignDoc' });
+    function handleDisablePlanningEpic() {
+        vscode.postMessage({ type: 'disableDesignDoc', docType: 'planning-epic' });
+    }
+
+    function handleDisableDesignSystemDoc() {
+        vscode.postMessage({ type: 'disableDesignDoc', docType: 'design-system' });
     }
 
     if (btnDisableDocLocal) {
-        btnDisableDocLocal.addEventListener('click', handleDisableDesignDoc);
+        btnDisableDocLocal.addEventListener('click', handleDisablePlanningEpic);
     }
     if (btnDisableDocOnline) {
-        btnDisableDocOnline.addEventListener('click', handleDisableDesignDoc);
+        btnDisableDocOnline.addEventListener('click', handleDisablePlanningEpic);
     }
     const btnDisableDocDesign = document.getElementById('btn-disable-doc-design');
     if (btnDisableDocDesign) {
-        btnDisableDocDesign.addEventListener('click', handleDisableDesignDoc);
+        btnDisableDocDesign.addEventListener('click', handleDisableDesignSystemDoc);
     }
 
     // Button handlers
@@ -3938,8 +3979,18 @@ DEPTH: Deep (50-100+ sources)`;
     let _kanbanSelectedPlan = null;
     let _kanbanPreviewRequestId = 0;
     let _kanbanAvailableColumns = [];  // { id, label, kind }[] — merged across workspaces
+    let _pendingKanbanSelection = null;
 
-    
+    function _complexityToCssClass(complexity) {
+        const score = parseInt(complexity, 10);
+        if (isNaN(score) || score <= 0) return 'unknown';
+        if (score <= 2) return 'very-low';
+        if (score <= 4) return 'low';
+        if (score <= 6) return 'medium';
+        if (score <= 8) return 'high';
+        return 'very-high';
+    }
+
     const kanbanFilters = {
         column: '',
         workspaceRoot: '',
@@ -4141,6 +4192,7 @@ DEPTH: Deep (50-100+ sources)`;
         filtered.forEach(plan => {
             const itemDiv = document.createElement('div');
             itemDiv.className = 'kanban-plan-item';
+            itemDiv.dataset.planId = plan.planId;
             if (_kanbanSelectedPlan && _kanbanSelectedPlan.planId === plan.planId) {
                 itemDiv.classList.add('selected');
             }
@@ -4156,10 +4208,12 @@ DEPTH: Deep (50-100+ sources)`;
                 `<option value="${escapeHtml(col.id)}" ${col.id === plan.column ? 'selected' : ''}>${escapeHtml(col.label)}</option>`
             ).join('');
 
+            const complexityClass = _complexityToCssClass(plan.complexity);
             itemDiv.innerHTML = `
                 <div style="width: 100%;">
                     <div style="display: flex; align-items: flex-start; gap: 8px;">
                         <span class="kanban-plan-topic">${escapeHtml(plan.topic)}</span>
+                        <span class="complexity-dot ${complexityClass}" title="Complexity: ${escapeHtml(plan.complexity)}"></span>
                     </div>
                     <div class="kanban-plan-meta" style="margin-top: 4px;">
                         ${escapeHtml(metaParts.join(' · '))} · ${escapeHtml(displayTime)}
@@ -4187,6 +4241,10 @@ DEPTH: Deep (50-100+ sources)`;
                 document.querySelectorAll('.kanban-plan-item').forEach(el => el.classList.remove('selected'));
                 itemDiv.classList.add('selected');
                 _kanbanSelectedPlan = plan;
+                renderKanbanMetaBar(plan);
+                if (plan.sessionId) {
+                    vscode.postMessage({ type: 'planShown', sessionId: plan.sessionId });
+                }
 
                 if (plan.planFile) {
                     if (kanbanPreviewContent) {
@@ -4290,6 +4348,126 @@ DEPTH: Deep (50-100+ sources)`;
         });
     }
 
+    function renderKanbanMetaBar(plan) {
+        const metaBar = document.getElementById('kanban-preview-meta-bar');
+        if (!metaBar) return;
+        metaBar.style.display = 'flex';
+
+        const columnDef = _kanbanAvailableColumns.find(c => c.id === plan.column);
+        const columnLabel = escapeHtml(columnDef ? columnDef.label : plan.column);
+        const complexityClass = _complexityToCssClass(plan.complexity);
+        const complexityLabel = escapeHtml(plan.complexity || 'Unknown');
+
+        const allColumnOptions = _kanbanAvailableColumns.map(col =>
+            `<option value="${escapeHtml(col.id)}">${escapeHtml(col.label)}</option>`
+        ).join('');
+
+        const complexityOptions = ['Unknown', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+            .map(v => `<option value="${v}" ${v === plan.complexity ? 'selected' : ''}>${v}</option>`)
+            .join('');
+
+        metaBar.innerHTML = `
+            <div class="kanban-meta-group">
+                <span class="kanban-meta-label">Column:</span>
+                <span class="kanban-meta-value kanban-meta-dropdown-toggle" id="kanban-meta-column">${columnLabel}</span>
+                <select class="kanban-meta-dropdown" id="kanban-meta-column-select" style="display:none;" data-plan-file="${escapeHtml(plan.planFile || '')}" data-workspace-root="${escapeHtml(plan.workspaceRoot)}" data-plan-id="${escapeHtml(plan.planId)}">
+                    ${allColumnOptions}
+                    <option value="COMPLETED">COMPLETED</option>
+                    <option value="__delete__">— Delete Plan —</option>
+                </select>
+            </div>
+            <div class="kanban-meta-group">
+                <span class="kanban-meta-label">Complexity:</span>
+                <span class="complexity-dot ${complexityClass}"></span>
+                <span class="kanban-meta-value kanban-meta-dropdown-toggle" id="kanban-meta-complexity">${complexityLabel}</span>
+                <select class="kanban-meta-dropdown" id="kanban-meta-complexity-select" style="display:none;" data-plan-id="${escapeHtml(plan.planId)}" data-workspace-root="${escapeHtml(plan.workspaceRoot)}">
+                    ${complexityOptions}
+                </select>
+            </div>
+            <div class="kanban-meta-group">
+                <button class="strip-btn" id="kanban-meta-log-btn">Log</button>
+                <button class="strip-btn" id="kanban-meta-delete-btn">Delete</button>
+            </div>
+        `;
+
+        // Column dropdown toggle
+        const columnToggle = document.getElementById('kanban-meta-column');
+        const columnSelect = document.getElementById('kanban-meta-column-select');
+        if (columnToggle && columnSelect) {
+            columnToggle.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const isHidden = columnSelect.style.display === 'none';
+                document.querySelectorAll('.kanban-meta-dropdown').forEach(el => { el.style.display = 'none'; });
+                columnSelect.style.display = isHidden ? 'block' : 'none';
+                if (isHidden) columnSelect.focus();
+            });
+            columnSelect.addEventListener('change', (e) => {
+                e.stopPropagation();
+                const newColumn = columnSelect.value;
+                const planFile = columnSelect.dataset.planFile;
+                const workspaceRoot = columnSelect.dataset.workspaceRoot;
+                const planId = columnSelect.dataset.planId;
+                columnSelect.style.display = 'none';
+                if (newColumn === '__delete__') {
+                    if (window.confirm('Delete this plan?')) {
+                        vscode.postMessage({ type: 'deleteKanbanPlan', planId, planFile, workspaceRoot });
+                    }
+                } else if (planFile && newColumn) {
+                    vscode.postMessage({ type: 'moveKanbanPlanColumn', planFile, newColumn, workspaceRoot });
+                }
+            });
+            columnSelect.addEventListener('blur', () => {
+                setTimeout(() => { columnSelect.style.display = 'none'; }, 200);
+            });
+        }
+
+        // Complexity dropdown toggle
+        const complexityToggle = document.getElementById('kanban-meta-complexity');
+        const complexitySelect = document.getElementById('kanban-meta-complexity-select');
+        if (complexityToggle && complexitySelect) {
+            complexityToggle.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const isHidden = complexitySelect.style.display === 'none';
+                document.querySelectorAll('.kanban-meta-dropdown').forEach(el => { el.style.display = 'none'; });
+                complexitySelect.style.display = isHidden ? 'block' : 'none';
+                if (isHidden) complexitySelect.focus();
+            });
+            complexitySelect.addEventListener('change', (e) => {
+                e.stopPropagation();
+                const newComplexity = complexitySelect.value;
+                const planId = complexitySelect.dataset.planId;
+                const workspaceRoot = complexitySelect.dataset.workspaceRoot;
+                complexitySelect.style.display = 'none';
+                if (planId) {
+                    vscode.postMessage({ type: 'setKanbanPlanComplexity', planId, complexity: newComplexity, workspaceRoot });
+                }
+            });
+            complexitySelect.addEventListener('blur', () => {
+                setTimeout(() => { complexitySelect.style.display = 'none'; }, 200);
+            });
+        }
+
+        // Log button
+        const logBtn = document.getElementById('kanban-meta-log-btn');
+        if (logBtn) {
+            logBtn.addEventListener('click', () => {
+                if (plan.sessionId && plan.workspaceRoot) {
+                    vscode.postMessage({ type: 'fetchKanbanPlanLog', sessionId: plan.sessionId, workspaceRoot: plan.workspaceRoot });
+                }
+            });
+        }
+
+        // Delete button
+        const deleteBtn = document.getElementById('kanban-meta-delete-btn');
+        if (deleteBtn) {
+            deleteBtn.addEventListener('click', () => {
+                if (window.confirm('Delete this plan?')) {
+                    vscode.postMessage({ type: 'deleteKanbanPlan', planId: plan.planId, planFile: plan.planFile, workspaceRoot: plan.workspaceRoot });
+                }
+            });
+        }
+    }
+
     function populateKanbanFilters() {
         if (!kanbanWorkspaceFilter || !kanbanProjectFilter) return;
 
@@ -4391,6 +4569,24 @@ DEPTH: Deep (50-100+ sources)`;
         updateKanbanColumnFilter();  // NEW: populate column dropdown
         renderKanbanPlans(_kanbanPlansCache, kanbanFilters);
 
+        // Resolve pending selection (e.g. from kanban board Review button)
+        if (_pendingKanbanSelection) {
+            const { sessionId, planFile, workspaceRoot } = _pendingKanbanSelection;
+            const match = _kanbanPlansCache.find(p =>
+                (sessionId && p.sessionId === sessionId) ||
+                (planFile && p.planFile === planFile) ||
+                (workspaceRoot && p.workspaceRoot === workspaceRoot && p.sessionId === sessionId)
+            );
+            if (match) {
+                const itemDiv = kanbanListPane.querySelector(`.kanban-plan-item[data-plan-id="${match.planId}"]`);
+                if (itemDiv) {
+                    itemDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    itemDiv.click();
+                }
+            }
+            _pendingKanbanSelection = null;
+        }
+
         // Show transient "↻ refreshed" indicator
         if (typeof document.hasFocus === 'function' && document.hasFocus()) {
             const strip = document.querySelector('.kanban-controls-strip');
@@ -4480,6 +4676,10 @@ DEPTH: Deep (50-100+ sources)`;
         const btnReviewKanban = document.getElementById('btn-review-kanban');
         if (btnReviewKanban) {
             btnReviewKanban.disabled = !_kanbanSelectedPlan || !_kanbanSelectedPlan.planFile;
+        }
+        const btnKanbanLog = document.getElementById('btn-kanban-log');
+        if (btnKanbanLog) {
+            btnKanbanLog.disabled = !_kanbanSelectedPlan || !_kanbanSelectedPlan.sessionId;
         }
     }
 
@@ -4814,7 +5014,7 @@ DEPTH: Deep (50-100+ sources)`;
                 state.activeDesignDocId === state.activeDocId;
 
             if (isThisDocActive) {
-                vscode.postMessage({ type: 'disableDesignDoc' });
+                vscode.postMessage({ type: 'disableDesignDoc', docType: 'planning-epic' });
             } else {
                 const wrapper = findTreeNode(state.activeSource, state.activeDocId);
                 const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : undefined;

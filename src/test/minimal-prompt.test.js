@@ -85,7 +85,7 @@ function testDesignDocContentAppendedWhenProvided() {
         designDocContent: 'Pre-fetched Notion content here'
     });
 
-    assert.ok(prompt.includes('DESIGN DOC REFERENCE (pre-fetched from Notion)'), 'Prompt should include design doc content reference');
+    assert.ok(prompt.includes('PLANNING EPIC REFERENCE (pre-fetched from Notion)'), 'Prompt should include planning epic content reference');
     assert.ok(prompt.includes('Pre-fetched Notion content here'), 'Prompt should include the actual design doc content');
     console.log('  PASS: Design doc content is appended when provided');
 }

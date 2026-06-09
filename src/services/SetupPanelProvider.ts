@@ -623,6 +623,15 @@ export class SetupPanelProvider implements vscode.Disposable {
                     });
                     break;
                 }
+                case 'getDesignSystemDocSetting': {
+                    const setting = this._taskViewerProvider.handleGetDesignSystemDocSetting();
+                    this._panel.webview.postMessage({
+                        type: 'designSystemDocSetting',
+                        enabled: setting.enabled,
+                        link: setting.link
+                    });
+                    break;
+                }
                 case 'getGitIgnoreConfig': {
                     const config = this._taskViewerProvider.handleGetGitIgnoreConfig();
                     this._panel.webview.postMessage({ type: 'gitIgnoreConfig', ...config });

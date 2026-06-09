@@ -48,7 +48,7 @@ export class PlannerPromptWriter {
     /**
      * Shared logic: write content to the first configured local docs folder.
      * Idempotent by design: same content → same filename → overwrite with identical content.
-     * @param options.skipDesignDocLink - (DEPRECATED) If true, do NOT set designDocLink. Previously used by removed "Copy Link" feature.
+     * @param options.skipDesignDocLink - (DEPRECATED) If true, do NOT set the planning epic link (designDocLink). Previously used by removed "Copy Link" feature.
      */
     private async _writeDocToDocsDir(
         workspaceRoot: string,
@@ -128,8 +128,8 @@ export class PlannerPromptWriter {
                 source: sourceId,
                 savedPath: newDocPath,
                 message: aggregatedPath
-                    ? `Design doc imported and activated from ${sourceName} (aggregated with other active sources)`
-                    : `Design doc imported and activated from ${sourceName}`
+                    ? `Planning epic imported and activated from ${sourceName} (aggregated with other active sources)`
+                    : `Planning epic imported and activated from ${sourceName}`
             };
         }
 

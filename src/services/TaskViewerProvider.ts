@@ -2896,6 +2896,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return this._isDesignDocEnabled() && this._getDesignDocLink().trim().length > 0;
     }
 
+    public handleGetDesignSystemDocSetting(): { enabled: boolean; link: string } {
+        return {
+            enabled: this._isDesignSystemDocEnabled(),
+            link: this._getDesignSystemDocLink()
+        };
+    }
+
     private async _isAcceptanceTesterActive(workspaceRoot?: string): Promise<boolean> {
         const visibleAgents = await this.getVisibleAgents(workspaceRoot);
         return visibleAgents.tester !== false && this._isAcceptanceTesterDesignDocConfigured();
@@ -2908,7 +2915,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             return false;
         }
         if (!this._isAcceptanceTesterDesignDocConfigured()) {
-            vscode.window.showErrorMessage('Acceptance Tester requires a Design Doc / PRD to be enabled and attached in Setup.');
+            vscode.window.showErrorMessage('Acceptance Tester requires a Planning Epic to be enabled and attached in Setup.');
             return false;
         }
         return true;
@@ -3084,62 +3091,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     public async handleDeletePlanFromReview(sessionId: string, workspaceRoot?: string, planFileAbsolute?: string): Promise<boolean> {
         return await this._handleDeletePlan(sessionId, workspaceRoot, planFileAbsolute);
-    }
-
-    public async sendReviewTicketToNextAgent(sessionId: string): Promise<{ ok: boolean; message: string }> {
-        const workspaceRoot = await this._resolveWorkspaceRootForSession(sessionId);
-        if (!workspaceRoot) {
-            return { ok: false, message: 'No workspace folder found.' };
-        }
-        await this._activateWorkspaceContext(workspaceRoot);
-
-        const ticketData = await this.getReviewTicketData(sessionId);
-        const [customAgents, customKanbanColumns] = await Promise.all([
-            this.getCustomAgents(workspaceRoot),
-            this._getCustomKanbanColumns(workspaceRoot)
-        ]);
-        const currentColumn = this._normalizeLegacyKanbanColumn(ticketData.column);
-        const targetColumn = await this._getNextKanbanColumnForSession(
-            currentColumn,
-            sessionId,
-            workspaceRoot,
-            customAgents,
-            customKanbanColumns
-        );
-        if (!targetColumn) {
-            return { ok: false, message: 'Plan is already in the final column.' };
-        }
-        const configuredColumn = customKanbanColumns.find((column) => column.id === targetColumn);
-        if (configuredColumn) {
-            const dispatched = await this.dispatchConfiguredKanbanColumnAction(configuredColumn.role, [sessionId], {
-                targetColumn,
-                dragDropMode: configuredColumn.dragDropMode,
-                additionalInstructions: configuredColumn.triggerPrompt,
-                instruction: configuredColumn.role === 'planner' ? 'improve-plan' : undefined,
-                workspaceRoot
-            });
-            if (!dispatched) {
-                return { ok: false, message: `Failed to send plan to ${targetColumn}.` };
-            }
-            return { ok: true, message: `Sent to ${targetColumn}.` };
-        }
-        const role = this._roleForKanbanColumn(targetColumn);
-        if (!role) {
-            await this.handleKanbanForwardMove([sessionId], targetColumn, workspaceRoot);
-            return { ok: true, message: `Moved to ${targetColumn}.` };
-        }
-
-        const instruction = role === 'planner' ? 'improve-plan' : undefined;
-        const dispatched = await this.handleKanbanTrigger(role, sessionId, instruction, workspaceRoot);
-        if (!dispatched) {
-            return { ok: false, message: `Failed to send plan to ${targetColumn}.` };
-        }
-
-        return { ok: true, message: `Sent to ${targetColumn}.` };
-    }
-
-    public async handleKanbanReviewPlan(sessionId: string, workspaceRoot?: string) {
-        await this._handleReviewPlan(sessionId, workspaceRoot);
     }
 
     public async getStartupCommands(workspaceRoot?: string): Promise<Record<string, string>> {
@@ -3694,6 +3645,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             type: 'designDocSetting',
             enabled: designDocSetting.enabled,
             link: designDocSetting.link
+        });
+
+        const designSystemDocSetting = this.handleGetDesignSystemDocSetting();
+        this._view.webview.postMessage({
+            type: 'designSystemDocSetting',
+            enabled: designSystemDocSetting.enabled,
+            link: designSystemDocSetting.link
         });
 
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
@@ -8446,11 +8404,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             }
                         }
                         break;
-                    case 'reviewPlan':
-                        if (data.sessionId) {
-                            await this._handleReviewPlan(data.sessionId);
-                        }
-                        break;
                     case 'copyPlanLink': {
                         const effectiveId = data.sessionId || data.planId;
                         if (effectiveId) {
@@ -12821,432 +12774,12 @@ What would you like to find?`;
         return `# ${trimmedTopic}\n\n${normalizedContent.replace(/^\s*/, '')}`;
     }
 
-    private _getReviewLogEntries(events: any[]): { timestamp: string; workflow: string; details: string }[] {
-        const columnRoleMap: Record<string, string> = {
-            'CREATED': 'Planner',
-            'PLAN REVIEWED': 'Planner',
-            'LEAD CODED': 'Lead Coder',
-            'CODER CODED': 'Coder',
-            'CODE REVIEWED': 'Reviewer',
-            'ACCEPTANCE TESTED': 'Acceptance Tester'
-        };
-
-        return [...events].reverse().map((event) => {
-            const action = String(event?.action || '').trim().toLowerCase();
-            const targetColumn = String(event?.targetColumn || '').trim();
-            const outcome = String(event?.outcome || '').trim().toLowerCase();
-            const workflow = String(event?.workflow || 'unknown').trim() || 'unknown';
-
-            const role = columnRoleMap[targetColumn] || '';
-
-            let details = '';
-            if (action === 'execute' || action === 'delegate_task') {
-                details = role ? `SENT TO ${role}` : `Dispatched (${workflow})`;
-            } else if (action === 'submit_result') {
-                details = role ? `COMPLETED — ${role}` : `Completed (${workflow})`;
-            } else if (outcome === 'failed' || outcome === 'fail') {
-                details = role ? `FAILED — ${role}` : `Failed (${workflow})`;
-            } else if (action === 'start_workflow') {
-                details = `Started ${workflow}`;
-            } else if (action === 'complete_workflow_phase') {
-                details = `Phase completed (${workflow})`;
-            } else {
-                const parts = [
-                    action ? `action=${action}` : '',
-                    outcome ? `outcome=${outcome}` : '',
-                    targetColumn ? `target=${targetColumn}` : ''
-                ].filter(Boolean);
-                details = parts.join(' · ') || 'No additional details';
-            }
-
-            return { timestamp: String(event?.timestamp || ''), workflow, details };
-        });
-    }
-
-    public async getReviewTicketData(sessionId: string): Promise<{
-        sessionId?: string;
-        topic: string;
-        planFileAbsolute: string;
-        column: string;
-        isCompleted: boolean;
-        complexity: string;
-        planText: string;
-        planMtimeMs: number;
-        actionLog: { timestamp: string; workflow: string; details: string }[];
-        columns: { id: string; label: string }[];
-        canEditMetadata: boolean;
-    }> {
-        const workspaceRoot = await this._resolveWorkspaceRootForSession(sessionId);
-        if (!workspaceRoot) {
-            throw new Error('No workspace folder found.');
-        }
-        await this._activateWorkspaceContext(workspaceRoot);
-        const log = this._getSessionLog(workspaceRoot);
-        const sheet = await log.getRunSheet(sessionId);
-        if (!sheet) {
-            throw new Error(`Run sheet not found for session ${sessionId}.`);
-        }
-
-        const planFileAbsolute = this._getPlanPathFromSheet(workspaceRoot, sheet);
-        const planText = await fs.promises.readFile(planFileAbsolute, 'utf8');
-        const stats = await fs.promises.stat(planFileAbsolute);
-        const [customAgents, customKanbanColumns, visibleAgents] = await Promise.all([
-            this.getCustomAgents(workspaceRoot),
-            this._getCustomKanbanColumns(workspaceRoot),
-            this.getVisibleAgents(workspaceRoot)
-        ]);
-        const allColumns = this._buildKanbanColumnsForWorkspace(customAgents, customKanbanColumns);
-        const columns = this._filterVisibleColumns(allColumns, visibleAgents)
-            .map(column => ({ id: column.id, label: column.label }));
-        const events: any[] = Array.isArray(sheet.events) ? sheet.events : [];
-        const row = await this._getKanbanPlanRecordForSession(workspaceRoot, sessionId);
-        let column = this._getEffectiveKanbanColumnForSession(sheet, customAgents, row);
-        let complexity: string = 'Unknown';
-
-        if (row) {
-            complexity = row.complexity || 'Unknown';
-        }
-
-        if (complexity === 'Unknown' && this._kanbanProvider && typeof sheet.planFile === 'string' && sheet.planFile.trim()) {
-            complexity = await this._kanbanProvider.getComplexityFromPlan(workspaceRoot, sheet.planFile);
-        }
-
-        return {
-            sessionId,
-            topic: String(sheet.topic || path.basename(planFileAbsolute)),
-            planFileAbsolute,
-            column,
-            isCompleted: sheet.completed === true,
-            complexity,
-            planText,
-            planMtimeMs: stats.mtimeMs,
-            actionLog: this._getReviewLogEntries(events),
-            columns,
-            canEditMetadata: true
-        };
-    }
-
-    public async getReviewOpenPlans(sessionId: string): Promise<Array<{
-        sessionId: string;
-        topic: string;
-        column: string;
-        planFileAbsolute: string;
-    }>> {
-        const workspaceRoot = await this._resolveWorkspaceRootForSession(sessionId);
-        if (!workspaceRoot) {
-            throw new Error('No workspace folder found.');
-        }
-        await this._activateWorkspaceContext(workspaceRoot);
-
-        const log = this._getSessionLog(workspaceRoot);
-        const sheets = await log.getRunSheets();
-        const customAgents = await this.getCustomAgents(workspaceRoot);
-
-        const openPlans = sheets
-            .filter((sheet: any) => sheet?.sessionId && !sheet.completed && sheet.sessionId !== sessionId)
-            .map((sheet: any) => {
-                const events: any[] = Array.isArray(sheet.events) ? sheet.events : [];
-                let lastActivity = String(sheet.createdAt || '');
-                for (const event of events) {
-                    if (event?.timestamp && event.timestamp > lastActivity) {
-                        lastActivity = event.timestamp;
-                    }
-                }
-
-                try {
-                    return {
-                        sessionId: String(sheet.sessionId),
-                        topic: String(sheet.topic || sheet.sessionId || 'Untitled plan'),
-                        column: deriveKanbanColumn(events, customAgents),
-                        planFileAbsolute: this._getPlanPathFromSheet(workspaceRoot, sheet),
-                        lastActivity
-                    };
-                } catch {
-                    return null;
-                }
-            })
-            .filter((entry): entry is {
-                sessionId: string;
-                topic: string;
-                column: string;
-                planFileAbsolute: string;
-                lastActivity: string;
-            } => !!entry)
-            .sort((a, b) => (b.lastActivity || '').localeCompare(a.lastActivity || ''))
-            .slice(0, 50)
-            .map(({ lastActivity, ...entry }) => entry);
-
-        return openPlans;
-    }
-
-    private async _renameSessionPlanFile(
-        workspaceRoot: string,
-        sessionId: string,
-        sheet: any,
-        nextTopic: string
-    ): Promise<{ planFileAbsolute: string; planFileRelative: string }> {
-        const currentPlanFileAbsolute = this._getPlanPathFromSheet(workspaceRoot, sheet);
-        const currentRelative = (typeof sheet.planFile === 'string' && sheet.planFile.trim())
-            ? sheet.planFile.trim().replace(/\\/g, '/')
-            : path.relative(workspaceRoot, currentPlanFileAbsolute).replace(/\\/g, '/');
-        const currentDir = path.dirname(currentPlanFileAbsolute);
-        const currentExt = path.extname(currentPlanFileAbsolute) || '.md';
-        const currentBase = path.basename(currentPlanFileAbsolute, currentExt);
-        const prefixMatch = currentBase.match(/^(feature_plan_\d{8}_\d{6})_/i);
-        if (!prefixMatch) {
-            return { planFileAbsolute: currentPlanFileAbsolute, planFileRelative: currentRelative };
-        }
-        const prefix = prefixMatch[1];
-        const slug = this._toPlanSlug(nextTopic);
-        const baseTargetName = `${prefix}_${slug}${currentExt}`;
-        let candidateAbsolute = path.join(currentDir, baseTargetName);
-        let suffix = 2;
-        while (candidateAbsolute !== currentPlanFileAbsolute && fs.existsSync(candidateAbsolute)) {
-            candidateAbsolute = path.join(currentDir, `${prefix}_${slug}_${suffix}${currentExt}`);
-            suffix += 1;
-        }
-
-        if (candidateAbsolute === currentPlanFileAbsolute) {
-            return {
-                planFileAbsolute: currentPlanFileAbsolute,
-                planFileRelative: currentRelative
-            };
-        }
-
-        // Register the rename with the plan watcher to avoid delete event triggers
-        this._kanbanProvider?.getGlobalPlanWatcher()?.registerRename(currentRelative);
-
-        await fs.promises.rename(currentPlanFileAbsolute, candidateAbsolute);
-        const nextRelative = path.relative(workspaceRoot, candidateAbsolute).replace(/\\/g, '/');
-
-        await this._getSessionLog(workspaceRoot).updateRunSheet(sessionId, (current: any) => {
-            current.planFile = nextRelative;
-            return current;
-        });
-
-        const planId = this._getPlanIdForRunSheet(sheet);
-        if (planId) {
-            const entry = this._planRegistry.entries[planId];
-            if (entry) {
-                entry.localPlanPath = nextRelative;
-                entry.updatedAt = new Date().toISOString();
-                await this._savePlanRegistry(workspaceRoot);
-            }
-        }
-
-        const db = await this._getKanbanDb(workspaceRoot);
-        if (db) {
-            await db.updatePlanFile(sessionId, nextRelative);
-            await db.updateSessionId(sessionId, nextRelative);
-        }
-
-        sheet.planFile = nextRelative;
-        return {
-            planFileAbsolute: candidateAbsolute,
-            planFileRelative: nextRelative
-        };
-    }
-
-    public async updateReviewTicket(request: {
-        type: 'setColumn' | 'setComplexity' | 'setTopic' | 'savePlanText';
-        sessionId?: string;
-        column?: string;
-        complexity?: string;
-        topic?: string;
-        content?: string;
-        expectedMtimeMs?: number;
-    }): Promise<{
-        ok: boolean;
-        message: string;
-        data?: Awaited<ReturnType<TaskViewerProvider['getReviewTicketData']>>;
-    }> {
-        let sessionId = String(request?.sessionId || '').trim();
-        if (!sessionId) {
-            return { ok: false, message: 'Session ID is required.' };
-        }
-
-        const workspaceRoot = await this._resolveWorkspaceRootForSession(sessionId);
-        if (!workspaceRoot) {
-            return { ok: false, message: 'No workspace folder found.' };
-        }
-        await this._activateWorkspaceContext(workspaceRoot);
-
-        const log = this._getSessionLog(workspaceRoot);
-        const sheet = await log.getRunSheet(sessionId);
-        if (!sheet) {
-            return { ok: false, message: `Run sheet not found for session ${sessionId}.` };
-        }
-
-        const planFileAbsolute = this._getPlanPathFromSheet(workspaceRoot, sheet);
-        const refreshViews = async () => {
-            this.refresh();
-        };
-
-        try {
-            switch (request.type) {
-                case 'setColumn': {
-                    const column = this._normalizeLegacyKanbanColumn(String(request.column || '').trim());
-                    if (!column) {
-                        return { ok: false, message: 'Column is required.' };
-                    }
-                    const [customAgents, customKanbanColumns, visibleAgents] = await Promise.all([
-                        this.getCustomAgents(workspaceRoot),
-                        this._getCustomKanbanColumns(workspaceRoot),
-                        this.getVisibleAgents(workspaceRoot)
-                    ]);
-                    const allColumns = this._buildKanbanColumnsForWorkspace(customAgents, customKanbanColumns);
-                    const columns = this._filterVisibleColumns(allColumns, visibleAgents)
-                        .map(entry => entry.id);
-                    if (!columns.includes(column)) {
-                        return { ok: false, message: `Unknown column '${column}'.` };
-                    }
-
-                    const currentRow = await this._getKanbanPlanRecordForSession(workspaceRoot, sessionId);
-                    const currentColumn = this._getEffectiveKanbanColumnForSession(sheet, customAgents, currentRow);
-                    if (currentColumn === column) {
-                        break;
-                    }
-
-                    const workflowName = this._workflowForManualColumnChange(currentColumn, column, customAgents, customKanbanColumns);
-                    if (workflowName) {
-                        const updated = await this._applyManualKanbanColumnChange(
-                            sessionId,
-                            column,
-                            workflowName,
-                            'User manually changed plan column from ticket view',
-                            workspaceRoot
-                        );
-                        if (!updated) {
-                            return { ok: false, message: 'Failed to persist ticket column change.' };
-                        }
-                    }
-                    break;
-                }
-                case 'setComplexity': {
-                    const complexity = request.complexity || 'Unknown';
-                    const currentContent = await fs.promises.readFile(planFileAbsolute, 'utf8');
-                    const nextContent = this._applyComplexityToPlanContent(currentContent, complexity);
-                    if (nextContent !== currentContent) {
-                        await fs.promises.writeFile(planFileAbsolute, nextContent, 'utf8');
-                    }
-                    const db = await this._getKanbanDb(workspaceRoot);
-                    if (db && planFileAbsolute) {
-                        const wsId = await this._getWorkspaceIdForRoot(workspaceRoot);
-                        if (wsId) {
-                            await db.updateComplexityByPlanFile(planFileAbsolute, wsId, complexity);
-                        }
-                    }
-                    break;
-                }
-                case 'setTopic': {
-                    const topic = String(request.topic || '').trim();
-                    if (!topic) {
-                        return { ok: false, message: 'Topic is required.' };
-                    }
-                    await log.updateRunSheet(sessionId, (current: any) => {
-                        current.topic = topic;
-                        return current;
-                    });
-                    const currentContent = await fs.promises.readFile(planFileAbsolute, 'utf8');
-                    const nextContent = this._applyTopicToPlanContent(currentContent, topic);
-                    if (nextContent !== currentContent) {
-                        await fs.promises.writeFile(planFileAbsolute, nextContent, 'utf8');
-                    }
-                    const planId = this._getPlanIdForRunSheet(sheet);
-                    if (planId) {
-                        const entry = this._planRegistry.entries[planId];
-                        if (entry) {
-                            entry.topic = topic;
-                            entry.updatedAt = new Date().toISOString();
-                            await this._savePlanRegistry(workspaceRoot);
-                        }
-                    }
-                    const db = await this._getKanbanDb(workspaceRoot);
-                    if (db) {
-                        await db.updateTopic(sessionId, topic);
-                    }
-                    break;
-                }
-                case 'savePlanText': {
-                    const requestedTopic = String(request.topic || '').trim();
-                    const content = typeof request.content === 'string' ? request.content : '';
-                    const nextContent = requestedTopic
-                        ? this._applyTopicToPlanContent(content, requestedTopic)
-                        : content;
-                    const expectedMtimeMs = Number(request.expectedMtimeMs);
-                    const currentStats = await fs.promises.stat(planFileAbsolute);
-                    if (Number.isFinite(expectedMtimeMs) && Math.abs(currentStats.mtimeMs - expectedMtimeMs) > 1) {
-                        return { ok: false, message: 'Plan file changed on disk since this ticket was opened. Reload the ticket and try again.' };
-                    }
-                    await fs.promises.writeFile(planFileAbsolute, nextContent, 'utf8');
-                    const h1Match = nextContent.match(/^#\s+(.+)$/m);
-                    const nextTopic = requestedTopic || (h1Match ? h1Match[1].trim() : String(sheet.topic || '').trim());
-                    let activePlanFileAbsolute = planFileAbsolute;
-                    if (nextTopic) {
-                        const renamed = await this._renameSessionPlanFile(workspaceRoot, sessionId, sheet, nextTopic);
-                        activePlanFileAbsolute = renamed.planFileAbsolute;
-                        sessionId = renamed.planFileRelative;
-                        await log.updateRunSheet(sessionId, (current: any) => {
-                            current.topic = nextTopic;
-                            return current;
-                        });
-                        const db = await this._getKanbanDb(workspaceRoot);
-                        if (db) {
-                            await db.updateTopic(sessionId, nextTopic);
-                        }
-                        const planId = this._getPlanIdForRunSheet(sheet);
-                        if (planId) {
-                            const entry = this._planRegistry.entries[planId];
-                            if (entry) {
-                                entry.topic = nextTopic;
-                                entry.updatedAt = new Date().toISOString();
-                                await this._savePlanRegistry(workspaceRoot);
-                            }
-                        }
-                    }
-                    if (this._kanbanProvider && activePlanFileAbsolute.trim()) {
-                        const nextComplexity = await this._kanbanProvider.getComplexityFromPlan(workspaceRoot, activePlanFileAbsolute);
-                        const db = await this._getKanbanDb(workspaceRoot);
-                        if (db) {
-                            const wsId = await this._getWorkspaceIdForRoot(workspaceRoot);
-                            if (wsId) {
-                                await db.updateComplexityByPlanFile(activePlanFileAbsolute, wsId, nextComplexity);
-                            }
-                        }
-                    }
-                    break;
-                }
-            }
-
-            await refreshViews();
-            return {
-                ok: true,
-                message: request.type === 'savePlanText' ? 'Plan saved.' : 'Ticket updated.',
-                data: await this.getReviewTicketData(sessionId)
-            };
-        } catch (e) {
-            return {
-                ok: false,
-                message: e instanceof Error ? e.message : String(e)
-            };
-        }
-    }
-
     private async _handleViewPlan(sessionId: string, workspaceRoot?: string) {
         try {
             const { planFileAbsolute } = await this._resolvePlanContextForSession(sessionId, workspaceRoot);
             await vscode.commands.executeCommand('switchboard.openPlan', vscode.Uri.file(planFileAbsolute));
         } catch (e) {
             vscode.window.showErrorMessage(`Failed to open plan: ${e}`);
-        }
-    }
-
-    private async _handleReviewPlan(sessionId: string, workspaceRoot?: string) {
-        try {
-            const { planFileAbsolute, topic, workspaceRoot: resolvedWorkspaceRoot } = await this._resolvePlanContextForSession(sessionId, workspaceRoot);
-            await vscode.commands.executeCommand('switchboard.reviewPlan', { sessionId, planFileAbsolute, topic, workspaceRoot: resolvedWorkspaceRoot });
-        } catch (e) {
-            vscode.window.showErrorMessage(`Failed to open review panel: ${e}`);
         }
     }
 
@@ -13908,7 +13441,7 @@ What would you like to find?`;
                 }
             }
 
-            // Fallback: if mirrorPath unresolved but we have planFileAbsolute from ReviewProvider
+            // Fallback: if mirrorPath unresolved but we have planFileAbsolute
             if (!mirrorPath && planFileAbsolute) {
                 const abs = path.resolve(planFileAbsolute);
                 const absNorm = process.platform === 'win32' ? abs.toLowerCase() : abs;
@@ -14108,7 +13641,7 @@ What would you like to find?`;
             return true;
         } catch (e) {
             // Re-throw so callers can distinguish errors from user cancellation (return false).
-            // Callers (ReviewProvider catch block, Kanban webview handler catch block) already
+            // Callers (Kanban webview handler catch block) already
             // have catch blocks that display the error appropriately.
             throw e;
         }
@@ -14869,6 +14402,16 @@ What would you like to find?`;
 
     private _getDesignDocLink(): string {
         return vscode.workspace.getConfiguration('switchboard').get<string>('planner.designDocLink', '') || '';
+    }
+
+    private _isDesignSystemDocEnabled(): boolean {
+        const plannerConfig: any = this.getSetting('switchboard.prompts.roleConfig_planner', undefined);
+        if (plannerConfig?.addons?.designSystemDoc !== undefined) return plannerConfig.addons.designSystemDoc;
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('planner.designSystemDocEnabled', false);
+    }
+
+    private _getDesignSystemDocLink(): string {
+        return vscode.workspace.getConfiguration('switchboard').get<string>('planner.designSystemDocLink', '') || '';
     }
 
     private async _getDesignDocContent(workspaceRoot: string): Promise<string | null> {

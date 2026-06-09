@@ -95,6 +95,10 @@ export interface PromptBuilderOptions {
     designDocLink?: string;
     /** When present, the full pre-fetched Notion page content to embed verbatim. Takes precedence over designDocLink. */
     designDocContent?: string;
+    /** When present, appends a Design System Doc link to planner prompts. */
+    designSystemDocLink?: string;
+    /** When present, the full pre-fetched content of the design system doc. */
+    designSystemDocContent?: string;
     /** Per-role prompt customisations loaded from state.json. */
     defaultPromptOverrides?: Partial<Record<string, DefaultPromptOverride>>;
     /** The absolute path to the workspace root. Used for workspace type detection and working directory resolution. */
@@ -442,7 +446,7 @@ export function buildKanbanBatchPrompt(
 
         const designDocLink = options?.designDocLink?.trim();
         if (designDocLink) {
-            plannerBase += `DESIGN DOC REFERENCE:\nThe following design document provides the project's product requirements and specifications. Use it as foundational context for all planning decisions:\n${designDocLink}\n\n`;
+            plannerBase += `PLANNING EPIC REFERENCE:\nThe following design document provides the project's product requirements and specifications. Use it as foundational context for all planning decisions:\n${designDocLink}\n\n`;
         }
 
         if (aggressivePairProgramming) {
@@ -482,7 +486,17 @@ export function buildKanbanBatchPrompt(
         // Append design doc content (pre-fetched Notion)
         const designDocContent = options?.designDocContent?.trim();
         if (designDocContent) {
-            plannerPrompt += `\n\nDESIGN DOC REFERENCE (pre-fetched from Notion):\nThe following is the full content of the project's design document / PRD. Use it as foundational context for all planning decisions:\n\n${designDocContent}`;
+            plannerPrompt += `\n\nPLANNING EPIC REFERENCE (pre-fetched from Notion):\nThe following is the full content of the project's design document / PRD. Use it as foundational context for all planning decisions:\n\n${designDocContent}`;
+        }
+
+        const designSystemDocLink = options?.designSystemDocLink?.trim();
+        if (designSystemDocLink) {
+            plannerPrompt += `\n\nDESIGN SYSTEM DOC REFERENCE:\nThe following design system document provides the project's visual and interaction design specifications. Use it as context for implementation decisions:\n${designSystemDocLink}`;
+        }
+
+        const designSystemDocContent = options?.designSystemDocContent?.trim();
+        if (designSystemDocContent) {
+            plannerPrompt += `\n\nDESIGN SYSTEM DOC REFERENCE (pre-fetched):\nThe following is the full content of the project's design system document. Use it as context for implementation decisions:\n\n${designSystemDocContent}`;
         }
 
         return normalizeNewlines(plannerPrompt);
@@ -610,9 +624,9 @@ For each plan:
 
         let designDocBlock = '';
         if (designDocContent) {
-            designDocBlock = `DESIGN DOC REFERENCE (pre-fetched from Notion):\nThe following is the full content of the project's design document / PRD. Use it as the authoritative requirements baseline for acceptance testing:\n\n${designDocContent}`;
+            designDocBlock = `PLANNING EPIC REFERENCE (pre-fetched from Notion):\nThe following is the full content of the project's design document / PRD. Use it as the authoritative requirements baseline for acceptance testing:\n\n${designDocContent}`;
         } else if (designDocLink) {
-            designDocBlock = `DESIGN DOC REFERENCE:\nThe following design document provides the project's product requirements and specifications. Use it as the authoritative requirements baseline for acceptance testing:\n${designDocLink}`;
+            designDocBlock = `PLANNING EPIC REFERENCE:\nThe following design document provides the project's product requirements and specifications. Use it as the authoritative requirements baseline for acceptance testing:\n${designDocLink}`;
         }
 
         const promptParts = [
@@ -1289,9 +1303,15 @@ export function buildCustomAgentPrompt(
     if (addons?.researchEnabled) prompt += `\n\n${DEEP_RESEARCH_DIRECTIVE}`;
 
     if (addons?.designDocContent) {
-        prompt += `\n\nDESIGN DOC REFERENCE (pre-fetched):\n${addons.designDocContent}`;
+        prompt += `\n\nPLANNING EPIC REFERENCE (pre-fetched):\n${addons.designDocContent}`;
     } else if (addons?.designDocLink) {
-        prompt += `\n\nDESIGN DOC REFERENCE:\n${addons.designDocLink}`;
+        prompt += `\n\nPLANNING EPIC REFERENCE:\n${addons.designDocLink}`;
+    }
+
+    if (addons?.designSystemDocContent) {
+        prompt += `\n\nDESIGN SYSTEM DOC REFERENCE (pre-fetched):\n${addons.designSystemDocContent}`;
+    } else if (addons?.designSystemDocLink) {
+        prompt += `\n\nDESIGN SYSTEM DOC REFERENCE:\n${addons.designSystemDocLink}`;
     }
 
     if (promptInstructions) prompt += `\n\nAdditional Instructions: ${promptInstructions}`;

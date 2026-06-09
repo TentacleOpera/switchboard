@@ -150,6 +150,12 @@ export class KanbanProvider implements vscode.Disposable {
         this._reloadSettingsFromStore();
     }
 
+    private _planningPanelProvider?: import('./PlanningPanelProvider').PlanningPanelProvider;
+
+    public setPlanningPanelProvider(provider: import('./PlanningPanelProvider').PlanningPanelProvider) {
+        this._planningPanelProvider = provider;
+    }
+
     private _getCacheService(workspaceRoot: string): import('./PlanningPanelCacheService').PlanningPanelCacheService {
         const resolved = path.resolve(workspaceRoot);
         const existing = this._cacheServices.get(resolved);
@@ -2292,6 +2298,15 @@ export class KanbanProvider implements vscode.Disposable {
         return { designDocLink, designDocContent };
     }
 
+    private async _resolveDesignSystemDoc(workspaceRoot: string): Promise<{ designSystemDocLink?: string; designSystemDocContent?: string }> {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        const designSystemDocEnabled = config.get<boolean>('planner.designSystemDocEnabled', false);
+        const designSystemDocLink = designSystemDocEnabled ? (config.get<string>('planner.designSystemDocLink', '') || '').trim() : undefined;
+        if (!designSystemDocLink) return {};
+        // Design system doc does NOT support Notion pre-fetching in this iteration
+        return { designSystemDocLink };
+    }
+
     public async generateUnifiedPrompt(
         role: string,
         plans: BatchPromptPlan[],
@@ -2311,6 +2326,10 @@ export class KanbanProvider implements vscode.Disposable {
                 const { designDocLink, designDocContent } = await this._resolveGlobalDesignDoc(workspaceRoot);
                 mergedAddons.designDocLink = designDocLink;
                 mergedAddons.designDocContent = designDocContent;
+            }
+            if (mergedAddons.designSystemDoc) {
+                const { designSystemDocLink } = await this._resolveDesignSystemDoc(workspaceRoot);
+                mergedAddons.designSystemDocLink = designSystemDocLink;
             }
             const promptTab = this._getRoleConfig(role)?.prompt?.trim() || '';
             const instructions = promptTab || agentConfig?.promptInstructions || '';
@@ -2353,6 +2372,8 @@ export class KanbanProvider implements vscode.Disposable {
             const { designDocLink, designDocContent } = await this._resolveGlobalDesignDoc(workspaceRoot);
             resolvedOptions.designDocLink = designDocLink;
             resolvedOptions.designDocContent = designDocContent;
+            const { designSystemDocLink } = await this._resolveDesignSystemDoc(workspaceRoot);
+            resolvedOptions.designSystemDocLink = designSystemDocLink;
         } else if (role === 'lead' || role === 'coder' || role === 'intern') {
             resolvedOptions.instruction = (role === 'coder' || role === 'intern') ? 'low-complexity' : undefined;
             resolvedOptions.pairProgrammingEnabled = (this._autobanState?.pairProgrammingMode ?? 'off') !== 'off';
@@ -2368,7 +2389,7 @@ export class KanbanProvider implements vscode.Disposable {
         } else if (role === 'tester') {
             const { designDocLink, designDocContent } = await this._resolveGlobalDesignDoc(workspaceRoot);
             if (!designDocLink) {
-                throw new Error('Acceptance Tester requires a Design Doc / PRD to be enabled and attached in Setup.');
+                throw new Error('Acceptance Tester requires a Planning Epic to be enabled and attached in Setup.');
             }
             resolvedOptions.designDocLink = designDocLink;
             resolvedOptions.designDocContent = designDocContent;
@@ -2456,6 +2477,8 @@ export class KanbanProvider implements vscode.Disposable {
             aggressivePairProgramming: plannerConfig?.addons?.aggressivePairProgramming ?? config.get<boolean>('aggressivePairProgramming.enabled', false),
             designDocEnabled: plannerConfig?.addons?.designDoc ?? config.get<boolean>('planner.designDocEnabled', false),
             designDocLink: config.get<string>('planner.designDocLink', ''),
+            designSystemDocEnabled: plannerConfig?.addons?.designSystemDoc ?? config.get<boolean>('planner.designSystemDocEnabled', false),
+            designSystemDocLink: config.get<string>('planner.designSystemDocLink', ''),
             plannerWorkflowPath: plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agent/workflows/improve-plan.md'),
             skipCompilationByRole: {
                 planner: plannerConfig?.addons?.skipCompilation ?? false,
@@ -5304,8 +5327,14 @@ This step is what moves the plan forward in the Switchboard pipeline.
             }
             case 'reviewPlan': {
                 const reviewSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
-                if (reviewSessionId) {
-                    await vscode.commands.executeCommand('switchboard.reviewPlanFromKanban', reviewSessionId, msg.workspaceRoot);
+                if (reviewSessionId && this._planningPanelProvider) {
+                    this._planningPanelProvider.reveal();
+                    this._planningPanelProvider.postMessageToWebview({
+                        type: 'activateKanbanTabAndSelectPlan',
+                        sessionId: reviewSessionId,
+                        planFile: msg.planFile || '',
+                        workspaceRoot: msg.workspaceRoot || ''
+                    });
                 }
                 break;
             }

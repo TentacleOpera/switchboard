@@ -2543,10 +2543,15 @@
                 
 
                 
-                <label class="checkbox-item" title="Append design doc/PRD as context for planning">
-                  <input type="checkbox" id="plannerAddonDesignDoc">
+                <label class="checkbox-item" title="Append planning epic as context for planning">
+                  <input type="checkbox" id="plannerAddonPlanningEpic">
+                  <span>Planning Epic Reference</span>
+                  <span class="tooltip">Include planning epic as context</span>
+                </label>
+                <label class="checkbox-item" title="Append design system doc as context for planning">
+                  <input type="checkbox" id="plannerAddonDesignSystemDoc">
                   <span>Design Doc Reference</span>
-                  <span class="tooltip">Include design doc as planning context</span>
+                  <span class="tooltip">Include design system doc as context</span>
                 </label>
                 
                 <label class="checkbox-item" title="Aggressive pair programming mode">
@@ -2872,7 +2877,8 @@
                 document.getElementById('plannerWorkflowFilePathGroup').style.display = plannerWorkflowEnabled ? 'block' : 'none';
                 document.getElementById('plannerAddonSwitchboardSafeguards').checked = config.addons?.switchboardSafeguards !== false;
 
-                document.getElementById('plannerAddonDesignDoc').checked = !!config.addons?.designDoc;
+                document.getElementById('plannerAddonPlanningEpic').checked = !!config.addons?.designDoc;
+                document.getElementById('plannerAddonDesignSystemDoc').checked = !!config.addons?.designSystemDoc;
                 document.getElementById('plannerAddonAggressivePairProgramming').checked = !!config.addons?.aggressivePairProgramming;
                 document.getElementById('plannerAddonGitProhibition').checked = !!config.addons?.gitProhibition;
                 document.getElementById('plannerAddonClearAntigravityContext').checked = !!config.addons?.clearAntigravityContext;
@@ -3600,12 +3606,16 @@
             }
 
             // Planner specific add-on listeners
-            ['plannerAddonSwitchboardSafeguards', 'plannerAddonDesignDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonClearAntigravityContext', 'plannerAddonCavemanOutput', 'plannerAddonSkipCompilation', 'plannerAddonSkipTests'].forEach(id => {
+            ['plannerAddonSwitchboardSafeguards', 'plannerAddonPlanningEpic', 'plannerAddonDesignSystemDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonClearAntigravityContext', 'plannerAddonCavemanOutput', 'plannerAddonSkipCompilation', 'plannerAddonSkipTests'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) {
                     el.addEventListener('change', (e) => {
+                        const addonIdMap = {
+                            'plannerAddonPlanningEpic': 'designDoc',
+                            'plannerAddonDesignSystemDoc': 'designSystemDoc'
+                        };
                         const addonId = id.replace('plannerAddon', '');
-                        const finalAddonId = addonId.charAt(0).toLowerCase() + addonId.slice(1);
+                        const finalAddonId = addonIdMap[id] || (addonId.charAt(0).toLowerCase() + addonId.slice(1));
                         if (!roleConfigs.planner) roleConfigs.planner = { workflowFilePath: '', addons: {} };
                         if (!roleConfigs.planner.addons) roleConfigs.planner.addons = {};
                         roleConfigs.planner.addons[finalAddonId] = e.target.checked;
