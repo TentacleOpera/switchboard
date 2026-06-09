@@ -2807,6 +2807,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
         // Route html-folder errors to the HTML preview area
         if (sourceId === 'html-folder') {
+            resetHtmlBanner();
             const initialState = document.getElementById('html-initial-state');
             const loadingState = document.getElementById('html-loading-state');
             const imageContainer = document.getElementById('image-preview-container');

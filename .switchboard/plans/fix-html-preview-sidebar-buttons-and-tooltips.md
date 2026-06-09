@@ -380,3 +380,7 @@ Add defensive null checks in the action click handler (lines 983-998):
 - [ ] Manual end-to-end verification
 
 **Recommendation:** Complexity 5 → Send to Coder.
+
+## Review Findings
+
+Implementation verified against plan. All checklist items present in code. One MAJOR issue found and fixed: `handlePreviewError` for `html-folder` did not call `resetHtmlBanner()`, leaving the banner in active state with enabled buttons while the preview showed an error — fixed by adding `resetHtmlBanner()` at `planning.js:2810`. One NIT deferred: `data-tooltip` attributes are set in JS but have no corresponding CSS to render custom tooltips; native `title` tooltips work as fallback. Pre-existing TS errors in `ClickUpSyncService.ts` and `KanbanProvider.ts` are unrelated. `_handleLinkToDocument` `cleanDocId` colon-splitting verified safe for current `${folderIndex}:${relativePath}` docId format.
