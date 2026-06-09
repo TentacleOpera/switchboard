@@ -1255,6 +1255,17 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         return { wrapper: container, childContainer };
     }
 
+    function resetHtmlBanner() {
+        const banner = document.getElementById('active-doc-banner-html');
+        const bannerName = document.getElementById('active-doc-name-html');
+        const openBtn = document.getElementById('btn-open-browser-html');
+        const copyBtn = document.getElementById('btn-copy-link-html');
+        if (banner) banner.classList.add('inactive');
+        if (bannerName) bannerName.textContent = 'None';
+        if (openBtn) { openBtn.disabled = true; openBtn.onclick = null; }
+        if (copyBtn) { copyBtn.disabled = true; copyBtn.onclick = null; }
+    }
+
     function loadDocumentPreview(sourceId, docId, docName) {
         if (sourceId === 'html-folder') {
             if (state.selectedEl) {
@@ -1327,17 +1338,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 sourceFolder
             });
             return;
-        }
-
-        function resetHtmlBanner() {
-            const banner = document.getElementById('active-doc-banner-html');
-            const bannerName = document.getElementById('active-doc-name-html');
-            const openBtn = document.getElementById('btn-open-browser-html');
-            const copyBtn = document.getElementById('btn-copy-link-html');
-            if (banner) banner.classList.add('inactive');
-            if (bannerName) bannerName.textContent = 'None';
-            if (openBtn) { openBtn.disabled = true; openBtn.onclick = null; }
-            if (copyBtn) { copyBtn.disabled = true; copyBtn.onclick = null; }
         }
 
         if (sourceId === 'design-folder') {
