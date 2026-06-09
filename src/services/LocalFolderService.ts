@@ -10,10 +10,20 @@ export interface LocalFolderConfig {
     lastFetchAt: string | null;
 }
 
+export interface LocalFolderPathsConfig {
+    localFolderPaths: string[];
+    htmlFolderPaths: string[];
+    designFolderPaths: string[];
+    _migratedLocal?: boolean;
+    _migratedHtml?: boolean;
+    _migratedDesign?: boolean;
+}
+
 export class LocalFolderService {
     private _workspaceRoot: string;
     private _configPath: string;
     private _cachePath: string;
+    private _folderPathsCache: LocalFolderPathsConfig | null = null;
 
     private static readonly _EXCLUDED_DIRS = new Set(['node_modules', '.git', '.switchboard']);
     private static readonly _MAX_DEPTH = 10;
@@ -35,13 +45,49 @@ export class LocalFolderService {
     async loadConfig(): Promise<LocalFolderConfig | null> {
         try {
             const content = await fs.promises.readFile(this._configPath, 'utf8');
-            return JSON.parse(content);
+            const parsed = JSON.parse(content);
+            // Strip folder-path and migration fields so they don't leak into LocalFolderConfig consumers
+            const { localFolderPaths, htmlFolderPaths, designFolderPaths, _migrated, _migratedLocal, _migratedHtml, _migratedDesign, ...rest } = parsed;
+            return rest;
         } catch { return null; }
     }
 
     async saveConfig(config: LocalFolderConfig): Promise<void> {
         await fs.promises.mkdir(path.dirname(this._configPath), { recursive: true });
-        await fs.promises.writeFile(this._configPath, JSON.stringify(config, null, 2));
+        let existing: any = {};
+        try {
+            existing = JSON.parse(await fs.promises.readFile(this._configPath, 'utf8'));
+        } catch { /* file may not exist yet */ }
+        const merged = { ...existing, ...config };
+        await fs.promises.writeFile(this._configPath, JSON.stringify(merged, null, 2));
+    }
+
+    async loadFolderPathsConfig(): Promise<LocalFolderPathsConfig> {
+        try {
+            const content = await fs.promises.readFile(this._configPath, 'utf8');
+            const parsed = JSON.parse(content);
+            return {
+                localFolderPaths: parsed.localFolderPaths || [],
+                htmlFolderPaths: parsed.htmlFolderPaths || [],
+                designFolderPaths: parsed.designFolderPaths || [],
+                _migratedLocal: parsed._migratedLocal || false,
+                _migratedHtml: parsed._migratedHtml || false,
+                _migratedDesign: parsed._migratedDesign || false
+            };
+        } catch {
+            return { localFolderPaths: [], htmlFolderPaths: [], designFolderPaths: [], _migratedLocal: false, _migratedHtml: false, _migratedDesign: false };
+        }
+    }
+
+    async saveFolderPathsConfig(config: LocalFolderPathsConfig): Promise<void> {
+        await fs.promises.mkdir(path.dirname(this._configPath), { recursive: true });
+        let existing: any = {};
+        try {
+            existing = JSON.parse(await fs.promises.readFile(this._configPath, 'utf8'));
+        } catch { /* file may not exist yet */ }
+        const merged = { ...existing, ...config };
+        await fs.promises.writeFile(this._configPath, JSON.stringify(merged, null, 2));
+        this._folderPathsCache = config;
     }
 
     async loadCachedContent(): Promise<string | null> {
@@ -53,10 +99,6 @@ export class LocalFolderService {
     async saveCachedContent(markdown: string): Promise<void> {
         await fs.promises.mkdir(path.dirname(this._cachePath), { recursive: true });
         await fs.promises.writeFile(this._cachePath, markdown, 'utf8');
-    }
-
-    private _getConfigurationTarget(): vscode.ConfigurationTarget {
-        return vscode.ConfigurationTarget.Global;
     }
 
     /** Read the legacy singular setting; returns the raw string or empty string. */
@@ -77,19 +119,46 @@ export class LocalFolderService {
     }
 
     getFolderPaths(): string[] {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const paths = config.get<string[]>('research.localFolderPaths', []);
-
-        // Legacy fallback: read singular setting if array is empty
-        if (paths.length === 0) {
-            const legacyPath = config.get<string>('research.localFolderPath', '');
-            if (legacyPath) {
-                paths.push(legacyPath);
+        let cfg = this._folderPathsCache;
+        if (!cfg) {
+            try {
+                const content = fs.readFileSync(this._configPath, 'utf8');
+                const parsed = JSON.parse(content);
+                cfg = {
+                    localFolderPaths: parsed.localFolderPaths || [],
+                    htmlFolderPaths: parsed.htmlFolderPaths || [],
+                    designFolderPaths: parsed.designFolderPaths || [],
+                    _migratedLocal: parsed._migratedLocal || false,
+                    _migratedHtml: parsed._migratedHtml || false,
+                    _migratedDesign: parsed._migratedDesign || false
+                };
+            } catch {
+                cfg = { localFolderPaths: [], htmlFolderPaths: [], designFolderPaths: [], _migratedLocal: false, _migratedHtml: false, _migratedDesign: false };
             }
+            this._folderPathsCache = cfg;
+        }
+
+        // One-time migration from global settings
+        if (!cfg._migratedLocal) {
+            const config = vscode.workspace.getConfiguration('switchboard');
+            const globalPaths = config.get<string[]>('research.localFolderPaths', []);
+            const legacyPath = config.get<string>('research.localFolderPath', '');
+            const merged = [...globalPaths];
+            if (legacyPath && !merged.includes(legacyPath)) {
+                merged.push(legacyPath);
+            }
+            cfg.localFolderPaths = merged;
+            cfg._migratedLocal = true;
+            this._folderPathsCache = cfg;
+            // Persist and clear global settings asynchronously
+            this.saveFolderPathsConfig(cfg).then(() => {
+                config.update('research.localFolderPaths', undefined, vscode.ConfigurationTarget.Global);
+                config.update('research.localFolderPath', undefined, vscode.ConfigurationTarget.Global);
+            }).catch(() => {});
         }
 
         const seen = new Set<string>();
-        return paths
+        return (cfg.localFolderPaths || [])
             .map(p => this.resolveFolderPath(p))
             .filter(p => p && !seen.has(p) && seen.add(p) as unknown as boolean);
     }
@@ -100,49 +169,24 @@ export class LocalFolderService {
     }
 
     async addFolderPath(folderPath: string): Promise<void> {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        let currentPaths = config.get<string[]>('research.localFolderPaths', []);
-
-        // Migrate legacy singular setting into the array before adding
-        if (currentPaths.length === 0) {
-            const legacyPath = this._getLegacyFolderPath();
-            if (legacyPath) {
-                currentPaths = [legacyPath];
-            }
-        }
+        const cfg = await this.loadFolderPathsConfig();
+        const currentPaths = cfg.localFolderPaths || [];
 
         const resolvedInput = this.resolveFolderPath(folderPath);
         const isDuplicate = currentPaths.some(p => this.resolveFolderPath(p) === resolvedInput);
         if (!isDuplicate) {
-            const newPaths = [...currentPaths, folderPath];
-            await config.update('research.localFolderPaths', newPaths, this._getConfigurationTarget());
+            cfg.localFolderPaths = [...currentPaths, folderPath];
+            await this.saveFolderPathsConfig(cfg);
         }
     }
 
     async removeFolderPath(folderPath: string): Promise<void> {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        let currentPaths = config.get<string[]>('research.localFolderPaths', []);
-
-        // Migrate legacy singular setting into the array before removing
-        if (currentPaths.length === 0) {
-            const legacyPath = this._getLegacyFolderPath();
-            if (legacyPath) {
-                currentPaths = [legacyPath];
-            }
-        }
+        const cfg = await this.loadFolderPathsConfig();
+        const currentPaths = cfg.localFolderPaths || [];
 
         const resolvedToRemove = this.resolveFolderPath(folderPath);
-        const newPaths = currentPaths.filter(p => this.resolveFolderPath(p) !== resolvedToRemove);
-        await config.update('research.localFolderPaths', newPaths, this._getConfigurationTarget());
-
-        // If the array is now empty, clear the legacy setting too so the
-        // fallback in getFolderPaths() doesn't re-add the removed folder.
-        if (newPaths.length === 0) {
-            const legacyPath = this._getLegacyFolderPath();
-            if (legacyPath) {
-                await config.update('research.localFolderPath', undefined, this._getConfigurationTarget());
-            }
-        }
+        cfg.localFolderPaths = currentPaths.filter(p => this.resolveFolderPath(p) !== resolvedToRemove);
+        await this.saveFolderPathsConfig(cfg);
     }
 
     // ── File Listing ────────────────────────────────────────────
@@ -275,10 +319,38 @@ export class LocalFolderService {
     }
 
     getHtmlFolderPaths(): string[] {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const paths = config.get<string[]>('research.htmlFolderPaths', []);
+        let cfg = this._folderPathsCache;
+        if (!cfg) {
+            try {
+                const content = fs.readFileSync(this._configPath, 'utf8');
+                const parsed = JSON.parse(content);
+                cfg = {
+                    localFolderPaths: parsed.localFolderPaths || [],
+                    htmlFolderPaths: parsed.htmlFolderPaths || [],
+                    designFolderPaths: parsed.designFolderPaths || [],
+                    _migratedLocal: parsed._migratedLocal || false,
+                    _migratedHtml: parsed._migratedHtml || false,
+                    _migratedDesign: parsed._migratedDesign || false
+                };
+            } catch {
+                cfg = { localFolderPaths: [], htmlFolderPaths: [], designFolderPaths: [], _migratedLocal: false, _migratedHtml: false, _migratedDesign: false };
+            }
+            this._folderPathsCache = cfg;
+        }
+
+        if (!cfg._migratedHtml) {
+            const config = vscode.workspace.getConfiguration('switchboard');
+            const globalPaths = config.get<string[]>('research.htmlFolderPaths', []);
+            cfg.htmlFolderPaths = globalPaths;
+            cfg._migratedHtml = true;
+            this._folderPathsCache = cfg;
+            this.saveFolderPathsConfig(cfg).then(() => {
+                config.update('research.htmlFolderPaths', undefined, vscode.ConfigurationTarget.Global);
+            }).catch(() => {});
+        }
+
         const seen = new Set<string>();
-        return paths
+        return (cfg.htmlFolderPaths || [])
             .map(p => this.resolveFolderPath(p))
             .filter(p => p && !seen.has(p) && seen.add(p) as unknown as boolean);
     }
@@ -289,24 +361,24 @@ export class LocalFolderService {
     }
 
     async addHtmlFolderPath(folderPath: string): Promise<void> {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const currentPaths = config.get<string[]>('research.htmlFolderPaths', []);
+        const cfg = await this.loadFolderPathsConfig();
+        const currentPaths = cfg.htmlFolderPaths || [];
         const resolvedInput = this.resolveFolderPath(folderPath);
-        
+
         const isDuplicate = currentPaths.some(p => this.resolveFolderPath(p) === resolvedInput);
         if (!isDuplicate) {
-            const newPaths = [...currentPaths, folderPath];
-            await config.update('research.htmlFolderPaths', newPaths, this._getConfigurationTarget());
+            cfg.htmlFolderPaths = [...currentPaths, folderPath];
+            await this.saveFolderPathsConfig(cfg);
         }
     }
 
     async removeHtmlFolderPath(folderPath: string): Promise<void> {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const currentPaths = config.get<string[]>('research.htmlFolderPaths', []);
+        const cfg = await this.loadFolderPathsConfig();
+        const currentPaths = cfg.htmlFolderPaths || [];
         const resolvedToRemove = this.resolveFolderPath(folderPath);
-        
-        const newPaths = currentPaths.filter(p => this.resolveFolderPath(p) !== resolvedToRemove);
-        await config.update('research.htmlFolderPaths', newPaths, this._getConfigurationTarget());
+
+        cfg.htmlFolderPaths = currentPaths.filter(p => this.resolveFolderPath(p) !== resolvedToRemove);
+        await this.saveFolderPathsConfig(cfg);
     }
 
     async listHtmlFiles(): Promise<Array<{
@@ -434,10 +506,38 @@ export class LocalFolderService {
     }
 
     getDesignFolderPaths(): string[] {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const paths = config.get<string[]>('research.designFolderPaths', []);
+        let cfg = this._folderPathsCache;
+        if (!cfg) {
+            try {
+                const content = fs.readFileSync(this._configPath, 'utf8');
+                const parsed = JSON.parse(content);
+                cfg = {
+                    localFolderPaths: parsed.localFolderPaths || [],
+                    htmlFolderPaths: parsed.htmlFolderPaths || [],
+                    designFolderPaths: parsed.designFolderPaths || [],
+                    _migratedLocal: parsed._migratedLocal || false,
+                    _migratedHtml: parsed._migratedHtml || false,
+                    _migratedDesign: parsed._migratedDesign || false
+                };
+            } catch {
+                cfg = { localFolderPaths: [], htmlFolderPaths: [], designFolderPaths: [], _migratedLocal: false, _migratedHtml: false, _migratedDesign: false };
+            }
+            this._folderPathsCache = cfg;
+        }
+
+        if (!cfg._migratedDesign) {
+            const config = vscode.workspace.getConfiguration('switchboard');
+            const globalPaths = config.get<string[]>('research.designFolderPaths', []);
+            cfg.designFolderPaths = globalPaths;
+            cfg._migratedDesign = true;
+            this._folderPathsCache = cfg;
+            this.saveFolderPathsConfig(cfg).then(() => {
+                config.update('research.designFolderPaths', undefined, vscode.ConfigurationTarget.Global);
+            }).catch(() => {});
+        }
+
         const seen = new Set<string>();
-        return paths
+        return (cfg.designFolderPaths || [])
             .map(p => this.resolveFolderPath(p))
             .filter(p => p && !seen.has(p) && seen.add(p) as unknown as boolean);
     }
@@ -448,24 +548,24 @@ export class LocalFolderService {
     }
 
     async addDesignFolderPath(folderPath: string): Promise<void> {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const currentPaths = config.get<string[]>('research.designFolderPaths', []);
+        const cfg = await this.loadFolderPathsConfig();
+        const currentPaths = cfg.designFolderPaths || [];
         const resolvedInput = this.resolveFolderPath(folderPath);
-        
+
         const isDuplicate = currentPaths.some(p => this.resolveFolderPath(p) === resolvedInput);
         if (!isDuplicate) {
-            const newPaths = [...currentPaths, folderPath];
-            await config.update('research.designFolderPaths', newPaths, this._getConfigurationTarget());
+            cfg.designFolderPaths = [...currentPaths, folderPath];
+            await this.saveFolderPathsConfig(cfg);
         }
     }
 
     async removeDesignFolderPath(folderPath: string): Promise<void> {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const currentPaths = config.get<string[]>('research.designFolderPaths', []);
+        const cfg = await this.loadFolderPathsConfig();
+        const currentPaths = cfg.designFolderPaths || [];
         const resolvedToRemove = this.resolveFolderPath(folderPath);
-        
-        const newPaths = currentPaths.filter(p => this.resolveFolderPath(p) !== resolvedToRemove);
-        await config.update('research.designFolderPaths', newPaths, this._getConfigurationTarget());
+
+        cfg.designFolderPaths = currentPaths.filter(p => this.resolveFolderPath(p) !== resolvedToRemove);
+        await this.saveFolderPathsConfig(cfg);
     }
 
     async listDesignFiles(): Promise<Array<{

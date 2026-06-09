@@ -1218,6 +1218,7 @@ export class PlanningPanelProvider {
                 break;
             }
             case 'addLocalFolder': {
+                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
                 const result = await vscode.window.showOpenDialog({
                     openLabel: 'Add Docs Folder',
                     canSelectFiles: false,
@@ -1225,27 +1226,32 @@ export class PlanningPanelProvider {
                     canSelectMany: false
                 });
                 if (result && result.length > 0) {
-                    const service = this._getLocalFolderService(workspaceRoot);
+                    const service = this._getLocalFolderService(root);
                     await service.addFolderPath(result[0].fsPath);
                     this._setupLocalFolderWatchers();
                     await this._sendLocalDocsReady();
+                    this._panel?.webview.postMessage({ type: 'localFoldersListed', paths: service.getFolderPaths(), workspaceRoot: root });
                 }
                 break;
             }
             case 'removeLocalFolder': {
-                const service = this._getLocalFolderService(workspaceRoot);
+                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
+                const service = this._getLocalFolderService(root);
                 await service.removeFolderPath(msg.folderPath);
                 this._setupLocalFolderWatchers();
                 await this._sendLocalDocsReady();
+                this._panel?.webview.postMessage({ type: 'localFoldersListed', paths: service.getFolderPaths(), workspaceRoot: root });
                 break;
             }
             case 'listLocalFolders': {
-                const service = this._getLocalFolderService(workspaceRoot);
+                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
+                const service = this._getLocalFolderService(root);
                 const paths = service.getFolderPaths();
-                this._panel?.webview.postMessage({ type: 'localFoldersListed', paths });
+                this._panel?.webview.postMessage({ type: 'localFoldersListed', paths, workspaceRoot: root });
                 break;
             }
             case 'addHtmlFolder': {
+                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
                 const result = await vscode.window.showOpenDialog({
                     openLabel: 'Add HTML Folder',
                     canSelectFiles: false,
@@ -1253,27 +1259,32 @@ export class PlanningPanelProvider {
                     canSelectMany: false
                 });
                 if (result && result.length > 0) {
-                    const service = this._getLocalFolderService(workspaceRoot);
+                    const service = this._getLocalFolderService(root);
                     await service.addHtmlFolderPath(result[0].fsPath);
                     this._setupHtmlFolderWatchers();
                     await this._sendHtmlDocsReady();
+                    this._panel?.webview.postMessage({ type: 'htmlFoldersListed', paths: service.getHtmlFolderPaths(), workspaceRoot: root });
                 }
                 break;
             }
             case 'removeHtmlFolder': {
-                const service = this._getLocalFolderService(workspaceRoot);
+                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
+                const service = this._getLocalFolderService(root);
                 await service.removeHtmlFolderPath(msg.folderPath);
                 this._setupHtmlFolderWatchers();
                 await this._sendHtmlDocsReady();
+                this._panel?.webview.postMessage({ type: 'htmlFoldersListed', paths: service.getHtmlFolderPaths(), workspaceRoot: root });
                 break;
             }
             case 'listHtmlFolders': {
-                const service = this._getLocalFolderService(workspaceRoot);
+                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
+                const service = this._getLocalFolderService(root);
                 const paths = service.getHtmlFolderPaths();
-                this._panel?.webview.postMessage({ type: 'htmlFoldersListed', paths });
+                this._panel?.webview.postMessage({ type: 'htmlFoldersListed', paths, workspaceRoot: root });
                 break;
             }
             case 'addDesignFolder': {
+                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
                 const result = await vscode.window.showOpenDialog({
                     openLabel: 'Add Design Folder',
                     canSelectFiles: false,
@@ -1281,24 +1292,28 @@ export class PlanningPanelProvider {
                     canSelectMany: false
                 });
                 if (result && result.length > 0) {
-                    const service = this._getLocalFolderService(workspaceRoot);
+                    const service = this._getLocalFolderService(root);
                     await service.addDesignFolderPath(result[0].fsPath);
                     this._setupDesignFolderWatchers();
                     await this._sendDesignDocsReady();
+                    this._panel?.webview.postMessage({ type: 'designFoldersListed', paths: service.getDesignFolderPaths(), workspaceRoot: root });
                 }
                 break;
             }
             case 'removeDesignFolder': {
-                const service = this._getLocalFolderService(workspaceRoot);
+                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
+                const service = this._getLocalFolderService(root);
                 await service.removeDesignFolderPath(msg.folderPath);
                 this._setupDesignFolderWatchers();
                 await this._sendDesignDocsReady();
+                this._panel?.webview.postMessage({ type: 'designFoldersListed', paths: service.getDesignFolderPaths(), workspaceRoot: root });
                 break;
             }
             case 'listDesignFolders': {
-                const service = this._getLocalFolderService(workspaceRoot);
+                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
+                const service = this._getLocalFolderService(root);
                 const paths = service.getDesignFolderPaths();
-                this._panel?.webview.postMessage({ type: 'designFoldersListed', paths });
+                this._panel?.webview.postMessage({ type: 'designFoldersListed', paths, workspaceRoot: root });
                 break;
             }
             case 'refreshSource': {
@@ -1841,6 +1856,23 @@ export class PlanningPanelProvider {
                     const db = KanbanDatabase.forWorkspace(wsRoot);
                     const epic = await db.getPlanBySessionId(epicSessionId);
                     if (!epic || !epic.isEpic) break;
+                    // Lock-column validation
+                    const lockColumnsRaw = await db.getConfig('epic_lock_columns');
+                    const lockColumns = (lockColumnsRaw || 'IN PROGRESS,CODE REVIEW,REVIEWED,DONE').split(',').map((c: string) => c.trim());
+                    if (lockColumns.includes(epic.kanbanColumn)) {
+                        this._panel?.webview.postMessage({ type: 'epicError', message: 'Cannot modify subtasks of an epic in a locked column.' });
+                        break;
+                    }
+                    const subtask = await db.getPlanBySessionId(subtaskSessionId);
+                    if (!subtask) break;
+                    if (subtask.isEpic) {
+                        this._panel?.webview.postMessage({ type: 'epicError', message: 'Cannot add an epic as a subtask.' });
+                        break;
+                    }
+                    if (subtask.epicId && subtask.epicId !== epic.planId) {
+                        this._panel?.webview.postMessage({ type: 'epicError', message: 'Subtask already belongs to another epic.' });
+                        break;
+                    }
                     await db.updateEpicStatus(subtaskSessionId, 0, epic.planId);
                     const allPlans = await this._getKanbanPlans(wsRoot);
                     this._panel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, requestId: Date.now() });
@@ -3042,15 +3074,7 @@ export class PlanningPanelProvider {
             const allFiles: Array<{ id: string; name: string; relativePath: string; isFolder?: boolean; parentId?: string; _root?: string; sourceFolder?: string; title?: string }> = [];
             const scannedPaths = new Set<string>();
             const activeRoot = this._getWorkspaceRoot();
-            let configuredFolderPaths: string[] = []; // Track configured folder paths for webview
-
-            // Compute configured folder paths using the first root (global settings)
-            // With global settings, all roots return the same paths, so use first root
-            const configRoot = allRoots.length > 0 ? allRoots[0] : activeRoot;
-            if (configRoot) {
-                const configService = this._getLocalFolderService(configRoot);
-                configuredFolderPaths = configService.getFolderPaths();
-            }
+            const configuredFolderPathsByRoot: Record<string, string[]> = {};
 
             const seenFilePaths = new Set<string>(); // Deduplicate files across roots
 
@@ -3058,6 +3082,7 @@ export class PlanningPanelProvider {
                 try {
                     const localFolderService = this._getLocalFolderService(root);
                     const folderPaths = localFolderService.getFolderPaths();
+                    configuredFolderPathsByRoot[root] = folderPaths;
 
                     // Skip this root entirely if all its folder paths have already been scanned
                     const allAlreadyScanned = folderPaths.length > 0 && folderPaths.every(p => p && scannedPaths.has(p));
@@ -3117,7 +3142,7 @@ export class PlanningPanelProvider {
             // list of docs. Re-posting an identical list re-renders the tree, flashes
             // "loading local docs", and steals the active tab. Skip when nothing changed.
             const signature = JSON.stringify({
-                folderPaths: configuredFolderPaths,
+                folderPathsByRoot: configuredFolderPathsByRoot,
                 nodes: mappedNodes,
                 antigravitySessions,
                 antigravityEnabled: agEnabled,
@@ -3132,7 +3157,7 @@ export class PlanningPanelProvider {
             this._panel.webview.postMessage({
                 type: 'localDocsReady',
                 sourceId: 'local-folder',
-                folderPaths: configuredFolderPaths,
+                folderPathsByRoot: configuredFolderPathsByRoot,
                 nodes: mappedNodes,
                 workspaceItems,
                 antigravitySessions,
@@ -3144,7 +3169,7 @@ export class PlanningPanelProvider {
             this._panel?.webview.postMessage({
                 type: 'localDocsReady',
                 sourceId: 'local-folder',
-                folderPaths: [],
+                folderPathsByRoot: {},
                 nodes: [],
                 workspaceItems: this._buildKanbanWorkspaceItems(),
                 error: String(err)
@@ -3163,14 +3188,7 @@ export class PlanningPanelProvider {
                 const allFiles: Array<{ id: string; name: string; relativePath: string; isFolder?: boolean; parentId?: string; _root?: string; sourceFolder?: string; title?: string }> = [];
                 const scannedPaths = new Set<string>();
                 const activeRoot = this._getWorkspaceRoot();
-                let configuredFolderPaths: string[] = [];
-
-                // Compute configured HTML folder paths using the first root (global settings)
-                const configRoot = allRoots.length > 0 ? allRoots[0] : activeRoot;
-                if (configRoot) {
-                    const configService = this._getLocalFolderService(configRoot);
-                    configuredFolderPaths = configService.getHtmlFolderPaths();
-                }
+                const configuredFolderPathsByRoot: Record<string, string[]> = {};
 
                 const seenFilePaths = new Set<string>();
 
@@ -3178,6 +3196,7 @@ export class PlanningPanelProvider {
                     try {
                         const localFolderService = this._getLocalFolderService(root);
                         const folderPaths = localFolderService.getHtmlFolderPaths();
+                        configuredFolderPathsByRoot[root] = folderPaths;
 
                         const allAlreadyScanned = folderPaths.length > 0 && folderPaths.every(p => p && scannedPaths.has(p));
 
@@ -3219,7 +3238,7 @@ export class PlanningPanelProvider {
                 this._panel.webview.postMessage({
                     type: 'htmlDocsReady',
                     sourceId: 'html-folder',
-                    folderPaths: configuredFolderPaths,
+                    folderPathsByRoot: configuredFolderPathsByRoot,
                     nodes: this._mapLocalFilesToTreeNodes(allFiles),
                     workspaceItems
                 });
@@ -3228,7 +3247,7 @@ export class PlanningPanelProvider {
                 this._panel?.webview.postMessage({
                     type: 'htmlDocsReady',
                     sourceId: 'html-folder',
-                    folderPaths: [],
+                    folderPathsByRoot: {},
                     nodes: [],
                     workspaceItems: this._buildKanbanWorkspaceItems(),
                     error: String(err)
@@ -3248,14 +3267,7 @@ export class PlanningPanelProvider {
                 const allFiles: Array<{ id: string; name: string; relativePath: string; isFolder?: boolean; parentId?: string; _root?: string; sourceFolder?: string; title?: string }> = [];
                 const scannedPaths = new Set<string>();
                 const activeRoot = this._getWorkspaceRoot();
-                let configuredFolderPaths: string[] = [];
-
-                // Compute configured design folder paths using the first root (global settings)
-                const configRoot = allRoots.length > 0 ? allRoots[0] : activeRoot;
-                if (configRoot) {
-                    const configService = this._getLocalFolderService(configRoot);
-                    configuredFolderPaths = configService.getDesignFolderPaths();
-                }
+                const configuredFolderPathsByRoot: Record<string, string[]> = {};
 
                 const seenFilePaths = new Set<string>();
 
@@ -3263,6 +3275,7 @@ export class PlanningPanelProvider {
                     try {
                         const localFolderService = this._getLocalFolderService(root);
                         const folderPaths = localFolderService.getDesignFolderPaths();
+                        configuredFolderPathsByRoot[root] = folderPaths;
 
                         const allAlreadyScanned = folderPaths.length > 0 && folderPaths.every(p => p && scannedPaths.has(p));
 
@@ -3301,7 +3314,7 @@ export class PlanningPanelProvider {
                 this._panel.webview.postMessage({
                     type: 'designDocsReady',
                     sourceId: 'design-folder',
-                    folderPaths: configuredFolderPaths,
+                    folderPathsByRoot: configuredFolderPathsByRoot,
                     nodes: this._mapLocalFilesToTreeNodes(allFiles),
                     workspaceItems
                 });
@@ -3310,7 +3323,7 @@ export class PlanningPanelProvider {
                 this._panel?.webview.postMessage({
                     type: 'designDocsReady',
                     sourceId: 'design-folder',
-                    folderPaths: [],
+                    folderPathsByRoot: {},
                     nodes: [],
                     workspaceItems: this._buildKanbanWorkspaceItems(),
                     error: String(err)

@@ -156,6 +156,8 @@ export interface PromptBuilderOptions {
     subtaskCount?: number;
     /** Max subtasks before truncation warning (default 20). */
     epicMaxSubtasks?: number;
+    /** User-configured epic prompt template, injected after the epic directive. */
+    epicPromptTemplate?: string;
 }
 
 export function resolveBaseInstructions(
@@ -211,7 +213,15 @@ export function buildPromptDispatchContext(plans: BatchPromptPlan[]): PromptDisp
         ...plan,
         workingDir: (plan.workingDir || '').trim()
     }));
-    const planList = normalizedPlans.map(plan => `- [${plan.topic}] Plan File: ${plan.absolutePath}`).join('\n');
+    const planList = normalizedPlans.map(plan => {
+        if (plan.isSubtask && plan.epicTopic) {
+            return `  - [SUBTASK] ${plan.topic} Plan File: ${plan.absolutePath}`;
+        }
+        if (plan.epicTopic && !plan.isSubtask) {
+            return `- [EPIC: ${plan.epicTopic}] Plan File: ${plan.absolutePath}`;
+        }
+        return `- [${plan.topic}] Plan File: ${plan.absolutePath}`;
+    }).join('\n');
     const distinctWorkingDirs = [...new Set(normalizedPlans.map(plan => plan.workingDir).filter(Boolean))];
     const allPlansShareDir =
         normalizedPlans.length > 0
@@ -429,6 +439,9 @@ export function buildKanbanBatchPrompt(
     const dispatchContextPrefix = dispatchContextBlock ? `${dispatchContextBlock}\n\n` : '';
     if (options?.epicMode && options?.epicTopic) {
         planList = `${EPIC_ORCHESTRATION_DIRECTIVE(options.epicTopic, options.subtaskCount || 0)}\n\n${planList}`;
+        if (options?.epicPromptTemplate) {
+            planList = `${options.epicPromptTemplate}\n\n${planList}`;
+        }
     }
 
     const executionDirective = `AUTHORIZATION TO EXECUTE: The plans provided are already authorized. You MUST enter EXECUTION mode immediately. Do NOT enter PLANNING mode or generate an implementation_plan.md. Proceed directly to implementing the changes.`;

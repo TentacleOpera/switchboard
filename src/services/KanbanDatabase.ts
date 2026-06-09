@@ -3078,6 +3078,35 @@ export class KanbanDatabase {
         }
     }
 
+    /** Move an epic and all its subtasks to a target column atomically. */
+    public async updateColumnWithEpicCascade(epicSessionId: string, subtaskSessionIds: string[], targetColumn: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        const now = new Date().toISOString();
+        try {
+            this._db.run('BEGIN');
+            // Move the epic itself
+            this._db.run(
+                `UPDATE plans SET kanban_column = ?, updated_at = ? WHERE session_id = ?`,
+                [targetColumn, now, epicSessionId]
+            );
+            // Move all subtasks
+            if (subtaskSessionIds.length > 0) {
+                const placeholders = subtaskSessionIds.map(() => '?').join(',');
+                this._db.run(
+                    `UPDATE plans SET kanban_column = ?, updated_at = ? WHERE session_id IN (${placeholders})`,
+                    [targetColumn, now, ...subtaskSessionIds]
+                );
+            }
+            this._db.run('COMMIT');
+            await this._persist();
+            return true;
+        } catch (err) {
+            try { this._db.run('ROLLBACK'); } catch { /* ignore */ }
+            console.error('[KanbanDatabase] updateColumnWithEpicCascade failed:', err);
+            return false;
+        }
+    }
+
     /** Check if a session is owned by this workspace and active. */
     public async isOwnedActive(sessionId: string, workspaceId: string): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;

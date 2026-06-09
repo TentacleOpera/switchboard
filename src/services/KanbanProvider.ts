@@ -2493,6 +2493,12 @@ export class KanbanProvider implements vscode.Disposable {
             resolvedOptions.epicMode = true;
             resolvedOptions.epicTopic = epicPlan?.topic || '';
             resolvedOptions.subtaskCount = subtaskCount;
+            // Read user-configured epic prompt template from DB config
+            const db = this._getKanbanDb(workspaceRoot);
+            if (db && await db.ensureReady()) {
+                const template = await db.getConfig('epic_prompt_template');
+                if (template) resolvedOptions.epicPromptTemplate = template;
+            }
         }
 
         const mergedOptions = {
@@ -3841,17 +3847,18 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
             await this._autoCommitIfCodeReviewTransition(workspaceRoot, sessionId, targetColumn);
 
-            const moved = await db.updateColumn(sessionId, targetColumn);
+            const plan = await db.getPlanBySessionId(sessionId);
+            let moved: boolean;
+            if (plan && plan.isEpic) {
+                // Atomic: move epic + all subtasks in one transaction
+                const subtasks = await db.getSubtasksByEpicId(plan.planId);
+                const subtaskSessionIds = subtasks.map(st => st.sessionId).filter(Boolean);
+                moved = await db.updateColumnWithEpicCascade(sessionId, subtaskSessionIds, targetColumn);
+            } else {
+                moved = await db.updateColumn(sessionId, targetColumn);
+            }
             if (moved) {
                 await this.queueIntegrationSyncForSession(workspaceRoot, sessionId, targetColumn);
-                const plan = await db.getPlanBySessionId(sessionId);
-                if (plan && plan.isEpic) {
-                    const subtasks = await db.getSubtasksByEpicId(plan.planId);
-                    const subtaskSessionIds = subtasks.map(st => st.sessionId).filter(Boolean);
-                    if (subtaskSessionIds.length > 0) {
-                        await db.updateColumnTransaction(subtaskSessionIds, targetColumn);
-                    }
-                }
             }
             return moved;
         } catch (err) {
@@ -4659,8 +4666,42 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     break;
                 }
                 
-                // Archive each plan
+                // Epic guard: check if any selected plan is an epic with subtasks
                 let archived = 0;
+                const epicPlans = plansToArchive.filter(p => p.isEpic);
+                if (epicPlans.length > 0) {
+                    let totalSubtasks = 0;
+                    for (const ep of epicPlans) {
+                        const subs = await db.getSubtasksByEpicId(ep.planId);
+                        totalSubtasks += subs.length;
+                    }
+                    if (totalSubtasks > 0) {
+                        const choice = await vscode.window.showWarningMessage(
+                            `${epicPlans.length} epic(s) with ${totalSubtasks} subtask(s) selected. Archive subtasks too?`,
+                            { modal: true },
+                            'Archive all (epics + subtasks)',
+                            'Orphan subtasks',
+                            'Cancel'
+                        );
+                        if (!choice || choice === 'Cancel') break;
+                        if (choice === 'Archive all (epics + subtasks)') {
+                            for (const ep of epicPlans) {
+                                const subs = await db.getSubtasksByEpicId(ep.planId);
+                                for (const st of subs) {
+                                    const success = await archiveMgr.archivePlan(st);
+                                    if (success) archived++;
+                                }
+                            }
+                        } else {
+                            // Orphan: clear epic_id on subtasks
+                            for (const ep of epicPlans) {
+                                await db.clearEpicIdForEpic(ep.planId);
+                            }
+                        }
+                    }
+                }
+                
+                // Archive each plan
                 for (const plan of plansToArchive) {
                     const success = await archiveMgr.archivePlan(plan);
                     if (success) archived++;

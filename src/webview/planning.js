@@ -21,9 +21,9 @@
         selectedEl: null,
         filterRequestIds: {},
         researchMode: persistedState.researchMode || 'web',
-        localFolderPaths: [],
-        htmlFolderPaths: [],
-        designFolderPaths: persistedState.designFolderPaths || [],
+        localFolderPathsByRoot: persistedState.localFolderPathsByRoot || {},
+        htmlFolderPathsByRoot: persistedState.htmlFolderPathsByRoot || {},
+        designFolderPathsByRoot: persistedState.designFolderPathsByRoot || (persistedState.designFolderPaths ? { [currentWorkspaceRoot || '']: persistedState.designFolderPaths } : {}),
         htmlPreviewCollapsed: persistedState.htmlPreviewCollapsed || false,
         designPreviewCollapsed: persistedState.designPreviewCollapsed || false,
         ticketsPreviewCollapsed: persistedState.ticketsPreviewCollapsed || false,
@@ -306,14 +306,14 @@
     document.getElementById('design-workspace-filter')?.addEventListener('change', (e) => {
         state.designWorkspaceRootFilter = e.target.value;
         const msg = state._lastDesignDocsMsg || {};
-        state.designFolderPaths = msg.folderPaths || [];
+        state.designFolderPathsByRoot = msg.folderPathsByRoot || {};
         const filteredNodes = state.designWorkspaceRootFilter
             ? (msg.nodes || []).filter(n => n.metadata?.root === state.designWorkspaceRootFilter)
             : (msg.nodes || []);
         renderDesignDocs({
             sourceId: msg.sourceId || 'design-folder',
             nodes: filteredNodes,
-            folderPaths: msg.folderPaths || []
+            folderPaths: getCurrentFolderPaths(state.designFolderPathsByRoot, state.designWorkspaceRootFilter)
         });
     });
 
@@ -1516,7 +1516,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             removeBtn.textContent = 'Remove';
             removeBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                vscode.postMessage({ type: 'removeLocalFolder', folderPath: path });
+                vscode.postMessage({ type: 'removeLocalFolder', folderPath: path, workspaceRoot: state.localWorkspaceRootFilter || currentWorkspaceRoot });
             });
 
             row.appendChild(pathSpan);
@@ -1525,12 +1525,22 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         });
     }
 
+    function getCurrentFolderPaths(map, filter) {
+        if (filter && map[filter]) {
+            return map[filter];
+        }
+        if (filter) {
+            return [];
+        }
+        return Object.values(map || {}).flat();
+    }
+
     function renderFolderListModal() {
         const folderListModal = document.getElementById('folder-list-modal');
         if (!folderListModal) return;
         folderListModal.innerHTML = '';
 
-        const folderPaths = state.localFolderPaths || [];
+        const folderPaths = getCurrentFolderPaths(state.localFolderPathsByRoot, state.localWorkspaceRootFilter);
 
         if (folderPaths.length === 0) {
             const empty = document.createElement('div');
@@ -1554,7 +1564,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             removeBtn.textContent = 'Remove';
             removeBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                vscode.postMessage({ type: 'removeLocalFolder', folderPath: path });
+                vscode.postMessage({ type: 'removeLocalFolder', folderPath: path, workspaceRoot: state.localWorkspaceRootFilter || currentWorkspaceRoot });
             });
 
             row.appendChild(pathSpan);
@@ -1566,7 +1576,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     function handleHtmlDocsReady(msg) {
         console.log('[PlanningPanel Webview] handleHtmlDocsReady called:', msg);
         state._lastHtmlDocsMsg = msg;
-        state.htmlFolderPaths = msg.folderPaths || [];
+        state.htmlFolderPathsByRoot = msg.folderPathsByRoot || {};
         populateWorkspaceDropdown('html-workspace-filter', msg.workspaceItems || [], state.htmlWorkspaceRootFilter);
         const filteredNodes = state.htmlWorkspaceRootFilter
             ? (msg.nodes || []).filter(n => n.metadata?.root === state.htmlWorkspaceRootFilter)
@@ -1574,7 +1584,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         renderHtmlDocs({
             sourceId: msg.sourceId || 'html-folder',
             nodes: filteredNodes,
-            folderPaths: msg.folderPaths || [],
+            folderPaths: getCurrentFolderPaths(state.htmlFolderPathsByRoot, state.htmlWorkspaceRootFilter),
             error: msg.error
         });
         renderHtmlFolderListModal();
@@ -1585,7 +1595,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         if (!folderListModal) return;
         folderListModal.innerHTML = '';
 
-        const folderPaths = state.htmlFolderPaths || [];
+        const folderPaths = getCurrentFolderPaths(state.htmlFolderPathsByRoot, state.htmlWorkspaceRootFilter);
 
         if (folderPaths.length === 0) {
             const empty = document.createElement('div');
@@ -1609,7 +1619,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             removeBtn.textContent = 'Remove';
             removeBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                vscode.postMessage({ type: 'removeHtmlFolder', folderPath: path });
+                vscode.postMessage({ type: 'removeHtmlFolder', folderPath: path, workspaceRoot: state.htmlWorkspaceRootFilter || currentWorkspaceRoot });
             });
 
             row.appendChild(pathSpan);
@@ -1672,7 +1682,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             if (modal) {
                 modal.style.display = 'flex';
                 renderHtmlFolderListModal();
-                vscode.postMessage({ type: 'listHtmlFolders' });
+                vscode.postMessage({ type: 'listHtmlFolders', workspaceRoot: state.htmlWorkspaceRootFilter || currentWorkspaceRoot });
             }
         });
 
@@ -1818,7 +1828,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         if (!folderListModal) return;
         folderListModal.innerHTML = '';
 
-        const folderPaths = state.designFolderPaths || [];
+        const folderPaths = getCurrentFolderPaths(state.designFolderPathsByRoot, state.designWorkspaceRootFilter);
 
         if (folderPaths.length === 0) {
             const empty = document.createElement('div');
@@ -1842,7 +1852,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             removeBtn.textContent = 'Remove';
             removeBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                vscode.postMessage({ type: 'removeDesignFolder', folderPath: path });
+                vscode.postMessage({ type: 'removeDesignFolder', folderPath: path, workspaceRoot: state.designWorkspaceRootFilter || currentWorkspaceRoot });
             });
 
             row.appendChild(pathSpan);
@@ -2355,7 +2365,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     function handleLocalDocsReady(msg) {
         console.log('[PlanningPanel Webview] handleLocalDocsReady called:', msg);
         state._lastLocalDocsMsg = msg;
-        state.localFolderPaths = msg.folderPaths || [];
+        state.localFolderPathsByRoot = msg.folderPathsByRoot || {};
         populateWorkspaceDropdown('local-workspace-filter', msg.workspaceItems || [], state.localWorkspaceRootFilter);
         const filteredNodes = state.localWorkspaceRootFilter
             ? (msg.nodes || []).filter(n => n.metadata?.root === state.localWorkspaceRootFilter)
@@ -2363,7 +2373,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         renderLocalDocs({
             sourceId: msg.sourceId || 'local-folder',
             nodes: filteredNodes,
-            folderPaths: msg.folderPaths || [],
+            folderPaths: getCurrentFolderPaths(state.localFolderPathsByRoot, state.localWorkspaceRootFilter),
             error: msg.error
         });
 
@@ -3083,20 +3093,22 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
     function handleLocalFolderPathUpdated(msg) {
         const { folderPath, folderPaths, nodes } = msg;
+        const targetRoot = msg.workspaceRoot || currentWorkspaceRoot || '';
         if (folderPaths) {
-            state.localFolderPaths = folderPaths;
+            state.localFolderPathsByRoot[targetRoot] = folderPaths;
         } else if (folderPath) {
-            state.localFolderPaths = [folderPath];
+            state.localFolderPathsByRoot[targetRoot] = [folderPath];
         }
-        renderFolderList(state.localFolderPaths);
+        const currentPaths = getCurrentFolderPaths(state.localFolderPathsByRoot, state.localWorkspaceRootFilter);
+        renderFolderList(currentPaths);
         renderFolderListModal();
-        populateResearchFolderSelect(state.localFolderPaths);
+        populateResearchFolderSelect(currentPaths);
 
         // Delegate to renderLocalDocs to ensure consistent source-folder grouping
         renderLocalDocs({
             sourceId: 'local-folder',
             nodes: nodes || [],
-            folderPaths: state.localFolderPaths
+            folderPaths: currentPaths
         });
     }
 
@@ -3596,7 +3608,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 break;
             case 'designDocsReady':
                 state._lastDesignDocsMsg = msg;
-                state.designFolderPaths = msg.folderPaths || [];
+                state.designFolderPathsByRoot = msg.folderPathsByRoot || {};
                 populateWorkspaceDropdown('design-workspace-filter', msg.workspaceItems || [], state.designWorkspaceRootFilter);
                 const filteredNodes = state.designWorkspaceRootFilter
                     ? (msg.nodes || []).filter(n => n.metadata?.root === state.designWorkspaceRootFilter)
@@ -3604,7 +3616,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 renderDesignDocs({
                     sourceId: msg.sourceId || 'design-folder',
                     nodes: filteredNodes,
-                    folderPaths: msg.folderPaths || []
+                    folderPaths: getCurrentFolderPaths(state.designFolderPathsByRoot, state.designWorkspaceRootFilter)
                 });
                 break;
             case 'onlineDocsReady':
@@ -3734,17 +3746,17 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 handleLocalFolderPathUpdated(msg);
                 break;
             case 'localFoldersListed':
-                state.localFolderPaths = msg.paths || [];
-                renderFolderList(state.localFolderPaths);
+                state.localFolderPathsByRoot[msg.workspaceRoot || currentWorkspaceRoot || ''] = msg.paths || [];
+                renderFolderList(msg.paths || []);
                 renderFolderListModal();
                 populateResearchFolderSelect(msg.paths || []);
                 break;
             case 'htmlFoldersListed':
-                state.htmlFolderPaths = msg.paths || [];
+                state.htmlFolderPathsByRoot[msg.workspaceRoot || currentWorkspaceRoot || ''] = msg.paths || [];
                 renderHtmlFolderListModal();
                 break;
             case 'designFoldersListed':
-                state.designFolderPaths = msg.paths || [];
+                state.designFolderPathsByRoot[msg.workspaceRoot || currentWorkspaceRoot || ''] = msg.paths || [];
                 renderDesignFolderListModal();
                 break;
             case 'airlock_exportComplete':
@@ -5628,7 +5640,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
     });
 
     document.getElementById('btn-add-folder-modal').addEventListener('click', () => {
-        vscode.postMessage({ type: 'addLocalFolder' });
+        vscode.postMessage({ type: 'addLocalFolder', workspaceRoot: state.localWorkspaceRootFilter || currentWorkspaceRoot });
     });
 
     // HTML Folder modal close (X button)
@@ -5661,7 +5673,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
     const btnAddHtmlFolderModal = document.getElementById('btn-add-html-folder-modal');
     if (btnAddHtmlFolderModal) {
         btnAddHtmlFolderModal.addEventListener('click', () => {
-            vscode.postMessage({ type: 'addHtmlFolder' });
+            vscode.postMessage({ type: 'addHtmlFolder', workspaceRoot: state.htmlWorkspaceRootFilter || currentWorkspaceRoot });
         });
     }
 
@@ -6719,7 +6731,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
     const btnAddDesignFolderModal = document.getElementById('btn-add-design-folder-modal');
     if (btnAddDesignFolderModal) {
         btnAddDesignFolderModal.addEventListener('click', () => {
-            vscode.postMessage({ type: 'addDesignFolder' });
+            vscode.postMessage({ type: 'addDesignFolder', workspaceRoot: state.designWorkspaceRootFilter || currentWorkspaceRoot });
         });
     }
 
@@ -6731,7 +6743,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             if (modal) {
                 modal.style.display = 'flex';
                 renderDesignFolderListModal();
-                vscode.postMessage({ type: 'listDesignFolders' });
+                vscode.postMessage({ type: 'listDesignFolders', workspaceRoot: state.designWorkspaceRootFilter || currentWorkspaceRoot });
             }
         });
     }
@@ -6743,8 +6755,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
     vscode.postMessage({ type: 'fetchRoots' });
     vscode.postMessage({ type: 'refreshSource', sourceId: 'local-folder' });
-    vscode.postMessage({ type: 'listHtmlFolders' });
+    vscode.postMessage({ type: 'listHtmlFolders', workspaceRoot: currentWorkspaceRoot });
     vscode.postMessage({ type: 'refreshSource', sourceId: 'html-folder' });
-    vscode.postMessage({ type: 'listDesignFolders' });
+    vscode.postMessage({ type: 'listDesignFolders', workspaceRoot: currentWorkspaceRoot });
     vscode.postMessage({ type: 'refreshSource', sourceId: 'design-folder' });
 })();
