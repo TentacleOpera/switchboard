@@ -6419,38 +6419,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return this._getAgentNameForRole(role, workspaceRoot);
     }
 
-    /** Handle analyst dispatch from Planning Panel research tab */
-    public async handleSendToAnalystFromPlanningPanel(prompt: string): Promise<boolean> {
-        const workspaceRoot = this._resolveWorkspaceRoot();
-        if (!workspaceRoot) {
-            vscode.window.showErrorMessage('No workspace root found.');
-            return false;
-        }
-
-        const targetAgent = await this._getAgentNameForRole('analyst', workspaceRoot);
-        if (!targetAgent) {
-            vscode.window.showErrorMessage("No agent assigned to role 'analyst'. Please assign a terminal first.");
-            return false;
-        }
-
-        // F-04 SECURITY: Validate agent name
-        if (!this._isValidAgentName(targetAgent)) {
-            vscode.window.showErrorMessage(`Invalid analyst agent name: ${targetAgent}`);
-            return false;
-        }
-
-        // Focus terminal for immediate feedback
-        await this._focusTerminalByName(targetAgent);
-
-        // Dispatch using existing pipeline
-        await this._dispatchExecuteMessage(workspaceRoot, targetAgent, prompt, {
-            source: 'planning-panel',
-            type: 'analyst-research'
-        });
-
-        return true;
-    }
-
     /** Column-to-role mapping for Autoban dispatches.
      *  Delegates unconditionally to columnToPromptRole to avoid a dual source-of-truth.
      *  columnToPromptRole handles all built-in columns and custom_agent_* columns;

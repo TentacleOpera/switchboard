@@ -1120,32 +1120,6 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(dispatchToCoderTerminalDisposable);
 
-    const sendToAnalystFromPlanningPanelDisposable = vscode.commands.registerCommand(
-        'switchboard.sendToAnalystFromPlanningPanel',
-        async (prompt: string): Promise<{ success: boolean; error?: string }> => {
-            try {
-                const result = await taskViewerProvider.handleSendToAnalystFromPlanningPanel(prompt);
-                return { success: result };
-            } catch (err) {
-                return { success: false, error: String(err) };
-            }
-        }
-    );
-    context.subscriptions.push(sendToAnalystFromPlanningPanelDisposable);
-
-    const checkAnalystAvailabilityDisposable = vscode.commands.registerCommand(
-        'switchboard.checkAnalystAvailability',
-        async (): Promise<{ available: boolean }> => {
-            const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
-            if (!workspaceRoot) {
-                return { available: false };
-            }
-            const analystAgent = await taskViewerProvider.getAgentNameForRole('analyst', workspaceRoot);
-            return { available: !!analystAgent };
-        }
-    );
-    context.subscriptions.push(checkAnalystAvailabilityDisposable);
-
     const setClickUpTokenDisposable = vscode.commands.registerCommand('switchboard.setClickUpToken', async () => {
         const token = await vscode.window.showInputBox({
             prompt: 'Enter your ClickUp API token (starts with pk_)',

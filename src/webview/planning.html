@@ -2849,6 +2849,136 @@
             background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
             border-color: var(--accent-teal);
         }
+
+        /* Complexity dot — coloured circle indicator */
+        .complexity-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            flex-shrink: 0;
+            vertical-align: middle;
+        }
+        .complexity-dot.unknown { background: #7f848e; }
+        .complexity-dot.very-low { background: var(--accent-teal); }
+        .complexity-dot.low { background: #98c379; }
+        .complexity-dot.medium { background: var(--accent-orange); }
+        .complexity-dot.high { background: #da3633; }
+        .complexity-dot.very-high { background: #ff00ff; }
+
+        /* Kanban preview meta bar */
+        #kanban-preview-meta-bar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 6px 10px;
+            border-bottom: 1px solid var(--border-color, #333);
+            background: var(--panel-bg2, #1a1a2e);
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-secondary);
+            flex-wrap: wrap;
+        }
+        .kanban-meta-group {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .kanban-meta-label {
+            color: var(--text-secondary);
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .kanban-meta-value {
+            color: var(--accent-teal);
+            cursor: pointer;
+            padding: 1px 4px;
+            border-radius: 2px;
+            border: 1px solid transparent;
+        }
+        .kanban-meta-value:hover {
+            border-color: var(--accent-teal-dim);
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+        .kanban-meta-dropdown {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            background: var(--panel-bg, #0d1117);
+            color: var(--accent-teal);
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 2px;
+            padding: 2px 4px;
+            outline: none;
+        }
+        .kanban-meta-dropdown:focus {
+            border-color: var(--accent-teal);
+        }
+
+        /* Kanban plan log modal overlay */
+        .kanban-log-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+        }
+        .kanban-log-modal {
+            background: var(--panel-bg, #0d1117);
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 6px;
+            padding: 16px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 70vh;
+            display: flex;
+            flex-direction: column;
+            font-family: var(--font-mono);
+            font-size: 11px;
+        }
+        .kanban-log-modal h3 {
+            margin: 0 0 12px 0;
+            color: var(--accent-teal);
+            font-size: 13px;
+        }
+        .kanban-log-entries {
+            overflow-y: auto;
+            flex: 1;
+        }
+        .kanban-log-entry {
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border-color, #222);
+            line-height: 1.4;
+        }
+        .kanban-log-entry:last-child { border-bottom: none; }
+        .kanban-log-timestamp {
+            color: var(--text-secondary);
+            font-size: 10px;
+        }
+        .kanban-log-workflow {
+            color: var(--accent-teal);
+        }
+        .kanban-log-details {
+            color: var(--text-primary, #ccc);
+        }
+        .kanban-log-close {
+            margin-top: 12px;
+            align-self: flex-end;
+            padding: 4px 12px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            background: transparent;
+            border: 1px solid var(--accent-teal-dim);
+            color: var(--accent-teal);
+            border-radius: 2px;
+            cursor: pointer;
+        }
+        .kanban-log-close:hover {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border-color: var(--accent-teal);
+        }
     </style>
 </head>
 <body class="cyber-theme-enabled">
@@ -2984,7 +3114,7 @@
             <!-- Step 1: Draft Research Prompt -->
             <div class="planning-card">
                 <div class="planning-card-header">STEP 1: DRAFT RESEARCH PROMPT</div>
-                <div class="planning-card-description">Send instructions to IDE-agent to draft a detailed research prompt for you.</div>
+                <div class="planning-card-description">Copy a meta-prompt to your clipboard. Paste it into your IDE agent to draft a detailed research prompt for Google AI Studio.</div>
 
                 <div class="planning-card-section-title" style="margin-top: 12px;">Central Question / Topic</div>
                 <textarea id="research-prompt-input" class="planning-input" rows="4" placeholder="Enter research topic..." style="margin-top: 12px;"></textarea>

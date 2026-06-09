@@ -1370,6 +1370,19 @@ export class KanbanDatabase {
         return this.updateComplexityByPlanFile(plan.planFile, plan.workspaceId, complexity);
     }
 
+    /** Update complexity directly by plan_id primary key. */
+    public async updateComplexityByPlanId(planId: string, complexity: string): Promise<boolean> {
+        const { isValidComplexityValue } = require('./complexityScale');
+        if (!planId || !isValidComplexityValue(complexity)) {
+            console.error(`[KanbanDatabase] Rejected updateComplexityByPlanId: planId=${planId}, complexity=${complexity}`);
+            return false;
+        }
+        return this._persistedUpdate(
+            'UPDATE plans SET complexity = ?, updated_at = ? WHERE plan_id = ?',
+            [complexity, new Date().toISOString(), planId]
+        );
+    }
+
     public async updateTagsByPlanFile(planFile: string, workspaceId: string, tags: string): Promise<boolean> {
         const normalized = this._ensureRelativePlanFile(planFile);
         return this._persistedUpdate(
@@ -1638,6 +1651,15 @@ export class KanbanDatabase {
         return this._persistedUpdate(
             'DELETE FROM plans WHERE plan_id = ?',
             [plan.planId]
+        );
+    }
+
+    /** Delete a plan directly by its plan_id primary key. */
+    public async deletePlanByPlanId(planId: string): Promise<boolean> {
+        if (!planId) return false;
+        return this._persistedUpdate(
+            'DELETE FROM plans WHERE plan_id = ?',
+            [planId]
         );
     }
 

@@ -1574,23 +1574,6 @@ export class PlanningPanelProvider {
                 }
                 break;
             }
-            case 'checkAnalystAvailability': {
-                try {
-                    const result = await vscode.commands.executeCommand<{ available: boolean }>(
-                        'switchboard.checkAnalystAvailability'
-                    );
-                    this._panel?.webview.postMessage({
-                        type: 'analystAvailabilityResult',
-                        available: result?.available ?? false
-                    });
-                } catch (err) {
-                    this._panel?.webview.postMessage({
-                        type: 'analystAvailabilityResult',
-                        available: false
-                    });
-                }
-                break;
-            }
             case 'sendToAnalyst': {
                 const prompt = msg.prompt;
                 if (!prompt) {
@@ -1615,44 +1598,6 @@ export class PlanningPanelProvider {
                 } catch (err) {
                     this._panel?.webview.postMessage({
                         type: 'sendToAnalystResult',
-                        success: false,
-                        error: String(err)
-                    });
-                }
-                break;
-            }
-            case 'draftResearchPrompt': {
-                const { topic, context, depth } = msg;
-                if (!topic) {
-                    this._panel?.webview.postMessage({
-                        type: 'draftResearchPromptResult',
-                        success: false,
-                        error: 'No topic provided'
-                    });
-                    break;
-                }
-                try {
-                    // Build the analyst prompt via the prompt builder
-                    const { buildKanbanBatchPrompt } = require('./agentPromptBuilder');
-                    const analystPrompt = buildKanbanBatchPrompt('analyst', [], {
-                        instruction: 'draft-research-prompt',
-                        researchTopic: topic,
-                        researchContext: context || '',
-                        researchDepth: depth || 'standard',
-                        switchboardSafeguardsEnabled: false
-                    });
-                    const result = await vscode.commands.executeCommand<{ success: boolean; error?: string }>(
-                        'switchboard.sendToAnalystFromPlanningPanel',
-                        analystPrompt
-                    );
-                    this._panel?.webview.postMessage({
-                        type: 'draftResearchPromptResult',
-                        success: result?.success ?? false,
-                        error: result?.error
-                    });
-                } catch (err) {
-                    this._panel?.webview.postMessage({
-                        type: 'draftResearchPromptResult',
                         success: false,
                         error: String(err)
                     });
@@ -1839,7 +1784,7 @@ export class PlanningPanelProvider {
                 try {
                     const { KanbanDatabase } = require('./KanbanDatabase');
                     const db = KanbanDatabase.forWorkspace(wsRoot);
-                    await db.updatePlan(planId, { complexity: normalizedComplexity });
+                    await db.updateComplexityByPlanId(planId, normalizedComplexity);
                     const allPlans = await this._getKanbanPlans(wsRoot);
                     this._panel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, requestId: Date.now() });
                     this._panel?.webview.postMessage({ type: 'kanbanPlanComplexityChanged', success: true });
@@ -1868,7 +1813,7 @@ export class PlanningPanelProvider {
                 try {
                     const { KanbanDatabase } = require('./KanbanDatabase');
                     const db = KanbanDatabase.forWorkspace(wsRoot);
-                    await db.deletePlan(planId);
+                    await db.deletePlanByPlanId(planId);
                     this._panel?.webview.postMessage({ type: 'kanbanPlanDeleted', success: true, planId });
                 } catch (err) {
                     this._panel?.webview.postMessage({ type: 'kanbanPlanDeleted', success: false, error: String(err) });

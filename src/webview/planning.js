@@ -380,8 +380,15 @@
         copyResearchPromptBtn.addEventListener('click', async () => {
             if (copyResearchPromptBtn.innerText === 'COPIED') return;
 
-            const prompt = generateResearchPrompt();
             const originalText = copyResearchPromptBtn.innerText;
+            const prompt = generateResearchPrompt();
+            if (!prompt) {
+                copyResearchPromptBtn.innerText = 'NO TOPIC';
+                setTimeout(() => {
+                    if (copyResearchPromptBtn) copyResearchPromptBtn.innerText = originalText;
+                }, 2000);
+                return;
+            }
             try {
                 await navigator.clipboard.writeText(prompt);
                 copyResearchPromptBtn.innerText = 'COPIED';
@@ -401,19 +408,31 @@
     // Research Tab: Draft with Analyst Agent Button
     const draftWithAnalystBtn = document.getElementById('btn-draft-with-analyst');
     if (draftWithAnalystBtn) {
-        draftWithAnalystBtn.addEventListener('click', () => {
-            const topic = document.getElementById('research-prompt-input')?.value.trim() || '';
+        draftWithAnalystBtn.addEventListener('click', async () => {
+            if (draftWithAnalystBtn.innerText === 'COPIED') return;
 
-            vscode.postMessage({
-                type: 'draftResearchPrompt',
-                topic: topic,
-                context: '',
-                depth: 'deep'
-            });
-            draftWithAnalystBtn.innerText = 'SENT';
-            setTimeout(() => {
-                if (draftWithAnalystBtn) draftWithAnalystBtn.innerText = 'DRAFT WITH ANALYST AGENT';
-            }, 2000);
+            const originalText = draftWithAnalystBtn.innerText;
+            const prompt = generateResearchPrompt();
+            if (!prompt) {
+                draftWithAnalystBtn.innerText = 'NO TOPIC';
+                setTimeout(() => {
+                    if (draftWithAnalystBtn) draftWithAnalystBtn.innerText = originalText;
+                }, 2000);
+                return;
+            }
+            try {
+                await navigator.clipboard.writeText(prompt);
+                draftWithAnalystBtn.innerText = 'COPIED';
+                setTimeout(() => {
+                    if (draftWithAnalystBtn) draftWithAnalystBtn.innerText = originalText;
+                }, 2000);
+            } catch (err) {
+                console.error('[Research] Failed to copy to clipboard:', err);
+                draftWithAnalystBtn.innerText = 'FAILED';
+                setTimeout(() => {
+                    if (draftWithAnalystBtn) draftWithAnalystBtn.innerText = originalText;
+                }, 2000);
+            }
         });
     }
 
@@ -430,14 +449,6 @@
             vscode.setState({ ...currentPersisted, lastResearchFolder: state.lastResearchFolder });
         });
     }
-
-    // Check analyst availability on load
-    function checkAnalystAvailability() {
-        vscode.postMessage({ type: 'checkAnalystAvailability' });
-    }
-
-    // Call after DOM ready
-    checkAnalystAvailability();
 
     // NotebookLM button handlers
     const bundleCodeBtn = document.getElementById('btn-bundle-code');
@@ -3139,12 +3150,47 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 break;
             }
             case 'kanbanPlanLogReady': {
+                // Remove any existing overlay
+                const existingOverlay = document.querySelector('.kanban-log-overlay');
+                if (existingOverlay) existingOverlay.remove();
+
+                const overlay = document.createElement('div');
+                overlay.className = 'kanban-log-overlay';
+
+                const modal = document.createElement('div');
+                modal.className = 'kanban-log-modal';
+
+                const heading = document.createElement('h3');
+                heading.textContent = 'Action Log';
+                modal.appendChild(heading);
+
+                const entriesDiv = document.createElement('div');
+                entriesDiv.className = 'kanban-log-entries';
+
                 if (msg.entries && msg.entries.length) {
-                    const lines = msg.entries.map(e => `[${e.timestamp}] ${e.workflow}: ${e.details}`).join('\n');
-                    window.alert('Action Log\n\n' + lines);
+                    msg.entries.forEach(e => {
+                        const entry = document.createElement('div');
+                        entry.className = 'kanban-log-entry';
+                        entry.innerHTML = `<span class="kanban-log-timestamp">${escapeHtml(e.timestamp)}</span> <span class="kanban-log-workflow">${escapeHtml(e.workflow)}</span><br/><span class="kanban-log-details">${escapeHtml(e.details)}</span>`;
+                        entriesDiv.appendChild(entry);
+                    });
                 } else {
-                    window.alert('Action Log\n\nNo entries found.');
+                    const empty = document.createElement('div');
+                    empty.className = 'kanban-log-entry';
+                    empty.textContent = 'No entries found.';
+                    entriesDiv.appendChild(empty);
                 }
+                modal.appendChild(entriesDiv);
+
+                const closeBtn = document.createElement('button');
+                closeBtn.className = 'kanban-log-close';
+                closeBtn.textContent = 'Close';
+                closeBtn.addEventListener('click', () => overlay.remove());
+                modal.appendChild(closeBtn);
+
+                overlay.appendChild(modal);
+                overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+                document.body.appendChild(overlay);
                 break;
             }
             case 'kanbanPlanDeleted': {
@@ -3164,6 +3210,22 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             case 'activateKanbanTabAndSelectPlan': {
                 _pendingKanbanSelection = { sessionId: msg.sessionId, planFile: msg.planFile, workspaceRoot: msg.workspaceRoot };
                 activateKanbanTab();
+                // Check already-loaded cache for immediate selection
+                if (_kanbanPlansCache && _kanbanPlansCache.length) {
+                    const match = _kanbanPlansCache.find(p =>
+                        (msg.sessionId && p.sessionId === msg.sessionId) ||
+                        (msg.planFile && p.planFile === msg.planFile)
+                    );
+                    if (match) {
+                        const itemDiv = kanbanListPane && kanbanListPane.querySelector(`.kanban-plan-item[data-plan-id="${match.planId}"]`);
+                        if (itemDiv) {
+                            itemDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            itemDiv.click();
+                            _pendingKanbanSelection = null;
+                        }
+                    }
+                }
+                // Always fetch to ensure data is fresh (pending selection resolved in handleKanbanPlansReady if not already matched)
                 vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
                 break;
             }
@@ -3458,36 +3520,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     statusEl.textContent = `Failed to delete: ${msg.error || 'Unknown error'}`;
                 }
                 break;
-            case 'analystAvailabilityResult': {
-                const draftAnalystBtn = document.getElementById('btn-draft-with-analyst');
-                if (draftAnalystBtn) {
-                    draftAnalystBtn.disabled = !msg.available;
-                    if (!msg.available) {
-                        draftAnalystBtn.title = 'Analyst terminal not available. Configure an analyst agent to enable this feature.';
-                    } else {
-                        draftAnalystBtn.removeAttribute('title');
-                    }
-                }
-                break;
-            }
-            case 'draftResearchPromptResult': {
-                const draftAnalystBtn = document.getElementById('btn-draft-with-analyst');
-                if (draftAnalystBtn) {
-                    if (msg.success) {
-                        draftAnalystBtn.innerText = 'SENT';
-                        setTimeout(() => {
-                            if (draftAnalystBtn) draftAnalystBtn.innerText = 'DRAFT WITH ANALYST AGENT';
-                        }, 2000);
-                    } else {
-                        draftAnalystBtn.innerText = 'FAILED';
-                        console.error('[Research] Failed to draft prompt with analyst:', msg.error);
-                        setTimeout(() => {
-                            if (draftAnalystBtn) draftAnalystBtn.innerText = 'DRAFT WITH ANALYST AGENT';
-                        }, 2000);
-                    }
-                }
-                break;
-            }
             case 'saveFileContentResult': {
                 const { success, conflict, diskContent, error, tab } = msg;
                 const textarea = document.getElementById(tab === 'local' ? 'markdown-editor-local' : (tab === 'design' ? 'markdown-editor-design' : 'kanban-editor'));
@@ -3938,34 +3970,23 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             return customPrompt;
         }
 
-        const contextText = "General subject matter research";
+        let prompt = `You are helping me draft a research prompt for Google AI Studio with search grounding enabled.
 
-        let prompt = `ROLE: You are a research analyst. Prefer authoritative primary sources over blogs and marketing copy; where sources conflict, say so explicitly.
+TOPIC: ${customPrompt}
 
-CONTEXT: ${contextText}. The reader is a domain practitioner — explain domain-specific concepts; do not assume specialist expertise.
+Please draft a comprehensive research prompt optimized for Google AI Studio. The drafted prompt should include:
+- ROLE definition for the research analyst
+- CONTEXT describing the domain and audience
+- CENTRAL QUESTION
+- 4-6 targeted SUB-QUESTIONS
+- SOURCE GUIDANCE (authoritative sources, date-checking, separate required/recommended/opinion)
+- SCOPE boundaries
+- OUTPUT format (executive summary, tiered findings, trade-off evaluation, glossary, source list)
+- DEPTH level with source count target
 
-CENTRAL QUESTION: ${customPrompt}
-SUB-QUESTIONS (cover all, lead with the first three):
-  1. Core framing of the central question and key definitions
-  2. What are the current best practices and authoritative standards?
-  3. What are the key trade-offs and failure modes?
-  4. What is the current state of the art and recent developments?
+Do NOT perform the research yourself. Only draft the prompt text that I will paste into Google AI Studio.
 
-SOURCE GUIDANCE: Prefer official documentation, standards bodies, and peer-reviewed sources; distrust vendor marketing claims. Date-check all sources — flag anything older than 2 years. Separate "required" from "recommended" from "opinion" in every finding. Where law or standards are silent or ambiguous, say so rather than assuming applicability. Do not insert sources inline among the text; place all citations and links in the "Full source list" section only.
-
-SCOPE: Primary focus is the central question above. Related domains and alternative approaches as clearly-labelled benchmarks only. Out of scope: unrelated domains and jurisdictions.
-
-OUTPUT:
-1) Executive summary (≤ 1 page)
-2) Tiered findings: required vs recommended vs optional — clearly distinguish compliance levels
-3) Focused trade-off evaluation (e.g. searchability vs confidentiality, cost vs coverage)
-4) Actionable recommendations checklist
-5) Plain-English glossary of domain-specific terms
-6) Full source list with direct links and retrieval dates
-
-DECISION THIS FEEDS: Recommended action plan — end with a recommended default.
-
-DEPTH: Deep (50-100+ sources)`;
+Return ONLY the drafted prompt with no additional commentary.`;
 
         return prompt;
     }

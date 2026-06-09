@@ -234,3 +234,7 @@ Key risks: cross-provider wiring without singleton (build failure if not injecte
 ## Recommendation
 
 Complexity 6 → **Send to Coder**
+
+## Review Findings
+
+Implementation was largely complete but had five material issues. Two CRITICAL runtime bugs fixed: `deleteKanbanPlan` called `db.deletePlan(planId)` which expects a sessionId (not plan_id primary key) — silently failing; `setKanbanPlanComplexity` called non-existent `db.updatePlan()` — would throw at runtime. Added `deletePlanByPlanId` and `updateComplexityByPlanId` to KanbanDatabase and updated handlers. Two MAJOR UI bugs fixed: `.complexity-dot` and meta bar CSS were entirely missing from `planning.html` (invisible/unstyled elements); `kanbanPlanLogReady` used `window.alert()` instead of modal overlay per plan spec. One MAJOR logic gap fixed: `activateKanbanTabAndSelectPlan` didn't check already-loaded cache per plan's dual-path guard requirement. Files changed: `planning.html`, `planning.js`, `PlanningPanelProvider.ts`, `KanbanDatabase.ts`. Remaining risk: orphaned `plan_events` rows on plan deletion (pre-existing, no CASCADE FK).
