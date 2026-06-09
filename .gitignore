@@ -18,6 +18,7 @@ dist/
 
 # OS files
 .DS_Store
+Icon
 Thumbs.db
 
 # Test output
