@@ -86,6 +86,7 @@ export class PlanningPanelProvider {
     private _activeDesignSystemDocSourceId: string | null = null;
     private _activeDesignSystemDocId: string | null = null;
     private _htmlServers = new Map<string, { server: http.Server; port: number; timeoutId: NodeJS.Timeout }>();
+    private _htmlServerCreationPromises = new Map<string, Promise<{ server: http.Server; port: number; timeoutId: NodeJS.Timeout }>>();
     private readonly _SERVER_DENY_LIST: readonly string[] = [
         '.switchboard',
         '.git',
@@ -4660,7 +4661,7 @@ export class PlanningPanelProvider {
             } catch (e) {}
         }
         this._htmlServers.clear();
-
+        this._htmlServerCreationPromises.clear();
         this._disposables.forEach(d => d.dispose());
         this._disposables = [];
         if (this._panel) {
@@ -4781,7 +4782,7 @@ export class PlanningPanelProvider {
     /**
      * Get or create a localhost HTTP server for the given sourceFolder.
      * Returns the server entry (with port) for URL construction.
-     * Sets a placeholder entry eagerly to prevent race conditions on concurrent calls.
+     * Uses a pending-promise map to prevent race conditions on concurrent calls.
      */
     private async _getOrCreateHtmlServer(sourceFolder: string): Promise<{ server: http.Server; port: number; timeoutId: NodeJS.Timeout }> {
         // Reuse existing server if already running
@@ -4792,7 +4793,26 @@ export class PlanningPanelProvider {
             return existing;
         }
 
-        // Start new server
+        // If another caller is already creating a server for this sourceFolder, await its result
+        const pendingPromise = this._htmlServerCreationPromises.get(sourceFolder);
+        if (pendingPromise) {
+            return pendingPromise;
+        }
+
+        // Start new server — store the creation promise to prevent race condition
+        const creationPromise = this._createHtmlServer(sourceFolder);
+        this._htmlServerCreationPromises.set(sourceFolder, creationPromise);
+
+        try {
+            const entry = await creationPromise;
+            return entry;
+        } finally {
+            // Always clean up the pending promise so future calls can retry on error
+            this._htmlServerCreationPromises.delete(sourceFolder);
+        }
+    }
+
+    private _createHtmlServer(sourceFolder: string): Promise<{ server: http.Server; port: number; timeoutId: NodeJS.Timeout }> {
         const server = http.createServer((req, res) => {
             this._handleHtmlServerRequest(req, res, sourceFolder);
         });

@@ -570,6 +570,10 @@ Skipped per session directive. Test suite to be run separately by the user.
 - Server creation race condition mitigated by setting `_htmlServers` entry immediately in `listen` callback
 - Deny-list blocks access to `.switchboard`, `.git`, `.env`, `node_modules`, `secrets`, `credentials`, `.ssh`, `.aws`
 
+## Review Findings
+
+Review found one MAJOR issue: a race condition in `_getOrCreateHtmlServer` where concurrent callers could both see `_htmlServers.get() → undefined` and create duplicate servers, leaking the first. Fixed by introducing `_htmlServerCreationPromises` map — second caller awaits the pending promise instead of creating a new server. Three NITs (redundant `.env.` deny-list entry, `part.startsWith(denied)` over-matching `.envrc`, iframe.src no-op on cache hit) deferred as harmless or edge-case. All other plan requirements verified: CSP `http:` added, all 4 `previewReady` paths include `iframeSrc`, sandbox toggling correct, timeout 10 min, deny-list and path traversal guards present, dispose path cleans up servers and creation promises. Remaining risk: deny-list `startsWith` matching is broader than strictly intended but blocks more secrets than it allows, which is acceptable.
+
 ## Recommendation
 
 Complexity 6 → **Send to Coder** for implementation.
