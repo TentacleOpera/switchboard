@@ -89,6 +89,9 @@ export interface KanbanCard {
     complexity: string;
     workspaceRoot: string;
     project?: string;
+    isEpic?: boolean;
+    epicId?: string;
+    subtaskCount?: number;
 }
 
 /**
@@ -1064,6 +1067,14 @@ export class KanbanProvider implements vscode.Disposable {
             // Completed plans intentionally bypass file-existence check — DB is source of truth for completed state
             const completedRowsFiltered = completedRows.filter(row => !!row.planFile);
 
+            const allRows = [...activeRowsFiltered, ...completedRowsFiltered];
+            const subtaskCountMap = new Map<string, number>();
+            for (const row of allRows) {
+                if (row.epicId) {
+                    subtaskCountMap.set(row.epicId, (subtaskCountMap.get(row.epicId) || 0) + 1);
+                }
+            }
+
             // Build cards directly from DB rows — no _resolveWorkspaceRoot that could return null
             const cards: KanbanCard[] = activeRowsFiltered.map(row => {
                 return {
@@ -1076,7 +1087,10 @@ export class KanbanProvider implements vscode.Disposable {
                     createdAt: row.createdAt || '',
                     complexity: row.complexity || 'Unknown',
                     workspaceRoot: resolvedWorkspaceRoot,
-                    project: row.project || ''
+                    project: row.project || '',
+                    isEpic: !!row.isEpic,
+                    epicId: row.epicId || undefined,
+                    subtaskCount: row.isEpic ? (subtaskCountMap.get(row.planId) || 0) : undefined
                 };
             });
 
@@ -1090,7 +1104,10 @@ export class KanbanProvider implements vscode.Disposable {
                 createdAt: rec.createdAt || '',
                 complexity: rec.complexity || 'Unknown',
                 workspaceRoot: resolvedWorkspaceRoot,
-                project: rec.project || ''
+                project: rec.project || '',
+                isEpic: !!rec.isEpic,
+                epicId: rec.epicId || undefined,
+                subtaskCount: rec.isEpic ? (subtaskCountMap.get(rec.planId) || 0) : undefined
             })));
 
             this._lastCards = cards;
@@ -1793,6 +1810,16 @@ export class KanbanProvider implements vscode.Disposable {
                     console.log(`[KanbanProvider] _refreshBoardImpl: filtered out ${dbRows.length - activeRows.length} ghost plans`);
                 }
 
+                const completedRecords = (await db.getCompletedPlans(workspaceId, completedLimit))
+                    .filter(rec => rec.planFile);
+                const allRows2 = [...activeRows, ...completedRecords];
+                const subtaskCountMap2 = new Map<string, number>();
+                for (const row of allRows2) {
+                    if (row.epicId) {
+                        subtaskCountMap2.set(row.epicId, (subtaskCountMap2.get(row.epicId) || 0) + 1);
+                    }
+                }
+
                 cards = activeRows.map(row => {
                     return {
                         planId: row.planId,
@@ -1805,14 +1832,15 @@ export class KanbanProvider implements vscode.Disposable {
                         complexity: row.complexity || 'Unknown',
                         workspaceRoot: resolvedWorkspaceRoot,
                         project: row.project || '',
-                        worktreeId: row.worktreeId
+                        worktreeId: row.worktreeId,
+                        isEpic: !!row.isEpic,
+                        epicId: row.epicId || undefined,
+                        subtaskCount: row.isEpic ? (subtaskCountMap2.get(row.planId) || 0) : undefined
                     };
                 });
 
                 // Completed plans from DB — don't filter by file existence;
                 // completed plans may have been archived (file moved) and should still appear.
-                const completedRecords = (await db.getCompletedPlans(workspaceId, completedLimit))
-                    .filter(rec => rec.planFile);
                 cards.push(...completedRecords.map(rec => ({
                     planId: rec.planId,
                     sessionId: rec.sessionId,
@@ -1823,7 +1851,10 @@ export class KanbanProvider implements vscode.Disposable {
                     createdAt: rec.createdAt || '',
                     complexity: rec.complexity || 'Unknown',
                     workspaceRoot: resolvedWorkspaceRoot,
-                    project: rec.project || ''
+                    project: rec.project || '',
+                    isEpic: !!rec.isEpic,
+                    epicId: rec.epicId || undefined,
+                    subtaskCount: rec.isEpic ? (subtaskCountMap2.get(rec.planId) || 0) : undefined
                 })));
             } else if (workspaceId) {
                 console.warn(`[KanbanProvider] Kanban DB unavailable: ${db.lastInitError || 'unknown error'}`);
@@ -2119,7 +2150,7 @@ export class KanbanProvider implements vscode.Disposable {
             const workingDir = repoScope
                 ? resolveWorkingDir(workspaceRoot, repoScope)
                 : '';
-            
+
             promptPlans.push({
                 topic: card.topic,
                 absolutePath: this._resolvePlanFilePath(workspaceRoot, card.planFile),
@@ -2128,6 +2159,35 @@ export class KanbanProvider implements vscode.Disposable {
                 sessionId: cardKey,
                 worktreePath: safetySessionPath
             });
+
+            if (card.isEpic && hasDb && card.planId) {
+                const maxRaw = await db.getConfig('epic_max_subtasks');
+                const maxSubtasks = maxRaw ? parseInt(maxRaw, 10) : 20;
+                const subtasks = await db.getSubtasksByEpicId(card.planId);
+                const limited = subtasks.slice(0, maxSubtasks);
+                for (const st of limited) {
+                    promptPlans.push({
+                        topic: `[SUBTASK] ${st.topic}`,
+                        absolutePath: this._resolvePlanFilePath(workspaceRoot, st.planFile),
+                        complexity: st.complexity,
+                        workingDir: st.repoScope ? resolveWorkingDir(workspaceRoot, st.repoScope) : '',
+                        sessionId: st.sessionId || st.planId,
+                        worktreePath: safetySessionPath,
+                        isSubtask: true,
+                        epicTopic: card.topic
+                    });
+                }
+                if (subtasks.length > maxSubtasks) {
+                    promptPlans.push({
+                        topic: `[WARNING: ${subtasks.length} subtasks exist but only ${maxSubtasks} included. Remaining subtasks stay in column: ${card.column}]`,
+                        absolutePath: '',
+                        sessionId: '',
+                        worktreePath: safetySessionPath,
+                        isSubtask: true,
+                        epicTopic: card.topic
+                    });
+                }
+            }
         }
         return promptPlans;
     }
@@ -2424,6 +2484,15 @@ export class KanbanProvider implements vscode.Disposable {
             resolvedOptions.complexityScoringSkill = promptsConfig.complexityScoringSkill;
         } else if (role === 'chat') {
             resolvedOptions.chatPlanDestinations = this._taskViewerProvider?.resolveChatPlanDestinations(workspaceRoot);
+        }
+
+        const hasSubtasks = plans.some(p => p.isSubtask);
+        if (hasSubtasks) {
+            const epicPlan = plans.find(p => !p.isSubtask);
+            const subtaskCount = plans.filter(p => p.isSubtask && !p.topic.startsWith('[WARNING:')).length;
+            resolvedOptions.epicMode = true;
+            resolvedOptions.epicTopic = epicPlan?.topic || '';
+            resolvedOptions.subtaskCount = subtaskCount;
         }
 
         const mergedOptions = {
@@ -3775,6 +3844,14 @@ This step is what moves the plan forward in the Switchboard pipeline.
             const moved = await db.updateColumn(sessionId, targetColumn);
             if (moved) {
                 await this.queueIntegrationSyncForSession(workspaceRoot, sessionId, targetColumn);
+                const plan = await db.getPlanBySessionId(sessionId);
+                if (plan && plan.isEpic) {
+                    const subtasks = await db.getSubtasksByEpicId(plan.planId);
+                    const subtaskSessionIds = subtasks.map(st => st.sessionId).filter(Boolean);
+                    if (subtaskSessionIds.length > 0) {
+                        await db.updateColumnTransaction(subtaskSessionIds, targetColumn);
+                    }
+                }
             }
             return moved;
         } catch (err) {
@@ -6259,6 +6336,114 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     });
                     vscode.window.showInformationMessage('Worktree record cleared.');
                 }
+                break;
+            }
+            case 'convertToEpic': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || !msg.sessionId) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                if (!db || !(await db.ensureReady())) break;
+                const plan = await db.getPlanBySessionId(msg.sessionId);
+                if (!plan) break;
+                if (msg.revert) {
+                    await db.updateEpicStatus(msg.sessionId, 0, '');
+                } else {
+                    if (plan.epicId) {
+                        vscode.window.showWarningMessage('Cannot convert a subtask to an epic.');
+                        break;
+                    }
+                    await db.updateEpicStatus(msg.sessionId, 1, '');
+                }
+                await this._refreshBoard(workspaceRoot);
+                break;
+            }
+            case 'addSubtaskToEpic': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || !msg.epicSessionId || !msg.subtaskSessionId) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                if (!db || !(await db.ensureReady())) break;
+                const epic = await db.getPlanBySessionId(msg.epicSessionId);
+                if (!epic || !epic.isEpic) {
+                    vscode.window.showWarningMessage('Target is not a valid epic.');
+                    break;
+                }
+                const lockColumnsRaw = await db.getConfig('epic_lock_columns');
+                const lockColumns = (lockColumnsRaw || 'IN PROGRESS,CODE REVIEW,REVIEWED,DONE').split(',').map((c: string) => c.trim());
+                if (lockColumns.includes(epic.kanbanColumn)) {
+                    vscode.window.showWarningMessage('Cannot modify subtasks of an epic in a locked column.');
+                    break;
+                }
+                const subtask = await db.getPlanBySessionId(msg.subtaskSessionId);
+                if (!subtask) break;
+                if (subtask.isEpic) {
+                    vscode.window.showWarningMessage('Cannot add an epic as a subtask.');
+                    break;
+                }
+                if (subtask.epicId && subtask.epicId !== epic.planId) {
+                    vscode.window.showWarningMessage('Subtask already belongs to another epic.');
+                    break;
+                }
+                await db.updateEpicStatus(msg.subtaskSessionId, 0, epic.planId);
+                await this._refreshBoard(workspaceRoot);
+                break;
+            }
+            case 'removeSubtaskFromEpic': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || !msg.subtaskSessionId) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                if (!db || !(await db.ensureReady())) break;
+                await db.updateEpicStatus(msg.subtaskSessionId, 0, '');
+                await this._refreshBoard(workspaceRoot);
+                break;
+            }
+            case 'deleteEpic': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || !msg.sessionId) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                if (!db || !(await db.ensureReady())) break;
+                const epic = await db.getPlanBySessionId(msg.sessionId);
+                if (!epic || !epic.isEpic) break;
+                if (msg.deleteSubtasks) {
+                    const subtasks = await db.getSubtasksByEpicId(epic.planId);
+                    for (const st of subtasks) {
+                        await db.tombstonePlan(st.planId);
+                    }
+                } else {
+                    await db.clearEpicIdForEpic(epic.planId);
+                }
+                await db.tombstonePlan(epic.planId);
+                await this._refreshBoard(workspaceRoot);
+                break;
+            }
+            case 'getEpicDetails': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || !msg.sessionId) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                if (!db || !(await db.ensureReady())) break;
+                const epic = await db.getPlanBySessionId(msg.sessionId);
+                if (!epic || !epic.isEpic) {
+                    this._panel?.webview.postMessage({ type: 'epicDetails', epic: null, subtasks: [] });
+                    break;
+                }
+                const subtasks = await db.getSubtasksByEpicId(epic.planId);
+                this._panel?.webview.postMessage({ type: 'epicDetails', epic, subtasks });
+                break;
+            }
+            case 'updateEpicConfig': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                if (!db || !(await db.ensureReady())) break;
+                if (msg.epicLockColumns !== undefined) {
+                    await db.setConfig('epic_lock_columns', String(msg.epicLockColumns));
+                }
+                if (msg.epicPromptTemplate !== undefined) {
+                    await db.setConfig('epic_prompt_template', String(msg.epicPromptTemplate));
+                }
+                if (msg.epicMaxSubtasks !== undefined) {
+                    await db.setConfig('epic_max_subtasks', String(msg.epicMaxSubtasks));
+                }
+                vscode.window.showInformationMessage('Epic configuration updated.');
                 break;
             }
         }

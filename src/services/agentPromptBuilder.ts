@@ -16,6 +16,8 @@ export interface BatchPromptPlan {
     workingDir?: string;
     sessionId?: string;
     worktreePath?: string;
+    isSubtask?: boolean;
+    epicTopic?: string;
 }
 
 /**
@@ -146,6 +148,14 @@ export interface PromptBuilderOptions {
     workflowFilePath?: string;
     /** Resolved chat-plan write destination(s) for the chat role. One path per entry; the agent picks one. */
     chatPlanDestinations?: string[];
+    /** When true, the batch includes an epic and its subtasks. */
+    epicMode?: boolean;
+    /** The epic's topic/title for directive injection. */
+    epicTopic?: string;
+    /** Number of subtasks included in the epic batch. */
+    subtaskCount?: number;
+    /** Max subtasks before truncation warning (default 20). */
+    epicMaxSubtasks?: number;
 }
 
 export function resolveBaseInstructions(
@@ -254,6 +264,13 @@ export const NO_SUBAGENTS_DIRECTIVE = "SUBAGENT POLICY: You are strictly forbidd
 export const CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE = (name: string) =>
     `SUBAGENT POLICY: You are authorized to use the "${name}" subagent for this task. Do not spawn or invoke any other subagents.`;
 export const WORKTREES_PER_PLAN_DIRECTIVE = 'Where possible, process each plan as an isolated unit using your native subagent or orchestration capabilities, creating a dedicated git worktree per plan to prevent file conflicts between concurrent tasks.';
+
+export const EPIC_ORCHESTRATION_DIRECTIVE = (epicTopic: string, count: number) =>
+    `EPIC MODE: You are implementing the epic "${epicTopic}" which consists of ${count} subtask(s).\n` +
+    `Use your native subagent or orchestration capabilities to handle each subtask. ` +
+    `If your tool supports worktree-per-plan isolation, activate it now. ` +
+    `If you do not support subagents, handle each subtask sequentially in the order listed below. ` +
+    `All subtasks are part of a single delivery unit — do not treat them as independent tickets.`;
 
 export const COMPLEXITY_SCORING_DIRECTIVE =
     `COMPLEXITY SCORING: Before proceeding, invoke the complexity_scoring skill ` +
@@ -406,8 +423,13 @@ export function buildKanbanBatchPrompt(
         skipCompilation ? SKIP_COMPILATION_DIRECTIVE : '',
         skipTests ? SKIP_TESTS_DIRECTIVE : '',
     ].filter(Boolean).join('\n\n');
-    const { planList, dispatchContextBlock } = buildPromptDispatchContext(plans);
+    const dispatchContext = buildPromptDispatchContext(plans);
+    let planList = dispatchContext.planList;
+    const dispatchContextBlock = dispatchContext.dispatchContextBlock;
     const dispatchContextPrefix = dispatchContextBlock ? `${dispatchContextBlock}\n\n` : '';
+    if (options?.epicMode && options?.epicTopic) {
+        planList = `${EPIC_ORCHESTRATION_DIRECTIVE(options.epicTopic, options.subtaskCount || 0)}\n\n${planList}`;
+    }
 
     const executionDirective = `AUTHORIZATION TO EXECUTE: The plans provided are already authorized. You MUST enter EXECUTION mode immediately. Do NOT enter PLANNING mode or generate an implementation_plan.md. Proceed directly to implementing the changes.`;
 

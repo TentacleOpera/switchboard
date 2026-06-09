@@ -1089,8 +1089,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) return;
         const effectiveRoot = await this._activateWorkspaceContext(workspaceRoot);
-        await this._migrateLegacyToRegistry(effectiveRoot);
         await this._loadPlanRegistry(effectiveRoot);
+        const _rescueDb = await this._getKanbanDb(effectiveRoot);
+        const _rescueWsId = await this._getWorkspaceIdForRoot(effectiveRoot);
+        if (_rescueDb && _rescueWsId) {
+            await this._rescueBrainMirrorsWithoutRegistryEntry(effectiveRoot, _rescueDb, _rescueWsId);
+        }
         console.log(`[TaskViewerProvider] Ownership registry initialized: ${Object.keys(this._planRegistry.entries).length} entries, workspaceId=${this._workspaceId}`);
     }
 
@@ -10567,53 +10571,6 @@ What would you like to find?`;
 
     private _getPlanIdFromStableBrainPath(stableBrainPath: string): string {
         return getAntigravityHash(stableBrainPath);
-    }
-
-    private async _migrateLegacyToRegistry(workspaceRoot: string): Promise<void> {
-        // DB-first: if DB already has plans for this workspace, skip migration
-        const db = await this._getKanbanDb(workspaceRoot);
-        const wsId = await this._getWorkspaceIdForRoot(workspaceRoot);
-        if (db) {
-            const existing = await db.getAllPlans(wsId);
-            if (existing.length > 0) {
-                await this._rescueBrainMirrorsWithoutRegistryEntry(workspaceRoot, db, wsId);
-                return;
-            }
-        }
-
-        const registry: PlanRegistry = { version: 1, entries: {} };
-        const now = new Date().toISOString();
-
-        // Migrate local plans from runsheets (first-time only, when DB is empty)
-        const log = this._getSessionLog(workspaceRoot);
-        try {
-            const sheets = await log.getRunSheets();
-            for (const sheet of sheets) {
-                if (sheet.brainSourcePath) continue;
-                if (!sheet.sessionId || !sheet.planFile) continue;
-                const planId = sheet.sessionId;
-                if (registry.entries[planId]) continue;
-                registry.entries[planId] = {
-                    planId,
-                    ownerWorkspaceId: wsId,
-                    sourceType: 'local',
-                    localPlanPath: sheet.planFile,
-                    topic: sheet.topic || '',
-                    createdAt: sheet.createdAt || now,
-                    updatedAt: sheet.completedAt || sheet.createdAt || now,
-                    status: sheet.completed === true ? 'completed' : 'active'
-                };
-            }
-        } catch (e) {
-            console.error('[TaskViewerProvider] Failed to migrate local plans:', e);
-        }
-
-        this._planRegistry = registry;
-        await this._savePlanRegistry(workspaceRoot);
-        console.log(`[TaskViewerProvider] Migrated ${Object.keys(registry.entries).length} plans to registry`);
-        if (db) {
-            await this._rescueBrainMirrorsWithoutRegistryEntry(workspaceRoot, db, wsId);
-        }
     }
 
     private async _rescueBrainMirrorsWithoutRegistryEntry(

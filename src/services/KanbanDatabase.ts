@@ -41,6 +41,8 @@ export interface KanbanPlanRecord {
     linearIssueId?: string;
     worktreeId?: number;
     worktreeStatus?: string; // 'none' | 'active' | 'merged' | 'deleted'
+    isEpic?: number;
+    epicId?: string;
 }
 
 export interface ImportedDocEntry {
@@ -112,7 +114,9 @@ CREATE TABLE IF NOT EXISTS plans (
     clickup_task_id   TEXT DEFAULT '',
     linear_issue_id   TEXT DEFAULT '',
     worktree_id       INTEGER,
-    worktree_status   TEXT DEFAULT 'none'
+    worktree_status   TEXT DEFAULT 'none',
+    is_epic           INTEGER DEFAULT 0,
+    epic_id           TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_plans_column ON plans(kanban_column);
 CREATE INDEX IF NOT EXISTS idx_plans_workspace ON plans(workspace_id);
@@ -443,6 +447,14 @@ const MIGRATION_V28_SQL = [
     `UPDATE plans SET project = '' WHERE project = '__unassigned__'`,
 ];
 
+// V29: Add epic support columns to plans table
+const MIGRATION_V29_SQL = [
+    `ALTER TABLE plans ADD COLUMN is_epic INTEGER DEFAULT 0`,
+    `ALTER TABLE plans ADD COLUMN epic_id TEXT DEFAULT ''`,
+    `CREATE INDEX IF NOT EXISTS idx_plans_epic_id ON plans(epic_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_plans_is_epic ON plans(is_epic)`,
+];
+
 
 /**
  * Generic plan upsert. On conflict, updates metadata fields and allows the
@@ -455,8 +467,8 @@ INSERT INTO plans (
     plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
     repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
     brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-    clickup_task_id, linear_issue_id, worktree_id
- ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    clickup_task_id, linear_issue_id, worktree_id, is_epic, epic_id
+ ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     topic = excluded.topic,
     plan_file = excluded.plan_file,
@@ -479,7 +491,9 @@ ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     dispatched_ide = excluded.dispatched_ide,
     clickup_task_id = excluded.clickup_task_id,
     linear_issue_id = excluded.linear_issue_id,
-    worktree_id = excluded.worktree_id
+    worktree_id = excluded.worktree_id,
+    is_epic = excluded.is_epic,
+    epic_id = excluded.epic_id
 `;
 
 const MIGRATION_VERSION_KEY = 'kanban_db_migration_version';
@@ -488,7 +502,7 @@ const ORPHAN_PURGE_CONFIRMATION_DELAY_MS = 350;
 const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
                        repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
                        brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-                       clickup_task_id, linear_issue_id, worktree_id, worktree_status`;
+                       clickup_task_id, linear_issue_id, worktree_id, worktree_status, is_epic, epic_id`;
 
 // Parse column definitions from SCHEMA_SQL's plans table for schema reconciliation.
 // This ensures that databases created before a column was added to SCHEMA_SQL
@@ -1266,6 +1280,22 @@ export class KanbanDatabase {
         const plan = await this.getPlanBySessionId(sessionId);
         if (!plan) { return false; }
         return this.updateColumnByPlanFile(plan.planFile, plan.workspaceId, newColumn);
+    }
+
+    public async updateEpicStatus(sessionId: string, isEpic: number, epicId: string): Promise<boolean> {
+        const plan = await this.getPlanBySessionId(sessionId);
+        if (!plan) return false;
+        return this._persistedUpdate(
+            'UPDATE plans SET is_epic = ?, epic_id = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+            [isEpic, epicId, new Date().toISOString(), plan.planFile, plan.workspaceId]
+        );
+    }
+
+    public async clearEpicIdForEpic(epicPlanId: string): Promise<boolean> {
+        return this._persistedUpdate(
+            "UPDATE plans SET epic_id = '', updated_at = ? WHERE epic_id = ?",
+            [new Date().toISOString(), epicPlanId]
+        );
     }
 
     /**
@@ -3018,6 +3048,36 @@ export class KanbanDatabase {
         return this._readRows(stmt);
     }
 
+    public async getSubtasksByEpicId(epicPlanId: string): Promise<KanbanPlanRecord[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans WHERE epic_id = ? AND status = 'active'`,
+            [epicPlanId]
+        );
+        return this._readRows(stmt);
+    }
+
+    public async updateColumnTransaction(sessionIds: string[], targetColumn: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        if (sessionIds.length === 0) return true;
+        const now = new Date().toISOString();
+        const placeholders = sessionIds.map(() => '?').join(',');
+        try {
+            this._db.run('BEGIN');
+            this._db.run(
+                `UPDATE plans SET kanban_column = ?, updated_at = ? WHERE session_id IN (${placeholders})`,
+                [targetColumn, now, ...sessionIds]
+            );
+            this._db.run('COMMIT');
+            await this._persist();
+            return true;
+        } catch (err) {
+            try { this._db.run('ROLLBACK'); } catch { /* ignore */ }
+            console.error('[KanbanDatabase] updateColumnTransaction failed:', err);
+            return false;
+        }
+    }
+
     /** Check if a session is owned by this workspace and active. */
     public async isOwnedActive(sessionId: string, workspaceId: string): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
@@ -3340,8 +3400,33 @@ export class KanbanDatabase {
         console.log(`[KanbanDatabase] _convertAbsoluteToRelativePaths: converted ${toConvert.length} record(s)`);
     }
 
+    private async _writePreMigrationBackup(): Promise<void> {
+        if (!this._workspaceRoot || !this._db) return;
+        try {
+            const backupDir = path.join(this._workspaceRoot, '.switchboard', 'dbbackup');
+            await fs.promises.mkdir(backupDir, { recursive: true });
+
+            const ts = new Date().toISOString().replace(/[:.]/g, '-');
+            const backupPath = path.join(backupDir, `kanban.db.backup.${ts}`);
+            const data = this._db.export();
+            await fs.promises.writeFile(backupPath, Buffer.from(data));
+
+            // Keep only the 5 most recent backups
+            const files = (await fs.promises.readdir(backupDir))
+                .filter(f => f.startsWith('kanban.db.backup.'))
+                .sort();
+            for (const old of files.slice(0, Math.max(0, files.length - 5))) {
+                await fs.promises.unlink(path.join(backupDir, old)).catch(() => { /* best effort */ });
+            }
+        } catch (e) {
+            console.error('[KanbanDatabase] Failed to write pre-migration backup:', e);
+        }
+    }
+
     private async _runMigrations(): Promise<void> {
         if (!this._db) return;
+
+        await this._writePreMigrationBackup();
 
         // V2: add brain_source_path, mirror_path columns + config table + status index
         for (const sql of MIGRATION_V2_SQL) {
@@ -3705,18 +3790,25 @@ export class KanbanDatabase {
                     }
 
                     // Step 5: Repair corrupted kanban_column values.
-                    const validColumns = ['CREATED', 'BACKLOG', 'PLAN REVIEWED', 'LEAD CODER ASSIGNED', 'CODER ASSIGNED', 'INTERN ASSIGNED', 'CODED', 'INTERN CODED', 'CODE REVIEWED', 'TESTED', 'UAT', 'COMPLETED'];
-                    const validList = validColumns.map(c => `'${c}'`).join(',');
-                    const repairStmt = this._db.prepare(
-                        `UPDATE plans SET kanban_column = 'CREATED' WHERE kanban_column NOT IN (${validList})`
-                    );
-                    let repairedColumns = 0;
+                    // Use SAFE_COLUMN_NAME_RE to validate rather than a hardcoded list —
+                    // a fixed list caused valid columns (e.g. LEAD CODED, CODER CODED) to be
+                    // silently reset to CREATED whenever the list fell out of sync with the schema.
+                    const allPlansStmt = this._db.prepare(`SELECT plan_id, kanban_column FROM plans`);
+                    const toReset: string[] = [];
                     try {
-                        repairStmt.step();
-                        // sql.js exec doesn't return changes; we'll estimate from before/after counts
-                    } finally { repairStmt.free(); }
-                    // For sql.js, run() gives us the info object but step() doesn't. Re-run with run:
-                    this._db.run(`UPDATE plans SET kanban_column = 'CREATED' WHERE kanban_column NOT IN (${validList})`);
+                        while (allPlansStmt.step()) {
+                            const row = allPlansStmt.getAsObject() as { plan_id: string; kanban_column: string };
+                            if (!SAFE_COLUMN_NAME_RE.test(String(row.kanban_column || ''))) {
+                                toReset.push(row.plan_id);
+                            }
+                        }
+                    } finally { allPlansStmt.free(); }
+                    for (const planId of toReset) {
+                        this._db.run(`UPDATE plans SET kanban_column = 'CREATED' WHERE plan_id = ?`, [planId]);
+                    }
+                    if (toReset.length > 0) {
+                        console.log(`[KanbanDatabase] V22 migration: reset ${toReset.length} plans with corrupted kanban_column to CREATED`);
+                    }
 
                     this._db.exec('COMMIT');
                     await this.setMigrationVersion(22);
@@ -3818,7 +3910,17 @@ export class KanbanDatabase {
             console.log('[KanbanDatabase] V28 migration completed: project values normalized from __unassigned__ to empty string');
         }
 
-
+        // V29: Add epic support columns to plans table
+        const v29 = await this.getMigrationVersion();
+        if (v29 < 29) {
+            for (const sql of MIGRATION_V29_SQL) {
+                try { this._db.exec(sql); } catch (e) {
+                    console.debug('[KanbanDatabase] V29 migration step skipped:', e);
+                }
+            }
+            await this.setMigrationVersion(29);
+            console.log('[KanbanDatabase] V29 migration completed: epic support columns added');
+        }
 
     }
 
@@ -4562,7 +4664,9 @@ FROM plans
                     clickupTaskId: String(row.clickup_task_id || ""),
                     linearIssueId: String(row.linear_issue_id || ""),
                     worktreeId: row.worktree_id !== null && row.worktree_id !== undefined ? Number(row.worktree_id) : undefined,
-                    worktreeStatus: String(row.worktree_status || 'none') as 'none' | 'active' | 'merged' | 'deleted'
+                    worktreeStatus: String(row.worktree_status || 'none') as 'none' | 'active' | 'merged' | 'deleted',
+                    isEpic: row.is_epic !== null && row.is_epic !== undefined ? Number(row.is_epic) : undefined,
+                    epicId: String(row.epic_id || '')
                 });
             }
         } finally {

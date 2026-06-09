@@ -1469,6 +1469,16 @@
                     </div>
 
                     <div class="db-subsection">
+                        <div class="subsection-header"><span>Automatic Backups</span></div>
+                        <div style="font-size:10px; color:var(--text-secondary); line-height:1.5;">
+                            <p style="margin:0 0 6px;">Switchboard writes a rolling backup of the database to <code>.switchboard/dbbackup/</code> each time the extension starts. The 5 most recent backups are kept. These can be used to recover from startup-triggered data loss.</p>
+                            <p style="margin:0 0 6px;">For additional protection, consider scheduling a daily copy of <code>.switchboard/kanban.db</code> to a location outside the project — for example using a cron job or a folder sync tool. A <code>.switchboard/dbbackup/</code> subfolder works well as the destination if you want backups co-located with the project.</p>
+                            <p style="margin:0;">Example cron (daily at 2am, keeping 30 days):<br>
+                            <code style="display:block; margin-top:4px; white-space:pre-wrap; word-break:break-all;">0 2 * * * cp /path/to/.switchboard/kanban.db /path/to/.switchboard/dbbackup/kanban.db.$(date +\%Y-\%m-\%d) && ls -t /path/to/.switchboard/dbbackup/kanban.db.* | tail -n +31 | xargs rm -f</code></p>
+                        </div>
+                    </div>
+
+                    <div class="db-subsection">
                         <div class="subsection-header"><span>Notion Backup</span></div>
                         <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
                             Backup to Notion database. Requires integration token.

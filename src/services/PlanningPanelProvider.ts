@@ -1813,6 +1813,97 @@ export class PlanningPanelProvider {
                 }
                 break;
             }
+            case 'getEpicDetails': {
+                const sessionId = String(msg.sessionId || '');
+                const wsRoot = String(msg.workspaceRoot || workspaceRoot);
+                if (!sessionId || !wsRoot) {
+                    this._panel?.webview.postMessage({ type: 'epicDetails', epic: null, subtasks: [] });
+                    break;
+                }
+                try {
+                    const { KanbanDatabase } = require('./KanbanDatabase');
+                    const db = KanbanDatabase.forWorkspace(wsRoot);
+                    const epic = await db.getPlanBySessionId(sessionId);
+                    const subtasks = epic && epic.isEpic ? await db.getSubtasksByEpicId(epic.planId) : [];
+                    this._panel?.webview.postMessage({ type: 'epicDetails', epic, subtasks });
+                } catch (err) {
+                    this._panel?.webview.postMessage({ type: 'epicDetails', epic: null, subtasks: [], error: String(err) });
+                }
+                break;
+            }
+            case 'addSubtaskToEpic': {
+                const epicSessionId = String(msg.epicSessionId || '');
+                const subtaskSessionId = String(msg.subtaskSessionId || '');
+                const wsRoot = String(msg.workspaceRoot || workspaceRoot);
+                if (!epicSessionId || !subtaskSessionId || !wsRoot) break;
+                try {
+                    const { KanbanDatabase } = require('./KanbanDatabase');
+                    const db = KanbanDatabase.forWorkspace(wsRoot);
+                    const epic = await db.getPlanBySessionId(epicSessionId);
+                    if (!epic || !epic.isEpic) break;
+                    await db.updateEpicStatus(subtaskSessionId, 0, epic.planId);
+                    const allPlans = await this._getKanbanPlans(wsRoot);
+                    this._panel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, requestId: Date.now() });
+                } catch (err) {
+                    console.error('[PlanningPanelProvider] addSubtaskToEpic failed:', err);
+                }
+                break;
+            }
+            case 'removeSubtaskFromEpic': {
+                const subtaskSessionId = String(msg.subtaskSessionId || '');
+                const wsRoot = String(msg.workspaceRoot || workspaceRoot);
+                if (!subtaskSessionId || !wsRoot) break;
+                try {
+                    const { KanbanDatabase } = require('./KanbanDatabase');
+                    const db = KanbanDatabase.forWorkspace(wsRoot);
+                    await db.updateEpicStatus(subtaskSessionId, 0, '');
+                    const allPlans = await this._getKanbanPlans(wsRoot);
+                    this._panel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, requestId: Date.now() });
+                } catch (err) {
+                    console.error('[PlanningPanelProvider] removeSubtaskFromEpic failed:', err);
+                }
+                break;
+            }
+            case 'deleteEpic': {
+                const sessionId = String(msg.sessionId || '');
+                const wsRoot = String(msg.workspaceRoot || workspaceRoot);
+                const deleteSubtasks = !!msg.deleteSubtasks;
+                if (!sessionId || !wsRoot) break;
+                try {
+                    const { KanbanDatabase } = require('./KanbanDatabase');
+                    const db = KanbanDatabase.forWorkspace(wsRoot);
+                    const epic = await db.getPlanBySessionId(sessionId);
+                    if (!epic || !epic.isEpic) break;
+                    if (deleteSubtasks) {
+                        const subtasks = await db.getSubtasksByEpicId(epic.planId);
+                        for (const st of subtasks) {
+                            await db.tombstonePlan(st.planId);
+                        }
+                    } else {
+                        await db.clearEpicIdForEpic(epic.planId);
+                    }
+                    await db.tombstonePlan(epic.planId);
+                    const allPlans = await this._getKanbanPlans(wsRoot);
+                    this._panel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, requestId: Date.now() });
+                } catch (err) {
+                    console.error('[PlanningPanelProvider] deleteEpic failed:', err);
+                }
+                break;
+            }
+            case 'updateEpicConfig': {
+                const wsRoot = String(msg.workspaceRoot || workspaceRoot);
+                if (!wsRoot) break;
+                try {
+                    const { KanbanDatabase } = require('./KanbanDatabase');
+                    const db = KanbanDatabase.forWorkspace(wsRoot);
+                    if (msg.epicLockColumns !== undefined) await db.setConfig('epic_lock_columns', String(msg.epicLockColumns));
+                    if (msg.epicPromptTemplate !== undefined) await db.setConfig('epic_prompt_template', String(msg.epicPromptTemplate));
+                    if (msg.epicMaxSubtasks !== undefined) await db.setConfig('epic_max_subtasks', String(msg.epicMaxSubtasks));
+                } catch (err) {
+                    console.error('[PlanningPanelProvider] updateEpicConfig failed:', err);
+                }
+                break;
+            }
             case 'saveFileContent': {
                 const filePath = String(msg.filePath || '');
                 const content = String(msg.content || '');

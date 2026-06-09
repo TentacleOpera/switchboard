@@ -774,8 +774,21 @@
             border-radius: 3px;
             white-space: nowrap;
         }
-
-
+        .epic-card {
+            border-left: 4px solid #7c3aed;
+            background: rgba(124, 58, 237, 0.06);
+        }
+        .epic-badge {
+            display: inline-block;
+            font-size: 0.7em;
+            font-weight: 700;
+            text-transform: uppercase;
+            background: #7c3aed;
+            color: white;
+            padding: 1px 6px;
+            border-radius: 3px;
+            margin-right: 4px;
+        }
 
         /* During drag, prevent child elements from interfering with drop targets */
         .column-body.drag-over .kanban-card,
@@ -4780,6 +4793,20 @@
                 });
             });
 
+            document.querySelectorAll('.card-btn.epic-toggle').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const sessionId = btn.dataset.session || btn.dataset.planId || '';
+                    const workspaceRoot = btn.dataset.workspaceRoot || getActiveWorkspaceRoot();
+                    if (btn.textContent === 'Un-epic') {
+                        if (confirm('Remove epic status from this plan?')) {
+                            postKanbanMessage({ type: 'convertToEpic', sessionId, workspaceRoot, revert: true });
+                        }
+                    } else {
+                        postKanbanMessage({ type: 'convertToEpic', sessionId, workspaceRoot });
+                    }
+                });
+            });
+
             document.querySelectorAll('.card-btn.copy').forEach(btn => {
                 btn.addEventListener('click', () => {
                     const column = btn.dataset.column || btn.closest('.kanban-column')?.dataset?.column;
@@ -4929,6 +4956,11 @@
                     ? `<button class="card-btn send-to-new-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move back to New">→ New</button>`
                     : '';
 
+            const epicClass = card.isEpic ? ' epic-card' : '';
+            const epicBadge = card.isEpic ? `<span class="epic-badge">EPIC · ${card.subtaskCount || 0} subtask${(card.subtaskCount || 0) !== 1 ? 's' : ''}</span>` : '';
+            const epicToggleBtn = (!card.epicId && !card.isEpic)
+                ? `<button class="card-btn epic-toggle" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Convert to epic">Make Epic</button>`
+                : (card.isEpic ? `<button class="card-btn epic-toggle" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Remove epic status">Un-epic</button>` : '');
             const completeOrDoneBtn = isCompleted
                 ? `<span class="card-done-badge">✓ Done</span>`
                 : `<button class="card-btn icon-btn complete" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Complete and archive">
@@ -4936,14 +4968,15 @@
                    </button>`;
             const cardId = escapeAttr(card.planId || card.sessionId || '');
             return `
-                <div class="kanban-card${completedClass}" draggable="true" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}">
-                    <div class="card-topic">${escapeHtml(shortTopic)}</div>
+                <div class="kanban-card${completedClass}${epicClass}" draggable="true" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}">
+                    <div class="card-topic">${epicBadge}${escapeHtml(shortTopic)}</div>
                     <div class="card-meta">Complexity: <span class="complexity-indicator ${complexityClass}">${category}</span> · ${timeAgo}</div>
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">
                         <div style="display: flex; gap: 4px;">
                             ${pairProgramBtn}
                             ${primaryActionBtn}
                             ${backlogActionBtn}
+                            ${epicToggleBtn}
                         </div>
                         <div style="display: flex; gap: 4px;">
                             <button class="card-btn icon-btn review" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Review plan">

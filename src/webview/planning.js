@@ -3539,6 +3539,25 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 // Pending selection will be resolved in handleKanbanPlansReady if not matched immediately.
                 break;
             }
+            case 'epicDetails': {
+                const epicId = msg.epic ? msg.epic.planId : '';
+                const container = kanbanListPane && kanbanListPane.querySelector(`.epic-accordion[data-plan-id="${epicId}"] .epic-subtasks`);
+                if (container) {
+                    if (!msg.epic) {
+                        container.innerHTML = '<span style="color: var(--vscode-errorForeground, #ff6b6b);">Epic not found</span>';
+                    } else if (!msg.subtasks || msg.subtasks.length === 0) {
+                        container.innerHTML = '<span style="color: var(--text-secondary);">No subtasks</span>';
+                    } else {
+                        container.innerHTML = msg.subtasks.map(st => `
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 2px 0;">
+                                <span>${escapeHtml(st.topic)}</span>
+                                <button class="epic-remove-subtask-btn strip-btn" data-subtask-session="${escapeHtml(st.sessionId || st.planId)}" style="margin: 0; padding: 1px 4px; font-size: 10px;">Remove</button>
+                            </div>
+                        `).join('');
+                    }
+                }
+                break;
+            }
             case 'commentResult': {
                 const { ok, message } = msg;
                 if (ok) {
@@ -4353,6 +4372,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
     let _kanbanPlansCache = [];
     let _kanbanAllWorkspaceProjects = {};  // { [resolvedRoot]: string[] }
     let _kanbanWorkspaceItems = [];         // { workspaceRoot, label }[]
+    let _kanbanViewMode = 'all'; // 'all' | 'epics'
     let _kanbanSelectedPlan = null;
     let _kanbanPreviewRequestId = 0;
     let _kanbanAvailableColumns = [];  // { id, label, kind }[] — merged across workspaces
@@ -4407,6 +4427,46 @@ Return ONLY the drafted prompt with no additional commentary.`;
             vscode.postMessage({ type: 'importPlans' });
         });
     }
+    const kanbanViewAllBtn = document.getElementById('kanban-view-all');
+    const kanbanViewEpicsBtn = document.getElementById('kanban-view-epics');
+    const kanbanEpicConfigPanel = document.getElementById('kanban-epic-config');
+    const btnSaveEpicConfig = document.getElementById('btn-save-epic-config');
+
+    function updateKanbanViewButtons() {
+        if (kanbanViewAllBtn) kanbanViewAllBtn.classList.toggle('active', _kanbanViewMode === 'all');
+        if (kanbanViewEpicsBtn) kanbanViewEpicsBtn.classList.toggle('active', _kanbanViewMode === 'epics');
+        if (kanbanEpicConfigPanel) kanbanEpicConfigPanel.style.display = _kanbanViewMode === 'epics' ? '' : 'none';
+    }
+
+    if (kanbanViewAllBtn) {
+        kanbanViewAllBtn.addEventListener('click', () => {
+            _kanbanViewMode = 'all';
+            updateKanbanViewButtons();
+            renderKanbanPlans(_kanbanPlansCache, kanbanFilters);
+        });
+    }
+    if (kanbanViewEpicsBtn) {
+        kanbanViewEpicsBtn.addEventListener('click', () => {
+            _kanbanViewMode = 'epics';
+            updateKanbanViewButtons();
+            renderKanbanPlans(_kanbanPlansCache, kanbanFilters);
+        });
+    }
+    if (btnSaveEpicConfig) {
+        btnSaveEpicConfig.addEventListener('click', () => {
+            const lockCols = document.getElementById('epic-lock-columns');
+            const promptTpl = document.getElementById('epic-prompt-template');
+            const maxSub = document.getElementById('epic-max-subtasks');
+            vscode.postMessage({
+                type: 'updateEpicConfig',
+                workspaceRoot: currentWorkspaceRoot,
+                epicLockColumns: lockCols ? lockCols.value : undefined,
+                epicPromptTemplate: promptTpl ? promptTpl.value : undefined,
+                epicMaxSubtasks: maxSub ? maxSub.value : undefined
+            });
+        });
+    }
+
     const kanbanListPane = document.getElementById('kanban-list-pane');
     const kanbanPreviewPane = document.getElementById('kanban-preview-pane');
     const kanbanPreviewContent = document.getElementById('kanban-preview-content');
@@ -4581,12 +4641,20 @@ Return ONLY the drafted prompt with no additional commentary.`;
         // Already sorted by mtime descending from backend, but can double check
         filtered.sort((a, b) => b.mtime - a.mtime);
 
+        if (_kanbanViewMode === 'epics') {
+            filtered = filtered.filter(plan => plan.isEpic);
+        }
+
         if (filtered.length === 0) {
-            kanbanListPane.innerHTML = '<div class="kanban-empty-state">No matching kanban plans</div>';
+            const emptyMsg = _kanbanViewMode === 'epics' ? 'No epics found' : 'No matching kanban plans';
+            kanbanListPane.innerHTML = '<div class="kanban-empty-state">' + emptyMsg + '</div>';
             return;
         }
 
         kanbanListPane.innerHTML = '';
+        const availableSubtaskOptions = _kanbanViewMode === 'epics'
+            ? _kanbanPlansCache.filter(p => !p.isEpic && !p.epicId).map(p => `<option value="${escapeHtml(p.sessionId || p.planId)}">${escapeHtml(p.topic)}</option>`).join('')
+            : '';
         filtered.forEach(plan => {
             const itemDiv = document.createElement('div');
             itemDiv.className = 'kanban-plan-item';
@@ -4607,6 +4675,19 @@ Return ONLY the drafted prompt with no additional commentary.`;
             ).join('');
 
             const complexityClass = _complexityToCssClass(plan.complexity);
+            const epicAccordion = (_kanbanViewMode === 'epics' && plan.isEpic)
+                ? `
+                    <details class="epic-accordion" data-plan-id="${escapeHtml(plan.planId)}" style="margin-top: 6px; font-size: 11px;">
+                        <summary style="cursor: pointer; color: var(--text-secondary);">Subtasks (${plan.subtaskCount || 0}) — click to expand</summary>
+                        <div class="epic-subtasks" style="margin-top: 4px; padding-left: 8px;">Loading...</div>
+                        <div style="margin-top: 6px; display: flex; gap: 4px; align-items: center;">
+                            <select class="epic-add-subtask-select" style="flex: 1; font-size: 11px;"><option value="">Add subtask...</option>${availableSubtaskOptions}</select>
+                            <button class="epic-add-subtask-btn strip-btn" style="margin: 0; padding: 2px 6px; font-size: 10px;">Add</button>
+                            <button class="epic-delete-btn strip-btn" style="margin: 0; padding: 2px 6px; font-size: 10px; color: #ff6b6b;">Delete Epic</button>
+                        </div>
+                    </details>
+                `
+                : '';
             itemDiv.innerHTML = `
                 <div style="width: 100%;">
                     <div style="display: flex; align-items: flex-start; gap: 8px;">
@@ -4624,6 +4705,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
                         ${plan.planFile ? `<button class="kanban-plan-copy-link" data-plan-file="${escapeHtml(plan.planFile)}" title="Copy plan file path">Copy Link</button>` : ''}
                         ${plan.sessionId ? `<button class="kanban-plan-copy-prompt" data-session-id="${escapeHtml(plan.sessionId)}" data-column="${escapeHtml(plan.column)}" data-workspace-root="${escapeHtml(plan.workspaceRoot)}" title="Copy prompt and advance">Copy Prompt</button>` : ''}
                     </div>
+                    ${epicAccordion}
                 </div>
             `;
 
@@ -4743,6 +4825,56 @@ Return ONLY the drafted prompt with no additional commentary.`;
             }
 
             kanbanListPane.appendChild(itemDiv);
+        });
+
+        // Epic accordion interactions
+        if (_kanbanViewMode === 'epics') {
+            kanbanListPane.querySelectorAll('.epic-accordion').forEach(details => {
+                details.addEventListener('toggle', () => {
+                    if (details.open) {
+                        const planId = details.dataset.planId;
+                        vscode.postMessage({ type: 'getEpicDetails', sessionId: planId, workspaceRoot: currentWorkspaceRoot });
+                    }
+                });
+            });
+            kanbanListPane.querySelectorAll('.epic-add-subtask-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const details = btn.closest('.epic-accordion');
+                    const epicSessionId = details ? details.dataset.planId : '';
+                    const select = btn.parentElement.querySelector('.epic-add-subtask-select');
+                    const subtaskSessionId = select ? select.value : '';
+                    if (epicSessionId && subtaskSessionId) {
+                        vscode.postMessage({ type: 'addSubtaskToEpic', epicSessionId, subtaskSessionId, workspaceRoot: currentWorkspaceRoot });
+                    }
+                });
+            });
+            kanbanListPane.querySelectorAll('.epic-delete-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const details = btn.closest('.epic-accordion');
+                    const sessionId = details ? details.dataset.planId : '';
+                    const summaryText = details ? details.querySelector('summary')?.textContent : '';
+                    const countMatch = summaryText?.match(/(\d+)/);
+                    const subtaskCount = countMatch ? parseInt(countMatch[1], 10) : 0;
+                    if (!confirm('Delete this epic?')) return;
+                    const deleteSubtasks = subtaskCount > 0 ? confirm('Also delete all subtasks? (Cancel to orphan them)') : true;
+                    vscode.postMessage({ type: 'deleteEpic', sessionId, workspaceRoot: currentWorkspaceRoot, deleteSubtasks });
+                });
+            });
+        }
+    }
+
+    if (kanbanListPane) {
+        kanbanListPane.addEventListener('click', (e) => {
+            const removeBtn = e.target.closest('.epic-remove-subtask-btn');
+            if (removeBtn) {
+                e.stopPropagation();
+                const subtaskSessionId = removeBtn.dataset.subtaskSession;
+                if (subtaskSessionId) {
+                    vscode.postMessage({ type: 'removeSubtaskFromEpic', subtaskSessionId, workspaceRoot: currentWorkspaceRoot });
+                }
+            }
         });
     }
 

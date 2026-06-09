@@ -3229,6 +3229,10 @@
                     <option value="">All Columns</option>
                 </select>
                 <input type="text" id="kanban-search" placeholder="Search plans..." />
+                <div class="kanban-view-toggle" style="display: flex; gap: 4px;">
+                    <button id="kanban-view-all" class="strip-btn active" style="margin: 0;">All</button>
+                    <button id="kanban-view-epics" class="strip-btn" style="margin: 0;">Epics</button>
+                </div>
                 <button id="kanban-refresh-btn" title="Refresh">↻</button>
                 <button id="btn-import-kanban-plans" class="strip-btn" title="Scan configured AI IDE folders and pick unclaimed plans to add (any age, bypasses the auto-claim window)">Import</button>
                 <button id="btn-kanban-log" class="strip-btn" disabled title="View action log for selected plan">Log</button>
@@ -3236,6 +3240,17 @@
                 <button id="btn-review-kanban" class="strip-btn" disabled title="Review plan - select text and submit comment to planner">Review</button>
                 <button id="btn-save-kanban" class="strip-btn" style="display:none;">Save</button>
                 <button id="btn-cancel-kanban" class="strip-btn" style="display:none;">Cancel</button>
+            </div>
+            <!-- Epic Config Panel -->
+            <div id="kanban-epic-config" style="display:none; padding: 8px 12px; border-bottom: 1px solid var(--border-color, rgba(255,255,255,0.08)); background: var(--panel-bg, #000000);">
+                <div style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 6px;">Epic Config</div>
+                <label style="font-size: 11px; display: block; margin-bottom: 2px;">Lock Columns (comma-separated)</label>
+                <input type="text" id="epic-lock-columns" class="planning-input" style="width: 100%; margin-bottom: 6px; box-sizing: border-box;" />
+                <label style="font-size: 11px; display: block; margin-bottom: 2px;">Prompt Template</label>
+                <input type="text" id="epic-prompt-template" class="planning-input" style="width: 100%; margin-bottom: 6px; box-sizing: border-box;" />
+                <label style="font-size: 11px; display: block; margin-bottom: 2px;">Max Subtasks</label>
+                <input type="number" id="epic-max-subtasks" class="planning-input" style="width: 100%; margin-bottom: 8px; box-sizing: border-box;" />
+                <button id="btn-save-epic-config" class="strip-btn">Save Config</button>
             </div>
             <!-- Split pane: list + preview -->
             <div class="content-row" id="kanban-content-row">
