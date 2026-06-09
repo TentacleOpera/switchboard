@@ -2469,25 +2469,41 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         }
                     };
                 }
-            } else if (htmlContent) {
-                // HTML preview: use srcdoc and inject base tag for relative asset resolution
-                // (iframe.src with vscode-webview-resource: URIs is blocked by VS Code's sandbox)
+            } else if (msg.iframeSrc) {
+                // PRIMARY PATH: Use real http:// origin — fixes external fetch persistence
                 if (iframeWrapper) { iframeWrapper.style.display = 'flex'; }
                 if (htmlWrapper) htmlWrapper.classList.add('scanlines-suppressed');
                 if (iframe) {
+                    // Cross-origin isolation: remove allow-same-origin for localhost
+                    iframe.setAttribute('sandbox', 'allow-scripts');
+                    iframe.removeAttribute('srcdoc');
+                    // Only append cache-buster on auto-refresh to preserve scroll/form state on initial load
+                    iframe.src = isAutoRefreshed
+                        ? msg.iframeSrc + '?t=' + Date.now()
+                        : msg.iframeSrc;
+                    console.log('[PlanningPanel] Loading preview via iframe.src (localhost):', msg.iframeSrc);
+                }
+                if (imageContainer) { imageContainer.style.display = 'none'; }
+                if (imageImg) { imageImg.removeAttribute('src'); }
+                // Apply zoom
+                const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
+                if (iframeViewport) applyZoom('html', iframeViewport);
+            } else if (htmlContent) {
+                // FALLBACK: srcdoc (backward compat or when server can't start)
+                if (iframeWrapper) { iframeWrapper.style.display = 'flex'; }
+                if (htmlWrapper) htmlWrapper.classList.add('scanlines-suppressed');
+                if (iframe) {
+                    // Restore allow-same-origin for srcdoc mode (needed for <base> tag resolution)
+                    iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
                     iframe.removeAttribute('src');
-                    iframe.removeAttribute('srcdoc');  // Destroy the attribute to guarantee a clean browsing context
+                    iframe.removeAttribute('srcdoc');
                     const htmlWithBase = injectBaseTag(htmlContent, webviewUri);
-                    console.log('[PlanningPanel] Setting srcdoc for HTML preview, length:', htmlWithBase.length, 'hasNonce:', /nonce="/.test(htmlWithBase));
+                    console.log('[PlanningPanel] Loading preview via iframe.srcdoc (fallback), length:', htmlWithBase.length);
                     iframe.srcdoc = htmlWithBase;
-                    // Diagnostic: listen for load/error events on the iframe
                     iframe.onload = () => { console.log('[PlanningPanel] Preview iframe loaded successfully'); };
-                    iframe.onerror = (e) => { console.error('[PlanningPanel] Preview iframe error:', e); }
-                    // Apply default zoom for iframe (scale 1, pan 0 — already set by resetZoom)
+                    iframe.onerror = (e) => { console.error('[PlanningPanel] Preview iframe error:', e); };
                     const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
-                    if (iframeViewport) {
-                        applyZoom('html', iframeViewport);
-                    }
+                    if (iframeViewport) applyZoom('html', iframeViewport);
                 }
                 if (imageContainer) { imageContainer.style.display = 'none'; }
                 if (imageImg) { imageImg.removeAttribute('src'); }
@@ -2514,6 +2530,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     applyZoom('html', iframeViewport);
                 }
                 if (iframe) {
+                    iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
                     iframe.removeAttribute('srcdoc');
                     iframe.src = webviewUri + '?t=' + Date.now(); // cache-buster for refresh
                 }

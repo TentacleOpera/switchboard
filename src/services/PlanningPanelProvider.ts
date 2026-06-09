@@ -86,6 +86,17 @@ export class PlanningPanelProvider {
     private _activeDesignSystemDocSourceId: string | null = null;
     private _activeDesignSystemDocId: string | null = null;
     private _htmlServers = new Map<string, { server: http.Server; port: number; timeoutId: NodeJS.Timeout }>();
+    private readonly _SERVER_DENY_LIST: readonly string[] = [
+        '.switchboard',
+        '.git',
+        '.env',
+        '.env.',
+        'node_modules',
+        'secrets',
+        'credentials',
+        '.ssh',
+        '.aws',
+    ];
 
     private _resolvedConfigCache: {
         configPath: string | null;
@@ -3336,6 +3347,16 @@ export class PlanningPanelProvider {
             this._activePreviewWorkspaceRoot = workspaceRoot;
             this._setupActiveDocWatcher(resolvedPath);
 
+            // Compute iframeSrc via localhost server (with fallback on error)
+            let iframeSrc: string | undefined;
+            try {
+                const serverEntry = await this._getOrCreateHtmlServer(resolvedSourceFolder);
+                iframeSrc = this._buildLocalhostUrl(serverEntry, resolvedSourceFolder, resolvedPath);
+            } catch (err: any) {
+                console.warn('[PlanningPanel] Failed to start localhost server for inline preview, falling back to srcdoc:', err.message);
+                iframeSrc = undefined;
+            }
+
             const fileExt = path.extname(resolvedPath).toLowerCase();
             const isImage = PlanningPanelProvider.IMAGE_EXTENSIONS.has(fileExt);
 
@@ -3347,6 +3368,7 @@ export class PlanningPanelProvider {
                     sourceId,
                     requestId,
                     webviewUri,
+                    iframeSrc,
                     docName: path.basename(resolvedPath),
                     isImage: true,
                     isAutoRefreshed: this._isAutoRefreshing
@@ -3371,6 +3393,7 @@ export class PlanningPanelProvider {
                             sourceId,
                             requestId,
                             webviewUri,
+                            iframeSrc,
                             docName: path.basename(resolvedPath),
                             isAutoRefreshed: false
                         });
@@ -3386,6 +3409,7 @@ export class PlanningPanelProvider {
                     sourceId,
                     requestId,
                     webviewUri,
+                    iframeSrc,
                     htmlContent: htmlWithCsp,
                     docName: path.basename(resolvedPath),
                     isAutoRefreshed: this._isAutoRefreshing
@@ -3398,6 +3422,7 @@ export class PlanningPanelProvider {
                     sourceId,
                     requestId,
                     webviewUri,
+                    iframeSrc,
                     docName: path.basename(resolvedPath),
                     isAutoRefreshed: this._isAutoRefreshing
                 });
@@ -4733,57 +4758,69 @@ export class PlanningPanelProvider {
             return;
         }
 
-        // Derive sourceFolder from absolutePath if not provided
         const resolvedSourceFolder = sourceFolder || path.dirname(absolutePath);
 
-        // Reuse existing server for this sourceFolder
-        const existing = this._htmlServers.get(resolvedSourceFolder);
-        if (existing) {
-            // Refresh inactivity timeout
-            clearTimeout(existing.timeoutId);
-            existing.timeoutId = this._createServerTimeout(resolvedSourceFolder);
-            const relativeUrlPath = path.relative(resolvedSourceFolder, absolutePath);
-            const urlPath = relativeUrlPath.split(path.sep).map(encodeURIComponent).join('/');
-            const url = `http://127.0.0.1:${existing.port}/${urlPath}`;
-            await vscode.env.openExternal(vscode.Uri.parse(url));
-            return;
-        }
-
-        // Verify file exists before spinning up a server
         try {
+            // Verify file exists before spinning up a server
             await fs.promises.access(absolutePath, fs.constants.R_OK);
         } catch {
             vscode.window.showErrorMessage(`File not found or not readable: ${absolutePath}`);
             return;
         }
 
+        try {
+            const entry = await this._getOrCreateHtmlServer(resolvedSourceFolder);
+            const url = this._buildLocalhostUrl(entry, resolvedSourceFolder, absolutePath);
+            await vscode.env.openExternal(vscode.Uri.parse(url));
+        } catch (err: any) {
+            console.error('[PlanningPanel] Failed to start local server:', err);
+            vscode.window.showErrorMessage(`Failed to start local server: ${err.message}`);
+        }
+    }
+
+    /**
+     * Get or create a localhost HTTP server for the given sourceFolder.
+     * Returns the server entry (with port) for URL construction.
+     * Sets a placeholder entry eagerly to prevent race conditions on concurrent calls.
+     */
+    private async _getOrCreateHtmlServer(sourceFolder: string): Promise<{ server: http.Server; port: number; timeoutId: NodeJS.Timeout }> {
+        // Reuse existing server if already running
+        const existing = this._htmlServers.get(sourceFolder);
+        if (existing) {
+            clearTimeout(existing.timeoutId);
+            existing.timeoutId = this._createServerTimeout(sourceFolder);
+            return existing;
+        }
+
         // Start new server
         const server = http.createServer((req, res) => {
-            this._handleHtmlServerRequest(req, res, resolvedSourceFolder);
+            this._handleHtmlServerRequest(req, res, sourceFolder);
         });
 
-        await new Promise<void>((resolve, reject) => {
+        return new Promise<{ server: http.Server; port: number; timeoutId: NodeJS.Timeout }>((resolve, reject) => {
             server.listen(0, '127.0.0.1', () => {
                 const address = server.address() as { port: number };
                 const port = address.port;
-                const relativeUrlPath = path.relative(resolvedSourceFolder, absolutePath);
-                const urlPath = relativeUrlPath.split(path.sep).map(encodeURIComponent).join('/');
-                const url = `http://127.0.0.1:${port}/${urlPath}`;
-
-                const timeoutId = this._createServerTimeout(resolvedSourceFolder);
-                this._htmlServers.set(resolvedSourceFolder, { server, port, timeoutId });
-
-                console.log(`[PlanningPanel] HTML server started on port ${port} for ${resolvedSourceFolder}`);
-                vscode.env.openExternal(vscode.Uri.parse(url));
-                resolve();
+                const timeoutId = this._createServerTimeout(sourceFolder);
+                const entry = { server, port, timeoutId };
+                this._htmlServers.set(sourceFolder, entry);
+                console.log(`[PlanningPanel] HTML server started on port ${port} for ${sourceFolder}`);
+                resolve(entry);
             });
-
             server.on('error', (err: any) => {
                 console.error('[PlanningPanel] HTML server error:', err);
-                vscode.window.showErrorMessage(`Failed to start local server: ${err.message}`);
                 reject(err);
             });
         });
+    }
+
+    /**
+     * Construct a localhost URL for a file served by an HTML server entry.
+     */
+    private _buildLocalhostUrl(serverEntry: { port: number }, sourceFolder: string, filePath: string): string {
+        const relativeUrlPath = path.relative(sourceFolder, filePath);
+        const urlPath = relativeUrlPath.split(path.sep).map(encodeURIComponent).join('/');
+        return `http://127.0.0.1:${serverEntry.port}/${urlPath}`;
     }
 
     private _handleHtmlServerRequest(req: http.IncomingMessage, res: http.ServerResponse, sourceFolder: string): void {
@@ -4802,10 +4839,21 @@ export class PlanningPanelProvider {
         const normalizedSource = path.normalize(sourceFolder).replace(/[\\/]+$/, '');
         const normalizedResolved = path.normalize(resolvedPath);
 
+        // Path traversal guard
         if (!normalizedResolved.startsWith(normalizedSource + path.sep) && normalizedResolved !== normalizedSource) {
             res.writeHead(403, { 'Content-Type': 'text/plain' });
             res.end('Forbidden: path traversal denied');
             return;
+        }
+
+        // Deny-list guard: reject any request for paths containing sensitive directories
+        const pathParts = normalizedResolved.split(path.sep);
+        for (const part of pathParts) {
+            if (this._SERVER_DENY_LIST.some(denied => part === denied || part.startsWith(denied))) {
+                res.writeHead(403, { 'Content-Type': 'text/plain' });
+                res.end('Forbidden: access denied');
+                return;
+            }
         }
 
         // Serve file
@@ -4864,6 +4912,6 @@ export class PlanningPanelProvider {
                 this._htmlServers.delete(sourceFolder);
                 console.log(`[PlanningPanel] HTML server auto-shutdown for ${sourceFolder}`);
             }
-        }, 5 * 60 * 1000); // 5 minutes
+        }, 10 * 60 * 1000); // 10 minutes — extended for interactive chat sessions
     }
 }

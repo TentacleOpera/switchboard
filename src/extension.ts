@@ -2353,6 +2353,7 @@ export async function activate(context: vscode.ExtensionContext) {
                         state.terminals[reg.name].lastSeen = new Date().toISOString();
                         if (reg.pid) state.terminals[reg.name].pid = reg.pid;
                         if (reg.ideName) state.terminals[reg.name].ideName = reg.ideName;
+                        if (reg.worktreePath) state.terminals[reg.name].worktreePath = reg.worktreePath;
                     }
                 });
                 taskViewerProvider.refresh();

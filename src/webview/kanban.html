@@ -2281,7 +2281,7 @@
         <button class="kanban-tab-btn" data-tab="automation">AUTOMATION</button>
         <button class="kanban-tab-btn" data-tab="worktrees">WORKTREES</button>
 
-        <button class="kanban-tab-btn" data-tab="uat">test</button>
+        <button class="kanban-tab-btn" data-tab="uat">UAT</button>
         <button class="kanban-tab-btn" data-tab="setup">SETUP</button>
     </div>
 
@@ -7996,7 +7996,7 @@
             if (cpMode === 'none') {
                 const infoBanner = document.createElement('div');
                 infoBanner.style.cssText = 'padding:8px; background:rgba(0,173,159,0.08); border:1px solid var(--accent-teal,#00ad9f); color:var(--text-secondary,#aaa); border-radius:4px; font-size:11px; line-height:1.4;';
-                infoBanner.textContent = '\u2139\ufe0f No control plane configured. Worktrees are optional \u2014 you can still create them for isolated git branches. Agent config queries always use the workspace root.';
+                infoBanner.textContent = '\u2139\ufe0f No control plane configured. Agents will run in the workspace root unless a worktree directory is selected.';
                 container.appendChild(infoBanner);
             }
 
@@ -8094,10 +8094,13 @@
                 createBtn.className = 'worktree-primary-btn';
                 createBtn.textContent = 'CREATE NEW WORKTREE';
                 createBtn.addEventListener('click', () => {
+                    if (createBtn.disabled) return;
+                    createBtn.disabled = true;
                     const selected = radioGroup.querySelector('input[name="worktree-agent-behaviour"]:checked');
                     const agentBehaviour = selected ? selected.value : 'worktreeNew';
                     const rememberChoice = rememberCb.checked;
                     postKanbanMessage({ type: 'createWorktree', workspaceRoot: currentWorkspaceRoot, agentBehaviour, rememberChoice });
+                    setTimeout(() => { createBtn.disabled = false; }, 5000);
                 });
                 actionSection.appendChild(createBtn);
 
@@ -8142,7 +8145,10 @@
                     clearBtn.style.cssText = 'margin-top: 8px;';
                     clearBtn.textContent = 'CLEAR WORKTREE RECORD';
                     clearBtn.addEventListener('click', () => {
+                        if (clearBtn.disabled) return;
+                        clearBtn.disabled = true;
                         postKanbanMessage({ type: 'clearSafetySessionRecord', workspaceRoot: currentWorkspaceRoot });
+                        setTimeout(() => { clearBtn.disabled = false; }, 5000);
                     });
                     activeSection.appendChild(clearBtn);
                 } else {
@@ -8153,7 +8159,10 @@
                     mergeBtn.className = 'worktree-primary-btn';
                     mergeBtn.textContent = 'MERGE BACK';
                     mergeBtn.addEventListener('click', () => {
+                        if (mergeBtn.disabled) return;
+                        mergeBtn.disabled = true;
                         postKanbanMessage({ type: 'mergeSafetySession', workspaceRoot: currentWorkspaceRoot });
+                        setTimeout(() => { mergeBtn.disabled = false; }, 5000);
                     });
                     btnGroup.appendChild(mergeBtn);
 
@@ -8177,8 +8186,11 @@
                     abandonBtn.className = 'worktree-primary-btn danger';
                     abandonBtn.textContent = 'ABANDON WORKTREE';
                     abandonBtn.addEventListener('click', () => {
+                        if (abandonBtn.disabled) return;
                         if (confirm('Are you sure you want to abandon this worktree? All worktree changes and the branch will be deleted!')) {
+                            abandonBtn.disabled = true;
                             postKanbanMessage({ type: 'abandonSafetySession', workspaceRoot: currentWorkspaceRoot });
+                            setTimeout(() => { abandonBtn.disabled = false; }, 5000);
                         }
                     });
                     btnGroup.appendChild(abandonBtn);

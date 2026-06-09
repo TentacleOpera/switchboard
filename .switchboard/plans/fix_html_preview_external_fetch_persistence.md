@@ -554,6 +554,22 @@ Skipped per session directive. Test suite to be run separately by the user.
    - Verify the iframe reloads with updated content (cache-buster applied).
    - Note: scroll position and form state will be lost on auto-refresh — this is expected behavior.
 
+## Execution Summary
+
+**Status:** Completed  
+**Date:** 2026-06-09  
+**Files Changed:**
+- `src/webview/planning.html` — Added `http:` to `frame-src` CSP directive
+- `src/services/PlanningPanelProvider.ts` — Added `_SERVER_DENY_LIST`, extracted `_getOrCreateHtmlServer` + `_buildLocalhostUrl`, refactored `_handleServeAndOpenHtml`, hardened `_handleHtmlServerRequest` with deny-list, extended auto-shutdown timeout to 10 min, wired `_handleFetchPreview` to compute and send `iframeSrc`
+- `src/webview/planning.js` — Added `msg.iframeSrc` as primary preview path with `sandbox="allow-scripts"`, preserved `srcdoc` fallback with `sandbox="allow-scripts allow-same-origin"`
+
+**Key Implementation Notes:**
+- All 4 `previewReady` postMessage paths in `_handleFetchPreview` include `iframeSrc` (image, cache hit, normal content, error fallback)
+- Sandbox toggles dynamically: `allow-scripts` for localhost (`iframe.src`), `allow-scripts allow-same-origin` for srcdoc fallback
+- Cache-buster (`?t=Date.now()`) only applied on auto-refresh for localhost path
+- Server creation race condition mitigated by setting `_htmlServers` entry immediately in `listen` callback
+- Deny-list blocks access to `.switchboard`, `.git`, `.env`, `node_modules`, `secrets`, `credentials`, `.ssh`, `.aws`
+
 ## Recommendation
 
 Complexity 6 → **Send to Coder** for implementation.

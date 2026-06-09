@@ -420,3 +420,7 @@ Then add these fields to each payload object:
 ---
 
 **Recommendation:** Complexity 8 → **Send to Lead Coder**
+
+## Review Findings
+
+Review found 4 issues: 1 CRITICAL (worktreePath not persisted to terminal state in extension.ts:2355 — fixed by adding `if (reg.worktreePath)` line), 1 MAJOR (no double-click protection on worktree buttons in kanban.html — fixed by adding disable-on-click + 5s timeout re-enable for create/merge/abandon/clear buttons), and 2 NITs (info banner text deviated from spec — fixed; create button hidden vs disabled-with-message — deferred as current UX matches mockup). Files changed: `src/extension.ts` (1 line added), `src/webview/kanban.html` (banner text updated + double-click guards on 4 buttons). Remaining risk: no `worktree-primary-btn.secondary` CSS variant defined (plan specified transparent/teal-border style for secondary actions); `clearRememberedWorktreeChoice` button uses `danger` style instead.
