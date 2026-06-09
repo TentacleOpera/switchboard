@@ -165,3 +165,7 @@ This guarantees a brand-new browsing context but requires slightly more DOM book
 - **Handler accumulation (pre-existing, out of scope):** lines 2289-2290 attach `onload`/`onerror` handlers on every `handlePreviewReady` call without removing prior handlers. This is a pre-existing issue not introduced by this fix.
 
 **Recommendation:** Complexity 3 → Send to Intern.
+
+## Review Findings
+
+**Reviewer pass completed.** No code changes required during review. Verified via grep that zero instances of `iframe.srcdoc = ''` remain in `src/webview/planning.js`. Both the success path (line 2479) and error path (line 2855) correctly use `iframe.removeAttribute('srcdoc')`, matching the existing proven pattern in the image-preview (line 2453) and fallback (line 2517) paths. No remaining risks introduced by this fix.
