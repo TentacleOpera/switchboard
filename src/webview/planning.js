@@ -2444,11 +2444,20 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
             const iframeWrapper = document.getElementById('html-preview-wrapper');
 
+            // Helper: toggle scanlines on the HTML tab's preview-panel-wrapper
+            const htmlWrapper = document.querySelector('#html-preview-content .preview-panel-wrapper');
+
             if (isImage && webviewUri) {
                 // Image preview: hide iframe wrapper, show image container
                 if (iframeWrapper) { iframeWrapper.style.display = 'none'; }
                 if (iframe) { iframe.removeAttribute('src'); iframe.removeAttribute('srcdoc'); }
                 if (imageContainer) { imageContainer.style.display = 'flex'; }
+                if (htmlWrapper) htmlWrapper.classList.add('scanlines-suppressed');
+                // Apply reset transform to image viewport (resetZoom cleared state but not DOM)
+                const imgViewport = imageContainer ? imageContainer.querySelector('.zoomable-viewport') : null;
+                if (imgViewport) {
+                    applyZoom('html', imgViewport);
+                }
                 if (imageImg) {
                     imageImg.src = webviewUri + '?t=' + Date.now(); // cache-buster for refresh
                     // Apply initial fit-to-container after image loads
@@ -2464,6 +2473,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 // HTML preview: use srcdoc and inject base tag for relative asset resolution
                 // (iframe.src with vscode-webview-resource: URIs is blocked by VS Code's sandbox)
                 if (iframeWrapper) { iframeWrapper.style.display = 'flex'; }
+                if (htmlWrapper) htmlWrapper.classList.add('scanlines-suppressed');
                 if (iframe) {
                     iframe.removeAttribute('src');
                     iframe.removeAttribute('srcdoc');  // Destroy the attribute to guarantee a clean browsing context
@@ -2485,12 +2495,24 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 // Cache hit: content hasn't changed, iframe already has srcdoc content
                 // Just ensure iframe is visible — do NOT modify src or srcdoc
                 if (iframeWrapper) { iframeWrapper.style.display = 'flex'; }
+                if (htmlWrapper) htmlWrapper.classList.add('scanlines-suppressed');
+                // Apply reset transform to viewport (resetZoom cleared state but not DOM)
+                const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
+                if (iframeViewport) {
+                    applyZoom('html', iframeViewport);
+                }
                 if (imageContainer) { imageContainer.style.display = 'none'; }
                 if (imageImg) { imageImg.removeAttribute('src'); }
             } else if (webviewUri) {
                 // Fallback: iframe src if htmlContent not available and no existing srcdoc
                 // (e.g., backend file read failed on first attempt)
                 if (iframeWrapper) { iframeWrapper.style.display = 'flex'; }
+                if (htmlWrapper) htmlWrapper.classList.add('scanlines-suppressed');
+                // Apply reset transform to viewport (resetZoom cleared state but not DOM)
+                const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
+                if (iframeViewport) {
+                    applyZoom('html', iframeViewport);
+                }
                 if (iframe) {
                     iframe.removeAttribute('srcdoc');
                     iframe.src = webviewUri + '?t=' + Date.now(); // cache-buster for refresh
@@ -2542,6 +2564,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (imgImg) imgImg.src = webviewUri + '?t=' + Date.now();
                 if (btnEditDesign) btnEditDesign.disabled = true;
                 if (designWrapper) designWrapper.classList.add('scanlines-suppressed');
+                // Apply reset transform to image viewport (resetZoom cleared state but not DOM)
+                const designImgViewport = imgCont ? imgCont.querySelector('.zoomable-viewport') : null;
+                if (designImgViewport) {
+                    applyZoom('design', designImgViewport);
+                }
                 // Apply initial fit-to-container after image loads
                 if (imgImg) {
                     imgImg.onload = () => {

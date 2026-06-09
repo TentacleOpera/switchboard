@@ -483,3 +483,7 @@ No automated tests applicable — this is a webview UI feature. Manual verificat
 - **Iframe rendering under transform:** Iframes inside CSS-transformed containers may exhibit blurry text or broken coordinate mapping at high zoom in Chromium/Electron. Acceptable for a viewer; not for an editor.
 - **Accessibility:** Keyboard-only users cannot zoom/pan. Consider adding keyboard shortcuts (e.g., `+`, `-`, `0` keys when the preview pane is focused) in a follow-up.
 - **Window-level listeners:** Three `mousemove`/`mouseup` pairs on `window` fire on every mouse event. Low overhead but could be optimized with attach-on-pan-start/detach-on-pan-end pattern in a follow-up.
+
+## Review Findings
+
+Two issues found and fixed in `src/webview/planning.js`. (1) CRITICAL: The HTML Previews tab has a `.cyber-scanlines` element (L3372) but the plan incorrectly stated it didn't; no scanline suppression was applied for HTML tab images/iframes. Fixed by adding `htmlWrapper` query and `scanlines-suppressed` class toggle in all html-folder branches. (2) MAJOR: `resetZoom()` resets JS state but never applies the reset transform to DOM viewport elements, causing stale transforms on cache-hit and fallback iframe branches. Fixed by adding `applyZoom()` calls after every container visibility toggle in both html-folder and design-folder branches. No automated tests apply (webview UI); manual verification per the Verification Plan is required.
