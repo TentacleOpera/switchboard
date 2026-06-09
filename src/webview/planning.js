@@ -46,6 +46,123 @@
         _lastDesignDocsMsg: null
     };
 
+    // ── Zoom/Pan Engine ──
+    const zoomState = {
+        html:     { scale: 1, panX: 0, panY: 0, isPanning: false, startX: 0, startY: 0 },
+        design:   { scale: 1, panX: 0, panY: 0, isPanning: false, startX: 0, startY: 0 },
+    };
+
+    const ZOOM_MIN = 0.1;
+    const ZOOM_MAX = 10.0;
+    const ZOOM_STEP = 0.1;
+
+    function resetZoom(tab) {
+        zoomState[tab] = { scale: 1, panX: 0, panY: 0, isPanning: false, startX: 0, startY: 0 };
+    }
+
+    function applyZoom(tab, viewportEl) {
+        if (!viewportEl) return;
+        viewportEl.style.transform = `translate(${zoomState[tab].panX}px, ${zoomState[tab].panY}px) scale(${zoomState[tab].scale})`;
+    }
+
+    function clampPan(tab, containerRect, contentWidth, contentHeight) {
+        const s = zoomState[tab].scale;
+        const minX = Math.min(0, containerRect.width - contentWidth * s);
+        const minY = Math.min(0, containerRect.height - contentHeight * s);
+        const maxX = Math.max(0, containerRect.width - contentWidth * s);
+        const maxY = Math.max(0, containerRect.height - contentHeight * s);
+        zoomState[tab].panX = Math.max(minX, Math.min(maxX, zoomState[tab].panX));
+        zoomState[tab].panY = Math.max(minY, Math.min(maxY, zoomState[tab].panY));
+    }
+
+    function fitToContainer(tab, containerEl, viewportEl) {
+        if (!containerEl || !viewportEl) return;
+        const containerRect = containerEl.getBoundingClientRect();
+        // Measure content: first child of viewport (img or iframe)
+        const contentEl = viewportEl.firstElementChild;
+        if (!contentEl) return;
+        let contentW, contentH;
+        if (contentEl.tagName === 'IMG') {
+            contentW = contentEl.naturalWidth || contentEl.offsetWidth;
+            contentH = contentEl.naturalHeight || contentEl.offsetHeight;
+        } else {
+            contentW = contentEl.offsetWidth;
+            contentH = contentEl.offsetHeight;
+        }
+        if (!contentW || !contentH) return;
+        const fitScale = Math.min(containerRect.width / contentW, containerRect.height / contentH, 1);
+        zoomState[tab].scale = fitScale;
+        zoomState[tab].panX = (containerRect.width - contentW * fitScale) / 2;
+        zoomState[tab].panY = (containerRect.height - contentH * fitScale) / 2;
+        applyZoom(tab, viewportEl);
+    }
+
+    function initZoomListeners(containerId, viewportSelector, tab) {
+        const container = document.getElementById(containerId);
+        if (!container) return;
+
+        container.addEventListener('wheel', (e) => {
+            if (!e.metaKey && !e.ctrlKey) return; // Modifier not held — let native scroll pass
+            e.preventDefault();
+
+            const delta = e.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
+            zoomState[tab].scale = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoomState[tab].scale + delta));
+            applyZoom(tab, container.querySelector(viewportSelector));
+        }, { passive: false });
+
+        container.addEventListener('mousedown', (e) => {
+            // Only left-click, ignore toolbar clicks
+            if (e.button !== 0 || e.target.closest('.zoom-toolbar')) return;
+            zoomState[tab].isPanning = true;
+            zoomState[tab].startX = e.clientX - zoomState[tab].panX;
+            zoomState[tab].startY = e.clientY - zoomState[tab].panY;
+            container.classList.add('panning');
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (!zoomState[tab].isPanning) return;
+            zoomState[tab].panX = e.clientX - zoomState[tab].startX;
+            zoomState[tab].panY = e.clientY - zoomState[tab].startY;
+            // Clamp pan to keep content visible
+            const containerRect = container.getBoundingClientRect();
+            const viewportEl = container.querySelector(viewportSelector);
+            const contentEl = viewportEl ? viewportEl.firstElementChild : null;
+            if (contentEl) {
+                const cw = contentEl.tagName === 'IMG' ? (contentEl.naturalWidth || contentEl.offsetWidth) : contentEl.offsetWidth;
+                const ch = contentEl.tagName === 'IMG' ? (contentEl.naturalHeight || contentEl.offsetHeight) : contentEl.offsetHeight;
+                clampPan(tab, containerRect, cw, ch);
+            }
+            applyZoom(tab, viewportEl);
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (!zoomState[tab].isPanning) return;
+            zoomState[tab].isPanning = false;
+            container.classList.remove('panning');
+        });
+
+        // Toolbar button delegation
+        container.addEventListener('click', (e) => {
+            const btn = e.target.closest('.zoom-btn');
+            if (!btn) return;
+            const action = btn.dataset.action;
+            const viewportEl = container.querySelector(viewportSelector);
+            if (action === 'zoom-in') {
+                zoomState[tab].scale = Math.min(ZOOM_MAX, zoomState[tab].scale + ZOOM_STEP * 2);
+            } else if (action === 'zoom-out') {
+                zoomState[tab].scale = Math.max(ZOOM_MIN, zoomState[tab].scale - ZOOM_STEP * 2);
+            } else if (action === 'reset') {
+                resetZoom(tab);
+            } else if (action === 'fit') {
+                fitToContainer(tab, container, viewportEl);
+                return; // fitToContainer calls applyZoom internally
+            }
+            applyZoom(tab, viewportEl);
+        });
+    }
+
+    let researchStatusTimeout = null;
+
     // Tickets tab state
     let ticketsInitialized = false;
     let ticketsLoadedOnce = false;
@@ -86,22 +203,17 @@
     let clickUpProjectLoading = false;
     let clickUpHierarchyLoading = false;
     let clickUpImportPending = false;
+    let _restoringClickUpHierarchy = false;
     let pendingClickUpDetailIssueId = '';
 
     // Cached HTML strings for DOM guard comparisons
     let _lastTicketsStateFilterHtml = '';
     let _lastTicketsProjectPickerHtml = '';
     let _lastTicketsIssuesContainerHtml = '';
-    let _lastTicketsDetailDescriptionHtml = '';
-    let _lastTicketsDetailSubtasksHtml = '';
-    let _lastTicketsDetailCommentsHtml = '';
-    let _lastTicketsDetailAttachmentsHtml = '';
+    let _lastTicketsDetailContentHtml = '';
     let _lastTicketsHierarchyHtml = '';
     let _lastTicketsClickUpIssuesContainerHtml = '';
-    let _lastTicketsClickUpDetailDescriptionHtml = '';
-    let _lastTicketsClickUpDetailSubtasksHtml = '';
-    let _lastTicketsClickUpDetailCommentsHtml = '';
-    let _lastTicketsClickUpDetailAttachmentsHtml = '';
+    let _lastTicketsClickUpDetailContentHtml = '';
     let _lastTicketsClickUpStateFilterHtml = '';
 
     // Helper functions for tickets tab
@@ -138,7 +250,11 @@
         return {
             listView: document.getElementById('tree-pane-tickets'),
             previewPane: document.getElementById('preview-pane-tickets'),
-            detailBanner: document.getElementById('tickets-detail-banner'),
+            activeDocBanner: document.getElementById('active-doc-banner-tickets'),
+            activeDocName: document.getElementById('active-doc-name-tickets'),
+            detailMeta: document.getElementById('tickets-detail-meta'),
+            detailStatus: document.getElementById('tickets-detail-status'),
+            detailAssignee: document.getElementById('tickets-detail-assignee'),
             emptyPreview: document.getElementById('tickets-empty-preview'),
             searchInput: document.getElementById('tickets-search'),
             projectPicker: document.getElementById('tickets-project-picker'),
@@ -148,13 +264,8 @@
             emptyState: document.getElementById('tickets-empty-state'),
             issuesContainer: document.getElementById('tickets-issues-container'),
             loadMoreButton: document.getElementById('tickets-load-more'),
-            detailTitle: document.getElementById('tickets-detail-title'),
-            detailStatus: document.getElementById('tickets-detail-status'),
-            detailAssignee: document.getElementById('tickets-detail-assignee'),
-            detailDescription: document.getElementById('tickets-detail-description'),
-            detailSubtasks: document.getElementById('tickets-detail-subtasks'),
-            detailComments: document.getElementById('tickets-detail-comments'),
-            detailAttachments: document.getElementById('tickets-detail-attachments'),
+            subtasksNav: document.getElementById('tickets-subtasks-nav'),
+            detailContent: document.getElementById('tickets-detail-content'),
             detailImportButton: document.getElementById('tickets-detail-import'),
             detailRefineButton: document.getElementById('tickets-detail-refine'),
             detailAskAgentButton: document.getElementById('tickets-detail-ask-agent'),
@@ -269,74 +380,61 @@
     const tabButtons = document.querySelectorAll('.research-tab-btn');
     const tabContents = document.querySelectorAll('.research-tab-content');
 
+    function switchToTab(tabName) {
+        // 1. Clean up dirty flags and edit/review modes (same logic as click handler)
+        if (state.dirtyFlags.local && tabName !== 'local') { exitEditMode('local', true); }
+        if (state.dirtyFlags.kanban && tabName !== 'kanban') { exitEditMode('kanban', true); }
+        if (state.dirtyFlags.design && tabName !== 'design') { exitEditMode('design', true); }
+        if (state.editMode.local && tabName !== 'local') { exitEditMode('local', true); }
+        if (state.editMode.kanban && tabName !== 'kanban') { exitEditMode('kanban', true); }
+        if (state.editMode.design && tabName !== 'design') { exitEditMode('design', true); }
+        if (state.reviewMode.kanban && tabName !== 'kanban') { exitReviewMode('kanban', true); }
+
+        // 2. Clear stale pending selection when navigating away from kanban
+        if (tabName !== 'kanban' && _pendingKanbanSelection) {
+            _pendingKanbanSelection = null;
+        }
+
+        // Reset HTML preview banner when leaving the HTML tab
+        if (tabName !== 'html-preview') {
+            resetHtmlBanner();
+        }
+
+        // 3. Update active classes
+        tabButtons.forEach(b => b.classList.remove('active'));
+        tabContents.forEach(c => c.classList.remove('active'));
+        const targetBtn = document.querySelector(`.research-tab-btn[data-tab="${tabName}"]`);
+        if (targetBtn) targetBtn.classList.add('active');
+        const targetContent = document.getElementById(`${tabName}-content`);
+        if (targetContent) targetContent.classList.add('active');
+
+        // 4. Apply sidebar state
+        if (tabName === 'html-preview') { applySidebarState('html-preview', state.htmlPreviewCollapsed); }
+        else if (tabName === 'design') { applySidebarState('design', state.designPreviewCollapsed); }
+        else if (tabName === 'tickets') { applySidebarState('tickets', state.ticketsPreviewCollapsed); }
+        else if (tabName === 'local' || tabName === 'research' || tabName === 'online') {
+            applySidebarState(tabName, state.docsListCollapsed);
+        }
+
+        // 5. Tab-specific initialization
+        if (tabName === 'kanban') {
+            vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+        }
+        if (tabName === 'tickets') {
+            if (!ticketsInitialized) { initTicketsTab(); ticketsInitialized = true; }
+            restoreTicketsState();
+            if (lastIntegrationProvider && !ticketsLoadedOnce) {
+                if (lastIntegrationProvider === 'clickup') loadClickUpSpaces();
+                else loadLinearProject();
+            }
+        } else {
+            if (ticketsInitialized) { saveTicketsState(); }
+        }
+    }
+
     tabButtons.forEach(btn => {
         btn.addEventListener('click', () => {
-            const tabName = btn.dataset.tab;
-
-            // Check dirty flags
-            if (state.dirtyFlags.local && tabName !== 'local') {
-                exitEditMode('local', true);
-            }
-            if (state.dirtyFlags.kanban && tabName !== 'kanban') {
-                exitEditMode('kanban', true);
-            }
-            if (state.dirtyFlags.design && tabName !== 'design') {
-                exitEditMode('design', true);
-            }
-
-            // If in edit mode but not dirty, auto-exit to clear editor state cleanly
-            if (state.editMode.local && tabName !== 'local') {
-                exitEditMode('local', true);
-            }
-            if (state.editMode.kanban && tabName !== 'kanban') {
-                exitEditMode('kanban', true);
-            }
-            if (state.editMode.design && tabName !== 'design') {
-                exitEditMode('design', true);
-            }
-            if (state.reviewMode.kanban && tabName !== 'kanban') {
-                exitReviewMode('kanban', true);
-            }
-
-            tabButtons.forEach(b => b.classList.remove('active'));
-            tabContents.forEach(c => c.classList.remove('active'));
-
-            btn.classList.add('active');
-            document.getElementById(`${tabName}-content`).classList.add('active');
-
-            // Apply correct sidebar state for the newly active tab
-            if (tabName === 'html-preview') {
-                applySidebarState('html-preview', state.htmlPreviewCollapsed);
-            } else if (tabName === 'design') {
-                applySidebarState('design', state.designPreviewCollapsed);
-            } else if (tabName === 'tickets') {
-                applySidebarState('tickets', state.ticketsPreviewCollapsed);
-            } else if (tabName === 'local' || tabName === 'research' || tabName === 'online') {
-                applySidebarState(tabName, state.docsListCollapsed);
-            }
-
-            if (tabName === 'kanban') {
-                vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
-            }
-
-            // Tickets tab initialization
-            if (tabName === 'tickets') {
-                if (!ticketsInitialized) {
-                    initTicketsTab();
-                    ticketsInitialized = true;
-                }
-                restoreTicketsState();
-                // Trigger initial load if not yet loaded
-                if (lastIntegrationProvider && !ticketsLoadedOnce) {
-                    if (lastIntegrationProvider === 'clickup') loadClickUpSpaces();
-                    else loadLinearProject();
-                }
-            } else {
-                // Save tickets state when switching away
-                if (ticketsInitialized) {
-                    saveTicketsState();
-                }
-            }
+            switchToTab(btn.dataset.tab);
         });
     });
 
@@ -394,6 +492,8 @@
                 copyResearchPromptBtn.innerText = 'COPIED';
                 setTimeout(() => {
                     if (copyResearchPromptBtn) copyResearchPromptBtn.innerText = originalText;
+                    const researchInput = document.getElementById('research-prompt-input');
+                    if (researchInput) researchInput.value = '';
                 }, 2000);
             } catch (err) {
                 console.error('[Research] Failed to copy to clipboard:', err);
@@ -501,6 +601,15 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 copySprintPromptBtn.innerText = 'COPIED';
                 setTimeout(() => { copySprintPromptBtn.innerText = 'COPY SPRINT PROMPT'; }, 2000);
             });
+        });
+    }
+
+    const importNotebookLMBtn = document.getElementById('btn-import-notebooklm-plans');
+    if (importNotebookLMBtn) {
+        importNotebookLMBtn.addEventListener('click', () => {
+            importNotebookLMBtn.disabled = true;
+            importNotebookLMBtn.textContent = 'IMPORTING...';
+            vscode.postMessage({ type: 'importNotebookLMPlans' });
         });
     }
 
@@ -961,15 +1070,20 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 const btn = document.createElement('button');
 
                 if (action === 'Link Doc' || action === 'Delete') {
-                    // Icon button
-                    btn.className = 'card-icon-btn' + (action === 'Delete' ? ' card-delete-btn' : '');
-                    btn.textContent = action === 'Link Doc' ? '🔗' : '×';
+                    btn.className = 'card-icon-btn' + (action === 'Link Doc' ? ' html-link-btn' : ' card-delete-btn');
+                    if (action === 'Link Doc') {
+                        btn.innerHTML = '<span>🔗</span><span class="btn-label">Copy</span>';
+                    } else {
+                        btn.textContent = '×';
+                    }
                     btn.title = action === 'Link Doc' ? 'Copy validated document path' : 'Delete';
-                    btn.setAttribute('aria-label', action === 'Link Doc' ? 'Link to document' : 'Delete document');
+                    btn.setAttribute('data-tooltip', action === 'Link Doc' ? 'Copy validated document path' : 'Delete');
+                    btn.setAttribute('aria-label', action === 'Link Doc' ? 'Copy link to document' : 'Delete document');
                 } else if (action === 'Serve & Open') {
-                    btn.className = 'card-icon-btn';
-                    btn.textContent = '🌐';
+                    btn.className = 'card-icon-btn html-serve-btn';
+                    btn.innerHTML = '<span>🌐</span><span class="btn-label">Open</span>';
                     btn.title = 'Start local server and open in browser';
+                    btn.setAttribute('data-tooltip', 'Start local server and open in browser');
                     btn.setAttribute('aria-label', 'Open in browser via local server');
                 } else {
                     // Text button (Set Context, Import, Sync)
@@ -988,19 +1102,27 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                             sourceFolder: nodeMetadata ? nodeMetadata.sourceFolder : undefined
                         });
                     } else if (action === 'Link Doc') {
+                        if (!nodeMetadata?.sourceFolder) {
+                            console.error('[PlanningPanel] Link Doc clicked but sourceFolder is missing');
+                            return;
+                        }
                         vscode.postMessage({
                             type: 'linkToDocument',
                             sourceId: sourceId,
                             docId: nodeId,
                             docName: title,
-                            sourceFolder: nodeMetadata ? nodeMetadata.sourceFolder : undefined
+                            sourceFolder: nodeMetadata.sourceFolder
                         });
                     } else if (action === 'Serve & Open') {
+                        if (!nodeMetadata?.absolutePath) {
+                            console.error('[PlanningPanel] Serve & Open clicked but absolutePath is missing');
+                            return;
+                        }
                         vscode.postMessage({
                             type: 'serveAndOpenHtml',
                             docId: nodeId,
                             docName: title,
-                            absolutePath: nodeMetadata?.absolutePath,
+                            absolutePath: nodeMetadata.absolutePath,
                             sourceFolder: nodeMetadata?.sourceFolder
                         });
                     } else if (action === 'Delete') {
@@ -1147,6 +1269,39 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             state.activeSource = sourceId;
             state.activeDocId = docId;
             state.activeDocName = docName;
+
+            // Wire HTML preview banner
+            const banner = document.getElementById('active-doc-banner-html');
+            const bannerName = document.getElementById('active-doc-name-html');
+            const openBtn = document.getElementById('btn-open-browser-html');
+            const copyBtn = document.getElementById('btn-copy-link-html');
+            if (banner) banner.classList.remove('inactive');
+            if (bannerName) bannerName.textContent = docName;
+            if (openBtn) {
+                openBtn.disabled = false;
+                openBtn.onclick = () => {
+                    vscode.postMessage({
+                        type: 'serveAndOpenHtml',
+                        docId: docId,
+                        docName: docName,
+                        absolutePath: wrapper ? wrapper.dataset.absolutePath : undefined,
+                        sourceFolder: sourceFolder
+                    });
+                };
+            }
+            if (copyBtn) {
+                copyBtn.disabled = false;
+                copyBtn.onclick = () => {
+                    vscode.postMessage({
+                        type: 'linkToDocument',
+                        sourceId: sourceId,
+                        docId: docId,
+                        docName: docName,
+                        sourceFolder: sourceFolder
+                    });
+                };
+            }
+
             state.previewRequestId++;
             updateLocalActiveContextButtonState();
 
@@ -1158,9 +1313,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             const loadingState = document.getElementById('html-loading-state');
             const previewFrame = document.getElementById('html-preview-frame');
             const imageContainer = document.getElementById('image-preview-container');
+            const iframeWrapper = document.getElementById('html-preview-wrapper');
             if (initialState) initialState.style.display = 'none';
             if (loadingState) loadingState.style.display = 'flex';
-            if (previewFrame) previewFrame.style.display = 'none';
+            if (iframeWrapper) iframeWrapper.style.display = 'none';
             if (imageContainer) imageContainer.style.display = 'none';
 
             vscode.postMessage({
@@ -1172,6 +1328,18 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             });
             return;
         }
+
+        function resetHtmlBanner() {
+            const banner = document.getElementById('active-doc-banner-html');
+            const bannerName = document.getElementById('active-doc-name-html');
+            const openBtn = document.getElementById('btn-open-browser-html');
+            const copyBtn = document.getElementById('btn-copy-link-html');
+            if (banner) banner.classList.add('inactive');
+            if (bannerName) bannerName.textContent = 'None';
+            if (openBtn) { openBtn.disabled = true; openBtn.onclick = null; }
+            if (copyBtn) { copyBtn.disabled = true; copyBtn.onclick = null; }
+        }
+
         if (sourceId === 'design-folder') {
             if (state.dirtyFlags.design) {
                 exitEditMode('design', true);
@@ -1488,6 +1656,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         const treePaneHtml = document.getElementById('tree-pane-html');
         if (!treePaneHtml) return;
 
+        resetHtmlBanner();
         treePaneHtml.innerHTML = '';
 
         // Re-add sidebar toggle
@@ -2260,6 +2429,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         if (sourceId === 'html-folder') {
             if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
 
+            // Reset zoom state for HTML tab on every new file load
+            resetZoom('html');
+
             // Hide loading/initial states, show appropriate preview
             const initialState = document.getElementById('html-initial-state');
             const loadingState = document.getElementById('html-loading-state');
@@ -2270,38 +2442,56 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             const imageContainer = document.getElementById('image-preview-container');
             const imageImg = document.getElementById('image-preview-img');
 
+            const iframeWrapper = document.getElementById('html-preview-wrapper');
+
             if (isImage && webviewUri) {
-                // Image preview: hide iframe, show image container
-                if (iframe) { iframe.style.display = 'none'; iframe.removeAttribute('src'); iframe.removeAttribute('srcdoc'); }
+                // Image preview: hide iframe wrapper, show image container
+                if (iframeWrapper) { iframeWrapper.style.display = 'none'; }
+                if (iframe) { iframe.removeAttribute('src'); iframe.removeAttribute('srcdoc'); }
                 if (imageContainer) { imageContainer.style.display = 'flex'; }
-                if (imageImg) { imageImg.src = webviewUri + '?t=' + Date.now(); } // cache-buster for refresh
+                if (imageImg) {
+                    imageImg.src = webviewUri + '?t=' + Date.now(); // cache-buster for refresh
+                    // Apply initial fit-to-container after image loads
+                    imageImg.onload = () => {
+                        const container = document.getElementById('image-preview-container');
+                        const viewport = container ? container.querySelector('.zoomable-viewport') : null;
+                        if (container && viewport) {
+                            fitToContainer('html', container, viewport);
+                        }
+                    };
+                }
             } else if (htmlContent) {
                 // HTML preview: use srcdoc and inject base tag for relative asset resolution
                 // (iframe.src with vscode-webview-resource: URIs is blocked by VS Code's sandbox)
+                if (iframeWrapper) { iframeWrapper.style.display = 'flex'; }
                 if (iframe) {
-                    iframe.style.display = '';
                     iframe.removeAttribute('src');
-                    iframe.srcdoc = '';  // Force iframe to about:blank before new content (prevents black screen on HTML-to-HTML transition)
+                    iframe.removeAttribute('srcdoc');  // Destroy the attribute to guarantee a clean browsing context
                     const htmlWithBase = injectBaseTag(htmlContent, webviewUri);
                     console.log('[PlanningPanel] Setting srcdoc for HTML preview, length:', htmlWithBase.length, 'hasNonce:', /nonce="/.test(htmlWithBase));
                     iframe.srcdoc = htmlWithBase;
                     // Diagnostic: listen for load/error events on the iframe
                     iframe.onload = () => { console.log('[PlanningPanel] Preview iframe loaded successfully'); };
-                    iframe.onerror = (e) => { console.error('[PlanningPanel] Preview iframe error:', e); };
+                    iframe.onerror = (e) => { console.error('[PlanningPanel] Preview iframe error:', e); }
+                    // Apply default zoom for iframe (scale 1, pan 0 — already set by resetZoom)
+                    const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
+                    if (iframeViewport) {
+                        applyZoom('html', iframeViewport);
+                    }
                 }
                 if (imageContainer) { imageContainer.style.display = 'none'; }
                 if (imageImg) { imageImg.removeAttribute('src'); }
             } else if (webviewUri && iframe && iframe.srcdoc) {
                 // Cache hit: content hasn't changed, iframe already has srcdoc content
                 // Just ensure iframe is visible — do NOT modify src or srcdoc
-                iframe.style.display = '';
+                if (iframeWrapper) { iframeWrapper.style.display = 'flex'; }
                 if (imageContainer) { imageContainer.style.display = 'none'; }
                 if (imageImg) { imageImg.removeAttribute('src'); }
             } else if (webviewUri) {
                 // Fallback: iframe src if htmlContent not available and no existing srcdoc
                 // (e.g., backend file read failed on first attempt)
+                if (iframeWrapper) { iframeWrapper.style.display = 'flex'; }
                 if (iframe) {
-                    iframe.style.display = '';
                     iframe.removeAttribute('srcdoc');
                     iframe.src = webviewUri + '?t=' + Date.now(); // cache-buster for refresh
                 }
@@ -2324,6 +2514,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         if (sourceId === 'design-folder') {
             if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
 
+            // Reset zoom state for Design tab on every new file load
+            resetZoom('design');
+
             state.activeDocFilePath = filePath || null;
             state.activeFileType = msg.fileType || null;
 
@@ -2338,6 +2531,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             const btnLinkDesign = document.getElementById('btn-link-to-doc-design');
             const btnEditDesign = document.getElementById('btn-edit-design');
 
+            // Helper: toggle scanlines on the Design tab's preview-panel-wrapper
+            const designWrapper = document.querySelector('#design-content .preview-panel-wrapper');
+
             if (isImage && webviewUri) {
                 if (mdPrev) mdPrev.style.display = 'none';
                 if (mdEd) mdEd.style.display = 'none';
@@ -2345,6 +2541,17 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (imgCont) imgCont.style.display = 'flex';
                 if (imgImg) imgImg.src = webviewUri + '?t=' + Date.now();
                 if (btnEditDesign) btnEditDesign.disabled = true;
+                if (designWrapper) designWrapper.classList.add('scanlines-suppressed');
+                // Apply initial fit-to-container after image loads
+                if (imgImg) {
+                    imgImg.onload = () => {
+                        const container = document.getElementById('image-preview-container-design');
+                        const viewport = container ? container.querySelector('.zoomable-viewport') : null;
+                        if (container && viewport) {
+                            fitToContainer('design', container, viewport);
+                        }
+                    };
+                }
             } else if (msg.fileType === 'json') {
                 // JSON preview
                 if (imgCont) imgCont.style.display = 'none';
@@ -2359,6 +2566,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         jsonCont.innerHTML = `<div class="json-error">Failed to parse JSON: ${e.message}<br><button onclick="viewRawJson()">View Raw</button></div>`;
                     }
                 }
+                if (designWrapper) designWrapper.classList.add('scanlines-suppressed');
                 state.activeDocContent = content || '';
                 if (mdEd) mdEd.value = content || '';
                 if (btnEditDesign) btnEditDesign.disabled = false;
@@ -2381,6 +2589,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         jsonCont.innerHTML = `<div class="json-error">Invalid YAML on disk — cannot render tree.<br><button onclick="viewRawJson()">View Raw</button></div>`;
                     }
                 }
+                if (designWrapper) designWrapper.classList.add('scanlines-suppressed');
                 state.activeDocContent = content || '';
                 if (mdEd) mdEd.value = content || '';
                 if (btnEditDesign) btnEditDesign.disabled = false;
@@ -2394,6 +2603,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     const langClass = msg.fileType === 'css' ? 'language-css' : (msg.fileType === 'xml' ? 'language-xml' : '');
                     mdPrev.innerHTML = `<pre><code class="${langClass}">${escapeHtml(content)}</code></pre>`;
                 }
+                if (designWrapper) designWrapper.classList.add('scanlines-suppressed');
                 state.activeDocContent = content || '';
                 if (btnEditDesign) btnEditDesign.disabled = false;
             } else {
@@ -2402,6 +2612,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (jsonCont) jsonCont.style.display = 'none';
                 if (mdEd && !state.editMode.design) mdEd.style.display = 'none';
                 if (mdPrev && !state.editMode.design) mdPrev.style.display = 'block';
+                if (designWrapper) designWrapper.classList.remove('scanlines-suppressed');
 
                 // Skip re-render if content hasn't changed (prevents line-length flicker)
                 if (state.activeDocContent === (content || '')) {
@@ -2609,10 +2820,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 statusHtml.style.color = '';
             }
             const iframe = document.getElementById('html-preview-frame');
+            const iframeWrapper = document.getElementById('html-preview-wrapper');
+            if (iframeWrapper) iframeWrapper.style.display = 'flex';
             if (iframe) {
-                iframe.style.display = '';
                 iframe.removeAttribute('src');  // Clear any src-based navigation
-                iframe.srcdoc = '';  // Force iframe to about:blank before error page (prevents black screen)
+                iframe.removeAttribute('srcdoc');  // Destroy the attribute to guarantee a clean browsing context
                 iframe.srcdoc = `<html><body style="background:#000;color:#e0e0e0;font-family:sans-serif;padding:2em"><p>Error: ${error.replace(/</g, '&lt;')}</p></body></html>`;
             }
             return;
@@ -2833,6 +3045,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         }
         renderFolderList(state.localFolderPaths);
         renderFolderListModal();
+        populateResearchFolderSelect(state.localFolderPaths);
 
         // Delegate to renderLocalDocs to ensure consistent source-folder grouping
         renderLocalDocs({
@@ -2840,6 +3053,47 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             nodes: nodes || [],
             folderPaths: state.localFolderPaths
         });
+    }
+
+    function populateResearchFolderSelect(paths) {
+        const folderSelect = document.getElementById('research-destination-folder');
+        const warningEl = document.getElementById('research-no-folders-warning');
+        const importBtn = document.getElementById('btn-import-research-doc-clipboard');
+
+        const hasFolders = paths && paths.length > 0;
+
+        if (warningEl) {
+            warningEl.style.display = hasFolders ? 'none' : 'block';
+        }
+        if (importBtn) {
+            importBtn.disabled = !hasFolders;
+            importBtn.style.opacity = hasFolders ? '1' : '0.4';
+        }
+
+        if (folderSelect) {
+            folderSelect.innerHTML = '';
+            (paths || []).forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p;
+                opt.textContent = p.split('/').pop() || p;
+                folderSelect.appendChild(opt);
+            });
+
+            if (hasFolders) {
+                if (state.lastResearchFolder && paths.includes(state.lastResearchFolder)) {
+                    folderSelect.value = state.lastResearchFolder;
+                } else {
+                    state.lastResearchFolder = paths[0];
+                    const currentPersisted = vscode.getState() || {};
+                    vscode.setState({ ...currentPersisted, lastResearchFolder: state.lastResearchFolder });
+                    folderSelect.value = state.lastResearchFolder;
+                }
+            } else {
+                state.lastResearchFolder = null;
+                const currentPersisted = vscode.getState() || {};
+                vscode.setState({ ...currentPersisted, lastResearchFolder: null });
+            }
+        }
     }
 
     function handleDocPagesReady(msg) {
@@ -2909,6 +3163,22 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         if (bundleBtn) {
             bundleBtn.disabled = false;
             bundleBtn.innerText = 'BUNDLE CODE';
+        }
+    }
+
+    function handleImportNotebookLMPlansResult(msg) {
+        const webaiStatus = document.getElementById('webai-status');
+        const importBtn = document.getElementById('btn-import-notebooklm-plans');
+        if (webaiStatus) {
+            const parts = [];
+            if (msg.overwritten > 0) parts.push(`${msg.overwritten} overwritten`);
+            if (msg.created > 0) parts.push(`${msg.created} created`);
+            if (msg.errors > 0) parts.push(`${msg.errors} failed`);
+            webaiStatus.textContent = parts.length > 0 ? `Import: ${parts.join(', ')}` : 'No plans found in clipboard.';
+        }
+        if (importBtn) {
+            importBtn.disabled = false;
+            importBtn.textContent = 'IMPORT PLANS';
         }
     }
 
@@ -3209,24 +3479,19 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             }
             case 'activateKanbanTabAndSelectPlan': {
                 _pendingKanbanSelection = { sessionId: msg.sessionId, planFile: msg.planFile, workspaceRoot: msg.workspaceRoot };
-                activateKanbanTab();
+                switchToTab('kanban');
                 // Check already-loaded cache for immediate selection
-                if (_kanbanPlansCache && _kanbanPlansCache.length) {
-                    const match = _kanbanPlansCache.find(p =>
-                        (msg.sessionId && p.sessionId === msg.sessionId) ||
-                        (msg.planFile && p.planFile === msg.planFile)
-                    );
-                    if (match) {
-                        const itemDiv = kanbanListPane && kanbanListPane.querySelector(`.kanban-plan-item[data-plan-id="${match.planId}"]`);
-                        if (itemDiv) {
-                            itemDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            itemDiv.click();
-                            _pendingKanbanSelection = null;
-                        }
+                const immediateMatch = findPendingKanbanMatch(_kanbanPlansCache);
+                if (immediateMatch) {
+                    const itemDiv = kanbanListPane && kanbanListPane.querySelector(`.kanban-plan-item[data-plan-id="${immediateMatch.planId}"]`);
+                    if (itemDiv) {
+                        itemDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        itemDiv.click();
+                        _pendingKanbanSelection = null;
                     }
                 }
-                // Always fetch to ensure data is fresh (pending selection resolved in handleKanbanPlansReady if not already matched)
-                vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+                // No redundant fetch — switchToTab('kanban') already fired fetchKanbanPlans.
+                // Pending selection will be resolved in handleKanbanPlansReady if not matched immediately.
                 break;
             }
             case 'commentResult': {
@@ -3364,6 +3629,13 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     if (docTitleInput) {
                         docTitleInput.value = '';
                     }
+                    // Auto-clear success status after 4 seconds
+                    if (researchStatusTimeout) clearTimeout(researchStatusTimeout);
+                    researchStatusTimeout = setTimeout(() => {
+                        if (researchStatusEl) researchStatusEl.textContent = '';
+                        if (statusEl) statusEl.textContent = '';
+                        researchStatusTimeout = null;
+                    }, 4000);
                 } else {
                     const errorText = `Error: ${msg.error || 'Failed to import'}`;
                     if (researchStatusEl) {
@@ -3399,44 +3671,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 state.localFolderPaths = msg.paths || [];
                 renderFolderList(state.localFolderPaths);
                 renderFolderListModal();
-                const folderSelect = document.getElementById('research-destination-folder');
-                const warningEl = document.getElementById('research-no-folders-warning');
-                const importBtn = document.getElementById('btn-import-research-doc-clipboard');
-                
-                const hasFolders = msg.paths && msg.paths.length > 0;
-                
-                if (warningEl) {
-                    warningEl.style.display = hasFolders ? 'none' : 'block';
-                }
-                if (importBtn) {
-                    importBtn.disabled = !hasFolders;
-                    importBtn.style.opacity = hasFolders ? '1' : '0.4';
-                }
-
-                if (folderSelect) {
-                    folderSelect.innerHTML = '';
-                    (msg.paths || []).forEach(p => {
-                        const opt = document.createElement('option');
-                        opt.value = p;
-                        opt.textContent = p.split('/').pop() || p;
-                        folderSelect.appendChild(opt);
-                    });
-
-                    if (hasFolders) {
-                        if (state.lastResearchFolder && msg.paths.includes(state.lastResearchFolder)) {
-                            folderSelect.value = state.lastResearchFolder;
-                        } else {
-                            state.lastResearchFolder = msg.paths[0];
-                            const currentPersisted = vscode.getState() || {};
-                            vscode.setState({ ...currentPersisted, lastResearchFolder: state.lastResearchFolder });
-                            folderSelect.value = state.lastResearchFolder;
-                        }
-                    } else {
-                        state.lastResearchFolder = null;
-                        const currentPersisted = vscode.getState() || {};
-                        vscode.setState({ ...currentPersisted, lastResearchFolder: null });
-                    }
-                }
+                populateResearchFolderSelect(msg.paths || []);
                 break;
             case 'htmlFoldersListed':
                 state.htmlFolderPaths = msg.paths || [];
@@ -3448,6 +3683,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 break;
             case 'airlock_exportComplete':
                 handleAirlockExportComplete(msg);
+                break;
+            case 'importNotebookLMPlansResult':
+                handleImportNotebookLMPlansResult(msg);
                 break;
             case 'importedDocsReady':
                 handleImportedDocsReady(msg);
@@ -3655,6 +3893,17 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 linearProjectMessage = '';
                 linearProjectLoading = false;
                 ticketsLoadedOnce = true;
+                if (_restoredLinearProjectPickerValue) {
+                    const projects = Array.from(new Set(
+                        linearProjectIssues
+                            .map((issue) => String(issue?.project?.name || '').trim())
+                            .filter(Boolean)
+                    ));
+                    if (projects.includes(_restoredLinearProjectPickerValue)) {
+                        linearProjectPickerValue = _restoredLinearProjectPickerValue;
+                    }
+                    _restoredLinearProjectPickerValue = '';
+                }
                 renderTicketsTab();
                 break;
             case 'linearProjectsLoaded':
@@ -3676,6 +3925,22 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 clickUpAvailableListsInFolder = [];
                 clickUpAvailableDirectLists = [];
                 clickUpHierarchyLoading = false;
+                if (_restoringClickUpHierarchy && clickUpSelectedSpaceId) {
+                    const spaceExists = clickUpAvailableSpaces.some(s => s.id === clickUpSelectedSpaceId);
+                    if (spaceExists) {
+                        clickUpHierarchyLoading = true;
+                        vscode.postMessage({
+                            type: 'clickupLoadFolders',
+                            spaceId: clickUpSelectedSpaceId,
+                            workspaceRoot: currentWorkspaceRoot || undefined
+                        });
+                    } else {
+                        clickUpSelectedSpaceId = '';
+                        clickUpSelectedFolderId = '';
+                        clickUpSelectedListId = '';
+                        _restoringClickUpHierarchy = false;
+                    }
+                }
                 renderTicketsTab();
                 break;
             case 'clickupFoldersLoaded':
@@ -3683,6 +3948,34 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 clickUpAvailableListsInFolder = [];
                 clickUpAvailableDirectLists = msg.directLists || [];
                 clickUpHierarchyLoading = false;
+                if (_restoringClickUpHierarchy && clickUpSelectedSpaceId) {
+                    if (clickUpSelectedFolderId) {
+                        const folderExists = clickUpAvailableFolders.some(f => f.id === clickUpSelectedFolderId);
+                        if (folderExists) {
+                            clickUpHierarchyLoading = true;
+                            vscode.postMessage({
+                                type: 'clickupLoadLists',
+                                spaceId: clickUpSelectedSpaceId,
+                                folderId: clickUpSelectedFolderId,
+                                workspaceRoot: currentWorkspaceRoot || undefined
+                            });
+                        } else {
+                            clickUpSelectedFolderId = '';
+                            clickUpSelectedListId = '';
+                            _restoringClickUpHierarchy = false;
+                        }
+                    } else {
+                        if (clickUpSelectedListId && clickUpAvailableDirectLists.some(l => l.id === clickUpSelectedListId)) {
+                            _restoringClickUpHierarchy = false;
+                            loadClickUpProject(false, clickUpSelectedListId);
+                        } else if (clickUpSelectedListId) {
+                            clickUpSelectedListId = '';
+                            _restoringClickUpHierarchy = false;
+                        } else {
+                            _restoringClickUpHierarchy = false;
+                        }
+                    }
+                }
                 renderTicketsTab();
                 break;
             case 'clickupListsLoaded':
@@ -3692,6 +3985,19 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     clickUpAvailableDirectLists = msg.lists || [];
                 }
                 clickUpHierarchyLoading = false;
+                if (_restoringClickUpHierarchy && clickUpSelectedListId) {
+                    const availableLists = clickUpSelectedFolderId
+                        ? clickUpAvailableListsInFolder
+                        : clickUpAvailableDirectLists;
+                    const listExists = availableLists.some(l => l.id === clickUpSelectedListId);
+                    if (listExists) {
+                        _restoringClickUpHierarchy = false;
+                        loadClickUpProject(false, clickUpSelectedListId);
+                    } else {
+                        clickUpSelectedListId = '';
+                        _restoringClickUpHierarchy = false;
+                    }
+                }
                 renderTicketsTab();
                 break;
             case 'clickupProjectLoaded':
@@ -4004,6 +4310,27 @@ Return ONLY the drafted prompt with no additional commentary.`;
     let _kanbanPreviewRequestId = 0;
     let _kanbanAvailableColumns = [];  // { id, label, kind }[] — merged across workspaces
     let _pendingKanbanSelection = null;
+
+    function findPendingKanbanMatch(cache) {
+        if (!_pendingKanbanSelection || !cache || !cache.length) return null;
+        const { sessionId, planFile, workspaceRoot } = _pendingKanbanSelection;
+        // Primary match: sessionId (most specific identifier)
+        if (sessionId) {
+            const bySession = cache.find(p => p.sessionId === sessionId);
+            if (bySession) return bySession;
+        }
+        // Fallback match: planFile
+        if (planFile) {
+            const byFile = cache.find(p => p.planFile === planFile);
+            if (byFile) return byFile;
+        }
+        // Last resort: workspaceRoot + sessionId compound
+        if (workspaceRoot && sessionId) {
+            const byCompound = cache.find(p => p.workspaceRoot === workspaceRoot && p.sessionId === sessionId);
+            if (byCompound) return byCompound;
+        }
+        return null;
+    }
 
     function _complexityToCssClass(complexity) {
         const score = parseInt(complexity, 10);
@@ -4595,20 +4922,16 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         // Resolve pending selection (e.g. from kanban board Review button)
         if (_pendingKanbanSelection) {
-            const { sessionId, planFile, workspaceRoot } = _pendingKanbanSelection;
-            const match = _kanbanPlansCache.find(p =>
-                (sessionId && p.sessionId === sessionId) ||
-                (planFile && p.planFile === planFile) ||
-                (workspaceRoot && p.workspaceRoot === workspaceRoot && p.sessionId === sessionId)
-            );
+            const match = findPendingKanbanMatch(_kanbanPlansCache);
             if (match) {
                 const itemDiv = kanbanListPane.querySelector(`.kanban-plan-item[data-plan-id="${match.planId}"]`);
                 if (itemDiv) {
                     itemDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
                     itemDiv.click();
                 }
+                _pendingKanbanSelection = null;  // Option B: only clear on successful match
             }
-            _pendingKanbanSelection = null;
+            // If no match, _pendingKanbanSelection persists for next fetch cycle
         }
 
         // Show transient "↻ refreshed" indicator
@@ -5256,6 +5579,22 @@ Return ONLY the drafted prompt with no additional commentary.`;
             }
         });
 
+        // Subtask navigation clicks
+        document.getElementById('tickets-subtasks-nav')?.addEventListener('click', (e) => {
+            const item = e.target.closest('.subtask-nav-item');
+            if (!item) return;
+            const subtaskId = item.dataset.subtaskId;
+            const provider = item.dataset.provider;
+            const nav = document.getElementById('tickets-subtasks-nav');
+            nav?.querySelectorAll('.subtask-nav-item').forEach(i => i.classList.remove('selected'));
+            item.classList.add('selected');
+            if (provider === 'linear') {
+                loadLinearTaskDetails(subtaskId);
+            } else if (provider === 'clickup') {
+                loadClickUpTaskDetails(subtaskId);
+            }
+        });
+
         // Issue card clicks (delegated)
         document.getElementById('tickets-issues-container')?.addEventListener('click', (e) => {
             const card = e.target.closest('[data-linear-issue-id], [data-clickup-task-id]');
@@ -5359,7 +5698,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function renderTicketsLinearPanel() {
         if (lastIntegrationProvider !== 'linear' || !isTicketsTabActive()) return;
 
-        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, detailBanner, emptyPreview, createButton } = getTicketsTabElements();
+        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, activeDocBanner, emptyPreview, createButton } = getTicketsTabElements();
 
         // Show Linear toolbar elements
         if (searchInput) searchInput.style.display = '';
@@ -5377,7 +5716,10 @@ Return ONLY the drafted prompt with no additional commentary.`;
         renderTicketsLinearProjectPickerOptions();
 
         const hasSelected = !!selectedLinearIssue;
-        if (detailBanner) detailBanner.style.display = hasSelected ? '' : 'none';
+        if (activeDocBanner) {
+            if (hasSelected) activeDocBanner.classList.remove('inactive');
+            else activeDocBanner.classList.add('inactive');
+        }
         if (emptyPreview) emptyPreview.style.display = hasSelected ? 'none' : '';
 
         renderTicketsLinearList();
@@ -5519,45 +5861,28 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function renderTicketsLinearTaskDetail() {
         if (!isTicketsTabActive()) return;
 
-        const { detailTitle, detailStatus, detailAssignee, detailDescription, detailSubtasks, detailComments, detailAttachments, detailImportButton, detailRefineButton, detailAskAgentButton, backToParentButton } = getTicketsTabElements();
-        if (!detailTitle || !detailStatus || !detailAssignee || !detailDescription) return;
+        const { activeDocBanner, activeDocName, detailMeta, detailStatus, detailAssignee, subtasksNav, detailContent, detailImportButton, detailRefineButton, detailAskAgentButton, backToParentButton } = getTicketsTabElements();
+        if (!activeDocBanner || !activeDocName || !detailContent) return;
 
         if (!selectedLinearIssue) {
-            detailTitle.textContent = '';
-            detailStatus.textContent = '';
-            detailAssignee.textContent = '';
-            if (_lastTicketsDetailDescriptionHtml !== '') {
-                detailDescription.innerHTML = '';
-                _lastTicketsDetailDescriptionHtml = '';
-            }
-            if (detailSubtasks && _lastTicketsDetailSubtasksHtml !== '') { detailSubtasks.innerHTML = ''; _lastTicketsDetailSubtasksHtml = ''; }
-            if (detailComments && _lastTicketsDetailCommentsHtml !== '') { detailComments.innerHTML = ''; _lastTicketsDetailCommentsHtml = ''; }
-            if (detailAttachments && _lastTicketsDetailAttachmentsHtml !== '') { detailAttachments.innerHTML = ''; _lastTicketsDetailAttachmentsHtml = ''; }
-            if (detailImportButton) {
-                detailImportButton.disabled = true;
-                delete detailImportButton.dataset.importIssueId;
-            }
-            if (detailRefineButton) {
-                detailRefineButton.disabled = true;
-                delete detailRefineButton.dataset.refineIssueId;
-                delete detailRefineButton.dataset.issueTitle;
-                delete detailRefineButton.dataset.issueDescription;
-            }
-            if (detailAskAgentButton) {
-                detailAskAgentButton.disabled = true;
-            }
-            if (backToParentButton) {
-                backToParentButton.style.display = 'none';
-                delete backToParentButton.dataset.parentId;
-                delete backToParentButton.dataset.parentProvider;
-            }
+            activeDocBanner.classList.add('inactive');
+            activeDocName.textContent = 'None';
+            if (detailMeta) detailMeta.style.display = 'none';
+            if (subtasksNav) { subtasksNav.innerHTML = ''; subtasksNav.style.display = 'none'; }
+            if (_lastTicketsDetailContentHtml !== '') { detailContent.innerHTML = ''; _lastTicketsDetailContentHtml = ''; }
+            if (detailImportButton) { detailImportButton.disabled = true; delete detailImportButton.dataset.importIssueId; }
+            if (detailRefineButton) { detailRefineButton.disabled = true; delete detailRefineButton.dataset.refineIssueId; delete detailRefineButton.dataset.issueTitle; delete detailRefineButton.dataset.issueDescription; }
+            if (detailAskAgentButton) { detailAskAgentButton.disabled = true; }
+            if (backToParentButton) { backToParentButton.style.display = 'none'; delete backToParentButton.dataset.parentId; delete backToParentButton.dataset.parentProvider; }
             return;
         }
 
         const issue = selectedLinearIssue.issue;
-        detailTitle.textContent = issue.title || issue.identifier || issue.id;
-        detailStatus.textContent = issue.state?.name || 'Unknown status';
-        detailAssignee.textContent = `Assignee: ${issue.assignee?.name || issue.assignee?.email || 'Unassigned'}`;
+        activeDocBanner.classList.remove('inactive');
+        activeDocName.textContent = issue.title || issue.identifier || issue.id;
+        if (detailMeta) detailMeta.style.display = '';
+        if (detailStatus) detailStatus.textContent = issue.state?.name || 'Unknown status';
+        if (detailAssignee) detailAssignee.textContent = `Assignee: ${issue.assignee?.name || issue.assignee?.email || 'Unassigned'}`;
 
         if (backToParentButton) {
             const parentId = issue.parentId;
@@ -5572,81 +5897,62 @@ Return ONLY the drafted prompt with no additional commentary.`;
             }
         }
 
+        if (subtasksNav) {
+            const subtasks = selectedLinearIssue.subtasks;
+            if (subtasks && subtasks.length > 0) {
+                let navHtml = '<div class="subtasks-header">Subtasks</div>';
+                navHtml += '<div style="display: flex; flex-direction: column; gap: 4px;">';
+                subtasks.forEach(subtask => {
+                    navHtml += `<div class="subtask-nav-item" data-subtask-id="${escapeAttr(subtask.id)}" data-provider="linear">
+                        <span>${escapeHtml(subtask.title || subtask.identifier || subtask.id)}</span>
+                        <span class="subtask-nav-status">${escapeHtml(subtask.state?.name || 'Unknown')}</span>
+                    </div>`;
+                });
+                navHtml += '</div>';
+                subtasksNav.innerHTML = navHtml;
+                subtasksNav.style.display = '';
+            } else {
+                subtasksNav.innerHTML = '';
+                subtasksNav.style.display = 'none';
+            }
+        }
+
+        let contentHtml = '';
+
         if (selectedLinearIssue.renderedDescriptionHtml) {
-            if (_lastTicketsDetailDescriptionHtml !== selectedLinearIssue.renderedDescriptionHtml) {
-                detailDescription.innerHTML = selectedLinearIssue.renderedDescriptionHtml;
-                _lastTicketsDetailDescriptionHtml = selectedLinearIssue.renderedDescriptionHtml;
-            }
+            contentHtml += selectedLinearIssue.renderedDescriptionHtml;
         } else {
-            const plainHtml = escapeHtml((issue.description || '').trim() || 'No description provided.').replace(/\n/g, '<br>');
-            if (_lastTicketsDetailDescriptionHtml !== plainHtml) {
-                detailDescription.innerHTML = plainHtml;
-                _lastTicketsDetailDescriptionHtml = plainHtml;
-            }
+            contentHtml += `<p>${escapeHtml((issue.description || '').trim() || 'No description provided.').replace(/\n/g, '<br>')}</p>`;
         }
 
-        if (detailSubtasks) {
-            const newSubtasksHtml = selectedLinearIssue.subtasks.length > 0
-                ? '<h4 class="tickets-section-header">Subtasks</h4>' + selectedLinearIssue.subtasks.map((subtask) => `
-                    <div class="tickets-subtask-item" data-linear-subtask-id="${escapeAttr(subtask.id)}">
-                        <div class="tickets-subtask-title">${escapeHtml(subtask.title || subtask.identifier || subtask.id)}</div>
-                        <div class="tickets-subtask-status">${escapeHtml(subtask.state?.name || 'Unknown state')}</div>
-                        <div class="tickets-subtask-actions">
-                            <button type="button" class="tickets-issue-import-btn" data-refine-issue-id="${escapeAttr(subtask.id)}" data-issue-title="${escapeAttr(subtask.title || '')}" data-issue-description="${escapeAttr(subtask.description || '')}">REFINE</button>
-                            <button type="button" class="tickets-issue-import-btn" data-import-issue-id="${escapeAttr(subtask.id)}">IMPORT</button>
-                        </div>
-                    </div>
-                `).join('')
-                : '';
-            if (_lastTicketsDetailSubtasksHtml !== newSubtasksHtml) {
-                detailSubtasks.innerHTML = newSubtasksHtml;
-                _lastTicketsDetailSubtasksHtml = newSubtasksHtml;
-            }
+        if (selectedLinearIssue.comments && selectedLinearIssue.comments.length > 0) {
+            contentHtml += '<h3>Comments</h3>';
+            contentHtml += selectedLinearIssue.comments.map(comment => `
+                <div class="tickets-comment-item">
+                    <span class="tickets-comment-author">${escapeHtml(comment.user?.name || comment.user?.email || 'Unknown')}</span>
+                    <span class="tickets-comment-date">${escapeHtml(comment.createdAt ? comment.createdAt.slice(0, 10) : '')}</span>
+                    <div class="tickets-comment-body">${escapeHtml(comment.body || '').replace(/\n/g, '<br>')}</div>
+                </div>
+            `).join('');
         }
 
-        if (detailComments) {
-            const newCommentsHtml = selectedLinearIssue.comments.length > 0
-                ? '<h4 class="tickets-section-header">Comments</h4>' + selectedLinearIssue.comments.map((comment) => `
-                    <div class="tickets-comment-item">
-                        <span class="tickets-comment-author">${escapeHtml(comment.user?.name || comment.user?.email || 'Unknown')}</span>
-                        <span class="tickets-comment-date">${escapeHtml(comment.createdAt ? comment.createdAt.slice(0, 10) : '')}</span>
-                        <div class="tickets-comment-body">${escapeHtml(comment.body || '').replace(/\n/g, '<br>')}</div>
-                    </div>
-                `).join('')
-                : '';
-            if (_lastTicketsDetailCommentsHtml !== newCommentsHtml) {
-                detailComments.innerHTML = newCommentsHtml;
-                _lastTicketsDetailCommentsHtml = newCommentsHtml;
-            }
+        if (selectedLinearIssue.attachments && selectedLinearIssue.attachments.length > 0) {
+            contentHtml += '<h3>Attachments</h3>';
+            contentHtml += selectedLinearIssue.attachments.map(attachment => `
+                <button type="button" class="tickets-attachment-item" data-linear-attachment-url="${escapeAttr(attachment.url || '')}">
+                    ${escapeHtml(attachment.title || attachment.filename || attachment.url || 'Attachment')}
+                </button>
+            `).join('');
         }
 
-        if (detailAttachments) {
-            const newAttachmentsHtml = selectedLinearIssue.attachments.length > 0
-                ? '<h4 class="tickets-section-header">Attachments</h4>' + selectedLinearIssue.attachments.map((attachment) => `
-                    <button type="button" class="tickets-attachment-item" data-linear-attachment-url="${escapeAttr(attachment.url || '')}">
-                        ${escapeHtml(attachment.title || attachment.filename || attachment.url || 'Attachment')}
-                    </button>
-                `).join('')
-                : '';
-            if (_lastTicketsDetailAttachmentsHtml !== newAttachmentsHtml) {
-                detailAttachments.innerHTML = newAttachmentsHtml;
-                _lastTicketsDetailAttachmentsHtml = newAttachmentsHtml;
-            }
+        if (_lastTicketsDetailContentHtml !== contentHtml) {
+            detailContent.innerHTML = contentHtml;
+            _lastTicketsDetailContentHtml = contentHtml;
         }
 
-        if (detailImportButton) {
-            detailImportButton.dataset.importIssueId = issue.id;
-            detailImportButton.disabled = false;
-        }
-        if (detailRefineButton) {
-            detailRefineButton.dataset.refineIssueId = issue.id;
-            detailRefineButton.dataset.issueTitle = issue.title || '';
-            detailRefineButton.dataset.issueDescription = issue.description || '';
-            detailRefineButton.disabled = false;
-        }
-        if (detailAskAgentButton) {
-            detailAskAgentButton.disabled = false;
-        }
+        if (detailImportButton) { detailImportButton.dataset.importIssueId = issue.id; detailImportButton.disabled = false; }
+        if (detailRefineButton) { detailRefineButton.dataset.refineIssueId = issue.id; detailRefineButton.dataset.issueTitle = issue.title || ''; detailRefineButton.dataset.issueDescription = issue.description || ''; detailRefineButton.disabled = false; }
+        if (detailAskAgentButton) { detailAskAgentButton.disabled = false; }
     }
 
     // ===== CLICKUP RENDERING FUNCTIONS =====
@@ -5654,7 +5960,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function renderTicketsClickUpPanel() {
         if (lastIntegrationProvider !== 'clickup' || !isTicketsTabActive()) return;
 
-        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, emptyState, issuesContainer, hierarchyNav, detailBanner, emptyPreview, createButton } = getTicketsTabElements();
+        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, emptyState, issuesContainer, hierarchyNav, activeDocBanner, emptyPreview, createButton } = getTicketsTabElements();
 
         // Hide Linear toolbar elements, show ClickUp hierarchy
         if (searchInput) searchInput.style.display = 'none';
@@ -5704,7 +6010,10 @@ Return ONLY the drafted prompt with no additional commentary.`;
         renderTicketsClickUpTaskDetail();
 
         const hasSelected = !!selectedClickUpIssue;
-        if (detailBanner) detailBanner.style.display = hasSelected ? '' : 'none';
+        if (activeDocBanner) {
+            if (hasSelected) activeDocBanner.classList.remove('inactive');
+            else activeDocBanner.classList.add('inactive');
+        }
         if (emptyPreview) emptyPreview.style.display = hasSelected ? 'none' : '';
     }
 
@@ -5787,6 +6096,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function attachTicketsHierarchyListeners() {
         const spaceSelect = document.getElementById('tickets-space-select');
         spaceSelect?.addEventListener('change', (e) => {
+            _restoringClickUpHierarchy = false;
             const spaceId = e.target.value;
             if (spaceId) {
                 clickUpSelectedSpaceId = spaceId;
@@ -5812,6 +6122,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         const folderSelect = document.getElementById('tickets-folder-select');
         folderSelect?.addEventListener('change', (e) => {
+            _restoringClickUpHierarchy = false;
             const folderId = e.target.value;
             if (folderId) {
                 clickUpSelectedFolderId = folderId === '_root_' ? '' : folderId;
@@ -5840,6 +6151,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         const listSelect = document.getElementById('tickets-list-select');
         listSelect?.addEventListener('change', (e) => {
+            _restoringClickUpHierarchy = false;
             const listId = e.target.value;
             if (listId) {
                 clickUpSelectedListId = listId;
@@ -5858,6 +6170,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         document.querySelectorAll('[data-level]').forEach(btn => {
             btn.addEventListener('click', (e) => {
+                _restoringClickUpHierarchy = false;
                 const level = e.target.dataset.level;
                 if (level === 'space') {
                     clickUpSelectedSpaceId = '';
@@ -5906,6 +6219,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         const search = String(clickUpProjectSearchValue || '').trim().toLowerCase();
         const statusFilter = String(clickUpProjectStatusFilterValue || '').trim();
         return clickUpProjectIssues.filter(task => {
+            if (task?.parentId) return false;
             if (statusFilter && task.status !== statusFilter) return false;
             if (!search) return true;
             const haystack = [
@@ -5966,121 +6280,29 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function renderTicketsClickUpTaskDetail() {
         if (!isTicketsTabActive()) return;
 
-        const { detailTitle, detailStatus, detailAssignee, detailDescription, detailSubtasks, detailComments, detailAttachments, detailImportButton, detailRefineButton, detailAskAgentButton, backToParentButton } = getTicketsTabElements();
-        if (!detailTitle || !detailStatus || !detailAssignee || !detailDescription) return;
+        const { activeDocBanner, activeDocName, detailMeta, detailStatus, detailAssignee, subtasksNav, detailContent, detailImportButton, detailRefineButton, detailAskAgentButton, backToParentButton } = getTicketsTabElements();
+        if (!activeDocBanner || !activeDocName || !detailContent) return;
 
         if (!selectedClickUpIssue) {
-            detailTitle.textContent = '';
-            detailStatus.textContent = '';
-            detailAssignee.textContent = '';
-            if (_lastTicketsClickUpDetailDescriptionHtml !== '') {
-                detailDescription.innerHTML = '';
-                _lastTicketsClickUpDetailDescriptionHtml = '';
-            }
-            if (detailSubtasks && _lastTicketsClickUpDetailSubtasksHtml !== '') { detailSubtasks.innerHTML = ''; _lastTicketsClickUpDetailSubtasksHtml = ''; }
-            if (detailComments && _lastTicketsClickUpDetailCommentsHtml !== '') { detailComments.innerHTML = ''; _lastTicketsClickUpDetailCommentsHtml = ''; }
-            if (detailAttachments && _lastTicketsClickUpDetailAttachmentsHtml !== '') { detailAttachments.innerHTML = ''; _lastTicketsClickUpDetailAttachmentsHtml = ''; }
-            if (detailImportButton) {
-                detailImportButton.disabled = true;
-                delete detailImportButton.dataset.importTaskId;
-            }
-            if (detailRefineButton) {
-                detailRefineButton.disabled = true;
-                delete detailRefineButton.dataset.refineTaskId;
-                delete detailRefineButton.dataset.issueTitle;
-                delete detailRefineButton.dataset.issueDescription;
-            }
-            if (detailAskAgentButton) {
-                detailAskAgentButton.disabled = true;
-            }
-            if (backToParentButton) {
-                backToParentButton.style.display = 'none';
-                delete backToParentButton.dataset.parentId;
-                delete backToParentButton.dataset.parentProvider;
-            }
+            activeDocBanner.classList.add('inactive');
+            activeDocName.textContent = 'None';
+            if (detailMeta) detailMeta.style.display = 'none';
+            if (subtasksNav) { subtasksNav.innerHTML = ''; subtasksNav.style.display = 'none'; }
+            if (_lastTicketsClickUpDetailContentHtml !== '') { detailContent.innerHTML = ''; _lastTicketsClickUpDetailContentHtml = ''; }
+            if (detailImportButton) { detailImportButton.disabled = true; delete detailImportButton.dataset.importTaskId; }
+            if (detailRefineButton) { detailRefineButton.disabled = true; delete detailRefineButton.dataset.refineTaskId; delete detailRefineButton.dataset.issueTitle; delete detailRefineButton.dataset.issueDescription; }
+            if (detailAskAgentButton) { detailAskAgentButton.disabled = true; }
+            if (backToParentButton) { backToParentButton.style.display = 'none'; delete backToParentButton.dataset.parentId; delete backToParentButton.dataset.parentProvider; }
             return;
         }
 
         const task = selectedClickUpIssue.task;
-        detailTitle.textContent = task.title || task.identifier || task.id;
-        detailStatus.textContent = task.status || 'Unknown status';
-        detailAssignee.textContent = `Assignee: ${task.assignees?.length ? task.assignees.map(a => a.username || a.email).join(', ') : 'Unassigned'}`;
+        activeDocBanner.classList.remove('inactive');
+        activeDocName.textContent = task.title || task.identifier || task.id;
+        if (detailMeta) detailMeta.style.display = '';
+        if (detailStatus) detailStatus.textContent = task.status || 'Unknown status';
+        if (detailAssignee) detailAssignee.textContent = `Assignee: ${task.assignees?.length ? task.assignees.map(a => a.username || a.email).join(', ') : 'Unassigned'}`;
 
-        if (selectedClickUpIssue.renderedDescriptionHtml) {
-            if (_lastTicketsClickUpDetailDescriptionHtml !== selectedClickUpIssue.renderedDescriptionHtml) {
-                detailDescription.innerHTML = selectedClickUpIssue.renderedDescriptionHtml;
-                _lastTicketsClickUpDetailDescriptionHtml = selectedClickUpIssue.renderedDescriptionHtml;
-            }
-        } else {
-            const plainHtml = escapeHtml((task.markdownDescription || task.description || '').trim() || 'No description provided.').replace(/\n/g, '<br>');
-            if (_lastTicketsClickUpDetailDescriptionHtml !== plainHtml) {
-                detailDescription.innerHTML = plainHtml;
-                _lastTicketsClickUpDetailDescriptionHtml = plainHtml;
-            }
-        }
-
-        if (detailSubtasks) {
-            const newSubtasksHtml = selectedClickUpIssue.subtasks.length > 0
-                ? '<h4 class="tickets-section-header">Subtasks</h4>' + selectedClickUpIssue.subtasks.map((subtask) => `
-                    <div class="tickets-subtask-item">
-                        <div class="tickets-subtask-title">${escapeHtml(subtask.title || subtask.name || subtask.id)}</div>
-                        <div class="tickets-subtask-status">${escapeHtml(subtask.status || 'Unknown')}</div>
-                        <div class="tickets-subtask-actions">
-                            <button type="button" class="tickets-issue-import-btn" data-refine-task-id="${escapeAttr(subtask.id)}" data-issue-title="${escapeAttr(subtask.title || '')}" data-issue-description="${escapeAttr(subtask.description || '')}">REFINE</button>
-                            <button type="button" class="tickets-issue-import-btn" data-import-task-id="${escapeAttr(subtask.id)}">IMPORT</button>
-                        </div>
-                    </div>
-                `).join('')
-                : '';
-            if (_lastTicketsClickUpDetailSubtasksHtml !== newSubtasksHtml) {
-                detailSubtasks.innerHTML = newSubtasksHtml;
-                _lastTicketsClickUpDetailSubtasksHtml = newSubtasksHtml;
-            }
-        }
-
-        if (detailComments) {
-            const newCommentsHtml = selectedClickUpIssue.comments.length > 0
-                ? '<h4 class="tickets-section-header">Comments</h4>' + selectedClickUpIssue.comments.map((comment) => `
-                    <div class="tickets-comment-item">
-                        <span class="tickets-comment-author">${escapeHtml(comment.user?.name || comment.user?.email || 'Unknown')}</span>
-                        <span class="tickets-comment-date">${escapeHtml(comment.createdAt ? comment.createdAt.slice(0, 10) : '')}</span>
-                        <div class="tickets-comment-body">${escapeHtml(comment.body || '').replace(/\n/g, '<br>')}</div>
-                    </div>
-                `).join('')
-                : '';
-            if (_lastTicketsClickUpDetailCommentsHtml !== newCommentsHtml) {
-                detailComments.innerHTML = newCommentsHtml;
-                _lastTicketsClickUpDetailCommentsHtml = newCommentsHtml;
-            }
-        }
-
-        if (detailAttachments) {
-            const newAttachmentsHtml = selectedClickUpIssue.attachments.length > 0
-                ? '<h4 class="tickets-section-header">Attachments</h4>' + selectedClickUpIssue.attachments.map((attachment) => `
-                    <button type="button" class="tickets-attachment-item" data-clickup-attachment-url="${escapeAttr(attachment.url || '')}">
-                        ${escapeHtml(attachment.title || attachment.filename || attachment.url || 'Attachment')}
-                    </button>
-                `).join('')
-                : '';
-            if (_lastTicketsClickUpDetailAttachmentsHtml !== newAttachmentsHtml) {
-                detailAttachments.innerHTML = newAttachmentsHtml;
-                _lastTicketsClickUpDetailAttachmentsHtml = newAttachmentsHtml;
-            }
-        }
-
-        if (detailImportButton) {
-            detailImportButton.dataset.importTaskId = task.id;
-            detailImportButton.disabled = false;
-        }
-        if (detailRefineButton) {
-            detailRefineButton.dataset.refineTaskId = task.id;
-            detailRefineButton.dataset.issueTitle = task.title || '';
-            detailRefineButton.dataset.issueDescription = task.markdownDescription || task.description || '';
-            detailRefineButton.disabled = false;
-        }
-        if (detailAskAgentButton) {
-            detailAskAgentButton.disabled = false;
-        }
         if (backToParentButton) {
             const parentId = task.parentId;
             if (parentId) {
@@ -6093,6 +6315,63 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 delete backToParentButton.dataset.parentProvider;
             }
         }
+
+        if (subtasksNav) {
+            const subtasks = selectedClickUpIssue.subtasks;
+            if (subtasks && subtasks.length > 0) {
+                let navHtml = '<div class="subtasks-header">Subtasks</div>';
+                navHtml += '<div style="display: flex; flex-direction: column; gap: 4px;">';
+                subtasks.forEach(subtask => {
+                    navHtml += `<div class="subtask-nav-item" data-subtask-id="${escapeAttr(subtask.id)}" data-provider="clickup">
+                        <span>${escapeHtml(subtask.title || subtask.name || subtask.id)}</span>
+                        <span class="subtask-nav-status">${escapeHtml(subtask.status || 'Unknown')}</span>
+                    </div>`;
+                });
+                navHtml += '</div>';
+                subtasksNav.innerHTML = navHtml;
+                subtasksNav.style.display = '';
+            } else {
+                subtasksNav.innerHTML = '';
+                subtasksNav.style.display = 'none';
+            }
+        }
+
+        let contentHtml = '';
+
+        if (selectedClickUpIssue.renderedDescriptionHtml) {
+            contentHtml += selectedClickUpIssue.renderedDescriptionHtml;
+        } else {
+            contentHtml += `<p>${escapeHtml((task.markdownDescription || task.description || '').trim() || 'No description provided.').replace(/\n/g, '<br>')}</p>`;
+        }
+
+        if (selectedClickUpIssue.comments && selectedClickUpIssue.comments.length > 0) {
+            contentHtml += '<h3>Comments</h3>';
+            contentHtml += selectedClickUpIssue.comments.map(comment => `
+                <div class="tickets-comment-item">
+                    <span class="tickets-comment-author">${escapeHtml(comment.user?.name || comment.user?.email || 'Unknown')}</span>
+                    <span class="tickets-comment-date">${escapeHtml(comment.createdAt ? comment.createdAt.slice(0, 10) : '')}</span>
+                    <div class="tickets-comment-body">${escapeHtml(comment.body || '').replace(/\n/g, '<br>')}</div>
+                </div>
+            `).join('');
+        }
+
+        if (selectedClickUpIssue.attachments && selectedClickUpIssue.attachments.length > 0) {
+            contentHtml += '<h3>Attachments</h3>';
+            contentHtml += selectedClickUpIssue.attachments.map(attachment => `
+                <button type="button" class="tickets-attachment-item" data-clickup-attachment-url="${escapeAttr(attachment.url || '')}">
+                    ${escapeHtml(attachment.title || attachment.filename || attachment.url || 'Attachment')}
+                </button>
+            `).join('');
+        }
+
+        if (_lastTicketsClickUpDetailContentHtml !== contentHtml) {
+            detailContent.innerHTML = contentHtml;
+            _lastTicketsClickUpDetailContentHtml = contentHtml;
+        }
+
+        if (detailImportButton) { detailImportButton.dataset.importTaskId = task.id; detailImportButton.disabled = false; }
+        if (detailRefineButton) { detailRefineButton.dataset.refineTaskId = task.id; detailRefineButton.dataset.issueTitle = task.title || ''; detailRefineButton.dataset.issueDescription = task.markdownDescription || task.description || ''; detailRefineButton.disabled = false; }
+        if (detailAskAgentButton) { detailAskAgentButton.disabled = false; }
     }
 
     // ===== LOAD FUNCTIONS =====
@@ -6220,6 +6499,14 @@ Return ONLY the drafted prompt with no additional commentary.`;
         clickUpSelectedListId = state.clickUpSelectedListId || '';
         clickUpProjectSearchValue = state.clickUpProjectSearchValue || '';
         clickUpProjectStatusFilterValue = state.clickUpProjectStatusFilterValue || '';
+
+        if (clickUpSelectedSpaceId) {
+            _restoringClickUpHierarchy = true;
+            ticketsLoadedOnce = true;
+        }
+        if (state.linearProjectPickerValue) {
+            _restoredLinearProjectPickerValue = state.linearProjectPickerValue;
+        }
     }
 
     // Design Folder modal close (X button)
@@ -6268,6 +6555,11 @@ Return ONLY the drafted prompt with no additional commentary.`;
             }
         });
     }
+
+    // Initialize zoom/pan listeners for image and iframe preview containers
+    initZoomListeners('image-preview-container',       '.zoomable-viewport', 'html');
+    initZoomListeners('html-preview-wrapper',           '.zoomable-viewport', 'html');
+    initZoomListeners('image-preview-container-design', '.zoomable-viewport', 'design');
 
     vscode.postMessage({ type: 'fetchRoots' });
     vscode.postMessage({ type: 'refreshSource', sourceId: 'local-folder' });

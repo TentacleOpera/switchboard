@@ -15323,6 +15323,177 @@ What would you like to find?`;
         await this._importMultiplePlansFromClipboard(text);
     }
 
+    public async importNotebookLMPlans(): Promise<{ overwritten: number; created: number; errors: number }> {
+        // LAZY CHANGE: Ensure DB exists before import
+        try {
+            const workspaceRoot = this._getWorkspaceRoot();
+            if (workspaceRoot) {
+                const db = await this._getKanbanDb(workspaceRoot);
+                if (db) {
+                    await db.createIfMissing();
+                }
+            }
+        } catch (e) {
+            console.error('[Import] DB creation failed:', e);
+        }
+
+        let text: string;
+        const html = await this._readClipboardHtml();
+        if (html) {
+            const converted = this._convertHtmlToMarkdown(html);
+            text = converted || (await vscode.env.clipboard.readText());
+        } else {
+            text = await vscode.env.clipboard.readText();
+        }
+
+        if (!text || !text.trim()) {
+            vscode.window.showWarningMessage('Clipboard is empty. Copy a Markdown plan first.');
+            return { overwritten: 0, created: 0, errors: 0 };
+        }
+        if (text.length > 200_000) {
+            vscode.window.showWarningMessage('Clipboard content is too large (>200 KB). Aborting import.');
+            return { overwritten: 0, created: 0, errors: 0 };
+        }
+
+        // Check for multi-plan markers: --- PLAN ---
+        const multiPlanDetect = new RegExp(TaskViewerProvider.CLIPBOARD_SEPARATOR_REGEX.source, 'gm');
+        const hasMultiPlanMarkers = multiPlanDetect.test(text);
+
+        let plans: Array<{ title: string; content: string }>;
+        if (!hasMultiPlanMarkers) {
+            const h1Match = text.match(/^#\s+(.+)$/m);
+            const h2Match = !h1Match ? text.match(/^##\s+(.+)$/m) : null;
+            const h3Match = !h1Match && !h2Match ? text.match(/^###\s+(.+)$/m) : null;
+
+            let title: string;
+            if (h1Match) {
+                title = h1Match[1].trim();
+            } else if (h2Match) {
+                title = h2Match[1].trim();
+            } else if (h3Match) {
+                title = h3Match[1].trim();
+            } else {
+                title = 'Imported Plan';
+            }
+
+            plans = [{ title, content: text }];
+        } else {
+            // Extract plan segments (same logic as _importMultiplePlansFromClipboard)
+            const separatorSource = TaskViewerProvider.CLIPBOARD_SEPARATOR_REGEX.source;
+            const splitRegex = new RegExp(`(${separatorSource})`, 'gm');
+            const parts = text.split(splitRegex).filter(p => p.trim());
+            const markerTest = new RegExp(separatorSource, 'm');
+
+            const extractedPlans: Array<{ title: string; content: string }> = [];
+            let currentPlan: { marker?: string; lines: string[] } | null = null;
+
+            for (const part of parts) {
+                if (markerTest.test(part)) {
+                    if (currentPlan && currentPlan.lines.length > 0) {
+                        const content = currentPlan.lines.join('\n').trim();
+                        if (content) {
+                            const h1Match = content.match(/^#\s+(.+)$/m);
+                            const title = h1Match ? h1Match[1].trim() : `Imported Plan ${extractedPlans.length + 1}`;
+                            extractedPlans.push({ title, content });
+                        }
+                    }
+                    currentPlan = { marker: part, lines: [] };
+                } else {
+                    if (currentPlan) {
+                        currentPlan.lines.push(part);
+                    } else {
+                        currentPlan = { lines: [part] };
+                    }
+                }
+            }
+
+            if (currentPlan && currentPlan.lines.length > 0) {
+                const content = currentPlan.lines.join('\n').trim();
+                if (content) {
+                    const h1Match = content.match(/^#\s+(.+)$/m);
+                    const title = h1Match ? h1Match[1].trim() : `Imported Plan ${extractedPlans.length + 1}`;
+                    extractedPlans.push({ title, content });
+                }
+            }
+
+            plans = extractedPlans;
+        }
+
+        if (plans.length === 0) {
+            vscode.window.showWarningMessage('No valid plans found in clipboard content.');
+            return { overwritten: 0, created: 0, errors: 0 };
+        }
+
+        const workspaceRoot = this._resolveWorkspaceRoot();
+        if (!workspaceRoot) {
+            vscode.window.showErrorMessage('No workspace folder found.');
+            return { overwritten: 0, created: 0, errors: 1 };
+        }
+
+        let overwritten = 0;
+        let created = 0;
+        let errors = 0;
+
+        for (const plan of plans) {
+            try {
+                const existing = await this._findExistingPlanInNewColumn(plan.title, workspaceRoot);
+                if (existing) {
+                    await this._overwriteExistingPlan(existing, plan.content);
+                    overwritten++;
+                } else {
+                    await this._createInitiatedPlan(plan.title, plan.content, false, { skipBrainPromotion: true });
+                    created++;
+                }
+            } catch (err: any) {
+                const msg = err?.message || String(err);
+                console.error(`[NotebookLM Import] Failed to import plan "${plan.title}":`, msg);
+                errors++;
+            }
+        }
+
+        if (overwritten > 0 || created > 0) {
+            const summary: string[] = [];
+            if (overwritten > 0) summary.push(`${overwritten} overwritten`);
+            if (created > 0) summary.push(`${created} created`);
+            this._showTemporaryNotification(`NotebookLM import: ${summary.join(', ')}`);
+        }
+
+        if (errors > 0) {
+            vscode.window.showErrorMessage(`Failed to import ${errors} plan(s). Check output panel for details.`);
+        }
+
+        return { overwritten, created, errors };
+    }
+
+    private async _findExistingPlanInNewColumn(title: string, workspaceRoot: string): Promise<KanbanPlanRecord | null> {
+        const normalizedTitle = title.toLowerCase().replace(/\s+/g, ' ').trim();
+        const workspaceId = await this._getWorkspaceIdForRoot(workspaceRoot);
+        const db = await this._getKanbanDb(workspaceRoot);
+        if (!db || !workspaceId) return null;
+        return db.getPlanByTopicAndColumn(normalizedTitle, 'CREATED', workspaceId);
+    }
+
+    private async _overwriteExistingPlan(record: KanbanPlanRecord, newContent: string): Promise<void> {
+        const workspaceRoot = this._resolveWorkspaceRoot();
+        if (!workspaceRoot) {
+            throw new Error('No workspace folder found.');
+        }
+        const planFileAbsolute = path.join(workspaceRoot, record.planFile);
+        const stablePath = this._normalizePendingPlanPath(planFileAbsolute);
+        this._pendingPlanCreations.add(stablePath);
+        this._planCreationInFlight.add(stablePath);
+        try {
+            await fs.promises.writeFile(planFileAbsolute, newContent, 'utf8');
+            const db = await this._getKanbanDb(workspaceRoot);
+            if (db) {
+                await db.updateLastActionByPlanFile(record.planFile, record.workspaceId, 'notebooklm_overwrite');
+            }
+        } finally {
+            this._planCreationInFlight.delete(stablePath);
+            setTimeout(() => this._pendingPlanCreations.delete(stablePath), 2000);
+        }
+    }
+
     private async _importMultiplePlansFromClipboard(text: string): Promise<void> {
         // Build split + marker-test regexes from the centralized constant
         const separatorSource = TaskViewerProvider.CLIPBOARD_SEPARATOR_REGEX.source;

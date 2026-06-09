@@ -1200,6 +1200,44 @@
             filter: brightness(1.2);
         }
 
+        /* Worktree tab primary button */
+        .worktree-primary-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 8px 14px;
+            border: 1px solid var(--accent-teal, #00ad9f);
+            border-radius: 4px;
+            background: rgba(0, 173, 159, 0.12);
+            color: var(--text-primary, #e8e8e8);
+            font-size: 14px;
+            font-weight: 600;
+            line-height: 1.3;
+            cursor: pointer;
+            transition: all 0.15s;
+            width: 100%;
+        }
+        .worktree-primary-btn:focus {
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(0, 173, 159, 0.3);
+        }
+        .worktree-primary-btn:hover:not(:disabled) {
+            background: rgba(0, 173, 159, 0.25);
+            border-color: var(--accent-teal, #00ad9f);
+        }
+        .worktree-primary-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        .worktree-primary-btn.danger {
+            border-color: var(--accent-red, #e55);
+            background: rgba(229, 85, 85, 0.12);
+            color: var(--accent-red, #e55);
+        }
+        .worktree-primary-btn.danger:hover:not(:disabled) {
+            background: rgba(229, 85, 85, 0.25);
+        }
+
         /* Selected card highlight */
         .kanban-card.selected {
             border-color: var(--accent-teal);
@@ -3511,8 +3549,8 @@
 
                 // Hydrate WORKTREES tab when activated
                 if (tabName === 'worktrees') {
-                  loadSafetySession();
-                  renderSafetySessionPanel();
+                  loadWorktreeConfig();
+                  renderWorktreesTab();
                 }
             });
         });
@@ -5467,6 +5505,7 @@
         let lastAntigravityAgent = '';
         let lastAntigravityColumn = '';
         let lastSafetySession = null;
+        let lastWorktreeConfig = null;
         let currentAutomationMode = 'single-column';
         let lastAntigravityBatchSize = 5;
         let managedTerminalPools = {};
@@ -5593,9 +5632,29 @@
                     }
                     break;
                 }
+                case 'worktreeConfig': {
+                    lastWorktreeConfig = msg;
+                    renderWorktreesTab();
+                    break;
+                }
                 case 'safetySession': {
                     lastSafetySession = msg.session;
-                    renderSafetySessionPanel();
+                    if (msg.session) {
+                        lastWorktreeConfig = {
+                            branch: msg.session.branch,
+                            path: msg.session.path,
+                            startedAt: msg.session.startedAt,
+                            pathExists: msg.session.pathExists,
+                            hasActiveSession: true,
+                            agentBehaviour: '',
+                            rememberedPath: '',
+                            rememberEnabled: false,
+                            activeTerminalCount: 0
+                        };
+                    } else {
+                        lastWorktreeConfig = null;
+                    }
+                    renderWorktreesTab();
                     break;
                 }
                 case 'antigravityPrompt': {
@@ -7912,15 +7971,33 @@
             });
         }
 
-        function createSafetySessionPanel(session) {
+        // (lastWorktreeConfig / lastSafetySession are forward-declared above; currentControlPlaneMode is set by workspace message handler)
+
+        function renderWorktreesTab() {
+            try {
+                const root = document.getElementById('worktree-panel-root');
+                if (!root) return;
+                root.innerHTML = '';
+                root.appendChild(createWorktreesPanel(lastWorktreeConfig));
+            } catch (err) {
+                console.error('[kanban webview] error rendering worktrees tab:', err);
+            }
+        }
+
+        function loadWorktreeConfig() {
+            postKanbanMessage({ type: 'getWorktreeConfig', workspaceRoot: currentWorkspaceRoot });
+        }
+
+        function createWorktreesPanel(config) {
             const container = document.createElement('div');
             container.style.cssText = 'padding: 12px; display: flex; flex-direction: column; gap: 16px;';
 
-            if (!currentControlPlaneMode || currentControlPlaneMode === 'none') {
-                const warningBanner = document.createElement('div');
-                warningBanner.style.cssText = 'padding:8px; background:rgba(229,85,85,0.15); border:1px solid var(--accent-red, #e55); color:var(--accent-red, #e55); border-radius:4px; font-size:10px; font-weight:bold; line-height:1.4;';
-                warningBanner.textContent = '⚠️ Control plane not configured. Safety session requires an explicit control plane or kanban database. Configure one in the workspace selector.';
-                container.appendChild(warningBanner);
+            const cpMode = currentControlPlaneMode || 'none';
+            if (cpMode === 'none') {
+                const infoBanner = document.createElement('div');
+                infoBanner.style.cssText = 'padding:8px; background:rgba(0,173,159,0.08); border:1px solid var(--accent-teal,#00ad9f); color:var(--text-secondary,#aaa); border-radius:4px; font-size:11px; line-height:1.4;';
+                infoBanner.textContent = '\u2139\ufe0f No control plane configured. Worktrees are optional \u2014 you can still create them for isolated git branches. Agent config queries always use the workspace root.';
+                container.appendChild(infoBanner);
             }
 
             // Description / Overview Header
@@ -7930,79 +8007,140 @@
             const configHeader = document.createElement('div');
             configHeader.className = 'subsection-header';
             const configSpan = document.createElement('span');
-            configSpan.textContent = 'SAFETY SESSION';
+            configSpan.textContent = 'WORKTREE';
             configHeader.appendChild(configSpan);
             configSection.appendChild(configHeader);
 
             const descriptionDiv = document.createElement('div');
             descriptionDiv.style.cssText = 'padding:8px; font-size:10px; color:var(--text-secondary); line-height:1.4;';
-            descriptionDiv.innerHTML = '<strong>When to use:</strong> When you want a single git worktree covering all agent work for a sprint or batch. Coder prompts reference the worktree path so agents edit code inside the worktree instead of the control plane root.<br><br>' +
-                '<strong>Workflow:</strong> Create a safety session, let agents implement changes, then merge the session branch back when you are satisfied.';
+            descriptionDiv.innerHTML = '<strong>When to use:</strong> When you want a single git worktree covering all agent work for a sprint or batch. Coder prompts reference the worktree path so agents edit code inside the worktree instead of the workspace root.<br><br>' +
+                '<strong>Workflow:</strong> Create a worktree, let agents implement changes, then merge the branch back when satisfied.';
             configSection.appendChild(descriptionDiv);
             container.appendChild(configSection);
 
+            const hasActiveSession = config && config.hasActiveSession;
+
+            // Agent Terminal Behaviour section
+            const behaviourSection = document.createElement('div');
+            behaviourSection.className = 'db-subsection';
+            behaviourSection.style.cssText = 'padding: 12px; display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--border-color); border-radius: 6px;';
+
+            const behaviourTitle = document.createElement('div');
+            behaviourTitle.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-primary);';
+            behaviourTitle.textContent = 'AGENT TERMINAL BEHAVIOUR';
+            behaviourSection.appendChild(behaviourTitle);
+
+            const activeTerminalCount = config?.activeTerminalCount || 0;
+            const selectedBehaviour = config?.agentBehaviour || 'worktreeNew';
+
+            const radioGroup = document.createElement('div');
+            radioGroup.style.cssText = 'display: flex; flex-direction: column; gap: 6px;';
+
+            const behaviours = [
+                { value: 'worktreeNew', label: 'Create new agent terminals in worktree directory' },
+                { value: 'worktreeReset', label: 'Dispose all existing agents and create new ones in worktree' },
+                { value: 'controlPlaneNew', label: 'Create new agent terminals in control plane directory' },
+                { value: 'existing', label: 'Use existing agents (keep current terminals)' }
+            ];
+
+            for (const b of behaviours) {
+                const row = document.createElement('label');
+                row.style.cssText = 'display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); cursor: pointer;';
+                const radio = document.createElement('input');
+                radio.type = 'radio';
+                radio.name = 'worktree-agent-behaviour';
+                radio.value = b.value;
+                radio.checked = selectedBehaviour === b.value;
+                if (b.value === 'existing' && activeTerminalCount === 0) {
+                    radio.disabled = true;
+                }
+                row.appendChild(radio);
+                const span = document.createElement('span');
+                span.textContent = b.label;
+                if (radio.disabled) {
+                    span.style.color = 'var(--text-muted)';
+                    span.title = 'No active agent terminals available';
+                }
+                row.appendChild(span);
+                radioGroup.appendChild(row);
+            }
+            behaviourSection.appendChild(radioGroup);
+
+            const rememberRow = document.createElement('label');
+            rememberRow.style.cssText = 'display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-muted); margin-top: 4px;';
+            const rememberCb = document.createElement('input');
+            rememberCb.type = 'checkbox';
+            rememberCb.checked = !!config?.rememberEnabled;
+            rememberRow.appendChild(rememberCb);
+            const rememberSpan = document.createElement('span');
+            rememberSpan.textContent = 'Remember choice for next startup';
+            rememberRow.appendChild(rememberSpan);
+            behaviourSection.appendChild(rememberRow);
+
+            container.appendChild(behaviourSection);
+
             // Active / Inactive states
-            if (!session) {
-                // No active session
+            if (!hasActiveSession) {
                 const actionSection = document.createElement('div');
                 actionSection.className = 'db-subsection';
                 actionSection.style.cssText = 'padding: 12px; display: flex; flex-direction: column; gap: 8px; border: 1px dashed var(--border-color); border-radius: 6px;';
 
                 const stateTitle = document.createElement('div');
                 stateTitle.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted);';
-                stateTitle.textContent = 'NO ACTIVE SAFETY SESSION';
+                stateTitle.textContent = 'NO ACTIVE WORKTREE';
                 actionSection.appendChild(stateTitle);
 
-                const startBtn = document.createElement('button');
-                startBtn.className = 'complexity-routing-btn';
-                startBtn.style.cssText = 'width: 100%; text-align: center; justify-content: center;';
-                startBtn.textContent = 'START SAFETY SESSION';
-                startBtn.addEventListener('click', () => {
-                    postKanbanMessage({ type: 'startSafetySession', workspaceRoot: currentWorkspaceRoot });
+                const createBtn = document.createElement('button');
+                createBtn.className = 'worktree-primary-btn';
+                createBtn.textContent = 'CREATE NEW WORKTREE';
+                createBtn.addEventListener('click', () => {
+                    const selected = radioGroup.querySelector('input[name="worktree-agent-behaviour"]:checked');
+                    const agentBehaviour = selected ? selected.value : 'worktreeNew';
+                    const rememberChoice = rememberCb.checked;
+                    postKanbanMessage({ type: 'createWorktree', workspaceRoot: currentWorkspaceRoot, agentBehaviour, rememberChoice });
                 });
-                actionSection.appendChild(startBtn);
+                actionSection.appendChild(createBtn);
 
                 container.appendChild(actionSection);
             } else {
-                // Active session
                 const activeSection = document.createElement('div');
                 activeSection.className = 'db-subsection';
                 activeSection.style.cssText = 'padding: 12px; display: flex; flex-direction: column; gap: 12px; border: 1px solid var(--accent-teal, #00ad9f); border-radius: 6px; background: rgba(0, 173, 159, 0.05);';
 
                 const stateTitle = document.createElement('div');
                 stateTitle.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--accent-teal, #00ad9f); display: flex; align-items: center; gap: 6px;';
-                stateTitle.innerHTML = '● ACTIVE SAFETY SESSION';
+                stateTitle.innerHTML = '\u25cf ACTIVE WORKTREE';
                 activeSection.appendChild(stateTitle);
 
                 const detailsList = document.createElement('div');
                 detailsList.style.cssText = 'display: flex; flex-direction: column; gap: 6px; font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary);';
 
                 const branchRow = document.createElement('div');
-                branchRow.innerHTML = `<span style="color:var(--text-muted)">Branch:</span> <span style="color:var(--text-primary); font-weight:bold;">${session.branch}</span>`;
+                branchRow.innerHTML = `<span style="color:var(--text-muted)">Branch:</span> <span style="color:var(--text-primary); font-weight:bold;">${config.branch}</span>`;
                 detailsList.appendChild(branchRow);
 
                 const pathRow = document.createElement('div');
                 pathRow.style.cssText = 'word-break: break-all;';
-                pathRow.innerHTML = `<span style="color:var(--text-muted)">Path:</span> <span style="color:var(--text-primary)">${session.path}</span>`;
+                pathRow.innerHTML = `<span style="color:var(--text-muted)">Path:</span> <span style="color:var(--text-primary)">${config.path}</span>`;
                 detailsList.appendChild(pathRow);
 
                 const startedRow = document.createElement('div');
-                const timeStr = session.startedAt ? new Date(session.startedAt).toLocaleString() : 'Unknown';
+                const timeStr = config.startedAt ? new Date(config.startedAt).toLocaleString() : 'Unknown';
                 startedRow.innerHTML = `<span style="color:var(--text-muted)">Started:</span> <span style="color:var(--text-primary)">${timeStr}</span>`;
                 detailsList.appendChild(startedRow);
 
                 activeSection.appendChild(detailsList);
 
-                if (!session.pathExists) {
+                if (!config.pathExists) {
                     const warningBanner = document.createElement('div');
                     warningBanner.style.cssText = 'padding: 8px; margin-top: 8px; background: rgba(229,85,85,0.1); border: 1px solid var(--accent-red, #e55); color: var(--accent-red, #e55); border-radius: 4px; font-size: 10px; line-height: 1.4;';
-                    warningBanner.textContent = '⚠️ Worktree directory not found on disk. It may have been deleted manually.';
+                    warningBanner.textContent = '\u26a0\ufe0f Worktree directory not found on disk. It may have been deleted manually.';
                     activeSection.appendChild(warningBanner);
 
                     const clearBtn = document.createElement('button');
-                    clearBtn.className = 'complexity-routing-btn';
-                    clearBtn.style.cssText = 'margin-top: 8px; border-color: var(--accent-red); color: var(--accent-red);';
-                    clearBtn.textContent = 'CLEAR SESSION RECORD';
+                    clearBtn.className = 'worktree-primary-btn danger';
+                    clearBtn.style.cssText = 'margin-top: 8px;';
+                    clearBtn.textContent = 'CLEAR WORKTREE RECORD';
                     clearBtn.addEventListener('click', () => {
                         postKanbanMessage({ type: 'clearSafetySessionRecord', workspaceRoot: currentWorkspaceRoot });
                     });
@@ -8012,8 +8150,7 @@
                     btnGroup.style.cssText = 'display: flex; flex-direction: column; gap: 8px; margin-top: 8px;';
 
                     const mergeBtn = document.createElement('button');
-                    mergeBtn.className = 'complexity-routing-btn';
-                    mergeBtn.style.cssText = 'background: var(--accent-teal, #00ad9f); color: #fff; text-align: center; justify-content: center;';
+                    mergeBtn.className = 'worktree-primary-btn';
                     mergeBtn.textContent = 'MERGE BACK';
                     mergeBtn.addEventListener('click', () => {
                         postKanbanMessage({ type: 'mergeSafetySession', workspaceRoot: currentWorkspaceRoot });
@@ -8021,11 +8158,10 @@
                     btnGroup.appendChild(mergeBtn);
 
                     const askAgentBtn = document.createElement('button');
-                    askAgentBtn.className = 'complexity-routing-btn';
-                    askAgentBtn.style.cssText = 'text-align: center; justify-content: center;';
+                    askAgentBtn.className = 'worktree-primary-btn';
                     askAgentBtn.textContent = 'ASK AGENT TO MERGE';
                     askAgentBtn.addEventListener('click', () => {
-                        const promptText = `Please merge the safety session worktree back to main.\nSteps:\n1. From the control plane directory, run: git merge --no-ff ${session.branch}\n2. If there are conflicts, resolve them, then git add . && git commit\n3. Run: git worktree remove --force ${session.path}\n4. Run: git branch -D ${session.branch}\n5. Confirm that main now contains the merged changes.`;
+                        const promptText = `Please merge the worktree back to main.\nSteps:\n1. From the workspace directory, run: git merge --no-ff ${config.branch}\n2. If there are conflicts, resolve them, then git add . && git commit\n3. Run: git worktree remove --force ${config.path}\n4. Run: git branch -D ${config.branch}\n5. Confirm that main now contains the merged changes.`;
                         navigator.clipboard.writeText(promptText).then(() => {
                             askAgentBtn.textContent = 'PROMPT COPIED!';
                             setTimeout(() => {
@@ -8038,11 +8174,10 @@
                     btnGroup.appendChild(askAgentBtn);
 
                     const abandonBtn = document.createElement('button');
-                    abandonBtn.className = 'complexity-routing-btn';
-                    abandonBtn.style.cssText = 'border-color: var(--accent-red, #e55); color: var(--accent-red, #e55); text-align: center; justify-content: center;';
-                    abandonBtn.textContent = 'ABANDON SESSION';
+                    abandonBtn.className = 'worktree-primary-btn danger';
+                    abandonBtn.textContent = 'ABANDON WORKTREE';
                     abandonBtn.addEventListener('click', () => {
-                        if (confirm('Are you sure you want to abandon this safety session? All worktree changes and the branch will be deleted!')) {
+                        if (confirm('Are you sure you want to abandon this worktree? All worktree changes and the branch will be deleted!')) {
                             postKanbanMessage({ type: 'abandonSafetySession', workspaceRoot: currentWorkspaceRoot });
                         }
                     });
@@ -8055,23 +8190,6 @@
             }
 
             return container;
-        }
-
-        // (lastSafetySession is forward-declared above; currentControlPlaneMode is set by workspace message handler)
-
-        function renderSafetySessionPanel() {
-            try {
-                const root = document.getElementById('worktree-panel-root');
-                if (!root) return;
-                root.innerHTML = '';
-                root.appendChild(createSafetySessionPanel(lastSafetySession));
-            } catch (err) {
-                console.error('[kanban webview] error rendering safety session panel:', err);
-            }
-        }
-
-        function loadSafetySession() {
-            postKanbanMessage({ type: 'getSafetySession', workspaceRoot: currentWorkspaceRoot });
         }
 
         // Initialize DOM event listeners

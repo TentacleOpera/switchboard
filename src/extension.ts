@@ -660,6 +660,11 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(importFromClipboardDisposable);
 
+    const importNotebookLMPlansDisposable = vscode.commands.registerCommand('switchboard.importNotebookLMPlans', async () => {
+        return await taskViewerProvider?.importNotebookLMPlans();
+    });
+    context.subscriptions.push(importNotebookLMPlansDisposable);
+
     const selectSessionDisposable = vscode.commands.registerCommand('switchboard.selectSession', (sessionId: string) => {
         if (typeof sessionId === 'string' && sessionId.trim()) {
             taskViewerProvider.selectSession(sessionId);
@@ -667,14 +672,18 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(selectSessionDisposable);
 
-    const createAgentGridDisposable = vscode.commands.registerCommand('switchboard.createAgentGrid', async () => {
-        await createAgentGrid();
+    const createAgentGridDisposable = vscode.commands.registerCommand('switchboard.createAgentGrid', async (args?: any) => {
+        await createAgentGrid(args);
     });
     const createAgentGridEditorDisposable = vscode.commands.registerCommand('switchboard.createAgentGridEditor', async () => {
         await createAgentGrid();
     });
+    const disposeAllGridTerminalsDisposable = vscode.commands.registerCommand('switchboard.disposeAllGridTerminals', async () => {
+        await disposeAllGridTerminals();
+    });
     context.subscriptions.push(createAgentGridDisposable);
     context.subscriptions.push(createAgentGridEditorDisposable);
+    context.subscriptions.push(disposeAllGridTerminalsDisposable);
 
     // Kanban Board
     const setupPanelProvider = new SetupPanelProvider(context.extensionUri);
@@ -2139,7 +2148,27 @@ export async function activate(context: vscode.ExtensionContext) {
     );
     context.subscriptions.push(sendReviewCommentDisposable);
 
-    async function createAgentGrid() {
+    async function disposeAllGridTerminals() {
+        for (const [name, terminal] of Array.from(registeredTerminals.entries())) {
+            if (terminal.exitStatus === undefined) {
+                outputChannel?.appendLine(`[Extension] Disposing grid terminal '${name}' for worktreeReset`);
+                terminal.dispose();
+            }
+            registeredTerminals.delete(name);
+        }
+        await taskViewerProvider.updateState(async (state: any) => {
+            if (!state.terminals) state.terminals = {};
+            const currentIde = vscode.env.appName || '';
+            for (const key of Object.keys(state.terminals)) {
+                const entry = state.terminals[key];
+                if (entry?.purpose === 'agent-grid' && isCompatibleIdeName(entry.ideName, currentIde)) {
+                    delete state.terminals[key];
+                }
+            }
+        });
+    }
+
+    async function createAgentGrid(options?: { cwdOverride?: string }) {
         const currentWorkspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot()
             ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (!currentWorkspaceRoot) {
@@ -2148,6 +2177,37 @@ export async function activate(context: vscode.ExtensionContext) {
         }
         const verifyWorkspace = () => kanbanProvider!.getCurrentWorkspaceRoot() === currentWorkspaceRoot;
         const effectiveWorkspaceRoot = kanbanProvider!.resolveEffectiveWorkspaceRoot(currentWorkspaceRoot);
+        let effectiveCwd = effectiveWorkspaceRoot;
+        if (options?.cwdOverride) {
+            if (fs.existsSync(options.cwdOverride)) {
+                effectiveCwd = options.cwdOverride;
+            } else {
+                vscode.window.showWarningMessage(`cwdOverride path does not exist: ${options.cwdOverride}. Using workspace root.`);
+            }
+        } else {
+            // Check for remembered worktree path
+            const kpAny = kanbanProvider as any;
+            const db = kpAny && typeof kpAny._getKanbanDb === 'function' ? kpAny._getKanbanDb(currentWorkspaceRoot) : null;
+            if (db) {
+                try {
+                    const ready = await db.ensureReady();
+                    if (ready) {
+                        const rememberEnabled = await db.getMeta('worktree_remember_enabled');
+                        if (rememberEnabled === 'true') {
+                            const rememberedPath = await db.getMeta('worktree_remembered_path');
+                            if (rememberedPath && fs.existsSync(rememberedPath)) {
+                                effectiveCwd = rememberedPath;
+                            } else if (rememberedPath) {
+                                // Stale path — clear and notify
+                                await db.setMeta('worktree_remember_enabled', '');
+                                await db.setMeta('worktree_remembered_path', '');
+                                vscode.window.showInformationMessage('Remembered worktree path no longer exists. Using workspace root instead.');
+                            }
+                        }
+                    }
+                } catch { /* ignore DB errors */ }
+            }
+        }
         const visibleAgents = await taskViewerProvider.getVisibleAgents(effectiveWorkspaceRoot);
         const includeJulesMonitor = visibleAgents.jules !== false;
         const customAgents = await taskViewerProvider.getCustomAgents(effectiveWorkspaceRoot);
@@ -2255,7 +2315,7 @@ export async function activate(context: vscode.ExtensionContext) {
                     const gridTermOpts: vscode.TerminalOptions = {
                         name: agent.name,
                         location: vscode.TerminalLocation.Panel,
-                        cwd: effectiveWorkspaceRoot
+                        cwd: effectiveCwd
                     };
                     terminal = vscode.window.createTerminal(gridTermOpts);
                     createdTerminals.push(terminal);
@@ -2267,7 +2327,8 @@ export async function activate(context: vscode.ExtensionContext) {
                     pid: null,
                     friendlyName: agent.name,
                     skipParentResolution: true,
-                    ideName: vscode.env.appName
+                    ideName: vscode.env.appName,
+                    worktreePath: effectiveCwd
                 });
                 outputChannel?.appendLine(`[Extension] Queued grid terminal '${agent.name}' (PID: null — skipParentResolution) for batch registration`);
                 registeredTerminals.set(suffixedName(agent.name), terminal);

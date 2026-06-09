@@ -1433,6 +1433,11 @@ export class PlanningPanelProvider {
                 await this._handleImportPlansFromClipboard(workspaceRoot);
                 break;
             }
+            case 'importNotebookLMPlans': {
+                const result = await vscode.commands.executeCommand('switchboard.importNotebookLMPlans') as { overwritten: number; created: number; errors: number } | undefined;
+                this._panel?.webview.postMessage({ type: 'importNotebookLMPlansResult', overwritten: result?.overwritten ?? 0, created: result?.created ?? 0, errors: result?.errors ?? 0 });
+                break;
+            }
             case 'importResearchDoc': {
                 await this._handleImportResearchDoc(workspaceRoot, msg.docTitle, msg.folderPath);
                 break;
@@ -1802,7 +1807,7 @@ export class PlanningPanelProvider {
                 const originalContent = String(msg.originalContent || '');
                 const tab = String(msg.tab || '');
                 const allRoots = this._getWorkspaceRoots();
-                let resolved = path.resolve(filePath);
+                let resolved: string;
                 if (!path.isAbsolute(filePath)) {
                     const wsRoot = this._getWorkspaceRoot() || (allRoots.length > 0 ? allRoots[0] : undefined);
                     if (wsRoot) {
@@ -1811,6 +1816,8 @@ export class PlanningPanelProvider {
                         this._panel?.webview.postMessage({ type: 'saveFileContentResult', success: false, error: 'No workspace root to resolve relative path', tab });
                         break;
                     }
+                } else {
+                    resolved = path.resolve(filePath);
                 }
                 let isAllowed = allRoots.some(r => resolved.startsWith(path.resolve(r)));
                 if (!isAllowed) {
@@ -4735,9 +4742,18 @@ export class PlanningPanelProvider {
             // Refresh inactivity timeout
             clearTimeout(existing.timeoutId);
             existing.timeoutId = this._createServerTimeout(resolvedSourceFolder);
-            const filename = path.basename(absolutePath);
-            const url = `http://127.0.0.1:${existing.port}/${encodeURIComponent(filename)}`;
+            const relativeUrlPath = path.relative(resolvedSourceFolder, absolutePath);
+            const urlPath = relativeUrlPath.split(path.sep).map(encodeURIComponent).join('/');
+            const url = `http://127.0.0.1:${existing.port}/${urlPath}`;
             await vscode.env.openExternal(vscode.Uri.parse(url));
+            return;
+        }
+
+        // Verify file exists before spinning up a server
+        try {
+            await fs.promises.access(absolutePath, fs.constants.R_OK);
+        } catch {
+            vscode.window.showErrorMessage(`File not found or not readable: ${absolutePath}`);
             return;
         }
 
@@ -4750,8 +4766,9 @@ export class PlanningPanelProvider {
             server.listen(0, '127.0.0.1', () => {
                 const address = server.address() as { port: number };
                 const port = address.port;
-                const filename = path.basename(absolutePath);
-                const url = `http://127.0.0.1:${port}/${encodeURIComponent(filename)}`;
+                const relativeUrlPath = path.relative(resolvedSourceFolder, absolutePath);
+                const urlPath = relativeUrlPath.split(path.sep).map(encodeURIComponent).join('/');
+                const url = `http://127.0.0.1:${port}/${urlPath}`;
 
                 const timeoutId = this._createServerTimeout(resolvedSourceFolder);
                 this._htmlServers.set(resolvedSourceFolder, { server, port, timeoutId });
@@ -4782,10 +4799,10 @@ export class PlanningPanelProvider {
 
         // Resolve and validate path is within sourceFolder
         const resolvedPath = path.resolve(sourceFolder, requestedPath.substring(1)); // strip leading /
-        const normalizedSource = path.normalize(sourceFolder);
+        const normalizedSource = path.normalize(sourceFolder).replace(/[\\/]+$/, '');
         const normalizedResolved = path.normalize(resolvedPath);
 
-        if (!normalizedResolved.startsWith(normalizedSource + path.sep)) {
+        if (!normalizedResolved.startsWith(normalizedSource + path.sep) && normalizedResolved !== normalizedSource) {
             res.writeHead(403, { 'Content-Type': 'text/plain' });
             res.end('Forbidden: path traversal denied');
             return;

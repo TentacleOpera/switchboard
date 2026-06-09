@@ -2342,6 +2342,21 @@ export class KanbanDatabase {
         return rows.length > 0 ? rows[0] : null;
     }
 
+    public async getPlanByTopicAndColumn(topic: string, kanbanColumn: string, workspaceId: string): Promise<KanbanPlanRecord | null> {
+        if (!(await this.ensureReady()) || !this._db) return null;
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE LOWER(topic) = LOWER(?)
+               AND kanban_column = ?
+               AND workspace_id = ?
+               AND status = 'active'
+             LIMIT 1`,
+            [topic, kanbanColumn, workspaceId]
+        );
+        const rows = this._readRows(stmt);
+        return rows.length > 0 ? rows[0] : null;
+    }
+
     /** Returns all plan files in the DB (any status) in a single query. */
     public async getPlanFileSet(): Promise<Set<string>> {
         if (!(await this.ensureReady()) || !this._db) return new Set();

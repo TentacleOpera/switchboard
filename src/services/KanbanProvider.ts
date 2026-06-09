@@ -1120,6 +1120,7 @@ export class KanbanProvider implements vscode.Disposable {
             const workspaceItems = this._getWorkspaceItems();
             const allWorkspaceProjects = await this._getAllWorkspaceProjects();
 
+            const cpStatus = this.getControlPlaneSelectionStatus(resolvedWorkspaceRoot);
             this._panel.webview.postMessage({
                 type: 'updateWorkspaceSelection',
                 workspaceRoot: resolvedWorkspaceRoot,
@@ -1127,7 +1128,13 @@ export class KanbanProvider implements vscode.Disposable {
                 activeFilter: this._repoScopeFilter || null,
                 projectFilter: this._projectFilter ?? null,
                 projects: projList,
-                allWorkspaceProjects
+                allWorkspaceProjects,
+                controlPlaneMode: cpStatus.mode,
+                controlPlaneRoot: cpStatus.controlPlaneRoot,
+                effectiveControlPlaneRoot: cpStatus.effectiveWorkspaceRoot,
+                explicitControlPlaneRoot: cpStatus.explicitControlPlaneRoot,
+                pendingCandidate: cpStatus.pendingCandidate,
+                repoScopeFilter: cpStatus.repoScopeFilter
             });
 
             // THE critical message — sends cards to webview
@@ -1839,6 +1846,7 @@ export class KanbanProvider implements vscode.Disposable {
             const projects = workspaceId && dbReady ? await db.getProjects(workspaceId) : [];
             const allWorkspaceProjects = await this._getAllWorkspaceProjects();
 
+            const cpStatus2 = this.getControlPlaneSelectionStatus(resolvedWorkspaceRoot);
             this._panel.webview.postMessage({
                 type: 'updateWorkspaceSelection',
                 workspaceRoot: resolvedWorkspaceRoot,
@@ -1846,7 +1854,13 @@ export class KanbanProvider implements vscode.Disposable {
                 activeFilter: this._repoScopeFilter || null,
                 projectFilter: this._projectFilter ?? null,
                 projects,
-                allWorkspaceProjects
+                allWorkspaceProjects,
+                controlPlaneMode: cpStatus2.mode,
+                controlPlaneRoot: cpStatus2.controlPlaneRoot,
+                effectiveControlPlaneRoot: cpStatus2.effectiveWorkspaceRoot,
+                explicitControlPlaneRoot: cpStatus2.explicitControlPlaneRoot,
+                pendingCandidate: cpStatus2.pendingCandidate,
+                repoScopeFilter: cpStatus2.repoScopeFilter
             });
             this._lastCards = cards;
             this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig });
@@ -1978,6 +1992,7 @@ export class KanbanProvider implements vscode.Disposable {
             const projects = workspaceId ? await db.getProjects(workspaceId) : [];
             const allWorkspaceProjects = await this._getAllWorkspaceProjects();
 
+            const cpStatus3 = this.getControlPlaneSelectionStatus(resolvedWorkspaceRoot);
             this._panel.webview.postMessage({
                 type: 'updateWorkspaceSelection',
                 workspaceRoot: resolvedWorkspaceRoot,
@@ -1985,7 +2000,13 @@ export class KanbanProvider implements vscode.Disposable {
                 activeFilter: this._repoScopeFilter || null,
                 projectFilter: this._projectFilter ?? null,
                 projects,
-                allWorkspaceProjects
+                allWorkspaceProjects,
+                controlPlaneMode: cpStatus3.mode,
+                controlPlaneRoot: cpStatus3.controlPlaneRoot,
+                effectiveControlPlaneRoot: cpStatus3.effectiveWorkspaceRoot,
+                explicitControlPlaneRoot: cpStatus3.explicitControlPlaneRoot,
+                pendingCandidate: cpStatus3.pendingCandidate,
+                repoScopeFilter: cpStatus3.repoScopeFilter
             });
             this._lastCards = cards;
             this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig });
@@ -6038,16 +6059,28 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 }
                 break;
             }
+            case 'getWorktreeConfig':
             case 'getSafetySession': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) break;
-                const session = await this._getSafetySessionData(workspaceRoot);
+                const config = await this._getWorktreeConfigData(workspaceRoot);
+                this._panel?.webview.postMessage({
+                    type: 'worktreeConfig',
+                    ...config
+                });
+                // Backward compatibility
                 this._panel?.webview.postMessage({
                     type: 'safetySession',
-                    session
+                    session: config?.hasActiveSession ? {
+                        branch: config.branch,
+                        path: config.path,
+                        startedAt: config.startedAt,
+                        pathExists: config.pathExists
+                    } : null
                 });
                 break;
             }
+            case 'createWorktree':
             case 'startSafetySession': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) break;
@@ -6058,16 +6091,62 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                         await db.setMeta('active_safety_session_branch', branch);
                         await db.setMeta('active_safety_session_started_at', new Date().toISOString());
                         await db.setMeta('active_safety_session_path', wtPath);
-                        
-                        const session = await this._getSafetySessionData(workspaceRoot);
+
+                        const agentBehaviour = msg.agentBehaviour || 'worktreeNew';
+                        const rememberChoice = msg.rememberChoice || false;
+                        const cpStatus = this.getControlPlaneSelectionStatus(workspaceRoot);
+                        const effectiveCpRoot = cpStatus.effectiveWorkspaceRoot || workspaceRoot;
+
+                        if (agentBehaviour === 'existing') {
+                            const config = await this._getWorktreeConfigData(workspaceRoot);
+                            if (config && config.activeTerminalCount === 0) {
+                                vscode.window.showWarningMessage('No active agent terminals found. Consider creating new agents instead.');
+                            }
+                        } else if (agentBehaviour === 'controlPlaneNew') {
+                            await vscode.commands.executeCommand('switchboard.createAgentGrid', { cwdOverride: effectiveCpRoot });
+                        } else if (agentBehaviour === 'worktreeReset') {
+                            await vscode.commands.executeCommand('switchboard.disposeAllGridTerminals');
+                            await vscode.commands.executeCommand('switchboard.createAgentGrid', { cwdOverride: wtPath });
+                        } else if (agentBehaviour === 'worktreeNew') {
+                            await vscode.commands.executeCommand('switchboard.createAgentGrid', { cwdOverride: wtPath });
+                        }
+
+                        if (rememberChoice) {
+                            await db.setMeta('worktree_agent_behaviour', agentBehaviour);
+                            await db.setMeta('worktree_remembered_path', wtPath);
+                            await db.setMeta('worktree_remember_enabled', 'true');
+                        }
+
+                        const config = await this._getWorktreeConfigData(workspaceRoot);
+                        this._panel?.webview.postMessage({
+                            type: 'worktreeConfig',
+                            ...config
+                        });
                         this._panel?.webview.postMessage({
                             type: 'safetySession',
-                            session
+                            session: config?.hasActiveSession ? {
+                                branch: config.branch,
+                                path: config.path,
+                                startedAt: config.startedAt,
+                                pathExists: config.pathExists
+                            } : null
                         });
-                        vscode.window.showInformationMessage(`Safety session started: ${branch}`);
+                        vscode.window.showInformationMessage(`Worktree created: ${branch}`);
                     } catch (e: any) {
-                        vscode.window.showErrorMessage(`Failed to start safety session: ${e.message}`);
+                        vscode.window.showErrorMessage(`Failed to create worktree: ${e.message}`);
                     }
+                }
+                break;
+            }
+            case 'clearRememberedWorktreeChoice': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                if (db && await db.ensureReady()) {
+                    await db.setMeta('worktree_agent_behaviour', '');
+                    await db.setMeta('worktree_remembered_path', '');
+                    await db.setMeta('worktree_remember_enabled', '');
+                    vscode.window.showInformationMessage('Remembered worktree choice cleared.');
                 }
                 break;
             }
@@ -6093,8 +6172,11 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                             await db.setMeta('active_safety_session_branch', '');
                             await db.setMeta('active_safety_session_started_at', '');
                             await db.setMeta('active_safety_session_path', '');
+                            await db.setMeta('worktree_agent_behaviour', '');
+                            await db.setMeta('worktree_remembered_path', '');
+                            await db.setMeta('worktree_remember_enabled', '');
                             this._panel?.webview.postMessage({ type: 'safetySession', session: null });
-                            vscode.window.showInformationMessage('Safety session record cleared.');
+                            vscode.window.showInformationMessage('Worktree record cleared.');
                         }
                         break;
                     }
@@ -6107,12 +6189,15 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                         await db.setMeta('active_safety_session_branch', '');
                         await db.setMeta('active_safety_session_started_at', '');
                         await db.setMeta('active_safety_session_path', '');
+                        await db.setMeta('worktree_agent_behaviour', '');
+                        await db.setMeta('worktree_remembered_path', '');
+                        await db.setMeta('worktree_remember_enabled', '');
 
                         this._panel?.webview.postMessage({
                             type: 'safetySession',
                             session: null
                         });
-                        vscode.window.showInformationMessage('Safety session merged successfully.');
+                        vscode.window.showInformationMessage('Worktree merged successfully.');
                     } catch (e: any) {
                         vscode.window.showErrorMessage(`Merge failed: ${e.message}`);
                     }
@@ -6145,12 +6230,15 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     await db.setMeta('active_safety_session_branch', '');
                     await db.setMeta('active_safety_session_started_at', '');
                     await db.setMeta('active_safety_session_path', '');
+                    await db.setMeta('worktree_agent_behaviour', '');
+                    await db.setMeta('worktree_remembered_path', '');
+                    await db.setMeta('worktree_remember_enabled', '');
 
                     this._panel?.webview.postMessage({
                         type: 'safetySession',
                         session: null
                     });
-                    vscode.window.showInformationMessage('Safety session abandoned.');
+                    vscode.window.showInformationMessage('Worktree abandoned.');
                 }
                 break;
             }
@@ -6162,11 +6250,14 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     await db.setMeta('active_safety_session_branch', '');
                     await db.setMeta('active_safety_session_started_at', '');
                     await db.setMeta('active_safety_session_path', '');
+                    await db.setMeta('worktree_agent_behaviour', '');
+                    await db.setMeta('worktree_remembered_path', '');
+                    await db.setMeta('worktree_remember_enabled', '');
                     this._panel?.webview.postMessage({
                         type: 'safetySession',
                         session: null
                     });
-                    vscode.window.showInformationMessage('Safety session record cleared.');
+                    vscode.window.showInformationMessage('Worktree record cleared.');
                 }
                 break;
             }
@@ -6387,18 +6478,66 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         }
     }
 
-    private async _getSafetySessionData(workspaceRoot: string): Promise<{ branch: string; path: string; startedAt: string; pathExists: boolean } | null> {
+    private async _getWorktreeConfigData(workspaceRoot: string): Promise<any> {
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !await db.ensureReady()) return null;
         const branch = await db.getMeta('active_safety_session_branch');
         const sessionPath = await db.getMeta('active_safety_session_path');
         const startedAt = await db.getMeta('active_safety_session_started_at');
-        if (!branch || !sessionPath) return null;
+        const agentBehaviour = await db.getMeta('worktree_agent_behaviour');
+        const rememberedPath = await db.getMeta('worktree_remembered_path');
+        const rememberEnabled = await db.getMeta('worktree_remember_enabled');
+
+        const hasActiveSession = !!(branch && sessionPath);
+        const pathExists = sessionPath ? fs.existsSync(sessionPath) : false;
+
+        // Count active grid terminals by checking visible agents
+        let activeTerminalCount = 0;
+        try {
+            const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+            const customAgents = await this._getCustomAgents(workspaceRoot);
+            const allAgentNames = [
+                'Planner', 'Lead Coder', 'Coder', 'Intern', 'Reviewer', 'Analyst',
+                ...customAgents.map(a => a.name)
+            ];
+            if (visibleAgents.jules !== false) { allAgentNames.push('Jules Monitor'); }
+            const normalize = (s: string | undefined) => (s || '').trim();
+            const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            for (const terminal of vscode.window.terminals) {
+                if (terminal.exitStatus !== undefined) continue;
+                const tName = normalize(terminal.name);
+                const cName = normalize((terminal.creationOptions as vscode.TerminalOptions | undefined)?.name);
+                for (const agentName of allAgentNames) {
+                    const pattern = new RegExp(`^${escapeRegex(agentName)}(?: \\(\\d+\\))?$`);
+                    if (pattern.test(tName) || pattern.test(cName)) {
+                        activeTerminalCount++;
+                        break;
+                    }
+                }
+            }
+        } catch { /* ignore */ }
+
         return {
-            branch,
-            path: sessionPath,
+            branch: branch || '',
+            path: sessionPath || '',
             startedAt: startedAt || '',
-            pathExists: fs.existsSync(sessionPath)
+            pathExists,
+            hasActiveSession,
+            agentBehaviour: agentBehaviour || '',
+            rememberedPath: rememberedPath || '',
+            rememberEnabled: rememberEnabled === 'true',
+            activeTerminalCount
+        };
+    }
+
+    private async _getSafetySessionData(workspaceRoot: string): Promise<{ branch: string; path: string; startedAt: string; pathExists: boolean } | null> {
+        const config = await this._getWorktreeConfigData(workspaceRoot);
+        if (!config || !config.hasActiveSession) return null;
+        return {
+            branch: config.branch,
+            path: config.path,
+            startedAt: config.startedAt,
+            pathExists: config.pathExists
         };
     }
 }
