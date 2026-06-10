@@ -63,3 +63,7 @@ Fix the Online Docs tab: derive rendered sources from actual configuration (no h
   - `src/webview/planning.js` — B1 (empty-state text, stash enabledSources in state), B2 (remove all button refs/handlers), B3 (import→local tab handoff with race guard via pendingImportDocName)
 - **Validation:** Skipped per session instructions (no compile / no tests). Code is syntactically clean and follows existing patterns.
 - **Remaining risks:** None identified.
+
+## Review Findings
+
+Reviewer-executor pass completed. One MAJOR issue found and fixed: the import→local handoff searched by `dataset.name`, which is the extracted document title (frontmatter/H1) and often differs from the filename. This caused the imported doc to never be selected when titles differed from slugs, and the race-guard retry was equally broken. Fixed both the immediate search and the `localDocsReady` retry to match against `dataset.absolutePath === msg.savedPath` instead, and updated the pending state to store the full path. Files changed: `src/webview/planning.js` (importFullDocResult handler and handleLocalDocsReady retry). No remaining risks.

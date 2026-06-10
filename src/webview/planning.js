@@ -2573,11 +2573,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
         // Retry pending import selection if the doc just appeared
         if (state._pendingImportDocName) {
-            const pendingName = state._pendingImportDocName;
+            const pendingPath = state._pendingImportDocName;
             const nodes = document.querySelectorAll('.tree-node');
             let found = null;
             for (let i = 0; i < nodes.length; i++) {
-                if (nodes[i].dataset.sourceId === 'local-folder' && nodes[i].dataset.name === pendingName) {
+                if (nodes[i].dataset.sourceId === 'local-folder' && nodes[i].dataset.absolutePath === pendingPath) {
                     found = nodes[i];
                     break;
                 }
@@ -3926,13 +3926,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     vscode.postMessage({ type: 'fetchImportedDocs' });
 
                     if (msg.savedPath) {
-                        const parts = msg.savedPath.split(/[\\/]/);
-                        const localDocName = parts[parts.length - 1];
                         switchToTab('local');
                         let found = null;
                         const nodes = document.querySelectorAll('.tree-node');
                         for (let i = 0; i < nodes.length; i++) {
-                            if (nodes[i].dataset.sourceId === 'local-folder' && nodes[i].dataset.name === localDocName) {
+                            if (nodes[i].dataset.sourceId === 'local-folder' && nodes[i].dataset.absolutePath === msg.savedPath) {
                                 found = nodes[i];
                                 break;
                             }
@@ -3940,7 +3938,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         if (found) {
                             loadDocumentPreview('local-folder', found.dataset.nodeId, found.dataset.name);
                         } else {
-                            state._pendingImportDocName = localDocName;
+                            state._pendingImportDocName = msg.savedPath;
                         }
                     } else if (state.activeSource && state.activeDocId) {
                         vscode.postMessage({
