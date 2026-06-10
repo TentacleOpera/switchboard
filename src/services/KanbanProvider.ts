@@ -6379,25 +6379,6 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 }
                 break;
             }
-            case 'convertToEpic': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (!workspaceRoot || !msg.sessionId) break;
-                const db = this._getKanbanDb(workspaceRoot);
-                if (!db || !(await db.ensureReady())) break;
-                const plan = await db.getPlanBySessionId(msg.sessionId);
-                if (!plan) break;
-                if (msg.revert) {
-                    await db.updateEpicStatus(msg.sessionId, 0, '');
-                } else {
-                    if (plan.epicId) {
-                        vscode.window.showWarningMessage('Cannot convert a subtask to an epic.');
-                        break;
-                    }
-                    await db.updateEpicStatus(msg.sessionId, 1, '');
-                }
-                await this._refreshBoard(workspaceRoot);
-                break;
-            }
             case 'addSubtaskToEpic': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || !msg.epicSessionId || !msg.subtaskSessionId) break;
@@ -6425,6 +6406,75 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     break;
                 }
                 await db.updateEpicStatus(msg.subtaskSessionId, 0, epic.planId);
+                await this._refreshBoard(workspaceRoot);
+                break;
+            }
+            case 'createEpic': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const name = msg.name ? String(msg.name).trim() : '';
+                const subtaskPlanIds = Array.isArray(msg.subtaskPlanIds) ? msg.subtaskPlanIds : [];
+                if (!name || subtaskPlanIds.length === 0) {
+                    vscode.window.showWarningMessage('Epic name and at least one subtask are required.');
+                    break;
+                }
+                const db = this._getKanbanDb(workspaceRoot);
+                if (!db || !(await db.ensureReady())) break;
+                const subtasks: any[] = [];
+                for (const pid of subtaskPlanIds) {
+                    const plan = await db.getPlanBySessionId(pid);
+                    if (plan) subtasks.push(plan);
+                }
+                if (subtasks.length === 0) {
+                    vscode.window.showWarningMessage('No valid subtasks found for epic creation.');
+                    break;
+                }
+                const customColumns = await this._getCustomKanbanColumns(workspaceRoot);
+                const columnDefs = await this._buildKanbanColumns([], customColumns);
+                const ordinalMap = new Map<string, number>();
+                columnDefs.forEach((def, idx) => ordinalMap.set(def.id, idx));
+                const resolvedColumn = subtasks
+                    .map((st: any) => st.kanbanColumn)
+                    .filter((col: string | null): col is string => !!col)
+                    .sort((a: string, b: string) => (ordinalMap.get(a) ?? Infinity) - (ordinalMap.get(b) ?? Infinity))[0] || subtasks[0].kanbanColumn || 'CREATED';
+                const planId = crypto.randomUUID();
+                const sessionId = crypto.randomUUID();
+                const workspaceId = await db.getWorkspaceId();
+                if (!workspaceId) {
+                    vscode.window.showWarningMessage('Workspace ID not found. Cannot create epic.');
+                    break;
+                }
+                const epicPlanFile = path.join('.switchboard', 'plans', `epic-${planId}.md`);
+                const now = new Date().toISOString();
+                await db.upsertPlan({
+                    planId,
+                    sessionId,
+                    topic: name,
+                    planFile: epicPlanFile,
+                    kanbanColumn: resolvedColumn,
+                    status: 'active',
+                    complexity: 'Unknown',
+                    tags: '',
+                    repoScope: '',
+                    workspaceId,
+                    createdAt: now,
+                    updatedAt: now,
+                    lastAction: '',
+                    sourceType: 'local',
+                    brainSourcePath: '',
+                    mirrorPath: '',
+                    routedTo: '',
+                    dispatchedAgent: '',
+                    dispatchedIde: ''
+                });
+                await db.updateEpicStatus(sessionId, 1, '');
+                const epicPath = path.join(workspaceRoot, epicPlanFile);
+                const epicContent = `---\ndescription: ${name}\n---\n\n# ${name}\n\n${msg.description ? String(msg.description).trim() : ''}`;
+                await fs.promises.mkdir(path.dirname(epicPath), { recursive: true });
+                await fs.promises.writeFile(epicPath, epicContent, 'utf8');
+                for (const st of subtasks) {
+                    await db.updateEpicStatus(st.sessionId, 0, planId);
+                }
                 await this._refreshBoard(workspaceRoot);
                 break;
             }
@@ -6468,6 +6518,9 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 }
                 const subtasks = await db.getSubtasksByEpicId(epic.planId);
                 this._panel?.webview.postMessage({ type: 'epicDetails', epic, subtasks });
+                if (msg.source === 'kanban') {
+                    this._panel?.webview.postMessage({ type: 'kanbanEpicDetails', epic, subtasks });
+                }
                 break;
             }
             case 'updateEpicConfig': {

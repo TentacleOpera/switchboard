@@ -4442,13 +4442,10 @@ Return ONLY the drafted prompt with no additional commentary.`;
     }
     const kanbanViewAllBtn = document.getElementById('kanban-view-all');
     const kanbanViewEpicsBtn = document.getElementById('kanban-view-epics');
-    const kanbanEpicConfigPanel = document.getElementById('kanban-epic-config');
-    const btnSaveEpicConfig = document.getElementById('btn-save-epic-config');
 
     function updateKanbanViewButtons() {
         if (kanbanViewAllBtn) kanbanViewAllBtn.classList.toggle('active', _kanbanViewMode === 'all');
         if (kanbanViewEpicsBtn) kanbanViewEpicsBtn.classList.toggle('active', _kanbanViewMode === 'epics');
-        if (kanbanEpicConfigPanel) kanbanEpicConfigPanel.style.display = _kanbanViewMode === 'epics' ? '' : 'none';
     }
 
     if (kanbanViewAllBtn) {
@@ -4463,20 +4460,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
             _kanbanViewMode = 'epics';
             updateKanbanViewButtons();
             renderKanbanPlans(_kanbanPlansCache, kanbanFilters);
-        });
-    }
-    if (btnSaveEpicConfig) {
-        btnSaveEpicConfig.addEventListener('click', () => {
-            const lockCols = document.getElementById('epic-lock-columns');
-            const promptTpl = document.getElementById('epic-prompt-template');
-            const maxSub = document.getElementById('epic-max-subtasks');
-            vscode.postMessage({
-                type: 'updateEpicConfig',
-                workspaceRoot: currentWorkspaceRoot,
-                epicLockColumns: lockCols ? lockCols.value : undefined,
-                epicPromptTemplate: promptTpl ? promptTpl.value : undefined,
-                epicMaxSubtasks: maxSub ? maxSub.value : undefined
-            });
         });
     }
 
