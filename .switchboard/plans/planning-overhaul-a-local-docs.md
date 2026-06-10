@@ -75,3 +75,15 @@ Fix the Local Docs tab UX: give folders a Link button, drop the emoji from the d
 **Remaining risks:**
 - Subfolder headers are not flex containers, so Link/+ buttons sit inline next to the folder name rather than right-aligned. This is a cosmetic deviation from source-folder headers but does not break functionality.
 - No automated tests run per session directive; manual verification in Extension Development Host recommended for sidebar collapse behavior and create-new-document flow.
+
+## Review Findings
+
+Review completed 2026-06-10. Three CRITICAL/MAJOR issues were found and fixed in `src/services/PlanningPanelProvider.ts`:
+
+1. `_handleCreateLocalDoc` sent `docId: sanitized` (e.g. `my-plan.md`) without the `${folderIndex}:` prefix used by tree nodes, so `findTreeNode` in the webview failed to select the new doc and `fetchPreview` errored with "sourceFolder is required". Fixed by computing the correct `docId` with prefix before posting `selectLocalDoc`.
+2. Both `_handleLinkToFolder` and `_handleCreateLocalDoc` passed subfolder `folderPath` values (which use `${folderIndex}:${relativePath}` IDs from the webview) directly into `resolveFolderPath()`, producing garbage paths like `/workspace/0:subfolder/name`. This broke Link and Create on all subfolders. Fixed by parsing the prefix, scanning workspace roots to locate the actual subfolder, and validating the resolved path lies within a configured source folder.
+3. `_handleCreateLocalDoc` wrote new files to the wrong absolute path for subfolders and could miss or falsely trigger collision checks. Fixed alongside issue #2 by resolving to the correct absolute path before writing.
+
+**Files changed:** `src/services/PlanningPanelProvider.ts` (lines 3038-3175)
+**Validation:** `node --check src/webview/planning.js` passed.
+**Remaining risks:** Multi-root workspaces with identically-indexed folders may still resolve subfolders to the first matching root during Link/Create; this is an edge case of the existing `folderIndex:` ID scheme and is acceptable for current usage.

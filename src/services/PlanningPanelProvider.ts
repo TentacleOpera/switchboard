@@ -3040,12 +3040,40 @@ export class PlanningPanelProvider {
         folderPath: string
     ): Promise<void> {
         try {
-            const localFolderService = this._getLocalFolderServiceForFolder(folderPath, workspaceRoot, 'local-folder')
-                || this._getLocalFolderService(workspaceRoot);
-            const resolvedFolder = localFolderService.resolveFolderPath(folderPath);
+            let resolvedFolder = '';
+            let localFolderService = this._getLocalFolderService(workspaceRoot);
+
+            if (/^\d+:/.test(folderPath)) {
+                const colonIdx = folderPath.indexOf(':');
+                const relativePath = folderPath.substring(colonIdx + 1);
+                let found = false;
+                for (const root of this._getWorkspaceRoots()) {
+                    const service = this._getLocalFolderService(root);
+                    const folderPaths = service.getFolderPaths();
+                    for (let i = 0; i < folderPaths.length; i++) {
+                        const candidate = path.join(folderPaths[i], relativePath);
+                        if (fs.existsSync(candidate)) {
+                            resolvedFolder = candidate;
+                            localFolderService = service;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (found) { break; }
+                }
+                if (!found) {
+                    throw new Error('Subfolder not found');
+                }
+            } else {
+                localFolderService = this._getLocalFolderServiceForFolder(folderPath, workspaceRoot, 'local-folder')
+                    || this._getLocalFolderService(workspaceRoot);
+                resolvedFolder = localFolderService.resolveFolderPath(folderPath);
+            }
+
             const allowedPaths = localFolderService.getFolderPaths();
-            if (!allowedPaths.includes(resolvedFolder)) {
-                throw new Error('Folder is not a configured local docs folder');
+            const isWithinAllowed = allowedPaths.some(p => resolvedFolder.startsWith(p + path.sep) || resolvedFolder === p);
+            if (!isWithinAllowed) {
+                throw new Error('Folder is not within a configured local docs folder');
             }
             if (!fs.existsSync(resolvedFolder)) {
                 throw new Error('Folder does not exist');
@@ -3079,13 +3107,49 @@ export class PlanningPanelProvider {
                 sanitized += '.md';
             }
 
-            const localFolderService = this._getLocalFolderServiceForFolder(folderPath, workspaceRoot, 'local-folder')
-                || this._getLocalFolderService(workspaceRoot);
-            const resolvedFolder = localFolderService.resolveFolderPath(folderPath);
-            const allowedPaths = localFolderService.getFolderPaths();
-            if (!allowedPaths.includes(resolvedFolder)) {
-                vscode.window.showErrorMessage('Folder is not a configured local docs folder');
-                return;
+            let resolvedFolder = '';
+            let docId = '';
+            let localFolderService = this._getLocalFolderService(workspaceRoot);
+
+            if (/^\d+:/.test(folderPath)) {
+                const colonIdx = folderPath.indexOf(':');
+                const folderIndex = parseInt(folderPath.substring(0, colonIdx), 10);
+                const relativePath = folderPath.substring(colonIdx + 1);
+                let found = false;
+                for (const root of this._getWorkspaceRoots()) {
+                    const service = this._getLocalFolderService(root);
+                    const folderPaths = service.getFolderPaths();
+                    if (folderIndex >= 0 && folderIndex < folderPaths.length) {
+                        const candidate = path.join(folderPaths[folderIndex], relativePath);
+                        if (fs.existsSync(candidate)) {
+                            resolvedFolder = candidate;
+                            localFolderService = service;
+                            docId = `${folderIndex}:${path.join(relativePath, sanitized)}`;
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                if (!found) {
+                    // Fallback to active root
+                    const folderPaths = localFolderService.getFolderPaths();
+                    if (folderIndex < 0 || folderIndex >= folderPaths.length) {
+                        throw new Error('Invalid folder reference');
+                    }
+                    resolvedFolder = path.join(folderPaths[folderIndex], relativePath);
+                    docId = `${folderIndex}:${path.join(relativePath, sanitized)}`;
+                }
+            } else {
+                localFolderService = this._getLocalFolderServiceForFolder(folderPath, workspaceRoot, 'local-folder')
+                    || this._getLocalFolderService(workspaceRoot);
+                resolvedFolder = localFolderService.resolveFolderPath(folderPath);
+                const allowedPaths = localFolderService.getFolderPaths();
+                if (!allowedPaths.includes(resolvedFolder)) {
+                    vscode.window.showErrorMessage('Folder is not a configured local docs folder');
+                    return;
+                }
+                const folderIndex = allowedPaths.indexOf(resolvedFolder);
+                docId = `${folderIndex}:${sanitized}`;
             }
 
             const filePath = path.join(resolvedFolder, sanitized);
@@ -3102,9 +3166,8 @@ export class PlanningPanelProvider {
             await this._sendLocalDocsReady();
             this._panel?.webview.postMessage({
                 type: 'selectLocalDoc',
-                docId: sanitized,
-                docName: sanitized,
-                sourceFolder: folderPath
+                docId,
+                docName: sanitized
             });
         } catch (err) {
             vscode.window.showErrorMessage(`Failed to create document: ${String(err)}`);
