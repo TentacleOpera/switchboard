@@ -138,4 +138,23 @@ No migration code. The extension is in development with a single user; a stale `
 - [ ] No remaining references: `grep -rn "afterburner_updated\|afterburner-updated\|terracotta\|slightly-darker-black\|slightly_darker" src package.json` returns nothing.
 
 ## Execution Status
-- **Status:** Not started
+- **Status:** Completed
+- **Files changed:**
+  - `package.json` (theme enum)
+  - `src/webview/planning.html`
+  - `src/webview/planning.js`
+  - `src/webview/kanban.html`
+  - `src/webview/implementation.html`
+  - `src/webview/setup.html`
+  - `src/services/PlanningPanelProvider.ts`
+  - `src/services/KanbanProvider.ts`
+  - `src/services/TaskViewerProvider.ts`
+  - `src/services/SetupPanelProvider.ts`
+  - `designs/HankenGrotesk-Variable.woff2` (new)
+  - `designs/Poppins-SemiBold.woff2` (new)
+  - `designs/Poppins-Bold.woff2` (new)
+- **Validation:**
+  - `grep -rn "afterburner_updated\|afterburner-updated\|slightly-darker-black\|slightly_darker" src package.json` returns nothing.
+  - Only remaining `terracotta` reference is in the `claudify` enum description in `package.json`, which is expected.
+- **Remaining risks:**
+  - Manual visual verification required for font loading in all four panels (no automated webview rendering tests).

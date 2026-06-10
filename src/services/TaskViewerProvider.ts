@@ -15041,8 +15041,15 @@ What would you like to find?`;
         const createdAt = new Date().toISOString();
         const idea = this._buildDraftPlanContent(title);
 
+        // Inherit the active kanban project filter, if any
+        let projectName: string | undefined;
+        const activeProject = this._kanbanProvider?.getProjectFilter();
+        if (activeProject && activeProject !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
+            projectName = activeProject;
+        }
+
         try {
-            const { planFileAbsolute } = await this._createInitiatedPlan(title, idea, false, { createdAt });
+            const { planFileAbsolute } = await this._createInitiatedPlan(title, idea, false, { createdAt, projectName });
             await this._openPlanInReviewPanel(planFileAbsolute, title);
         } catch (err: any) {
             const msg = err?.message || String(err);
@@ -16887,6 +16894,11 @@ What would you like to find?`;
             // Inject shared defaults
             const sharedDefaultsUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'sharedDefaults.js')).toString();
             content = content.replace('<!-- SHARED_DEFAULTS_SCRIPT -->', `<script src="${sharedDefaultsUri}" nonce="${nonce}"></script>`);
+
+            const hankenFontUri = webview.asWebviewUri(
+                vscode.Uri.joinPath(this._extensionUri, 'designs', 'HankenGrotesk-Variable.woff2')
+            );
+            content = content.replace(/\{\{HANKEN_FONT_URI\}\}/g, hankenFontUri.toString());
 
             return content;
         } catch (e) {

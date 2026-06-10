@@ -617,15 +617,11 @@
           "type": "string",
           "enum": [
             "afterburner",
-            "afterburner_updated",
-            "claude-terracotta",
-            "slightly-darker-black"
+            "claudify"
           ],
           "enumDescriptions": [
-            "Afterburner — Default cyberpunk teal theme with scanline effects",
-            "Afterburner Updated — Brighter cyan, Hanken Grotesk, scanline effects",
-            "Claude Terracotta — Warm terracotta accent on professional dark surfaces",
-            "Slightly Darker Black — Minimalist monochrome with tonal depth and luminance"
+            "Afterburner — Cyberpunk theme, brighter cyan, Hanken Grotesk, scanline effects",
+            "Claudify — Afterburner with Claude terracotta accent and Poppins headings"
           ],
           "default": "afterburner",
           "description": "Visual theme for Switchboard webviews. Applies to Setup, Kanban, and Planning panels.",

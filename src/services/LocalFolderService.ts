@@ -20,7 +20,8 @@ export interface LocalFolderPathsConfig {
 }
 
 export class LocalFolderService {
-    private _workspaceRoot: string;
+    private _rawWorkspaceRoot: string;
+    private _effectiveWorkspaceRoot: string;
     private _configPath: string;
     private _cachePath: string;
     private _folderPathsCache: LocalFolderPathsConfig | null = null;
@@ -35,9 +36,30 @@ export class LocalFolderService {
     ];
 
     constructor(workspaceRoot: string) {
-        this._workspaceRoot = workspaceRoot;
-        this._configPath = path.join(workspaceRoot, '.switchboard', 'local-folder-config.json');
-        this._cachePath = path.join(workspaceRoot, '.switchboard', 'local-folder-cache.md');
+        this._rawWorkspaceRoot = workspaceRoot;
+        let effective = workspaceRoot;
+        try {
+            const { resolveEffectiveWorkspaceRootFromMappings } = require('../services/WorkspaceIdentityService');
+            effective = resolveEffectiveWorkspaceRootFromMappings(workspaceRoot);
+        } catch { /* outside extension host or module unavailable */ }
+        this._effectiveWorkspaceRoot = effective;
+        this._configPath = path.join(effective, '.switchboard', 'local-folder-config.json');
+        this._cachePath = path.join(effective, '.switchboard', 'local-folder-cache.md');
+    }
+
+    private _assertAllowedWrite(targetDir: string): void {
+        try {
+            const { isAllowedSwitchboardLocation } = require('../utils/switchboardLocationGuard');
+            if (!isAllowedSwitchboardLocation(targetDir, this._rawWorkspaceRoot)) {
+                throw new Error('Blocked: attempted to write .switchboard data to a child workspace folder');
+            }
+        } catch (err) {
+            if (err instanceof Error && err.message.startsWith('Blocked:')) {
+                throw err;
+            }
+            // Guard unavailable — log warning but allow write to proceed
+            console.warn('[LocalFolderService] isAllowedSwitchboardLocation guard unavailable, allowing write to', targetDir);
+        }
     }
 
     // ── Config ──────────────────────────────────────────────────
@@ -53,6 +75,7 @@ export class LocalFolderService {
     }
 
     async saveConfig(config: LocalFolderConfig): Promise<void> {
+        this._assertAllowedWrite(path.dirname(this._configPath));
         await fs.promises.mkdir(path.dirname(this._configPath), { recursive: true });
         let existing: any = {};
         try {
@@ -80,6 +103,7 @@ export class LocalFolderService {
     }
 
     async saveFolderPathsConfig(config: LocalFolderPathsConfig): Promise<void> {
+        this._assertAllowedWrite(path.dirname(this._configPath));
         await fs.promises.mkdir(path.dirname(this._configPath), { recursive: true });
         let existing: any = {};
         try {
@@ -97,6 +121,7 @@ export class LocalFolderService {
     }
 
     async saveCachedContent(markdown: string): Promise<void> {
+        this._assertAllowedWrite(path.dirname(this._cachePath));
         await fs.promises.mkdir(path.dirname(this._cachePath), { recursive: true });
         await fs.promises.writeFile(this._cachePath, markdown, 'utf8');
     }
@@ -115,7 +140,7 @@ export class LocalFolderService {
         const expanded = trimmed.startsWith('~')
             ? path.join(os.homedir(), trimmed.slice(1))
             : trimmed;
-        return path.isAbsolute(expanded) ? expanded : path.join(this._workspaceRoot, expanded);
+        return path.isAbsolute(expanded) ? expanded : path.join(this._rawWorkspaceRoot, expanded);
     }
 
     getFolderPaths(): string[] {

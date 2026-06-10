@@ -25,8 +25,8 @@ function run() {
 
     assert.match(
         source,
-        /public async createDraftPlanTicket\(\): Promise<void> \{[\s\S]*await this\._createInitiatedPlan\(title, idea, false, \{ createdAt \}\);/,
-        'Expected normal draft plan creation to keep the default brain-promotion behavior.'
+        /public async createDraftPlanTicket\(\): Promise<void> \{[\s\S]*await this\._createInitiatedPlan\(title, idea, false, \{ createdAt, projectName \}\);/,
+        'Expected normal draft plan creation to keep the default brain-promotion behavior while inheriting the active project filter.'
     );
 
     assert.match(

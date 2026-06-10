@@ -3129,18 +3129,17 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         // Track the active Switchboard visual theme
         if (theme) { state.switchboardTheme = theme; }
         // Remove Switchboard visual theme classes
-        document.body.classList.remove('theme-claude-terracotta', 'theme-slightly-darker-black', 'theme-afterburner-updated');
-        // Cyberpunk CRT effects (scanlines, grid, glow, sweep) are part of the Afterburner aesthetic only.
-        // Toggle cyber-theme-enabled: on for afterburner or afterburner_updated, off for any other Switchboard visual theme.
-        if (state.switchboardTheme === 'afterburner' || state.switchboardTheme === 'afterburner_updated') {
+        document.body.classList.remove('theme-claudify');
+        // Cyberpunk CRT effects (scanlines, grid, glow, sweep) are part of the Afterburner aesthetic.
+        // Toggle cyber-theme-enabled: on for afterburner or claudify, off for any other theme.
+        if (state.switchboardTheme === 'afterburner' || state.switchboardTheme === 'claudify') {
             document.body.classList.add('cyber-theme-enabled');
         } else {
             document.body.classList.remove('cyber-theme-enabled');
-            document.body.classList.add(`theme-${state.switchboardTheme}`);
         }
-        // Apply the updated palette override when afterburner_updated is active
-        if (state.switchboardTheme === 'afterburner_updated') {
-            document.body.classList.add('theme-afterburner-updated');
+        // Apply palette override when claudify is active
+        if (state.switchboardTheme === 'claudify') {
+            document.body.classList.add('theme-claudify');
         }
     }
 
@@ -3722,7 +3721,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 break;
             }
             case 'activateKanbanTabAndSelectPlan': {
-                _pendingKanbanSelection = { sessionId: msg.sessionId, planFile: msg.planFile, workspaceRoot: msg.workspaceRoot };
+                _pendingKanbanSelection = { planId: msg.planId || '', sessionId: msg.sessionId || '', planFile: msg.planFile || '', workspaceRoot: msg.workspaceRoot || '' };
                 switchToTab('kanban');
                 // Check already-loaded cache for immediate selection
                 const immediateMatch = findPendingKanbanMatch(_kanbanPlansCache);
@@ -4639,22 +4638,32 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
     function findPendingKanbanMatch(cache) {
         if (!_pendingKanbanSelection || !cache || !cache.length) return null;
-        const { sessionId, planFile, workspaceRoot } = _pendingKanbanSelection;
-        // Primary match: sessionId (most specific identifier)
+        const { planId, sessionId, planFile, workspaceRoot } = _pendingKanbanSelection;
+
+        // Primary: planId (current canonical identifier)
+        if (planId) {
+            const byPlanId = cache.find(p => p.planId === planId);
+            if (byPlanId) return byPlanId;
+        }
+
+        // Legacy fallback: sessionId (deprecated but still present on older plans)
         if (sessionId) {
             const bySession = cache.find(p => p.sessionId === sessionId);
             if (bySession) return bySession;
         }
-        // Fallback match: planFile
+
+        // Fallback: planFile
         if (planFile) {
             const byFile = cache.find(p => p.planFile === planFile);
             if (byFile) return byFile;
         }
+
         // Last resort: workspaceRoot + sessionId compound
         if (workspaceRoot && sessionId) {
             const byCompound = cache.find(p => p.workspaceRoot === workspaceRoot && p.sessionId === sessionId);
             if (byCompound) return byCompound;
         }
+
         return null;
     }
 

@@ -6,6 +6,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Switchboard Setup</title>
     <style>
+        @font-face {
+            font-family: 'Hanken Grotesk';
+            src: url('{{HANKEN_FONT_URI}}') format('woff2');
+            font-weight: 100 900;
+            font-display: swap;
+        }
         :root {
             --bg-color: #0d0d0d;
             --panel-bg: #000000;
@@ -16,116 +22,19 @@
             --bg-dim: #111111;
             --text-primary: #e0e0e0;
             --text-secondary: #777777;
-            --accent-teal: #3ddbd9;
+            --accent-primary: #00e5ff;
+            --accent-teal: var(--accent-primary);
             --accent-green: #4ec9b0;
             --accent-red: #f85149;
             --accent-orange: #d18616;
             --glow-green: 0 0 10px rgba(78, 201, 176, 0.6), 0 0 20px rgba(78, 201, 176, 0.25);
             --glow-red: 0 0 10px rgba(248, 81, 73, 0.6), 0 0 20px rgba(248, 81, 73, 0.25);
-            --font-family: var(--vscode-font-family, 'Segoe UI', 'Roboto', sans-serif);
+            --font-family: 'Hanken Grotesk', var(--vscode-font-family, 'Segoe UI', 'Roboto', sans-serif);
             --font-mono: var(--vscode-editor-font-family, 'Consolas', 'Courier New', monospace);
         }
 
-        /* Claude Terracotta — warm terracotta accent on professional dark surfaces */
-        body.theme-claude-terracotta {
-            /* Backgrounds */
-            --bg-color: #1A1A1A;          /* Primary Surface — Main editor/Kanban area */
-            --panel-bg: #121212;          /* Sidebar/Panels — Left sidebar and bottom terminal */
-            --panel-bg2: #1A1A1A;         /* Secondary surface */
-            --bg-dim: #1A1A1A;
-
-            /* Primary Accent (Terracotta) — Active tab indicators, progress bar fills, critical state icons */
+        body.theme-claudify {
             --accent-teal: #D97757;
-            --accent-teal-dim: color-mix(in srgb, #D97757 40%, transparent);
-            --accent-teal-bright: #E08868;
-            --glow-teal: 0 0 10px color-mix(in srgb, #D97757 50%, transparent);
-
-            /* Secondary/Action (Muted Terracotta) — Primary action buttons (solid fill), hover states for outlined buttons */
-            --accent-green: #A35941;
-            --accent-red: #e05544;
-            --accent-orange: #D97757;
-
-            /* Borders & Outlines */
-            --border-color: #2D2D2D;      /* Section Dividers */
-            --border-bright: #2D2D2D;
-            --border-dim: #2D2D2D;
-
-            /* Typography */
-            --text-primary: #FFFFFF;      /* Headings/Active Text */
-            --text-secondary: #A0A0A0;   /* Secondary/Body Text */
-        }
-        /* Claude Terracotta — button overrides */
-        body.theme-claude-terracotta .action-btn {
-            background: #A35941;          /* Muted Terracotta solid fill */
-            border-color: #A35941;
-            color: #FFFFFF;
-        }
-        body.theme-claude-terracotta .action-btn:hover:not(:disabled) {
-            background: #D97757;          /* Primary Terracotta on hover */
-            border-color: #D97757;
-        }
-        body.theme-claude-terracotta .secondary-btn {
-            border-color: color-mix(in srgb, #D97757 60%, transparent);  /* Ghost style at 60% opacity */
-            color: #D97757;
-        }
-        body.theme-claude-terracotta .secondary-btn:hover:not(:disabled) {
-            background: color-mix(in srgb, #D97757 10%, transparent);
-            border-color: #D97757;
-            color: #FFFFFF;
-        }
-
-        /* Slightly Darker Black — minimalist monochrome with tonal depth and luminance */
-        body.theme-slightly-darker-black {
-            /* Backgrounds */
-            --bg-color: #0A0A0A;          /* Primary Surface — Deepest black for main workspace */
-            --panel-bg: #0A0A0A;          /* Deepest black */
-            --panel-bg2: #141414;         /* Secondary Surface — Slightly lighter for sidebars and terminal panels */
-            --bg-dim: #141414;
-
-            /* Accents (Monochrome) */
-            --accent-teal: #E0E0E0;       /* Active States — Light gray for active tabs/borders */
-            --accent-teal-dim: color-mix(in srgb, #E0E0E0 40%, transparent);
-            --accent-teal-bright: #FFFFFF;
-            --glow-teal: 0 0 10px color-mix(in srgb, #E0E0E0 30%, transparent);
-            --accent-green: #E0E0E0;
-            --accent-red: #ff4444;
-            --accent-orange: #E0E0E0;
-
-            /* Borders & Dividers */
-            --border-color: #1F1F1F;      /* Subtle Dividers */
-            --border-bright: #333333;     /* Interactive Outlines */
-            --border-dim: #1F1F1F;
-
-            /* Typography */
-            --text-primary: #F5F5F5;      /* Primary Text — High contrast */
-            --text-secondary: #666666;    /* De-emphasized Text — Metadata, timestamps, inactive labels */
-        }
-        /* Slightly Darker Black — button overrides */
-        body.theme-slightly-darker-black .action-btn {
-            background: #FFFFFF;          /* White on black for primary CTAs */
-            border-color: #FFFFFF;
-            color: #0A0A0A;
-        }
-        body.theme-slightly-darker-black .action-btn:hover:not(:disabled) {
-            background: #E0E0E0;
-            border-color: #E0E0E0;
-            color: #0A0A0A;
-        }
-        body.theme-slightly-darker-black .secondary-btn {
-            border-color: #333333;        /* Interactive Outlines */
-            color: #E0E0E0;
-        }
-        body.theme-slightly-darker-black .secondary-btn:hover:not(:disabled) {
-            background: rgba(255, 255, 255, 0.05);  /* Semi-transparent white overlay for hover on dark surfaces */
-            border-color: #E0E0E0;
-            color: #F5F5F5;
-        }
-        /* Slightly Darker Black — special hover effects */
-        body.theme-slightly-darker-black .strip-btn:hover:not(:disabled),
-        body.theme-slightly-darker-black .tab-btn:hover,
-        body.theme-slightly-darker-black .db-radio-option:hover,
-        body.theme-slightly-darker-black .db-action-btn:hover {
-            background: rgba(255, 255, 255, 0.05);
         }
 
         * {
@@ -1164,16 +1073,8 @@
                     <span>Afterburner</span>
                 </label>
                 <label class="db-radio-option">
-                    <input type="radio" name="theme-selection" value="afterburner_updated">
-                    <span>Afterburner Updated</span>
-                </label>
-                <label class="db-radio-option">
-                    <input type="radio" name="theme-selection" value="claude-terracotta">
-                    <span>Claude Terracotta</span>
-                </label>
-                <label class="db-radio-option">
-                    <input type="radio" name="theme-selection" value="slightly-darker-black">
-                    <span>Slightly Darker Black</span>
+                    <input type="radio" name="theme-selection" value="claudify">
+                    <span>Claudify</span>
                 </label>
             </div>
             <div style="border-top: 1px solid var(--border-dim); margin: 12px 0;"></div>
@@ -1667,10 +1568,6 @@
                     const savedTheme = currentSwitchboardTheme || 'afterburner';
                     const themeRadio = document.querySelector(`input[name="theme-selection"][value="${savedTheme}"]`);
                     if (themeRadio) themeRadio.checked = true;
-                    const animationSettings = document.getElementById('theme-animation-settings');
-                    if (animationSettings) {
-                        animationSettings.style.display = (savedTheme === 'afterburner' || savedTheme === 'afterburner_updated') ? '' : 'none';
-                    }
                 }
             };
 
@@ -3566,10 +3463,6 @@
 
         document.querySelectorAll('input[name="theme-selection"]').forEach(radio => {
             radio.addEventListener('change', (e) => {
-                const animationSettings = document.getElementById('theme-animation-settings');
-                if (animationSettings) {
-                    animationSettings.style.display = (e.target.value === 'afterburner' || e.target.value === 'afterburner_updated') ? '' : 'none';
-                }
                 currentSwitchboardTheme = e.target.value;
                 vscode.postMessage({ type: 'setThemeSetting', theme: e.target.value });
             });
@@ -3808,12 +3701,8 @@
                     currentSwitchboardTheme = theme;
                     const themeRadio = document.querySelector(`input[name="theme-selection"][value="${theme}"]`);
                     if (themeRadio) themeRadio.checked = true;
-                    const animationSettings = document.getElementById('theme-animation-settings');
-                    if (animationSettings) {
-                        animationSettings.style.display = (theme === 'afterburner' || theme === 'afterburner_updated') ? '' : 'none';
-                    }
                     // Only remove Switchboard visual theme classes — preserve other body classes
-                    document.body.classList.remove('theme-claude-terracotta', 'theme-slightly-darker-black');
+                    document.body.classList.remove('theme-claudify');
                     if (theme !== 'afterburner') {
                         document.body.classList.add(`theme-${theme}`);
                     }

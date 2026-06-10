@@ -369,6 +369,10 @@ export class PlanningPanelProvider {
         }
     }
 
+    public hasPanel(): boolean {
+        return !!this._panel;
+    }
+
     public postMessageToWebview(message: any): void {
         this._panel?.webview.postMessage(message);
     }
@@ -830,6 +834,21 @@ export class PlanningPanelProvider {
             vscode.Uri.joinPath(this._extensionUri, 'designs', 'GeistPixel-Square.woff2')
         );
         htmlContent = htmlContent.replace(/\{\{GEIST_PIXEL_FONT_URI\}\}/g, geistPixelFontUri.toString());
+
+        const hankenFontUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this._extensionUri, 'designs', 'HankenGrotesk-Variable.woff2')
+        );
+        htmlContent = htmlContent.replace(/\{\{HANKEN_FONT_URI\}\}/g, hankenFontUri.toString());
+
+        const poppinsSemiboldFontUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this._extensionUri, 'designs', 'Poppins-SemiBold.woff2')
+        );
+        htmlContent = htmlContent.replace(/\{\{POPPINS_SEMIBOLD_FONT_URI\}\}/g, poppinsSemiboldFontUri.toString());
+
+        const poppinsBoldFontUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this._extensionUri, 'designs', 'Poppins-Bold.woff2')
+        );
+        htmlContent = htmlContent.replace(/\{\{POPPINS_BOLD_FONT_URI\}\}/g, poppinsBoldFontUri.toString());
 
         return htmlContent;
     }

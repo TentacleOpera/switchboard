@@ -6,8 +6,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Switchboard</title>
-    <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
+        @font-face {
+            font-family: 'Hanken Grotesk';
+            src: url('{{HANKEN_FONT_URI}}') format('woff2');
+            font-weight: 100 900;
+            font-display: swap;
+        }
         :root {
             --bg-color: #0d0d0d;
             --panel-bg: #000000;
@@ -19,8 +24,9 @@
             --text-primary: #e0e0e0;
             --text-secondary: #777777;
 
-            --accent-cyan: #3ddbd9;
-            --accent-teal: #3ddbd9;
+            --accent-primary: #00e5ff;
+            --accent-cyan: var(--accent-primary);
+            --accent-teal: var(--accent-primary);
             --accent-teal-dim: color-mix(in srgb, var(--accent-teal) 40%, transparent);
             --glow-teal: 0 0 10px color-mix(in srgb, var(--accent-teal) 50%, transparent);
             --accent-green: #4ec9b0;
@@ -34,12 +40,12 @@
             --glow-green-btn: 0 0 6px rgba(78, 201, 176, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.08);
             --glow-cyan: 0 0 8px rgba(55, 148, 255, 0.3);
 
-            --font-family: var(--vscode-font-family, 'Segoe UI', 'Roboto', sans-serif);
+            --font-family: 'Hanken Grotesk', var(--vscode-font-family, 'Segoe UI', 'Roboto', sans-serif);
             --font-mono: var(--vscode-editor-font-family, 'Consolas', 'Courier New', monospace);
         }
-        /* Afterburner Updated — Hanken Grotesk font only */
-        body.theme-afterburner-updated {
-            --font-family: 'Hanken Grotesk', var(--vscode-font-family), -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        body.theme-claudify {
+            --accent-teal: #D97757;
+            --accent-cyan: #D97757;
         }
 
         * {
@@ -3295,7 +3301,7 @@
                 }
                 case 'switchboardThemeNameSetting':
                 case 'switchboardThemeChanged': {
-                    document.body.classList.remove('theme-claude-terracotta', 'theme-slightly-darker-black', 'theme-afterburner-updated');
+                    document.body.classList.remove('theme-claudify');
                     if (message.theme && message.theme !== 'afterburner') {
                         document.body.classList.add(`theme-${message.theme}`);
                     }

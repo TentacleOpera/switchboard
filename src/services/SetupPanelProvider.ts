@@ -1388,6 +1388,11 @@ export class SetupPanelProvider implements vscode.Disposable {
         const sharedDefaultsUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'sharedDefaults.js')).toString();
         content = content.replace('<!-- SHARED_DEFAULTS_SCRIPT -->', `<script src="${sharedDefaultsUri}" nonce="${nonce}"></script>`);
 
+        const hankenFontUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this._extensionUri, 'designs', 'HankenGrotesk-Variable.woff2')
+        );
+        content = content.replace(/\{\{HANKEN_FONT_URI\}\}/g, hankenFontUri.toString());
+
         return content;
     }
 }

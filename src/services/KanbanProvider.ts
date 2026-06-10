@@ -5465,12 +5465,17 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 break;
             }
             case 'reviewPlan': {
-                const reviewSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
-                if (reviewSessionId && this._planningPanelProvider) {
-                    this._planningPanelProvider.reveal();
+                const reviewId = this._resolveSessionId(msg.planId, msg.sessionId);
+                if (reviewId && this._planningPanelProvider) {
+                    // Only open a new panel if none exists. If it exists in another window,
+                    // just message it — do NOT forcibly reveal (which steals it back).
+                    if (!this._planningPanelProvider.hasPanel()) {
+                        await this._planningPanelProvider.open();
+                    }
                     this._planningPanelProvider.postMessageToWebview({
                         type: 'activateKanbanTabAndSelectPlan',
-                        sessionId: reviewSessionId,
+                        planId: msg.planId || '',
+                        sessionId: reviewId,
                         planFile: msg.planFile || '',
                         workspaceRoot: msg.workspaceRoot || ''
                     });
@@ -6735,6 +6740,11 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         for (const [placeholder, uri] of Object.entries(iconMap)) {
             content = content.replace(new RegExp(placeholder.replace(/[{}]/g, '\\$&'), 'g'), uri);
         }
+
+        const hankenFontUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this._extensionUri, 'designs', 'HankenGrotesk-Variable.woff2')
+        );
+        content = content.replace(/\{\{HANKEN_FONT_URI\}\}/g, hankenFontUri.toString());
 
         return content;
     }
