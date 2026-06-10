@@ -109,3 +109,7 @@ Key risks: concurrent migration races from multiple child-root instances sharing
 
 ## Recommendation
 Send to Coder
+
+## Review Findings
+
+**Files changed:** `src/services/LocalFolderService.ts` — one CRITICAL fix applied. The `_assertAllowedWrite` guard was passing `path.dirname(this._configPath)` (e.g. `/parent/.switchboard`) to `isAllowedSwitchboardLocation`, but the guard expects the workspace root itself (e.g. `/parent`). This caused the guard to always reject writes in multi-repo workspaces, breaking local folder config entirely. Fixed by removing the parameter and having `_assertAllowedWrite` pass `this._effectiveWorkspaceRoot` directly. All three callers (`saveConfig`, `saveFolderPathsConfig`, `saveCachedContent`) updated. **Validation:** Skipped per prompt (no compilation or test run). **Remaining risks:** Concurrent migration races from multiple child-root instances sharing one config file remain acceptable per plan; early-activation guard fallback edge is unchanged.

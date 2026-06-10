@@ -47,10 +47,10 @@ export class LocalFolderService {
         this._cachePath = path.join(effective, '.switchboard', 'local-folder-cache.md');
     }
 
-    private _assertAllowedWrite(targetDir: string): void {
+    private _assertAllowedWrite(): void {
         try {
             const { isAllowedSwitchboardLocation } = require('../utils/switchboardLocationGuard');
-            if (!isAllowedSwitchboardLocation(targetDir, this._rawWorkspaceRoot)) {
+            if (!isAllowedSwitchboardLocation(this._effectiveWorkspaceRoot, this._rawWorkspaceRoot)) {
                 throw new Error('Blocked: attempted to write .switchboard data to a child workspace folder');
             }
         } catch (err) {
@@ -58,7 +58,7 @@ export class LocalFolderService {
                 throw err;
             }
             // Guard unavailable — log warning but allow write to proceed
-            console.warn('[LocalFolderService] isAllowedSwitchboardLocation guard unavailable, allowing write to', targetDir);
+            console.warn('[LocalFolderService] isAllowedSwitchboardLocation guard unavailable, allowing write to', this._effectiveWorkspaceRoot);
         }
     }
 
@@ -75,7 +75,7 @@ export class LocalFolderService {
     }
 
     async saveConfig(config: LocalFolderConfig): Promise<void> {
-        this._assertAllowedWrite(path.dirname(this._configPath));
+        this._assertAllowedWrite();
         await fs.promises.mkdir(path.dirname(this._configPath), { recursive: true });
         let existing: any = {};
         try {
@@ -103,7 +103,7 @@ export class LocalFolderService {
     }
 
     async saveFolderPathsConfig(config: LocalFolderPathsConfig): Promise<void> {
-        this._assertAllowedWrite(path.dirname(this._configPath));
+        this._assertAllowedWrite();
         await fs.promises.mkdir(path.dirname(this._configPath), { recursive: true });
         let existing: any = {};
         try {
@@ -121,7 +121,7 @@ export class LocalFolderService {
     }
 
     async saveCachedContent(markdown: string): Promise<void> {
-        this._assertAllowedWrite(path.dirname(this._cachePath));
+        this._assertAllowedWrite();
         await fs.promises.mkdir(path.dirname(this._cachePath), { recursive: true });
         await fs.promises.writeFile(this._cachePath, markdown, 'utf8');
     }
