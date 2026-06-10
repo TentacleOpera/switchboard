@@ -74,3 +74,16 @@ Reuse the existing `.folder-modal` pattern (markup planning.html:3443-3500, CSS 
   - [ ] Second sync of the same doc: one-click "Update '<remote doc>' on <source>" — updates the same remote doc, **no duplicate created**; "Sync somewhere else…" enters the full flow.
   - [ ] `.switchboard/planning-sync-config.json` merges new shapes with existing `browseFilterContainers` content (no clobbering).
   - [ ] No API tokens in logs; create/update verified against ClickUp, Linear, and Notion individually.
+
+## Review Findings
+
+All core requirements implemented: `createDocument` adapters for ClickUp/Linear/Notion, per-source `+ New` buttons with upload-location resolution, "Sync to Online" button with modal fast path, and persistent doc mappings. `npm run compile` clean.
+
+**Fixes applied during review:**
+- `planning.js`: fast-path text now uses display names ("ClickUp" not "clickup").
+- `planning.js`: when multiple sources have saved upload locations, modal now shows source-selection step instead of arbitrarily picking the first.
+- `planning.js` + `planning.html`: confirm step now displays the selected source and target location so users know where the doc will sync.
+- `NotionFetchService.ts`: `updatePageContent` now chunks content into multiple ≤2000 char paragraph blocks (same as `createPage`), fixing a **data-loss bug** where re-syncs truncated everything after 2000 characters.
+
+**Remaining risks:**
+- `onlineDocCreated` handler has an 800ms race between `refreshSource` and `loadDocumentPreview`.

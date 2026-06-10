@@ -3849,21 +3849,25 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (_syncModalState.localDocPath && msg.docMappings && msg.docMappings[_syncModalState.localDocPath]) {
                     _syncModalState.mapping = msg.docMappings[_syncModalState.localDocPath];
                     const map = _syncModalState.mapping;
-                    if (syncFastText) syncFastText.innerHTML = `This document is already synced to <strong>${escapeHtml(map.sourceId)}</strong>. Update the existing remote document?`;
+                    const fastSourceName = _sourceDisplayNames[map.sourceId] || map.sourceId;
+                    if (syncFastText) syncFastText.innerHTML = `This document is already synced to <strong>${escapeHtml(fastSourceName)}</strong>. Update the existing remote document?`;
                     if (syncStepFast) syncStepFast.style.display = '';
                     if (syncStepSource) syncStepSource.style.display = 'none';
                     if (syncStepLocation) syncStepLocation.style.display = 'none';
                     if (syncStepConfirm) syncStepConfirm.style.display = 'none';
                 } else {
-                    // No mapping — skip to source step (or confirm if upload location already set)
+                    // No mapping — skip to source step (or confirm if exactly one upload location is saved)
                     const saved = _syncModalState.uploadLocations;
                     const sources = ['clickup', 'linear', 'notion'].filter(s => state.enabledSources[s] !== false);
-                    const hasSaved = sources.some(s => saved[s]);
-                    if (hasSaved) {
-                        _syncModalState.sourceId = sources.find(s => saved[s]) || sources[0];
+                    const savedSources = sources.filter(s => saved[s]);
+                    if (savedSources.length === 1) {
+                        _syncModalState.sourceId = savedSources[0];
                         _syncModalState.parentId = saved[_syncModalState.sourceId];
-                        _renderSyncSourceStep();
                         _showSyncStep('confirm');
+                    } else if (savedSources.length > 1) {
+                        // Multiple saved locations — let user pick source first
+                        _renderSyncSourceStep();
+                        _showSyncStep('source');
                     } else {
                         _renderSyncSourceStep();
                         _showSyncStep('source');
@@ -7023,6 +7027,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
     const syncProgress = document.getElementById('sync-progress');
     const syncResult = document.getElementById('sync-result');
     const syncResultLink = document.getElementById('sync-result-link');
+    const syncConfirmInfo = document.getElementById('sync-confirm-info');
 
     let _syncModalState = {
         step: 'fast',
@@ -7063,6 +7068,21 @@ Return ONLY the drafted prompt with no additional commentary.`;
         _showSyncStep('fast');
     }
 
+    const _sourceDisplayNames = { clickup: 'ClickUp', linear: 'Linear', notion: 'Notion' };
+
+    function _renderSyncConfirmInfo() {
+        if (!syncConfirmInfo) return;
+        const sid = _syncModalState.sourceId;
+        const pid = _syncModalState.parentId;
+        const sourceName = _sourceDisplayNames[sid] || sid || 'Unknown';
+        let info = `Source: <strong>${escapeHtml(sourceName)}</strong>`;
+        if (pid && pid !== '__all__') {
+            const containerName = state.activeContainers.get(sid)?.name || pid;
+            info += ` &middot; Location: <strong>${escapeHtml(containerName)}</strong>`;
+        }
+        syncConfirmInfo.innerHTML = info;
+    }
+
     function _showSyncStep(step) {
         [syncStepFast, syncStepSource, syncStepLocation, syncStepConfirm].forEach(el => {
             if (el) el.style.display = 'none';
@@ -7070,13 +7090,15 @@ Return ONLY the drafted prompt with no additional commentary.`;
         const map = { fast: syncStepFast, source: syncStepSource, location: syncStepLocation, confirm: syncStepConfirm };
         if (map[step]) map[step].style.display = '';
         _syncModalState.step = step;
+        if (step === 'confirm') {
+            _renderSyncConfirmInfo();
+        }
     }
 
     function _renderSyncSourceStep() {
         if (!syncSourceList) return;
         syncSourceList.innerHTML = '';
         const sources = ['clickup', 'linear', 'notion'];
-        const displayNames = { clickup: 'ClickUp', linear: 'Linear', notion: 'Notion' };
         sources.forEach(sid => {
             if (state.enabledSources[sid] === false) return;
             const label = document.createElement('label');
@@ -7093,7 +7115,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             }
             radio.addEventListener('change', () => { _syncModalState.sourceId = sid; });
             label.appendChild(radio);
-            label.appendChild(document.createTextNode(displayNames[sid] || sid));
+            label.appendChild(document.createTextNode(_sourceDisplayNames[sid] || sid));
             syncSourceList.appendChild(label);
         });
     }

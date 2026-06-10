@@ -573,25 +573,20 @@ export class NotionFetchService {
         return { success: false, error: `Failed to clear page blocks (HTTP ${deleteResult.status})` };
       }
 
-      // For v1, we'll append the content as a single paragraph block
-      // This is a simplification - a full implementation would parse markdown to blocks
+      // Append content as chunked paragraph blocks (≤2000 chars each) to match createPage behaviour
+      const MAX_BLOCK_TEXT = 2000;
+      const chunks: string[] = [];
+      for (let i = 0; i < content.length; i += MAX_BLOCK_TEXT) {
+        chunks.push(content.slice(i, i + MAX_BLOCK_TEXT));
+      }
       const blockPayload = {
-        children: [
-          {
-            object: 'block',
-            type: 'paragraph',
-            paragraph: {
-              rich_text: [
-                {
-                  type: 'text',
-                  text: {
-                    content: content.substring(0, 2000) // Notion has limits on block size
-                  }
-                }
-              ]
-            }
+        children: chunks.map(chunk => ({
+          object: 'block',
+          type: 'paragraph',
+          paragraph: {
+            rich_text: [{ type: 'text', text: { content: chunk } }]
           }
-        ]
+        }))
       };
 
       const appendResult = await this.httpRequest('PATCH', `/blocks/${pageId}/children`, blockPayload);
