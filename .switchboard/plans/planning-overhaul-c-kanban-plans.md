@@ -76,3 +76,8 @@ Clean up the Kanban Plans tab function strip: collapse the All/Epics button pair
   - [ ] No panel-wide Log button; the doc-scoped Log button in the meta bar still works.
   - [ ] Review button lives in the doc-preview meta bar; entering review mode flips it to "EXIT REVIEW" and hides Edit.
   - [ ] Switching plans while in review mode cleanly exits review mode first — no stuck state, no console errors.
+
+## Review Findings
+- **Files changed:** `src/webview/planning.html` (added `.strip-btn.active` CSS rule at line 370), `src/webview/planning.js` (no changes needed — implementation was already correct).
+- **Validation:** JavaScript syntax check passed (`node --check`). No compilation or tests run per session directives.
+- **Remaining risks:** None material. The `.strip-btn.active` CSS fix was the only gap; all state management for review mode, edit mode hiding, and selection-change cleanup is correctly wired.
