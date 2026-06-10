@@ -1,32 +1,58 @@
 # Extract Design & HTML Previews to a Dedicated Design Panel, Add Google Stitch SDK Integration
 
-## Metadata
-**Complexity:** 8
-**Tags:** frontend, backend, api, ui, feature, refactor
+## Goal
 
----
+Extract the `design-content` and `html-preview-content` tabs from `planning.html` / `planning.js` / `PlanningPanelProvider.ts` into a new, dedicated `DesignPanel`, create `design.html` and `design.js` webview files that replicate the planning panel's dark theme and all existing Design System / HTML Previews functionality, and integrate `@google/stitch-sdk` (v0.3.5) with a **Stitch** tab for AI-generated UI screens. Register the new panel with a VS Code command, a status bar button, and a quick-action button in `implementation.html`, while preserving all existing user configurations without migration.
 
-## Problem & Context
+**Core Problem, Background & Root-Cause Analysis:**
 
-`src/webview/planning.html` is overloaded at 3,467 lines / 141 KB. It currently hosts eight tabs (Local Docs, Online Docs, Kanban Plans, HTML Previews, Tickets, Research, Design System, NotebookLM). The **Design System** and **HTML Previews** tabs contain substantial DOM, CSS, and JavaScript logic that bloats the single-file architecture, slows load time, and couples design-related workflows with research/planning workflows.
-
-The user wants these tabs extracted into a **standalone `design.html` panel** styled identically to the planning panel, plus a new **Stitch** tab that integrates Google's `@google/stitch-sdk` for AI-generated UI screens.
-
-## Goals
-
-1. **Extract** the `design-content` and `html-preview-content` tabs from `planning.html` / `planning.js` / `PlanningPanelProvider.ts` into a new, dedicated `DesignPanel`.
-2. **Create** `design.html` and `design.js` webview files that replicate the planning panel's dark theme, tab bar, sidebar+preview layout, and all existing Design System / HTML Previews functionality.
-3. **Integrate** `@google/stitch-sdk` (v0.3.5) into the new panel with a **Stitch** tab for generating UI screens, downloading PNGs/HTML, and opening/managing Stitch projects.
-4. **Register** the new panel with a VS Code command, a status bar button, and a quick-action button in `implementation.html`.
-5. **Preserve** all existing user configurations (design folder paths, HTML folder paths) without requiring migration — these are stored in `local-folder-config.json` and consumed by `LocalFolderService`.
-
-## Root Cause Analysis
-
-- **Single-file bloat:** `planning.html` embeds CSS for eight distinct workflows. Any change to one tab risks regressing others.
-- **Provider overload:** `PlanningPanelProvider.ts` (5,432 lines) handles file watchers, message routing, and preview logic for design docs, HTML files, local docs, online docs, kanban plans, and tickets. Splitting the design/HTML surface area off reduces its scope by ~30%.
+- **Single-file bloat:** `src/webview/planning.html` (3,467 lines, 141 KB) embeds CSS for eight distinct workflows. Any change to one tab risks regressing others.
+- **Provider overload:** `src/services/PlanningPanelProvider.ts` (5,436 lines) handles file watchers, message routing, and preview logic for design docs, HTML files, local docs, online docs, kanban plans, and tickets. Splitting the design/HTML surface area off reduces its scope by ~30%.
 - **Missing SDK integration:** There is currently no bridge between Switchboard and Google Stitch. The `@google/stitch-sdk` package exposes a high-level object API (`stitch.project().generate().getHtml()`) that is ideal for a VS Code webview panel but requires a dedicated provider to manage async SDK calls and temporary-URL downloads.
 
-## Plan
+## Metadata
+
+**Tags:** frontend, backend, api, ui, feature, refactor
+**Complexity:** 8
+
+## User Review Required
+
+- Stitch API key is user-supplied; no OAuth flow. User must provide key via VS Code settings (`switchboard.stitch.apiKey`) or an inline "Configure API Key" prompt in the Stitch tab.
+- Existing design/HTML folder configurations in `local-folder-config.json` are preserved without migration, but users should verify the new Design Panel loads their folders correctly after extraction.
+- The `DESIGN SYSTEM` and `HTML PREVIEWS` buttons disappear from the Planning panel tab bar (exact lines: `planning.html:2927–2931`); users must open the dedicated Design panel via command palette, status bar, or the quick-action button in `implementation.html`.
+
+## Complexity Audit
+
+### Routine
+- Copy CSS/theme blocks (`:root`, `@font-face`, `body.theme-claudify`, `.cyber-theme-enabled`) into new `src/webview/design.html` from `src/webview/planning.html`.
+- Port `switchTab`, `applySidebarState`, tree rendering, and preview logic to `src/webview/design.js`.
+- Register `switchboard.openDesignPanel` command and status bar item in `src/extension.ts`.
+- Add Design quick-action button in `src/webview/implementation.html` (line ~1893).
+- Add Stitch settings and `@google/stitch-sdk` dependency to `package.json`.
+- Configure webpack to copy new webview files (already covered by `src/webview/*.html` / `*.js` glob at `webpack.config.js` lines 76–87).
+
+### Complex / Risky
+- Surgical removal of design/HTML-related functions, state, event listeners, and message handlers from `src/webview/planning.js` (7,282 lines) without regressing the remaining six tabs.
+- Moving file watchers (`_setupHtmlFolderWatchers` at `PlanningPanelProvider.ts:453`, `_setupDesignFolderWatchers` at `PlanningPanelProvider.ts:497`), debounced refresh methods (`_sendHtmlDocsReady` at `PlanningPanelProvider.ts:3559`, `_sendDesignDocsReady` at `PlanningPanelProvider.ts:3638`), and the mini HTTP server lifecycle (`_htmlServers` / `_htmlServerCreationPromises` at `PlanningPanelProvider.ts:88–89`, server methods at `PlanningPanelProvider.ts:5285–5432`) from `PlanningPanelProvider.ts` into a new `DesignPanelProvider.ts`.
+- Integrating `@google/stitch-sdk` v0.3.5 with async SDK calls (`project.generate()`, `screen.getHtml()`, `screen.getImage()`), temporary-URL asset downloads, and user-friendly error handling.
+- Ensuring `_getHtml()` fallback path resolution works for `design.html` across packaged vs. development builds.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** During the transition, both `PlanningPanelProvider` and `DesignPanelProvider` could theoretically watch the same folders if the cleanup in Phase 3 is incomplete. Mitigation: remove `_htmlFolderWatchers` and `_designFolderWatchers` entirely from `PlanningPanelProvider` before the new provider starts; the `refreshSource` and folder add/remove handlers in `PlanningPanelProvider` (lines 1276–1356) must also be removed or rerouted.
+- **Security:** The HTML preview iframe uses `sandbox="allow-scripts"` (or `allow-scripts allow-same-origin` for srcdoc fallback). The local HTTP server enforces `_SERVER_DENY_LIST` (`PlanningPanelProvider.ts:90–100`). The Stitch API key must never be logged or exposed to the webview; it stays in the Node.js extension host.
+- **Side Effects:** Users lose direct access to Design System and HTML Previews from the Planning panel. The `LocalFolderService` configuration format and paths do not change, so no data migration is needed.
+- **Dependencies & Conflicts:** `@google/stitch-sdk` is a new runtime dependency. It requires either `STITCH_API_KEY` env var or `switchboard.stitch.apiKey` setting. `LocalFolderService` remains shared; both providers instantiate it per workspace root.
+
+## Dependencies
+
+- No upstream plan dependencies.
+
+## Adversarial Synthesis
+
+Key risks: surgical removal of design/HTML logic from a 7 KB `planning.js` is error-prone and may leave orphaned state keys or event listeners that silently break remaining tabs; Stitch SDK v0.3.5 is a pre-1.0 Google library with an unstable API surface; moving the `_htmlServers` Map and server lifecycle to a new provider risks port leaks if `dispose()` is incomplete. Mitigations: perform a grep-driven pass using identifiers `design-`, `html-`, `tree-pane-design`, `tree-pane-html`, pin the SDK to `^0.3.5` with wrapped try/catch, and mirror the existing server cleanup loop in `DesignPanelProvider.dispose()`.
+
+## Proposed Changes
 
 ### Phase 1: Create the New Design Panel Webview (`design.html`, `design.js`)
 
@@ -120,10 +146,10 @@ The SDK defaults to `STITCH_API_KEY` from `process.env`. The provider should als
 ### Phase 3: Clean Up `planning.html`, `planning.js`, and `PlanningPanelProvider.ts`
 
 #### 3.1 `src/webview/planning.html`
-- **Remove** the `DESIGN SYSTEM` and `HTML PREVIEWS` buttons from `#research-tab-bar`.
-- **Remove** the entire `<div id="design-content">` block (lines ~3155–3200).
-- **Remove** the entire `<div id="html-preview-content">` block (lines ~3202–3258).
-- **Remove** CSS selectors specific to `#design-content`, `#html-preview-content`, `#tree-pane-design`, `#tree-pane-html`, `#preview-pane-design`, `#preview-pane-html`, and related `cyber-theme-enabled` rules.
+- **Remove** the `DESIGN SYSTEM` and `HTML PREVIEWS` buttons from `#research-tab-bar` (exact lines 2927–2931: remove `<button class="research-tab-btn" data-tab="html-preview">HTML PREVIEWS</button>` and `<button class="research-tab-btn" data-tab="design">DESIGN SYSTEM</button>`).
+- **Remove** the entire `<div id="design-content">` block (exact lines 3155–3201, starting at `<div id="design-content" class="research-tab-content">` through closing `</div>` before `html-preview-content`).
+- **Remove** the entire `<div id="html-preview-content">` block (exact lines 3202–3258, starting at `<div id="html-preview-content" class="research-tab-content">` through closing `</div>` before `tickets-content`).
+- **Remove** CSS selectors specific to `#design-content`, `#html-preview-content`, `#tree-pane-design`, `#tree-pane-html`, `#preview-pane-design`, `#preview-pane-html`, and related `cyber-theme-enabled` rules (exact lines 173–191 in the combined `#local-content, #online-content, #kanban-content, #design-content, #html-preview-content, #tickets-content` block and their `.active` variants; also lines 2236–2239 in `.cyber-theme-enabled` rules).
 - **Remove** the `folder-modal-html` modal block if it exists only for HTML previews.
 
 #### 3.2 `src/webview/planning.js`
@@ -131,21 +157,20 @@ The SDK defaults to `STITCH_API_KEY` from `process.env`. The provider should als
 - **Remove** all HTML-preview-related functions: `handleHtmlDocsReady`, `renderHtmlDocs`, `renderHtmlFolderListModal`, `loadDocumentPreview` branches for `html-folder`, `serveHtmlFile`, etc.
 - **Remove** event listeners on `#design-workspace-filter`, `#html-workspace-filter`, `#design-docs-search`, `#html-docs-search`, design/html sidebar toggle buttons.
 - **Remove** `state.designWorkspaceRootFilter`, `state.htmlWorkspaceRootFilter`, `state.designDocsSearch`, `state.htmlDocsSearch`, `state._lastDesignDocsMsg`, `state._lastHtmlDocsMsg`.
-- **Update** `switchTab` to remove `design` and `html-preview` branches.
-- **Update** `applySidebarState` calls to remove design/html entries.
+- **Update** `switchTab` (`planning.js:470–510`) to remove `design` and `html-preview` branches (lines 474–475 for dirty-flag checks, lines 486–488 for `html-preview` reset, lines 499–500 for `applySidebarState` calls).
+- **Update** `applySidebarState` calls (`planning.js:454–459`) to remove design/html entries.
 
 #### 3.3 `src/services/PlanningPanelProvider.ts`
-- **Remove** private fields: `_htmlFolderWatchers`, `_htmlDocsDebounce`, `_designFolderWatchers`, `_designDocsDebounce`, `_activeDesignDocSourceId`, `_activeDesignDocId`, `_activeDesignSystemDocSourceId`, `_activeDesignSystemDocId`, `_htmlServers`, `_htmlServerCreationPromises`.
-- **Remove** methods: `_setupHtmlFolderWatchers()`, `_setupDesignFolderWatchers()`, `_sendHtmlDocsReady()`, `_sendDesignDocsReady()`, `_serveHtmlFile()`, all HTML-server lifecycle methods.
-- **Remove** `_handleMessage` branches for design/HTML document loading, HTML server requests, design doc active-state messages, etc.
-- **Remove** `_sendActiveDesignDocState()`.
+- **Remove** private fields: `_htmlFolderWatchers` (line 66), `_htmlDocsDebounce` (line 67), `_designFolderWatchers` (line 68), `_designDocsDebounce` (line 69), `_activeDesignDocSourceId` (line 84), `_activeDesignDocId` (line 85), `_activeDesignSystemDocSourceId` (line 86), `_activeDesignSystemDocId` (line 87), `_htmlServers` (line 88), `_htmlServerCreationPromises` (line 89).
+- **Remove** methods: `_setupHtmlFolderWatchers()` (lines 453–495), `_setupDesignFolderWatchers()` (lines 497–540), `_sendHtmlDocsReady()` (lines 3559–3636), `_sendDesignDocsReady()` (lines 3638–3741), `_serveHtmlFile()`, and all HTML-server lifecycle methods (`_getOrCreateHtmlServer` at line 5285, `_createHtmlServer` at line 5312, `_createServerTimeout` at line 5425, and related cleanup in `dispose()` at lines 5155–5162).
+- **Remove** `_handleMessage` branches for design/HTML document loading, HTML server requests, design doc active-state messages, etc. (folder add/remove handlers for `addHtmlFolder`/`removeHtmlFolder`/`listHtmlFolders` at lines 1276–1307, `addDesignFolder`/`removeDesignFolder`/`listDesignFolders` at lines 1309–1341, and `refreshSource` branches at lines 1347–1356).
 - **Update** `_getHtml()` to no longer reference design/HTML-specific content (this is mostly about reducing the HTML file size, but the provider method itself stays structurally the same).
 
 ### Phase 4: Wire the New Panel into the Extension Host
 
 #### 4.1 `src/extension.ts`
-- **Import** `DesignPanelProvider`.
-- **Instantiate** after `planningPanelProvider`:
+- **Import** `DesignPanelProvider` (add after line 24, after `import { PlanningPanelProvider } from './services/PlanningPanelProvider';`).
+- **Instantiate** after `planningPanelProvider` (insert after the `planningPanelProvider` instantiation block):
   ```typescript
   const designPanelProvider = new DesignPanelProvider(
       context.extensionUri,
@@ -153,7 +178,7 @@ The SDK defaults to `STITCH_API_KEY` from `process.env`. The provider should als
   );
   context.subscriptions.push(designPanelProvider);
   ```
-- **Register command:**
+- **Register command** (insert after existing command registrations, before `context.subscriptions.push(openDesignPanelDisposable);`):
   ```typescript
   const openDesignPanelDisposable = vscode.commands.registerCommand(
       'switchboard.openDesignPanel',
@@ -161,24 +186,23 @@ The SDK defaults to `STITCH_API_KEY` from `process.env`. The provider should als
   );
   context.subscriptions.push(openDesignPanelDisposable);
   ```
-- **Status bar item:** Add `designStatusBarItem` (priority 93, right-aligned) with `$(paintcan)` or `$(symbol-color)` icon, tooltip "Open Design Panel", command `switchboard.openDesignPanel`.
-- **Update** `updateStatusBarVisibility()` to include a `switchboard.statusBar.showDesignButton` toggle.
-- **Add** `kanbanProvider!.setDesignPanelProvider(designPanelProvider)` if the kanban provider needs to reference it (optional, only if cross-panel coordination is needed).
+- **Status bar item:** Add `designStatusBarItem` (priority 93, right-aligned) with `$(paintcan)` icon, tooltip "Open Design Panel", command `switchboard.openDesignPanel`. Insert after `artifactsStatusBarItem` creation (line 1736) in the existing status bar item block.
+- **Update** `updateStatusBarVisibility()` (lines 1738–1772): add `showDesignButton` read at the top, conditional `designStatusBarItem.show()/hide()` in the body, and `e.affectsConfiguration('switchboard.statusBar.showDesignButton')` in the config-change listener (around line 1791).
 - **Add** configuration change listener: if `switchboard.stitch.apiKey` changes, post a message to the design panel to refresh the Stitch tab auth state.
 
 #### 4.2 `src/webview/implementation.html`
-In the Quick Actions section (around line 1893), add a fourth button:
+In the Quick Actions section (exact lines 1895–1899), add a fourth button:
 ```html
 <button id="btn-quick-design" class="secondary-btn is-teal" style="flex:1">design</button>
 ```
-And its event listener:
+And its event listener (add alongside existing quick-action listeners):
 ```javascript
 const btnQuickDesign = document.getElementById('btn-quick-design');
 if (btnQuickDesign) btnQuickDesign.addEventListener('click', () => vscode.postMessage({ type: 'openDesignPanel' }));
 ```
 
 #### 4.3 `src/services/TaskViewerProvider.ts`
-Add a handler for the `openDesignPanel` message type that executes the command:
+Add a handler for the `openDesignPanel` message type (insert after the existing `openPlanningPanel` case at lines 7640–7642):
 ```typescript
 case 'openDesignPanel':
     await vscode.commands.executeCommand('switchboard.openDesignPanel');
@@ -232,12 +256,14 @@ Add `@google/stitch-sdk` to `dependencies` in `package.json`:
 "@google/stitch-sdk": "^0.3.5"
 ```
 
-### Phase 6: Build & Verification Checklist
+## Verification Plan
 
-- [ ] `npm install` picks up `@google/stitch-sdk`.
-- [ ] `npm run compile` succeeds with no TypeScript errors.
-- [ ] Webpack copies `src/webview/design.html` and `src/webview/design.js` into `dist/webview/`.
-- [ ] `DesignPanelProvider._getHtml()` resolves `design.html` from the fallback path chain.
+### Automated Tests
+- **Compilation check:** `npm run compile` (or `tsc --noEmit`) must pass with zero TypeScript errors across all modified `.ts` files. (Session directive: skip actual compilation step; plan assumes pre-compiled state.)
+- **Webpack asset copy:** Verify `src/webview/design.html` and `src/webview/design.js` are emitted to `dist/webview/` by the existing `CopyWebpackPlugin` glob (`webpack.config.js:76–87`).
+- **Fallback-path test:** `DesignPanelProvider._getHtml()` must resolve `design.html` from the fallback chain (`dist/webview/design.html` → `webview/design.html` → `src/webview/design.html`).
+
+### Manual Verification Checklist
 - [ ] Running `Switchboard: Open Design Panel` opens a webview panel titled `DESIGN`.
 - [ ] The Design System tab loads and displays configured design folders correctly.
 - [ ] The HTML Previews tab loads and displays configured HTML folders correctly; iframe preview works; zoom toolbar works.
@@ -266,11 +292,11 @@ Add `@google/stitch-sdk` to `dependencies` in `package.json`:
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| Removing design/HTML code from `planning.js` (335 KB) is error-prone | Medium | Do a surgical pass: grep for `design-`, `html-`, `tree-pane-design`, `tree-pane-html` identifiers and remove only those functions/listeners. Run the existing test suite afterward. |
-| Stitch SDK v0.3.5 is young and API may change | Low | Pin the version to `^0.3.5` and wrap all SDK calls in try/catch with user-friendly error messages. If the API changes, only `DesignPanelProvider.ts` needs updates. |
+| Removing design/HTML code from `planning.js` (7,282 lines) is error-prone | Medium | Do a surgical pass: grep for `design-`, `html-`, `tree-pane-design`, `tree-pane-html` identifiers and remove only those functions/listeners. Verify remaining six tabs still render and switch correctly. |
+| Stitch SDK v0.3.5 is pre-1.0 and API may change | Low | Pin the version to `^0.3.5` and wrap all SDK calls in try/catch with user-friendly error messages. If the API changes, only `DesignPanelProvider.ts` needs updates. |
 | Users with existing design/HTML configs see broken panels | High | The `LocalFolderService` config format and paths do not change. The new `DesignPanelProvider` reads the same `local-folder-config.json`. No migration needed. |
-| Two providers watch the same folders (race conditions) | Low | Remove the watchers from `PlanningPanelProvider` entirely. Only `DesignPanelProvider` will watch design/HTML folders. |
-| Webview CSP issues with iframe src for HTML previews | Low | Continue using `srcdoc` or `blob:` URLs for HTML preview iframe content, or serve via the local HTTP server on `localhost`. The existing pattern in `PlanningPanelProvider` works. |
+| Two providers watch the same folders (race conditions) | Low | Remove `_htmlFolderWatchers` and `_designFolderWatchers` from `PlanningPanelProvider` entirely (lines 66–69, 453–540). Only `DesignPanelProvider` will watch design/HTML folders. |
+| Webview CSP issues with iframe src for HTML previews | Low | Continue using `srcdoc` or `blob:` URLs for HTML preview iframe content, or serve via the local HTTP server on `localhost` (existing server lifecycle at `PlanningPanelProvider.ts:5285–5432`, moved to `DesignPanelProvider`). The existing sandbox attributes (`allow-scripts`, `allow-same-origin` for srcdoc) remain. |
 
 ## Files Changed
 
@@ -288,3 +314,7 @@ Add `@google/stitch-sdk` to `dependencies` in `package.json`:
 - `src/services/TaskViewerProvider.ts` — add `openDesignPanel` message handler
 - `package.json` — add command, settings, and `@google/stitch-sdk` dependency
 - `package-lock.json` — updated by `npm install`
+
+## Recommendation
+
+**Send to Lead Coder**

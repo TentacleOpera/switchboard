@@ -491,9 +491,7 @@ ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     dispatched_ide = excluded.dispatched_ide,
     clickup_task_id = excluded.clickup_task_id,
     linear_issue_id = excluded.linear_issue_id,
-    worktree_id = excluded.worktree_id,
-    is_epic = excluded.is_epic,
-    epic_id = excluded.epic_id
+    worktree_id = excluded.worktree_id
 `;
 
 const MIGRATION_VERSION_KEY = 'kanban_db_migration_version';
@@ -1170,7 +1168,9 @@ export class KanbanDatabase {
                     record.dispatchedIde || '',   // 20
                     record.clickupTaskId || '',   // 21
                     record.linearIssueId || '',    // 22
-                    record.worktreeId ?? null       // 23
+                    record.worktreeId ?? null,      // 23
+                    record.isEpic ?? null,           // 24
+                    record.epicId || ''             // 25
                 ]);
             }
             this._db.run('COMMIT');
@@ -4200,7 +4200,8 @@ FROM plans
                         record.project,
                         record.workspaceId, record.createdAt, record.updatedAt, record.lastAction, record.sourceType,
                         record.brainSourcePath, record.mirrorPath, record.routedTo, record.dispatchedAgent,
-                        record.dispatchedIde, record.clickupTaskId, record.linearIssueId, record.worktreeId ?? null
+                        record.dispatchedIde, record.clickupTaskId, record.linearIssueId, record.worktreeId ?? null,
+                        record.isEpic ?? null, record.epicId || ''
                     ]);
                     restored++;
                 } catch (e) {

@@ -6472,7 +6472,9 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     mirrorPath: '',
                     routedTo: '',
                     dispatchedAgent: '',
-                    dispatchedIde: ''
+                    dispatchedIde: '',
+                    isEpic: 1,
+                    epicId: ''
                 });
                 await db.updateEpicStatus(sessionId, 1, '');
                 const epicPath = path.join(workspaceRoot, epicPlanFile);
