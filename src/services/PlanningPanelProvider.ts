@@ -373,6 +373,10 @@ export class PlanningPanelProvider {
         return !!this._panel;
     }
 
+    public isInCurrentWindow(): boolean {
+        return !!this._panel && this._panel.viewColumn !== undefined;
+    }
+
     public postMessageToWebview(message: any): void {
         this._panel?.webview.postMessage(message);
     }
@@ -1999,8 +2003,12 @@ export class PlanningPanelProvider {
                     for (const r of allRoots) {
                         try {
                             const service = this._getLocalFolderService(r);
-                            const designPaths = service.getDesignFolderPaths();
-                            if (designPaths.some(dp => resolved.startsWith(path.resolve(dp)))) {
+                            const allAllowedPaths = [
+                                ...service.getFolderPaths(),
+                                ...service.getDesignFolderPaths(),
+                                ...service.getHtmlFolderPaths()
+                            ];
+                            if (allAllowedPaths.some(dp => resolved.startsWith(path.resolve(dp)))) {
                                 isAllowed = true;
                                 break;
                             }
@@ -2691,6 +2699,42 @@ export class PlanningPanelProvider {
                     console.error('[PlanningPanel] Failed to refine ClickUp task:', error);
                     this._panel?.webview.postMessage({
                         type: 'clickupTaskRefined',
+                        success: false,
+                        error: error instanceof Error ? error.message : String(error)
+                    });
+                }
+                break;
+            }
+            case 'ticketsAskAgent': {
+                const askWorkspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const ticketId = String(msg.id || '').trim();
+                const provider = msg.provider === 'clickup' ? 'clickup' : 'linear';
+
+                if (!askWorkspaceRoot || !ticketId) {
+                    this._panel?.webview.postMessage({
+                        type: 'ticketsAskAgentResult',
+                        success: false,
+                        error: 'Missing workspace or ticket ID'
+                    });
+                    break;
+                }
+
+                try {
+                    await vscode.commands.executeCommand(
+                        'switchboard.askAgentTask',
+                        {
+                            workspaceRoot: askWorkspaceRoot,
+                            id: ticketId,
+                            title: String(msg.title || '').trim(),
+                            description: String(msg.description || '').trim(),
+                            provider
+                        }
+                    );
+                    this._panel?.webview.postMessage({ type: 'ticketsAskAgentResult', success: true });
+                } catch (error) {
+                    console.error('[PlanningPanel] Failed to send ticket to agent:', error);
+                    this._panel?.webview.postMessage({
+                        type: 'ticketsAskAgentResult',
                         success: false,
                         error: error instanceof Error ? error.message : String(error)
                     });
@@ -4836,9 +4880,18 @@ export class PlanningPanelProvider {
                 }
             }
 
+            // Ensure the written doc has an H1 near the top — the local docs sidebar derives
+            // card titles from the first ~1KB of the file, so docs without a leading heading
+            // showed up titleless.
+            let contentToWrite = content;
+            const bodyWithoutFrontMatter = content.replace(/^---\n[\s\S]*?\n---\n*/, '');
+            if (!/^#\s+/m.test(bodyWithoutFrontMatter.slice(0, 1000))) {
+                contentToWrite = `# ${finalDocTitle}\n\n${bodyWithoutFrontMatter}`;
+            }
+
             const writeResult = await this._plannerPromptWriter.writeContentToDocsDir(
                 workspaceRoot,
-                content,
+                contentToWrite,
                 finalDocTitle,
                 'research-clipboard',
                 { skipDesignDocLink: true, targetFolder: folderPath }

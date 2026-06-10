@@ -425,15 +425,6 @@
             display: none;
         }
 
-        .html-banner-actions {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-        }
-        .active-doc-banner.inactive .html-banner-actions {
-            display: none;
-        }
-
         /* Subtask navigation — matches Online Docs .page-navigation pattern */
         #tickets-subtasks-nav {
             margin-bottom: 16px;
@@ -1011,9 +1002,12 @@
         #markdown-preview-tickets {
             flex: 1;
             overflow-y: auto;
-            padding: 26px; /* Match VS Code's markdown.css default */
-            max-width: 800px; /* Clarification: kept for readability, VS Code uses full width */
-            margin: 0 auto;
+            /* Center an ~800px reading column via padding (not max-width+margin:auto) so the
+               scrollbar stays on the pane's right edge instead of hugging the text column. */
+            padding: 26px max(26px, calc((100% - 800px) / 2));
+            width: 100%;
+            box-sizing: border-box;
+            margin: 0;
             font-family: var(--font-family);
             font-size: 13px;
             line-height: 1.5;
@@ -1851,8 +1845,30 @@
             padding: 4px 8px;
             font-size: 12px;
         }
-        #kanban-search { flex: 1; }
-        .sidebar-search-input { flex: 1; min-width: 120px; }
+        .sidebar-search-input {
+            flex: 0 1 180px;
+            min-width: 90px;
+            max-width: 200px;
+            margin-left: auto;
+            height: 24px;
+            box-sizing: border-box;
+            padding: 3px 8px;
+            background: var(--panel-bg2, rgba(10, 10, 10, 0.7));
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            color: var(--text-primary);
+            font-family: var(--font-family);
+            font-size: 12px;
+        }
+        .sidebar-search-input::placeholder { color: var(--text-secondary); }
+        .sidebar-search-input:focus {
+            outline: none;
+            border-color: var(--accent-teal-dim);
+        }
+        .cyber-theme-enabled .sidebar-search-input {
+            background: rgba(10, 10, 10, 0.70);
+            border-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+        }
         #kanban-content-row { display: flex; gap: 0; height: 100%; overflow: hidden; }
         #kanban-list-pane { flex: 1; overflow-y: auto; }
         .kanban-preview-pane { overflow-y: auto; padding: 12px; border-left: 1px solid var(--border-color, rgba(255,255,255,0.08)); background: var(--panel-bg, #000000); }
@@ -2220,7 +2236,8 @@
         .cyber-theme-enabled #local-content,
         .cyber-theme-enabled #online-content,
         .cyber-theme-enabled #design-content,
-        .cyber-theme-enabled #html-preview-content {
+        .cyber-theme-enabled #html-preview-content,
+        .cyber-theme-enabled #tickets-content {
             background: transparent;
         }
 
@@ -2836,29 +2853,6 @@
             border-color: var(--accent-teal);
         }
 
-        /* Design preview meta bar */
-        #design-preview-meta-bar {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 6px 10px;
-            border-bottom: 1px solid var(--border-color, #333);
-            background: var(--panel-bg2, #1a1a2e);
-            font-family: var(--font-mono);
-            font-size: 11px;
-            color: var(--text-secondary);
-            flex-wrap: wrap;
-        }
-        #design-preview-meta-bar .meta-doc-title {
-            color: var(--text-primary);
-            font-weight: 600;
-            margin-right: auto;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            max-width: 300px;
-        }
-
         /* Kanban plan log modal overlay */
         .kanban-log-overlay {
             position: fixed;
@@ -2950,7 +2944,6 @@
                 <select id="local-workspace-filter" class="workspace-filter-select">
                     <option value="">All Workspaces</option>
                 </select>
-                <input type="text" id="local-docs-search" class="sidebar-search-input" placeholder="Search docs..." />
                 <button id="btn-set-active-context-local" class="strip-btn" disabled>Set as Active Planning Context</button>
                 <button id="btn-import-full-doc" class="strip-btn" disabled style="display: none;">Import</button>
                 <button id="btn-export-to-source" class="strip-btn" disabled style="display: none;">Export to Source</button>
@@ -2958,7 +2951,8 @@
                 <button id="btn-save-local" class="strip-btn" style="display:none;">Save</button>
                 <button id="btn-cancel-local" class="strip-btn" style="display:none;">Cancel</button>
                 <button id="btn-sync-to-online" class="strip-btn" disabled>Sync to Online</button>
-                <span id="status"></span>
+                <input type="text" id="local-docs-search" class="sidebar-search-input" placeholder="Search docs..." />
+                <span id="status" style="margin-left: 0;"></span>
 
             </div>
             <div class="content-row">
@@ -2998,9 +2992,9 @@
                 <button class="btn-disable-doc" id="btn-disable-doc-online">Turn off</button>
             </div>
             <div class="controls-strip" id="controls-strip-online">
-                <input type="text" id="online-docs-search" class="sidebar-search-input" placeholder="Search docs..." />
                 <button id="btn-import-full-doc-online" class="strip-btn" disabled>Import</button>
                 <button id="btn-edit-online" class="strip-btn" disabled style="display:none;" title="Editing not available for remote docs">Edit</button>
+                <input type="text" id="online-docs-search" class="sidebar-search-input" placeholder="Search docs..." />
                 <span id="status-online"></span>
             </div>
             <div class="content-row">
@@ -3134,12 +3128,12 @@
                 <select id="kanban-column-filter">
                     <option value="">All Columns</option>
                 </select>
-                <input type="text" id="kanban-search" class="sidebar-search-input" placeholder="Search plans..." />
                 <button id="kanban-view-epics" class="strip-btn" style="margin: 0;">Epics</button>
                 <button id="btn-import-kanban-plans" class="strip-btn" title="Scan configured AI IDE folders and pick unclaimed plans to add (any age, bypasses the auto-claim window)">Import</button>
                 <button id="btn-edit-kanban" class="strip-btn" disabled>Edit</button>
                 <button id="btn-save-kanban" class="strip-btn" style="display:none;">Save</button>
                 <button id="btn-cancel-kanban" class="strip-btn" style="display:none;">Cancel</button>
+                <input type="text" id="kanban-search" class="sidebar-search-input" placeholder="Search plans..." />
             </div>
             <!-- Split pane: list + preview -->
             <div class="content-row" id="kanban-content-row">
@@ -3163,6 +3157,11 @@
                 <select id="design-workspace-filter" class="workspace-filter-select">
                     <option value="">All Workspaces</option>
                 </select>
+                <button id="btn-set-active-context-design" class="strip-btn" disabled>Set as Active Design Doc</button>
+                <button id="btn-link-to-doc-design" class="strip-btn" disabled>Link</button>
+                <button id="btn-edit-design" class="strip-btn" disabled>Edit</button>
+                <button id="btn-save-design" class="strip-btn" style="display:none;">Save</button>
+                <button id="btn-cancel-design" class="strip-btn" style="display:none;">Cancel</button>
                 <input type="text" id="design-docs-search" class="sidebar-search-input" placeholder="Search design..." />
                 <span id="status-design"></span>
             </div>
@@ -3176,7 +3175,6 @@
                 <div class="preview-panel-wrapper">
                     <div id="preview-pane-design" style="flex: 1; width: 100%; box-sizing: border-box; overflow: auto; height: 100%;">
                         <div class="preview-content-wrapper" style="height: 100%; display: flex; flex-direction: column;">
-                            <div id="design-preview-meta-bar" style="display:none;"></div>
                             <div id="markdown-preview-design">
                                 <div class="empty-state">Select a design document, image, JSON, or YAML file from the sidebar to preview</div>
                             </div>
@@ -3206,6 +3204,8 @@
                 <select id="html-workspace-filter" class="workspace-filter-select">
                     <option value="">All Workspaces</option>
                 </select>
+                <button id="btn-open-browser-html" class="strip-btn" disabled>Open in Browser</button>
+                <button id="btn-copy-link-html" class="strip-btn" disabled>Copy Link</button>
                 <input type="text" id="html-docs-search" class="sidebar-search-input" placeholder="Search previews..." />
                 <span id="status-html" style="margin-left: 0; font-size: 12px; color: var(--text-secondary);">No folder configured</span>
             </div>
@@ -3218,16 +3218,6 @@
                 </div>
                 <div class="preview-panel-wrapper">
                     <div id="preview-pane-html" style="flex: 1; width: 100%; box-sizing: border-box; height: 100%; display: flex; flex-direction: column; overflow: hidden;">
-                        <div class="active-doc-banner inactive" id="active-doc-banner-html">
-                            <div class="active-doc-info">
-                                <span class="active-doc-label">Active File:</span>
-                                <span class="active-doc-name" id="active-doc-name-html">None</span>
-                            </div>
-                            <div class="html-banner-actions">
-                                <button id="btn-open-browser-html" class="strip-btn" disabled>Open in Browser</button>
-                                <button id="btn-copy-link-html" class="strip-btn" disabled>Copy Link</button>
-                            </div>
-                        </div>
                         <div id="html-initial-state" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 32px; color: var(--text-secondary);">
                             <span style="font-size: 48px; opacity: 0.5;">🌐</span>
                             <div style="text-align: center;">
@@ -3268,13 +3258,13 @@
         </div>
         <div id="tickets-content" class="research-tab-content">
             <div class="controls-strip" id="controls-strip-tickets">
-                <input id="tickets-search" type="text" class="sidebar-search-input" placeholder="Search tickets..." />
                 <select id="tickets-project-picker" style="display:none"></select>
                 <select id="tickets-state-filter" style="display:none"></select>
                 <select id="tickets-status-filter" style="display:none"></select>
                 <button id="tickets-create" class="strip-btn" disabled title="Configure an integration in Setup first">+ New Ticket</button>
                 <button id="tickets-refresh" class="strip-btn">Refresh</button>
                 <div id="tickets-hierarchy-nav" style="display:none; flex-wrap: wrap;"></div>
+                <input id="tickets-search" type="text" class="sidebar-search-input" placeholder="Search tickets..." />
             </div>
             <div class="content-row">
                 <div id="tree-pane-tickets">

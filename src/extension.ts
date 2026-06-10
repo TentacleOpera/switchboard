@@ -1408,6 +1408,11 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(refineTaskDisposable);
 
+    const askAgentTaskDisposable = vscode.commands.registerCommand('switchboard.askAgentTask', async (data: { workspaceRoot: string; id: string; title: string; description: string; provider: 'linear' | 'clickup' }) => {
+        return taskViewerProvider.askAgentTask(data.workspaceRoot, { id: data.id, title: data.title, description: data.description, provider: data.provider });
+    });
+    context.subscriptions.push(askAgentTaskDisposable);
+
     // Terminal sync serialization state — MUST be declared before first call
     // (Control Plane Runtime init at line ~1395 calls syncTerminalRegistryWithState).
     // Previously these were declared ~120 lines later, causing a TDZ ReferenceError

@@ -4589,6 +4589,18 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         await this.dispatchCustomPromptToRole('planner', prompt, resolvedRoot);
     }
 
+    public async askAgentTask(workspaceRoot: string, data: { id: string; title: string; description: string; provider: 'linear' | 'clickup' }): Promise<void> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) return;
+        const agentName = await this._getAgentNameForRole('planner', resolvedRoot);
+        if (!agentName) {
+            vscode.window.showWarningMessage('No planner agent found. Set one up in the Setup panel.');
+            throw new Error('No planner agent configured');
+        }
+        const prompt = `Please review the following ${data.provider} ticket and action it. Assess the request, investigate the relevant code, and either implement the change or report back with findings:\n\nTitle: ${data.title}\nDescription: ${data.description}\n\nTicket ID: ${data.id}`;
+        await this.dispatchCustomPromptToRole('planner', prompt, resolvedRoot);
+    }
+
     private _buildClickUpImportPlanContent(
         task: any,
         createdAt?: string

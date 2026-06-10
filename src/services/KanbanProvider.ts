@@ -5471,6 +5471,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     // just message it — do NOT forcibly reveal (which steals it back).
                     if (!this._planningPanelProvider.hasPanel()) {
                         await this._planningPanelProvider.open();
+                    } else if (this._planningPanelProvider.isInCurrentWindow()) {
+                        this._planningPanelProvider.reveal();
                     }
                     this._planningPanelProvider.postMessageToWebview({
                         type: 'activateKanbanTabAndSelectPlan',

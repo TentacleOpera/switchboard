@@ -158,3 +158,6 @@ No migration code. The extension is in development with a single user; a stale `
   - Only remaining `terracotta` reference is in the `claudify` enum description in `package.json`, which is expected.
 - **Remaining risks:**
   - Manual visual verification required for font loading in all four panels (no automated webview rendering tests).
+
+## Review Findings
+Reviewer-executor pass completed. Two fixes applied: removed a stale `#3ddbd9` fallback in `src/webview/planning.js:3767` and updated `.vscode/settings.json:33` to the new `afterburner` theme name. `node --check` and JSON validation passed. One material gap remains: `dist/webview/` still contains pre-change compiled artifacts (providers load `dist/` first), so `npm run compile` must run before the new themes are active at runtime.

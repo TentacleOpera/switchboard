@@ -82,9 +82,17 @@
         zoomState[tab].panY = Math.max(minY, Math.min(maxY, zoomState[tab].panY));
     }
 
-    function fitToContainer(tab, containerEl, viewportEl) {
+    function fitToContainer(tab, containerEl, viewportEl, retriesLeft = 5) {
         if (!containerEl || !viewportEl) return;
         const containerRect = containerEl.getBoundingClientRect();
+        // Container not laid out yet (hidden tab / pending flex layout) → a fit now would
+        // compute scale 0 and render the content invisibly small. Retry next frame.
+        if (!containerRect.width || !containerRect.height) {
+            if (retriesLeft > 0) {
+                requestAnimationFrame(() => fitToContainer(tab, containerEl, viewportEl, retriesLeft - 1));
+            }
+            return;
+        }
         // Measure content: first child of viewport (img or iframe)
         const contentEl = viewportEl.firstElementChild;
         if (!contentEl) return;
@@ -104,6 +112,34 @@
         applyZoom(tab, viewportEl);
     }
 
+    function getViewportContentSize(viewportEl) {
+        const contentEl = viewportEl ? viewportEl.firstElementChild : null;
+        if (!contentEl) return null;
+        const w = contentEl.tagName === 'IMG' ? (contentEl.naturalWidth || contentEl.offsetWidth) : contentEl.offsetWidth;
+        const h = contentEl.tagName === 'IMG' ? (contentEl.naturalHeight || contentEl.offsetHeight) : contentEl.offsetHeight;
+        return (w && h) ? { w, h } : null;
+    }
+
+    // Rescale about a fixed point (cx, cy in container coordinates) so the content under
+    // that point stays put, then clamp the pan so the content can't drift off-screen.
+    function zoomAt(tab, container, viewportEl, newScale, cx, cy) {
+        const oldScale = zoomState[tab].scale;
+        const clamped = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, newScale));
+        if (!oldScale || clamped === oldScale) {
+            zoomState[tab].scale = clamped || 1;
+            applyZoom(tab, viewportEl);
+            return;
+        }
+        const k = clamped / oldScale;
+        zoomState[tab].panX = cx - (cx - zoomState[tab].panX) * k;
+        zoomState[tab].panY = cy - (cy - zoomState[tab].panY) * k;
+        zoomState[tab].scale = clamped;
+        const containerRect = container.getBoundingClientRect();
+        const size = getViewportContentSize(viewportEl);
+        if (size) clampPan(tab, containerRect, size.w, size.h);
+        applyZoom(tab, viewportEl);
+    }
+
     function initZoomListeners(containerId, viewportSelector, tab) {
         const container = document.getElementById(containerId);
         if (!container) return;
@@ -113,8 +149,10 @@
             e.preventDefault();
 
             const delta = e.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
-            zoomState[tab].scale = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoomState[tab].scale + delta));
-            applyZoom(tab, container.querySelector(viewportSelector));
+            const rect = container.getBoundingClientRect();
+            zoomAt(tab, container, container.querySelector(viewportSelector),
+                zoomState[tab].scale + delta,
+                e.clientX - rect.left, e.clientY - rect.top);
         }, { passive: false });
 
         container.addEventListener('mousedown', (e) => {
@@ -154,10 +192,13 @@
             if (!btn) return;
             const action = btn.dataset.action;
             const viewportEl = container.querySelector(viewportSelector);
+            const rect = container.getBoundingClientRect();
             if (action === 'zoom-in') {
-                zoomState[tab].scale = Math.min(ZOOM_MAX, zoomState[tab].scale + ZOOM_STEP * 2);
+                zoomAt(tab, container, viewportEl, zoomState[tab].scale + ZOOM_STEP * 2, rect.width / 2, rect.height / 2);
+                return;
             } else if (action === 'zoom-out') {
-                zoomState[tab].scale = Math.max(ZOOM_MIN, zoomState[tab].scale - ZOOM_STEP * 2);
+                zoomAt(tab, container, viewportEl, zoomState[tab].scale - ZOOM_STEP * 2, rect.width / 2, rect.height / 2);
+                return;
             } else if (action === 'reset') {
                 resetZoom(tab);
             } else if (action === 'fit') {
@@ -238,7 +279,7 @@
     }
 
     function showTicketsStatus(text, isError) {
-        const toolbar = document.querySelector('.tickets-toolbar');
+        const toolbar = document.getElementById('controls-strip-tickets');
         if (toolbar) {
             let statusSpan = toolbar.querySelector('.tickets-action-status');
             if (!statusSpan) {
@@ -467,8 +508,14 @@
             vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
         }
         if (tabName === 'tickets') {
-            if (!ticketsInitialized) { initTicketsTab(); ticketsInitialized = true; }
-            restoreTicketsState();
+            // Restore persisted state only once — re-running it on every tab entry
+            // re-kicked the ClickUp restore chain and refetched everything each visit.
+            // After the initial load, fetching is manual via the Refresh button.
+            if (!ticketsInitialized) {
+                initTicketsTab();
+                restoreTicketsState();
+                ticketsInitialized = true;
+            }
             if (lastIntegrationProvider && !ticketsLoadedOnce) {
                 if (lastIntegrationProvider === 'clickup') loadClickUpSpaces();
                 else loadLinearProject();
@@ -1126,7 +1173,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     btn.setAttribute('aria-label', action === 'Link Doc' ? 'Copy link to document' : 'Delete document');
                 } else if (action === 'Serve & Open') {
                     btn.className = 'card-icon-btn html-serve-btn';
-                    btn.innerHTML = '<span>🌐</span><span class="btn-label">Open</span>';
+                    btn.innerHTML = '<span class="btn-label">Open</span>';
                     btn.title = 'Start local server and open in browser';
                     btn.setAttribute('data-tooltip', 'Start local server and open in browser');
                     btn.setAttribute('aria-label', 'Open in browser via local server');
@@ -1266,7 +1313,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             } else if (sourceId === 'design-folder') {
                 actions = ['Set Context', 'Link Doc'];
             } else if (sourceId === 'html-folder') {
-                actions = ['Serve & Open', 'Link Doc'];
+                // Open (serve in browser) only makes sense for actual HTML pages
+                const isHtmlFile = /\.html?$/i.test(node.name || node.id || '');
+                actions = isHtmlFile ? ['Serve & Open', 'Link Doc'] : ['Link Doc'];
             } else {
                 actions = ['Import', 'Link Doc'];
             }
@@ -1319,12 +1368,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     }
 
     function resetHtmlBanner() {
-        const banner = document.getElementById('active-doc-banner-html');
-        const bannerName = document.getElementById('active-doc-name-html');
+        // "Banner" is gone — the Open in Browser / Copy Link actions now live in the controls strip
         const openBtn = document.getElementById('btn-open-browser-html');
         const copyBtn = document.getElementById('btn-copy-link-html');
-        if (banner) banner.classList.add('inactive');
-        if (bannerName) bannerName.textContent = 'None';
         if (openBtn) { openBtn.disabled = true; openBtn.onclick = null; }
         if (copyBtn) { copyBtn.disabled = true; copyBtn.onclick = null; }
     }
@@ -1344,16 +1390,13 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             state.activeDocId = docId;
             state.activeDocName = docName;
 
-            // Wire HTML preview banner
-            const banner = document.getElementById('active-doc-banner-html');
-            const bannerName = document.getElementById('active-doc-name-html');
+            // Wire strip actions for the selected file
             const openBtn = document.getElementById('btn-open-browser-html');
             const copyBtn = document.getElementById('btn-copy-link-html');
-            if (banner) banner.classList.remove('inactive');
-            if (bannerName) bannerName.textContent = docName;
+            const isHtmlFile = /\.html?$/i.test(docName || docId || '');
             if (openBtn) {
-                openBtn.disabled = false;
-                openBtn.onclick = () => {
+                openBtn.disabled = !isHtmlFile;
+                openBtn.onclick = !isHtmlFile ? null : () => {
                     vscode.postMessage({
                         type: 'serveAndOpenHtml',
                         docId: docId,
@@ -1423,7 +1466,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             state.previewRequestId++;
             state.activeDocContent = null; // Force re-render; prevent stale-content short-circuit
             updateLocalActiveContextButtonState();
-            renderDesignMetaBar();
+            updateDesignDocControls();
 
             const statusDesign = document.getElementById('status-design');
             if (statusDesign) {
@@ -1575,13 +1618,14 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     }
 
     function getCurrentFolderPaths(map, filter) {
+        // De-dupe: the same folder can be registered under multiple workspace roots
         if (filter && map[filter]) {
-            return map[filter];
+            return [...new Set(map[filter])];
         }
         if (filter) {
             return [];
         }
-        return Object.values(map || {}).flat();
+        return [...new Set(Object.values(map || {}).flat())];
     }
 
     function renderFolderListModal() {
@@ -1677,8 +1721,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         });
     }
     
-    const TYPE_ORDER = ['markdown', 'yaml', 'json', 'image'];
+    const TYPE_ORDER = ['html', 'markdown', 'yaml', 'json', 'image'];
     const TYPE_LABELS = {
+        html: 'HTML',
         markdown: 'Markdown',
         yaml: 'YAML',
         json: 'JSON',
@@ -1688,6 +1733,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     function getDocType(doc) {
         const name = doc.name || doc.id || '';
         const ext = name.substring(name.lastIndexOf('.')).toLowerCase();
+        if (['.html', '.htm'].includes(ext)) return 'html';
         if (['.md', '.markdown'].includes(ext)) return 'markdown';
         if (['.yaml', '.yml'].includes(ext)) return 'yaml';
         if (ext === '.json') return 'json';
@@ -1697,6 +1743,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
     function groupDocsByType(docs) {
         const groups = {
+            html: [],
             markdown: [],
             yaml: [],
             json: [],
@@ -1705,7 +1752,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         };
         docs.forEach(doc => {
             const type = getDocType(doc);
-            groups[type].push(doc);
+            (groups[type] || groups.other).push(doc);
         });
         return groups;
     }
@@ -2570,8 +2617,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         const agToggleModal = document.getElementById('antigravity-toggle-modal');
         if (agToggleModal) { agToggleModal.checked = state.antigravityEnabled; }
 
-        // Keep modal folder list in sync when docs are refreshed
+        // Keep modal folder list and research destination dropdown in sync when docs are refreshed
         renderFolderListModal();
+        populateResearchFolderSelect(getCurrentFolderPaths(state.localFolderPathsByRoot, state.localWorkspaceRootFilter));
 
         // Retry pending import selection if the doc just appeared
         if (state._pendingImportDocName) {
@@ -2896,11 +2944,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 }
             } else {
                 if (statusDesign) {
-                    statusDesign.textContent = 'Loaded';
+                    statusDesign.textContent = '';
                     statusDesign.style.color = '';
                 }
             }
-            renderDesignMetaBar();
+            updateDesignDocControls();
             return;
         }
 
@@ -3314,6 +3362,14 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         }
 
         if (folderSelect) {
+            // Skip the rebuild when nothing changed — local docs refresh often, and
+            // recreating the options closes an open dropdown / fights user selection.
+            const existingValues = Array.from(folderSelect.options).map(o => o.value);
+            if (existingValues.length === (paths || []).length &&
+                existingValues.every((v, i) => v === paths[i])) {
+                return;
+            }
+            const previousValue = folderSelect.value;
             folderSelect.innerHTML = '';
             (paths || []).forEach(p => {
                 const opt = document.createElement('option');
@@ -3321,6 +3377,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 opt.textContent = p.split('/').pop() || p;
                 folderSelect.appendChild(opt);
             });
+            if (previousValue && (paths || []).includes(previousValue)) {
+                folderSelect.value = previousValue;
+            }
 
             if (hasFolders) {
                 if (state.lastResearchFolder && paths.includes(state.lastResearchFolder)) {
@@ -3764,7 +3823,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     if (kanbanStrip) {
                         const feedback = document.createElement('span');
                         feedback.textContent = 'Comment sent';
-                        feedback.style.cssText = 'color: var(--accent-teal, #3ddbd9); font-size: 11px; margin-left: 8px;';
+                        feedback.style.cssText = 'color: var(--accent-teal); font-size: 11px; margin-left: 8px;';
                         kanbanStrip.appendChild(feedback);
                         setTimeout(() => feedback.remove(), 2000);
                     }
@@ -4443,6 +4502,14 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     showTicketsStatus('Refine failed', true);
                 }
                 break;
+            case 'ticketsAskAgentResult':
+                if (msg.success) {
+                    showTicketsStatus('Sent to agent ✓', false);
+                } else {
+                    console.error('Ask Agent failed:', msg.error);
+                    showTicketsStatus(msg.error || 'Ask Agent failed', true);
+                }
+                break;
         }
     });
 
@@ -4509,7 +4576,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         state.designSystemDocSourceId = designSystemDoc.sourceId || null;
         state.designSystemDocId = designSystemDoc.docId || null;
         updateLocalActiveContextButtonState();
-        renderDesignMetaBar();
+        updateDesignDocControls();
     }
 
     function handleDisablePlanningEpic() {
@@ -5234,51 +5301,47 @@ Return ONLY the drafted prompt with no additional commentary.`;
         }
     }
 
-    function renderDesignMetaBar() {
-        const metaBar = document.getElementById('design-preview-meta-bar');
-        if (!metaBar) return;
-        if (!state.activeSource || !state.activeDocId || state.activeSource !== 'design-folder') {
-            metaBar.style.display = 'none';
-            return;
-        }
-        metaBar.style.display = 'flex';
+    // Doc-scoped design controls live in the main controls strip (#controls-strip-design).
+    // This derives their enabled state / labels from current selection state.
+    function updateDesignDocControls() {
+        const hasDoc = state.activeSource === 'design-folder' && !!state.activeDocId;
 
         const docExt = (state.activeDocId || '').substring((state.activeDocId || '').lastIndexOf('.')).toLowerCase();
         const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(docExt) || state.activeFileType === 'image';
-        const isEditing = state.editMode.design;
 
-        const isActiveDoc = state.designSystemDocEnabled &&
+        const isActiveDoc = hasDoc && state.designSystemDocEnabled &&
             state.designSystemDocSourceId === state.activeSource &&
             state.designSystemDocId === state.activeDocId;
 
-        let html = `<span class="meta-doc-title">${escapeHtml(state.activeDocName || '')}</span>`;
-        if (isActiveDoc) {
-            html += `<button class="strip-btn" id="design-meta-turn-off">Turn off</button>`;
-        } else {
-            html += `<button class="strip-btn" id="design-meta-set-active">Set as Active Design Doc</button>`;
-        }
-        html += `<button class="strip-btn" id="design-meta-link">Link</button>`;
-        if (isEditing) {
-            html += `<button class="strip-btn" id="design-meta-save">Save</button>`;
-            html += `<button class="strip-btn" id="design-meta-cancel">Cancel</button>`;
-        } else {
-            html += `<button class="strip-btn" id="design-meta-edit"${isImage ? ' disabled' : ''}>Edit</button>`;
-        }
+        const btnSet = document.getElementById('btn-set-active-context-design');
+        const btnLink = document.getElementById('btn-link-to-doc-design');
+        const btnEdit = document.getElementById('btn-edit-design');
 
-        metaBar.innerHTML = html;
+        if (btnSet) {
+            btnSet.disabled = !hasDoc;
+            btnSet.textContent = isActiveDoc ? 'Turn off' : 'Set as Active Design Doc';
+            btnSet.dataset.active = isActiveDoc ? 'true' : 'false';
+        }
+        if (btnLink) btnLink.disabled = !hasDoc;
+        if (btnEdit) btnEdit.disabled = !hasDoc || isImage;
     }
 
-    // Design preview meta bar delegated actions
+    // Design strip doc-action buttons
     (function() {
-        const designMetaBar = document.getElementById('design-preview-meta-bar');
-        if (!designMetaBar) return;
-        designMetaBar.addEventListener('click', (e) => {
-            const btn = e.target.closest('button');
-            if (!btn) return;
-            const action = btn.id;
-            if (action === 'design-meta-set-active') {
+        const btnSet = document.getElementById('btn-set-active-context-design');
+        const btnLink = document.getElementById('btn-link-to-doc-design');
+        const btnEdit = document.getElementById('btn-edit-design');
+        const btnSave = document.getElementById('btn-save-design');
+        const btnCancel = document.getElementById('btn-cancel-design');
+
+        if (btnSet) {
+            btnSet.addEventListener('click', () => {
                 if (!state.activeSource || !state.activeDocId) return;
-                btn.disabled = true;
+                if (btnSet.dataset.active === 'true') {
+                    vscode.postMessage({ type: 'disableDesignDoc', docType: 'design-system' });
+                    return;
+                }
+                btnSet.disabled = true;
                 const statusDesign = document.getElementById('status-design');
                 if (statusDesign) {
                     statusDesign.textContent = 'Setting as active design doc...';
@@ -5293,9 +5356,10 @@ Return ONLY the drafted prompt with no additional commentary.`;
                     docName: state.activeDocName || state.activeDocId,
                     sourceFolder
                 });
-            } else if (action === 'design-meta-turn-off') {
-                vscode.postMessage({ type: 'disableDesignDoc', docType: 'design-system' });
-            } else if (action === 'design-meta-link') {
+            });
+        }
+        if (btnLink) {
+            btnLink.addEventListener('click', () => {
                 if (!state.activeSource || !state.activeDocId) return;
                 const wrapper = findTreeNode(state.activeSource, state.activeDocId);
                 const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : undefined;
@@ -5306,11 +5370,16 @@ Return ONLY the drafted prompt with no additional commentary.`;
                     docName: state.activeDocName || state.activeDocId,
                     sourceFolder
                 });
-            } else if (action === 'design-meta-edit') {
-                enterEditMode('design');
-            } else if (action === 'design-meta-save') {
+            });
+        }
+        if (btnEdit) {
+            btnEdit.addEventListener('click', () => enterEditMode('design'));
+        }
+        if (btnSave) {
+            btnSave.addEventListener('click', () => {
                 const filePath = state.activeDocFilePath;
-                const content = document.getElementById('markdown-editor-design') ? document.getElementById('markdown-editor-design').value : '';
+                const editor = document.getElementById('markdown-editor-design');
+                const content = editor ? editor.value : '';
                 const originalContent = state.editOriginalContent.design;
                 if (filePath) {
                     vscode.postMessage({
@@ -5321,10 +5390,11 @@ Return ONLY the drafted prompt with no additional commentary.`;
                         tab: 'design'
                     });
                 }
-            } else if (action === 'design-meta-cancel') {
-                exitEditMode('design', true);
-            }
-        });
+            });
+        }
+        if (btnCancel) {
+            btnCancel.addEventListener('click', () => exitEditMode('design', true));
+        }
     })();
 
     function populateKanbanFilters() {
@@ -5519,7 +5589,9 @@ Return ONLY the drafted prompt with no additional commentary.`;
         state.dirtyFlags.kanban = false;
 
         if (msg.content) {
-            kanbanPreviewContent.innerHTML = renderMarkdown(msg.content);
+            // Hide YAML frontmatter from the rendered preview (edit mode still sees the raw file)
+            const displayContent = msg.content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '');
+            kanbanPreviewContent.innerHTML = renderMarkdown(displayContent);
         } else {
             kanbanPreviewContent.innerHTML = '<div class="kanban-empty-state">Plan file is empty</div>';
         }
@@ -5647,7 +5719,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         state.editMode[tab] = true;
         state.dirtyFlags[tab] = false;
-        if (tab === 'design') renderDesignMetaBar();
+        if (tab === 'design') updateDesignDocControls();
     }
 
     function exitEditMode(tab, discard) {
@@ -5721,7 +5793,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             }
         }
 
-        if (tab === 'design') renderDesignMetaBar();
+        if (tab === 'design') updateDesignDocControls();
 
         return true;
     }
@@ -6014,7 +6086,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 return;
             }
             if (askAgentBtn) {
-                console.log('Ask Agent feature is not yet implemented in the Planning panel.');
+                const id = askAgentBtn.dataset.askAgentIssueId || askAgentBtn.dataset.askAgentTaskId;
+                handleTicketsAskAgent(lastIntegrationProvider, id);
                 return;
             }
             const card = e.target.closest('[data-linear-issue-id], [data-clickup-task-id]');
@@ -6320,7 +6393,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             }
         }
 
-        let contentHtml = '';
+        let contentHtml = `<h1>${escapeHtml(issue.title || issue.identifier || issue.id)}</h1>`;
 
         if (selectedLinearIssue.renderedDescriptionHtml) {
             contentHtml += selectedLinearIssue.renderedDescriptionHtml;
@@ -6722,7 +6795,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             }
         }
 
-        let contentHtml = '';
+        let contentHtml = `<h1>${escapeHtml(task.title || task.identifier || task.id)}</h1>`;
 
         if (selectedClickUpIssue.renderedDescriptionHtml) {
             contentHtml += selectedClickUpIssue.renderedDescriptionHtml;
@@ -6844,6 +6917,34 @@ Return ONLY the drafted prompt with no additional commentary.`;
             title,
             description
         });
+    }
+
+    function handleTicketsAskAgent(provider, id) {
+        if (!provider || !id) return;
+        let title = '';
+        let description = '';
+        if (provider === 'linear') {
+            const issue = linearProjectIssues.find(i => i.id === id);
+            if (issue) {
+                title = issue.title || issue.identifier || '';
+                description = issue.description || '';
+            }
+        } else if (provider === 'clickup') {
+            const task = clickUpProjectIssues.find(t => t.id === id);
+            if (task) {
+                title = task.title || task.identifier || '';
+                description = task.markdownDescription || task.description || '';
+            }
+        }
+        vscode.postMessage({
+            type: 'ticketsAskAgent',
+            provider,
+            workspaceRoot: currentWorkspaceRoot,
+            id,
+            title,
+            description
+        });
+        showTicketsStatus('Sending ticket to agent...');
     }
 
     // ===== STATE PERSISTENCE =====
