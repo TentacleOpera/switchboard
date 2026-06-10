@@ -1803,6 +1803,19 @@ export class PlanningPanelProvider {
                     const { KanbanDatabase } = require('./KanbanDatabase');
                     const db = KanbanDatabase.forWorkspace(wsRoot);
                     await db.deletePlanByPlanId(planId);
+                    // Delete the .md file from disk so the watcher doesn't re-import it
+                    if (planFile) {
+                        const resolvedPlanFile = path.isAbsolute(planFile)
+                            ? planFile
+                            : path.resolve(wsRoot, planFile);
+                        try {
+                            await require('fs').promises.unlink(resolvedPlanFile);
+                        } catch (unlinkErr: any) {
+                            if (unlinkErr?.code !== 'ENOENT') {
+                                console.warn(`[PlanningPanelProvider] Failed to delete plan file ${resolvedPlanFile}:`, unlinkErr);
+                            }
+                        }
+                    }
                     this._panel?.webview.postMessage({ type: 'kanbanPlanDeleted', success: true, planId });
                 } catch (err) {
                     this._panel?.webview.postMessage({ type: 'kanbanPlanDeleted', success: false, error: String(err) });

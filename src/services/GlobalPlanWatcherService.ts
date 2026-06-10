@@ -32,6 +32,18 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
     private _recentRenames = new Set<string>();
     private _currentProjects = new Map<string, string>();
 
+    // Paths currently being written by _createInitiatedPlan — skip watcher insert to avoid duplicates
+    private static _pendingCreations = new Map<string, NodeJS.Timeout>();
+
+    public static registerPendingCreation(absolutePath: string): void {
+        const key = path.resolve(absolutePath);
+        const existing = GlobalPlanWatcherService._pendingCreations.get(key);
+        if (existing) clearTimeout(existing);
+        GlobalPlanWatcherService._pendingCreations.set(key, setTimeout(() => {
+            GlobalPlanWatcherService._pendingCreations.delete(key);
+        }, 3000));
+    }
+
     public registerRename(oldRelativePath: string): void {
         const normalized = oldRelativePath.replace(/\\/g, '/');
         this._recentRenames.add(normalized);
@@ -382,9 +394,14 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
 
     private async _handlePlanFile(uri: vscode.Uri, workspaceRoot: string): Promise<void> {
         try {
+            if (GlobalPlanWatcherService._pendingCreations.has(path.resolve(uri.fsPath))) {
+                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Skipping watcher insert for internally created plan: ${uri.fsPath}`);
+                return;
+            }
+
             const db = KanbanDatabase.forWorkspace(workspaceRoot);
             await db.ensureReady();
-            
+
             const relativePath = path.relative(workspaceRoot, uri.fsPath).replace(/\\/g, '/');
             if (isRuntimeMirrorPlanFile(path.basename(relativePath))) {
                 this._outputChannel?.appendLine(`[GlobalPlanWatcher] Skipped brain mirror file: ${relativePath}`);

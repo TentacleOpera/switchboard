@@ -48,6 +48,7 @@ import {
 } from './LinearSyncService';
 import { LinearDocsAdapter } from './LinearDocsAdapter';
 import { LocalFolderService } from './LocalFolderService';
+import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 import { LocalApiServer } from './LocalApiServer';
 import { MultiRepoScaffoldingService } from './MultiRepoScaffoldingService';
 import { KanbanDatabase, KanbanPlanRecord, WorkspaceDatabaseMapping } from './KanbanDatabase';
@@ -15031,14 +15032,8 @@ What would you like to find?`;
         ].join('\n');
     }
 
-    private async _openPlanInReviewPanel(planFileAbsolute: string, topic: string): Promise<void> {
-        const workspaceRoot = this._resolveWorkspaceRoot();
-        await vscode.commands.executeCommand('switchboard.reviewPlan', {
-            planFileAbsolute,
-            topic,
-            workspaceRoot: workspaceRoot || undefined,
-            initialMode: 'edit'
-        });
+    private async _openPlanInReviewPanel(planFileAbsolute: string, _topic: string): Promise<void> {
+        await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(planFileAbsolute));
     }
 
     public async createDraftPlanTicket(): Promise<void> {
@@ -15449,6 +15444,7 @@ What would you like to find?`;
         const stablePath = this._normalizePendingPlanPath(planFileAbsolute);
         this._pendingPlanCreations.add(stablePath);
         this._planCreationInFlight.add(stablePath);
+        GlobalPlanWatcherService.registerPendingCreation(planFileAbsolute);
         try {
             await fs.promises.writeFile(planFileAbsolute, newContent, 'utf8');
             const db = await this._getKanbanDb(workspaceRoot);
@@ -15587,6 +15583,7 @@ What would you like to find?`;
 
         const stablePlanPath = this._normalizePendingPlanPath(planFileAbsolute);
         this._pendingPlanCreations.add(stablePlanPath);
+        GlobalPlanWatcherService.registerPendingCreation(planFileAbsolute);
         try {
             const content = isAirlock ? `## Notebook Plan\n\n${idea}` : idea;
             await fs.promises.writeFile(planFileAbsolute, content, 'utf8');

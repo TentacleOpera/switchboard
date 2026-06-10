@@ -233,3 +233,7 @@ Key risks: schema collision in `local-folder-config.json` (existing `loadConfig`
 - [ ] "All Workspaces" filter in the dropdown shows folders from all workspaces combined.
 
 **Recommendation**: Send to Coder (complexity 6 — multi-file coordination with moderate risk, but mechanically repetitive across three tab types).
+
+## Review Findings
+
+Two MAJOR issues found and fixed in `src/webview/planning.js`: (1) `listDesignFolders` message at line 1884 was missing `workspaceRoot`, causing wrong-workspace fallback in multi-root setups — added the parameter; (2) `designDocsReady` handler (line 3609) skipped `renderDesignFolderListModal()`, leaving the design folder modal stale on backend refresh — added the call for parity with local/HTML tabs. Three NITs deferred: dead `_getLegacyFolderPath()` method in LocalFolderService, unused `activeRoot` variables in `_sendHtmlDocsReady`/`_sendDesignDocsReady`, and unreachable backward-compat branch for `persistedState.designFolderPaths`. No compilation or test runs performed per session directives. Remaining risk: the per-instance `_getLocalFolderService` factory (no caching across calls) means migration could race if two instances for the same root read simultaneously before `_migratedLocal` is persisted — mitigated by idempotent write and `.catch(() => {})` on global-settings clear.
