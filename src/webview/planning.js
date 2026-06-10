@@ -6892,9 +6892,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
     // ===== IMPORT/REFINE DELEGATION =====
 
     function handleTicketsImport(provider, id, includeSubtasks) {
-        const { detailImportButton } = getTicketsTabElements();
-        if (detailImportButton) detailImportButton.disabled = true;
-
         vscode.postMessage({
             type: provider === 'clickup' ? 'clickupImportTask' : 'linearImportTask',
             workspaceRoot: currentWorkspaceRoot,
