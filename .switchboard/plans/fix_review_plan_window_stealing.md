@@ -275,3 +275,13 @@ case 'activateKanbanTabAndSelectPlan': {
 ---
 
 **Recommendation: Send to Intern**
+
+## Review Findings
+
+**Reviewer:** Direct reviewer pass (in-place). **Status:** Approved — no material issues found.
+
+- **Files changed:** `src/webview/kanban.html`, `src/services/PlanningPanelProvider.ts`, `src/services/KanbanProvider.ts`, `src/webview/planning.js` — all four files contain the exact changes specified in the plan.
+- **Validation:** Skipped per session directive (compilation and tests run separately by user). Visual inspection confirms no syntax errors, type mismatches, or logic regressions.
+- **Grumpy Stage 1:** Zero CRITICAL/MAJOR findings. Two NITs surfaced: (a) `await open()` serializes potentially slow sync I/O on the fresh-create path (net improvement over prior fire-and-forget, but worth monitoring), and (b) legacy plans with empty `planId` may query `data-plan-id=""` in the kanban tab DOM — pre-existing, out of scope.
+- **Balanced Stage 2:** All plan requirements implemented correctly. Conditional `hasPanel()` → `open()` / `postMessage` flow decouples messaging from revealing. `planId`-first lookup in `findPendingKanbanMatch` is correctly wired with explicit `planId` passthrough in the extension handler. `planFile` inclusion in the review message fixes the workspace-scoping fallback.
+- **Remaining risks:** Fresh-open message-delivery race (pre-existing, documented, non-destructive); silent no-focus UX when panel lives in another window (intentional, documented).
