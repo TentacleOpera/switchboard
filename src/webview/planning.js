@@ -350,6 +350,16 @@
         });
     });
 
+    wireSidebarSearch('tickets-search', (value) => {
+        if (lastIntegrationProvider === 'linear') {
+            linearProjectSearchValue = value;
+            renderTicketsLinearList();
+        } else if (lastIntegrationProvider === 'clickup') {
+            clickUpProjectSearchValue = value;
+            renderTicketsClickUpList();
+        }
+    });
+
     function getActiveTabName() {
         const activeBtn = document.querySelector('.research-tab-btn.active');
         return activeBtn ? activeBtn.dataset.tab : 'local';
@@ -5984,21 +5994,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function initTicketsTab() {
         const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, loadMoreButton } = getTicketsTabElements();
 
-        // Search input with debounce
-        let searchDebounceTimer = null;
-        searchInput?.addEventListener('input', (e) => {
-            clearTimeout(searchDebounceTimer);
-            searchDebounceTimer = setTimeout(() => {
-                if (lastIntegrationProvider === 'linear') {
-                    linearProjectSearchValue = e.target.value;
-                    renderTicketsLinearList();
-                } else if (lastIntegrationProvider === 'clickup') {
-                    clickUpProjectSearchValue = e.target.value;
-                    renderTicketsClickUpList();
-                }
-            }, 300);
-        });
-
         // Project picker (Linear)
         projectPicker?.addEventListener('change', (e) => {
             linearProjectPickerValue = e.target.value;
@@ -6436,7 +6431,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, emptyState, issuesContainer, hierarchyNav, emptyPreview, createButton } = getTicketsTabElements();
 
         // Hide Linear toolbar elements, show ClickUp hierarchy
-        if (searchInput) searchInput.style.display = 'none';
+        if (searchInput) searchInput.style.display = '';
         if (projectPicker) projectPicker.style.display = 'none';
         if (stateFilter) stateFilter.style.display = 'none';
         if (clickUpStatusFilter) {
@@ -6701,6 +6696,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
             if (statusFilter && task.status !== statusFilter) return false;
             if (!search) return true;
             const haystack = [
+                task.id,
+                task.identifier,
                 task.title,
                 task.description,
                 task.assignees?.map(a => a.username || a.email).join(' ')
@@ -6712,8 +6709,12 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function renderTicketsClickUpList() {
         if (!isTicketsTabActive()) return;
 
-        const { issuesContainer, emptyState, loadMoreButton } = getTicketsTabElements();
+        const { issuesContainer, emptyState, loadMoreButton, searchInput } = getTicketsTabElements();
         if (!issuesContainer) return;
+
+        if (searchInput && searchInput.value !== clickUpProjectSearchValue) {
+            searchInput.value = clickUpProjectSearchValue;
+        }
 
         if (clickUpProjectStatus === 'loading') {
             if (emptyState) emptyState.style.display = 'none';

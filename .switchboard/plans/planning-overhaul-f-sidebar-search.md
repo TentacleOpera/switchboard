@@ -51,3 +51,7 @@ All use one CSS class for consistent sizing (`flex: 1` inside the strip like `#k
   - [ ] Subheaders with zero visible children are hidden (Local Docs / Design System).
   - [ ] Filter survives an auto-refresh (edit a plan file / let tickets poll) — the filtered view re-applies, doesn't reset.
   - [ ] Clearing the input restores the full list.
+
+## Review Findings
+
+Review completed: 5 material issues found and fixed in `src/webview/planning.js`. Tickets search was using a rogue 300ms inline debounce instead of the shared `wireSidebarSearch` helper; refactored to use the shared helper with correct 200ms debounce. ClickUp panel was hiding the search input (`display: none`); now visible so ClickUp users can client-side filter loaded tasks. ClickUp list renderer didn't sync the input value from restored state; added sync. ClickUp client-side filter excluded task `id` and `identifier` from its haystack; added both to match the plan's "title/identifier/assignee" requirement. Files changed: `src/webview/planning.js` only. Compilation and tests skipped per session directive. Remaining risk: ClickUp search is client-side only over already-loaded tasks; server-side `searchQuery` is only sent during initial load/more, not on typing. No other risks identified.
