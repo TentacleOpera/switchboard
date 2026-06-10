@@ -61,3 +61,15 @@ Fix the Design System tab: visually distinct subheader hierarchy, clean filename
   - [ ] Button reads "Set as Active Design Doc" with matching status text; `planner.designSystemDocLink` is still the key written; `planner.designDocLink` untouched.
   - [ ] Doc controls (title, Set as Active Design Doc, Link, Edit/Save/Cancel) live in `#design-preview-meta-bar`; Edit/Save/Cancel state survives plan switches without stuck state or console errors.
   - [ ] Design cards visually identical to local/kanban cards (gradient, classes), no tab-specific overrides remain.
+
+## Review Findings
+
+**Fixed:**
+- `renderDesignMetaBar` used `state.activeDesignDocEnabled` (planning epic state) to decide the "Turn off" button — now uses new `state.designSystemDocEnabled`/`sourceId`/`docId` fields populated from `msg.designSystemDoc` in `updateActiveDocBanner`.
+- Removed dead JS references to deleted HTML elements: `btn-set-active-context-design`, `btn-link-to-doc-design`, `btn-edit-design`, `btn-save-design`, `btn-cancel-design` event listeners and `loadDocumentPreview`/`handlePreviewReady` toggles; also removed dead `btn-manage-design-folders` listener.
+
+**Files changed:** `src/webview/planning.js` (state init, `updateActiveDocBanner`, `renderDesignMetaBar`, dead code removal).
+
+**Validation:** `node --check src/webview/planning.js` clean.
+
+**Remaining risks:** `enterEditMode`/`exitEditMode` still branch for design-tab button IDs in shared infrastructure — null-safe no-ops, but untidy for future maintenance.

@@ -45,6 +45,9 @@
         activeDesignDocEnabled: false,
         activeDesignDocSourceId: null,
         activeDesignDocId: null,
+        designSystemDocEnabled: false,
+        designSystemDocSourceId: null,
+        designSystemDocId: null,
         _lastLocalDocsMsg: null,
         _lastHtmlDocsMsg: null,
         _lastDesignDocsMsg: null
@@ -1436,17 +1439,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 imageContainerDesign.style.display = 'none';
             }
 
-            const btnSetDesign = document.getElementById('btn-set-active-context-design');
-            if (btnSetDesign) btnSetDesign.disabled = false;
-            const btnLinkDesign = document.getElementById('btn-link-to-doc-design');
-            if (btnLinkDesign) btnLinkDesign.disabled = false;
-            const btnEditDesign = document.getElementById('btn-edit-design');
-            if (btnEditDesign) {
-                const ext = docId.substring(docId.lastIndexOf('.')).toLowerCase();
-                const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.svg'].includes(ext);
-                btnEditDesign.disabled = isImage;
-            }
-
             vscode.postMessage({
                 type: 'fetchPreview',
                 sourceId,
@@ -2789,10 +2781,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             const jsonCont = document.getElementById('json-preview-container-design');
             const statusDesign = document.getElementById('status-design');
 
-            const btnSetDesign = document.getElementById('btn-set-active-context-design');
-            const btnLinkDesign = document.getElementById('btn-link-to-doc-design');
-            const btnEditDesign = document.getElementById('btn-edit-design');
-
             // Helper: toggle scanlines on the Design tab's preview-panel-wrapper
             const designWrapper = document.querySelector('#design-content .preview-panel-wrapper');
 
@@ -2802,7 +2790,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (jsonCont) jsonCont.style.display = 'none';
                 if (imgCont) imgCont.style.display = 'flex';
                 if (imgImg) imgImg.src = webviewUri + '?t=' + Date.now();
-                if (btnEditDesign) btnEditDesign.disabled = true;
                 if (designWrapper) designWrapper.classList.add('scanlines-suppressed');
                 // Apply reset transform to image viewport (resetZoom cleared state but not DOM)
                 const designImgViewport = imgCont ? imgCont.querySelector('.zoomable-viewport') : null;
@@ -2836,7 +2823,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (designWrapper) designWrapper.classList.add('scanlines-suppressed');
                 state.activeDocContent = content || '';
                 if (mdEd) mdEd.value = content || '';
-                if (btnEditDesign) btnEditDesign.disabled = false;
             } else if (msg.fileType === 'yaml') {
                 // YAML preview — use pre-parsed JSON from backend
                 if (imgCont) imgCont.style.display = 'none';
@@ -2859,7 +2845,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (designWrapper) designWrapper.classList.add('scanlines-suppressed');
                 state.activeDocContent = content || '';
                 if (mdEd) mdEd.value = content || '';
-                if (btnEditDesign) btnEditDesign.disabled = false;
             } else if (msg.fileType === 'css' || msg.fileType === 'xml' || msg.fileType === 'text') {
                 // Plain text / code preview in markdown container
                 if (imgCont) imgCont.style.display = 'none';
@@ -2872,7 +2857,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 }
                 if (designWrapper) designWrapper.classList.add('scanlines-suppressed');
                 state.activeDocContent = content || '';
-                if (btnEditDesign) btnEditDesign.disabled = false;
             } else {
                 // Markdown (default) — existing path
                 if (imgCont) imgCont.style.display = 'none';
@@ -2895,7 +2879,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 state.activeDocContent = content || '';
                 if (mdEd) mdEd.value = content || '';
                 if (mdPrev) mdPrev.innerHTML = renderMarkdown(content || '');
-                if (btnEditDesign) btnEditDesign.disabled = false;
             }
 
             if (isAutoRefreshed) {
@@ -4523,6 +4506,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         state.activeDesignDocEnabled = planningEpic.enabled || false;
         state.activeDesignDocSourceId = planningEpic.sourceId || null;
         state.activeDesignDocId = planningEpic.docId || null;
+        state.designSystemDocEnabled = designSystemDoc.enabled || false;
+        state.designSystemDocSourceId = designSystemDoc.sourceId || null;
+        state.designSystemDocId = designSystemDoc.docId || null;
         updateLocalActiveContextButtonState();
         renderDesignMetaBar();
     }
@@ -5252,9 +5238,9 @@ Return ONLY the drafted prompt with no additional commentary.`;
         const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(docExt) || state.activeFileType === 'image';
         const isEditing = state.editMode.design;
 
-        const isActiveDoc = state.activeDesignDocEnabled &&
-            state.activeDesignDocSourceId === state.activeSource &&
-            state.activeDesignDocId === state.activeDocId;
+        const isActiveDoc = state.designSystemDocEnabled &&
+            state.designSystemDocSourceId === state.activeSource &&
+            state.designSystemDocId === state.activeDocId;
 
         let html = `<span class="meta-doc-title">${escapeHtml(state.activeDocName || '')}</span>`;
         if (isActiveDoc) {
@@ -5800,60 +5786,12 @@ Return ONLY the drafted prompt with no additional commentary.`;
         setupTextareaTabInterceptor(kanbanEditor);
     }
 
-    const btnEditDesign = document.getElementById('btn-edit-design');
-    const btnSaveDesign = document.getElementById('btn-save-design');
-    const btnCancelDesign = document.getElementById('btn-cancel-design');
     const markdownEditorDesign = document.getElementById('markdown-editor-design');
-
-    if (btnEditDesign) {
-        btnEditDesign.addEventListener('click', () => enterEditMode('design'));
-    }
-    if (btnSaveDesign) {
-        btnSaveDesign.addEventListener('click', () => {
-            const filePath = state.activeDocFilePath;
-            const content = markdownEditorDesign ? markdownEditorDesign.value : '';
-            const originalContent = state.editOriginalContent.design;
-            if (filePath) {
-                vscode.postMessage({
-                    type: 'saveFileContent',
-                    filePath,
-                    content,
-                    originalContent,
-                    tab: 'design'
-                });
-            }
-        });
-    }
-    if (btnCancelDesign) {
-        btnCancelDesign.addEventListener('click', () => exitEditMode('design', false));
-    }
     if (markdownEditorDesign) {
         markdownEditorDesign.addEventListener('input', () => {
             state.dirtyFlags.design = true;
         });
         setupTextareaTabInterceptor(markdownEditorDesign);
-    }
-
-    const btnSetActiveDesign = document.getElementById('btn-set-active-context-design');
-    if (btnSetActiveDesign) {
-        btnSetActiveDesign.addEventListener('click', () => {
-            if (!state.activeSource || !state.activeDocId) return;
-            btnSetActiveDesign.disabled = true;
-            const statusDesign = document.getElementById('status-design');
-            if (statusDesign) {
-                statusDesign.textContent = 'Setting as active planning context...';
-                statusDesign.style.color = '';
-            }
-            const wrapper = findTreeNode(state.activeSource, state.activeDocId);
-            const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : undefined;
-            vscode.postMessage({
-                type: 'setActivePlanningContext',
-                sourceId: state.activeSource,
-                docId: state.activeDocId,
-                docName: state.activeDocName || state.activeDocId,
-                sourceFolder
-            });
-        });
     }
 
     if (btnSetActiveContextLocal) {
@@ -5876,22 +5814,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
                     sourceFolder
                 });
             }
-        });
-    }
-
-    const btnLinkToDesign = document.getElementById('btn-link-to-doc-design');
-    if (btnLinkToDesign) {
-        btnLinkToDesign.addEventListener('click', () => {
-            if (!state.activeSource || !state.activeDocId) return;
-            const wrapper = findTreeNode(state.activeSource, state.activeDocId);
-            const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : undefined;
-            vscode.postMessage({
-                type: 'linkToDocument',
-                sourceId: state.activeSource,
-                docId: state.activeDocId,
-                docName: state.activeDocName || state.activeDocId,
-                sourceFolder
-            });
         });
     }
 
@@ -6989,19 +6911,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
     if (btnAddDesignFolderModal) {
         btnAddDesignFolderModal.addEventListener('click', () => {
             vscode.postMessage({ type: 'addDesignFolder', workspaceRoot: state.designWorkspaceRootFilter || currentWorkspaceRoot });
-        });
-    }
-
-    // Manage design folders button in design content strip
-    const btnManageDesignFolders = document.getElementById('btn-manage-design-folders');
-    if (btnManageDesignFolders) {
-        btnManageDesignFolders.addEventListener('click', () => {
-            const modal = document.getElementById('folder-modal-design');
-            if (modal) {
-                modal.style.display = 'flex';
-                renderDesignFolderListModal();
-                vscode.postMessage({ type: 'listDesignFolders', workspaceRoot: state.designWorkspaceRootFilter || currentWorkspaceRoot });
-            }
         });
     }
 
