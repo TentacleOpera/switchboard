@@ -101,7 +101,7 @@ export class PlanningPanelProvider {
 
     private _resolvedConfigCache: {
         configPath: string | null;
-        config: { syncMode?: string; browseFilterContainers?: Record<string, string>; selectedContainers?: string[] };
+        config: { syncMode?: string; browseFilterContainers?: Record<string, string>; selectedContainers?: string[]; uploadLocations?: Record<string, string>; docMappings?: Record<string, { sourceId: string; docId: string; url?: string }> };
         sourceRoot: string;
     } | null = null;
 
@@ -181,7 +181,7 @@ export class PlanningPanelProvider {
 
     private async _resolveSyncConfig(): Promise<{
         configPath: string | null;
-        config: { syncMode?: string; browseFilterContainers?: Record<string, string>; selectedContainers?: string[] };
+        config: { syncMode?: string; browseFilterContainers?: Record<string, string>; selectedContainers?: string[]; uploadLocations?: Record<string, string>; docMappings?: Record<string, { sourceId: string; docId: string; url?: string }> };
         sourceRoot: string;
     }> {
         // Return cached result if available (resolves race condition on repeated calls)
@@ -190,7 +190,7 @@ export class PlanningPanelProvider {
         }
 
         const allRoots = this._getWorkspaceRoots();
-        const defaultConfig = { syncMode: 'no-sync', browseFilterContainers: {}, selectedContainers: [] as string[] };
+        const defaultConfig = { syncMode: 'no-sync', browseFilterContainers: {}, selectedContainers: [] as string[], uploadLocations: {}, docMappings: {} };
 
         // Search all roots for config
         for (const root of allRoots) {
@@ -1499,6 +1499,14 @@ export class PlanningPanelProvider {
                 await this._handleLinkToDocument(workspaceRoot, msg.sourceId, msg.docId, msg.docName, msg.sourceFolder);
                 break;
             }
+            case 'linkToFolder': {
+                await this._handleLinkToFolder(workspaceRoot, msg.folderPath);
+                break;
+            }
+            case 'createLocalDoc': {
+                await this._handleCreateLocalDoc(workspaceRoot, msg.folderPath);
+                break;
+            }
             case 'serveAndOpenHtml': {
                 await this._handleServeAndOpenHtml(
                     msg.absolutePath as string,
@@ -2670,6 +2678,166 @@ export class PlanningPanelProvider {
                 }
                 break;
             }
+            case 'createOnlineDocument': {
+                const sourceId = String(msg.sourceId || '').trim();
+                let parentId = String(msg.parentId || '').trim() || undefined;
+                let title = String(msg.title || '').trim();
+                if (!sourceId) {
+                    this._panel?.webview.postMessage({ type: 'onlineDocCreated', success: false, error: 'Missing source' });
+                    break;
+                }
+                try {
+                    if (!parentId) {
+                        const { configPath, config, sourceRoot } = await this._resolveSyncConfig();
+                        parentId = config.uploadLocations?.[sourceId];
+                        if (!parentId) {
+                            // Show picker
+                            const adapter = this._researchImportService.getAdapter(sourceId);
+                            if (!adapter) {
+                                this._panel?.webview.postMessage({ type: 'onlineDocCreated', success: false, error: 'Adapter not available' });
+                                break;
+                            }
+                            const containers = await adapter.listContainers();
+                            if (!containers || containers.length === 0) {
+                                this._panel?.webview.postMessage({ type: 'onlineDocCreated', success: false, error: 'No containers available to create doc' });
+                                break;
+                            }
+                            const pick = await vscode.window.showQuickPick(
+                                containers.map(c => ({ label: c.name, description: c.id, value: c.id })),
+                                { placeHolder: `Choose a location for new ${sourceId} document` }
+                            );
+                            if (!pick) {
+                                this._panel?.webview.postMessage({ type: 'onlineDocCreated', success: false, error: 'No location selected' });
+                                break;
+                            }
+                            parentId = pick.value;
+                            // Save as upload location
+                            if (configPath) {
+                                const updated = { ...config, uploadLocations: { ...(config.uploadLocations || {}), [sourceId]: parentId } };
+                                await fs.promises.writeFile(configPath, JSON.stringify(updated, null, 2));
+                                this._resolvedConfigCache = { configPath, config: updated, sourceRoot };
+                            }
+                        }
+                    }
+                    if (!title) {
+                        title = (await vscode.window.showInputBox({ prompt: 'Document title', placeHolder: 'Enter document title' })) || '';
+                        if (!title) {
+                            this._panel?.webview.postMessage({ type: 'onlineDocCreated', success: false, error: 'No title provided' });
+                            break;
+                        }
+                    }
+                    const adapter = this._researchImportService.getAdapter(sourceId);
+                    if (!adapter || !adapter.createDocument) {
+                        this._panel?.webview.postMessage({ type: 'onlineDocCreated', success: false, error: 'Adapter does not support document creation' });
+                        break;
+                    }
+                    const result = await adapter.createDocument({ parentId, title });
+                    if (result.success) {
+                        // Refresh source
+                        this._sendOnlineDocsReady();
+                        this._panel?.webview.postMessage({ type: 'onlineDocCreated', success: true, docId: result.docId, url: result.url, sourceId });
+                    } else {
+                        this._panel?.webview.postMessage({ type: 'onlineDocCreated', success: false, error: result.error || 'Creation failed' });
+                    }
+                } catch (err) {
+                    this._panel?.webview.postMessage({ type: 'onlineDocCreated', success: false, error: String(err) });
+                }
+                break;
+            }
+            case 'setUploadLocation': {
+                const sourceId = String(msg.sourceId || '').trim();
+                if (!sourceId) break;
+                try {
+                    const { configPath, config, sourceRoot } = await this._resolveSyncConfig();
+                    const adapter = this._researchImportService.getAdapter(sourceId);
+                    if (!adapter) break;
+                    const containers = await adapter.listContainers();
+                    if (!containers || containers.length === 0) break;
+                    const pick = await vscode.window.showQuickPick(
+                        containers.map(c => ({ label: c.name, description: c.id, value: c.id })),
+                        { placeHolder: `Set upload location for ${sourceId}` }
+                    );
+                    if (pick && configPath) {
+                        const updated = { ...config, uploadLocations: { ...(config.uploadLocations || {}), [sourceId]: pick.value } };
+                        await fs.promises.writeFile(configPath, JSON.stringify(updated, null, 2));
+                        this._resolvedConfigCache = { configPath, config: updated, sourceRoot };
+                        this._panel?.webview.postMessage({ type: 'uploadLocationSet', sourceId, containerId: pick.value });
+                    }
+                } catch (err) {
+                    console.error('[PlanningPanel] Failed to set upload location:', err);
+                }
+                break;
+            }
+            case 'syncDocToOnline': {
+                const localDocPath = String(msg.localDocPath || '');
+                const sourceId = String(msg.sourceId || '');
+                const parentId = String(msg.parentId || '').trim() || undefined;
+                const mode = msg.mode === 'update' ? 'update' : 'create';
+                const rememberLocation = Boolean(msg.rememberLocation);
+                const docName = String(msg.docName || '');
+                if (!localDocPath || !sourceId) {
+                    this._panel?.webview.postMessage({ type: 'syncToOnlineResult', success: false, error: 'Missing local doc path or source' });
+                    break;
+                }
+                try {
+                    const content = await fs.promises.readFile(localDocPath, 'utf8');
+                    const { configPath, config, sourceRoot } = await this._resolveSyncConfig();
+                    const mappingKey = localDocPath;
+                    const existingMapping = config.docMappings?.[mappingKey];
+
+                    const adapter = this._researchImportService.getAdapter(sourceId);
+                    if (!adapter) {
+                        this._panel?.webview.postMessage({ type: 'syncToOnlineResult', success: false, error: 'Adapter not available' });
+                        break;
+                    }
+
+                    let result: { success: boolean; docId?: string; url?: string; error?: string };
+
+                    if (mode === 'update' && existingMapping && existingMapping.sourceId === sourceId && adapter.updateContent) {
+                        const updateResult = await adapter.updateContent(existingMapping.docId, content);
+                        if (updateResult.success) {
+                            result = { success: true, docId: existingMapping.docId, url: existingMapping.url };
+                        } else {
+                            result = { success: false, error: updateResult.error || 'Update failed' };
+                        }
+                    } else if (adapter.createDocument) {
+                        const createResult = await adapter.createDocument({ parentId, title: docName || path.basename(localDocPath, '.md'), content });
+                        result = createResult;
+                    } else {
+                        result = { success: false, error: 'Adapter does not support create/update' };
+                    }
+
+                    if (result.success && configPath) {
+                        const updatedConfig = { ...config };
+                        if (!updatedConfig.docMappings) updatedConfig.docMappings = {};
+                        updatedConfig.docMappings[mappingKey] = { sourceId, docId: result.docId!, url: result.url };
+                        if (rememberLocation && parentId) {
+                            if (!updatedConfig.uploadLocations) updatedConfig.uploadLocations = {};
+                            updatedConfig.uploadLocations[sourceId] = parentId;
+                        }
+                        await fs.promises.writeFile(configPath, JSON.stringify(updatedConfig, null, 2));
+                        this._resolvedConfigCache = { configPath, config: updatedConfig, sourceRoot };
+                    }
+
+                    this._panel?.webview.postMessage({ type: 'syncToOnlineResult', ...result });
+                } catch (err) {
+                    this._panel?.webview.postMessage({ type: 'syncToOnlineResult', success: false, error: String(err) });
+                }
+                break;
+            }
+            case 'getSyncConfig': {
+                try {
+                    const { config } = await this._resolveSyncConfig();
+                    this._panel?.webview.postMessage({
+                        type: 'syncConfigReady',
+                        uploadLocations: config.uploadLocations || {},
+                        docMappings: config.docMappings || {}
+                    });
+                } catch (err) {
+                    this._panel?.webview.postMessage({ type: 'syncConfigReady', uploadLocations: {}, docMappings: {} });
+                }
+                break;
+            }
         }
     }
 
@@ -2864,6 +3032,82 @@ export class PlanningPanelProvider {
             vscode.window.showInformationMessage(`Document path copied to clipboard: ${docPath}`);
         } catch (err) {
             vscode.window.showErrorMessage(`Failed to link to document: ${String(err)}`);
+        }
+    }
+
+    private async _handleLinkToFolder(
+        workspaceRoot: string,
+        folderPath: string
+    ): Promise<void> {
+        try {
+            const localFolderService = this._getLocalFolderServiceForFolder(folderPath, workspaceRoot, 'local-folder')
+                || this._getLocalFolderService(workspaceRoot);
+            const resolvedFolder = localFolderService.resolveFolderPath(folderPath);
+            const allowedPaths = localFolderService.getFolderPaths();
+            if (!allowedPaths.includes(resolvedFolder)) {
+                throw new Error('Folder is not a configured local docs folder');
+            }
+            if (!fs.existsSync(resolvedFolder)) {
+                throw new Error('Folder does not exist');
+            }
+            await vscode.env.clipboard.writeText(resolvedFolder);
+            vscode.window.showInformationMessage(`Folder path copied to clipboard: ${resolvedFolder}`);
+        } catch (err) {
+            vscode.window.showErrorMessage(`Failed to link to folder: ${String(err)}`);
+        }
+    }
+
+    private async _handleCreateLocalDoc(
+        workspaceRoot: string,
+        folderPath: string
+    ): Promise<void> {
+        try {
+            const docName = await vscode.window.showInputBox({
+                prompt: 'New document name',
+                placeHolder: 'e.g. my-plan.md',
+                validateInput: (value) => {
+                    if (!value || !value.trim()) { return 'Name is required'; }
+                    const sanitized = value.trim().replace(/[\\/:]/g, '').replace(/\.\./g, '');
+                    if (!sanitized) { return 'Invalid name'; }
+                    return undefined;
+                }
+            });
+            if (!docName) { return; }
+
+            let sanitized = docName.trim().replace(/[\\/:]/g, '').replace(/\.\./g, '');
+            if (!sanitized.toLowerCase().endsWith('.md')) {
+                sanitized += '.md';
+            }
+
+            const localFolderService = this._getLocalFolderServiceForFolder(folderPath, workspaceRoot, 'local-folder')
+                || this._getLocalFolderService(workspaceRoot);
+            const resolvedFolder = localFolderService.resolveFolderPath(folderPath);
+            const allowedPaths = localFolderService.getFolderPaths();
+            if (!allowedPaths.includes(resolvedFolder)) {
+                vscode.window.showErrorMessage('Folder is not a configured local docs folder');
+                return;
+            }
+
+            const filePath = path.join(resolvedFolder, sanitized);
+            if (fs.existsSync(filePath)) {
+                vscode.window.showErrorMessage(`A document named ${sanitized} already exists.`);
+                return;
+            }
+
+            const title = sanitized.replace(/\.md$/i, '');
+            const stub = `# ${title}\n`;
+            await fs.promises.writeFile(filePath, stub, 'utf8');
+
+            this._lastLocalDocsSignature = '';
+            await this._sendLocalDocsReady();
+            this._panel?.webview.postMessage({
+                type: 'selectLocalDoc',
+                docId: sanitized,
+                docName: sanitized,
+                sourceFolder: folderPath
+            });
+        } catch (err) {
+            vscode.window.showErrorMessage(`Failed to create document: ${String(err)}`);
         }
     }
 
@@ -3359,14 +3603,16 @@ export class PlanningPanelProvider {
 
         if (!this._panel) { throw new Error('[PlanningPanel] _panel is undefined — cannot send onlineDocsReady'); }
         console.log('[PlanningPanel] Sending onlineDocsReady, roots count:', roots.length, 'roots:', roots);
+        const enabledSources: Record<string, boolean> = {};
+        availableSources.forEach(s => {
+            if (s !== 'local-folder') {
+                enabledSources[s] = true;
+            }
+        });
         this._panel.webview.postMessage({
             type: 'onlineDocsReady',
             roots,
-            enabledSources: {
-                clickup: true,
-                linear: true,
-                notion: true
-            },
+            enabledSources,
             browseFilterContainers
         });
     }
@@ -4301,7 +4547,7 @@ export class PlanningPanelProvider {
                 }
                 await this._sendLocalDocsReady();
                 await this._handleFetchImportedDocs(workspaceRoot);
-                this._panel?.webview.postMessage({ type: 'importFullDocResult', success: true, message: 'Document imported' });
+                this._panel?.webview.postMessage({ type: 'importFullDocResult', success: true, message: 'Document imported', savedPath: writeResult.savedPath, docName });
                 return;
             }
 
@@ -4389,7 +4635,9 @@ export class PlanningPanelProvider {
                     this._panel?.webview.postMessage({
                         type: 'importFullDocResult',
                         success: errorCount === 0,
-                        message: `Imported ${importedCount} pages (${errorCount} errors)`
+                        message: `Imported ${importedCount} pages (${errorCount} errors)`,
+                        savedPath: batchEntries[0]?.filePath,
+                        docName
                     });
                     return;
                 }
@@ -4435,7 +4683,9 @@ export class PlanningPanelProvider {
             this._panel?.webview.postMessage({
                 type: 'importFullDocResult',
                 success: true,
-                message: 'Document imported successfully'
+                message: 'Document imported successfully',
+                savedPath: writeResult.savedPath,
+                docName
             });
         } catch (err) {
             this._panel?.webview.postMessage({ type: 'importFullDocResult', error: String(err) });

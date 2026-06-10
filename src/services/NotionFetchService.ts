@@ -604,6 +604,85 @@ export class NotionFetchService {
     }
   }
 
+  /**
+   * Create a new Notion page under a parent page or database.
+   * Optionally appends content as chunked paragraph blocks (≤2000 chars each).
+   */
+  async createPage(parentId: string, title: string, content?: string): Promise<{ success: boolean; pageId?: string; url?: string; error?: string }> {
+    try {
+      // Normalize parentId
+      let cleanParentId = parentId;
+      if (parentId.startsWith('page:')) {
+        cleanParentId = parentId.slice(5);
+      } else if (parentId.startsWith('database:')) {
+        cleanParentId = parentId.slice(9);
+      }
+      if (!cleanParentId) {
+        return { success: false, error: 'Invalid parent ID' };
+      }
+
+      const isDatabase = parentId.startsWith('database:');
+      const parentField = isDatabase ? 'database_id' : 'page_id';
+
+      const body: any = {
+        parent: { [parentField]: cleanParentId },
+        properties: {
+          title: {
+            title: [{ type: 'text', text: { content: title } }]
+          }
+        }
+      };
+
+      // Databases require the title property name to match the database schema;
+      // for simplicity we assume 'Name' or 'Title' is handled by the caller choosing
+      // a page parent. If database parent, we still try title — Notion will error
+      // if the schema doesn't match, which is acceptable for this plan.
+      if (isDatabase) {
+        body.properties = {
+          Name: {
+            title: [{ type: 'text', text: { content: title } }]
+          }
+        };
+      }
+
+      const result = await this.httpRequest('POST', '/pages', body);
+      if (result.status !== 200) {
+        return { success: false, error: result.data?.message || `Notion page creation failed (HTTP ${result.status})` };
+      }
+
+      const pageId = result.data?.id;
+      const url = result.data?.url;
+      if (!pageId) {
+        return { success: false, error: 'Notion page creation did not return an ID' };
+      }
+
+      if (content) {
+        const MAX_BLOCK_TEXT = 2000;
+        const chunks: string[] = [];
+        for (let i = 0; i < content.length; i += MAX_BLOCK_TEXT) {
+          chunks.push(content.slice(i, i + MAX_BLOCK_TEXT));
+        }
+        const blockPayload = {
+          children: chunks.map(chunk => ({
+            object: 'block',
+            type: 'paragraph',
+            paragraph: {
+              rich_text: [{ type: 'text', text: { content: chunk } }]
+            }
+          }))
+        };
+        const appendResult = await this.httpRequest('PATCH', `/blocks/${pageId}/children`, blockPayload);
+        if (appendResult.status < 200 || appendResult.status >= 300) {
+          return { success: false, error: `Failed to append content (HTTP ${appendResult.status})` };
+        }
+      }
+
+      return { success: true, pageId, url };
+    } catch (err: any) {
+      return { success: false, error: String(err) };
+    }
+  }
+
   get configPath(): string { return this._configPath; }
   get cachePath(): string { return this._cachePath; }
   get workspaceRoot(): string { return this._workspaceRoot; }

@@ -6097,7 +6097,7 @@
                     break;
                 }
                 case 'kanbanEpicDetails': {
-                    populateEpicManageModal(msg.epic, msg.subtasks);
+                    populateEpicManageModal(msg.epic, msg.subtasks, { epicLockColumns: msg.epicLockColumns, epicPromptTemplate: msg.epicPromptTemplate, epicMaxSubtasks: msg.epicMaxSubtasks });
                     break;
                 }
             }
@@ -6685,12 +6685,21 @@
         function closeEpicManageModal() {
             document.getElementById('epic-manage-modal')?.classList.add('hidden');
         }
-        function populateEpicManageModal(epic, subtasks) {
+        function populateEpicManageModal(epic, subtasks, config) {
             const subtaskList = document.getElementById('epic-manage-subtask-list');
             if (!subtaskList) return;
             if (!epic) {
                 subtaskList.innerHTML = '<li>Epic not found</li>';
                 return;
+            }
+            // Populate config fields with current workspace-level values
+            if (config) {
+                const lockCols = document.getElementById('epic-manage-lock-columns');
+                const promptTpl = document.getElementById('epic-manage-prompt-template');
+                const maxSub = document.getElementById('epic-manage-max-subtasks');
+                if (lockCols) lockCols.value = config.epicLockColumns || '';
+                if (promptTpl) promptTpl.value = config.epicPromptTemplate || '';
+                if (maxSub) maxSub.value = config.epicMaxSubtasks || '';
             }
             if (!subtasks || subtasks.length === 0) {
                 subtaskList.innerHTML = '<li>No subtasks</li>';
@@ -6781,12 +6790,19 @@
             const lockCols = document.getElementById('epic-manage-lock-columns');
             const promptTpl = document.getElementById('epic-manage-prompt-template');
             const maxSub = document.getElementById('epic-manage-max-subtasks');
+            const lockVal = lockCols ? lockCols.value : undefined;
+            const tplVal = promptTpl ? promptTpl.value : undefined;
+            const maxVal = maxSub ? maxSub.value : undefined;
+            // Guard: confirm if all fields are empty (would clear existing workspace config)
+            if (!lockVal && !tplVal && !maxVal) {
+                if (!confirm('All config fields are empty. Save will clear existing epic configuration. Continue?')) return;
+            }
             postKanbanMessage({
                 type: 'updateEpicConfig',
                 workspaceRoot: getActiveWorkspaceRoot(),
-                epicLockColumns: lockCols ? lockCols.value : undefined,
-                epicPromptTemplate: promptTpl ? promptTpl.value : undefined,
-                epicMaxSubtasks: maxSub ? maxSub.value : undefined
+                epicLockColumns: lockVal,
+                epicPromptTemplate: tplVal,
+                epicMaxSubtasks: maxVal
             });
         });
         document.getElementById('epic-manage-subtask-list')?.addEventListener('click', (e) => {

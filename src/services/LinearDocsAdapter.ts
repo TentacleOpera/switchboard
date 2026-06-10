@@ -323,11 +323,43 @@ export class LinearDocsAdapter implements ResearchSourceAdapter {
                 }
             `;
             const result = await this._linearService.graphqlRequest(query, { id: fileId, content });
-            
+
             if (result.data?.documentUpdate?.success) {
                 return { success: true };
             }
             return { success: false, error: 'Linear API update failed' };
+        } catch (err) {
+            return { success: false, error: String(err) };
+        }
+    }
+
+    async createDocument(params: { parentId?: string; title: string; content?: string }): Promise<{ success: boolean; docId?: string; url?: string; error?: string }> {
+        try {
+            const input: any = { title: params.title };
+            if (params.content) {
+                input.content = params.content;
+            }
+            if (params.parentId && params.parentId.startsWith('project:')) {
+                input.projectId = params.parentId.slice(8);
+            }
+
+            const query = `
+                mutation($input: DocumentCreateInput!) {
+                    documentCreate(input: $input) {
+                        success
+                        document {
+                            id
+                            url
+                        }
+                    }
+                }
+            `;
+            const result = await this._linearService.graphqlRequest(query, { input });
+            const payload = result.data?.documentCreate;
+            if (payload?.success && payload?.document?.id) {
+                return { success: true, docId: payload.document.id, url: payload.document.url };
+            }
+            return { success: false, error: 'Linear document creation failed' };
         } catch (err) {
             return { success: false, error: String(err) };
         }

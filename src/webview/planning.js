@@ -38,6 +38,10 @@
         localWorkspaceRootFilter: '',
         htmlWorkspaceRootFilter: '',
         designWorkspaceRootFilter: '',
+        localDocsSearch: '',
+        onlineDocsSearch: '',
+        htmlDocsSearch: '',
+        designDocsSearch: '',
         activeDesignDocEnabled: false,
         activeDesignDocSourceId: null,
         activeDesignDocId: null,
@@ -250,11 +254,6 @@
         return {
             listView: document.getElementById('tree-pane-tickets'),
             previewPane: document.getElementById('preview-pane-tickets'),
-            activeDocBanner: document.getElementById('active-doc-banner-tickets'),
-            activeDocName: document.getElementById('active-doc-name-tickets'),
-            detailMeta: document.getElementById('tickets-detail-meta'),
-            detailStatus: document.getElementById('tickets-detail-status'),
-            detailAssignee: document.getElementById('tickets-detail-assignee'),
             emptyPreview: document.getElementById('tickets-empty-preview'),
             searchInput: document.getElementById('tickets-search'),
             projectPicker: document.getElementById('tickets-project-picker'),
@@ -266,10 +265,6 @@
             loadMoreButton: document.getElementById('tickets-load-more'),
             subtasksNav: document.getElementById('tickets-subtasks-nav'),
             detailContent: document.getElementById('tickets-detail-content'),
-            detailImportButton: document.getElementById('tickets-detail-import'),
-            detailRefineButton: document.getElementById('tickets-detail-refine'),
-            detailAskAgentButton: document.getElementById('tickets-detail-ask-agent'),
-            backToParentButton: document.getElementById('tickets-back-to-parent'),
             hierarchyNav: document.getElementById('tickets-hierarchy-nav'),
             createButton: document.getElementById('tickets-create')
         };
@@ -305,6 +300,44 @@
     });
     document.getElementById('design-workspace-filter')?.addEventListener('change', (e) => {
         state.designWorkspaceRootFilter = e.target.value;
+        const msg = state._lastDesignDocsMsg || {};
+        state.designFolderPathsByRoot = msg.folderPathsByRoot || {};
+        const filteredNodes = state.designWorkspaceRootFilter
+            ? (msg.nodes || []).filter(n => n.metadata?.root === state.designWorkspaceRootFilter)
+            : (msg.nodes || []);
+        renderDesignDocs({
+            sourceId: msg.sourceId || 'design-folder',
+            nodes: filteredNodes,
+            folderPaths: getCurrentFolderPaths(state.designFolderPathsByRoot, state.designWorkspaceRootFilter)
+        });
+    });
+
+    function wireSidebarSearch(inputId, onSearch) {
+        const input = document.getElementById(inputId);
+        if (!input) return;
+        let debounceTimer;
+        input.addEventListener('input', () => {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+                onSearch(input.value);
+            }, 200);
+        });
+    }
+
+    wireSidebarSearch('local-docs-search', (value) => {
+        state.localDocsSearch = value;
+        handleLocalDocsReady(state._lastLocalDocsMsg || {});
+    });
+    wireSidebarSearch('online-docs-search', (value) => {
+        state.onlineDocsSearch = value;
+        applyOnlineDocsSearchFilter();
+    });
+    wireSidebarSearch('html-docs-search', (value) => {
+        state.htmlDocsSearch = value;
+        handleHtmlDocsReady(state._lastHtmlDocsMsg || {});
+    });
+    wireSidebarSearch('design-docs-search', (value) => {
+        state.designDocsSearch = value;
         const msg = state._lastDesignDocsMsg || {};
         state.designFolderPathsByRoot = msg.folderPathsByRoot || {};
         const filteredNodes = state.designWorkspaceRootFilter
@@ -628,7 +661,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     const treePaneOnline = document.getElementById('tree-pane-online');
     const markdownPreview = document.getElementById('markdown-preview');
     const markdownPreviewOnline = document.getElementById('markdown-preview-online');
-    const btnAppendToPromptsOnline = document.getElementById('btn-append-to-prompts-online');
     const btnSetActiveContextLocal = document.getElementById('btn-set-active-context-local');
     const btnExportToSource = document.getElementById('btn-export-to-source');
     const statusEl = document.getElementById('status');
@@ -1072,7 +1104,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (action === 'Link Doc' || action === 'Delete') {
                     btn.className = 'card-icon-btn' + (action === 'Link Doc' ? ' html-link-btn' : ' card-delete-btn');
                     if (action === 'Link Doc') {
-                        btn.innerHTML = '<span>🔗</span><span class="btn-label">Copy</span>';
+                        btn.innerHTML = '<span class="btn-label">Link</span>';
                     } else {
                         btn.textContent = '×';
                     }
@@ -1226,9 +1258,27 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 actions = ['Import', 'Link Doc'];
             }
 
+            let title = node.title || node.name;
+            let subtitle = (node.title && node.title !== node.name) ? node.name : undefined;
+            if (sourceId === 'design-folder') {
+                const fullName = node.name || node.id || '';
+                const lastDot = fullName.lastIndexOf('.');
+                title = lastDot > 0 ? fullName.substring(0, lastDot) : fullName;
+                const ext = lastDot > 0 ? fullName.substring(lastDot).toLowerCase() : '';
+                if (['.md', '.markdown'].includes(ext)) subtitle = 'Markdown';
+                else if (['.yaml', '.yml'].includes(ext)) subtitle = 'YAML';
+                else if (ext === '.json') subtitle = 'JSON';
+                else if (['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(ext)) {
+                    const imageLabels = { '.png': 'PNG', '.jpg': 'JPEG', '.jpeg': 'JPEG', '.gif': 'GIF', '.svg': 'SVG', '.webp': 'WEBP', '.bmp': 'BMP' };
+                    subtitle = imageLabels[ext];
+                } else {
+                    subtitle = undefined;
+                }
+            }
+
             const cardWrapper = renderDocCard({
-                title: node.title || node.name,
-                subtitle: (node.title && node.title !== node.name) ? node.name : undefined,
+                title,
+                subtitle,
                 sourceId,
                 nodeId: node.id,
                 nodeMetadata: node.metadata,
@@ -1360,6 +1410,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             state.previewRequestId++;
             state.activeDocContent = null; // Force re-render; prevent stale-content short-circuit
             updateLocalActiveContextButtonState();
+            renderDesignMetaBar();
 
             const statusDesign = document.getElementById('status-design');
             if (statusDesign) {
@@ -1419,10 +1470,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         state.previewRequestId++;
         updateLocalActiveContextButtonState();
 
-        if (btnAppendToPromptsOnline) btnAppendToPromptsOnline.disabled = false;
-        const btnLinkToOnline = document.getElementById('btn-link-to-doc-online');
-        if (btnLinkToOnline) btnLinkToOnline.disabled = false;
-        
         if (sourceId === 'local-folder' && btnExportToSource) {
             const importedInfo = state.importedDocs.get(docName);
             if (importedInfo && importedInfo.canSync) {
@@ -1707,7 +1754,13 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         }
 
         const folderNodes = (nodes || []).filter(n => n.kind === 'folder');
-        const docNodes = (nodes || []).filter(n => n.kind === 'document');
+        let docNodes = (nodes || []).filter(n => n.kind === 'document');
+
+        // Apply sidebar search filter
+        const search = String(state.htmlDocsSearch || '').trim().toLowerCase();
+        if (search) {
+            docNodes = docNodes.filter(d => (d.title || d.name || '').toLowerCase().includes(search));
+        }
 
         // Group nodes by sourceFolder
         const docsBySourceFolder = new Map();
@@ -1740,7 +1793,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             const folderDocs = docsBySourceFolder.get(sourceFolder) || [];
             const sourceFolderNodes = foldersBySourceFolder.get(sourceFolder) || [];
 
-            if (folderDocs.length === 0 && sourceFolderNodes.length === 0) return;
+            // Skip source folders with no visible documents
+            if (folderDocs.length === 0) return;
 
             const sourceHeader = document.createElement('div');
             sourceHeader.className = 'folder-subheader source-folder-header';
@@ -1784,7 +1838,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     if (typeDocs.length === 0) return;
 
                     const typeSubheader = document.createElement('div');
-                    typeSubheader.className = 'folder-subheader';
+                    typeSubheader.className = 'type-subheader';
                     typeSubheader.textContent = TYPE_LABELS[type];
                     docList.appendChild(typeSubheader);
 
@@ -1806,7 +1860,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (typeDocs.length === 0) return;
 
                 const typeSubheader = document.createElement('div');
-                typeSubheader.className = 'folder-subheader';
+                typeSubheader.className = 'type-subheader';
                 typeSubheader.textContent = TYPE_LABELS[type];
                 docList.appendChild(typeSubheader);
 
@@ -1906,7 +1960,13 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         }
 
         const folderNodes = (nodes || []).filter(n => n.kind === 'folder');
-        const docNodes = (nodes || []).filter(n => n.kind === 'document');
+        let docNodes = (nodes || []).filter(n => n.kind === 'document');
+
+        // Apply sidebar search filter
+        const search = String(state.designDocsSearch || '').trim().toLowerCase();
+        if (search) {
+            docNodes = docNodes.filter(d => (d.title || d.name || '').toLowerCase().includes(search));
+        }
 
         // Group nodes by sourceFolder
         const docsBySourceFolder = new Map();
@@ -1939,7 +1999,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             const folderDocs = docsBySourceFolder.get(sourceFolder) || [];
             const sourceFolderNodes = foldersBySourceFolder.get(sourceFolder) || [];
 
-            if (folderDocs.length === 0 && sourceFolderNodes.length === 0) return;
+            // Skip source folders with no visible documents
+            if (folderDocs.length === 0) return;
 
             const sourceHeader = document.createElement('div');
             sourceHeader.className = 'folder-subheader source-folder-header';
@@ -1983,7 +2044,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     if (typeDocs.length === 0) return;
 
                     const typeSubheader = document.createElement('div');
-                    typeSubheader.className = 'folder-subheader';
+                    typeSubheader.className = 'type-subheader';
                     typeSubheader.textContent = TYPE_LABELS[type];
                     docList.appendChild(typeSubheader);
 
@@ -2005,7 +2066,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (typeDocs.length === 0) return;
 
                 const typeSubheader = document.createElement('div');
-                typeSubheader.className = 'folder-subheader';
+                typeSubheader.className = 'type-subheader';
                 typeSubheader.textContent = TYPE_LABELS[type];
                 docList.appendChild(typeSubheader);
 
@@ -2069,7 +2130,13 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 }
             } else {
                 const folderNodes = (nodes || []).filter(n => n.kind === 'folder' || n.isDirectory);
-                const docNodes = (nodes || []).filter(n => n.kind === 'document' && !n.isDirectory);
+                let docNodes = (nodes || []).filter(n => n.kind === 'document' && !n.isDirectory);
+
+                // Apply sidebar search filter
+                const search = String(state.localDocsSearch || '').trim().toLowerCase();
+                if (search) {
+                    docNodes = docNodes.filter(d => (d.title || d.name || '').toLowerCase().includes(search));
+                }
 
                 // Group nodes by sourceFolder first
                 const docsBySourceFolder = new Map();
@@ -2103,8 +2170,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     const folderDocs = docsBySourceFolder.get(sourceFolder) || [];
                     const sourceFolderNodes = foldersBySourceFolder.get(sourceFolder) || [];
 
-                    // Skip source folders with no documents AND no subfolders
-                    if (folderDocs.length === 0 && sourceFolderNodes.length === 0) return;
+                    // Skip source folders with no visible documents
+                    if (folderDocs.length === 0) return;
 
                     // Source-folder subheader (basename of the full path)
                     const sourceHeader = document.createElement('div');
@@ -2116,6 +2183,32 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     const labelSpan = document.createElement('span');
                     labelSpan.textContent = folderName;
                     sourceHeader.appendChild(labelSpan);
+
+                    const linkBtn = document.createElement('button');
+                    linkBtn.className = 'folder-link-btn';
+                    linkBtn.textContent = 'Link';
+                    linkBtn.title = `Copy link to folder ${folderName}`;
+                    linkBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        vscode.postMessage({
+                            type: 'linkToFolder',
+                            folderPath: sourceFolder
+                        });
+                    });
+                    sourceHeader.appendChild(linkBtn);
+
+                    const createBtn = document.createElement('button');
+                    createBtn.className = 'folder-create-btn';
+                    createBtn.textContent = '+';
+                    createBtn.title = `Create new document in ${folderName}`;
+                    createBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        vscode.postMessage({
+                            type: 'createLocalDoc',
+                            folderPath: sourceFolder
+                        });
+                    });
+                    sourceHeader.appendChild(createBtn);
 
                     const importBtn = document.createElement('button');
                     importBtn.className = 'folder-import-btn';
@@ -2172,7 +2265,36 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
                         const subheader = document.createElement('div');
                         subheader.className = 'folder-subheader';
-                        subheader.textContent = folder.name;
+                        const subLabel = document.createElement('span');
+                        subLabel.textContent = folder.name;
+                        subheader.appendChild(subLabel);
+
+                        const subLinkBtn = document.createElement('button');
+                        subLinkBtn.className = 'folder-link-btn';
+                        subLinkBtn.textContent = 'Link';
+                        subLinkBtn.title = `Copy link to folder ${folder.name}`;
+                        subLinkBtn.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            vscode.postMessage({
+                                type: 'linkToFolder',
+                                folderPath: folder.id
+                            });
+                        });
+                        subheader.appendChild(subLinkBtn);
+
+                        const subCreateBtn = document.createElement('button');
+                        subCreateBtn.className = 'folder-create-btn';
+                        subCreateBtn.textContent = '+';
+                        subCreateBtn.title = `Create new document in ${folder.name}`;
+                        subCreateBtn.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            vscode.postMessage({
+                                type: 'createLocalDoc',
+                                folderPath: folder.id
+                            });
+                        });
+                        subheader.appendChild(subCreateBtn);
+
                         docList.appendChild(subheader);
 
                         folderDocsInSource.forEach(doc => {
@@ -2192,7 +2314,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             docList.className = 'source-doc-list';
             docList.dataset.sourceId = sourceId;
             treePane.appendChild(docList);
-            (nodes || []).forEach(node => {
+            const search = String(state.localDocsSearch || '').trim().toLowerCase();
+            const filteredNodes = search
+                ? (nodes || []).filter(n => (n.title || n.name || '').toLowerCase().includes(search))
+                : (nodes || []);
+            filteredNodes.forEach(node => {
                 const { wrapper } = renderNode(node, sourceId);
                 docList.appendChild(wrapper);
             });
@@ -2309,7 +2435,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         if (!roots || roots.length === 0) {
             const empty = document.createElement('div');
             empty.className = 'empty-state';
-            empty.textContent = 'No online sources available';
+            empty.textContent = 'No online sources connected — configure ClickUp, Linear or Notion in Setup.';
             treePaneOnline.appendChild(empty);
             return;
         }
@@ -2347,6 +2473,26 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 vscode.postMessage({ type: 'refreshSource', sourceId });
             });
             controlsContainer.appendChild(refreshBtn);
+
+            const newBtn = document.createElement('button');
+            newBtn.className = 'source-new-btn';
+            newBtn.textContent = '+ New';
+            newBtn.title = 'Create new document';
+            newBtn.addEventListener('click', () => {
+                const activeContainer = state.activeContainers.get(sourceId);
+                vscode.postMessage({ type: 'createOnlineDocument', sourceId, parentId: activeContainer?.id });
+            });
+            controlsContainer.appendChild(newBtn);
+
+            const locationBtn = document.createElement('button');
+            locationBtn.className = 'source-location-btn';
+            locationBtn.innerHTML = '&#9881;';
+            locationBtn.title = 'Set upload location';
+            locationBtn.addEventListener('click', () => {
+                vscode.postMessage({ type: 'setUploadLocation', sourceId });
+            });
+            controlsContainer.appendChild(locationBtn);
+
             headerRow.appendChild(controlsContainer);
 
             treePaneOnline.appendChild(headerRow);
@@ -2359,6 +2505,43 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             docList.innerHTML = '<div class="tree-placeholder">Loading...</div>';
             
             vscode.postMessage({ type: 'fetchContainers', sourceId });
+        });
+    }
+
+    function applyOnlineDocsSearchFilter() {
+        if (!treePaneOnline) return;
+        const search = String(state.onlineDocsSearch || '').trim().toLowerCase();
+        const docLists = treePaneOnline.querySelectorAll('.source-doc-list');
+        docLists.forEach(docList => {
+            const nodes = docList.querySelectorAll('.tree-node');
+            let hasVisible = false;
+            nodes.forEach(node => {
+                const name = (node.dataset.name || '').toLowerCase();
+                const label = node.querySelector('.label');
+                const text = (label ? label.textContent : '').toLowerCase();
+                const match = !search || name.includes(search) || text.includes(search);
+                if (match) {
+                    node.style.display = '';
+                    hasVisible = true;
+                    // Show ancestor folder nodes
+                    let parent = node.parentElement;
+                    while (parent && parent !== docList) {
+                        if (parent.classList && parent.classList.contains('tree-node')) {
+                            parent.style.display = '';
+                        }
+                        parent = parent.parentElement;
+                    }
+                } else {
+                    node.style.display = 'none';
+                }
+            });
+            // Hide/show corresponding source header
+            const sourceId = docList.dataset.sourceId;
+            const headerRow = treePaneOnline.querySelector(`.source-header-row:has(.source-header[data-source-id="${sourceId}"])`);
+            if (headerRow) {
+                headerRow.style.display = hasVisible ? '' : 'none';
+            }
+            docList.style.display = hasVisible ? '' : 'none';
         });
     }
 
@@ -2387,16 +2570,35 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
         // Keep modal folder list in sync when docs are refreshed
         renderFolderListModal();
+
+        // Retry pending import selection if the doc just appeared
+        if (state._pendingImportDocName) {
+            const pendingName = state._pendingImportDocName;
+            const nodes = document.querySelectorAll('.tree-node');
+            let found = null;
+            for (let i = 0; i < nodes.length; i++) {
+                if (nodes[i].dataset.sourceId === 'local-folder' && nodes[i].dataset.name === pendingName) {
+                    found = nodes[i];
+                    break;
+                }
+            }
+            if (found) {
+                state._pendingImportDocName = null;
+                loadDocumentPreview('local-folder', found.dataset.nodeId, found.dataset.name);
+            }
+        }
     }
 
     function handleOnlineDocsReady(msg) {
         // Stash saved filter containers for re-application after containers load
         _savedBrowseFilterContainers = msg.browseFilterContainers || {};
+        state.enabledSources = msg.enabledSources || {};
         renderOnlineDocs(msg.roots || [], msg.enabledSources || {
             clickup: true,
             linear: true,
             notion: true
         });
+        updateSyncToOnlineButtonState();
     }
 
 
@@ -2421,6 +2623,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             const { wrapper } = renderNode(node, sourceId);
             childContainer.appendChild(wrapper);
         });
+        applyOnlineDocsSearchFilter();
     }
 
     function viewRawJson() {
@@ -2672,7 +2875,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (state.activeDocContent === (content || '')) {
                     if (isAutoRefreshed) {
                         if (statusDesign) {
-                            statusDesign.textContent = (docName || 'Loaded') + ' — auto-refreshed';
+                            statusDesign.textContent = 'Auto-refreshed';
                             statusDesign.style.color = 'var(--accent-teal)';
                         }
                     }
@@ -2685,9 +2888,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (btnEditDesign) btnEditDesign.disabled = false;
             }
 
-            if (btnSetDesign) btnSetDesign.disabled = false;
-            if (btnLinkDesign) btnLinkDesign.disabled = false;
-
             if (isAutoRefreshed) {
                 if (state.editMode.design) {
                     state.externalChangePending.design = true;
@@ -2698,15 +2898,16 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     return;
                 }
                 if (statusDesign) {
-                    statusDesign.textContent = (docName || 'Loaded') + ' — auto-refreshed';
+                    statusDesign.textContent = 'Auto-refreshed';
                     statusDesign.style.color = 'var(--accent-teal)';
                 }
             } else {
                 if (statusDesign) {
-                    statusDesign.textContent = docName || 'Loaded';
+                    statusDesign.textContent = 'Loaded';
                     statusDesign.style.color = '';
                 }
             }
+            renderDesignMetaBar();
             return;
         }
 
@@ -2739,7 +2940,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         const isOnline = ONLINE_SOURCES.includes(sourceId);
         const targetPreview = isOnline ? markdownPreviewOnline : markdownPreview;
         const targetStatus = isOnline ? statusElOnline : statusEl;
-        const targetBtnAppend = isOnline ? btnAppendToPromptsOnline : null;
         const btnImportFullId = isOnline ? 'btn-import-full-doc-online' : 'btn-import-full-doc';
 
         const btnImportFullDoc = document.getElementById(btnImportFullId);
@@ -2777,7 +2977,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 pageListHtml += '<div style="border-top: 1px solid var(--accent-teal-dim); margin-top: 12px; padding-top: 12px;">';
                 pageListHtml += renderMarkdown(content);
                 pageListHtml += '</div>';
-                if (targetBtnAppend) targetBtnAppend.disabled = false;
                 if (btnImportFullDoc) btnImportFullDoc.disabled = false;
             } else {
                 pageListHtml += '<div class="empty-state" style="padding: 32px; text-align: center; color: var(--text-secondary);">Select a page above to view its content, or click "Import full doc" to import the entire document.</div>';
@@ -2905,7 +3104,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         const isOnline = ONLINE_SOURCES.includes(sourceId);
         const targetPreview = isOnline ? markdownPreviewOnline : markdownPreview;
         const targetStatus = isOnline ? statusElOnline : statusEl;
-        const targetBtnAppend = isOnline ? btnAppendToPromptsOnline : null;
         const btnImportFullId = isOnline ? 'btn-import-full-doc-online' : 'btn-import-full-doc';
 
         const errorDiv = document.createElement('div');
@@ -2914,8 +3112,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         targetPreview.innerHTML = '';
         targetPreview.appendChild(errorDiv);
         targetStatus.textContent = 'Error loading preview';
-        
-        if (targetBtnAppend) targetBtnAppend.disabled = true;
 
         const btnImportFullDoc = document.getElementById(btnImportFullId);
         if (btnImportFullDoc) {
@@ -2930,12 +3126,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             
             // Just refresh imported docs list quietly
             vscode.postMessage({ type: 'fetchImportedDocs' });
-            
-            if (btnAppendToPromptsOnline) btnAppendToPromptsOnline.disabled = false;
         } else if (msg.error) {
             statusEl.textContent = `Error: ${msg.error}`;
             statusElOnline.textContent = `Error: ${msg.error}`;
-            if (btnAppendToPromptsOnline) btnAppendToPromptsOnline.disabled = false;
         }
     }
 
@@ -3089,6 +3282,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             const { wrapper } = renderNode(node, sourceId);
             docList.appendChild(wrapper);
         });
+        if (isOnline) applyOnlineDocsSearchFilter();
     }
 
     function handleLocalFolderPathUpdated(msg) {
@@ -3603,6 +3797,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             case 'localDocsReady':
                 handleLocalDocsReady(msg);
                 break;
+            case 'selectLocalDoc': {
+                const { docId, docName } = msg;
+                loadDocumentPreview('local-folder', docId, docName || docId);
+                break;
+            }
             case 'htmlDocsReady':
                 handleHtmlDocsReady(msg);
                 break;
@@ -3632,6 +3831,75 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             case 'previewError':
                 handlePreviewError(msg);
                 break;
+            case 'onlineDocCreated':
+                if (msg.success && msg.docId) {
+                    // Refresh and select the new doc
+                    vscode.postMessage({ type: 'refreshSource', sourceId: msg.sourceId });
+                    setTimeout(() => {
+                        loadDocumentPreview(msg.sourceId, msg.docId, msg.docName || 'New Document');
+                    }, 800);
+                } else if (msg.error) {
+                    if (statusEl) statusEl.textContent = `Create failed: ${msg.error}`;
+                }
+                break;
+            case 'syncConfigReady':
+                _syncModalState.uploadLocations = msg.uploadLocations || {};
+                _syncModalState.enabledSources = state.enabledSources || {};
+                // Fast path: check if current local doc has a mapping
+                if (_syncModalState.localDocPath && msg.docMappings && msg.docMappings[_syncModalState.localDocPath]) {
+                    _syncModalState.mapping = msg.docMappings[_syncModalState.localDocPath];
+                    const map = _syncModalState.mapping;
+                    if (syncFastText) syncFastText.innerHTML = `This document is already synced to <strong>${escapeHtml(map.sourceId)}</strong>. Update the existing remote document?`;
+                    if (syncStepFast) syncStepFast.style.display = '';
+                    if (syncStepSource) syncStepSource.style.display = 'none';
+                    if (syncStepLocation) syncStepLocation.style.display = 'none';
+                    if (syncStepConfirm) syncStepConfirm.style.display = 'none';
+                } else {
+                    // No mapping — skip to source step (or confirm if upload location already set)
+                    const saved = _syncModalState.uploadLocations;
+                    const sources = ['clickup', 'linear', 'notion'].filter(s => state.enabledSources[s] !== false);
+                    const hasSaved = sources.some(s => saved[s]);
+                    if (hasSaved) {
+                        _syncModalState.sourceId = sources.find(s => saved[s]) || sources[0];
+                        _syncModalState.parentId = saved[_syncModalState.sourceId];
+                        _renderSyncSourceStep();
+                        _showSyncStep('confirm');
+                    } else {
+                        _renderSyncSourceStep();
+                        _showSyncStep('source');
+                    }
+                }
+                break;
+            case 'syncToOnlineResult':
+                if (btnSyncConfirmSync) btnSyncConfirmSync.disabled = false;
+                if (msg.success) {
+                    if (syncProgress) syncProgress.textContent = 'Sync complete!';
+                    if (syncResult && syncResultLink) {
+                        syncResult.style.display = '';
+                        if (msg.url) {
+                            syncResultLink.href = msg.url;
+                            syncResultLink.textContent = 'Open remote document';
+                        } else {
+                            syncResultLink.href = '#';
+                            syncResultLink.textContent = 'Sync succeeded (no URL returned)';
+                        }
+                    }
+                } else {
+                    if (syncProgress) syncProgress.textContent = `Sync failed: ${msg.error || 'Unknown error'}`;
+                }
+                break;
+            case 'uploadLocationSet':
+                _syncModalState.uploadLocations[msg.sourceId] = msg.containerId;
+                break;
+            case 'containersReady': {
+                const crSourceId = msg.sourceId;
+                handleContainersReady(msg);
+                // If the sync modal is open and waiting for containers for the selected source, populate location select
+                if (syncOnlineModal && syncOnlineModal.style.display !== 'none' && _syncModalState.sourceId === crSourceId) {
+                    _populateSyncLocationSelect(msg.containers || []);
+                }
+                break;
+            }
             case 'plannerPromptState':
                 handlePlannerPromptState(msg);
                 break;
@@ -3648,17 +3916,33 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     statusEl.textContent = `Error: ${msg.error}`;
                     statusElOnline.textContent = `Error: ${msg.error}`;
                 }
-                if (btnAppendToPromptsOnline) btnAppendToPromptsOnline.disabled = false;
                 break;
             case 'importFullDocResult':
                 if (msg.success) {
                     statusEl.textContent = msg.message || 'Full document imported';
                     statusElOnline.textContent = msg.message || 'Full document imported';
-                    
+
                     // Update the imported docs list
                     vscode.postMessage({ type: 'fetchImportedDocs' });
-                    
-                    if (state.activeSource && state.activeDocId) {
+
+                    if (msg.savedPath) {
+                        const parts = msg.savedPath.split(/[\\/]/);
+                        const localDocName = parts[parts.length - 1];
+                        switchToTab('local');
+                        let found = null;
+                        const nodes = document.querySelectorAll('.tree-node');
+                        for (let i = 0; i < nodes.length; i++) {
+                            if (nodes[i].dataset.sourceId === 'local-folder' && nodes[i].dataset.name === localDocName) {
+                                found = nodes[i];
+                                break;
+                            }
+                        }
+                        if (found) {
+                            loadDocumentPreview('local-folder', found.dataset.nodeId, found.dataset.name);
+                        } else {
+                            state._pendingImportDocName = localDocName;
+                        }
+                    } else if (state.activeSource && state.activeDocId) {
                         vscode.postMessage({
                             type: 'fetchPreview',
                             sourceId: state.activeSource,
@@ -3733,9 +4017,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             case 'switchboardThemeNameSetting':
             case 'switchboardThemeChanged':
                 handleThemeChanged(msg.theme);
-                break;
-            case 'containersReady':
-                handleContainersReady(msg);
                 break;
             case 'filteredDocsReady':
                 handleFilteredDocsReady(msg);
@@ -4152,8 +4433,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             }
             case 'linearTaskImported':
             case 'clickupTaskImported':
-                const { detailImportButton } = getTicketsTabElements();
-                if (detailImportButton) detailImportButton.disabled = false;
                 if (msg.success) {
                     showTicketsStatus('Imported ✓', false);
                 } else {
@@ -4195,6 +4474,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             btnSetActiveContextLocal.disabled = false;
             btnSetActiveContextLocal.textContent = 'Set as Active Planning Context';
         }
+        updateSyncToOnlineButtonState();
     }
 
     function updateActiveDocBanner(msg) {
@@ -4232,6 +4512,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         state.activeDesignDocSourceId = planningEpic.sourceId || null;
         state.activeDesignDocId = planningEpic.docId || null;
         updateLocalActiveContextButtonState();
+        renderDesignMetaBar();
     }
 
     function handleDisablePlanningEpic() {
@@ -4254,39 +4535,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     }
 
     // Button handlers
-    if (btnAppendToPromptsOnline) {
-        btnAppendToPromptsOnline.addEventListener('click', () => {
-            if (!state.activeSource || !state.activeDocId) return;
-
-            btnAppendToPromptsOnline.disabled = true;
-            statusElOnline.textContent = 'Appending to planning prompts...';
-
-            const payload = {
-                type: 'appendToPlannerPrompt',
-                sourceId: state.activeSource,
-                docId: state.activeDocId,
-                docName: state.activeDocName || state.activeDocId
-            };
-            if (state.activeDocContent) {
-                payload.content = state.activeDocContent;
-            }
-            vscode.postMessage(payload);
-        });
-    }
-
-    const btnLinkToOnline = document.getElementById('btn-link-to-doc-online');
-    if (btnLinkToOnline) {
-        btnLinkToOnline.addEventListener('click', () => {
-            if (!state.activeSource || !state.activeDocId) return;
-            vscode.postMessage({
-                type: 'linkToDocument',
-                sourceId: state.activeSource,
-                docId: state.activeDocId,
-                docName: state.activeDocName || state.activeDocId
-            });
-        });
-    }
-
     const btnImportFullDoc = document.getElementById('btn-import-full-doc');
     if (btnImportFullDoc) {
         btnImportFullDoc.addEventListener('click', () => {
@@ -4433,32 +4681,18 @@ Return ONLY the drafted prompt with no additional commentary.`;
     const kanbanWorkspaceFilter = document.getElementById('kanban-workspace-filter');
     const kanbanProjectFilter = document.getElementById('kanban-project-filter');
     const kanbanSearch = document.getElementById('kanban-search');
-    const kanbanRefreshBtn = document.getElementById('kanban-refresh-btn');
     const btnImportKanbanPlans = document.getElementById('btn-import-kanban-plans');
     if (btnImportKanbanPlans) {
         btnImportKanbanPlans.addEventListener('click', () => {
             vscode.postMessage({ type: 'importPlans' });
         });
     }
-    const kanbanViewAllBtn = document.getElementById('kanban-view-all');
     const kanbanViewEpicsBtn = document.getElementById('kanban-view-epics');
 
-    function updateKanbanViewButtons() {
-        if (kanbanViewAllBtn) kanbanViewAllBtn.classList.toggle('active', _kanbanViewMode === 'all');
-        if (kanbanViewEpicsBtn) kanbanViewEpicsBtn.classList.toggle('active', _kanbanViewMode === 'epics');
-    }
-
-    if (kanbanViewAllBtn) {
-        kanbanViewAllBtn.addEventListener('click', () => {
-            _kanbanViewMode = 'all';
-            updateKanbanViewButtons();
-            renderKanbanPlans(_kanbanPlansCache, kanbanFilters);
-        });
-    }
     if (kanbanViewEpicsBtn) {
         kanbanViewEpicsBtn.addEventListener('click', () => {
-            _kanbanViewMode = 'epics';
-            updateKanbanViewButtons();
+            _kanbanViewMode = _kanbanViewMode === 'all' ? 'epics' : 'all';
+            kanbanViewEpicsBtn.classList.toggle('active', _kanbanViewMode === 'epics');
             renderKanbanPlans(_kanbanPlansCache, kanbanFilters);
         });
     }
@@ -4479,11 +4713,9 @@ Return ONLY the drafted prompt with no additional commentary.`;
         }
         state.reviewMode.kanban = true;
         const btnEdit = document.getElementById('btn-edit-kanban');
-        const btnReview = document.getElementById('btn-review-kanban');
         if (btnEdit) btnEdit.style.display = 'none';
-        if (btnReview) {
-            btnReview.textContent = 'EXIT REVIEW';
-            btnReview.title = 'Exit review mode';
+        if (_kanbanSelectedPlan) {
+            renderKanbanMetaBar(_kanbanSelectedPlan);
         }
     }
 
@@ -4495,11 +4727,9 @@ Return ONLY the drafted prompt with no additional commentary.`;
             hideKanbanCommentPopup(true);
         }
         const btnEdit = document.getElementById('btn-edit-kanban');
-        const btnReview = document.getElementById('btn-review-kanban');
         if (btnEdit) btnEdit.style.display = '';
-        if (btnReview) {
-            btnReview.textContent = 'REVIEW';
-            btnReview.title = 'Review plan - select text and submit comment to planner';
+        if (_kanbanSelectedPlan) {
+            renderKanbanMetaBar(_kanbanSelectedPlan);
         }
     }
 
@@ -4598,16 +4828,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
         });
     }
 
-    const btnReviewKanban = document.getElementById('btn-review-kanban');
-    if (btnReviewKanban) {
-        btnReviewKanban.addEventListener('click', () => {
-            if (state.reviewMode.kanban) {
-                exitReviewMode('kanban', true);
-            } else {
-                enterReviewMode('kanban');
-            }
-        });
-    }
 
     function renderKanbanPlans(plans, filters) {
         if (!kanbanListPane) return;
@@ -4911,6 +5131,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 </select>
             </div>
             <div class="kanban-meta-group">
+                <button class="strip-btn" id="kanban-meta-review-btn">${state.reviewMode.kanban ? 'EXIT REVIEW' : 'REVIEW'}</button>
                 <button class="strip-btn" id="kanban-meta-log-btn">Log</button>
                 <button class="strip-btn" id="kanban-meta-delete-btn">Delete</button>
             </div>
@@ -4973,6 +5194,18 @@ Return ONLY the drafted prompt with no additional commentary.`;
             });
         }
 
+        // Review button
+        const reviewBtn = document.getElementById('kanban-meta-review-btn');
+        if (reviewBtn) {
+            reviewBtn.addEventListener('click', () => {
+                if (state.reviewMode.kanban) {
+                    exitReviewMode('kanban', true);
+                } else {
+                    enterReviewMode('kanban');
+                }
+            });
+        }
+
         // Log button
         const logBtn = document.getElementById('kanban-meta-log-btn');
         if (logBtn) {
@@ -4993,6 +5226,99 @@ Return ONLY the drafted prompt with no additional commentary.`;
             });
         }
     }
+
+    function renderDesignMetaBar() {
+        const metaBar = document.getElementById('design-preview-meta-bar');
+        if (!metaBar) return;
+        if (!state.activeSource || !state.activeDocId || state.activeSource !== 'design-folder') {
+            metaBar.style.display = 'none';
+            return;
+        }
+        metaBar.style.display = 'flex';
+
+        const docExt = (state.activeDocId || '').substring((state.activeDocId || '').lastIndexOf('.')).toLowerCase();
+        const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(docExt) || state.activeFileType === 'image';
+        const isEditing = state.editMode.design;
+
+        const isActiveDoc = state.activeDesignDocEnabled &&
+            state.activeDesignDocSourceId === state.activeSource &&
+            state.activeDesignDocId === state.activeDocId;
+
+        let html = `<span class="meta-doc-title">${escapeHtml(state.activeDocName || '')}</span>`;
+        if (isActiveDoc) {
+            html += `<button class="strip-btn" id="design-meta-turn-off">Turn off</button>`;
+        } else {
+            html += `<button class="strip-btn" id="design-meta-set-active">Set as Active Design Doc</button>`;
+        }
+        html += `<button class="strip-btn" id="design-meta-link">Link</button>`;
+        if (isEditing) {
+            html += `<button class="strip-btn" id="design-meta-save">Save</button>`;
+            html += `<button class="strip-btn" id="design-meta-cancel">Cancel</button>`;
+        } else {
+            html += `<button class="strip-btn" id="design-meta-edit"${isImage ? ' disabled' : ''}>Edit</button>`;
+        }
+
+        metaBar.innerHTML = html;
+    }
+
+    // Design preview meta bar delegated actions
+    (function() {
+        const designMetaBar = document.getElementById('design-preview-meta-bar');
+        if (!designMetaBar) return;
+        designMetaBar.addEventListener('click', (e) => {
+            const btn = e.target.closest('button');
+            if (!btn) return;
+            const action = btn.id;
+            if (action === 'design-meta-set-active') {
+                if (!state.activeSource || !state.activeDocId) return;
+                btn.disabled = true;
+                const statusDesign = document.getElementById('status-design');
+                if (statusDesign) {
+                    statusDesign.textContent = 'Setting as active design doc...';
+                    statusDesign.style.color = '';
+                }
+                const wrapper = findTreeNode(state.activeSource, state.activeDocId);
+                const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : undefined;
+                vscode.postMessage({
+                    type: 'setActivePlanningContext',
+                    sourceId: state.activeSource,
+                    docId: state.activeDocId,
+                    docName: state.activeDocName || state.activeDocId,
+                    sourceFolder
+                });
+            } else if (action === 'design-meta-turn-off') {
+                vscode.postMessage({ type: 'disableDesignDoc', docType: 'design-system' });
+            } else if (action === 'design-meta-link') {
+                if (!state.activeSource || !state.activeDocId) return;
+                const wrapper = findTreeNode(state.activeSource, state.activeDocId);
+                const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : undefined;
+                vscode.postMessage({
+                    type: 'linkToDocument',
+                    sourceId: state.activeSource,
+                    docId: state.activeDocId,
+                    docName: state.activeDocName || state.activeDocId,
+                    sourceFolder
+                });
+            } else if (action === 'design-meta-edit') {
+                enterEditMode('design');
+            } else if (action === 'design-meta-save') {
+                const filePath = state.activeDocFilePath;
+                const content = document.getElementById('markdown-editor-design') ? document.getElementById('markdown-editor-design').value : '';
+                const originalContent = state.editOriginalContent.design;
+                if (filePath) {
+                    vscode.postMessage({
+                        type: 'saveFileContent',
+                        filePath,
+                        content,
+                        originalContent,
+                        tab: 'design'
+                    });
+                }
+            } else if (action === 'design-meta-cancel') {
+                exitEditMode('design', true);
+            }
+        });
+    })();
 
     function populateKanbanFilters() {
         if (!kanbanWorkspaceFilter || !kanbanProjectFilter) return;
@@ -5195,14 +5521,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
         if (btnEditKanban) {
             btnEditKanban.disabled = !_kanbanSelectedPlan || !_kanbanSelectedPlan.planFile;
         }
-        const btnReviewKanban = document.getElementById('btn-review-kanban');
-        if (btnReviewKanban) {
-            btnReviewKanban.disabled = !_kanbanSelectedPlan || !_kanbanSelectedPlan.planFile;
-        }
-        const btnKanbanLog = document.getElementById('btn-kanban-log');
-        if (btnKanbanLog) {
-            btnKanbanLog.disabled = !_kanbanSelectedPlan || !_kanbanSelectedPlan.sessionId;
-        }
     }
 
     function handleKanbanContextSet(msg) {
@@ -5271,11 +5589,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
         });
     }
 
-    if (kanbanRefreshBtn) {
-        kanbanRefreshBtn.addEventListener('click', () => {
-            vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
-        });
-    }
 
     function setupTextareaTabInterceptor(textarea) {
         textarea.addEventListener('keydown', (e) => {
@@ -5327,6 +5640,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         state.editMode[tab] = true;
         state.dirtyFlags[tab] = false;
+        if (tab === 'design') renderDesignMetaBar();
     }
 
     function exitEditMode(tab, discard) {
@@ -5399,6 +5713,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 }
             }
         }
+
+        if (tab === 'design') renderDesignMetaBar();
 
         return true;
     }
@@ -5664,7 +5980,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
     // ===== TICKETS TAB IMPLEMENTATION =====
 
     function initTicketsTab() {
-        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, loadMoreButton, backToParentButton } = getTicketsTabElements();
+        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, loadMoreButton } = getTicketsTabElements();
 
         // Search input with debounce
         let searchDebounceTimer = null;
@@ -5715,24 +6031,10 @@ Return ONLY the drafted prompt with no additional commentary.`;
         // Load more button (ClickUp pagination)
         loadMoreButton?.addEventListener('click', loadMoreClickUpTasks);
 
-        // Back buttons
-        backToParentButton?.addEventListener('click', () => {
-            const parentId = backToParentButton.dataset.parentId;
-            const provider = backToParentButton.dataset.parentProvider;
-            if (parentId) {
-                if (provider === 'clickup') {
-                    loadClickUpTaskDetails(parentId);
-                } else {
-                    loadLinearTaskDetails(parentId);
-                }
-            }
-        });
-
         // Detail action buttons (delegated)
         document.getElementById('preview-pane-tickets')?.addEventListener('click', (e) => {
             const importBtn = e.target.closest('[data-import-issue-id], [data-import-task-id]');
             const refineBtn = e.target.closest('[data-refine-issue-id], [data-refine-task-id]');
-            const askAgentBtn = e.target.closest('#tickets-detail-ask-agent');
 
             if (importBtn) {
                 const id = importBtn.dataset.importIssueId || importBtn.dataset.importTaskId;
@@ -5748,10 +6050,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 handleTicketsRefine(provider, id, title, description);
             }
 
-            if (askAgentBtn) {
-                // Show "not yet implemented" stub
-                console.log('Ask Agent feature is not yet implemented in the Planning panel.');
-            }
         });
 
         // Subtask navigation clicks
@@ -5772,6 +6070,25 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         // Issue card clicks (delegated)
         document.getElementById('tickets-issues-container')?.addEventListener('click', (e) => {
+            const importBtn = e.target.closest('[data-import-issue-id], [data-import-task-id]');
+            const refineBtn = e.target.closest('[data-refine-issue-id], [data-refine-task-id]');
+            const askAgentBtn = e.target.closest('[data-ask-agent-issue-id], [data-ask-agent-task-id]');
+            if (importBtn) {
+                const id = importBtn.dataset.importIssueId || importBtn.dataset.importTaskId;
+                handleTicketsImport(lastIntegrationProvider, id, true);
+                return;
+            }
+            if (refineBtn) {
+                const id = refineBtn.dataset.refineIssueId || refineBtn.dataset.refineTaskId;
+                const title = refineBtn.dataset.issueTitle || '';
+                const description = refineBtn.dataset.issueDescription || '';
+                handleTicketsRefine(lastIntegrationProvider, id, title, description);
+                return;
+            }
+            if (askAgentBtn) {
+                console.log('Ask Agent feature is not yet implemented in the Planning panel.');
+                return;
+            }
             const card = e.target.closest('[data-linear-issue-id], [data-clickup-task-id]');
             if (card) {
                 const linearId = card.dataset.linearIssueId;
@@ -5873,7 +6190,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function renderTicketsLinearPanel() {
         if (lastIntegrationProvider !== 'linear' || !isTicketsTabActive()) return;
 
-        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, activeDocBanner, emptyPreview, createButton } = getTicketsTabElements();
+        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, emptyPreview, createButton } = getTicketsTabElements();
 
         // Show Linear toolbar elements
         if (searchInput) searchInput.style.display = '';
@@ -5890,12 +6207,17 @@ Return ONLY the drafted prompt with no additional commentary.`;
         renderTicketsLinearStateFilterOptions();
         renderTicketsLinearProjectPickerOptions();
 
-        const hasSelected = !!selectedLinearIssue;
-        if (activeDocBanner) {
-            if (hasSelected) activeDocBanner.classList.remove('inactive');
-            else activeDocBanner.classList.add('inactive');
+        const loadingState = document.getElementById('tickets-loading-state');
+        const markdownPreview = document.getElementById('markdown-preview-tickets');
+        if (linearProjectStatus === 'loading') {
+            if (loadingState) loadingState.style.display = 'flex';
+            if (markdownPreview) markdownPreview.style.display = 'none';
+        } else {
+            if (loadingState) loadingState.style.display = 'none';
+            if (markdownPreview) markdownPreview.style.display = '';
+            const hasSelected = !!selectedLinearIssue;
+            if (emptyPreview) emptyPreview.style.display = hasSelected ? 'none' : '';
         }
-        if (emptyPreview) emptyPreview.style.display = hasSelected ? 'none' : '';
 
         renderTicketsLinearList();
         renderTicketsLinearTaskDetail();
@@ -5978,10 +6300,12 @@ Return ONLY the drafted prompt with no additional commentary.`;
         }
 
         if (linearProjectStatus === 'loading') {
-            emptyState.textContent = linearProjectMessage || 'Loading Linear project...';
-            emptyState.style.display = '';
-            issuesContainer.innerHTML = '';
-            _lastTicketsIssuesContainerHtml = '';
+            emptyState.style.display = 'none';
+            const skeletonHtml = '<div class="sidebar-skeleton"></div><div class="sidebar-skeleton"></div><div class="sidebar-skeleton"></div><div class="sidebar-skeleton" style="width: 60%;"></div>';
+            if (_lastTicketsIssuesContainerHtml !== skeletonHtml) {
+                issuesContainer.innerHTML = skeletonHtml;
+                _lastTicketsIssuesContainerHtml = skeletonHtml;
+            }
             return;
         }
 
@@ -6019,9 +6343,10 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 <div class="tickets-issue-meta">${escapeHtml(issue.state?.name || 'Unknown state')}</div>
                 <div class="tickets-issue-meta">${escapeHtml(issue.assignee?.name || issue.assignee?.email || 'Unassigned')}</div>
                 <div class="tickets-issue-meta">${escapeHtml((issue.description || '').trim().slice(0, 180) || 'No description provided.')}</div>
-                <div style="display:flex; justify-content:flex-end; margin-top:8px; gap:4px;">
-                    <button type="button" class="tickets-issue-import-btn" data-refine-issue-id="${escapeAttr(issue.id)}" data-issue-title="${escapeAttr(issue.title || '')}" data-issue-description="${escapeAttr(issue.description || '')}">REFINE</button>
-                    <button type="button" class="tickets-issue-import-btn" data-import-issue-id="${escapeAttr(issue.id)}">IMPORT</button>
+                <div class="card-actions">
+                    <button type="button" class="card-icon-btn" data-ask-agent-issue-id="${escapeAttr(issue.id)}">ASK AGENT</button>
+                    <button type="button" class="card-icon-btn" data-refine-issue-id="${escapeAttr(issue.id)}" data-issue-title="${escapeAttr(issue.title || '')}" data-issue-description="${escapeAttr(issue.description || '')}">REFINE</button>
+                    <button type="button" class="card-icon-btn" data-import-issue-id="${escapeAttr(issue.id)}">IMPORT</button>
                 </div>
             </div>
             `;
@@ -6036,41 +6361,16 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function renderTicketsLinearTaskDetail() {
         if (!isTicketsTabActive()) return;
 
-        const { activeDocBanner, activeDocName, detailMeta, detailStatus, detailAssignee, subtasksNav, detailContent, detailImportButton, detailRefineButton, detailAskAgentButton, backToParentButton } = getTicketsTabElements();
-        if (!activeDocBanner || !activeDocName || !detailContent) return;
+        const { subtasksNav, detailContent } = getTicketsTabElements();
+        if (!detailContent) return;
 
         if (!selectedLinearIssue) {
-            activeDocBanner.classList.add('inactive');
-            activeDocName.textContent = 'None';
-            if (detailMeta) detailMeta.style.display = 'none';
             if (subtasksNav) { subtasksNav.innerHTML = ''; subtasksNav.style.display = 'none'; }
             if (_lastTicketsDetailContentHtml !== '') { detailContent.innerHTML = ''; _lastTicketsDetailContentHtml = ''; }
-            if (detailImportButton) { detailImportButton.disabled = true; delete detailImportButton.dataset.importIssueId; }
-            if (detailRefineButton) { detailRefineButton.disabled = true; delete detailRefineButton.dataset.refineIssueId; delete detailRefineButton.dataset.issueTitle; delete detailRefineButton.dataset.issueDescription; }
-            if (detailAskAgentButton) { detailAskAgentButton.disabled = true; }
-            if (backToParentButton) { backToParentButton.style.display = 'none'; delete backToParentButton.dataset.parentId; delete backToParentButton.dataset.parentProvider; }
             return;
         }
 
         const issue = selectedLinearIssue.issue;
-        activeDocBanner.classList.remove('inactive');
-        activeDocName.textContent = issue.title || issue.identifier || issue.id;
-        if (detailMeta) detailMeta.style.display = '';
-        if (detailStatus) detailStatus.textContent = issue.state?.name || 'Unknown status';
-        if (detailAssignee) detailAssignee.textContent = `Assignee: ${issue.assignee?.name || issue.assignee?.email || 'Unassigned'}`;
-
-        if (backToParentButton) {
-            const parentId = issue.parentId;
-            if (parentId) {
-                backToParentButton.style.display = '';
-                backToParentButton.dataset.parentId = parentId;
-                backToParentButton.dataset.parentProvider = 'linear';
-            } else {
-                backToParentButton.style.display = 'none';
-                delete backToParentButton.dataset.parentId;
-                delete backToParentButton.dataset.parentProvider;
-            }
-        }
 
         if (subtasksNav) {
             const subtasks = selectedLinearIssue.subtasks;
@@ -6124,10 +6424,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
             detailContent.innerHTML = contentHtml;
             _lastTicketsDetailContentHtml = contentHtml;
         }
-
-        if (detailImportButton) { detailImportButton.dataset.importIssueId = issue.id; detailImportButton.disabled = false; }
-        if (detailRefineButton) { detailRefineButton.dataset.refineIssueId = issue.id; detailRefineButton.dataset.issueTitle = issue.title || ''; detailRefineButton.dataset.issueDescription = issue.description || ''; detailRefineButton.disabled = false; }
-        if (detailAskAgentButton) { detailAskAgentButton.disabled = false; }
     }
 
     // ===== CLICKUP RENDERING FUNCTIONS =====
@@ -6135,7 +6431,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function renderTicketsClickUpPanel() {
         if (lastIntegrationProvider !== 'clickup' || !isTicketsTabActive()) return;
 
-        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, emptyState, issuesContainer, hierarchyNav, activeDocBanner, emptyPreview, createButton } = getTicketsTabElements();
+        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, emptyState, issuesContainer, hierarchyNav, emptyPreview, createButton } = getTicketsTabElements();
 
         // Hide Linear toolbar elements, show ClickUp hierarchy
         if (searchInput) searchInput.style.display = 'none';
@@ -6184,12 +6480,17 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         renderTicketsClickUpTaskDetail();
 
-        const hasSelected = !!selectedClickUpIssue;
-        if (activeDocBanner) {
-            if (hasSelected) activeDocBanner.classList.remove('inactive');
-            else activeDocBanner.classList.add('inactive');
+        const loadingState = document.getElementById('tickets-loading-state');
+        const markdownPreview = document.getElementById('markdown-preview-tickets');
+        if (clickUpProjectStatus === 'loading') {
+            if (loadingState) loadingState.style.display = 'flex';
+            if (markdownPreview) markdownPreview.style.display = 'none';
+        } else {
+            if (loadingState) loadingState.style.display = 'none';
+            if (markdownPreview) markdownPreview.style.display = '';
+            const hasSelected = !!selectedClickUpIssue;
+            if (emptyPreview) emptyPreview.style.display = hasSelected ? 'none' : '';
         }
-        if (emptyPreview) emptyPreview.style.display = hasSelected ? 'none' : '';
     }
 
     function renderTicketsClickUpHierarchyNav() {
@@ -6413,12 +6714,12 @@ Return ONLY the drafted prompt with no additional commentary.`;
         if (!issuesContainer) return;
 
         if (clickUpProjectStatus === 'loading') {
-            if (emptyState) {
-                emptyState.textContent = clickUpProjectMessage || 'Loading tasks...';
-                emptyState.style.display = '';
+            if (emptyState) emptyState.style.display = 'none';
+            const skeletonHtml = '<div class="sidebar-skeleton"></div><div class="sidebar-skeleton"></div><div class="sidebar-skeleton"></div><div class="sidebar-skeleton" style="width: 60%;"></div>';
+            if (_lastTicketsClickUpIssuesContainerHtml !== skeletonHtml) {
+                issuesContainer.innerHTML = skeletonHtml;
+                _lastTicketsClickUpIssuesContainerHtml = skeletonHtml;
             }
-            issuesContainer.innerHTML = '';
-            _lastTicketsClickUpIssuesContainerHtml = '';
             return;
         }
 
@@ -6434,9 +6735,10 @@ Return ONLY the drafted prompt with no additional commentary.`;
                     <div class="tickets-issue-title">${escapeHtml(task.title || task.identifier)}</div>
                     <div class="tickets-issue-meta">${escapeHtml(task.status || 'Unknown')}</div>
                     <div class="tickets-issue-meta">${task.assignees?.length ? escapeHtml(task.assignees.map(a => a.username || a.email).join(', ')) : 'Unassigned'}</div>
-                    <div style="display:flex; justify-content:flex-end; margin-top:8px; gap:4px;">
-                        <button type="button" class="tickets-issue-import-btn" data-refine-task-id="${escapeAttr(task.id)}" data-issue-title="${escapeAttr(task.title || '')}" data-issue-description="${escapeAttr(task.markdownDescription || task.description || '')}">REFINE</button>
-                        <button type="button" class="tickets-issue-import-btn" data-import-task-id="${escapeAttr(task.id)}">IMPORT</button>
+                    <div class="card-actions">
+                        <button type="button" class="card-icon-btn" data-ask-agent-task-id="${escapeAttr(task.id)}">ASK AGENT</button>
+                        <button type="button" class="card-icon-btn" data-refine-task-id="${escapeAttr(task.id)}" data-issue-title="${escapeAttr(task.title || '')}" data-issue-description="${escapeAttr(task.markdownDescription || task.description || '')}">REFINE</button>
+                        <button type="button" class="card-icon-btn" data-import-task-id="${escapeAttr(task.id)}">IMPORT</button>
                     </div>
                 </div>
                 `;
@@ -6455,41 +6757,16 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function renderTicketsClickUpTaskDetail() {
         if (!isTicketsTabActive()) return;
 
-        const { activeDocBanner, activeDocName, detailMeta, detailStatus, detailAssignee, subtasksNav, detailContent, detailImportButton, detailRefineButton, detailAskAgentButton, backToParentButton } = getTicketsTabElements();
-        if (!activeDocBanner || !activeDocName || !detailContent) return;
+        const { subtasksNav, detailContent } = getTicketsTabElements();
+        if (!detailContent) return;
 
         if (!selectedClickUpIssue) {
-            activeDocBanner.classList.add('inactive');
-            activeDocName.textContent = 'None';
-            if (detailMeta) detailMeta.style.display = 'none';
             if (subtasksNav) { subtasksNav.innerHTML = ''; subtasksNav.style.display = 'none'; }
             if (_lastTicketsClickUpDetailContentHtml !== '') { detailContent.innerHTML = ''; _lastTicketsClickUpDetailContentHtml = ''; }
-            if (detailImportButton) { detailImportButton.disabled = true; delete detailImportButton.dataset.importTaskId; }
-            if (detailRefineButton) { detailRefineButton.disabled = true; delete detailRefineButton.dataset.refineTaskId; delete detailRefineButton.dataset.issueTitle; delete detailRefineButton.dataset.issueDescription; }
-            if (detailAskAgentButton) { detailAskAgentButton.disabled = true; }
-            if (backToParentButton) { backToParentButton.style.display = 'none'; delete backToParentButton.dataset.parentId; delete backToParentButton.dataset.parentProvider; }
             return;
         }
 
         const task = selectedClickUpIssue.task;
-        activeDocBanner.classList.remove('inactive');
-        activeDocName.textContent = task.title || task.identifier || task.id;
-        if (detailMeta) detailMeta.style.display = '';
-        if (detailStatus) detailStatus.textContent = task.status || 'Unknown status';
-        if (detailAssignee) detailAssignee.textContent = `Assignee: ${task.assignees?.length ? task.assignees.map(a => a.username || a.email).join(', ') : 'Unassigned'}`;
-
-        if (backToParentButton) {
-            const parentId = task.parentId;
-            if (parentId) {
-                backToParentButton.style.display = '';
-                backToParentButton.dataset.parentId = parentId;
-                backToParentButton.dataset.parentProvider = 'clickup';
-            } else {
-                backToParentButton.style.display = 'none';
-                delete backToParentButton.dataset.parentId;
-                delete backToParentButton.dataset.parentProvider;
-            }
-        }
 
         if (subtasksNav) {
             const subtasks = selectedClickUpIssue.subtasks;
@@ -6543,10 +6820,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
             detailContent.innerHTML = contentHtml;
             _lastTicketsClickUpDetailContentHtml = contentHtml;
         }
-
-        if (detailImportButton) { detailImportButton.dataset.importTaskId = task.id; detailImportButton.disabled = false; }
-        if (detailRefineButton) { detailRefineButton.dataset.refineTaskId = task.id; detailRefineButton.dataset.issueTitle = task.title || ''; detailRefineButton.dataset.issueDescription = task.markdownDescription || task.description || ''; detailRefineButton.disabled = false; }
-        if (detailAskAgentButton) { detailAskAgentButton.disabled = false; }
     }
 
     // ===== LOAD FUNCTIONS =====
@@ -6731,6 +7004,232 @@ Return ONLY the drafted prompt with no additional commentary.`;
             }
         });
     }
+
+    // ── Sync to Online UI ───────────────────────────────────────
+    const btnSyncToOnline = document.getElementById('btn-sync-to-online');
+    const syncOnlineModal = document.getElementById('sync-online-modal');
+    const btnCloseSyncOnlineModal = document.getElementById('btn-close-sync-online-modal');
+    const syncStepFast = document.getElementById('sync-step-fast');
+    const syncStepSource = document.getElementById('sync-step-source');
+    const syncStepLocation = document.getElementById('sync-step-location');
+    const syncStepConfirm = document.getElementById('sync-step-confirm');
+    const syncFastText = document.getElementById('sync-fast-text');
+    const btnSyncFastConfirm = document.getElementById('btn-sync-fast-confirm');
+    const btnSyncFastElsewhere = document.getElementById('btn-sync-fast-elsewhere');
+    const syncSourceList = document.getElementById('sync-source-list');
+    const btnSyncSourceNext = document.getElementById('btn-sync-source-next');
+    const syncLocationSelect = document.getElementById('sync-location-select');
+    const syncRememberLocation = document.getElementById('sync-remember-location');
+    const btnSyncLocationNext = document.getElementById('btn-sync-location-next');
+    const btnSyncLocationBack = document.getElementById('btn-sync-location-back');
+    const syncDocName = document.getElementById('sync-doc-name');
+    const btnSyncConfirmSync = document.getElementById('btn-sync-confirm-sync');
+    const btnSyncConfirmBack = document.getElementById('btn-sync-confirm-back');
+    const syncProgress = document.getElementById('sync-progress');
+    const syncResult = document.getElementById('sync-result');
+    const syncResultLink = document.getElementById('sync-result-link');
+
+    let _syncModalState = {
+        step: 'fast',
+        localDocPath: '',
+        docName: '',
+        sourceId: '',
+        parentId: '',
+        mapping: null,
+        uploadLocations: {},
+        enabledSources: {}
+    };
+
+    function updateSyncToOnlineButtonState() {
+        if (!btnSyncToOnline) return;
+        const hasLocalSelection = state.activeSource === 'local-folder' && state.activeDocId;
+        const hasOnlineSource = Object.keys(state.enabledSources || {}).some(k => state.enabledSources[k] !== false);
+        btnSyncToOnline.disabled = !(hasLocalSelection && hasOnlineSource);
+    }
+
+    // Sync-to-online button state is updated inside updateLocalActiveContextButtonState and handleOnlineDocsReady
+
+    function openSyncOnlineModal() {
+        if (!syncOnlineModal) return;
+        _syncModalState.step = 'fast';
+        _syncModalState.localDocPath = state.activeDocFilePath || '';
+        _syncModalState.docName = state.activeDocName || '';
+        _syncModalState.sourceId = '';
+        _syncModalState.parentId = '';
+        _syncModalState.mapping = null;
+        syncProgress.style.display = 'none';
+        syncResult.style.display = 'none';
+        syncDocName.value = _syncModalState.docName || '';
+
+        // Request current sync config to check mappings
+        vscode.postMessage({ type: 'getSyncConfig' });
+
+        syncOnlineModal.style.display = 'flex';
+        _showSyncStep('fast');
+    }
+
+    function _showSyncStep(step) {
+        [syncStepFast, syncStepSource, syncStepLocation, syncStepConfirm].forEach(el => {
+            if (el) el.style.display = 'none';
+        });
+        const map = { fast: syncStepFast, source: syncStepSource, location: syncStepLocation, confirm: syncStepConfirm };
+        if (map[step]) map[step].style.display = '';
+        _syncModalState.step = step;
+    }
+
+    function _renderSyncSourceStep() {
+        if (!syncSourceList) return;
+        syncSourceList.innerHTML = '';
+        const sources = ['clickup', 'linear', 'notion'];
+        const displayNames = { clickup: 'ClickUp', linear: 'Linear', notion: 'Notion' };
+        sources.forEach(sid => {
+            if (state.enabledSources[sid] === false) return;
+            const label = document.createElement('label');
+            label.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;';
+            const radio = document.createElement('input');
+            radio.type = 'radio';
+            radio.name = 'sync-source';
+            radio.value = sid;
+            if (!_syncModalState.sourceId) {
+                _syncModalState.sourceId = sid;
+                radio.checked = true;
+            } else if (_syncModalState.sourceId === sid) {
+                radio.checked = true;
+            }
+            radio.addEventListener('change', () => { _syncModalState.sourceId = sid; });
+            label.appendChild(radio);
+            label.appendChild(document.createTextNode(displayNames[sid] || sid));
+            syncSourceList.appendChild(label);
+        });
+    }
+
+    async function _renderSyncLocationStep() {
+        if (!syncLocationSelect) return;
+        syncLocationSelect.innerHTML = '<option value="">Loading…</option>';
+        const sid = _syncModalState.sourceId;
+        const saved = _syncModalState.uploadLocations[sid];
+        if (saved) {
+            // Pre-fill with saved location; still fetch containers to show name
+            vscode.postMessage({ type: 'fetchContainers', sourceId: sid });
+            // Wait for containersReady via a one-time handler? Instead, we already have activeContainers
+            const containerName = state.activeContainers.get(sid)?.name || saved;
+            syncLocationSelect.innerHTML = `<option value="${escapeHtml(saved)}">${escapeHtml(containerName)}</option>`;
+            _syncModalState.parentId = saved;
+            return;
+        }
+        vscode.postMessage({ type: 'fetchContainers', sourceId: sid });
+    }
+
+    function _populateSyncLocationSelect(containers) {
+        if (!syncLocationSelect) return;
+        syncLocationSelect.innerHTML = '';
+        const allOpt = document.createElement('option');
+        allOpt.value = '__all__';
+        allOpt.textContent = 'Root / No specific container';
+        syncLocationSelect.appendChild(allOpt);
+        containers.forEach(c => {
+            const opt = document.createElement('option');
+            opt.value = c.id;
+            opt.textContent = c.name;
+            syncLocationSelect.appendChild(opt);
+        });
+        // If a saved upload location exists and matches an option, select it
+        const saved = _syncModalState.uploadLocations[_syncModalState.sourceId];
+        if (saved && syncLocationSelect.querySelector(`option[value="${saved}"]`)) {
+            syncLocationSelect.value = saved;
+        }
+    }
+
+    if (btnSyncToOnline) {
+        btnSyncToOnline.addEventListener('click', openSyncOnlineModal);
+    }
+
+    if (btnCloseSyncOnlineModal) {
+        btnCloseSyncOnlineModal.addEventListener('click', () => {
+            if (syncOnlineModal) syncOnlineModal.style.display = 'none';
+        });
+    }
+
+    if (syncOnlineModal) {
+        syncOnlineModal.addEventListener('click', (e) => {
+            if (e.target.id === 'sync-online-modal') {
+                syncOnlineModal.style.display = 'none';
+            }
+        });
+    }
+
+    if (btnSyncFastConfirm) {
+        btnSyncFastConfirm.addEventListener('click', () => {
+            if (_syncModalState.mapping) {
+                _syncModalState.sourceId = _syncModalState.mapping.sourceId;
+                _showSyncStep('confirm');
+                _triggerSync('update');
+            }
+        });
+    }
+
+    if (btnSyncFastElsewhere) {
+        btnSyncFastElsewhere.addEventListener('click', () => {
+            _renderSyncSourceStep();
+            _showSyncStep('source');
+        });
+    }
+
+    if (btnSyncSourceNext) {
+        btnSyncSourceNext.addEventListener('click', () => {
+            const selected = syncSourceList?.querySelector('input[name="sync-source"]:checked');
+            _syncModalState.sourceId = selected ? selected.value : '';
+            _renderSyncLocationStep();
+            _showSyncStep('location');
+        });
+    }
+
+    if (btnSyncLocationNext) {
+        btnSyncLocationNext.addEventListener('click', () => {
+            _syncModalState.parentId = syncLocationSelect?.value || undefined;
+            _showSyncStep('confirm');
+        });
+    }
+
+    if (btnSyncLocationBack) {
+        btnSyncLocationBack.addEventListener('click', () => {
+            _renderSyncSourceStep();
+            _showSyncStep('source');
+        });
+    }
+
+    if (btnSyncConfirmBack) {
+        btnSyncConfirmBack.addEventListener('click', () => {
+            _showSyncStep('location');
+        });
+    }
+
+    if (btnSyncConfirmSync) {
+        btnSyncConfirmSync.addEventListener('click', () => {
+            _triggerSync('create');
+        });
+    }
+
+    function _triggerSync(mode) {
+        if (!btnSyncConfirmSync) return;
+        btnSyncConfirmSync.disabled = true;
+        syncProgress.style.display = '';
+        syncProgress.textContent = mode === 'update' ? 'Updating…' : 'Syncing…';
+        syncResult.style.display = 'none';
+        vscode.postMessage({
+            type: 'syncDocToOnline',
+            localDocPath: _syncModalState.localDocPath,
+            sourceId: _syncModalState.sourceId,
+            parentId: _syncModalState.parentId,
+            mode,
+            rememberLocation: syncRememberLocation ? syncRememberLocation.checked : false,
+            docName: syncDocName ? syncDocName.value : _syncModalState.docName
+        });
+    }
+
+    // Wire message handlers for sync-related responses
+    const _origMessageHandler = window.addEventListener ? null : null; // placeholder — actual dispatch is inline switch below
+    // We will add cases to the main switch in the message handler block above
 
     // Initialize zoom/pan listeners for image and iframe preview containers
     initZoomListeners('image-preview-container',       '.zoomable-viewport', 'html');

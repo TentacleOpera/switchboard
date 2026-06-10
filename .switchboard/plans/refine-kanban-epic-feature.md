@@ -201,3 +201,6 @@ Executed 2026-06-10.
 **Remaining risks:**
 - Auto-add path (`ADD N TO EPIC`) dispatches multiple `addSubtaskToEpic` messages; backend refreshes board after each. Could be batched in future.
 - `selectedCards` entries selected before this change lack `isEpic`/`epicId`; button state may be slightly off until reselection. Non-critical.
+
+## Review Findings
+Reviewed 2026-06-10. Two MAJOR issues found and fixed: (1) YAML frontmatter in `createEpic` wrote unquoted `name` value — names containing `---` or `:` would break the plan file; fixed with single-quote wrapping and apostrophe escaping. (2) Manage modal config fields (lock columns, prompt template, max subtasks) were never pre-populated with current workspace values, and clicking Save with empty fields would silently clear config; fixed by including config in `kanbanEpicDetails` response, populating inputs in `populateEpicManageModal`, and adding a confirmation guard on Save when all fields are empty. Files changed: `KanbanProvider.ts` (YAML quoting + config in response), `kanban.html` (config population + save guard). No new typecheck errors. Remaining risks unchanged.

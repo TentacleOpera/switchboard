@@ -6469,7 +6469,10 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 });
                 await db.updateEpicStatus(sessionId, 1, '');
                 const epicPath = path.join(workspaceRoot, epicPlanFile);
-                const epicContent = `---\ndescription: ${name}\n---\n\n# ${name}\n\n${msg.description ? String(msg.description).trim() : ''}`;
+                // Quote YAML values to prevent frontmatter breakage from names containing ---, :, etc.
+                const yamlSafeName = name.replace(/'/g, "''");
+                const yamlSafeDesc = (msg.description ? String(msg.description).trim() : '').replace(/'/g, "''");
+                const epicContent = `---\ndescription: '${yamlSafeName}'\n---\n\n# ${name}\n\n${msg.description ? String(msg.description).trim() : ''}`;
                 await fs.promises.mkdir(path.dirname(epicPath), { recursive: true });
                 await fs.promises.writeFile(epicPath, epicContent, 'utf8');
                 for (const st of subtasks) {
@@ -6519,7 +6522,10 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 const subtasks = await db.getSubtasksByEpicId(epic.planId);
                 this._panel?.webview.postMessage({ type: 'epicDetails', epic, subtasks });
                 if (msg.source === 'kanban') {
-                    this._panel?.webview.postMessage({ type: 'kanbanEpicDetails', epic, subtasks });
+                    const epicLockColumns = await db.getConfig('epic_lock_columns') || '';
+                    const epicPromptTemplate = await db.getConfig('epic_prompt_template') || '';
+                    const epicMaxSubtasks = await db.getConfig('epic_max_subtasks') || '';
+                    this._panel?.webview.postMessage({ type: 'kanbanEpicDetails', epic, subtasks, epicLockColumns, epicPromptTemplate, epicMaxSubtasks });
                 }
                 break;
             }

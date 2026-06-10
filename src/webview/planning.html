@@ -11,6 +11,18 @@
             from { transform: rotate(0deg); }
             to { transform: rotate(360deg); }
         }
+        @keyframes skeleton-shimmer {
+            0% { background-position: -200px 0; }
+            100% { background-position: calc(200px + 100%) 0; }
+        }
+        .sidebar-skeleton {
+            height: 18px;
+            margin: 8px 12px;
+            border-radius: 4px;
+            background: linear-gradient(90deg, var(--panel-bg2) 25%, var(--card-bg-hover) 50%, var(--panel-bg2) 75%);
+            background-size: 200px 100%;
+            animation: skeleton-shimmer 1.5s infinite ease-in-out;
+        }
         @font-face {
             font-family: 'GeistPixel';
             src: url('{{GEIST_PIXEL_FONT_URI}}') format('woff2');
@@ -395,36 +407,12 @@
             overflow: hidden;
         }
 
-        .content-row.collapsed .file-name,
-        .content-row.collapsed .label,
-        .content-row.collapsed .folder-subheader,
-        .content-row.collapsed .source-header,
-        .content-row.collapsed .folder-config,
-        .content-row.collapsed .source-header-row,
-        .content-row.collapsed .imported-docs-header,
-        .content-row.collapsed .imported-docs-doc-subheader,
-        .content-row.collapsed .last-synced,
-        .content-row.collapsed .sync-btn,
-        .content-row.collapsed .source-badge,
-        .content-row.collapsed .card-text,
-        .content-row.collapsed .card-actions,
-        .content-row.collapsed .card-subtitle {
+        .content-row.collapsed #tree-pane > *:not(.sidebar-toggle-row),
+        .content-row.collapsed #tree-pane-online > *:not(.sidebar-toggle-row),
+        .content-row.collapsed #tree-pane-design > *:not(.sidebar-toggle-row),
+        .content-row.collapsed #tree-pane-html > *:not(.sidebar-toggle-row),
+        .content-row.collapsed #tree-pane-tickets > *:not(.sidebar-toggle-row) {
             display: none !important;
-        }
-
-        .content-row.collapsed .tree-node-container {
-            margin-left: 0 !important;
-        }
-
-        .content-row.collapsed .tree-node {
-            justify-content: center;
-            padding: 8px 0;
-            margin-left: 0 !important;
-        }
-
-        .content-row.collapsed .tree-node .icon {
-            margin: 0;
-            font-size: 16px;
         }
 
         .sidebar-toggle-row {
@@ -555,17 +543,6 @@
             display: none;
         }
 
-        /* Tickets banner actions — extend active-doc-banner for ticket action buttons */
-        .tickets-banner-actions {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-        }
-
-        .active-doc-banner.inactive .tickets-banner-actions {
-            display: none;
-        }
-
         .html-banner-actions {
             display: flex;
             gap: 8px;
@@ -573,16 +550,6 @@
         }
         .active-doc-banner.inactive .html-banner-actions {
             display: none;
-        }
-
-        /* Tickets detail meta inside active-doc-banner */
-        .tickets-detail-meta {
-            display: flex;
-            gap: 8px;
-            font-size: 11px;
-            color: var(--text-secondary);
-            font-family: var(--font-mono);
-            margin-left: 8px;
         }
 
         /* Subtask navigation — matches Online Docs .page-navigation pattern */
@@ -858,6 +825,20 @@
             padding-top: 8px;
         }
 
+        .type-subheader {
+            font-size: 9px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 8px 8px 4px 24px;
+            margin-top: 0;
+        }
+        .source-folder-header + .type-subheader {
+            margin-top: 0;
+            padding-top: 8px;
+        }
+
         .source-folder-header {
             display: flex;
             justify-content: space-between;
@@ -870,7 +851,9 @@
             margin: 8px 0 4px 0;
         }
 
-        .folder-import-btn {
+        .folder-import-btn,
+        .folder-link-btn,
+        .folder-create-btn {
             font-size: 11px;
             padding: 2px 6px;
             background: transparent;
@@ -879,10 +862,18 @@
             border-radius: 2px;
             cursor: pointer;
             transition: all 0.15s;
-            margin-left: auto;
             line-height: 1;
         }
-        .folder-import-btn:hover {
+        .folder-import-btn {
+            margin-left: auto;
+        }
+        .folder-link-btn,
+        .folder-create-btn {
+            margin-left: 4px;
+        }
+        .folder-import-btn:hover,
+        .folder-link-btn:hover,
+        .folder-create-btn:hover {
             background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
             border-color: var(--accent-teal);
         }
@@ -918,6 +909,32 @@
         .source-refresh-btn:hover {
             background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
             border-color: var(--accent-teal);
+        }
+        .source-new-btn {
+            font-size: 11px;
+            padding: 2px 8px;
+            background: transparent;
+            color: var(--accent-teal);
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .source-new-btn:hover {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border-color: var(--accent-teal);
+        }
+        .source-location-btn {
+            font-size: 11px;
+            padding: 2px 6px;
+            background: transparent;
+            color: var(--text-secondary);
+            border: none;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .source-location-btn:hover {
+            color: var(--accent-teal);
         }
         .source-folder-header:first-of-type {
             margin-top: 4px;
@@ -1147,13 +1164,11 @@
         /* Afterburner Updated — doc preview matches prototype */
         body.theme-afterburner-updated #markdown-preview,
         body.theme-afterburner-updated #markdown-preview-online,
-        body.theme-afterburner-updated #markdown-preview-design,
-        body.theme-afterburner-updated #markdown-preview-tickets {
+        body.theme-afterburner-updated #markdown-preview-design {
             font-family: 'Hanken Grotesk', sans-serif;
             padding: 26px;
         }
-        body.theme-afterburner-updated #kanban-preview-pane,
-        body.theme-afterburner-updated #markdown-preview-tickets {
+        body.theme-afterburner-updated #kanban-preview-pane {
             font-family: 'Hanken Grotesk', var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", system-ui, "Ubuntu", "Droid Sans", sans-serif);
         }
         body.theme-afterburner-updated #markdown-preview h1, body.theme-afterburner-updated #markdown-preview h2, body.theme-afterburner-updated #markdown-preview h3, body.theme-afterburner-updated #markdown-preview h4, body.theme-afterburner-updated #markdown-preview h5, body.theme-afterburner-updated #markdown-preview h6,
@@ -1964,14 +1979,7 @@
             font-size: 12px;
         }
         #kanban-search { flex: 1; }
-        #kanban-refresh-btn {
-            background: transparent;
-            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
-            color: inherit;
-            border-radius: 4px;
-            cursor: pointer;
-            padding: 4px 8px;
-        }
+        .sidebar-search-input { flex: 1; min-width: 120px; }
         #kanban-content-row { display: flex; gap: 0; height: 100%; overflow: hidden; }
         #kanban-list-pane { flex: 1; overflow-y: auto; }
         .kanban-preview-pane { overflow-y: auto; padding: 12px; border-left: 1px solid var(--border-color, rgba(255,255,255,0.08)); background: var(--panel-bg, #000000); }
@@ -2103,6 +2111,14 @@
         .zoomable-viewport {
             transform-origin: top left;
             will-change: transform;
+        }
+        /* Image preview viewports must fill the container so flex centering is a no-op
+           and fitToContainer's top-left-origin pan math holds — mirrors the inline
+           width/height:100% on the iframe viewport (#html-preview-wrapper). */
+        #image-preview-container .zoomable-viewport,
+        #image-preview-container-design .zoomable-viewport {
+            width: 100%;
+            height: 100%;
         }
 
         /* Class-based scanline suppression — toggled by JS */
@@ -2306,8 +2322,7 @@
         }
 
         /* Kanban preview — same direct-glass approach */
-        .cyber-theme-enabled #kanban-preview-pane,
-        .cyber-theme-enabled #markdown-preview-tickets {
+        .cyber-theme-enabled #kanban-preview-pane {
             background-color: rgba(255, 255, 255, 0.015);
             background-image:
                 linear-gradient(rgba(61, 219, 217, 0.08) 1px, transparent 1px),
@@ -2743,29 +2758,22 @@
             font-size: 11px;
             color: var(--text-secondary);
             line-height: 1.5;
-            font-family: var(--font-mono);
+            font-family: var(--font-family);
         }
 
-        .ticket-node .tickets-issue-import-btn {
-            display: inline-block;
-            background: transparent;
-            color: var(--accent-teal);
-            border: 1px solid var(--accent-teal);
-            padding: 2px 8px;
-            font-size: 9px;
-            font-family: var(--font-mono);
-            cursor: pointer;
-            letter-spacing: 0.5px;
+        .ticket-node .card-actions {
+            display: flex;
+            gap: 4px;
+            margin-top: 4px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
         }
 
-        .ticket-node .tickets-issue-import-btn:hover {
-            background: var(--accent-teal);
-            color: var(--panel-bg);
-        }
-
-        .ticket-node .tickets-issue-import-btn:disabled {
-            opacity: 0.4;
-            cursor: not-allowed;
+        .ticket-node .card-actions .card-icon-btn {
+            width: auto;
+            padding: 0 6px;
+            font-size: 10px;
+            height: 22px;
         }
 
         /* ── Ticket Detail Preview Pane ── */
@@ -2957,6 +2965,29 @@
             border-color: var(--accent-teal);
         }
 
+        /* Design preview meta bar */
+        #design-preview-meta-bar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 6px 10px;
+            border-bottom: 1px solid var(--border-color, #333);
+            background: var(--panel-bg2, #1a1a2e);
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-secondary);
+            flex-wrap: wrap;
+        }
+        #design-preview-meta-bar .meta-doc-title {
+            color: var(--text-primary);
+            font-weight: 600;
+            margin-right: auto;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 300px;
+        }
+
         /* Kanban plan log modal overlay */
         .kanban-log-overlay {
             position: fixed;
@@ -3048,12 +3079,14 @@
                 <select id="local-workspace-filter" class="workspace-filter-select">
                     <option value="">All Workspaces</option>
                 </select>
+                <input type="text" id="local-docs-search" class="sidebar-search-input" placeholder="Search docs..." />
                 <button id="btn-set-active-context-local" class="strip-btn" disabled>Set as Active Planning Context</button>
                 <button id="btn-import-full-doc" class="strip-btn" disabled style="display: none;">Import</button>
                 <button id="btn-export-to-source" class="strip-btn" disabled style="display: none;">Export to Source</button>
                 <button id="btn-edit-local" class="strip-btn" disabled>Edit</button>
                 <button id="btn-save-local" class="strip-btn" style="display:none;">Save</button>
                 <button id="btn-cancel-local" class="strip-btn" style="display:none;">Cancel</button>
+                <button id="btn-sync-to-online" class="strip-btn" disabled>Sync to Online</button>
                 <span id="status"></span>
 
             </div>
@@ -3094,9 +3127,8 @@
                 <button class="btn-disable-doc" id="btn-disable-doc-online">Turn off</button>
             </div>
             <div class="controls-strip" id="controls-strip-online">
+                <input type="text" id="online-docs-search" class="sidebar-search-input" placeholder="Search docs..." />
                 <button id="btn-import-full-doc-online" class="strip-btn" disabled>Import</button>
-                <button id="btn-append-to-prompts-online" class="strip-btn" disabled>Set as active planning context</button>
-                <button id="btn-link-to-doc-online" class="strip-btn" disabled>Link to Document</button>
                 <button id="btn-edit-online" class="strip-btn" disabled style="display:none;" title="Editing not available for remote docs">Edit</button>
                 <span id="status-online"></span>
             </div>
@@ -3105,7 +3137,10 @@
                     <div class="sidebar-toggle-row">
                         <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
                     </div>
-                    <div class="empty-state">Loading online docs...</div>
+                    <div class="sidebar-skeleton"></div>
+                    <div class="sidebar-skeleton"></div>
+                    <div class="sidebar-skeleton"></div>
+                    <div class="sidebar-skeleton" style="width: 60%;"></div>
                 </div>
                 <div class="preview-panel-wrapper">
                     <div id="preview-pane-online" style="flex: 1; width: 100%; box-sizing: border-box;">
@@ -3228,16 +3263,10 @@
                 <select id="kanban-column-filter">
                     <option value="">All Columns</option>
                 </select>
-                <input type="text" id="kanban-search" placeholder="Search plans..." />
-                <div class="kanban-view-toggle" style="display: flex; gap: 4px;">
-                    <button id="kanban-view-all" class="strip-btn active" style="margin: 0;">All</button>
-                    <button id="kanban-view-epics" class="strip-btn" style="margin: 0;">Epics</button>
-                </div>
-                <button id="kanban-refresh-btn" title="Refresh">↻</button>
+                <input type="text" id="kanban-search" class="sidebar-search-input" placeholder="Search plans..." />
+                <button id="kanban-view-epics" class="strip-btn" style="margin: 0;">Epics</button>
                 <button id="btn-import-kanban-plans" class="strip-btn" title="Scan configured AI IDE folders and pick unclaimed plans to add (any age, bypasses the auto-claim window)">Import</button>
-                <button id="btn-kanban-log" class="strip-btn" disabled title="View action log for selected plan">Log</button>
                 <button id="btn-edit-kanban" class="strip-btn" disabled>Edit</button>
-                <button id="btn-review-kanban" class="strip-btn" disabled title="Review plan - select text and submit comment to planner">Review</button>
                 <button id="btn-save-kanban" class="strip-btn" style="display:none;">Save</button>
                 <button id="btn-cancel-kanban" class="strip-btn" style="display:none;">Cancel</button>
             </div>
@@ -3259,23 +3288,11 @@
             </div>
         </div>
         <div id="design-content" class="research-tab-content">
-            <div class="active-doc-banner inactive" id="active-doc-banner-design">
-                <div class="active-doc-info">
-                    <span class="active-doc-label">Active Design Doc:</span>
-                    <span class="active-doc-name" id="active-doc-name-design">None</span>
-                </div>
-                <button class="btn-disable-doc" id="btn-disable-doc-design">Turn off</button>
-            </div>
             <div class="controls-strip" id="controls-strip-design">
                 <select id="design-workspace-filter" class="workspace-filter-select">
                     <option value="">All Workspaces</option>
                 </select>
-                <button id="btn-set-active-context-design" class="strip-btn" disabled>Set as Active Planning Context</button>
-                <button id="btn-link-to-doc-design" class="strip-btn" disabled>Link to Document</button>
-                <button id="btn-edit-design" class="strip-btn" disabled>Edit</button>
-                <button id="btn-save-design" class="strip-btn" style="display:none;">Save</button>
-                <button id="btn-cancel-design" class="strip-btn" style="display:none;">Cancel</button>
-                <button id="btn-manage-design-folders" class="strip-btn">Manage Folders</button>
+                <input type="text" id="design-docs-search" class="sidebar-search-input" placeholder="Search design..." />
                 <span id="status-design"></span>
             </div>
             <div class="content-row">
@@ -3288,6 +3305,7 @@
                 <div class="preview-panel-wrapper">
                     <div id="preview-pane-design" style="flex: 1; width: 100%; box-sizing: border-box; overflow: auto; height: 100%;">
                         <div class="preview-content-wrapper" style="height: 100%; display: flex; flex-direction: column;">
+                            <div id="design-preview-meta-bar" style="display:none;"></div>
                             <div id="markdown-preview-design">
                                 <div class="empty-state">Select a design document, image, JSON, or YAML file from the sidebar to preview</div>
                             </div>
@@ -3317,6 +3335,7 @@
                 <select id="html-workspace-filter" class="workspace-filter-select">
                     <option value="">All Workspaces</option>
                 </select>
+                <input type="text" id="html-docs-search" class="sidebar-search-input" placeholder="Search previews..." />
                 <span id="status-html" style="margin-left: 0; font-size: 12px; color: var(--text-secondary);">No folder configured</span>
             </div>
             <div class="content-row">
@@ -3378,7 +3397,7 @@
         </div>
         <div id="tickets-content" class="research-tab-content">
             <div class="controls-strip" id="controls-strip-tickets">
-                <input id="tickets-search" type="text" placeholder="Search tickets..." />
+                <input id="tickets-search" type="text" class="sidebar-search-input" placeholder="Search tickets..." />
                 <select id="tickets-project-picker" style="display:none"></select>
                 <select id="tickets-state-filter" style="display:none"></select>
                 <select id="tickets-status-filter" style="display:none"></select>
@@ -3398,22 +3417,9 @@
                 <div class="preview-panel-wrapper">
                     <div id="preview-pane-tickets" style="flex: 1; width: 100%; box-sizing: border-box;">
                         <div class="preview-content-wrapper">
-                            <!-- Active ticket banner matching local docs active-doc-banner pattern -->
-                            <div class="active-doc-banner inactive" id="active-doc-banner-tickets">
-                                <div class="active-doc-info">
-                                    <span class="active-doc-label">Active Ticket:</span>
-                                    <span class="active-doc-name" id="active-doc-name-tickets">None</span>
-                                    <span class="tickets-detail-meta" id="tickets-detail-meta" style="display:none">
-                                        <span id="tickets-detail-status"></span>
-                                        <span id="tickets-detail-assignee"></span>
-                                    </span>
-                                </div>
-                                <div class="tickets-banner-actions">
-                                    <button id="tickets-detail-import" class="strip-btn" disabled>Import</button>
-                                    <button id="tickets-detail-refine" class="strip-btn" disabled>Refine</button>
-                                    <button id="tickets-detail-ask-agent" class="strip-btn" disabled>Ask Agent</button>
-                                    <button id="tickets-back-to-parent" class="strip-btn" style="display:none">Back to Parent</button>
-                                </div>
+                            <div id="tickets-loading-state" style="flex: 1; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 32px; color: var(--text-secondary);">
+                                <div style="width: 32px; height: 32px; border: 3px solid var(--border-color); border-top-color: var(--accent-teal); border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+                                <div style="font-size: 12px;">Loading tickets...</div>
                             </div>
                             <!-- Markdown preview container matching local docs -->
                             <div id="markdown-preview-tickets">
@@ -3516,6 +3522,56 @@
                     </div>
                     <div id="design-folder-list-modal" class="folder-list">
                         <!-- Folder items rendered by JS -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="folder-modal" id="sync-online-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="sync-online-modal-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="sync-online-modal-title">Sync to Online</h3>
+                <button class="modal-close-btn" id="btn-close-sync-online-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px;">
+                <div id="sync-step-fast" style="display:none;">
+                    <p id="sync-fast-text" style="margin:0; font-size:13px;"></p>
+                    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:12px;">
+                        <button id="btn-sync-fast-elsewhere" class="strip-btn">Sync somewhere else…</button>
+                        <button id="btn-sync-fast-confirm" class="planning-button" style="margin:0; padding:4px 12px;">Update</button>
+                    </div>
+                </div>
+                <div id="sync-step-source" style="display:none;">
+                    <p style="margin:0 0 8px; font-size:12px; color:var(--text-secondary);">Select destination source:</p>
+                    <div id="sync-source-list" style="display:flex; flex-direction:column; gap:6px;"></div>
+                    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:12px;">
+                        <button id="btn-sync-source-next" class="planning-button" style="margin:0; padding:4px 12px;">Next</button>
+                    </div>
+                </div>
+                <div id="sync-step-location" style="display:none;">
+                    <p style="margin:0 0 8px; font-size:12px; color:var(--text-secondary);">Select upload location:</p>
+                    <select id="sync-location-select" class="workspace-filter-select" style="width:100%;"></select>
+                    <label style="display:flex; align-items:center; gap:6px; margin-top:8px; font-size:12px; color:var(--text-secondary);">
+                        <input type="checkbox" id="sync-remember-location" checked />
+                        Remember as upload location
+                    </label>
+                    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:12px;">
+                        <button id="btn-sync-location-back" class="strip-btn">Back</button>
+                        <button id="btn-sync-location-next" class="planning-button" style="margin:0; padding:4px 12px;">Next</button>
+                    </div>
+                </div>
+                <div id="sync-step-confirm" style="display:none;">
+                    <div style="display:flex; flex-direction:column; gap:4px;">
+                        <label style="font-size:11px; text-transform:uppercase; color:var(--text-secondary);">Document name</label>
+                        <input type="text" id="sync-doc-name" class="planning-input" style="width:100%; box-sizing:border-box;" />
+                    </div>
+                    <div id="sync-progress" style="margin-top:8px; font-size:12px; color:var(--accent-teal); display:none;"></div>
+                    <div id="sync-result" style="margin-top:8px; display:none;">
+                        <a id="sync-result-link" href="#" target="_blank" style="color:var(--accent-teal); font-size:13px;"></a>
+                    </div>
+                    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:12px;">
+                        <button id="btn-sync-confirm-back" class="strip-btn">Back</button>
+                        <button id="btn-sync-confirm-sync" class="planning-button" style="margin:0; padding:4px 12px;">Sync</button>
                     </div>
                 </div>
             </div>

@@ -40,6 +40,9 @@ export interface ResearchSourceAdapter {
 
     // Optional: write-back support for sync-to-source
     updateContent?(fileId: string, content: string): Promise<{ success: boolean; error?: string }>;
+
+    // Optional: create a new remote document (used by + New and Sync to Online)
+    createDocument?(params: { parentId?: string; title: string; content?: string }): Promise<{ success: boolean; docId?: string; url?: string; error?: string }>;
 }
 
 export class NotionResearchAdapter implements ResearchSourceAdapter {
@@ -233,6 +236,21 @@ export class NotionResearchAdapter implements ResearchSourceAdapter {
             // Use the Notion service to update the page content
             const result = await this._service.updatePageContent(pageId, content);
             return result;
+        } catch (err) {
+            return { success: false, error: String(err) };
+        }
+    }
+
+    async createDocument(params: { parentId?: string; title: string; content?: string }): Promise<{ success: boolean; docId?: string; url?: string; error?: string }> {
+        try {
+            if (!params.parentId) {
+                return { success: false, error: 'Notion requires a parent page or database to create a document' };
+            }
+            const result = await this._service.createPage(params.parentId, params.title, params.content);
+            if (result.success) {
+                return { success: true, docId: result.pageId ? `page:${result.pageId}` : undefined, url: result.url };
+            }
+            return { success: false, error: result.error || 'Notion page creation failed' };
         } catch (err) {
             return { success: false, error: String(err) };
         }

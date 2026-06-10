@@ -932,4 +932,56 @@ export class ClickUpDocsAdapter implements ResearchSourceAdapter {
             return { success: false, error: String(err) };
         }
     }
+
+    async createDocument(params: { parentId?: string; title: string; content?: string }): Promise<{ success: boolean; docId?: string; url?: string; error?: string }> {
+        try {
+            const wsId = await this._ensureWorkspaceId();
+            if (!wsId) {
+                return { success: false, error: 'ClickUp workspace ID not available' };
+            }
+
+            const body: any = { name: params.title };
+            if (params.parentId) {
+                if (params.parentId.startsWith('space:')) {
+                    body.parent_id = params.parentId.slice(6);
+                    body.parent_type = 4;
+                } else if (params.parentId.startsWith('list:')) {
+                    body.parent_id = params.parentId.slice(5);
+                    body.parent_type = 6;
+                }
+                // folder: not supported as direct doc parent in v3; omit parent → workspace-level doc
+            }
+
+            const docResp = await this._clickUpService.httpRequestV3('POST', `/workspaces/${wsId}/docs`, body);
+            if (docResp.status < 200 || docResp.status >= 300) {
+                return { success: false, error: this._localizeHttpError(docResp.status, 'ClickUp doc creation failed') };
+            }
+
+            const docId = docResp.data?.id || docResp.data?.doc?.id;
+            const docUrl = docResp.data?.url || docResp.data?.doc?.url;
+            if (!docId) {
+                return { success: false, error: 'ClickUp doc creation did not return an ID' };
+            }
+
+            // Create first page with content if provided
+            if (params.content) {
+                try {
+                    await this._clickUpService.createDocPage({
+                        workspaceId: wsId,
+                        docId,
+                        pageName: 'Page 1',
+                        content: params.content,
+                        parentPageId: undefined
+                    });
+                } catch (pageErr: any) {
+                    // Doc exists but page creation failed — still report success with doc link
+                    console.warn('[ClickUpDocsAdapter] Doc created but initial page failed:', pageErr);
+                }
+            }
+
+            return { success: true, docId: `doc:${docId}`, url: docUrl };
+        } catch (err: any) {
+            return { success: false, error: String(err) };
+        }
+    }
 }
