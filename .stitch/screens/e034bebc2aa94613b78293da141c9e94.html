@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+
+<html class="h-full" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>AUTOBAN | MISSION CONTROL | ARTIFACTS</title>
+<!-- Tailwind CSS CDN -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<!-- Google Fonts for Modern Aerospace Typography -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@300;400;600;700&amp;family=Inter:wght@300;400;500;600&amp;family=JetBrains+Mono:wght@400;700&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "inverse-primary": "#006875",
+            "surface": "#101414",
+            "outline-variant": "#3b494c",
+            "secondary-container": "#474746",
+            "on-secondary-container": "#b7b5b4",
+            "secondary-fixed-dim": "#c8c6c5",
+            "primary-fixed": "#9cf0ff",
+            "tertiary-fixed": "#dce4e4",
+            "on-secondary-fixed": "#1c1b1b",
+            "surface-tint": "#00daf3",
+            "error": "#ffb4ab",
+            "on-error": "#690005",
+            "primary-fixed-dim": "#00daf3",
+            "inverse-on-surface": "#2e3131",
+            "primary-container": "#00e5ff",
+            "background": "#101414",
+            "surface-variant": "#323536",
+            "on-surface": "#e1e3e3",
+            "on-primary-fixed-variant": "#004f58",
+            "surface-container-highest": "#323536",
+            "surface-container": "#1d2020",
+            "on-secondary-fixed-variant": "#474746",
+            "on-primary-container": "#00626e",
+            "on-tertiary": "#2a3232",
+            "surface-bright": "#363a3a",
+            "secondary": "#c8c6c5",
+            "error-container": "#93000a",
+            "inverse-surface": "#e1e3e3",
+            "on-tertiary-fixed": "#151d1d",
+            "outline": "#849396",
+            "on-primary": "#00363d",
+            "tertiary-container": "#c9d2d1",
+            "tertiary": "#e6eeee",
+            "tertiary-fixed-dim": "#c0c8c8",
+            "on-tertiary-container": "#525a5a",
+            "on-error-container": "#ffdad6",
+            "surface-container-low": "#191c1c",
+            "primary": "#c3f5ff",
+            "on-surface-variant": "#bac9cc",
+            "surface-dim": "#101414",
+            "surface-container-high": "#272b2b",
+            "on-secondary": "#313030",
+            "on-tertiary-fixed-variant": "#404848",
+            "on-background": "#e1e3e3",
+            "on-primary-fixed": "#001f24",
+            "surface-container-lowest": "#0b0f0f",
+            "secondary-fixed": "#e5e2e1",
+            // Custom Neon Tactical Palettes
+            "neon-cyan": "#00daf3",
+            "neon-warn": "#ffd400",
+            "neon-success": "#00f38b"
+          },
+          fontFamily: {
+            'mono': ['JetBrains Mono', 'monospace'],
+            'body': ['Inter', 'sans-serif'],
+            'headline': ['Hanken Grotesk', 'sans-serif'],
+          }
+        }
+      }
+    }
+  </script>
+<style>
+    /* Mission Control Background */
+    .grid-bg {
+      background-color: #101414;
+      background-image: 
+        linear-gradient(rgba(0, 218, 243, 0.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0, 218, 243, 0.05) 1px, transparent 1px);
+      background-size: 32px 32px;
+      position: relative;
+    }
+    
+    /* Tactical HUD scanlines */
+    .scanline-effect::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.15) 50%);
+      background-size: 100% 4px;
+      pointer-events: none;
+      z-index: 50;
+    }
+
+    /* Corner HUD brackets */
+    .hud-bracket {
+      position: absolute;
+      width: 8px;
+      height: 8px;
+      border-color: #00daf3;
+      border-style: solid;
+      opacity: 0.6;
+    }
+    .bracket-tl { top: -2px; left: -2px; border-width: 2px 0 0 2px; }
+    .bracket-tr { top: -2px; right: -2px; border-width: 2px 2px 0 0; }
+    .bracket-bl { bottom: -2px; left: -2px; border-width: 0 0 2px 2px; }
+    .bracket-br { bottom: -2px; right: -2px; border-width: 0 2px 2px 0; }
+
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: #0b0f0f; }
+    ::-webkit-scrollbar-thumb { background: #3b494c; border-radius: 2px; }
+    ::-webkit-scrollbar-thumb:hover { background: #00daf3; }
+
+    .glow-cyan { text-shadow: 0 0 10px rgba(0, 218, 243, 0.5); }
+    .neon-border { border: 1px solid rgba(0, 218, 243, 0.2); }
+    .neon-border-active { border: 1px solid #00daf3; box-shadow: 0 0 10px rgba(0, 218, 243, 0.2); }
+  </style>
+</head>
+<body class="bg-surface text-on-surface font-body h-full flex flex-col overflow-hidden scanline-effect">
+<!-- BEGIN: MainHeader -->
+<header class="bg-surface-container-lowest border-b border-outline-variant flex items-center justify-between px-6 h-14 flex-shrink-0 z-10" data-purpose="global-header">
+<div class="flex items-center space-x-8">
+<div class="flex items-center space-x-3">
+<div class="w-6 h-6 bg-neon-cyan flex items-center justify-center rounded-sm">
+<div class="w-3 h-3 border-2 border-surface"></div>
+</div>
+<span class="font-headline font-bold tracking-[0.2em] text-lg text-white">AUTOBAN</span>
+</div>
+<nav class="flex items-center space-x-1">
+<div class="bg-surface-container-high border-x border-t-2 border-t-neon-cyan px-4 py-2 flex items-center space-x-3">
+<svg class="w-4 h-4 text-neon-cyan" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+<span class="text-xs font-mono font-bold uppercase tracking-widest text-white">ARTIFACTS.SYS</span>
+<button class="text-on-surface-variant hover:text-neon-cyan"><svg class="w-3 h-3" fill="currentColor" viewbox="0 0 20 20"><path d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"></path></svg></button>
+</div>
+</nav>
+</div>
+<div class="flex items-center space-x-6 text-on-surface-variant">
+<div class="flex items-center space-x-2 font-mono text-[10px] tracking-tighter opacity-60">
+<span>CPU_LOAD: 24%</span>
+<span class="text-neon-cyan">MEM: 4.2GB</span>
+</div>
+<div class="h-8 w-px bg-outline-variant"></div>
+<div class="flex items-center space-x-4">
+<svg class="w-5 h-5 hover:text-neon-cyan cursor-pointer transition-colors" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707M16.243 17.657l.707.707M7.357 6.343l.707.707" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+<svg class="w-5 h-5 hover:text-neon-cyan cursor-pointer transition-colors" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+<div class="w-8 h-8 rounded-full border border-neon-cyan flex items-center justify-center p-0.5">
+<div class="w-full h-full bg-surface-container-high rounded-full overflow-hidden">
+<div class="w-full h-full bg-gradient-to-br from-neon-cyan to-inverse-primary opacity-50"></div>
+</div>
+</div>
+</div>
+</div>
+</header>
+<!-- END: MainHeader -->
+<!-- BEGIN: Navigation Hub -->
+<div class="bg-surface-container border-b border-outline-variant flex items-center h-12 px-6 space-x-8 flex-shrink-0 z-10" data-purpose="secondary-navigation">
+<a class="text-[11px] font-mono font-bold uppercase tracking-[0.15em] text-neon-cyan border-b-2 border-neon-cyan h-full flex items-center" href="#">LOCAL_RESOURCES</a>
+<a class="text-[11px] font-mono font-bold uppercase tracking-[0.15em] text-on-surface-variant hover:text-white transition-colors" href="#">REMOTE_DOCS</a>
+<a class="text-[11px] font-mono font-bold uppercase tracking-[0.15em] text-on-surface-variant hover:text-white transition-colors" href="#">TASK_STRATEGY</a>
+<a class="text-[11px] font-mono font-bold uppercase tracking-[0.15em] text-on-surface-variant hover:text-white transition-colors" href="#">INTEL_CORE</a>
+<a class="text-[11px] font-mono font-bold uppercase tracking-[0.15em] text-on-surface-variant hover:text-white transition-colors" href="#">DESIGN_VECTORS</a>
+<div class="flex-1"></div>
+<div class="flex items-center space-x-2 text-[10px] font-mono text-outline">
+<span class="w-2 h-2 rounded-full bg-neon-success animate-pulse"></span>
+<span class="uppercase tracking-widest">ACTIVE_NODE: X-772_QUANTUM</span>
+</div>
+</div>
+<!-- END: Navigation Hub -->
+<div class="flex flex-1 overflow-hidden relative">
+<!-- BEGIN: Tactical Sidebar -->
+<aside class="w-72 bg-surface-container-low border-r border-outline-variant flex flex-col flex-shrink-0 z-10" data-purpose="project-sidebar">
+<!-- Workspace Selector -->
+<div class="p-4 border-b border-outline-variant/30">
+<div class="relative group">
+<div class="hud-bracket bracket-tl"></div><div class="hud-bracket bracket-tr"></div>
+<div class="hud-bracket bracket-bl"></div><div class="hud-bracket bracket-br"></div>
+<button class="w-full bg-surface-container-high border border-outline-variant px-3 py-2 text-[10px] font-mono uppercase tracking-[0.2em] text-left flex justify-between items-center text-neon-cyan">
+          ROOT_WORKSPACE
+          <svg class="w-3 h-3" fill="currentColor" viewbox="0 0 20 20"><path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"></path></svg>
+</button>
+</div>
+<div class="mt-3 flex space-x-2">
+<button class="flex-1 bg-neon-cyan/5 border border-neon-cyan/30 text-[9px] font-mono font-bold py-1.5 text-neon-cyan hover:bg-neon-cyan/10 uppercase tracking-tighter">INIT_PLANNING</button>
+<button class="bg-surface-container-highest border border-outline-variant px-3 text-[9px] font-mono text-on-surface-variant hover:text-white">CFG</button>
+</div>
+</div>
+<!-- Scrollable Project List -->
+<div class="flex-1 overflow-y-auto p-4 space-y-6">
+<!-- Project Category -->
+<div>
+<div class="flex items-center justify-between mb-4">
+<h3 class="text-[10px] font-mono font-bold text-neon-cyan/70 tracking-[0.3em] uppercase">PROJECT_STREAMS</h3>
+<span class="text-[8px] font-mono text-outline">TOTAL: 08</span>
+</div>
+<div class="space-y-4">
+<!-- Active Tactical Card -->
+<div class="relative bg-surface-container-highest/40 neon-border-active p-3 group transition-all" data-purpose="active-item-card">
+<div class="absolute -top-1.5 -right-1.5 bg-neon-cyan text-surface text-[8px] font-bold px-1 py-0.5 tracking-tighter">ACTIVE</div>
+<h4 class="text-[12px] font-headline font-bold text-white mb-1 uppercase tracking-tight">Data Analytics Migration</h4>
+<div class="flex items-center space-x-2 mb-3">
+<div class="w-1.5 h-1.5 rounded-full bg-neon-cyan"></div>
+<p class="text-[9px] font-mono text-on-surface-variant truncate">COMP_ANALYSIS_AMPLITUDE_MIXPANEL</p>
+</div>
+<div class="flex gap-1.5">
+<button class="flex-1 bg-neon-cyan border border-neon-cyan text-surface font-mono font-bold text-[9px] py-1 uppercase tracking-tighter">MOUNT</button>
+<button class="border border-outline-variant p-1 text-on-surface-variant hover:text-neon-cyan transition-colors"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button>
+<button class="border border-outline-variant p-1 text-on-surface-variant hover:text-error transition-colors"><svg class="w-3.5 h-3.5" fill="currentColor" viewbox="0 0 20 20"><path d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"></path></svg></button>
+</div>
+</div>
+<!-- Secondary Tactical Card -->
+<div class="bg-surface-container neon-border p-3 opacity-60 hover:opacity-100 transition-all cursor-pointer">
+<h4 class="text-[11px] font-headline font-semibold text-on-surface mb-1 uppercase tracking-tight">Enterprise Architecture</h4>
+<p class="text-[9px] font-mono text-outline mb-3">ENT_DIG_ANALYTICS_ARCH_V2</p>
+<div class="flex gap-1.5">
+<button class="flex-1 border border-outline-variant text-on-surface-variant font-mono text-[9px] py-1 uppercase hover:border-neon-cyan hover:text-white transition-colors">MOUNT</button>
+</div>
+</div>
+</div>
+</div>
+<!-- Intel Docs Category -->
+<div>
+<h3 class="text-[10px] font-mono font-bold text-outline tracking-[0.3em] uppercase mb-4">CORE_INTEL</h3>
+<div class="space-y-3">
+<div class="flex items-center p-2 border border-outline-variant/20 hover:border-neon-cyan/40 transition-colors group cursor-pointer">
+<div class="w-1 h-8 bg-outline-variant group-hover:bg-neon-cyan mr-3 transition-colors"></div>
+<div class="flex-1 min-w-0">
+<h5 class="text-[10px] font-mono text-on-surface-variant group-hover:text-white truncate uppercase">Amplitude Dashboard Overview</h5>
+<span class="text-[8px] font-mono text-outline">MD_CONTENT | 4.2KB</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="p-4 border-t border-outline-variant/30 flex items-center justify-between">
+<div class="flex space-x-1">
+<div class="w-2 h-2 rounded-full bg-neon-success shadow-[0_0_5px_rgba(0,243,139,0.5)]"></div>
+<div class="w-2 h-2 rounded-full bg-on-secondary-container"></div>
+<div class="w-2 h-2 rounded-full bg-on-secondary-container"></div>
+</div>
+<span class="text-[9px] font-mono text-outline uppercase tracking-widest">SECURE_LINK_STABLE</span>
+</div>
+</aside>
+<!-- END: Tactical Sidebar -->
+<!-- BEGIN: Mission Control Content -->
+<main class="flex-1 flex flex-col overflow-hidden grid-bg z-0" data-purpose="documentation-viewer">
+<!-- Dynamic Header Elements -->
+<div class="absolute top-4 left-6 pointer-events-none opacity-40 font-mono text-[10px] text-neon-cyan space-y-1">
+<div>LAT: 37.7749° N</div>
+<div>LNG: 122.4194° W</div>
+</div>
+<div class="absolute top-4 right-6 pointer-events-none opacity-40 font-mono text-[10px] text-neon-cyan text-right space-y-1">
+<div>REF_ID: AUT-AN-99X</div>
+<div>TS_HEX: 0x5F3E22A</div>
+</div>
+<div class="flex-1 overflow-y-auto p-12 relative z-10">
+<div class="max-w-5xl mx-auto">
+<!-- Main Tactical Header Card -->
+<div class="relative bg-surface-container-lowest/80 border-l-4 border-neon-cyan p-10 mb-12 backdrop-blur-md">
+<div class="hud-bracket bracket-tr"></div>
+<div class="hud-bracket bracket-br"></div>
+<div class="flex items-start justify-between mb-8">
+<div class="space-y-4">
+<span class="inline-block px-2 py-0.5 bg-neon-cyan/10 border border-neon-cyan/30 text-neon-cyan text-[10px] font-mono tracking-widest uppercase">STRATEGIC_INTEL_ANALYSIS</span>
+<h1 class="text-6xl font-headline font-bold text-white uppercase leading-[0.95] tracking-tighter">
+                Comparative Analysis:<br/>
+<span class="text-neon-cyan glow-cyan">Amplitude &amp; Mixpanel</span>
+</h1>
+</div>
+<div class="text-right">
+<div class="text-4xl font-headline font-bold text-outline opacity-20">01</div>
+<div class="text-[9px] font-mono text-outline uppercase mt-1">Classification: Top Secret</div>
+</div>
+</div>
+<div class="flex items-center space-x-12 border-t border-outline-variant/30 pt-6">
+<div class="flex flex-col">
+<span class="text-[9px] font-mono text-outline uppercase">Report_Status</span>
+<span class="text-xs font-mono text-neon-success">COMPLETE_VERIFIED</span>
+</div>
+<div class="flex flex-col">
+<span class="text-[9px] font-mono text-outline uppercase">Revision_ID</span>
+<span class="text-xs font-mono text-white">4.2.1-BETA</span>
+</div>
+<div class="flex flex-col">
+<span class="text-[9px] font-mono text-outline uppercase">Last_Modified</span>
+<span class="text-xs font-mono text-white">2026.04.12_14:20</span>
+</div>
+</div>
+</div>
+<!-- Content Modules -->
+<div class="grid grid-cols-1 gap-10">
+<!-- Executive Summary Section -->
+<section class="relative group" data-purpose="content-section">
+<div class="flex items-center mb-6">
+<div class="h-px flex-1 bg-gradient-to-r from-neon-cyan/50 to-transparent"></div>
+<h2 class="px-6 text-xl font-headline font-bold text-neon-cyan uppercase tracking-[0.2em] italic">01. Executive Summary</h2>
+<div class="h-px flex-1 bg-gradient-to-l from-neon-cyan/50 to-transparent"></div>
+</div>
+<div class="grid grid-cols-12 gap-8">
+<!-- Sidebar Stats/Metadata for section -->
+<div class="col-span-3 space-y-4">
+<div class="p-4 border border-outline-variant/30 bg-surface-container-high/40 rounded-sm">
+<span class="text-[9px] font-mono text-outline uppercase block mb-2">Key_Indicators</span>
+<div class="space-y-3">
+<div class="flex justify-between items-center">
+<span class="text-[10px] font-mono text-on-surface-variant">Market_Share</span>
+<span class="text-[10px] font-mono text-neon-cyan">84.2%</span>
+</div>
+<div class="w-full bg-outline-variant/30 h-1">
+<div class="bg-neon-cyan h-full w-[84%]"></div>
+</div>
+<div class="flex justify-between items-center">
+<span class="text-[10px] font-mono text-on-surface-variant">AI_Readiness</span>
+<span class="text-[10px] font-mono text-neon-success">HIGH</span>
+</div>
+</div>
+</div>
+<!-- Tactical Warning Box -->
+<div class="p-4 border border-neon-warn/30 bg-neon-warn/5 rounded-sm flex items-start space-x-3">
+<svg class="w-4 h-4 text-neon-warn mt-0.5" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+<div>
+<span class="text-[9px] font-mono text-neon-warn uppercase block font-bold">Alert: Economic Shift</span>
+<p class="text-[10px] font-mono text-on-surface-variant leading-tight">Projected TCO increase for legacy warehouse-native deployments in Q3.</p>
+</div>
+</div>
+</div>
+<!-- Main Content Text -->
+<div class="col-span-9">
+<div class="relative bg-surface-container-high/20 p-8 border border-outline-variant/20 hover:border-neon-cyan/30 transition-all">
+<div class="hud-bracket bracket-tl"></div><div class="hud-bracket bracket-tr"></div>
+<div class="hud-bracket bracket-bl"></div><div class="hud-bracket bracket-br"></div>
+<div class="prose prose-invert max-w-none space-y-6">
+<p class="text-lg text-on-surface leading-relaxed font-light">
+                      In the contemporary digital economy, the capacity to capture, process, and derive <span class="text-neon-cyan font-semibold">actionable intelligence</span> from user behavioral data is a fundamental prerequisite for commercial success. As software-as-a-service (SaaS), e-commerce, and direct-to-consumer platforms mature, organizations are moving beyond traditional pageview-centric web analytics to sophisticated, event-driven product analytics platforms.
+                    </p>
+<p class="text-on-surface-variant leading-relaxed italic border-l-2 border-outline-variant pl-4">
+                      Within this highly competitive ecosystem, two platforms have emerged as the definitive market leaders: Amplitude and Mixpanel. Both solutions provide robust foundational capabilities designed to map user journeys, measure long-term retention, and optimize conversion funnels.
+                    </p>
+<p class="text-on-surface leading-relaxed">
+                      As of 2026, the expectations placed upon product analytics platforms have escalated dramatically. Modern enterprise environments require these tools to integrate natively with cloud data warehouses, deploy advanced artificial intelligence to automate complex diagnostic queries, and embed analytical insights directly into collaborative workspaces such as Slack and Microsoft Teams. Furthermore, the convergence of analytics with customer data platforms (CDPs) and feature management systems has fundamentally altered the <span class="text-neon-warn font-mono uppercase text-[12px]">total cost of ownership (TCO)</span> calculation for prospective buyers.
+                    </p>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- System Dimension Analysis Module -->
+<section class="grid grid-cols-3 gap-6">
+<div class="bg-surface-container-high/40 p-5 border border-outline-variant/30 hover:neon-border-active transition-all group">
+<span class="text-[9px] font-mono text-neon-cyan uppercase tracking-widest mb-2 block">Dimension_01</span>
+<h3 class="text-sm font-headline font-bold text-white uppercase mb-3">Behavioral Intel</h3>
+<p class="text-[11px] text-on-surface-variant leading-relaxed">Evaluation of core analytical capabilities and the depth of behavioral mapping across complex user lifecycles.</p>
+</div>
+<div class="bg-surface-container-high/40 p-5 border border-outline-variant/30 hover:neon-border-active transition-all group">
+<span class="text-[9px] font-mono text-neon-cyan uppercase tracking-widest mb-2 block">Dimension_02</span>
+<h3 class="text-sm font-headline font-bold text-white uppercase mb-3">Cloud Native Arch</h3>
+<p class="text-[11px] text-on-surface-variant leading-relaxed">Data export protocols and warehouse-native architectures ensuring low-latency synchronization with Snowflake/BigQuery.</p>
+</div>
+<div class="bg-surface-container-high/40 p-5 border border-outline-variant/30 hover:neon-border-active transition-all group">
+<span class="text-[9px] font-mono text-neon-cyan uppercase tracking-widest mb-2 block">Dimension_03</span>
+<h3 class="text-sm font-headline font-bold text-white uppercase mb-3">AI Reasoning</h3>
+<p class="text-[11px] text-on-surface-variant leading-relaxed">Integration of autonomous reasoning agents for automated insight generation and anomaly detection alerts.</p>
+</div>
+</section>
+</div>
+</div>
+</div>
+<!-- Mission Control Footer -->
+<footer class="h-10 bg-surface-container-lowest border-t border-outline-variant flex items-center justify-between px-6 z-10" data-purpose="content-footer">
+<div class="flex items-center space-x-6">
+<div class="flex items-center space-x-2">
+<span class="w-1.5 h-1.5 bg-neon-cyan rounded-full shadow-[0_0_8px_rgba(0,218,243,0.8)]"></span>
+<span class="text-[10px] font-mono text-neon-cyan font-bold uppercase tracking-widest">SYSTEM_LINK: NOMINAL</span>
+</div>
+<div class="flex items-center space-x-2 border-l border-outline-variant/30 pl-6">
+<span class="text-[10px] font-mono text-outline uppercase tracking-widest">ENCRYPTION:</span>
+<span class="text-[10px] font-mono text-on-surface-variant">AES-256-GCM</span>
+</div>
+</div>
+<div class="flex items-center space-x-8">
+<div class="flex items-center space-x-3">
+<div class="w-16 h-1 bg-outline-variant/30 rounded-full overflow-hidden">
+<div class="h-full bg-neon-cyan w-1/4 animate-pulse"></div>
+</div>
+<span class="text-[10px] font-mono text-outline uppercase">PROG: 25%</span>
+</div>
+<div class="text-[10px] font-mono text-outline uppercase tracking-widest">
+          PAGE: <span class="text-white">01</span> / <span class="text-white">24</span>
+</div>
+</div>
+</footer>
+</main>
+<!-- END: Mission Control Content -->
+<!-- Tactical FAB -->
+<div class="absolute bottom-16 right-8 z-50">
+<button class="w-14 h-14 bg-surface-container-highest border-2 border-neon-cyan text-neon-cyan flex items-center justify-center hover:bg-neon-cyan hover:text-surface transition-all shadow-[0_0_20px_rgba(0,218,243,0.3)] group">
+<div class="relative">
+<div class="absolute -inset-2 border border-neon-cyan/20 scale-125 group-hover:scale-150 transition-transform"></div>
+<svg class="w-6 h-6" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+</div>
+</button>
+</div>
+</div>
+</body></html>

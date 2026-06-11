@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+
+<html class="h-full" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>AUTOBAN | ARTIFACTS</title>
+<!-- Tailwind CSS CDN -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<!-- Google Fonts for Modern Aerospace Typography -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Chivo+Mono:wght@300;400;700&amp;family=Inter:wght@300;400;500;600&amp;family=Oswald:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            'panel-dark': '#0a0c0d',
+            'panel-border': '#1e2426',
+            'panel-accent': '#00f2ff',
+            'sidebar-bg': '#0d1112',
+            'header-bg': '#080a0b',
+            'card-active': '#0f1a1d',
+          },
+          fontFamily: {
+            'header': ['Oswald', 'sans-serif'], // Condensed geometric grotesque
+            'body': ['Inter', 'sans-serif'], // Clean sans-serif
+            'mono': ['Chivo Mono', 'monospace'], // Subtle monospace
+          },
+        }
+      }
+    }
+  </script>
+<style data-purpose="custom-layout-styles">
+    /* Scanline/Grid Effect for Content Background */
+    .grid-bg {
+      background-color: #0d1112;
+      background-image: 
+        linear-gradient(rgba(0, 242, 255, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0, 242, 255, 0.03) 1px, transparent 1px);
+      background-size: 20px 20px;
+      position: relative;
+    }
+    .grid-bg::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%), 
+                  linear-gradient(90deg, rgba(255, 0, 0, 0.02), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.02));
+      background-size: 100% 4px, 3px 100%;
+      pointer-events: none;
+    }
+
+    /* Neon Glow Effects */
+    .neon-text {
+      text-shadow: 0 0 10px rgba(0, 242, 255, 0.7), 0 0 20px rgba(0, 242, 255, 0.3);
+    }
+    .neon-border-active {
+      box-shadow: 0 0 15px rgba(0, 242, 255, 0.3);
+      border-color: #00f2ff;
+    }
+
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0a0c0d;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #333;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #444;
+    }
+  </style>
+</head>
+<body class="bg-panel-dark text-gray-300 font-body h-full flex flex-col overflow-hidden">
+<!-- BEGIN: MainHeader -->
+<header class="bg-header-bg border-b border-panel-border flex items-center justify-between px-4 h-12 flex-shrink-0" data-purpose="global-header">
+<div class="flex items-center space-x-6">
+<div class="flex items-center space-x-2">
+<div class="w-5 h-5 bg-panel-accent rounded-sm opacity-80"></div>
+<span class="font-header font-semibold tracking-widest text-sm text-gray-100">AUTOBAN</span>
+</div>
+<nav class="flex items-center space-x-1">
+<div class="bg-gray-800/50 border-t-2 border-panel-accent px-3 py-1 flex items-center space-x-2">
+<svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+<span class="text-xs font-mono uppercase tracking-tight text-white">Artifacts</span>
+<button class="hover:text-panel-accent"><svg class="w-3 h-3" fill="currentColor" viewbox="0 0 20 20"><path clip-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" fill-rule="evenodd"></path></svg></button>
+</div>
+</nav>
+</div>
+<div class="flex items-center space-x-4 text-gray-500">
+<svg class="w-5 h-5 hover:text-panel-accent cursor-pointer" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707M16.243 17.657l.707.707M7.357 6.343l.707.707" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+<svg class="w-5 h-5 hover:text-panel-accent cursor-pointer" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+<div class="h-6 w-px bg-panel-border"></div>
+<svg class="w-5 h-5 hover:text-panel-accent cursor-pointer" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M4 6h16M4 12h16m-7 6h7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+</div>
+</header>
+<!-- END: MainHeader -->
+<!-- BEGIN: SubHeader -->
+<div class="bg-panel-dark border-b border-panel-border flex items-center h-10 px-4 space-x-6 flex-shrink-0" data-purpose="secondary-navigation">
+<a class="text-[10px] font-mono uppercase tracking-widest text-panel-accent border-b border-panel-accent h-full flex items-center" href="#">Local Docs</a>
+<a class="text-[10px] font-mono uppercase tracking-widest text-gray-500 hover:text-gray-300" href="#">Online Docs</a>
+<a class="text-[10px] font-mono uppercase tracking-widest text-gray-500 hover:text-gray-300" href="#">Kanban Plans</a>
+<a class="text-[10px] font-mono uppercase tracking-widest text-gray-500 hover:text-gray-300" href="#">Research</a>
+<a class="text-[10px] font-mono uppercase tracking-widest text-gray-500 hover:text-gray-300" href="#">NotebookLM</a>
+<a class="text-[10px] font-mono uppercase tracking-widest text-gray-500 hover:text-gray-300" href="#">Design System</a>
+<a class="text-[10px] font-mono uppercase tracking-widest text-gray-500 hover:text-gray-300" href="#">HTML Previews</a>
+<a class="text-[10px] font-mono uppercase tracking-widest text-gray-500 hover:text-gray-300" href="#">Tickets</a>
+</div>
+<div class="bg-black/40 px-4 py-2 flex items-center border-b border-panel-border flex-shrink-0">
+<span class="text-[10px] font-mono text-gray-500 uppercase tracking-tight mr-4">Active Design Doc:</span>
+<span class="text-[10px] font-mono text-gray-300 uppercase">None</span>
+</div>
+<!-- END: SubHeader -->
+<div class="flex flex-1 overflow-hidden">
+<!-- BEGIN: LeftSidebar -->
+<aside class="w-64 bg-sidebar-bg border-r border-panel-border flex flex-col flex-shrink-0" data-purpose="project-sidebar">
+<!-- Toolbar -->
+<div class="p-3 space-y-3">
+<div class="flex items-center space-x-2">
+<button class="bg-panel-dark border border-panel-border text-[10px] font-mono px-2 py-1 flex-1 text-left flex justify-between items-center text-gray-400">
+            All Workspaces
+            <svg class="w-3 h-3" fill="currentColor" viewbox="0 0 20 20"><path clip-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" fill-rule="evenodd"></path></svg>
+</button>
+</div>
+<div class="flex space-x-1">
+<button class="bg-gray-800/40 border border-panel-border text-[9px] font-mono px-2 py-1 text-gray-400 flex-1 hover:bg-gray-700">SET AS ACTIVE PLANNING CONTEXT</button>
+<button class="bg-gray-800/40 border border-panel-border text-[9px] font-mono px-2 py-1 text-gray-400 hover:bg-gray-700 uppercase">Edit</button>
+</div>
+<div class="flex items-center justify-between pt-2">
+<button class="text-[10px] font-mono border border-panel-border px-2 py-1 text-gray-500 hover:bg-gray-800">Manage Folders</button>
+<button class="text-[10px] font-mono text-gray-500 hover:text-panel-accent">«</button>
+</div>
+</div>
+<!-- Projects Section -->
+<div class="flex-1 overflow-y-auto p-3 space-y-4">
+<div>
+<div class="flex items-center justify-between mb-3">
+<h3 class="text-xs font-header font-bold text-panel-accent tracking-widest uppercase">Projects</h3>
+<button class="text-[9px] font-mono bg-panel-accent/10 text-panel-accent border border-panel-accent/30 px-1.5 py-0.5 uppercase">Import</button>
+</div>
+<p class="text-[9px] font-mono text-gray-600 uppercase mb-2">Data Analytics Migration</p>
+<div class="space-y-2">
+<!-- Active Project Card -->
+<div class="bg-card-active border-2 neon-border-active p-2 rounded-sm" data-purpose="active-item-card">
+<h4 class="text-[11px] font-semibold text-white leading-tight mb-1">**Comparative Analysis of Amplitude and...</h4>
+<p class="text-[9px] font-mono text-gray-500 mb-2">Comparative Analysis of Amplitude and Mixpanel_...</p>
+<div class="flex space-x-1">
+<button class="bg-gray-800/80 border border-panel-border text-[8px] font-mono px-1.5 py-0.5 text-gray-300">IMPORT</button>
+<button class="bg-gray-800/80 border border-panel-border px-1 py-0.5 text-gray-300">
+<svg class="w-3 h-3" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+</button>
+<button class="bg-gray-800/80 border border-panel-border px-1 py-0.5 text-gray-300">
+<svg class="w-3 h-3" fill="currentColor" viewbox="0 0 20 20"><path clip-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" fill-rule="evenodd"></path></svg>
+</button>
+</div>
+</div>
+<!-- Inactive Cards -->
+<div class="bg-panel-dark border border-panel-border p-2 rounded-sm opacity-60 hover:opacity-100 transition-opacity">
+<h4 class="text-[11px] font-semibold text-gray-300 leading-tight mb-1">**Enterprise Digital Analytics Architectur...</h4>
+<p class="text-[9px] font-mono text-gray-500 mb-2">Enterprise Digital Analytics Architecture_ A Comp...</p>
+<div class="flex space-x-1">
+<button class="bg-gray-800/80 border border-panel-border text-[8px] font-mono px-1.5 py-0.5 text-gray-300">IMPORT</button>
+<button class="bg-gray-800/80 border border-panel-border px-1 py-0.5 text-gray-300"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button>
+<button class="bg-gray-800/80 border border-panel-border px-1 py-0.5 text-gray-300"><svg class="w-3 h-3" fill="currentColor" viewbox="0 0 20 20"><path clip-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" fill-rule="evenodd"></path></svg></button>
+</div>
+</div>
+</div>
+</div>
+<div>
+<div class="flex items-center justify-between mb-3">
+<h3 class="text-xs font-header font-bold text-panel-accent tracking-widest uppercase">Docs</h3>
+<button class="text-[9px] font-mono bg-panel-accent/10 text-panel-accent border border-panel-accent/30 px-1.5 py-0.5 uppercase">Import</button>
+</div>
+<div class="bg-panel-dark border border-panel-border p-2 rounded-sm mb-2 opacity-80">
+<h4 class="text-[11px] font-semibold text-gray-200 leading-tight mb-1">Autism 360 App - Amplitude Dashboard ...</h4>
+<p class="text-[9px] font-mono text-gray-500 mb-2">amplitude-dashboard-overview.md</p>
+<div class="flex space-x-1">
+<button class="bg-gray-800/80 border border-panel-border text-[8px] font-mono px-1.5 py-0.5 text-gray-300">IMPORT</button>
+<button class="bg-gray-800/80 border border-panel-border px-1 py-0.5 text-gray-300"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button>
+<button class="bg-gray-800/80 border border-panel-border px-1 py-0.5 text-gray-300"><svg class="w-3 h-3" fill="currentColor" viewbox="0 0 20 20"><path clip-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" fill-rule="evenodd"></path></svg></button>
+</div>
+</div>
+</div>
+</div>
+</aside>
+<!-- END: LeftSidebar -->
+<!-- BEGIN: MainContent -->
+<main class="flex-1 flex flex-col overflow-hidden grid-bg" data-purpose="documentation-viewer">
+<div class="flex-1 overflow-y-auto p-12 scroll-smooth">
+<div class="max-w-4xl mx-auto space-y-12">
+<!-- Document Header -->
+<article class="space-y-8">
+<header class="space-y-6">
+<h1 class="text-5xl font-header font-medium text-white neon-text uppercase leading-[1.1] border-l-4 border-panel-accent pl-8 py-2">
+                Comparative Analysis of Amplitude and Mixpanel: <br/>
+<span class="text-3xl opacity-90">Product Analytics, Data Architecture, AI Integration, and Economics</span>
+</h1>
+<div class="h-px w-full bg-gradient-to-r from-panel-accent/50 to-transparent"></div>
+</header>
+<!-- Executive Summary -->
+<section class="space-y-6" data-purpose="content-section">
+<h2 class="text-2xl font-header font-medium text-panel-accent neon-text uppercase tracking-wide border-b border-panel-accent/30 pb-2">
+                Executive Summary and Market Context
+              </h2>
+<div class="space-y-6 text-gray-300 leading-relaxed text-lg">
+<p>
+                  In the contemporary digital economy, the capacity to capture, process, and derive actionable intelligence from user behavioral data is a fundamental prerequisite for commercial success. As software-as-a-service (SaaS), e-commerce, and direct-to-consumer platforms mature, organizations are moving beyond traditional pageview-centric web analytics to sophisticated, event-driven product analytics platforms. Within this highly competitive ecosystem, two platforms have emerged as the definitive market leaders: Amplitude and Mixpanel. Both solutions provide robust foundational capabilities designed to map user journeys, measure long-term retention, and optimize conversion funnels. However, beneath these shared operational goals, Amplitude and Mixpanel diverge significantly in their architectural philosophies, data governance frameworks, artificial intelligence integration, and economic models.
+                </p>
+<p>
+                  As of 2026, the expectations placed upon product analytics platforms have escalated dramatically. Modern enterprise environments require these tools to integrate natively with cloud data warehouses, deploy advanced artificial intelligence to automate complex diagnostic queries, and embed analytical insights directly into collaborative workspaces such as Slack and Microsoft Teams. Furthermore, the convergence of analytics with customer data platforms (CDPs) and feature management systems has fundamentally altered the total cost of ownership (TCO) calculation for prospective buyers.
+                </p>
+<p>
+                  This exhaustive research report evaluates Amplitude and Mixpanel across five critical dimensions: core analytical capabilities and behavioral intelligence, data export and warehouse-native architectures, artificial intelligence and autonomous reasoning, workflow integrations via ChatOps, and comprehensive pricing models. The subsequent analysis...
+                </p>
+</div>
+</section>
+</article>
+</div>
+</div>
+<!-- Footer Indicator -->
+<footer class="h-8 bg-black/60 border-t border-panel-border flex items-center justify-between px-4" data-purpose="content-footer">
+<div class="flex items-center space-x-4">
+<span class="text-[9px] font-mono text-panel-accent/60 uppercase">SYSTEM_STATUS: NOMINAL</span>
+<span class="text-[9px] font-mono text-gray-600 uppercase">PAGE: 01 / 24</span>
+</div>
+<div class="flex items-center space-x-4">
+<div class="flex space-x-1">
+<span class="w-1.5 h-1.5 rounded-full bg-green-500/50"></span>
+<span class="w-1.5 h-1.5 rounded-full bg-gray-700"></span>
+<span class="w-1.5 h-1.5 rounded-full bg-gray-700"></span>
+</div>
+<span class="text-[9px] font-mono text-gray-600">SECURE_SYNC_ENBALED</span>
+</div>
+</footer>
+</main>
+<!-- END: MainContent -->
+<!-- Quick Action Fab -->
+<div class="absolute bottom-6 right-6">
+<button class="w-10 h-10 bg-gray-800/80 border border-panel-border rounded-lg flex items-center justify-center text-gray-400 hover:text-panel-accent hover:border-panel-accent/50 transition-all shadow-2xl backdrop-blur-sm">
+<svg class="w-5 h-5" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+</button>
+</div>
+</div>
+</body></html>

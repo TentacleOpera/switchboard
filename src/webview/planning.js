@@ -956,12 +956,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     btn.title = action === 'Link Doc' ? 'Copy validated document path' : 'Delete';
                     btn.setAttribute('data-tooltip', action === 'Link Doc' ? 'Copy validated document path' : 'Delete');
                     btn.setAttribute('aria-label', action === 'Link Doc' ? 'Copy link to document' : 'Delete document');
-                } else if (action === 'Serve & Open') {
-                    btn.className = 'card-icon-btn html-serve-btn';
-                    btn.innerHTML = '<span class="btn-label">Open</span>';
-                    btn.title = 'Start local server and open in browser';
-                    btn.setAttribute('data-tooltip', 'Start local server and open in browser');
-                    btn.setAttribute('aria-label', 'Open in browser via local server');
                 } else {
                     // Text button (Set Context, Import, Sync)
                     btn.className = 'planning-card-btn';
@@ -989,18 +983,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                             docId: nodeId,
                             docName: title,
                             sourceFolder: nodeMetadata.sourceFolder
-                        });
-                    } else if (action === 'Serve & Open') {
-                        if (!nodeMetadata?.absolutePath) {
-                            console.error('[PlanningPanel] Serve & Open clicked but absolutePath is missing');
-                            return;
-                        }
-                        vscode.postMessage({
-                            type: 'serveAndOpenHtml',
-                            docId: nodeId,
-                            docName: title,
-                            absolutePath: nodeMetadata.absolutePath,
-                            sourceFolder: nodeMetadata?.sourceFolder
                         });
                     } else if (action === 'Delete') {
                         if (deleteHandler) {
@@ -1095,33 +1077,12 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             let actions = [];
             if (sourceId === 'local-folder') {
                 actions = ['Import', 'Link Doc', 'Delete'];
-            } else if (sourceId === 'design-folder') {
-                actions = ['Set Context', 'Link Doc'];
-            } else if (sourceId === 'html-folder') {
-                // Open (serve in browser) only makes sense for actual HTML pages
-                const isHtmlFile = /\.html?$/i.test(node.name || node.id || '');
-                actions = isHtmlFile ? ['Serve & Open', 'Link Doc'] : ['Link Doc'];
             } else {
                 actions = ['Import', 'Link Doc'];
             }
 
             let title = node.title || node.name;
             let subtitle = (node.title && node.title !== node.name) ? node.name : undefined;
-            if (sourceId === 'design-folder') {
-                const fullName = node.name || node.id || '';
-                const lastDot = fullName.lastIndexOf('.');
-                title = lastDot > 0 ? fullName.substring(0, lastDot) : fullName;
-                const ext = lastDot > 0 ? fullName.substring(lastDot).toLowerCase() : '';
-                if (['.md', '.markdown'].includes(ext)) subtitle = 'Markdown';
-                else if (['.yaml', '.yml'].includes(ext)) subtitle = 'YAML';
-                else if (ext === '.json') subtitle = 'JSON';
-                else if (['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(ext)) {
-                    const imageLabels = { '.png': 'PNG', '.jpg': 'JPEG', '.jpeg': 'JPEG', '.gif': 'GIF', '.svg': 'SVG', '.webp': 'WEBP', '.bmp': 'BMP' };
-                    subtitle = imageLabels[ext];
-                } else {
-                    subtitle = undefined;
-                }
-            }
 
             const cardWrapper = renderDocCard({
                 title,
@@ -1152,7 +1113,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         return { wrapper: container, childContainer };
     }
 
-
+    function loadDocumentPreview(sourceId, docId, docName) {
         if (state.dirtyFlags.local) {
             exitEditMode('local', true);
         }
@@ -2027,49 +1988,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         const { sourceId, requestId, error } = msg;
 
         if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
-
-        // Route html-folder errors to the HTML preview area
-        if (sourceId === 'html-folder') {
-            resetHtmlBanner();
-            const initialState = document.getElementById('html-initial-state');
-            const loadingState = document.getElementById('html-loading-state');
-            const imageContainer = document.getElementById('image-preview-container');
-            if (initialState) initialState.style.display = 'none';
-            if (loadingState) loadingState.style.display = 'none';
-            if (imageContainer) imageContainer.style.display = 'none';
-
-            const statusHtml = document.getElementById('status-html');
-            if (statusHtml) {
-                statusHtml.textContent = 'Error: ' + error;
-                statusHtml.style.color = '';
-            }
-            const iframe = document.getElementById('html-preview-frame');
-            const iframeWrapper = document.getElementById('html-preview-wrapper');
-            if (iframeWrapper) iframeWrapper.style.display = 'flex';
-            if (iframe) {
-                iframe.removeAttribute('src');  // Clear any src-based navigation
-                iframe.removeAttribute('srcdoc');  // Destroy the attribute to guarantee a clean browsing context
-                iframe.srcdoc = `<html><body style="background:#000;color:#e0e0e0;font-family:sans-serif;padding:2em"><p>Error: ${error.replace(/</g, '&lt;')}</p></body></html>`;
-            }
-            return;
-        }
-
-        if (sourceId === 'design-folder') {
-            const statusDesign = document.getElementById('status-design');
-            if (statusDesign) {
-                statusDesign.textContent = 'Error: ' + error;
-                statusDesign.style.color = 'var(--vscode-errorForeground, #ff6b6b)';
-            }
-            const previewDesign = document.getElementById('markdown-preview-design');
-            if (previewDesign) {
-                previewDesign.innerHTML = `<div class="empty-state" style="color:var(--vscode-errorForeground, #ff6b6b)">Error: ${error}</div>`;
-            }
-            const imageContainerDesign = document.getElementById('image-preview-container-design');
-            if (imageContainerDesign) {
-                imageContainerDesign.style.display = 'none';
-            }
-            return;
-        }
 
         const isOnline = ONLINE_SOURCES.includes(sourceId);
         const targetPreview = isOnline ? markdownPreviewOnline : markdownPreview;
@@ -4708,40 +4626,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
         vscode.postMessage({ type: 'addLocalFolder', workspaceRoot: state.localWorkspaceRootFilter || currentWorkspaceRoot });
     });
 
-    // HTML Folder modal close (X button)
-    const btnCloseHtmlFolderModal = document.getElementById('btn-close-html-folder-modal');
-    if (btnCloseHtmlFolderModal) {
-        btnCloseHtmlFolderModal.addEventListener('click', () => {
-            const modal = document.getElementById('folder-modal-html');
-            if (modal) modal.style.display = 'none';
-        });
-    }
-
-    // HTML Folder modal close (backdrop click)
-    const folderModalHtml = document.getElementById('folder-modal-html');
-    if (folderModalHtml) {
-        folderModalHtml.addEventListener('click', (e) => {
-            if (e.target.id === 'folder-modal-html') {
-                e.target.style.display = 'none';
-            }
-        });
-    }
-
-    // Modal HTML folder management buttons
-    const btnRefreshHtmlFoldersModal = document.getElementById('btn-refresh-html-folders-modal');
-    if (btnRefreshHtmlFoldersModal) {
-        btnRefreshHtmlFoldersModal.addEventListener('click', () => {
-            vscode.postMessage({ type: 'refreshSource', sourceId: 'html-folder' });
-        });
-    }
-
-    const btnAddHtmlFolderModal = document.getElementById('btn-add-html-folder-modal');
-    if (btnAddHtmlFolderModal) {
-        btnAddHtmlFolderModal.addEventListener('click', () => {
-            vscode.postMessage({ type: 'addHtmlFolder', workspaceRoot: state.htmlWorkspaceRootFilter || currentWorkspaceRoot });
-        });
-    }
-
     // ===== TICKETS TAB IMPLEMENTATION =====
 
     function initTicketsTab() {
@@ -5738,40 +5622,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
         if (state.linearProjectPickerValue) {
             _restoredLinearProjectPickerValue = state.linearProjectPickerValue;
         }
-    }
-
-    // Design Folder modal close (X button)
-    const btnCloseDesignFolderModal = document.getElementById('btn-close-design-folder-modal');
-    if (btnCloseDesignFolderModal) {
-        btnCloseDesignFolderModal.addEventListener('click', () => {
-            const modal = document.getElementById('folder-modal-design');
-            if (modal) modal.style.display = 'none';
-        });
-    }
-
-    // Design Folder modal close (backdrop click)
-    const folderModalDesign = document.getElementById('folder-modal-design');
-    if (folderModalDesign) {
-        folderModalDesign.addEventListener('click', (e) => {
-            if (e.target.id === 'folder-modal-design') {
-                e.target.style.display = 'none';
-            }
-        });
-    }
-
-    // Modal Design folder management buttons
-    const btnRefreshDesignFoldersModal = document.getElementById('btn-refresh-design-folders-modal');
-    if (btnRefreshDesignFoldersModal) {
-        btnRefreshDesignFoldersModal.addEventListener('click', () => {
-            vscode.postMessage({ type: 'refreshSource', sourceId: 'design-folder' });
-        });
-    }
-
-    const btnAddDesignFolderModal = document.getElementById('btn-add-design-folder-modal');
-    if (btnAddDesignFolderModal) {
-        btnAddDesignFolderModal.addEventListener('click', () => {
-            vscode.postMessage({ type: 'addDesignFolder', workspaceRoot: state.designWorkspaceRootFilter || currentWorkspaceRoot });
-        });
     }
 
     // ── Sync to Online UI ───────────────────────────────────────

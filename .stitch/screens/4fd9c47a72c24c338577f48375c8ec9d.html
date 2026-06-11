@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Safe Haven - Grounding Exercise</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100;300;400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "tertiary-fixed-dim": "#d1e3e2",
+                        "on-secondary-fixed-variant": "#006381",
+                        "surface": "#f6fafa",
+                        "primary-fixed": "#7fe6db",
+                        "secondary-fixed-dim": "#98deff",
+                        "tertiary-container": "#dff1f0",
+                        "surface-tint": "#006b64",
+                        "error-dim": "#67040d",
+                        "on-primary-container": "#00534d",
+                        "on-surface-variant": "#576162",
+                        "on-error-container": "#6e0a12",
+                        "on-secondary-container": "#005974",
+                        "inverse-surface": "#0a0f0f",
+                        "tertiary": "#526262",
+                        "on-error": "#fff7f6",
+                        "background": "#f6fafa",
+                        "surface-container-low": "#eef5f5",
+                        "error": "#a83836",
+                        "surface-container": "#e7eff0",
+                        "on-tertiary-fixed-variant": "#556665",
+                        "on-secondary-fixed": "#00455b",
+                        "surface-dim": "#d1dcdd",
+                        "inverse-primary": "#7fe6db",
+                        "surface-container-high": "#e1eaea",
+                        "on-primary": "#e2fffa",
+                        "outline": "#727d7d",
+                        "tertiary-dim": "#465656",
+                        "on-secondary": "#f3faff",
+                        "inverse-on-surface": "#999e9e",
+                        "on-primary-fixed": "#003e39",
+                        "surface-bright": "#f6fafa",
+                        "tertiary-fixed": "#dff1f0",
+                        "primary-dim": "#005e57",
+                        "primary-container": "#7fe6db",
+                        "secondary-fixed": "#bee9ff",
+                        "on-background": "#2a3435",
+                        "on-surface": "#2a3435",
+                        "on-tertiary-container": "#4b5c5b",
+                        "outline-variant": "#a9b4b5",
+                        "surface-container-highest": "#dae5e5",
+                        "on-tertiary-fixed": "#394949",
+                        "secondary-container": "#bee9ff",
+                        "on-primary-fixed-variant": "#005d57",
+                        "secondary": "#006786",
+                        "secondary-dim": "#005a75",
+                        "on-tertiary": "#eafdfc",
+                        "surface-variant": "#dae5e5",
+                        "error-container": "#fa746f",
+                        "primary": "#006b64",
+                        "surface-container-lowest": "#ffffff",
+                        "primary-fixed-dim": "#71d7cd"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "1rem",
+                        "lg": "2rem",
+                        "xl": "3rem",
+                        "full": "9999px"
+                    },
+                    "fontFamily": {
+                        "headline": ["Inter"],
+                        "body": ["Inter"],
+                        "label": ["Inter"]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background: radial-gradient(circle at center, #005e57 0%, #0a0f0f 100%);
+            min-height: 100vh;
+            color: #f6fafa;
+            overflow-x: hidden;
+        }
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+        }
+        .breathing-circle {
+            box-shadow: 0 0 80px rgba(127, 230, 219, 0.2);
+        }
+        /* Custom subtle scrollbar for content areas */
+        ::-webkit-scrollbar {
+            width: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(127, 230, 219, 0.2);
+            border-radius: 10px;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="antialiased selection:bg-primary-fixed selection:text-on-primary-fixed">
+<!-- Top Navigation Anchor (Shared Component: TopAppBar) -->
+<header class="bg-cyan-50/80 dark:bg-slate-900/80 backdrop-blur-xl docked full-width top-0 z-50 fixed top-0 left-0 right-0">
+<div class="flex justify-between items-center w-full px-8 py-4">
+<div class="flex items-center gap-4">
+<button class="hover:bg-white/20 transition-colors duration-300 p-2 rounded-full flex items-center justify-center">
+<span class="material-symbols-outlined text-teal-800 dark:text-teal-200">close</span>
+</button>
+<h1 class="font-inter tracking-tight font-light headline-lg text-teal-900 dark:text-teal-50 font-semibold">Safe Haven</h1>
+</div>
+<div class="flex items-center">
+<div class="w-10 h-10 rounded-full overflow-hidden bg-teal-100 dark:bg-teal-900 border border-teal-200/20">
+<img alt="Parent Profile" data-alt="soft portrait of a serene woman with a gentle smile in warm natural light with a minimalist aesthetic background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAf68YGHO0ARe4m_PDbZYEoNOQQqxXILbiLIBuydresYHROsjLSS5M2SI_eAuhDnpQljZ7_2fbhqWxNufx-z4AgM269bUdH2Fv4nVU1WBmI0CObe4swg-wzKAJVOUbW-_tYKwYsCcxCMxk6tAUf13H76HIzgdosO4ETFDRiRlFo9M7ySGYKSzLMRaEPsy406UiCdRUppHBcJewOLWvyf6MaghsXpuHdrhCQgK21SVywQh1oLfmGwVx3MXRsRYfZnF2blx_9NwsYoOvm"/>
+</div>
+</div>
+</div>
+</header>
+<main class="relative pt-24 pb-32 px-6 max-w-4xl mx-auto flex flex-col items-center min-h-screen">
+<!-- Section 1: Breathing Anchor -->
+<section class="flex flex-col items-center justify-center py-12 text-center">
+<div class="mb-8">
+<h2 class="text-on-primary font-headline text-3xl font-light tracking-tight opacity-80 mb-2">Finding Your Center</h2>
+<p class="text-on-primary-fixed-variant font-body text-sm tracking-wide">4-7-8 Rhythm</p>
+</div>
+<!-- Breathing Visualizer -->
+<div class="relative w-72 h-72 md:w-96 md:h-96 flex items-center justify-center">
+<!-- Inner soft circles (layered for "soul") -->
+<div class="absolute w-full h-full rounded-full bg-primary/10 breathing-circle animate-pulse"></div>
+<div class="absolute w-3/4 h-3/4 rounded-full bg-primary/20 backdrop-blur-sm"></div>
+<div class="absolute w-1/2 h-1/2 rounded-full bg-gradient-to-tr from-primary to-primary-fixed shadow-2xl flex items-center justify-center">
+<span class="text-on-primary text-2xl font-light tracking-widest uppercase">Inhale</span>
+</div>
+</div>
+<!-- Cycle Status -->
+<div class="mt-12 flex gap-8">
+<div class="flex flex-col items-center">
+<span class="text-primary-fixed font-semibold text-lg">4s</span>
+<span class="text-on-surface-variant text-[10px] uppercase tracking-tighter">Inhale</span>
+</div>
+<div class="w-px h-8 bg-outline-variant/30"></div>
+<div class="flex flex-col items-center">
+<span class="text-primary-fixed font-semibold text-lg">7s</span>
+<span class="text-on-surface-variant text-[10px] uppercase tracking-tighter">Hold</span>
+</div>
+<div class="w-px h-8 bg-outline-variant/30"></div>
+<div class="flex flex-col items-center">
+<span class="text-primary-fixed font-semibold text-lg">8s</span>
+<span class="text-on-surface-variant text-[10px] uppercase tracking-tighter">Exhale</span>
+</div>
+</div>
+</section>
+<!-- Section 2: Grounding Triggers (Bento-lite Asymmetric Grid) -->
+<section class="w-full mt-16">
+<h3 class="text-primary-fixed font-headline text-xl font-light mb-8 px-2 tracking-wide">Grounding Exercises</h3>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+<!-- Trigger Card 1 -->
+<div class="glass-panel p-8 rounded-xl border border-white/5 flex flex-col gap-4 group hover:bg-white/10 transition-all duration-500">
+<div class="w-12 h-12 rounded-full bg-secondary-container/20 flex items-center justify-center">
+<span class="material-symbols-outlined text-secondary-fixed">hearing</span>
+</div>
+<div>
+<h4 class="text-on-primary font-medium text-lg mb-2">Auditory Anchor</h4>
+<p class="text-on-surface-variant text-sm leading-relaxed">Name 3 specific sounds you can hear right now. The hum of a fan, birds chirping, or your own breath.</p>
+</div>
+</div>
+<!-- Trigger Card 2 -->
+<div class="glass-panel p-8 rounded-xl border border-white/5 flex flex-col gap-4 group hover:bg-white/10 transition-all duration-500 md:mt-8">
+<div class="w-12 h-12 rounded-full bg-primary-container/20 flex items-center justify-center">
+<span class="material-symbols-outlined text-primary-fixed">pan_tool</span>
+</div>
+<div>
+<h4 class="text-on-primary font-medium text-lg mb-2">Tactile Awareness</h4>
+<p class="text-on-surface-variant text-sm leading-relaxed">Feel the texture of your chair or the fabric of your clothes. Notice the temperature against your skin.</p>
+</div>
+</div>
+<!-- Trigger Card 3 -->
+<div class="glass-panel p-8 rounded-xl border border-white/5 flex flex-col gap-4 group hover:bg-white/10 transition-all duration-500">
+<div class="w-12 h-12 rounded-full bg-tertiary-container/20 flex items-center justify-center">
+<span class="material-symbols-outlined text-tertiary-fixed-dim">visibility</span>
+</div>
+<div>
+<h4 class="text-on-primary font-medium text-lg mb-2">Visual Focus</h4>
+<p class="text-on-surface-variant text-sm leading-relaxed">Spot 5 things that are the color blue. Observe their shade and how light hits them.</p>
+</div>
+</div>
+<!-- Trigger Card 4 -->
+<div class="glass-panel p-8 rounded-xl border border-white/5 flex flex-col gap-4 group hover:bg-white/10 transition-all duration-500 md:-mt-8">
+<div class="w-12 h-12 rounded-full bg-secondary-fixed-dim/10 flex items-center justify-center">
+<span class="material-symbols-outlined text-secondary-fixed-dim">air</span>
+</div>
+<div>
+<h4 class="text-on-primary font-medium text-lg mb-2">Olfactory Presence</h4>
+<p class="text-on-surface-variant text-sm leading-relaxed">Is there a scent in the air? If not, imagine the smell of fresh lavender or rain on dry earth.</p>
+</div>
+</div>
+</div>
+</section>
+<!-- Section 3: Sound Sanctuary -->
+<section class="w-full mt-24 mb-12">
+<div class="glass-panel p-8 rounded-xl border border-white/5 flex flex-col md:flex-row items-center gap-8">
+<div class="flex flex-col items-center md:items-start gap-1">
+<h3 class="text-on-primary font-headline text-lg font-medium">Sound Sanctuary</h3>
+<p class="text-on-surface-variant text-xs">Soft Brown Noise</p>
+</div>
+<div class="flex-grow w-full flex items-center gap-4">
+<span class="material-symbols-outlined text-on-surface-variant text-sm">volume_mute</span>
+<div class="relative w-full h-2 bg-white/10 rounded-full overflow-hidden">
+<div class="absolute top-0 left-0 h-full w-2/3 bg-gradient-to-r from-primary to-primary-fixed rounded-full"></div>
+<div class="absolute top-1/2 left-[66%] -translate-y-1/2 w-4 h-4 bg-white rounded-full shadow-lg cursor-pointer"></div>
+</div>
+<span class="material-symbols-outlined text-on-surface-variant text-sm">volume_up</span>
+</div>
+<button class="bg-white/10 p-4 rounded-full hover:bg-white/20 transition-all">
+<span class="material-symbols-outlined text-on-primary">pause</span>
+</button>
+</div>
+</section>
+<!-- Section 4: Exit with Peace -->
+<section class="w-full flex justify-center py-12">
+<button class="bg-gradient-to-r from-primary to-primary-dim px-12 py-5 rounded-xl text-on-primary font-headline font-semibold text-lg tracking-wide shadow-2xl shadow-primary/20 hover:scale-105 transition-transform duration-500 active:scale-95">
+                Exit with Peace
+            </button>
+</section>
+</main>
+<!-- Bottom Navigation Shell (Shared Component: BottomNavBar) -->
+<nav class="fixed bottom-0 left-0 right-0 z-50 flex justify-center pb-safe">
+<div class="bg-white/60 dark:bg-slate-900/60 backdrop-blur-2xl rounded-full mb-6 mx-auto max-w-xs shadow-xl shadow-teal-900/5 flex justify-center items-center gap-2 p-2">
+<!-- Spa Icon (Grounding/Health - Active based on page intent) -->
+<button class="bg-teal-600 dark:bg-teal-400 text-white dark:text-slate-900 rounded-full p-3 scale-110 gentle-spring-animation">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">spa</span>
+</button>
+<!-- Window Icon (Dashboard) -->
+<button class="text-teal-400 dark:text-teal-600 p-3 hover:scale-105 transition-transform duration-500">
+<span class="material-symbols-outlined">window</span>
+</button>
+<!-- Favorite Icon (Wellness) -->
+<button class="text-teal-400 dark:text-teal-600 p-3 hover:scale-105 transition-transform duration-500">
+<span class="material-symbols-outlined">favorite</span>
+</button>
+<!-- Person Icon (Profile) -->
+<button class="text-teal-400 dark:text-teal-600 p-3 hover:scale-105 transition-transform duration-500">
+<span class="material-symbols-outlined">person</span>
+</button>
+</div>
+</nav>
+<!-- Visual Decor for Immersion -->
+<div class="fixed top-[-10%] left-[-10%] w-[40%] h-[40%] bg-primary/10 blur-[120px] rounded-full -z-10"></div>
+<div class="fixed bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-secondary/10 blur-[150px] rounded-full -z-10"></div>
+</body></html>

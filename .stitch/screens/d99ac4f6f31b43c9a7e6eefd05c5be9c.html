@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+
+<html class="h-full" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>AUTOBAN | ARTIFACTS [INDUSTRIAL-MONO]</title>
+<!-- Tailwind CSS CDN -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<!-- Google Fonts for Modern Aerospace Typography -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600;700;800&amp;family=Inter:wght@300;400;500;600&amp;family=Chivo+Mono:wght@300;400;700&amp;display=swap" rel="stylesheet"/>
+<script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            'panel-dark': '#1a1a1a', // Deep charcoal as requested
+            'panel-border': '#2d2d2d',
+            'panel-accent': '#ffb800', // Amber/Warning palette
+            'sidebar-bg': '#1e1e1e',
+            'header-bg': '#141414',
+            'card-active': '#24211a',
+          },
+          fontFamily: {
+            'header': ['Hanken Grotesk', 'sans-serif'], // As per DESIGN_SYSTEM_1
+            'body': ['Inter', 'sans-serif'],
+            'mono': ['Chivo Mono', 'monospace'],
+          },
+        }
+      }
+    }
+  </script>
+<style data-purpose="custom-layout-styles">
+    /* Industrial Grid Effect */
+    .grid-bg {
+      background-color: #1a1a1a;
+      background-image: 
+        linear-gradient(rgba(255, 184, 0, 0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 184, 0, 0.02) 1px, transparent 1px);
+      background-size: 32px 32px;
+      position: relative;
+    }
+    
+    /* Hardware/Recessed feel */
+    .recessed-panel {
+      box-shadow: inset 2px 2px 4px rgba(0,0,0,0.5), inset -1px -1px 2px rgba(255,255,255,0.05);
+      border: 1px solid #2d2d2d;
+    }
+    
+    /* Tactical Typography as per DOCUMENT_3 */
+    .tactical-h1 {
+      font-family: 'Hanken Grotesk', sans-serif;
+      text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
+    }
+    
+    .tactical-h2, .tactical-h3 {
+      font-family: 'Hanken Grotesk', sans-serif;
+      text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      color: #ffb800;
+      text-shadow: 0 0 10px rgba(255, 184, 0, 0.6), 0 0 20px rgba(255, 184, 0, 0.2);
+    }
+
+    .tactical-label {
+      font-family: 'Hanken Grotesk', sans-serif;
+      text-transform: uppercase;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      color: #ffb800;
+      text-shadow: 0 0 8px rgba(255, 184, 0, 0.5);
+    }
+
+    /* Physical-looking button triggers */
+    .physical-btn {
+      background: #2a2a2a;
+      border-top: 1px solid #3d3d3d;
+      border-left: 1px solid #3d3d3d;
+      border-right: 1px solid #111111;
+      border-bottom: 2px solid #000000;
+      transition: all 0.1s;
+    }
+    .physical-btn:active {
+      border-top: 2px solid #000000;
+      border-bottom: 1px solid #3d3d3d;
+      transform: translateY(1px);
+    }
+
+    /* Scanline overlay */
+    .scanlines {
+      background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.15) 50%);
+      background-size: 100% 4px;
+      pointer-events: none;
+    }
+
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #141414;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #3a3a3a;
+      border: 2px solid #141414;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #ffb800;
+    }
+  </style>
+</head>
+<body class="bg-panel-dark text-gray-400 font-body h-full flex flex-col overflow-hidden">
+<div class="fixed inset-0 scanlines z-[9999]"></div>
+<!-- BEGIN: MainHeader -->
+<header class="bg-header-bg border-b-2 border-black flex items-center justify-between px-4 h-12 flex-shrink-0 z-10" data-purpose="global-header">
+<div class="flex items-center space-x-6">
+<div class="flex items-center space-x-3">
+<div class="w-4 h-4 bg-panel-accent shadow-[0_0_8px_rgba(255,184,0,0.6)]"></div>
+<span class="tactical-label text-sm text-gray-100">AUTOBAN</span>
+</div>
+<nav class="flex items-center space-x-0.5">
+<div class="bg-panel-dark border-x border-t border-panel-border px-4 py-1.5 flex items-center space-x-2 relative top-[1px]">
+<svg class="w-3.5 h-3.5 text-panel-accent" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+<span class="text-[10px] font-mono uppercase tracking-widest text-white">Artifacts.sys</span>
+<button class="hover:text-panel-accent ml-2"><svg class="w-3 h-3" fill="currentColor" viewbox="0 0 20 20"><path clip-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" fill-rule="evenodd"></path></svg></button>
+</div>
+</nav>
+</div>
+<div class="flex items-center space-x-4 text-gray-500">
+<button class="p-1 hover:text-panel-accent transition-colors"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707M16.243 17.657l.707.707M7.357 6.343l.707.707" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button>
+<button class="p-1 hover:text-panel-accent transition-colors"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button>
+<div class="h-6 w-px bg-panel-border"></div>
+<button class="p-1 hover:text-panel-accent transition-colors"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M4 6h16M4 12h16m-7 6h7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button>
+</div>
+</header>
+<!-- END: MainHeader -->
+<!-- BEGIN: SubHeader -->
+<div class="bg-sidebar-bg border-b-2 border-black flex items-center h-10 px-4 space-x-6 flex-shrink-0 overflow-x-auto no-scrollbar" data-purpose="secondary-navigation">
+<a class="text-[10px] font-mono uppercase tracking-[0.2em] text-panel-accent font-bold border-b-2 border-panel-accent h-full flex items-center" href="#">Local Docs</a>
+<a class="text-[10px] font-mono uppercase tracking-[0.2em] text-gray-500 hover:text-gray-300" href="#">Online Docs</a>
+<a class="text-[10px] font-mono uppercase tracking-[0.2em] text-gray-500 hover:text-gray-300" href="#">Kanban Plans</a>
+<a class="text-[10px] font-mono uppercase tracking-[0.2em] text-gray-500 hover:text-gray-300" href="#">Research</a>
+<a class="text-[10px] font-mono uppercase tracking-[0.2em] text-gray-500 hover:text-gray-300" href="#">NotebookLM</a>
+<a class="text-[10px] font-mono uppercase tracking-[0.2em] text-gray-500 hover:text-gray-300" href="#">Design System</a>
+<a class="text-[10px] font-mono uppercase tracking-[0.2em] text-gray-500 hover:text-gray-300" href="#">HTML Previews</a>
+<a class="text-[10px] font-mono uppercase tracking-[0.2em] text-gray-500 hover:text-gray-300" href="#">Tickets</a>
+</div>
+<div class="bg-[#111] px-4 py-1.5 flex items-center border-b border-panel-border flex-shrink-0">
+<div class="flex items-center space-x-2">
+<div class="w-1.5 h-1.5 rounded-full bg-red-600 animate-pulse"></div>
+<span class="text-[9px] font-mono text-gray-600 uppercase tracking-tighter">Active Design Doc:</span>
+</div>
+<span class="text-[9px] font-mono text-gray-400 uppercase ml-4 bg-panel-border px-2 py-0.5">None_Selected</span>
+</div>
+<!-- END: SubHeader -->
+<div class="flex flex-1 overflow-hidden">
+<!-- BEGIN: LeftSidebar -->
+<aside class="w-72 bg-sidebar-bg border-r-2 border-black flex flex-col flex-shrink-0 overflow-hidden" data-purpose="project-sidebar">
+<!-- Toolbar -->
+<div class="p-4 space-y-4 border-b border-panel-border bg-black/10">
+<div class="recessed-panel p-1 bg-black/20">
+<button class="w-full text-[10px] font-mono px-3 py-2 flex justify-between items-center text-gray-400 uppercase tracking-widest">
+          All Workspaces
+          <svg class="w-3 h-3 text-panel-accent" fill="currentColor" viewbox="0 0 20 20"><path clip-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" fill-rule="evenodd"></path></svg>
+</button>
+</div>
+<div class="flex space-x-2">
+<button class="physical-btn text-[9px] font-mono px-3 py-2 text-gray-300 flex-1 uppercase tracking-tight hover:text-panel-accent">Set Planning Context</button>
+<button class="physical-btn text-[9px] font-mono px-4 py-2 text-gray-300 uppercase hover:text-panel-accent">Edit</button>
+</div>
+<div class="flex items-center justify-between pt-1">
+<button class="physical-btn text-[9px] font-mono px-3 py-1.5 text-gray-400 uppercase">Folder MGMT</button>
+<button class="text-[10px] font-mono text-gray-600 hover:text-panel-accent">ID: 04-2026-X</button>
+</div>
+</div>
+<!-- Projects Section -->
+<div class="flex-1 overflow-y-auto p-4 space-y-6">
+<div>
+<div class="flex items-center justify-between mb-4">
+<h3 class="tactical-label text-[11px]">Projects_Archive</h3>
+<button class="physical-btn text-[9px] font-mono px-2 py-0.5 text-panel-accent">Import</button>
+</div>
+<div class="space-y-4">
+<!-- Active Project Card -->
+<div class="bg-card-active border-l-4 border-panel-accent recessed-panel p-3 relative" data-purpose="active-item-card">
+<div class="absolute top-0 right-0 p-1 text-[8px] font-mono text-panel-accent/40">ID: PRJ-001</div>
+<h4 class="text-[11px] font-bold text-panel-accent uppercase leading-tight mb-2 tracking-wide">Comparative Analysis: Amplitude vs Mixpanel</h4>
+<p class="text-[9px] font-mono text-gray-500 mb-3 leading-relaxed">System metadata: behavioral_analytics_v4.pdf</p>
+<div class="flex space-x-2">
+<button class="physical-btn bg-black/40 text-[8px] font-mono px-2 py-1 text-panel-accent">MOUNT_FILE</button>
+<button class="physical-btn bg-black/40 p-1 text-gray-400 hover:text-panel-accent">
+<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+</button>
+<button class="physical-btn bg-black/40 p-1 text-gray-400 hover:text-red-500">
+<svg class="w-3.5 h-3.5" fill="currentColor" viewbox="0 0 20 20"><path clip-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" fill-rule="evenodd"></path></svg>
+</button>
+</div>
+</div>
+<!-- Inactive Card -->
+<div class="bg-black/20 border border-panel-border p-3 opacity-60 hover:opacity-100 transition-opacity">
+<h4 class="text-[11px] font-bold text-gray-300 uppercase leading-tight mb-2 tracking-wide">Enterprise Digital Architecture</h4>
+<p class="text-[9px] font-mono text-gray-600 mb-3">System metadata: arch_overview_final.md</p>
+<div class="flex space-x-2">
+<button class="physical-btn text-[8px] font-mono px-2 py-1 text-gray-400">READ_ONLY</button>
+<button class="physical-btn p-1 text-gray-500 hover:text-panel-accent"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button>
+</div>
+</div>
+</div>
+</div>
+<div>
+<div class="flex items-center justify-between mb-4">
+<h3 class="tactical-label text-[11px]">System_Docs</h3>
+<button class="physical-btn text-[9px] font-mono px-2 py-0.5 text-panel-accent">New</button>
+</div>
+<div class="recessed-panel bg-black/20 p-3 opacity-80 border-dashed">
+<h4 class="text-[11px] font-bold text-gray-400 uppercase mb-2">Autism 360 - Dashboard v2</h4>
+<p class="text-[9px] font-mono text-gray-600 mb-3">amplitude-dashboard-overview.md</p>
+<div class="flex space-x-2">
+<button class="physical-btn text-[8px] font-mono px-2 py-1 text-gray-400">MOUNT</button>
+</div>
+</div>
+</div>
+</div>
+</aside>
+<!-- END: LeftSidebar -->
+<!-- BEGIN: MainContent -->
+<main class="flex-1 flex flex-col overflow-hidden grid-bg border-r-2 border-black" data-purpose="documentation-viewer">
+<div class="flex-1 overflow-y-auto p-12 scroll-smooth">
+<div class="max-w-4xl mx-auto space-y-12">
+<!-- Document Header -->
+<article class="space-y-10">
+<header class="space-y-6 relative">
+<div class="absolute -left-12 top-0 h-full w-1 bg-panel-accent shadow-[0_0_15px_rgba(255,184,0,0.4)]"></div>
+<h1 class="tactical-h1 text-4xl uppercase leading-tight text-white border-l-4 border-panel-accent pl-8 py-4 bg-black/20 border-y border-r border-panel-border">
+              Comparative Analysis: <br/>
+<span class="text-2xl text-panel-accent/90 block mt-2">Amplitude vs Mixpanel / Product Analytics / AI / Economics</span>
+</h1>
+<div class="flex justify-between items-center text-[10px] font-mono text-panel-accent/50 uppercase tracking-widest px-8">
+<span>SECURITY_CLEARANCE: LEVEL_4</span>
+<span>VERSION: 01.A-2026</span>
+</div>
+</header>
+<!-- Executive Summary -->
+<section class="space-y-8" data-purpose="content-section">
+<div class="flex items-center space-x-4">
+<h2 class="tactical-h2 text-xl pb-1 border-b-2 border-panel-accent/50 pr-8">
+                Executive Summary and Market Context
+              </h2>
+<div class="flex-1 h-px bg-panel-border"></div>
+</div>
+<div class="space-y-6 text-gray-300 leading-relaxed text-lg font-light tracking-wide bg-black/10 p-8 recessed-panel border-panel-border">
+<p class="first-letter:text-5xl first-letter:font-header first-letter:mr-3 first-letter:float-left first-letter:text-panel-accent first-letter:mt-1">
+                In the contemporary digital economy, the capacity to capture, process, and derive actionable intelligence from user behavioral data is a fundamental prerequisite for commercial success. As software-as-a-service (SaaS), e-commerce, and direct-to-consumer platforms mature, organizations are moving beyond traditional pageview-centric web analytics to sophisticated, event-driven product analytics platforms. Within this highly competitive ecosystem, two platforms have emerged as the definitive market leaders: Amplitude and Mixpanel. Both solutions provide robust foundational capabilities designed to map user journeys, measure long-term retention, and optimize conversion funnels. 
+              </p>
+<p>
+                As of 2026, the expectations placed upon product analytics platforms have escalated dramatically. Modern enterprise environments require these tools to integrate natively with cloud data warehouses, deploy advanced artificial intelligence to automate complex diagnostic queries, and embed analytical insights directly into collaborative workspaces such as Slack and Microsoft Teams.
+              </p>
+<div class="border-y border-panel-accent/20 py-4 my-8">
+<p class="text-panel-accent/80 italic font-mono text-base text-center">
+                  "Architecture philosophies, data governance frameworks, AI integration, and economic models diverge significantly."
+                </p>
+</div>
+<p>
+                This exhaustive research report evaluates Amplitude and Mixpanel across five critical dimensions: core analytical capabilities and behavioral intelligence, data export and warehouse-native architectures, artificial intelligence and autonomous reasoning, workflow integrations via ChatOps, and comprehensive pricing models.
+              </p>
+</div>
+</section>
+</article>
+</div>
+</div>
+<!-- Footer Indicator -->
+<footer class="h-8 bg-[#141414] border-t-2 border-black flex items-center justify-between px-4 z-10" data-purpose="content-footer">
+<div class="flex items-center space-x-6">
+<span class="text-[9px] font-mono text-panel-accent/70 uppercase tracking-widest flex items-center">
+<span class="w-1.5 h-1.5 bg-panel-accent mr-2 shadow-[0_0_5px_rgba(255,184,0,0.8)]"></span>
+          SYS_STATUS: NOMINAL
+        </span>
+<span class="text-[9px] font-mono text-gray-600 uppercase">PAGE_INDEX: 01 // 24</span>
+</div>
+<div class="flex items-center space-x-6">
+<div class="flex space-x-1.5">
+<span class="w-1.5 h-3 bg-panel-accent/30"></span>
+<span class="w-1.5 h-3 bg-panel-accent/30"></span>
+<span class="w-1.5 h-3 bg-panel-accent"></span>
+</div>
+<span class="text-[9px] font-mono text-gray-500 uppercase tracking-tighter">Secure_Encrypted_Link_Active</span>
+</div>
+</footer>
+</main>
+<!-- END: MainContent -->
+<!-- Quick Action Fab -->
+<div class="absolute bottom-10 right-10 z-20">
+<button class="w-12 h-12 physical-btn rounded-none flex items-center justify-center text-panel-accent shadow-2xl backdrop-blur-md group hover:bg-panel-accent hover:text-black transition-all">
+<svg class="w-6 h-6 transform group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"></path></svg>
+<span class="absolute -top-8 right-0 bg-panel-accent text-black text-[8px] font-bold px-1 py-0.5 opacity-0 group-hover:opacity-100 transition-opacity uppercase font-mono">Execute_cmd</span>
+</button>
+</div>
+</div>
+</body></html>

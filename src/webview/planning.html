@@ -278,8 +278,6 @@
 
         .content-row.collapsed #tree-pane,
         .content-row.collapsed #tree-pane-online,
-        .content-row.collapsed #tree-pane-design,
-        .content-row.collapsed #tree-pane-html,
         .content-row.collapsed #tree-pane-tickets {
             padding: 4px;
             overflow: hidden;
@@ -287,8 +285,6 @@
 
         .content-row.collapsed #tree-pane > *:not(.sidebar-toggle-row),
         .content-row.collapsed #tree-pane-online > *:not(.sidebar-toggle-row),
-        .content-row.collapsed #tree-pane-design > *:not(.sidebar-toggle-row),
-        .content-row.collapsed #tree-pane-html > *:not(.sidebar-toggle-row),
         .content-row.collapsed #tree-pane-tickets > *:not(.sidebar-toggle-row) {
             display: none !important;
         }
@@ -653,7 +649,6 @@
 
         #tree-pane,
         #tree-pane-online,
-        #tree-pane-html,
         #tree-pane-tickets {
             position: relative;
             background: var(--panel-bg2);
@@ -943,13 +938,6 @@
             overflow-y: auto;
             padding: 0 16px 16px 16px;
             height: 100%;
-        }
-
-        #preview-pane-design {
-            background: var(--panel-bg);
-        }
-        #preview-pane-html {
-            background: var(--panel-bg);
         }
 
         .preview-content-wrapper {
@@ -1998,10 +1986,8 @@
             will-change: transform;
         }
         /* Image preview viewports must fill the container so flex centering is a no-op
-           and fitToContainer's top-left-origin pan math holds — mirrors the inline
-           width/height:100% on the iframe viewport (#html-preview-wrapper). */
-        #image-preview-container .zoomable-viewport,
-        #image-preview-container-design .zoomable-viewport {
+           and fitToContainer's top-left-origin pan math holds. */
+        #image-preview-container .zoomable-viewport {
             width: 100%;
             height: 100%;
         }
@@ -2167,8 +2153,6 @@
         /* Sidebar tree panes */
         .cyber-theme-enabled #tree-pane,
         .cyber-theme-enabled #tree-pane-online,
-        .cyber-theme-enabled #tree-pane-design,
-        .cyber-theme-enabled #tree-pane-html,
         .cyber-theme-enabled #tree-pane-tickets {
             background: rgba(10, 10, 10, 0.70);
             backdrop-filter: blur(8px);
@@ -2194,8 +2178,6 @@
            These sit directly above the body grid with no opaque ancestor in the way. */
         .cyber-theme-enabled #preview-pane,
         .cyber-theme-enabled #preview-pane-online,
-        .cyber-theme-enabled #preview-pane-design,
-        .cyber-theme-enabled #preview-pane-html,
         .cyber-theme-enabled #preview-pane-tickets {
             background-color: rgba(255, 255, 255, 0.015);
             background-image:
@@ -2403,12 +2385,7 @@
         .json-error { color: var(--vscode-errorForeground, #ff6b6b); padding: 12px; }
         .json-error button { margin-top: 8px; padding: 4px 12px; cursor: pointer; }
         .edit-mode #markdown-preview,
-        .edit-mode #markdown-preview-design,
         .edit-mode #kanban-preview-content {
-            display: none !important;
-        }
-        .edit-mode #image-preview-container-design,
-        .edit-mode #json-preview-container-design {
             display: none !important;
         }
         .edit-mode .markdown-editor {

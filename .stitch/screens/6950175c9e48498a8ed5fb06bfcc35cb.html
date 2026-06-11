@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+
+<html class="h-full" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>AUTOBAN - Artifacts View</title>
+<!-- Tailwind CSS v3 CDN -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<!-- Google Fonts: JetBrains Mono for Retro Terminal aesthetic -->
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;700&amp;display=swap" rel="stylesheet"/>
+<style data-purpose="retro-terminal-theme">
+    :root {
+      --bg-dark: #0a0c0d;
+      --sidebar-bg: #111416;
+      --border-color: #212529;
+      --accent-glow: #a5f3fc; /* Cyan-200 */
+      --grid-line: rgba(255, 255, 255, 0.03);
+    }
+
+    body {
+      font-family: 'JetBrains Mono', monospace;
+      background-color: var(--bg-dark);
+      color: #d1d5db;
+    }
+
+    /* Scanline effect for that retro CRT feel */
+    .scanlines {
+      position: fixed;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: linear-gradient(
+        to bottom,
+        rgba(18, 16, 16, 0) 50%,
+        rgba(0, 0, 0, 0.1) 50%
+      );
+      background-size: 100% 4px;
+      z-index: 100;
+      pointer-events: none;
+      opacity: 0.2;
+    }
+
+    /* Grid background for main content area */
+    .grid-bg {
+      background-image: 
+        linear-gradient(var(--grid-line) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+      background-size: 30px 30px;
+    }
+
+    /* Glowing text effects */
+    .neon-glow {
+      text-shadow: 0 0 10px rgba(165, 243, 252, 0.5), 0 0 20px rgba(165, 243, 252, 0.3);
+    }
+
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0a0c0d;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #475569;
+    }
+  </style>
+<style data-purpose="component-styles">
+    .nav-tab-active {
+      background-color: #1a1e21;
+      border-bottom: 2px solid #38bdf8;
+      color: #38bdf8;
+    }
+    .project-card-active {
+      border: 1px solid #0891b2;
+      box-shadow: inset 0 0 10px rgba(8, 145, 178, 0.2);
+    }
+    .sidebar-button {
+      background-color: #1a1e21;
+      border: 1px solid #334155;
+      font-size: 0.7rem;
+      transition: all 0.2s;
+    }
+    .sidebar-button:hover {
+      background-color: #334155;
+    }
+  </style>
+</head>
+<body class="h-full flex flex-col overflow-hidden">
+<div class="scanlines"></div>
+<!-- BEGIN: TopHeader -->
+<header class="h-12 flex items-center justify-between px-4 border-b border-[#212529] bg-[#0a0c0d] z-50">
+<div class="flex items-center space-x-6">
+<div class="font-bold tracking-widest text-sm flex items-center">
+<span class="mr-2">□</span> AUTOBAN
+      </div>
+<div class="flex items-center space-x-2 text-xs text-gray-400 bg-[#1a1e21] px-3 py-1.5 rounded border border-[#212529]">
+<span>☖ ARTIFACTS</span>
+<button class="ml-2 hover:text-white">×</button>
+</div>
+</div>
+<div class="flex items-center space-x-4 text-gray-400">
+<button class="hover:text-cyan-400 text-lg">☼</button>
+<button class="hover:text-cyan-400 text-lg">⚙</button>
+<button class="hover:text-cyan-400 text-lg">◫</button>
+<button class="hover:text-cyan-400 text-lg">•••</button>
+</div>
+</header>
+<!-- END: TopHeader -->
+<!-- BEGIN: SubNavbar -->
+<nav class="h-10 flex items-center px-2 space-x-1 border-b border-[#212529] bg-[#0a0c0d] z-40">
+<button class="px-4 py-2 text-[10px] font-bold nav-tab-active">LOCAL DOCS</button>
+<button class="px-4 py-2 text-[10px] font-bold text-gray-500 hover:text-gray-300">ONLINE DOCS</button>
+<button class="px-4 py-2 text-[10px] font-bold text-gray-500 hover:text-gray-300">KANBAN PLANS</button>
+<button class="px-4 py-2 text-[10px] font-bold text-gray-500 hover:text-gray-300">RESEARCH</button>
+<button class="px-4 py-2 text-[10px] font-bold text-gray-500 hover:text-gray-300">NOTEBOOKLM</button>
+<button class="px-4 py-2 text-[10px] font-bold text-gray-500 hover:text-gray-300">DESIGN SYSTEM</button>
+<button class="px-4 py-2 text-[10px] font-bold text-gray-500 hover:text-gray-300">HTML PREVIEWS</button>
+<button class="px-4 py-2 text-[10px] font-bold text-gray-500 hover:text-gray-300">TICKETS</button>
+</nav>
+<!-- END: SubNavbar -->
+<!-- BEGIN: ContextBar -->
+<div class="h-10 flex items-center px-4 space-x-4 border-b border-[#212529] bg-[#0a0c0d] text-[11px] text-gray-400">
+<span>Active Design Doc: <span class="text-gray-200">None</span></span>
+</div>
+<!-- END: ContextBar -->
+<!-- BEGIN: MainContentArea -->
+<main class="flex-grow flex overflow-hidden">
+<!-- BEGIN: LeftSidebar -->
+<aside class="w-64 flex-shrink-0 bg-[#111416] border-r border-[#212529] flex flex-col p-3 overflow-y-auto">
+<!-- Workspace Selector -->
+<div class="flex items-center space-x-2 mb-6">
+<div class="flex-grow">
+<select class="w-full bg-[#1a1e21] border border-[#334155] text-[10px] py-1 px-2 text-gray-300 rounded focus:ring-1 focus:ring-cyan-500">
+<option>All Workspaces</option>
+</select>
+</div>
+</div>
+<div class="flex items-center justify-between mb-6">
+<button class="text-[9px] border border-[#334155] px-2 py-1 uppercase hover:bg-[#1a1e21]">Set as active planning context</button>
+<button class="text-[9px] border border-[#334155] px-2 py-1 uppercase hover:bg-[#1a1e21]">Edit</button>
+</div>
+<div class="flex items-center justify-between mb-4">
+<button class="sidebar-button px-2 py-1 rounded">Manage Folders</button>
+<button class="text-gray-500 text-xs">«</button>
+</div>
+<!-- PROJECTS Section -->
+<div class="mb-8">
+<div class="flex items-center justify-between mb-3">
+<h3 class="text-[10px] font-bold text-cyan-400 tracking-widest uppercase">Projects</h3>
+<button class="text-[8px] bg-cyan-900/30 text-cyan-400 px-2 border border-cyan-700/50">IMPORT</button>
+</div>
+<p class="text-[9px] text-gray-600 mb-2 uppercase tracking-tighter">Data Analytics Migration</p>
+<!-- Active Project Card -->
+<div class="project-card-active rounded p-2 mb-2 bg-[#0d161a]">
+<h4 class="text-[10px] font-bold text-gray-100 mb-1 leading-tight">**Comparative Analysis of Amplitude and...</h4>
+<p class="text-[9px] text-gray-500 mb-2">Comparative Analysis of Amplitude and Mixpanel_...</p>
+<div class="flex space-x-1">
+<button class="sidebar-button px-1 py-0.5 rounded text-[8px]">IMPORT</button>
+<button class="sidebar-button px-1 py-0.5 rounded text-[8px]">🔗</button>
+<button class="sidebar-button px-1 py-0.5 rounded text-[8px]">×</button>
+</div>
+</div>
+<!-- Inactive Project Cards -->
+<div class="border border-[#212529] rounded p-2 mb-2 bg-[#1a1e21]">
+<h4 class="text-[10px] font-bold text-gray-300 mb-1 leading-tight">**Enterprise Digital Analytics Architectur...</h4>
+<p class="text-[9px] text-gray-500 mb-2">Enterprise Digital Analytics Architecture_ A Comp...</p>
+<div class="flex space-x-1">
+<button class="sidebar-button px-1 py-0.5 rounded text-[8px]">IMPORT</button>
+<button class="sidebar-button px-1 py-0.5 rounded text-[8px]">🔗</button>
+<button class="sidebar-button px-1 py-0.5 rounded text-[8px]">×</button>
+</div>
+</div>
+<div class="border border-[#212529] rounded p-2 mb-2 bg-[#1a1e21]">
+<h4 class="text-[10px] font-bold text-gray-300 mb-1 leading-tight">Here is the expanded breakdown of the p...</h4>
+<div class="flex space-x-1 mt-2">
+<button class="sidebar-button px-1 py-0.5 rounded text-[8px]">IMPORT</button>
+<button class="sidebar-button px-1 py-0.5 rounded text-[8px]">🔗</button>
+<button class="sidebar-button px-1 py-0.5 rounded text-[8px]">×</button>
+</div>
+</div>
+<div class="border border-[#212529] rounded p-2 mb-2 bg-[#1a1e21]">
+<h4 class="text-[10px] font-bold text-gray-300 mb-1 leading-tight">research_2026_06_04t23_51_36.md</h4>
+<div class="flex space-x-1 mt-2">
+<button class="sidebar-button px-1 py-0.5 rounded text-[8px]">IMPORT</button>
+<button class="sidebar-button px-1 py-0.5 rounded text-[8px]">🔗</button>
+<button class="sidebar-button px-1 py-0.5 rounded text-[8px]">×</button>
+</div>
+</div>
+</div>
+<!-- DOCS Section -->
+<div>
+<div class="flex items-center justify-between mb-3">
+<h3 class="text-[10px] font-bold text-cyan-400 tracking-widest uppercase">Docs</h3>
+<button class="text-[8px] bg-cyan-900/30 text-cyan-400 px-2 border border-cyan-700/50">IMPORT</button>
+</div>
+<div class="border border-[#212529] rounded p-2 mb-2 bg-[#1a1e21]">
+<h4 class="text-[10px] font-bold text-gray-300 mb-1 leading-tight">Autism 360 App - Amplitude Dashboard ...</h4>
+<p class="text-[9px] text-gray-500 mb-2">amplitude-dashboard-overview.md</p>
+<div class="flex space-x-1">
+<button class="sidebar-button px-1 py-0.5 rounded text-[8px]">IMPORT</button>
+<button class="sidebar-button px-1 py-0.5 rounded text-[8px]">🔗</button>
+<button class="sidebar-button px-1 py-0.5 rounded text-[8px]">×</button>
+</div>
+</div>
+</div>
+</aside>
+<!-- END: LeftSidebar -->
+<!-- BEGIN: MainContentDisplay -->
+<section class="flex-grow overflow-y-auto grid-bg p-8 md:p-16 relative">
+<div class="max-w-4xl mx-auto">
+<!-- Main Document Title -->
+<div class="mb-12 border-b border-white/5 pb-8">
+<h1 class="text-3xl md:text-5xl font-bold text-white uppercase tracking-tight neon-glow leading-tight">
+            Comparative Analysis of Amplitude and Mixpanel: Product Analytics, Data Architecture, AI Integration, and Economics
+          </h1>
+</div>
+<!-- Section Heading -->
+<div class="mb-8">
+<h2 class="text-xl md:text-2xl font-bold text-cyan-200 uppercase tracking-widest border-b border-cyan-900/50 pb-2 mb-6">
+            Executive Summary and Market Context
+          </h2>
+<div class="space-y-6 text-sm md:text-base leading-relaxed text-gray-300 font-light">
+<p>
+              In the contemporary digital economy, the capacity to capture, process, and derive actionable intelligence from user behavioral data is a fundamental prerequisite for commercial success. As software-as-a-service (SaaS), e-commerce, and direct-to-consumer platforms mature, organizations are moving beyond traditional pageview-centric web analytics to sophisticated, event-driven product analytics platforms. Within this highly competitive ecosystem, two platforms have emerged as the definitive market leaders: Amplitude and Mixpanel. Both solutions provide robust foundational capabilities designed to map user journeys, measure long-term retention, and optimize conversion funnels. However, beneath these shared operational goals, Amplitude and Mixpanel diverge significantly in their architectural philosophies, data governance frameworks, artificial intelligence integration, and economic models.
+            </p>
+<p>
+              As of 2026, the expectations placed upon product analytics platforms have escalated dramatically. Modern enterprise environments require these tools to integrate natively with cloud data warehouses, deploy advanced artificial intelligence to automate complex diagnostic queries, and embed analytical insights directly into collaborative workspaces such as Slack and Microsoft Teams. Furthermore, the convergence of analytics with customer data platforms (CDPs) and feature management systems has fundamentally altered the total cost of ownership (TCO) calculation for prospective buyers.
+            </p>
+<p>
+              This exhaustive research report evaluates Amplitude and Mixpanel across five critical dimensions: core analytical capabilities and behavioral intelligence, data export and warehouse-native architectures, artificial intelligence and autonomous reasoning, workflow integrations via ChatOps, and comprehensive pricing models. The subsequent analysis...
+            </p>
+</div>
+</div>
+</div>
+<!-- Floating Terminal Controls Decor -->
+<div class="fixed bottom-6 right-6 flex space-x-2">
+<button class="w-10 h-10 bg-black/80 border border-gray-700 text-gray-400 rounded-full flex items-center justify-center hover:bg-cyan-900/20 transition-colors">
+          🚀
+        </button>
+</div>
+</section>
+<!-- END: MainContentDisplay -->
+</main>
+<!-- END: MainContentArea -->
+</body></html>

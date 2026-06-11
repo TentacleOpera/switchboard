@@ -93,3 +93,6 @@ Key risks: surgical removal from a 7,282-line `planning.js` is error-prone and m
 ## Recommendation
 
 **Send to Coder**
+
+## Review Findings
+Reviewed 2026-06-11 (commit 6b62378). CRITICAL fixed: the surgery deleted the `function loadDocumentPreview(...)` header but left its body, which broke `planning.js` parsing entirely (the whole Planning panel would fail to load — every tab dead); header restored and `node --check` now passes. Also fixed incomplete removals the plan required: dead `design-folder`/`html-folder` branches in the shared tree renderer and `handlePreviewError`, dead HTML/design folder-modal listener blocks, the unreachable `Serve & Open` card action, and orphaned CSS selectors (`#tree-pane-design/html`, `#preview-pane-design/html`, `.edit-mode` design rules) in `planning.html`. Justified deviation kept: `_activeDesignDocSourceId`/`_activeDesignDocId` in `PlanningPanelProvider.ts` were NOT removed because the cross-tab "Set Context" / planningEpic feature (local + online docs) still depends on them. Remaining: residual `#markdown-preview-design` ids inside large grouped CSS selectors are harmless dead selectors (deferred); the six remaining tabs need a manual click-through after `npm run compile`.

@@ -167,3 +167,6 @@ Add `@google/stitch-sdk` to `dependencies` in `package.json`:
 ## Recommendation
 
 **Send to Intern**
+
+## Review Findings
+Reviewed 2026-06-11 (commit 6b62378). All plan items verified present and correctly cross-referenced: command/settings/dependency in `package.json`, provider instantiation + disposal + command + status bar item (priority 93) + visibility toggle + `stitch.apiKey` config listener in `src/extension.ts`, `openDesignPanel` routing in `TaskViewerProvider.ts:7643`, and the quick-action button in `implementation.html`. No code fixes were needed for this plan; the only deviation is a third `context` constructor argument on `DesignPanelProvider` (benign extension of the planned two-arg signature). The auto-commit also swept in out-of-plan confirm-dialog removals in `kanban.html` and `TaskViewerProvider.ts` — these are correct per the repo's no-confirm-dialogs rule (confirm() is a silent no-op in webviews) and were left in place. Verification was static per session constraints (no compile/tests); `npm run compile` must be run before the extension picks any of this up.

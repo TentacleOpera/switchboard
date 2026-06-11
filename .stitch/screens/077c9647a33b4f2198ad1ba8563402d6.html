@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+
+<html class="h-full bg-black" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>AUTOBAN | TACTICAL_OS</title>
+<!-- Tailwind CSS CDN -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<!-- Google Fonts for Modern Aerospace Typography -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Chivo+Mono:wght@300;400;700&amp;family=Inter:wght@300;400;500;600&amp;family=Oswald:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;700&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+  tailwind.config = {
+    darkMode: "class",
+    theme: {
+      extend: {
+        colors: {
+          "primary": "#00daf3",
+          "on-primary": "#00363d",
+          "surface": "#050708",
+          "surface-variant": "#101414",
+          "outline": "#3b494c",
+          "panel-accent": "#00f2ff",
+          "danger": "#ff3d00",
+        },
+        fontFamily: {
+          'header': ['Oswald', 'sans-serif'],
+          'body': ['Inter', 'sans-serif'],
+          'mono': ['JetBrains Mono', 'monospace'],
+        },
+        letterSpacing: {
+          'tactical': '0.1em',
+        }
+      }
+    }
+  }
+</script>
+<style>
+    /* Intense Scanline and Grid Effect */
+    .tactical-grid {
+      background-color: #050708;
+      background-image: 
+        linear-gradient(rgba(0, 242, 255, 0.08) 1.5px, transparent 1.5px),
+        linear-gradient(90deg, rgba(0, 242, 255, 0.08) 1.5px, transparent 1.5px);
+      background-size: 40px 40px;
+      position: relative;
+    }
+    
+    .tactical-grid::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background-image: 
+        linear-gradient(rgba(0, 242, 255, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0, 242, 255, 0.03) 1px, transparent 1px);
+      background-size: 10px 10px;
+      pointer-events: none;
+    }
+
+    .scanline-overlay {
+      position: fixed;
+      inset: 0;
+      background: linear-gradient(
+        to bottom,
+        rgba(18, 16, 16, 0) 50%,
+        rgba(0, 0, 0, 0.25) 50%
+      );
+      background-size: 100% 4px;
+      pointer-events: none;
+      z-index: 9999;
+      opacity: 0.15;
+    }
+
+    .emissive-text {
+      text-shadow: 0 0 12px rgba(0, 242, 255, 0.8), 0 0 24px rgba(0, 242, 255, 0.4);
+    }
+
+    .emissive-border {
+      box-shadow: 0 0 15px rgba(0, 242, 255, 0.2), inset 0 0 10px rgba(0, 242, 255, 0.1);
+      border-color: rgba(0, 242, 255, 0.5);
+    }
+
+    .crt-flicker {
+      animation: flicker 0.15s infinite;
+    }
+
+    @keyframes flicker {
+      0% { opacity: 0.97; }
+      50% { opacity: 1; }
+      100% { opacity: 0.98; }
+    }
+
+    /* Visualization elements */
+    .radar-sweep {
+      background: conic-gradient(from 0deg, rgba(0, 242, 255, 0.2) 0deg, transparent 90deg);
+      animation: sweep 4s linear infinite;
+    }
+
+    @keyframes sweep {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: #050708; }
+    ::-webkit-scrollbar-thumb { background: #00f2ff; border-radius: 2px; }
+</style>
+</head>
+<body class="bg-surface text-gray-300 font-body h-screen overflow-hidden flex flex-col uppercase text-[11px] tracking-wider">
+<div class="scanline-overlay"></div>
+<!-- Top Command Header -->
+<header class="h-14 border-b border-panel-accent/30 flex items-center justify-between px-6 bg-black/80 backdrop-blur-md relative z-10">
+<div class="flex items-center space-x-8">
+<div class="flex items-center space-x-3">
+<div class="w-2 h-8 bg-panel-accent emissive-border"></div>
+<span class="font-header text-xl font-bold tracking-tactical emissive-text text-white">AUTOBAN // TACTICAL_OS</span>
+</div>
+<div class="h-6 w-px bg-panel-accent/20"></div>
+<div class="flex space-x-6 font-mono text-[10px]">
+<div class="flex flex-col">
+<span class="text-gray-500">OPERATOR</span>
+<span class="text-panel-accent">ADMIN_ROOT</span>
+</div>
+<div class="flex flex-col">
+<span class="text-gray-500">SYSTEM_CLOCK</span>
+<span class="text-panel-accent">14:22:09.043</span>
+</div>
+<div class="flex flex-col">
+<span class="text-gray-500">ENCRYPTION</span>
+<span class="text-green-500">AES-256-MIL</span>
+</div>
+</div>
+</div>
+<div class="flex items-center space-x-4">
+<div class="flex items-center px-4 py-1 border border-panel-accent/20 bg-panel-accent/5">
+<span class="mr-2 text-panel-accent">●</span>
+<span class="font-mono text-[10px] text-panel-accent tracking-widest">SIGNAL_LOCKED</span>
+</div>
+<button class="p-2 text-gray-500 hover:text-panel-accent transition-colors">
+<svg class="w-5 h-5" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M4 6h16M4 12h16m-7 6h7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+</button>
+</div>
+</header>
+<main class="flex-1 flex overflow-hidden tactical-grid">
+<!-- Center-Focused Immersive View -->
+<div class="flex-1 flex max-w-[1920px] mx-auto w-full border-x border-panel-accent/10">
+<!-- Left Pane: Tactical System Monitor -->
+<aside class="w-80 border-r border-panel-accent/20 bg-black/40 flex flex-col p-4 space-y-6 overflow-hidden">
+<div class="space-y-4">
+<div class="flex justify-between items-end border-b border-panel-accent/30 pb-1">
+<span class="font-header text-xs font-bold text-panel-accent tracking-tactical">SYSTEM_STATUS</span>
+<span class="font-mono text-[9px] text-panel-accent/60">V.4.0.2</span>
+</div>
+<!-- Radar Vis -->
+<div class="aspect-square relative rounded-full border border-panel-accent/20 overflow-hidden bg-black/60">
+<div class="absolute inset-0 radar-sweep opacity-40"></div>
+<div class="absolute inset-0 flex items-center justify-center">
+<div class="w-full h-px bg-panel-accent/10"></div>
+<div class="h-full w-px bg-panel-accent/10 absolute"></div>
+<div class="w-1/2 h-1/2 rounded-full border border-panel-accent/10"></div>
+<div class="w-3/4 h-3/4 rounded-full border border-panel-accent/5"></div>
+</div>
+<!-- Blips -->
+<div class="absolute top-1/4 right-1/3 w-1.5 h-1.5 bg-panel-accent rounded-full animate-pulse shadow-[0_0_8px_#00f2ff]"></div>
+<div class="absolute bottom-1/4 left-1/2 w-1.5 h-1.5 bg-danger rounded-full animate-ping opacity-50"></div>
+</div>
+<div class="space-y-2 font-mono text-[9px]">
+<div class="flex justify-between"><span>CPU_LOAD</span><span class="text-panel-accent">42%</span></div>
+<div class="w-full h-1 bg-gray-900 overflow-hidden"><div class="h-full bg-panel-accent w-[42%]"></div></div>
+<div class="flex justify-between"><span>MEM_RESERVE</span><span class="text-panel-accent">8.4GB</span></div>
+<div class="w-full h-1 bg-gray-900 overflow-hidden"><div class="h-full bg-panel-accent w-[68%]"></div></div>
+<div class="flex justify-between"><span>NET_THROTTLE</span><span class="text-green-500">OPTIMAL</span></div>
+</div>
+</div>
+<div class="flex-1 space-y-4">
+<div class="flex justify-between items-end border-b border-panel-accent/30 pb-1">
+<span class="font-header text-xs font-bold text-panel-accent tracking-tactical">ACTIVE_NODES</span>
+</div>
+<div class="space-y-2">
+<div class="p-2 border border-panel-accent bg-panel-accent/10 relative overflow-hidden group cursor-pointer">
+<div class="absolute left-0 top-0 bottom-0 w-1 bg-panel-accent"></div>
+<div class="text-[10px] font-bold text-white mb-1">AMPLITUDE_ANALYSIS.DOC</div>
+<div class="text-[8px] text-panel-accent/60 font-mono">STATUS: RENDERING...</div>
+</div>
+<div class="p-2 border border-panel-accent/20 bg-white/5 opacity-60 hover:opacity-100 transition-opacity cursor-pointer">
+<div class="text-[10px] font-bold text-gray-400 mb-1">MIXPANEL_COMPARATIVE.XLS</div>
+<div class="text-[8px] text-gray-600 font-mono">STATUS: STANDBY</div>
+</div>
+<div class="p-2 border border-panel-accent/20 bg-white/5 opacity-60 hover:opacity-100 transition-opacity cursor-pointer">
+<div class="text-[10px] font-bold text-gray-400 mb-1">ENTERPRISE_ARCH.PDF</div>
+<div class="text-[8px] text-gray-600 font-mono">STATUS: STANDBY</div>
+</div>
+</div>
+</div>
+<div class="pt-4 border-t border-panel-accent/20">
+<div class="bg-danger/10 border border-danger/30 p-2 text-danger text-[9px] font-mono animate-pulse">
+                    CAUTION: UNAUTHORIZED OVERRIDE DETECTED
+                </div>
+</div>
+</aside>
+<!-- Right Pane: Main Console/Documentation -->
+<section class="flex-1 flex flex-col bg-black/60 overflow-hidden relative">
+<!-- Header Toolbar -->
+<div class="h-10 border-b border-panel-accent/20 flex items-center px-6 justify-between bg-black/40">
+<div class="flex space-x-6 text-[9px] font-mono">
+<span class="text-panel-accent">PATH: /ROOT/ARCHIVES/MARKET_REPORTS/026</span>
+<span class="text-gray-500 italic">READ_ONLY_MODE</span>
+</div>
+<div class="flex space-x-2">
+<button class="px-3 py-1 border border-panel-accent/30 hover:bg-panel-accent/10 text-[9px]">DECRYPT</button>
+<button class="px-3 py-1 border border-panel-accent/30 hover:bg-panel-accent/10 text-[9px]">DOWNLOAD</button>
+<button class="px-3 py-1 bg-panel-accent text-on-primary text-[9px] font-bold">EXPORT_CORE</button>
+</div>
+</div>
+<!-- Content Area -->
+<div class="flex-1 overflow-y-auto p-16 relative">
+<div class="max-w-3xl mx-auto space-y-12 crt-flicker">
+<!-- Doc Header -->
+<header class="space-y-8 relative">
+<div class="absolute -left-12 top-0 bottom-0 w-1 bg-panel-accent emissive-border"></div>
+<div class="space-y-4">
+<h1 class="text-5xl font-header font-bold text-white uppercase leading-none tracking-tactical emissive-text">
+                                Comparative Analysis:<br/>
+<span class="text-panel-accent opacity-80">Amplitude vs Mixpanel</span>
+</h1>
+<div class="flex items-center space-x-4 font-mono text-xs text-panel-accent/60">
+<span>SECURE_ID: 882-AX-99</span>
+<span>DATE: 2026.04.12</span>
+<span>CLASS: TOP_SECRET</span>
+</div>
+</div>
+<div class="h-1 w-full bg-panel-accent/20">
+<div class="h-full bg-panel-accent w-1/3 animate-[loading_4s_ease-in-out_infinite]"></div>
+</div>
+<style>@keyframes loading { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }</style>
+</header>
+<!-- Body -->
+<article class="space-y-10">
+<section class="space-y-6">
+<div class="flex items-center space-x-4">
+<div class="w-2 h-2 bg-panel-accent"></div>
+<h2 class="text-2xl font-header font-semibold text-panel-accent tracking-tactical uppercase">01 // Executive Summary</h2>
+</div>
+<div class="font-body text-lg text-gray-300 leading-relaxed space-y-6 first-letter:text-4xl first-letter:font-header first-letter:text-panel-accent first-letter:mr-3 first-letter:float-left">
+<p>
+                                    In the contemporary digital economy, the capacity to capture, process, and derive actionable intelligence from user behavioral data is a fundamental prerequisite for commercial success. As software-as-a-service (SaaS), e-commerce, and direct-to-consumer platforms mature, organizations are moving beyond traditional pageview-centric web analytics to sophisticated, event-driven product analytics platforms.
+                                </p>
+<p>
+                                    Within this highly competitive ecosystem, two platforms have emerged as the definitive market leaders: <span class="text-panel-accent font-bold">Amplitude</span> and <span class="text-panel-accent font-bold">Mixpanel</span>. Both solutions provide robust foundational capabilities designed to map user journeys, measure long-term retention, and optimize conversion funnels. However, beneath these shared operational goals, Amplitude and Mixpanel diverge significantly in their architectural philosophies.
+                                </p>
+</div>
+</section>
+<section class="p-8 border border-panel-accent/20 bg-panel-accent/5 space-y-6 relative overflow-hidden">
+<div class="absolute top-0 right-0 p-2 font-mono text-[8px] text-panel-accent opacity-40">INTEL_OVERLAY_ON</div>
+<div class="flex items-center space-x-4">
+<div class="w-2 h-2 bg-panel-accent"></div>
+<h2 class="text-2xl font-header font-semibold text-panel-accent tracking-tactical uppercase">02 // 2026 Market Evolution</h2>
+</div>
+<div class="font-body text-lg text-gray-300 leading-relaxed">
+<p>
+                                    As of 2026, the expectations placed upon product analytics platforms have escalated dramatically. Modern enterprise environments require these tools to integrate natively with cloud data warehouses, deploy advanced artificial intelligence to automate complex diagnostic queries, and embed analytical insights directly into collaborative workspaces.
+                                </p>
+</div>
+<!-- Data Grid Visualization -->
+<div class="grid grid-cols-3 gap-4 pt-4">
+<div class="p-4 border border-panel-accent/10 bg-black/40">
+<div class="text-[9px] text-gray-500 mb-1">AI_AUTONOMY</div>
+<div class="text-xl font-header text-panel-accent tracking-wider">LEVEL_04</div>
+</div>
+<div class="p-4 border border-panel-accent/10 bg-black/40">
+<div class="text-[9px] text-gray-500 mb-1">DATA_LAKE_SYNC</div>
+<div class="text-xl font-header text-green-500 tracking-wider">SYNCHRONIZED</div>
+</div>
+<div class="p-4 border border-panel-accent/10 bg-black/40">
+<div class="text-[9px] text-gray-500 mb-1">THREAT_VECTOR</div>
+<div class="text-xl font-header text-gray-400 tracking-wider">ZERO</div>
+</div>
+</div>
+</section>
+</article>
+</div>
+</div>
+<!-- Footer Terminal -->
+<footer class="h-10 border-t border-panel-accent/20 bg-black/80 flex items-center px-6 justify-between font-mono text-[9px]">
+<div class="flex items-center space-x-6">
+<div class="flex items-center">
+<span class="text-panel-accent mr-2">LOG:</span>
+<span class="text-gray-500">PULLING ENCRYPTED_BLOCK_0492... COMPLETE</span>
+</div>
+<div class="flex items-center">
+<span class="text-panel-accent mr-2">LATENCY:</span>
+<span class="text-green-500">12ms</span>
+</div>
+</div>
+<div class="flex items-center space-x-4">
+<span class="text-gray-600">PAGE_INDEX_01/24</span>
+<div class="flex space-x-1">
+<div class="w-1.5 h-1.5 bg-panel-accent"></div>
+<div class="w-1.5 h-1.5 bg-panel-accent/40"></div>
+<div class="w-1.5 h-1.5 bg-panel-accent/10"></div>
+</div>
+</div>
+</footer>
+</section>
+</div>
+</main>
+<!-- Floating Command Panel -->
+<div class="fixed bottom-12 right-12 z-50 flex flex-col items-end space-y-4">
+<div class="bg-black/90 border-2 border-panel-accent p-4 emissive-border hidden md:block max-w-xs animate-in fade-in slide-in-from-bottom-4">
+<div class="flex justify-between items-center mb-2 border-b border-panel-accent/30 pb-1">
+<span class="font-header text-[10px] text-panel-accent tracking-tactical">COMMS_LINK</span>
+<span class="text-[8px] text-panel-accent/40 font-mono">STABLE</span>
+</div>
+<p class="text-[9px] font-mono text-gray-400 leading-relaxed">
+            AI Assistant is analyzing the current comparative data. Predictive modeling suggests a 15% shift in TCO favoring Amplitude for high-scale enterprise deployments.
+        </p>
+</div>
+<button class="w-14 h-14 bg-panel-accent text-on-primary rounded-none emissive-border flex items-center justify-center hover:scale-110 transition-transform shadow-[0_0_20px_rgba(0,242,255,0.4)]">
+<svg class="w-8 h-8" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"></path></svg>
+</button>
+</div>
+</body></html>

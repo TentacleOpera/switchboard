@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>The Admin Concierge - VARA</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&amp;family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "on-surface-variant": "#414750",
+                    "inverse-surface": "#2d3133",
+                    "tertiary-fixed": "#ffdf9e",
+                    "on-surface": "#191c1e",
+                    "on-tertiary-fixed-variant": "#5b4300",
+                    "surface-container": "#eceef0",
+                    "surface-container-lowest": "#ffffff",
+                    "primary-container": "#005a9e",
+                    "on-primary-fixed-variant": "#004881",
+                    "secondary-fixed": "#c2e8ff",
+                    "on-secondary": "#ffffff",
+                    "surface-container-low": "#f2f4f6",
+                    "inverse-primary": "#a2c9ff",
+                    "surface-bright": "#f7f9fb",
+                    "on-primary": "#ffffff",
+                    "on-tertiary-fixed": "#261a00",
+                    "surface-tint": "#1260a5",
+                    "secondary-container": "#58cafe",
+                    "on-tertiary-container": "#ffc73f",
+                    "outline-variant": "#c1c7d2",
+                    "on-error-container": "#93000a",
+                    "tertiary": "#543e00",
+                    "secondary": "#006688",
+                    "tertiary-container": "#715400",
+                    "on-secondary-fixed": "#001e2b",
+                    "tertiary-fixed-dim": "#fabd00",
+                    "on-tertiary": "#ffffff",
+                    "surface-container-high": "#e6e8ea",
+                    "outline": "#727782",
+                    "on-secondary-container": "#005370",
+                    "on-primary-fixed": "#001c38",
+                    "on-primary-container": "#b1d1ff",
+                    "background": "#f7f9fb",
+                    "surface": "#f7f9fb",
+                    "primary-fixed-dim": "#a2c9ff",
+                    "inverse-on-surface": "#eff1f3",
+                    "error": "#ba1a1a",
+                    "surface-variant": "#e0e3e5",
+                    "primary-fixed": "#d3e4ff",
+                    "surface-container-highest": "#e0e3e5",
+                    "surface-dim": "#d8dadc",
+                    "secondary-fixed-dim": "#75d1ff",
+                    "on-error": "#ffffff",
+                    "primary": "#004277",
+                    "error-container": "#ffdad6",
+                    "on-secondary-fixed-variant": "#004d67",
+                    "on-background": "#191c1e"
+            },
+            "borderRadius": {
+                    "DEFAULT": "1rem",
+                    "lg": "2rem",
+                    "xl": "3rem",
+                    "full": "9999px"
+            },
+            "spacing": {},
+            "fontFamily": {
+                    "headline": [
+                            "Plus Jakarta Sans"
+                    ],
+                    "body": [
+                            "Inter"
+                    ],
+                    "label": [
+                            "Inter"
+                    ]
+            }
+    },
+        },
+      }
+    </script>
+<style>
+        body { font-family: 'Inter', sans-serif; }
+        h1, h2, h3, h4, h5, h6, .font-headline { font-family: 'Plus Jakarta Sans', sans-serif; }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+</head>
+<body class="bg-surface text-on-surface min-h-screen flex flex-col font-body antialiased pb-24 md:pb-0">
+<!-- TopAppBar -->
+<header class="w-full top-0 sticky z-50 bg-[#f7f9fb] dark:bg-slate-950 flex justify-between items-center px-6 py-4 max-w-full space-y-4">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-full overflow-hidden bg-gradient-to-br from-secondary-fixed to-primary-fixed flex items-center justify-center p-[2px]">
+<img alt="VARA Admin Assistant circular icon" class="w-full h-full object-cover rounded-full" data-alt="abstract soft glowing sphere in blue and silver tones representing a friendly AI assistant" src="https://lh3.googleusercontent.com/aida-public/AB6AXuC68LV3t0-6Jnt_wlcEqaVp9NJvUCP7163YrI3LEv-4tF2YLODgiu-XhbkN1c5PK2eEWv4TNdOJjj7NWqGCAxbIBbmBnlWJvBYquJ6N94vP2jy4jM94bcZsHX6WQqb6VK3Rt_rHKznEwvzUdRLaLDf2QRbtLvWDMw1Rtx0ZvWZ9wl8qieTAs0npE1T8Bo_FBDGOPLtg5Y_clYsY88bA3k55IJyEwU4UGG7YTh5W7W25LM626-fFU6Qilx1v-7t-Wb6t6S4apwQivsft"/>
+</div>
+<div>
+<h1 class="font-['Plus_Jakarta_Sans'] font-bold text-lg tracking-tight text-[#005A9E] dark:text-blue-400">VARA Admin</h1>
+<p class="text-sm text-on-surface-variant font-medium">Your Support Concierge</p>
+</div>
+</div>
+<button class="w-10 h-10 rounded-full flex items-center justify-center text-[#414750] dark:text-slate-400 hover:bg-slate-200/50 dark:hover:bg-slate-800/50 transition-colors scale-95 active:duration-150">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">settings</span>
+</button>
+</header>
+<!-- Main Content Canvas -->
+<main class="flex-1 w-full max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-12">
+<!-- Welcome & VARA Presence -->
+<section class="flex flex-col md:flex-row gap-6 items-start">
+<div class="flex-1 space-y-4">
+<h2 class="text-4xl font-headline font-bold text-primary tracking-tight">Good morning,<br/>let's map out the week.</h2>
+</div>
+<!-- VARA Insight Glass Card -->
+<div class="w-full md:w-80 bg-surface-container-lowest/80 backdrop-blur-md rounded-[24px] p-6 relative overflow-hidden group shadow-[0_8px_32px_rgba(0,0,0,0.04)]">
+<div class="absolute inset-0 bg-gradient-to-br from-secondary-fixed/30 to-primary-fixed/30 opacity-50 z-0"></div>
+<div class="relative z-10 flex gap-4 items-start">
+<span class="material-symbols-outlined text-tertiary-fixed-dim text-3xl" style="font-variation-settings: 'FILL' 1;">lightbulb</span>
+<div>
+<p class="text-sm text-on-surface font-medium leading-relaxed">
+                            I noticed you have the school meeting tomorrow. I've prepared the latest Narrative summary for you to share.
+                         </p>
+<button class="mt-3 text-primary font-semibold text-sm flex items-center gap-1 group-hover:text-primary-container transition-colors">
+                             View Summary <span class="material-symbols-outlined text-lg">arrow_forward</span>
+</button>
+</div>
+</div>
+</div>
+</section>
+<!-- The Micro-Win Logger (Highlight) -->
+<section class="bg-surface-container-lowest rounded-[24px] p-6 sm:p-8 flex flex-col md:flex-row gap-8 items-center justify-between shadow-[0_8px_32px_rgba(0,0,0,0.03)] border border-outline-variant/20">
+<div class="space-y-3 flex-1">
+<div class="flex items-center gap-2 text-tertiary-container">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">military_tech</span>
+<h3 class="font-headline font-bold text-xl">Recent Wins</h3>
+</div>
+<ul class="space-y-4">
+<li class="flex items-start gap-3">
+<div class="w-2 h-2 rounded-full bg-tertiary-fixed-dim mt-2"></div>
+<p class="text-on-surface-variant text-sm">Completed the NDIS renewal paperwork.</p>
+</li>
+<li class="flex items-start gap-3">
+<div class="w-2 h-2 rounded-full bg-tertiary-fixed-dim mt-2"></div>
+<p class="text-on-surface-variant text-sm">Found a great local advocate.</p>
+</li>
+<li class="flex items-start gap-3">
+<div class="w-2 h-2 rounded-full bg-tertiary-fixed-dim mt-2"></div>
+<p class="text-on-surface-variant text-sm">Organized the 2024 GP folder.</p>
+</li>
+</ul>
+</div>
+<button class="w-full md:w-auto bg-gradient-to-r from-tertiary-fixed-dim to-[#ffc73f] text-on-tertiary-fixed font-bold py-4 px-8 rounded-full shadow-[0_8px_24px_rgba(250,189,0,0.25)] hover:shadow-[0_12px_32px_rgba(250,189,0,0.35)] transition-all flex items-center justify-center gap-2 transform active:scale-95">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">add_circle</span>
+                Log a Win
+            </button>
+</section>
+<!-- Bento Grid for Archive & Narrative -->
+<div class="grid grid-cols-1 md:grid-cols-12 gap-8">
+<!-- THE EVIDENCE ARCHIVE -->
+<section class="md:col-span-7 bg-surface-container-lowest rounded-[24px] p-8 flex flex-col h-full shadow-[0_8px_32px_rgba(0,0,0,0.03)]">
+<div class="flex justify-between items-center mb-8">
+<div class="flex items-center gap-3 text-primary">
+<div class="w-12 h-12 rounded-full bg-primary-fixed flex items-center justify-center">
+<span class="material-symbols-outlined text-2xl" style="font-variation-settings: 'FILL' 1;">folder_open</span>
+</div>
+<h2 class="font-headline text-2xl font-bold text-on-surface">The Archive</h2>
+</div>
+<div class="flex gap-2">
+<button class="w-10 h-10 rounded-full border border-outline-variant/20 flex items-center justify-center text-primary hover:bg-surface-container-low transition-colors">
+<span class="material-symbols-outlined">search</span>
+</button>
+<button class="w-10 h-10 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center hover:bg-primary transition-colors">
+<span class="material-symbols-outlined">upload</span>
+</button>
+</div>
+</div>
+<div class="flex-1 flex flex-col gap-4">
+<h4 class="text-sm font-semibold text-on-surface-variant uppercase tracking-wider mb-2">Recent Uploads</h4>
+<!-- Document Items -->
+<div class="group flex items-center justify-between p-4 rounded-lg hover:bg-surface-container-low transition-colors cursor-pointer border border-transparent hover:border-outline-variant/10">
+<div class="flex items-center gap-4">
+<div class="w-10 h-10 rounded-full bg-surface text-primary flex items-center justify-center">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">description</span>
+</div>
+<div>
+<p class="font-medium text-on-surface">GP Referral Letter</p>
+<p class="text-xs text-on-surface-variant mt-1">Added 2 days ago • PDF</p>
+</div>
+</div>
+<span class="material-symbols-outlined text-outline group-hover:text-primary transition-colors">more_vert</span>
+</div>
+<div class="group flex items-center justify-between p-4 rounded-lg hover:bg-surface-container-low transition-colors cursor-pointer border border-transparent hover:border-outline-variant/10">
+<div class="flex items-center gap-4">
+<div class="w-10 h-10 rounded-full bg-surface text-primary flex items-center justify-center">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">assignment</span>
+</div>
+<div>
+<p class="font-medium text-on-surface">Clinic Intake Form</p>
+<p class="text-xs text-on-surface-variant mt-1">Added last week • Doc</p>
+</div>
+</div>
+<span class="material-symbols-outlined text-outline group-hover:text-primary transition-colors">more_vert</span>
+</div>
+</div>
+<button class="mt-6 w-full py-4 rounded-full border border-outline-variant/20 text-primary font-medium hover:bg-surface-container-low transition-colors flex items-center justify-center gap-2">
+                    Open Library Search
+                </button>
+</section>
+<!-- THE SHARED NARRATIVE -->
+<section class="md:col-span-5 bg-gradient-to-br from-primary to-primary-container rounded-[24px] p-8 flex flex-col h-full text-on-primary relative overflow-hidden shadow-[0_16px_40px_rgba(0,66,119,0.2)]">
+<!-- Abstract BG Elements -->
+<div class="absolute -top-24 -right-24 w-64 h-64 bg-white/5 rounded-full blur-3xl pointer-events-none"></div>
+<div class="absolute -bottom-24 -left-24 w-64 h-64 bg-secondary-container/10 rounded-full blur-3xl pointer-events-none"></div>
+<div class="relative z-10 flex flex-col h-full">
+<div class="flex items-center gap-3 mb-8 text-inverse-primary">
+<span class="material-symbols-outlined text-3xl" style="font-variation-settings: 'FILL' 1;">auto_stories</span>
+<h2 class="font-headline text-2xl font-bold text-on-primary">Shared Narrative</h2>
+</div>
+<!-- Profile Snapshot -->
+<div class="flex-1 space-y-6">
+<div class="flex items-center gap-4">
+<div class="w-16 h-16 rounded-full overflow-hidden border-2 border-white/20">
+<img alt="Child Profile" class="w-full h-full object-cover" data-alt="candid lifestyle shot of a smiling child playing outdoors with soft focus background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAqgJjypzvRyCLMOLA4yAhGIyBuJv1T4BuvIl2nmzZhFgQS-2MEN1qb3XgnIZoySrPhP3ZsbIet_KZ3XyAb_Sj9ajpz24Xn-xwkX24zSOTLovODZG-mFDOWKmeNN0xmINRN66431UdHuYv0LruIfiwpLD4kcOONApG1DQImHXwBZmrlIDBKMuKXMmJgp8knyhwFGZI6T93KTtPPzf0IjSLfHTsddkFzJLdjLOCA6Vvg5uDo4Apd_q_fYt5yHWMrr2Wm98mPy7ahEFFX"/>
+</div>
+<div>
+<h3 class="text-xl font-bold font-headline">Leo M.</h3>
+<p class="text-inverse-primary text-sm">Age 7</p>
+</div>
+</div>
+<div class="bg-white/10 rounded-lg p-4 backdrop-blur-sm border border-white/10">
+<h4 class="text-xs uppercase tracking-wider text-inverse-primary mb-2 font-semibold">Primary Focus</h4>
+<p class="text-sm font-medium">Support Level 2 - Administrative Oversight</p>
+</div>
+<div class="bg-white/10 rounded-lg p-4 backdrop-blur-sm border border-white/10">
+<h4 class="text-xs uppercase tracking-wider text-inverse-primary mb-2 font-semibold">Key Observation</h4>
+<p class="text-sm font-medium">Needs help with complex paperwork transitions</p>
+</div>
+</div>
+<button class="mt-8 w-full py-4 rounded-full bg-white text-primary font-bold hover:bg-surface-container-low transition-colors flex items-center justify-center gap-2 shadow-lg">
+<span class="material-symbols-outlined text-xl">share</span>
+                        Share Support Profile
+                    </button>
+</div>
+</section>
+</div>
+</main>
+<!-- BottomNavBar (Mobile Only) -->
+<nav class="md:hidden bg-white/80 dark:bg-slate-900/80 backdrop-blur-md fixed bottom-0 w-full rounded-t-[3rem] pb-safe shadow-[0_-8px_32px_rgba(0,0,0,0.08)] bg-surface-container-low fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 py-3">
+<a class="flex flex-col items-center justify-center bg-[#005A9E] text-white rounded-full p-3 mb-1 transition-transform duration-300 ease-out active:scale-90" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">smart_toy</span>
+<span class="font-['Inter'] text-[11px] font-semibold mt-1">Your Support Concierge</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#414750] dark:text-slate-400 p-2 hover:text-[#005A9E] dark:hover:text-blue-300 transition-transform duration-300 ease-out active:scale-90" href="#">
+<span class="material-symbols-outlined">folder_open</span>
+<span class="font-['Inter'] text-[11px] font-semibold mt-1">Archive</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#414750] dark:text-slate-400 p-2 hover:text-[#005A9E] dark:hover:text-blue-300 transition-transform duration-300 ease-out active:scale-90" href="#">
+<span class="material-symbols-outlined">auto_stories</span>
+<span class="font-['Inter'] text-[11px] font-semibold mt-1">Narrative</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#414750] dark:text-slate-400 p-2 hover:text-[#005A9E] dark:hover:text-blue-300 transition-transform duration-300 ease-out active:scale-90" href="#">
+<span class="material-symbols-outlined">military_tech</span>
+<span class="font-['Inter'] text-[11px] font-semibold mt-1">Wins</span>
+</a>
+</nav>
+</body></html>

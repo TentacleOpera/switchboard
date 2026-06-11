@@ -1,0 +1,63 @@
+# Design Overview: Neon Tactical (Technical Specification Update)
+
+This update clarifies the specific typographic styling required to achieve the "Tactical HUD" aesthetic. The primary discrepancy in implementation usually stems from letter-spacing and the absence of light-emissive effects (glows).
+
+## Correct Typography Styling
+
+To achieve the look in the designs, use the following CSS properties for your headers.
+
+### 1. Key Typographic Rules
+*   **Font Family:** 'Hanken Grotesk', sans-serif.
+*   **Letter Spacing (Crucial):** Use **positive** values (e.g., `0.05em` to `0.1em`). The technical/aerospace feel comes from "tracking out" the letters, not squeezing them together. 
+    *   *Incorrect:* `-0.05em` (Too compressed/standard UI).
+    *   *Correct:* `0.05em` (Technical/HUD feel).
+*   **Text Shadow (The "Glow"):** This is required to simulate a light-emitting display.
+    *   `text-shadow: 0 0 10px rgba(0, 229, 255, 0.6), 0 0 20px rgba(0, 229, 255, 0.2);`
+
+### 2. Refined CSS Variable & Rule List
+
+```css
+:root {
+  --font-family-technical: 'Hanken Grotesk', sans-serif;
+  --accent-teal: #00e5ff;
+  --header-glow: 0 0 10px rgba(0, 229, 255, 0.6), 0 0 20px rgba(0, 229, 255, 0.2);
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-family-technical);
+  text-transform: uppercase;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+/* Main Page Header */
+h1 {
+  font-size: 2rem;
+  letter-spacing: 0.05em;
+  color: #ffffff; /* High contrast white */
+  text-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
+}
+
+/* Functional/Section Headers */
+h2, h3 {
+  color: var(--accent-teal);
+  letter-spacing: 0.05em;
+  text-shadow: var(--header-glow);
+}
+
+/* Tactical Labels / Small Headers */
+h4, h5, h6 {
+  color: var(--accent-teal);
+  font-weight: 800;
+  letter-spacing: 0.1em; /* Increased tracking for smaller tech labels */
+  text-shadow: var(--header-glow);
+}
+```
+
+### 3. Comparison Summary
+| Property | Your Current Code | Neon Tactical Spec |
+| :--- | :--- | :--- |
+| **Letter Spacing** | `-0.05em` (Compressed) | `+0.05em` to `+0.1em` (Technical) |
+| **Font Weight** | `600` | `700` to `800` |
+| **Text Shadow** | *None* | `0 0 10px ...` (Glow) |
+| **Color (h1)** | `#ffffff` | `#ffffff` (with subtle white glow) |

@@ -5,6 +5,8 @@
     const persistedState = vscode.getState() || {};
 
     const state = {
+        switchboardTheme: null,
+        stitchBusy: false,
         activeSource: null,
         activeDocId: null,
         activeDocName: null,
@@ -26,7 +28,8 @@
         stitchProjects: [],
         selectedStitchProjectId: '',
         stitchScreens: [],
-        stitchApiKeyConfigured: false
+        stitchApiKeyConfigured: false,
+        activePreviewScreenId: null
     };
 
     // Tab switcher
@@ -833,6 +836,248 @@
     const stitchApiKeyInput = document.getElementById('stitch-api-key-input');
     const btnSaveStitchApiKey = document.getElementById('btn-save-stitch-api-key');
     const statusStitch = document.getElementById('status-stitch');
+    const btnNewStitchProject = document.getElementById('btn-new-stitch-project');
+    const btnOpenDesignMd = document.getElementById('btn-open-design-md');
+
+    const stitchPreviewPane = document.getElementById('stitch-preview-pane');
+    const previewImage = document.getElementById('preview-image');
+    const previewImagePlaceholder = document.getElementById('preview-image-placeholder');
+    const previewScreenTitle = document.getElementById('preview-screen-title');
+    const previewScreenMeta = document.getElementById('preview-screen-meta');
+    const btnClosePreview = document.getElementById('btn-close-preview');
+    let previewBtnHtml = document.getElementById('preview-btn-html');
+    let previewBtnPng = document.getElementById('preview-btn-png');
+    const previewRefineInput = document.getElementById('preview-refine-input');
+    let previewBtnEdit = document.getElementById('preview-btn-edit');
+    let previewBtnVariants = document.getElementById('preview-btn-variants');
+    const previewBtnReload = document.getElementById('preview-btn-reload');
+    const stitchThumbnailStrip = document.getElementById('stitch-thumbnail-strip');
+
+    // Single place that controls status colour — errors red, success teal,
+    // everything else neutral. Direct .textContent writes left the colour
+    // sticky-red after any error.
+    function setStitchStatus(text, kind) {
+        if (!statusStitch) return;
+        statusStitch.textContent = text;
+        statusStitch.style.color = kind === 'error' ? '#ff6b6b'
+            : kind === 'success' ? 'var(--accent-teal)'
+            : 'var(--text-secondary)';
+    }
+
+    // One Stitch operation at a time — double-clicking Variants used to queue
+    // two SDK calls and silently generate twice as many screens. Generate and
+    // Sync additionally require a selected project (the SDK cannot generate
+    // outside a project — it does NOT auto-create one).
+    function setStitchBusy(busy) {
+        state.stitchBusy = busy;
+        const hasProject = !!stitchProjectSelect.value;
+        if (btnGenerateStitch) {
+            btnGenerateStitch.disabled = busy || !hasProject;
+            btnGenerateStitch.title = hasProject
+                ? 'Generate a new screen in the selected project from the prompt'
+                : 'Select a project (or click + New Project) first';
+        }
+        if (btnSyncStitchProject) btnSyncStitchProject.disabled = busy || !hasProject;
+        if (btnOpenDesignMd) {
+            btnOpenDesignMd.disabled = busy || !hasProject;
+            btnOpenDesignMd.title = hasProject
+                ? 'Open the DESIGN.md handoff file'
+                : 'Select a project first';
+        }
+        if (btnNewStitchProject) btnNewStitchProject.disabled = busy;
+        if (stitchGallery) {
+            stitchGallery.querySelectorAll('button').forEach(b => { b.disabled = busy; });
+        }
+        if (previewBtnHtml) previewBtnHtml.disabled = busy;
+        if (previewBtnPng) previewBtnPng.disabled = busy;
+        if (previewBtnEdit) previewBtnEdit.disabled = busy;
+        if (previewBtnVariants) previewBtnVariants.disabled = busy;
+        if (previewBtnReload) previewBtnReload.disabled = busy;
+    }
+
+    function makeFifeHighResUrl(imageUrl) {
+        if (!imageUrl) return '';
+        if (imageUrl.includes('/fife/') || imageUrl.includes('lh3.googleusercontent.com')) {
+            const cleanUrl = imageUrl.replace(/=[wsh]\d+(?:-[wsh]\d+)?.*/, '');
+            return cleanUrl + '=w1200';
+        }
+        return imageUrl;
+    }
+
+    function openStitchPreview(screen) {
+        if (!screen) return;
+        state.activePreviewScreenId = screen.id;
+
+        if (stitchGallery) stitchGallery.style.display = 'none';
+        if (stitchGalleryEmpty) stitchGalleryEmpty.style.display = 'none';
+        if (stitchPreviewPane) stitchPreviewPane.style.display = 'flex';
+        if (stitchThumbnailStrip) stitchThumbnailStrip.style.display = 'flex';
+
+        if (previewScreenTitle) previewScreenTitle.textContent = screen.name || 'Untitled Screen';
+        if (previewScreenMeta) previewScreenMeta.textContent = `Device: ${screen.deviceType || 'AGNOSTIC'}`;
+
+        if (screen.imageUrl) {
+            if (previewImage) {
+                previewImage.style.display = 'block';
+                previewImage.src = makeFifeHighResUrl(screen.imageUrl);
+            }
+            if (previewImagePlaceholder) previewImagePlaceholder.style.display = 'none';
+        } else {
+            if (previewImage) {
+                previewImage.style.display = 'none';
+                previewImage.src = '';
+            }
+            if (previewImagePlaceholder) {
+                previewImagePlaceholder.style.display = 'flex';
+                const reloadBtn = previewImagePlaceholder.querySelector('button');
+                if (reloadBtn) {
+                    const newReloadBtn = reloadBtn.cloneNode(true);
+                    reloadBtn.parentNode.replaceChild(newReloadBtn, reloadBtn);
+                    newReloadBtn.addEventListener('click', () => {
+                        if (state.stitchBusy) return;
+                        setStitchStatus('Reloading screen…', 'busy');
+                        setStitchBusy(true);
+                        vscode.postMessage({
+                            type: 'stitchRefreshScreen',
+                            projectId: screen.projectId || stitchProjectSelect.value,
+                            screenId: screen.id
+                        });
+                    });
+                }
+            }
+        }
+
+        if (previewBtnHtml) {
+            const newHtmlBtn = previewBtnHtml.cloneNode(true);
+            previewBtnHtml.parentNode.replaceChild(newHtmlBtn, previewBtnHtml);
+            previewBtnHtml = newHtmlBtn;
+            previewBtnHtml.addEventListener('click', () => {
+                vscode.postMessage({
+                    type: 'stitchDownloadAsset',
+                    url: screen.htmlUrl,
+                    filename: `${screen.id}.html`
+                });
+            });
+        }
+        if (previewBtnPng) {
+            const newPngBtn = previewBtnPng.cloneNode(true);
+            previewBtnPng.parentNode.replaceChild(newPngBtn, previewBtnPng);
+            previewBtnPng = newPngBtn;
+            previewBtnPng.addEventListener('click', () => {
+                vscode.postMessage({
+                    type: 'stitchDownloadAsset',
+                    url: screen.imageUrl,
+                    filename: `${screen.id}.png`
+                });
+            });
+        }
+
+        if (previewBtnEdit) {
+            const newEditBtn = previewBtnEdit.cloneNode(true);
+            previewBtnEdit.parentNode.replaceChild(newEditBtn, previewBtnEdit);
+            previewBtnEdit = newEditBtn;
+            previewBtnEdit.addEventListener('click', () => {
+                if (state.stitchBusy) return;
+                const prompt = previewRefineInput ? previewRefineInput.value.trim() : '';
+                if (!prompt) { setStitchStatus('Type a change in the box above, then Apply Edit.', 'error'); return; }
+                setStitchStatus('Editing screen…', 'busy');
+                setStitchBusy(true);
+                vscode.postMessage({
+                    type: 'stitchEdit',
+                    screenId: screen.id,
+                    prompt
+                });
+            });
+        }
+        if (previewBtnVariants) {
+            const newVariantsBtn = previewBtnVariants.cloneNode(true);
+            previewBtnVariants.parentNode.replaceChild(newVariantsBtn, previewBtnVariants);
+            previewBtnVariants = newVariantsBtn;
+            previewBtnVariants.addEventListener('click', () => {
+                if (state.stitchBusy) return;
+                const prompt = previewRefineInput ? previewRefineInput.value.trim() : '';
+                setStitchStatus('Generating 3 variants of this screen…', 'busy');
+                setStitchBusy(true);
+                vscode.postMessage({
+                    type: 'stitchVariants',
+                    screenId: screen.id,
+                    prompt: prompt || undefined,
+                    count: 3
+                });
+            });
+        }
+
+        renderThumbnailStrip(state.stitchScreens, screen.id);
+    }
+
+    function closeStitchPreview() {
+        state.activePreviewScreenId = null;
+        if (stitchPreviewPane) stitchPreviewPane.style.display = 'none';
+        if (stitchThumbnailStrip) stitchThumbnailStrip.style.display = 'none';
+        if (previewImage) previewImage.src = '';
+        if (previewRefineInput) previewRefineInput.value = '';
+
+        if (state.stitchScreens && state.stitchScreens.length > 0) {
+            if (stitchGallery) stitchGallery.style.display = 'grid';
+            if (stitchGalleryEmpty) stitchGalleryEmpty.style.display = 'none';
+        } else {
+            if (stitchGallery) stitchGallery.style.display = 'none';
+            if (stitchGalleryEmpty) stitchGalleryEmpty.style.display = 'flex';
+        }
+    }
+
+    function renderThumbnailStrip(screens, activeId) {
+        if (!stitchThumbnailStrip) return;
+        stitchThumbnailStrip.innerHTML = '';
+        screens.forEach(screen => {
+            if (screen.imageUrl) {
+                const img = document.createElement('img');
+                img.className = `stitch-strip-thumb${screen.id === activeId ? ' active' : ''}`;
+                img.src = screen.imageUrl;
+                img.alt = screen.name || screen.id;
+                img.title = screen.name || 'Screen';
+                img.addEventListener('click', () => {
+                    openStitchPreview(screen);
+                });
+                stitchThumbnailStrip.appendChild(img);
+            } else {
+                const ph = document.createElement('div');
+                ph.className = `stitch-strip-thumb-placeholder${screen.id === activeId ? ' active' : ''}`;
+                ph.textContent = 'Rendering…';
+                ph.addEventListener('click', () => {
+                    openStitchPreview(screen);
+                });
+                stitchThumbnailStrip.appendChild(ph);
+            }
+        });
+    }
+
+    if (btnClosePreview) {
+        btnClosePreview.addEventListener('click', closeStitchPreview);
+    }
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            if (state.activePreviewScreenId) {
+                closeStitchPreview();
+                e.stopPropagation();
+            }
+        }
+    });
+
+    if (btnNewStitchProject) {
+        btnNewStitchProject.addEventListener('click', () => {
+            if (state.stitchBusy) return;
+            // Title is collected via a native VS Code input box on the host side.
+            vscode.postMessage({ type: 'stitchCreateProject' });
+        });
+    }
+
+    if (btnOpenDesignMd) {
+        btnOpenDesignMd.addEventListener('click', () => {
+            vscode.postMessage({ type: 'stitchOpenManifest' });
+        });
+    }
 
     if (btnSaveStitchApiKey && stitchApiKeyInput) {
         btnSaveStitchApiKey.addEventListener('click', () => {
@@ -849,10 +1094,11 @@
             const prompt = stitchPromptInput.value.trim();
             const deviceType = stitchDeviceSelect.value;
             const projectId = stitchProjectSelect.value;
-            if (!prompt) return;
+            if (!prompt) { setStitchStatus('Enter a prompt describing the screen first.', 'error'); return; }
+            if (state.stitchBusy) return;
 
-            statusStitch.textContent = 'Generating screen...';
-            btnGenerateStitch.disabled = true;
+            setStitchStatus('Generating screen…', 'busy');
+            setStitchBusy(true);
 
             vscode.postMessage({
                 type: 'stitchGenerate',
@@ -866,9 +1112,9 @@
     if (btnSyncStitchProject) {
         btnSyncStitchProject.addEventListener('click', () => {
             const projectId = stitchProjectSelect.value;
-            if (!projectId) return;
-            statusStitch.textContent = 'Syncing project to workspace...';
-            btnSyncStitchProject.disabled = true;
+            if (!projectId || state.stitchBusy) return;
+            setStitchStatus('Syncing project to workspace…', 'busy');
+            setStitchBusy(true);
             vscode.postMessage({
                 type: 'stitchSyncProject',
                 projectId
@@ -879,19 +1125,24 @@
     if (stitchProjectSelect) {
         stitchProjectSelect.addEventListener('change', () => {
             const projectId = stitchProjectSelect.value;
-            btnSyncStitchProject.disabled = !projectId;
+            if (state.activePreviewScreenId) {
+                closeStitchPreview();
+            }
             if (projectId) {
-                statusStitch.textContent = 'Loading project screens...';
+                setStitchStatus('Loading project screens…', 'busy');
+                setStitchBusy(true);
                 vscode.postMessage({ type: 'stitchGetProjectScreens', projectId });
             } else {
+                setStitchBusy(false);
                 renderStitchScreens([]);
             }
         });
     }
 
-    function populateStitchProjects(projects) {
+    function populateStitchProjects(projects, defaultProjectId) {
         if (!stitchProjectSelect) return;
-        const current = stitchProjectSelect.value;
+        // Keep the user's in-session choice; fall back to the configured default on first load.
+        const current = stitchProjectSelect.value || defaultProjectId || '';
         stitchProjectSelect.innerHTML = '<option value="">Select Project...</option>';
         projects.forEach(p => {
             const opt = document.createElement('option');
@@ -906,6 +1157,16 @@
         state.stitchScreens = screens;
         if (!stitchGallery || !stitchGalleryEmpty) return;
 
+        // If preview pane is active and screen is in the new list, update the active preview
+        if (state.activePreviewScreenId) {
+            const activeScreen = screens.find(s => s.id === state.activePreviewScreenId);
+            if (activeScreen) {
+                openStitchPreview(activeScreen);
+            } else {
+                closeStitchPreview();
+            }
+        }
+
         if (screens.length === 0) {
             stitchGallery.style.display = 'none';
             stitchGalleryEmpty.style.display = 'flex';
@@ -913,7 +1174,12 @@
         }
 
         stitchGalleryEmpty.style.display = 'none';
-        stitchGallery.style.display = 'grid';
+        // Only show gallery if not actively previewing
+        if (!state.activePreviewScreenId) {
+            stitchGallery.style.display = 'grid';
+        } else {
+            stitchGallery.style.display = 'none';
+        }
         stitchGallery.innerHTML = '';
 
         screens.forEach(screen => {
@@ -921,11 +1187,46 @@
             card.className = 'stitch-screen-card';
             card.dataset.screenId = screen.id;
 
-            const img = document.createElement('img');
-            img.className = 'stitch-screen-thumbnail';
-            img.src = screen.imageUrl || '';
-            img.alt = screen.name || screen.id;
-            card.appendChild(img);
+            // Thumbnail — screens still rendering (or with expired temp URLs) have no
+            // usable image; show a reload affordance instead of a broken-file icon.
+            const makeThumbPlaceholder = () => {
+                const ph = document.createElement('div');
+                ph.className = 'stitch-thumb-placeholder';
+                const label = document.createElement('span');
+                label.textContent = 'Preview not ready yet';
+                ph.appendChild(label);
+                const btnReload = document.createElement('button');
+                btnReload.className = 'strip-btn';
+                btnReload.textContent = '↻ Reload Screen';
+                btnReload.title = 'Re-fetch this screen from Stitch (picks up the rendered preview and fresh download links)';
+                btnReload.addEventListener('click', () => {
+                    if (state.stitchBusy) return;
+                    setStitchStatus('Reloading screen…', 'busy');
+                    setStitchBusy(true);
+                    vscode.postMessage({
+                        type: 'stitchRefreshScreen',
+                        projectId: screen.projectId || stitchProjectSelect.value,
+                        screenId: screen.id
+                    });
+                });
+                ph.appendChild(btnReload);
+                return ph;
+            };
+
+            if (screen.imageUrl) {
+                const img = document.createElement('img');
+                img.className = 'stitch-screen-thumbnail';
+                img.src = screen.imageUrl;
+                img.alt = screen.name || screen.id;
+                img.title = 'Click to view preview';
+                img.addEventListener('click', () => openStitchPreview(screen));
+                img.addEventListener('error', () => {
+                    img.replaceWith(makeThumbPlaceholder());
+                }, { once: true });
+                card.appendChild(img);
+            } else {
+                card.appendChild(makeThumbPlaceholder());
+            }
 
             const info = document.createElement('div');
             info.className = 'stitch-screen-info';
@@ -933,6 +1234,7 @@
             const title = document.createElement('div');
             title.className = 'stitch-screen-title';
             title.textContent = screen.name || 'Untitled Screen';
+            title.title = screen.name || 'Untitled Screen';
             info.appendChild(title);
 
             const meta = document.createElement('div');
@@ -969,55 +1271,6 @@
             actions.appendChild(btnPng);
 
             card.appendChild(actions);
-
-            // Refinement panel
-            const refinePanel = document.createElement('div');
-            refinePanel.className = 'stitch-refine-panel';
-
-            const input = document.createElement('input');
-            input.type = 'text';
-            input.className = 'stitch-input';
-            input.placeholder = 'Refinement prompt...';
-            refinePanel.appendChild(input);
-
-            const refineActions = document.createElement('div');
-            refineActions.style.display = 'flex';
-            refineActions.style.gap = '6px';
-
-            const btnEdit = document.createElement('button');
-            btnEdit.className = 'strip-btn stitch-btn-primary';
-            btnEdit.style.flex = '1';
-            btnEdit.textContent = 'Edit';
-            btnEdit.addEventListener('click', () => {
-                const prompt = input.value.trim();
-                if (!prompt) return;
-                statusStitch.textContent = 'Editing screen...';
-                vscode.postMessage({
-                    type: 'stitchEdit',
-                    screenId: screen.id,
-                    prompt
-                });
-            });
-            refineActions.appendChild(btnEdit);
-
-            const btnVariants = document.createElement('button');
-            btnVariants.className = 'strip-btn';
-            btnVariants.style.flex = '1';
-            btnVariants.textContent = 'Variants';
-            btnVariants.addEventListener('click', () => {
-                const prompt = input.value.trim();
-                statusStitch.textContent = 'Generating variants...';
-                vscode.postMessage({
-                    type: 'stitchVariants',
-                    screenId: screen.id,
-                    prompt: prompt || undefined,
-                    count: 3
-                });
-            });
-            refineActions.appendChild(btnVariants);
-
-            refinePanel.appendChild(refineActions);
-            card.appendChild(refinePanel);
 
             stitchGallery.appendChild(card);
         });
@@ -1137,21 +1390,28 @@
 
             case 'stitchProjectsReady':
                 state.stitchProjects = msg.projects || [];
-                populateStitchProjects(state.stitchProjects);
-                if (statusStitch) statusStitch.textContent = '';
+                populateStitchProjects(state.stitchProjects, msg.defaultProjectId);
+                setStitchBusy(false); // recompute Generate/Sync disabled state for the new selection
+                if (msg.selectProjectId) {
+                    setStitchStatus('Project created — describe a screen and press Generate', 'success');
+                    renderStitchScreens([]);
+                } else {
+                    setStitchStatus('', 'info');
+                }
                 break;
 
-            case 'stitchScreensReady':
-                if (btnGenerateStitch) btnGenerateStitch.disabled = false;
-                if (btnSyncStitchProject) btnSyncStitchProject.disabled = !stitchProjectSelect.value;
-                renderStitchScreens(msg.screens || []);
-                if (statusStitch) statusStitch.textContent = 'Screens loaded';
+            case 'stitchScreensReady': {
+                setStitchBusy(false);
+                const screens = msg.screens || [];
+                renderStitchScreens(screens);
+                setStitchStatus(`${screens.length} screen${screens.length === 1 ? '' : 's'} loaded`, 'success');
+                if (screens.length > 0 && !state.activePreviewScreenId) {
+                    openStitchPreview(screens[0]);
+                }
                 break;
+            }
 
-            case 'stitchScreenReady':
-                if (btnGenerateStitch) btnGenerateStitch.disabled = false;
-                if (btnSyncStitchProject) btnSyncStitchProject.disabled = !stitchProjectSelect.value;
-                if (statusStitch) statusStitch.textContent = 'Screen ready';
+            case 'stitchScreenReady': {
                 const updatedScreens = [...state.stitchScreens];
                 const existingIdx = updatedScreens.findIndex(s => s.id === msg.screen.id);
                 if (existingIdx >= 0) {
@@ -1160,33 +1420,39 @@
                     updatedScreens.unshift(msg.screen);
                 }
                 renderStitchScreens(updatedScreens);
+                setStitchBusy(false);
+                setStitchStatus('Screen ready', 'success');
                 break;
+            }
 
             case 'stitchSyncComplete':
-                if (btnSyncStitchProject) btnSyncStitchProject.disabled = false;
-                if (statusStitch) {
-                    statusStitch.textContent = 'Sync complete!';
-                    statusStitch.style.color = 'var(--accent-teal)';
-                    setTimeout(() => {
-                        statusStitch.textContent = '';
-                        statusStitch.style.color = '';
-                    }, 3000);
-                }
+                setStitchBusy(false);
+                setStitchStatus(
+                    msg.skippedCount > 0
+                        ? `Sync complete — DESIGN.md opened (${msg.skippedCount} screen${msg.skippedCount === 1 ? '' : 's'} still rendering, re-sync later)`
+                        : 'Sync complete — DESIGN.md opened in the editor',
+                    'success'
+                );
                 break;
 
             case 'stitchError':
-                if (btnGenerateStitch) btnGenerateStitch.disabled = false;
-                if (btnSyncStitchProject) btnSyncStitchProject.disabled = !stitchProjectSelect.value;
-                if (statusStitch) {
-                    statusStitch.textContent = 'Error: ' + msg.error;
-                    statusStitch.style.color = '#ff6b6b';
-                }
+                setStitchBusy(false);
+                setStitchStatus('Error: ' + msg.error, 'error');
                 break;
 
             case 'themeChanged':
             case 'switchboardThemeChanged':
-                if (msg.theme) {
-                    document.body.className = msg.theme.includes('claudify') ? 'theme-claudify' : 'cyber-theme-enabled';
+                // Mirrors planning.js handleThemeChanged: cyber CRT effects only for
+                // afterburner/claudify; claudify additionally gets the palette override.
+                if (msg.theme) { state.switchboardTheme = msg.theme; }
+                document.body.classList.remove('theme-claudify');
+                if (state.switchboardTheme === 'afterburner' || state.switchboardTheme === 'claudify') {
+                    document.body.classList.add('cyber-theme-enabled');
+                } else {
+                    document.body.classList.remove('cyber-theme-enabled');
+                }
+                if (state.switchboardTheme === 'claudify') {
+                    document.body.classList.add('theme-claudify');
                 }
                 break;
 

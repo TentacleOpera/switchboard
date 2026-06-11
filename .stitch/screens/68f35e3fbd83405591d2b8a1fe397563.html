@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Azure Haven - Momentum</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Plus+Jakarta+Sans:wght@500;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "error": "#ba1a1a",
+                    "primary-fixed": "#d3e4ff",
+                    "primary-container": "#005a9e",
+                    "on-error-container": "#93000a",
+                    "background": "#f7f9fb",
+                    "on-primary": "#ffffff",
+                    "secondary": "#006688",
+                    "on-tertiary": "#ffffff",
+                    "surface-container-high": "#e6e8ea",
+                    "inverse-surface": "#2d3133",
+                    "on-background": "#191c1e",
+                    "secondary-fixed-dim": "#75d1ff",
+                    "on-primary-fixed": "#001c38",
+                    "tertiary-fixed-dim": "#fabd00",
+                    "outline-variant": "#c1c7d2",
+                    "on-tertiary-container": "#ffc73f",
+                    "inverse-primary": "#a2c9ff",
+                    "surface-dim": "#d8dadc",
+                    "surface-container-low": "#f2f4f6",
+                    "inverse-on-surface": "#eff1f3",
+                    "on-primary-fixed-variant": "#004881",
+                    "on-primary-container": "#b1d1ff",
+                    "on-tertiary-fixed-variant": "#5b4300",
+                    "surface-variant": "#e0e3e5",
+                    "on-error": "#ffffff",
+                    "surface": "#f7f9fb",
+                    "secondary-fixed": "#c2e8ff",
+                    "primary-fixed-dim": "#a2c9ff",
+                    "error-container": "#ffdad6",
+                    "primary": "#004277",
+                    "outline": "#727782",
+                    "tertiary-fixed": "#ffdf9e",
+                    "surface-container-highest": "#e0e3e5",
+                    "on-secondary-fixed": "#001e2b",
+                    "tertiary": "#543e00",
+                    "surface-tint": "#1260a5",
+                    "tertiary-container": "#715400",
+                    "surface-container": "#eceef0",
+                    "on-surface": "#191c1e",
+                    "surface-container-lowest": "#ffffff",
+                    "surface-bright": "#f7f9fb",
+                    "secondary-container": "#58cafe",
+                    "on-secondary-fixed-variant": "#004d67",
+                    "on-secondary": "#ffffff",
+                    "on-surface-variant": "#414750",
+                    "on-tertiary-fixed": "#261a00",
+                    "on-secondary-container": "#005370"
+            },
+            "borderRadius": {
+                    "DEFAULT": "1rem",
+                    "lg": "2rem",
+                    "xl": "3rem",
+                    "full": "9999px"
+            },
+            "spacing": {},
+            "fontFamily": {
+                    "headline": [
+                            "Plus Jakarta Sans"
+                    ],
+                    "body": [
+                            "Inter"
+                    ],
+                    "label": [
+                            "Inter"
+                    ]
+            }
+        },
+        },
+      }
+    </script>
+<style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: theme('colors.surface');
+            color: theme('colors.on-surface');
+        }
+        h1, h2, h3, h4, h5, h6, .font-headline {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-surface text-on-surface min-h-screen pb-24 md:pb-0 font-body">
+<!-- TopAppBar -->
+<header class="docked full-width top-0 bg-[#f7f9fb] dark:bg-slate-950 text-[#005A9E] dark:text-blue-400 font-['Plus_Jakarta_Sans'] font-bold text-lg tracking-tight no-border tonal-shift-bg flat no-shadows flex justify-between items-center px-6 py-4 w-full sticky z-40">
+<div class="flex items-center gap-3">
+<div aria-label="Support Concierge Profile" class="w-10 h-10 rounded-full bg-gradient-to-br from-secondary-fixed to-primary-fixed flex items-center justify-center overflow-hidden" data-alt="Soft stylized minimalist icon representing a friendly AI support concierge with gentle pastel blues">
+<span class="material-symbols-outlined text-primary text-xl" data-icon="face_6" data-weight="fill" style="font-variation-settings: 'FILL' 1;">face_6</span>
+</div>
+<span class="text-[#005A9E] font-extrabold tracking-tighter">Azure Haven</span>
+</div>
+<button aria-label="Notifications" class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-surface-container-high transition-colors text-[#005A9E] dark:text-blue-400 hover:opacity-80 transition-opacity scale-95 duration-200">
+<span class="material-symbols-outlined" data-icon="auto_awesome">auto_awesome</span>
+</button>
+</header>
+<!-- Main Content -->
+<main class="max-w-3xl mx-auto px-6 pt-6 pb-24 md:px-8 space-y-12">
+<!-- Welcome Area -->
+<section class="space-y-2">
+<h1 class="font-headline text-display-md text-on-surface tracking-tight">Good morning.</h1>
+<p class="font-body text-body-lg text-on-surface-variant max-w-md leading-relaxed">Here is a gentle suggestion to build momentum today.</p>
+</section>
+<!-- Next 1-Minute Task Card (Signature Glassmorphism) -->
+<section class="relative">
+<div class="absolute -inset-1 bg-gradient-to-br from-secondary-fixed to-primary-fixed rounded-xl blur opacity-30"></div>
+<div class="relative bg-surface-container-lowest/80 backdrop-blur-xl rounded-xl p-8 border border-outline-variant/20 shadow-[0_8px_32px_rgba(0,66,119,0.08)]">
+<div class="flex items-start justify-between gap-4 mb-6">
+<div class="flex items-center gap-3">
+<div class="w-12 h-12 rounded-full bg-secondary-fixed flex items-center justify-center">
+<span class="material-symbols-outlined text-primary" data-icon="timer">timer</span>
+</div>
+<div>
+<h2 class="font-headline font-bold text-xl text-on-surface">1-Minute Task</h2>
+<span class="font-body text-sm text-on-surface-variant">Recommended by VARA</span>
+</div>
+</div>
+</div>
+<p class="font-body text-lg text-on-surface mb-8">Record 10 seconds of a transition.</p>
+<div class="flex items-center gap-4">
+<button class="bg-gradient-to-br from-primary to-primary-container text-on-primary rounded-full px-8 py-4 font-label font-medium hover:shadow-[0_8px_32px_rgba(0,90,158,0.2)] transition-shadow">
+                        Start Task
+                    </button>
+<button class="rounded-full px-6 py-4 font-label font-medium text-primary border border-outline-variant/20 hover:bg-surface-container transition-colors">
+                        Maybe Later
+                    </button>
+</div>
+</div>
+</section>
+<!-- Recent Wins Feed -->
+<section class="space-y-6">
+<div class="flex items-center justify-between">
+<h3 class="font-headline font-bold text-2xl text-on-surface tracking-tight">Recent Wins</h3>
+<button class="bg-tertiary-fixed-dim text-on-tertiary-container rounded-full px-5 py-2.5 font-label font-medium flex items-center gap-2 hover:opacity-90 transition-opacity">
+<span class="material-symbols-outlined text-sm" data-icon="add" data-weight="fill" style="font-variation-settings: 'FILL' 1;">add</span>
+                    Log a Win
+                </button>
+</div>
+<div class="space-y-4">
+<!-- Win Item 1 -->
+<div class="bg-surface-container-lowest rounded-lg p-6 shadow-[0_4px_16px_rgba(0,0,0,0.02)] hover:bg-surface-container-low transition-colors duration-300">
+<div class="flex items-start gap-4">
+<div class="w-10 h-10 rounded-full bg-surface-container flex items-center justify-center flex-shrink-0">
+<span class="material-symbols-outlined text-on-surface-variant" data-icon="celebration">celebration</span>
+</div>
+<div>
+<p class="font-body text-on-surface leading-relaxed">Successfully navigated the morning drop-off routine with minimal stress.</p>
+<span class="font-body text-xs text-on-surface-variant mt-2 block">Yesterday</span>
+</div>
+</div>
+</div>
+<!-- Win Item 2 -->
+<div class="bg-surface-container-lowest rounded-lg p-6 shadow-[0_4px_16px_rgba(0,0,0,0.02)] hover:bg-surface-container-low transition-colors duration-300">
+<div class="flex items-start gap-4">
+<div class="w-10 h-10 rounded-full bg-surface-container flex items-center justify-center flex-shrink-0">
+<span class="material-symbols-outlined text-on-surface-variant" data-icon="local_florist">local_florist</span>
+</div>
+<div>
+<p class="font-body text-on-surface leading-relaxed">Tried a new sensory-friendly texture at dinner.</p>
+<span class="font-body text-xs text-on-surface-variant mt-2 block">Tuesday</span>
+</div>
+</div>
+</div>
+</div>
+</section>
+</main>
+<!-- BottomNavBar (Mobile Only) -->
+<nav class="md:hidden fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 pb-6 pt-3 bg-white/80 dark:bg-slate-900/80 backdrop-blur-lg text-[#005A9E] dark:text-blue-400 font-['Plus_Jakarta_Sans'] font-semibold text-[11px] rounded-t-[32px] no-border shadow-[0_-8px_32px_rgba(0,90,158,0.08)]">
+<!-- Active: Momentum -->
+<button aria-label="Momentum" class="flex flex-col items-center justify-center bg-[#005A9E] text-white rounded-full px-5 py-2 transition-all tap-highlight-none active:scale-90">
+<span class="material-symbols-outlined mb-1" data-icon="speed" data-weight="fill" style="font-variation-settings: 'FILL' 1;">speed</span>
+<span>Momentum</span>
+</button>
+<!-- Inactive: Narrative -->
+<button aria-label="Narrative" class="flex flex-col items-center justify-center text-slate-400 dark:text-slate-500 px-5 py-2 hover:text-[#005A9E] dark:hover:text-blue-300 tap-highlight-none active:scale-90 transition-transform">
+<span class="material-symbols-outlined mb-1" data-icon="auto_stories">auto_stories</span>
+<span>Narrative</span>
+</button>
+<!-- Inactive: Archive -->
+<button aria-label="Archive" class="flex flex-col items-center justify-center text-slate-400 dark:text-slate-500 px-5 py-2 hover:text-[#005A9E] dark:hover:text-blue-300 tap-highlight-none active:scale-90 transition-transform">
+<span class="material-symbols-outlined mb-1" data-icon="inventory_2">inventory_2</span>
+<span>Archive</span>
+</button>
+</nav>
+</body></html>

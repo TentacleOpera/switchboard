@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+
+<html class="h-full" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>AUTOBAN | TECHNICAL DOCUMENTATION</title>
+<!-- Tailwind CSS CDN -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<!-- Google Fonts for Modern Aerospace Typography -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@300;400;500;600;700&amp;family=Inter:wght@300;400;500;600&amp;family=JetBrains+Mono:wght@400;700&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "inverse-primary": "#006875",
+            "surface": "#101414",
+            "outline-variant": "#3b494c",
+            "secondary-container": "#474746",
+            "on-secondary-container": "#b7b5b4",
+            "secondary-fixed-dim": "#c8c6c5",
+            "primary-fixed": "#9cf0ff",
+            "tertiary-fixed": "#dce4e4",
+            "on-secondary-fixed": "#1c1b1b",
+            "surface-tint": "#00daf3",
+            "error": "#ffb4ab",
+            "on-error": "#690005",
+            "primary-fixed-dim": "#00daf3",
+            "inverse-on-surface": "#2e3131",
+            "primary-container": "#00e5ff",
+            "background": "#101414",
+            "surface-variant": "#323536",
+            "on-surface": "#e1e3e3",
+            "on-primary-fixed-variant": "#004f58",
+            "surface-container-highest": "#323536",
+            "surface-container": "#1d2020",
+            "on-secondary-fixed-variant": "#474746",
+            "on-primary-container": "#00626e",
+            "on-tertiary": "#2a3232",
+            "surface-bright": "#363a3a",
+            "secondary": "#c8c6c5",
+            "error-container": "#93000a",
+            "inverse-surface": "#e1e3e3",
+            "on-tertiary-fixed": "#151d1d",
+            "outline": "#849396",
+            "on-primary": "#00363d",
+            "tertiary-container": "#c9d2d1",
+            "tertiary": "#e6eeee",
+            "tertiary-fixed-dim": "#c0c8c8",
+            "on-tertiary-container": "#525a5a",
+            "on-error-container": "#ffdad6",
+            "surface-container-low": "#191c1c",
+            "primary": "#c3f5ff",
+            "on-surface-variant": "#bac9cc",
+            "surface-dim": "#101414",
+            "surface-container-high": "#272b2b",
+            "on-secondary": "#313030",
+            "on-tertiary-fixed-variant": "#404848",
+            "on-background": "#e1e3e3",
+            "on-primary-fixed": "#001f24",
+            "surface-container-lowest": "#0b0f0f",
+            "secondary-fixed": "#e5e2e1"
+          },
+          borderRadius: {
+            "DEFAULT": "0.25rem",
+            "lg": "0.5rem",
+            "xl": "0.75rem",
+            "full": "9999px"
+          },
+          spacing: {
+            "unit": "4px",
+            "margin": "24px",
+            "gutter": "16px",
+            "sidebar_width": "280px"
+          },
+          fontFamily: {
+            "mono-data": ["JetBrains Mono", "monospace"],
+            "body-sm": ["Inter", "sans-serif"],
+            "body-base": ["Inter", "sans-serif"],
+            "headline-md": ["Hanken Grotesk", "sans-serif"],
+            "label-caps": ["JetBrains Mono", "monospace"],
+            "headline-lg": ["Hanken Grotesk", "sans-serif"]
+          }
+        },
+      },
+    }
+  </script>
+<style>
+    /* 40px Grid Background with Scanlines */
+    .grid-bg {
+      background-color: #101414;
+      background-image: 
+        linear-gradient(rgba(0, 218, 243, 0.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0, 218, 243, 0.05) 1px, transparent 1px);
+      background-size: 40px 40px;
+      position: relative;
+    }
+    .grid-bg::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.15) 50%);
+      background-size: 100% 4px;
+      pointer-events: none;
+    }
+
+    /* Cyan Header Glows */
+    .cyan-glow-text {
+      color: #c3f5ff;
+      text-shadow: 0 0 12px rgba(0, 218, 243, 0.4);
+    }
+    
+    .modern-aerospace-h1 {
+      font-family: 'Hanken Grotesk', sans-serif;
+      letter-spacing: -0.05em;
+      font-weight: 700;
+    }
+
+    .modern-aerospace-h2 {
+      font-family: 'Hanken Grotesk', sans-serif;
+      letter-spacing: -0.05em;
+      font-weight: 600;
+    }
+
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 4px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0b0f0f;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #3b494c;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #849396;
+    }
+
+    .border-accent {
+      border-color: #00daf3;
+    }
+  </style>
+</head>
+<body class="bg-surface text-on-surface font-body-base h-full flex flex-col overflow-hidden">
+<!-- Global Overlay Scanlines -->
+<div class="fixed inset-0 pointer-events-none z-[9999] opacity-[0.05]" style="background: linear-gradient(rgba(0, 0, 0, 0) 50%, rgba(0, 0, 0, 1) 50%); background-size: 100% 2px;"></div>
+<!-- Header -->
+<header class="h-12 bg-surface-container border-b border-outline-variant flex items-center justify-between px-4 flex-shrink-0 z-10" data-purpose="global-header">
+<div class="flex items-center space-x-6">
+<div class="flex items-center space-x-3">
+<div class="w-4 h-4 bg-primary rounded-sm shadow-[0_0_10px_rgba(0,218,243,0.5)]"></div>
+<span class="font-headline-md text-sm uppercase tracking-[0.2em] text-on-surface">AUTOBAN</span>
+</div>
+<div class="h-8 w-px bg-outline-variant"></div>
+<nav class="flex items-center space-x-1">
+<div class="bg-surface-container-highest border-b-2 border-primary px-4 py-1.5 flex items-center space-x-2">
+<span class="text-[10px] font-label-caps text-primary uppercase">Artifacts.sys</span>
+<button class="text-on-surface/50 hover:text-primary transition-colors">
+<svg class="w-3 h-3" fill="currentColor" viewbox="0 0 20 20"><path d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"></path></svg>
+</button>
+</div>
+</nav>
+</div>
+<div class="flex items-center space-x-5">
+<div class="text-[10px] font-mono-data text-outline">REF_SIG: 0x82A1C</div>
+<div class="flex items-center space-x-3">
+<svg class="w-4 h-4 text-outline hover:text-primary cursor-pointer transition-colors" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707M16.243 17.657l.707.707M7.357 6.343l.707.707" stroke-width="2"></path></svg>
+<svg class="w-4 h-4 text-outline hover:text-primary cursor-pointer transition-colors" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" stroke-width="2"></path></svg>
+</div>
+</div>
+</header>
+<!-- Secondary Navigation -->
+<div class="h-9 bg-surface-container-low border-b border-outline-variant flex items-center px-4 space-x-6 flex-shrink-0" data-purpose="secondary-navigation">
+<a class="text-[10px] font-label-caps text-primary border-b border-primary h-full flex items-center transition-colors" href="#">Local Docs</a>
+<a class="text-[10px] font-label-caps text-outline hover:text-on-surface transition-colors" href="#">Cloud Nexus</a>
+<a class="text-[10px] font-label-caps text-outline hover:text-on-surface transition-colors" href="#">Kanban Core</a>
+<a class="text-[10px] font-label-caps text-outline hover:text-on-surface transition-colors" href="#">Design Spec</a>
+<a class="text-[10px] font-label-caps text-outline hover:text-on-surface transition-colors" href="#">Tickets.log</a>
+</div>
+<div class="flex flex-1 overflow-hidden">
+<!-- Multi-Column High Density Sidebar -->
+<aside class="w-[320px] bg-surface-container-lowest border-r border-outline-variant flex flex-col flex-shrink-0" data-purpose="project-sidebar">
+<!-- Workspace Select -->
+<div class="p-3 border-b border-outline-variant">
+<button class="w-full bg-surface-container border border-outline-variant rounded p-2 flex items-center justify-between group">
+<div class="text-left">
+<div class="text-[9px] font-label-caps text-outline uppercase">Active Workspace</div>
+<div class="text-xs font-mono-data text-on-surface">PROJECT_ALPHA_OMEGA</div>
+</div>
+<svg class="w-4 h-4 text-outline group-hover:text-primary transition-colors" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M19 9l-7 7-7-7" stroke-width="2"></path></svg>
+</button>
+</div>
+<!-- Navigation Content -->
+<div class="flex-1 overflow-y-auto">
+<!-- Projects Section -->
+<section class="p-3 space-y-4">
+<div>
+<div class="flex items-center justify-between mb-3">
+<h3 class="text-[10px] font-label-caps text-primary tracking-widest uppercase">System Hierarchy</h3>
+<button class="text-[9px] font-mono-data bg-primary/10 text-primary border border-primary/30 px-1.5 py-0.5 uppercase hover:bg-primary/20 transition-all">Add_Node</button>
+</div>
+<div class="space-y-1">
+<!-- Active Node -->
+<div class="bg-surface-container-highest border-l-2 border-primary p-3 rounded-sm relative group cursor-pointer">
+<div class="absolute top-2 right-2 flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="p-1 hover:text-primary"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" stroke-width="2"></path></svg></button>
+</div>
+<div class="text-[11px] font-headline-md cyan-glow-text leading-tight mb-1">AMPLITUDE_VS_MIXPANEL_04.doc</div>
+<div class="text-[9px] font-mono-data text-outline mb-2">LAST_MOD: 2026-04-12T14:22:01Z</div>
+<div class="flex items-center space-x-2">
+<div class="flex-1 h-1 bg-surface-container rounded-full overflow-hidden">
+<div class="h-full bg-primary w-[75%]"></div>
+</div>
+<span class="text-[8px] font-mono-data text-outline">75%</span>
+</div>
+</div>
+<!-- Other Nodes -->
+<div class="p-3 hover:bg-surface-container transition-colors rounded-sm cursor-pointer border border-transparent hover:border-outline-variant">
+<div class="text-[11px] font-headline-md text-on-surface/80 leading-tight mb-1">ENTERPRISE_ARCH_CORE.sys</div>
+<div class="text-[9px] font-mono-data text-outline">NODE_ID: DATA_ARCH_01</div>
+</div>
+<div class="p-3 hover:bg-surface-container transition-colors rounded-sm cursor-pointer border border-transparent hover:border-outline-variant">
+<div class="text-[11px] font-headline-md text-on-surface/80 leading-tight mb-1">AUTISM_360_APP_SPEC.v2</div>
+<div class="text-[9px] font-mono-data text-outline">NODE_ID: MOBILE_REF_02</div>
+</div>
+</div>
+</div>
+<!-- Documentation Tree -->
+<div>
+<h3 class="text-[10px] font-label-caps text-outline tracking-widest uppercase mb-3">Resource Index</h3>
+<div class="space-y-0.5 font-mono-data text-[10px]">
+<div class="flex items-center py-1.5 px-2 hover:bg-surface-container rounded cursor-pointer group text-outline hover:text-on-surface transition-all">
+<svg class="w-3 h-3 mr-2" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" stroke-width="2"></path></svg>
+<span>CORE_ASSETS/</span>
+</div>
+<div class="flex items-center py-1.5 px-6 hover:bg-surface-container rounded cursor-pointer group text-outline hover:text-on-surface transition-all">
+<svg class="w-3 h-3 mr-2" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" stroke-width="2"></path></svg>
+<span>pricing_models_v2.md</span>
+</div>
+<div class="flex items-center py-1.5 px-6 hover:bg-surface-container rounded cursor-pointer group text-on-surface border-l border-primary/30">
+<svg class="w-3 h-3 mr-2 text-primary" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" stroke-width="2"></path></svg>
+<span class="text-primary font-bold">comparative_analysis.md</span>
+</div>
+</div>
+</div>
+</section>
+</div>
+<!-- Sidebar Status -->
+<div class="p-3 bg-surface-container-low border-t border-outline-variant">
+<div class="flex items-center justify-between text-[8px] font-mono-data text-outline mb-2">
+<span>SYNC_STATUS</span>
+<span class="text-primary">ENCRYPTED</span>
+</div>
+<div class="flex space-x-1">
+<div class="h-1 flex-1 bg-primary/20 rounded-full overflow-hidden">
+<div class="h-full bg-primary w-full animate-pulse"></div>
+</div>
+</div>
+</div>
+</aside>
+<!-- Main Content Area -->
+<main class="flex-1 flex flex-col overflow-hidden grid-bg" data-purpose="documentation-viewer">
+<!-- Breadcrumbs / Toolbar -->
+<div class="h-10 border-b border-outline-variant bg-surface/80 backdrop-blur-md flex items-center justify-between px-6 z-10">
+<div class="flex items-center space-x-2 text-[10px] font-mono-data text-outline">
+<span>ROOT</span>
+<svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M9 5l7 7-7 7" stroke-width="2"></path></svg>
+<span>PROJECTS</span>
+<svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M9 5l7 7-7 7" stroke-width="2"></path></svg>
+<span class="text-on-surface">COMPARATIVE_ANALYSIS_04</span>
+</div>
+<div class="flex items-center space-x-4">
+<button class="text-[10px] font-label-caps text-outline hover:text-primary flex items-center space-x-1 transition-colors">
+<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" stroke-width="2"></path></svg>
+<span>SHARE</span>
+</button>
+<button class="text-[10px] font-label-caps text-outline hover:text-primary flex items-center space-x-1 transition-colors">
+<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" stroke-width="2"></path></svg>
+<span>EXPORT_PDF</span>
+</button>
+</div>
+</div>
+<!-- Main Reader -->
+<div class="flex-1 overflow-y-auto scroll-smooth">
+<div class="max-w-4xl mx-auto p-16 space-y-12">
+<!-- Document Header -->
+<header class="space-y-6 border-b border-outline-variant pb-12">
+<div class="text-[11px] font-label-caps text-primary uppercase tracking-[0.3em] mb-4">Tech_Briefing // Classification: Restricted</div>
+<h1 class="text-6xl modern-aerospace-h1 text-on-surface uppercase leading-none">
+              Comparative Analysis: <br/>
+<span class="text-primary cyan-glow-text">Amplitude vs Mixpanel</span>
+</h1>
+<div class="flex items-center space-x-8 pt-4">
+<div class="flex flex-col">
+<span class="text-[9px] font-mono-data text-outline uppercase">Revision_ID</span>
+<span class="text-xs font-headline-md text-on-surface">REV_04.821_B</span>
+</div>
+<div class="flex flex-col">
+<span class="text-[9px] font-mono-data text-outline uppercase">Author_Credential</span>
+<span class="text-xs font-headline-md text-on-surface">SENIOR_ARCHITECT_09</span>
+</div>
+<div class="flex flex-col">
+<span class="text-[9px] font-mono-data text-outline uppercase">Security_Stamp</span>
+<span class="text-xs font-headline-md text-primary">ENCRYPTED_SHA256</span>
+</div>
+</div>
+</header>
+<!-- Content Section 01 -->
+<article class="prose prose-invert max-w-none">
+<section class="space-y-8">
+<h2 class="text-2xl modern-aerospace-h2 text-primary uppercase border-l-2 border-primary pl-6 tracking-wide">
+                01. Executive Summary &amp; Market Context
+              </h2>
+<div class="space-y-6 text-on-surface/80 leading-[1.7] font-body-base text-lg">
+<p>
+                  In the contemporary digital economy, the capacity to capture, process, and derive actionable intelligence from user behavioral data is a fundamental prerequisite for commercial success. As software-as-a-service (SaaS), e-commerce, and direct-to-consumer platforms mature, organizations are moving beyond traditional pageview-centric web analytics to sophisticated, event-driven product analytics platforms. 
+                </p>
+<div class="bg-surface-container border-y border-outline-variant p-8 my-8 relative overflow-hidden group">
+<div class="absolute top-0 left-0 w-1 h-full bg-primary shadow-[0_0_15px_rgba(0,218,243,0.3)]"></div>
+<div class="text-[10px] font-label-caps text-primary mb-3">TECHNICAL_ADVISORY</div>
+<p class="text-sm font-mono-data italic text-on-surface/90">
+                    "Within this highly competitive ecosystem, two platforms have emerged as the definitive market leaders: Amplitude and Mixpanel. Both solutions provide robust foundational capabilities designed to map user journeys, measure long-term retention, and optimize conversion funnels."
+                  </p>
+</div>
+<p>
+                  As of 2026, the expectations placed upon product analytics platforms have escalated dramatically. Modern enterprise environments require these tools to integrate natively with cloud data warehouses, deploy advanced artificial intelligence to automate complex diagnostic queries, and embed analytical insights directly into collaborative workspaces such as Slack and Microsoft Teams. Furthermore, the convergence of analytics with customer data platforms (CDPs) and feature management systems has fundamentally altered the total cost of ownership (TCO) calculation for prospective buyers.
+                </p>
+<p>
+                  This exhaustive research report evaluates Amplitude and Mixpanel across five critical dimensions: core analytical capabilities and behavioral intelligence, data export and warehouse-native architectures, artificial intelligence and autonomous reasoning, workflow integrations via ChatOps, and comprehensive pricing models.
+                </p>
+</div>
+</section>
+<!-- Metadata / Indicators -->
+<section class="grid grid-cols-2 gap-8 pt-12 border-t border-outline-variant">
+<div class="space-y-4">
+<h4 class="text-[11px] font-label-caps text-outline uppercase">Performance Metrics</h4>
+<div class="space-y-3">
+<div class="flex justify-between items-center text-xs font-mono-data">
+<span class="text-on-surface/60">Query Latency (Avg)</span>
+<span class="text-primary">124ms</span>
+</div>
+<div class="h-1 bg-surface-container-highest rounded-full">
+<div class="h-full bg-primary w-[88%]"></div>
+</div>
+<div class="flex justify-between items-center text-xs font-mono-data">
+<span class="text-on-surface/60">Data Retention Depth</span>
+<span class="text-on-surface">Unlimited</span>
+</div>
+</div>
+</div>
+<div class="space-y-4">
+<h4 class="text-[11px] font-label-caps text-outline uppercase">Deployment Options</h4>
+<div class="flex flex-wrap gap-2">
+<span class="text-[9px] font-label-caps border border-outline-variant px-2 py-1 text-on-surface/60">CLOUD_NATIVE</span>
+<span class="text-[9px] font-label-caps border border-primary/40 px-2 py-1 text-primary">WAREHOUSE_SYNC</span>
+<span class="text-[9px] font-label-caps border border-outline-variant px-2 py-1 text-on-surface/60">HYBRID_EDGE</span>
+</div>
+</div>
+</section>
+</article>
+</div>
+</div>
+<!-- Footer Bar -->
+<footer class="h-8 bg-surface-container-lowest border-t border-outline-variant flex items-center justify-between px-4 z-10" data-purpose="content-footer">
+<div class="flex items-center space-x-6">
+<div class="flex items-center space-x-2">
+<span class="w-2 h-2 rounded-full bg-primary animate-pulse shadow-[0_0_8px_#00daf3]"></span>
+<span class="text-[9px] font-mono-data text-primary">SYS_LINK: ESTABLISHED</span>
+</div>
+<span class="text-[9px] font-mono-data text-outline">CORE_TEMP: 34°C</span>
+</div>
+<div class="flex items-center space-x-6">
+<span class="text-[9px] font-mono-data text-outline">DOC_SEQ: 01_24_MARK_IV</span>
+<div class="flex space-x-1">
+<div class="w-1.5 h-1.5 bg-primary/40"></div>
+<div class="w-1.5 h-1.5 bg-primary/70"></div>
+<div class="w-1.5 h-1.5 bg-primary"></div>
+</div>
+</div>
+</footer>
+</main>
+<!-- Right Interaction Panel (Optional Hidden or Small) -->
+<aside class="w-12 bg-surface-container border-l border-outline-variant flex flex-col items-center py-4 space-y-6">
+<button class="p-2 text-outline hover:text-primary transition-all"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" stroke-width="2"></path></svg></button>
+<button class="p-2 text-outline hover:text-primary transition-all"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" stroke-width="2"></path></svg></button>
+<div class="flex-1"></div>
+<button class="p-2 text-primary/50 hover:text-primary transition-all animate-bounce"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-width="2"></path></svg></button>
+</aside>
+</div>
+<!-- FAB Overlay for Command Terminal -->
+<div class="absolute bottom-12 right-16">
+<button class="px-4 py-2 bg-primary text-on-primary font-label-caps text-[10px] rounded shadow-[0_0_20px_rgba(0,218,243,0.4)] flex items-center space-x-2 hover:scale-105 transition-transform">
+<span class="w-2 h-2 bg-on-primary rounded-full animate-ping"></span>
+<span>COMMAND_PROMPT</span>
+</button>
+</div>
+</body></html>

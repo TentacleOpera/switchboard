@@ -1,11 +1,20 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { LocalFolderService } from './LocalFolderService';
-// @ts-ignore
-import { stitch } from '@google/stitch-sdk';
+
+// @google/stitch-sdk is ESM-only (its exports map has no "require" condition), so a
+// static import fails resolution in this CJS bundle. A dynamic import() resolves with
+// the "import" condition, and webpackMode: "eager" inlines the SDK into the main
+// bundle — required because the installed extension ships dist/ without node_modules.
+let _stitchSdkPromise: Promise<any> | undefined;
+function loadStitch(): Promise<any> {
+    if (!_stitchSdkPromise) {
+        _stitchSdkPromise = import(/* webpackMode: "eager" */ '@google/stitch-sdk').then(m => m.stitch);
+    }
+    return _stitchSdkPromise;
+}
 
 interface TreeNode {
     id: string;
@@ -27,6 +36,7 @@ export class DesignPanelProvider implements vscode.Disposable {
     private _designDocsDebounce?: NodeJS.Timeout;
     private _activeScreens = new Map<string, any>(); // Key: screen.id, Value: SDK Screen instance
     private _lastWebviewRootsSignature?: string;
+    private _themeListenersRegistered = false;
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
@@ -77,6 +87,27 @@ export class DesignPanelProvider implements vscode.Disposable {
 
         this._setupHtmlFolderWatchers();
         this._setupDesignFolderWatchers();
+
+        if (!this._themeListenersRegistered) {
+            this._themeListenersRegistered = true;
+            this._disposables.push(
+                vscode.window.onDidChangeActiveColorTheme(() => {
+                    this._panel?.webview.postMessage({ type: 'themeChanged' });
+                })
+            );
+            this._disposables.push(
+                vscode.workspace.onDidChangeConfiguration(e => {
+                    if (e.affectsConfiguration('switchboard.theme.disableCyberAnimation')) {
+                        const disabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
+                        this._panel?.webview.postMessage({ type: 'cyberAnimationSetting', disabled });
+                    }
+                    if (e.affectsConfiguration('switchboard.theme.name')) {
+                        const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
+                        this._panel?.webview.postMessage({ type: 'switchboardThemeChanged', theme });
+                    }
+                })
+            );
+        }
     }
 
     public postMessage(message: any): void {
@@ -369,6 +400,23 @@ export class DesignPanelProvider implements vscode.Disposable {
         };
     }
 
+    private _getStitchOutputDir(workspaceRoot: string): string {
+        const configured = vscode.workspace.getConfiguration('switchboard')
+            .get<string>('stitch.defaultOutputFolder') || '.stitch';
+        return path.resolve(workspaceRoot, configured);
+    }
+
+    private async _formatScreen(screen: any): Promise<any> {
+        return {
+            id: screen.id,
+            projectId: screen.projectId,
+            name: screen.data?.title || screen.data?.displayName || screen.id,
+            deviceType: screen.data?.deviceType,
+            imageUrl: await screen.getImage(),
+            htmlUrl: await screen.getHtml()
+        };
+    }
+
     private _setupStitchApiKey(): boolean {
         const config = vscode.workspace.getConfiguration('switchboard');
         const apiKey = config.get<string>('stitch.apiKey') || process.env.STITCH_API_KEY;
@@ -383,25 +431,54 @@ export class DesignPanelProvider implements vscode.Disposable {
         const hasKey = this._setupStitchApiKey();
 
         switch (message.type) {
-            case 'ready':
+            case 'ready': {
                 this.postMessage({ type: 'stitchApiKeyStatus', configured: hasKey });
+                const themeConfig = vscode.workspace.getConfiguration('switchboard');
+                this.postMessage({ type: 'switchboardThemeChanged', theme: themeConfig.get<string>('theme.name', 'afterburner') });
+                this.postMessage({ type: 'cyberAnimationSetting', disabled: themeConfig.get<boolean>('theme.disableCyberAnimation', false) });
                 await this._sendHtmlDocsReady();
                 await this._sendDesignDocsReady();
                 break;
+            }
 
             case 'fetchPreview': {
                 try {
-                    const workspaceRoot = this._getWorkspaceRoot();
-                    if (!workspaceRoot) throw new Error('No workspace root selected');
-                    const service = this._getLocalFolderService(workspaceRoot);
-                    const fileContent = await service.readFile(message.docId, message.sourceFolder);
-                    const fileExt = path.extname(message.docId).toLowerCase();
+                    const sourceFolder = message.sourceFolder;
+                    if (!sourceFolder) throw new Error('sourceFolder is required');
+
+                    // Tree node ids are `${folderIndex}:${relativePath}` — strip the prefix.
+                    const rawDocId = String(message.docId || '');
+                    const relativePath = rawDocId.includes(':')
+                        ? rawDocId.substring(rawDocId.indexOf(':') + 1)
+                        : rawDocId;
+
+                    // Only configured design/html folders may be read from.
+                    const allowedFolders = new Set<string>();
+                    for (const root of this._getWorkspaceRoots()) {
+                        try {
+                            const svc = this._getLocalFolderService(root);
+                            svc.getDesignFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
+                            svc.getHtmlFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
+                        } catch {}
+                    }
+                    const resolvedFolder = path.resolve(sourceFolder);
+                    if (!allowedFolders.has(resolvedFolder)) {
+                        throw new Error('sourceFolder is not a configured design/html folder');
+                    }
+                    const absPath = path.resolve(resolvedFolder, relativePath);
+                    if (absPath !== resolvedFolder && !absPath.startsWith(resolvedFolder + path.sep)) {
+                        throw new Error('Invalid file path');
+                    }
+
+                    const fileExt = path.extname(relativePath).toLowerCase();
                     const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(fileExt);
 
+                    let fileContent = '';
                     let webviewUri: string | undefined;
                     if (isImage) {
-                        const absPath = path.resolve(message.sourceFolder || workspaceRoot, message.docId);
                         webviewUri = this._panel?.webview.asWebviewUri(vscode.Uri.file(absPath)).toString();
+                    } else {
+                        fileContent = await fs.promises.readFile(absPath, 'utf8');
                     }
 
                     this.postMessage({
@@ -409,8 +486,8 @@ export class DesignPanelProvider implements vscode.Disposable {
                         sourceId: message.sourceId,
                         requestId: message.requestId,
                         content: isImage ? '' : fileContent,
-                        docName: path.basename(message.docId),
-                        filePath: message.docId,
+                        docName: path.basename(relativePath),
+                        filePath: relativePath,
                         fileType: fileExt.substring(1),
                         isImage,
                         webviewUri,
@@ -460,8 +537,12 @@ export class DesignPanelProvider implements vscode.Disposable {
                         this.postMessage({ type: 'stitchApiKeyStatus', configured: false });
                         return;
                     }
+                    const stitch = await loadStitch();
                     const list = await stitch.projects();
-                    this.postMessage({ type: 'stitchProjectsReady', projects: list });
+                    const projects = list.map((p: any) => ({ id: p.id, name: p.data?.title || p.data?.name || p.id }));
+                    const defaultProjectId = vscode.workspace.getConfiguration('switchboard')
+                        .get<string>('stitch.defaultProjectId') || '';
+                    this.postMessage({ type: 'stitchProjectsReady', projects, defaultProjectId });
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err) });
                 }
@@ -469,17 +550,12 @@ export class DesignPanelProvider implements vscode.Disposable {
 
             case 'stitchGetProjectScreens':
                 try {
+                    const stitch = await loadStitch();
                     const projectInstance = stitch.project(message.projectId);
                     const list = await projectInstance.screens();
                     const formatted = await Promise.all(list.map(async (screen: any) => {
                         this._activeScreens.set(screen.id, screen);
-                        return {
-                            id: screen.id,
-                            name: screen.name,
-                            deviceType: screen.deviceType,
-                            imageUrl: await screen.getImage(),
-                            htmlUrl: await screen.getHtml()
-                        };
+                        return this._formatScreen(screen);
                     }));
                     this.postMessage({ type: 'stitchScreensReady', screens: formatted });
                 } catch (err: any) {
@@ -487,24 +563,65 @@ export class DesignPanelProvider implements vscode.Disposable {
                 }
                 break;
 
+            case 'stitchCreateProject':
+                try {
+                    const title = await vscode.window.showInputBox({
+                        prompt: 'Title for the new Stitch project',
+                        placeHolder: 'e.g. Onboarding Redesign'
+                    });
+                    if (!title) return; // user dismissed the input — nothing to do
+                    const stitch = await loadStitch();
+                    const project = await stitch.createProject(title);
+                    const list = await stitch.projects();
+                    const projects = list.map((p: any) => ({ id: p.id, name: p.data?.title || p.data?.name || p.id }));
+                    // Pass the new project as the default so the webview auto-selects it.
+                    this.postMessage({ type: 'stitchProjectsReady', projects, defaultProjectId: project.id, selectProjectId: project.id });
+                } catch (err: any) {
+                    this.postMessage({ type: 'stitchError', error: err.message || String(err) });
+                }
+                break;
+
+            case 'stitchRefreshScreen':
+                try {
+                    if (!message.projectId || !message.screenId) throw new Error('Missing project or screen id');
+                    const stitch = await loadStitch();
+                    // getScreen() fetches fresh details — new download URLs and title —
+                    // unlike the cached instance, whose data may predate render completion.
+                    const fresh = await stitch.project(message.projectId).getScreen(message.screenId);
+                    this._activeScreens.set(fresh.id, fresh);
+                    this.postMessage({ type: 'stitchScreenReady', screen: await this._formatScreen(fresh) });
+                } catch (err: any) {
+                    this.postMessage({ type: 'stitchError', error: err.message || String(err) });
+                }
+                break;
+
+            case 'stitchOpenManifest':
+                try {
+                    const workspaceRoot = this._getWorkspaceRoot();
+                    if (!workspaceRoot) throw new Error('No active workspace root found');
+                    const manifestPath = path.join(this._getStitchOutputDir(workspaceRoot), 'DESIGN.md');
+                    if (fs.existsSync(manifestPath)) {
+                        await vscode.window.showTextDocument(vscode.Uri.file(manifestPath), { preview: false });
+                    } else {
+                        vscode.window.showInformationMessage('No DESIGN.md yet — run "Sync Project to Workspace" first to download screens and the design-system palette.');
+                    }
+                } catch (err: any) {
+                    this.postMessage({ type: 'stitchError', error: err.message || String(err) });
+                }
+                break;
+
             case 'stitchGenerate':
                 try {
-                    let projectInstance = stitch;
-                    if (message.projectId) {
-                        projectInstance = stitch.project(message.projectId);
+                    // The SDK has no root-level generate — a project is required.
+                    if (!message.projectId) {
+                        this.postMessage({ type: 'stitchError', error: 'Select a Stitch project before generating a screen.' });
+                        return;
                     }
+                    const stitch = await loadStitch();
+                    const projectInstance = stitch.project(message.projectId);
                     const screen = await projectInstance.generate(message.prompt, message.deviceType);
                     this._activeScreens.set(screen.id, screen);
-                    this.postMessage({
-                        type: 'stitchScreenReady',
-                        screen: {
-                            id: screen.id,
-                            name: screen.name,
-                            deviceType: screen.deviceType,
-                            imageUrl: await screen.getImage(),
-                            htmlUrl: await screen.getHtml()
-                        }
-                    });
+                    this.postMessage({ type: 'stitchScreenReady', screen: await this._formatScreen(screen) });
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err) });
                 }
@@ -516,16 +633,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                     if (!screen) throw new Error('Screen instance not found in memory cache.');
                     const updated = await screen.edit(message.prompt);
                     this._activeScreens.set(updated.id, updated);
-                    this.postMessage({
-                        type: 'stitchScreenReady',
-                        screen: {
-                            id: updated.id,
-                            name: updated.name,
-                            deviceType: updated.deviceType,
-                            imageUrl: await updated.getImage(),
-                            htmlUrl: await updated.getHtml()
-                        }
-                    });
+                    this.postMessage({ type: 'stitchScreenReady', screen: await this._formatScreen(updated) });
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err) });
                 }
@@ -535,16 +643,10 @@ export class DesignPanelProvider implements vscode.Disposable {
                 try {
                     const screen = this._activeScreens.get(message.screenId);
                     if (!screen) throw new Error('Screen instance not found in memory cache.');
-                    const list = await screen.variants(message.prompt, { count: message.count || 3 });
+                    const list = await screen.variants(message.prompt, { variantCount: message.count || 3 });
                     const formatted = await Promise.all(list.map(async (v: any) => {
                         this._activeScreens.set(v.id, v);
-                        return {
-                            id: v.id,
-                            name: v.name,
-                            deviceType: v.deviceType,
-                            imageUrl: await v.getImage(),
-                            htmlUrl: await v.getHtml()
-                        };
+                        return this._formatScreen(v);
                     }));
                     this.postMessage({ type: 'stitchScreensReady', screens: formatted });
                 } catch (err: any) {
@@ -557,10 +659,11 @@ export class DesignPanelProvider implements vscode.Disposable {
                     const workspaceRoot = this._getWorkspaceRoot();
                     if (!workspaceRoot) throw new Error('No active workspace root found');
 
+                    const stitch = await loadStitch();
                     const projectInstance = stitch.project(message.projectId);
                     const screens = await projectInstance.screens();
 
-                    const outputDir = path.join(workspaceRoot, '.stitch');
+                    const outputDir = this._getStitchOutputDir(workspaceRoot);
                     await vscode.workspace.fs.createDirectory(vscode.Uri.file(outputDir));
                     const screensDir = path.join(outputDir, 'screens');
                     await vscode.workspace.fs.createDirectory(vscode.Uri.file(screensDir));
@@ -569,10 +672,19 @@ export class DesignPanelProvider implements vscode.Disposable {
                     designMd += `Sync timestamp: ${new Date().toISOString()}\n\n`;
                     designMd += `## Screens\n\n`;
 
+                    const skipped: string[] = [];
                     for (const s of screens) {
                         const safeId = s.id.replace(/[^a-zA-Z0-9_-]/g, '_');
+                        const screenName = s.data?.title || s.data?.displayName || s.id;
                         const htmlUrl = await s.getHtml();
                         const imageUrl = await s.getImage();
+
+                        // Screens still rendering have no download URLs yet — fetch('')
+                        // throws "Failed to parse URL"; skip them and say so in the manifest.
+                        if (!htmlUrl || !imageUrl) {
+                            skipped.push(screenName);
+                            continue;
+                        }
 
                         // Fetch and save HTML
                         const htmlRes = await fetch(htmlUrl);
@@ -586,17 +698,39 @@ export class DesignPanelProvider implements vscode.Disposable {
                         const pngPath = path.join(screensDir, `${safeId}.png`);
                         await vscode.workspace.fs.writeFile(vscode.Uri.file(pngPath), pngBuffer);
 
-                        designMd += `### ${s.name || s.id}\n`;
-                        designMd += `- Device: ${s.deviceType || 'AGNOSTIC'}\n`;
+                        designMd += `### ${screenName}\n`;
+                        designMd += `- Device: ${s.data?.deviceType || 'AGNOSTIC'}\n`;
                         designMd += `- HTML: [${safeId}.html](./screens/${safeId}.html)\n`;
-                        designMd += `- Image: ![${s.name || s.id}](./screens/${safeId}.png)\n\n`;
+                        designMd += `- Image: ![${screenName}](./screens/${safeId}.png)\n\n`;
+                    }
+                    if (skipped.length > 0) {
+                        designMd += `> Skipped (no download URLs yet — re-sync later): ${skipped.join(', ')}\n\n`;
+                    }
+
+                    // Design systems carry the project's palette/tokens — include them in the handoff.
+                    try {
+                        const designSystems = await projectInstance.listDesignSystems();
+                        if (designSystems && designSystems.length > 0) {
+                            designMd += `## Design Systems\n\n`;
+                            for (const ds of designSystems) {
+                                designMd += `### ${ds.data?.displayName || ds.data?.name || ds.id}\n\n`;
+                                const tokens = ds.data?.designTokens;
+                                if (tokens) {
+                                    designMd += '```\n' + String(tokens) + '\n```\n\n';
+                                } else if (ds.data) {
+                                    designMd += '```json\n' + JSON.stringify(ds.data, null, 2) + '\n```\n\n';
+                                }
+                            }
+                        }
+                    } catch {
+                        designMd += `> Design systems could not be fetched for this project.\n\n`;
                     }
 
                     const manifestPath = path.join(outputDir, 'DESIGN.md');
                     await vscode.workspace.fs.writeFile(vscode.Uri.file(manifestPath), Buffer.from(designMd, 'utf8'));
 
-                    this.postMessage({ type: 'stitchSyncComplete' });
-                    vscode.window.showInformationMessage('Sync Complete! Design assets saved under .stitch folder.');
+                    this.postMessage({ type: 'stitchSyncComplete', manifestPath, skippedCount: skipped.length });
+                    await vscode.window.showTextDocument(vscode.Uri.file(manifestPath), { preview: false });
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err) });
                 }
@@ -606,12 +740,17 @@ export class DesignPanelProvider implements vscode.Disposable {
                 try {
                     const workspaceRoot = this._getWorkspaceRoot();
                     if (!workspaceRoot) throw new Error('No active workspace root found');
+                    if (!message.url) {
+                        throw new Error('No download URL is available for this asset yet — reload the project screens and try again.');
+                    }
 
-                    const isPng = message.filename.endsWith('.png');
-                    const outputDir = path.join(workspaceRoot, '.stitch');
+                    // basename() so a webview-supplied filename can't traverse out of the output dir
+                    const safeFilename = path.basename(String(message.filename));
+                    const isPng = safeFilename.endsWith('.png');
+                    const outputDir = this._getStitchOutputDir(workspaceRoot);
                     await vscode.workspace.fs.createDirectory(vscode.Uri.file(outputDir));
 
-                    const targetPath = path.join(outputDir, message.filename);
+                    const targetPath = path.join(outputDir, safeFilename);
                     const res = await fetch(message.url);
 
                     if (isPng) {
@@ -622,7 +761,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                         await vscode.workspace.fs.writeFile(vscode.Uri.file(targetPath), Buffer.from(text, 'utf8'));
                     }
 
-                    vscode.window.showInformationMessage(`Downloaded ${message.filename} to .stitch/`);
+                    vscode.window.showInformationMessage(`Downloaded ${safeFilename} to ${path.basename(outputDir)}/`);
                 } catch (err: any) {
                     vscode.window.showErrorMessage('Download failed: ' + err.message);
                 }

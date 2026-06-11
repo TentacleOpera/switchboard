@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>The Discovery Stage - Admin Concierge</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "tertiary-fixed": "#b5e0fd",
+                    "tertiary": "#3a647d",
+                    "on-error-container": "#6e0a12",
+                    "surface-variant": "#dce4e6",
+                    "on-tertiary-container": "#265169",
+                    "surface-tint": "#236969",
+                    "surface-container-high": "#e3e9eb",
+                    "on-primary-container": "#0f5b5b",
+                    "inverse-on-surface": "#9a9d9e",
+                    "secondary": "#526075",
+                    "primary-dim": "#115c5d",
+                    "primary": "#236969",
+                    "on-primary-fixed": "#004748",
+                    "on-secondary-fixed-variant": "#4e5c71",
+                    "surface-bright": "#f8fafb",
+                    "tertiary-dim": "#2d5870",
+                    "tertiary-container": "#b5e0fd",
+                    "on-primary-fixed-variant": "#1e6565",
+                    "primary-fixed-dim": "#9ee0e0",
+                    "error-container": "#fa746f",
+                    "surface-container-low": "#f0f4f6",
+                    "outline": "#747c7e",
+                    "tertiary-fixed-dim": "#a8d1ee",
+                    "surface-dim": "#d4dbde",
+                    "primary-fixed": "#aceeee",
+                    "on-secondary-container": "#455367",
+                    "on-surface": "#2c3436",
+                    "error": "#a83836",
+                    "outline-variant": "#acb3b6",
+                    "on-tertiary-fixed-variant": "#305b73",
+                    "on-background": "#2c3436",
+                    "surface-container-highest": "#dce4e6",
+                    "on-tertiary": "#f5f9ff",
+                    "error-dim": "#67040d",
+                    "surface-container": "#eaeff0",
+                    "secondary-container": "#d5e3fd",
+                    "on-secondary-fixed": "#324054",
+                    "inverse-primary": "#bafdfc",
+                    "primary-container": "#aceeee",
+                    "background": "#f8fafb",
+                    "on-tertiary-fixed": "#0d3e56",
+                    "secondary-dim": "#465469",
+                    "surface-container-lowest": "#ffffff",
+                    "on-surface-variant": "#596063",
+                    "on-error": "#fff7f6",
+                    "surface": "#f8fafb",
+                    "inverse-surface": "#0b0f10",
+                    "secondary-fixed": "#d5e3fd",
+                    "on-primary": "#e0fffe",
+                    "secondary-fixed-dim": "#c7d5ee",
+                    "on-secondary": "#f8f8ff"
+            },
+            "borderRadius": {
+                    "DEFAULT": "1rem",
+                    "lg": "2rem",
+                    "xl": "3rem",
+                    "full": "9999px"
+            },
+            "fontFamily": {
+                    "headline": ["Inter"],
+                    "body": ["Inter"],
+                    "label": ["Inter"]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+      .material-symbols-outlined {
+        font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+      }
+      body {
+        font-family: 'Inter', sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      .editorial-shadow {
+        box-shadow: 0 24px 48px -12px rgba(44, 52, 54, 0.08);
+      }
+      .glass-card {
+        backdrop-filter: blur(24px);
+      }
+    </script>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-surface text-on-surface min-h-screen pb-32 selection:bg-primary-container selection:text-on-primary-container">
+
+    <!-- TopAppBar -->
+    <header class="bg-[#f8fafb]/70 backdrop-blur-3xl docked full-width top-0 z-40 sticky">
+        <div class="flex justify-between items-center w-full px-8 py-6 max-w-7xl mx-auto">
+            <div class="flex items-center gap-4">
+                <div class="w-12 h-12 rounded-full overflow-hidden bg-surface-container-highest">
+                    <img src="https://openui.fly.dev/openui/24x24.svg?text=👤" alt="User profile portrait" data-alt="close-up portrait of a professional woman with a calm and friendly expression, soft natural lighting in a modern airy office" class="w-full h-full object-cover">
+                </div>
+                <h1 class="text-2xl font-semibold tracking-[-0.02em] text-[#236969] font-inter">The Discovery Stage</h1>
+            </div>
+            <button class="text-[#236969] hover:opacity-80 transition-opacity active:scale-95 duration-200">
+                <span class="material-symbols-outlined text-2xl" data-icon="notifications">notifications</span>
+            </button>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-8 pt-8 space-y-12">
+        
+        <!-- Welcome & Asymmetric Hero Header -->
+        <section class="grid grid-cols-1 md:grid-cols-12 gap-8 items-end">
+            <div class="md:col-span-8">
+                <p class="text-primary font-medium tracking-wide label-md mb-2">MONDAY, OCT 24</p>
+                <h2 class="display-md text-4xl md:text-5xl font-semibold tracking-tight text-on-surface leading-tight">
+                    Good morning, Sarah. <br> 
+                    <span class="text-outline">Your journey is progressing.</span>
+                </h2>
+            </div>
+            <div class="md:col-span-4 flex justify-end">
+                <div class="bg-surface-container-low p-6 rounded-xl w-full max-w-sm">
+                    <p class="text-sm text-on-surface-variant font-medium mb-1">Weekly Momentum</p>
+                    <div class="flex items-center justify-between">
+                        <span class="text-2xl font-bold text-primary">84%</span>
+                        <div class="flex gap-1">
+                            <div class="h-2 w-8 rounded-full bg-primary"></div>
+                            <div class="h-2 w-8 rounded-full bg-primary"></div>
+                            <div class="h-2 w-8 rounded-full bg-primary-container"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Pipeline: The Road to Support -->
+        <section class="space-y-6">
+            <div class="flex items-baseline justify-between">
+                <h3 class="text-xl font-semibold text-on-surface">The Road to Support</h3>
+                <span class="text-sm font-medium text-primary">Pipeline View</span>
+            </div>
+            <div class="bg-surface-container-lowest editorial-shadow rounded-xl p-8 overflow-x-auto">
+                <div class="flex min-w-[800px] justify-between relative">
+                    <!-- Progress Line Background -->
+                    <div class="absolute top-5 left-0 w-full h-[2px] bg-surface-container-highest -z-10"></div>
+                    <div class="absolute top-5 left-0 w-1/3 h-[2px] bg-primary -z-10"></div>
+
+                    <!-- Step 1: Completed -->
+                    <div class="flex flex-col items-center gap-4 text-center w-48">
+                        <div class="w-10 h-10 rounded-full bg-primary text-white flex items-center justify-center shadow-lg">
+                            <span class="material-symbols-outlined text-lg" data-icon="check">check</span>
+                        </div>
+                        <div>
+                            <p class="font-semibold text-on-surface text-sm">GP Referral</p>
+                            <p class="text-xs text-outline">Completed Sept 12</p>
+                        </div>
+                    </div>
+
+                    <!-- Step 2: Active -->
+                    <div class="flex flex-col items-center gap-4 text-center w-48">
+                        <div class="w-10 h-10 rounded-full bg-white border-2 border-primary text-primary flex items-center justify-center shadow-md relative">
+                            <div class="absolute inset-0 rounded-full bg-primary/10 animate-pulse"></div>
+                            <span class="material-symbols-outlined text-lg" data-icon="adjust">adjust</span>
+                        </div>
+                        <div>
+                            <p class="font-bold text-primary text-sm">Clinic Intake</p>
+                            <p class="text-xs text-primary/70">Awaiting your forms</p>
+                        </div>
+                    </div>
+
+                    <!-- Step 3: Upcoming -->
+                    <div class="flex flex-col items-center gap-4 text-center w-48">
+                        <div class="w-10 h-10 rounded-full bg-surface-container-highest text-outline flex items-center justify-center">
+                            <span class="material-symbols-outlined text-lg" data-icon="pending">pending</span>
+                        </div>
+                        <div>
+                            <p class="font-medium text-on-surface-variant text-sm">NDIS ECA Application</p>
+                            <p class="text-xs text-outline">Up Next</p>
+                        </div>
+                    </div>
+
+                    <!-- Step 4: Upcoming -->
+                    <div class="flex flex-col items-center gap-4 text-center w-48">
+                        <div class="w-10 h-10 rounded-full bg-surface-container-highest text-outline flex items-center justify-center">
+                            <span class="material-symbols-outlined text-lg" data-icon="flag">flag</span>
+                        </div>
+                        <div>
+                            <p class="font-medium text-on-surface-variant text-sm">Final Assessment</p>
+                            <p class="text-xs text-outline">Estimated Dec 2024</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            <!-- Next Task - Primary Action Card -->
+            <div class="lg:col-span-7">
+                <section class="h-full">
+                    <h3 class="text-xl font-semibold text-on-surface mb-6">Your Next Task</h3>
+                    <div class="bg-gradient-to-br from-primary to-primary-dim text-on-primary rounded-xl p-8 editorial-shadow relative overflow-hidden h-[calc(100%-3rem)]">
+                        <!-- Abstract Decoration -->
+                        <div class="absolute -right-12 -top-12 w-64 h-64 bg-white/10 rounded-full blur-3xl"></div>
+                        
+                        <div class="relative z-10 flex flex-col justify-between h-full">
+                            <div>
+                                <span class="bg-white/20 text-xs font-bold tracking-widest uppercase px-3 py-1 rounded-full">PRIORITY ACTION</span>
+                                <h4 class="text-3xl font-bold mt-6 leading-tight">Complete OT Intake Form</h4>
+                                <p class="text-primary-container/80 mt-2 text-lg font-medium">Estimated time: 30 mins</p>
+                            </div>
+                            
+                            <div class="mt-12 flex flex-col sm:flex-row gap-4 items-center">
+                                <button class="w-full sm:w-auto bg-surface-container-lowest text-primary font-bold px-8 py-4 rounded-xl shadow-xl hover:scale-105 transition-transform active:scale-95">
+                                    Start Now
+                                </button>
+                                <button class="w-full sm:w-auto bg-transparent border border-white/20 hover:bg-white/10 text-white font-medium px-8 py-4 rounded-xl transition-colors">
+                                    Remind me at 8PM
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <!-- Evidence Collector - 1 Tap Feature -->
+            <div class="lg:col-span-5">
+                <section class="h-full">
+                    <h3 class="text-xl font-semibold text-on-surface mb-6">The Evidence Collector</h3>
+                    <div class="bg-tertiary-container text-on-tertiary-container rounded-xl p-8 editorial-shadow flex flex-col justify-between h-[calc(100%-3rem)] group cursor-pointer hover:bg-tertiary-fixed transition-colors">
+                        <div class="space-y-4">
+                            <div class="w-16 h-16 rounded-2xl bg-white/40 flex items-center justify-center text-tertiary">
+                                <span class="material-symbols-outlined text-4xl" data-weight="fill" data-icon="videocam">videocam</span>
+                            </div>
+                            <h4 class="text-2xl font-bold">Record Behaviour for Specialist</h4>
+                            <p class="text-tertiary font-medium">Quickly capture observations, sounds, or notes for the diagnostic panel.</p>
+                        </div>
+                        <div class="mt-8 flex items-center gap-3 font-bold group-hover:gap-5 transition-all">
+                            <span>Open Recorder</span>
+                            <span class="material-symbols-outlined" data-icon="arrow_forward">arrow_forward</span>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            <!-- Active Waitlists -->
+            <div class="lg:col-span-5">
+                <section class="space-y-6">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-xl font-semibold text-on-surface">Active Waitlists</h3>
+                        <button class="text-primary text-sm font-semibold">Manage all</button>
+                    </div>
+                    <div class="space-y-4">
+                        <div class="bg-surface-container-low p-6 rounded-xl flex items-center justify-between hover:bg-surface-container-high transition-colors">
+                            <div class="flex items-center gap-4">
+                                <div class="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center text-primary">
+                                    <span class="material-symbols-outlined" data-icon="medical_services">medical_services</span>
+                                </div>
+                                <div>
+                                    <p class="font-bold text-on-surface">Sunflower OT</p>
+                                    <p class="text-xs text-on-surface-variant font-medium">Wait time: 8 months</p>
+                                </div>
+                            </div>
+                            <div class="text-right">
+                                <span class="bg-white px-3 py-1 rounded-full text-[10px] font-bold text-primary shadow-sm uppercase tracking-wider">Checking weekly</span>
+                            </div>
+                        </div>
+
+                        <div class="bg-surface-container-low p-6 rounded-xl flex items-center justify-between hover:bg-surface-container-high transition-colors">
+                            <div class="flex items-center gap-4">
+                                <div class="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center text-primary">
+                                    <span class="material-symbols-outlined" data-icon="psychology">psychology</span>
+                                </div>
+                                <div>
+                                    <p class="font-bold text-on-surface">Bridge Speech Clinic</p>
+                                    <p class="text-xs text-on-surface-variant font-medium">Wait time: 14 months</p>
+                                </div>
+                            </div>
+                            <div class="text-right">
+                                <span class="bg-white px-3 py-1 rounded-full text-[10px] font-bold text-outline shadow-sm uppercase tracking-wider">Monthly update</span>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <!-- Document Vault - Grid -->
+            <div class="lg:col-span-7">
+                <section class="space-y-6">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-xl font-semibold text-on-surface">Document Vault</h3>
+                        <button class="text-primary text-sm font-semibold">View Library</button>
+                    </div>
+                    <div class="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                        <!-- Doc 1 -->
+                        <div class="bg-surface-container-lowest p-5 rounded-xl editorial-shadow flex flex-col gap-4 hover:scale-[1.02] transition-transform cursor-pointer">
+                            <span class="material-symbols-outlined text-primary text-3xl" data-icon="picture_as_pdf">picture_as_pdf</span>
+                            <div class="space-y-1">
+                                <p class="text-sm font-bold text-on-surface truncate">GP Referral.pdf</p>
+                                <p class="text-[10px] text-outline font-medium uppercase tracking-wider">1.2 MB</p>
+                            </div>
+                        </div>
+                        <!-- Doc 2 -->
+                        <div class="bg-surface-container-lowest p-5 rounded-xl editorial-shadow flex flex-col gap-4 hover:scale-[1.02] transition-transform cursor-pointer">
+                            <span class="material-symbols-outlined text-primary text-3xl" data-icon="video_file">video_file</span>
+                            <div class="space-y-1">
+                                <p class="text-sm font-bold text-on-surface truncate">Sensory Log</p>
+                                <p class="text-[10px] text-outline font-medium uppercase tracking-wider">VIDEO • 14 SEC</p>
+                            </div>
+                        </div>
+                        <!-- Doc 3 -->
+                        <div class="bg-surface-container-lowest p-5 rounded-xl editorial-shadow flex flex-col gap-4 hover:scale-[1.02] transition-transform cursor-pointer">
+                            <span class="material-symbols-outlined text-primary text-3xl" data-icon="description">description</span>
+                            <div class="space-y-1">
+                                <p class="text-sm font-bold text-on-surface truncate">Preschool Notes</p>
+                                <p class="text-[10px] text-outline font-medium uppercase tracking-wider">DOCUMENT</p>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </div>
+
+        <!-- Featured Guidance Article -->
+        <section class="bg-surface-container-low rounded-xl overflow-hidden flex flex-col md:flex-row editorial-shadow">
+            <div class="md:w-1/2">
+                <img src="https://openui.fly.dev/openui/600x400.svg?text=Understanding+NDIS" alt="Visual for guidance article" data-alt="soft aesthetic photograph of colorful children's building blocks on a light wooden table with gentle morning sunlight casting soft shadows" class="w-full h-full object-cover">
+            </div>
+            <div class="md:w-1/2 p-10 flex flex-col justify-center gap-6">
+                <div class="space-y-2">
+                    <span class="text-xs font-bold text-primary tracking-widest uppercase">Expert Guide</span>
+                    <h3 class="text-2xl font-bold text-on-surface">Demystifying the NDIS ECA Pathway</h3>
+                    <p class="text-on-surface-variant leading-relaxed">Learn what to expect in the next stage of your journey and how to prepare your documentation for the best outcome.</p>
+                </div>
+                <button class="flex items-center gap-2 text-primary font-bold">
+                    Read the guide <span class="material-symbols-outlined" data-icon="open_in_new">open_in_new</span>
+                </button>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- BottomNavBar -->
+    <nav class="fixed bottom-0 w-full z-50 rounded-t-[3rem] pb-8 pt-4 bg-white/80 dark:bg-[#141d1d]/80 backdrop-blur-3xl shadow-[0_-12px_40px_rgba(0,0,0,0.04)]">
+        <div class="flex justify-around items-center px-4 max-w-lg mx-auto">
+            <!-- Home (Active) -->
+            <button class="flex flex-col items-center justify-center bg-gradient-to-br from-[#236969] to-[#115c5d] text-white rounded-full px-6 py-2 shadow-lg active:scale-90 duration-300">
+                <span class="material-symbols-outlined" data-weight="fill" data-icon="home">home</span>
+                <span class="font-inter text-[11px] font-medium tracking-wide">Home</span>
+            </button>
+            
+            <!-- Tasks -->
+            <button class="flex flex-col items-center justify-center text-[#5c6e6e] dark:text-[#acb3b6] px-4 py-2 hover:bg-[#f0f4f6] dark:hover:bg-[#1a2424] rounded-full transition-all active:scale-90 duration-300">
+                <span class="material-symbols-outlined" data-icon="assignment">assignment</span>
+                <span class="font-inter text-[11px] font-medium tracking-wide">Tasks</span>
+            </button>
+            
+            <!-- Evidence -->
+            <button class="flex flex-col items-center justify-center text-[#5c6e6e] dark:text-[#acb3b6] px-4 py-2 hover:bg-[#f0f4f6] dark:hover:bg-[#1a2424] rounded-full transition-all active:scale-90 duration-300">
+                <span class="material-symbols-outlined" data-icon="fact_check">fact_check</span>
+                <span class="font-inter text-[11px] font-medium tracking-wide">Evidence</span>
+            </button>
+            
+            <!-- Documents -->
+            <button class="flex flex-col items-center justify-center text-[#5c6e6e] dark:text-[#acb3b6] px-4 py-2 hover:bg-[#f0f4f6] dark:hover:bg-[#1a2424] rounded-full transition-all active:scale-90 duration-300">
+                <span class="material-symbols-outlined" data-icon="description">description</span>
+                <span class="font-inter text-[11px] font-medium tracking-wide">Documents</span>
+            </button>
+        </div>
+    </nav>
+
+</body>
+</html></style><style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head><body></body></html>
