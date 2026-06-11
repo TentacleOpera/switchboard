@@ -418,7 +418,9 @@ export class DesignPanelProvider implements vscode.Disposable {
             name: screen.data?.title || screen.data?.displayName || screen.id,
             deviceType: screen.data?.deviceType,
             imageUrl: await screen.getImage(),
-            htmlUrl: await screen.getHtml()
+            htmlUrl: await screen.getHtml(),
+            status: screen.data?.screenMetadata?.status || null,
+            statusMessage: screen.data?.screenMetadata?.statusMessage || null
         };
     }
 

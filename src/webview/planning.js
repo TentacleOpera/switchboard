@@ -25,6 +25,7 @@
         ticketsPreviewCollapsed: persistedState.ticketsPreviewCollapsed || false,
         analystAvailable: false,
         docsListCollapsed: persistedState.docsListCollapsed || false,
+        kanbanListCollapsed: persistedState.kanbanListCollapsed || false,
         editMode: { local: false, kanban: false },
         editOriginalContent: { local: null, kanban: null },
         dirtyFlags: { local: false, kanban: false },
@@ -261,6 +262,9 @@
         if (activeTab === 'tickets') {
             state.ticketsPreviewCollapsed = !state.ticketsPreviewCollapsed;
             applySidebarState('tickets', state.ticketsPreviewCollapsed);
+        } else if (activeTab === 'kanban') {
+            state.kanbanListCollapsed = !state.kanbanListCollapsed;
+            applySidebarState('kanban', state.kanbanListCollapsed);
         } else {
             state.docsListCollapsed = !state.docsListCollapsed;
             // Apply to local and research tabs (they share the same collapsed state)
@@ -274,7 +278,8 @@
         vscode.setState({
             ...currentPersisted,
             docsListCollapsed: state.docsListCollapsed,
-            ticketsPreviewCollapsed: state.ticketsPreviewCollapsed
+            ticketsPreviewCollapsed: state.ticketsPreviewCollapsed,
+            kanbanListCollapsed: state.kanbanListCollapsed
         });
     }
 
@@ -283,6 +288,7 @@
     applySidebarState('research', state.docsListCollapsed);
     applySidebarState('online', state.docsListCollapsed);
     applySidebarState('tickets', state.ticketsPreviewCollapsed);
+    applySidebarState('kanban', state.kanbanListCollapsed);
 
     // Bind sidebar toggle listeners
     document.querySelectorAll('.sidebar-toggle-btn').forEach(btn => {
@@ -316,6 +322,7 @@
 
         // 4. Apply sidebar state
         if (tabName === 'tickets') { applySidebarState('tickets', state.ticketsPreviewCollapsed); }
+        else if (tabName === 'kanban') { applySidebarState('kanban', state.kanbanListCollapsed); }
         else if (tabName === 'local' || tabName === 'research' || tabName === 'online') {
             applySidebarState(tabName, state.docsListCollapsed);
         }
@@ -3358,15 +3365,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             vscode.postMessage({ type: 'importPlans' });
         });
     }
-    const kanbanViewEpicsBtn = document.getElementById('kanban-view-epics');
 
-    if (kanbanViewEpicsBtn) {
-        kanbanViewEpicsBtn.addEventListener('click', () => {
-            _kanbanViewMode = _kanbanViewMode === 'all' ? 'epics' : 'all';
-            kanbanViewEpicsBtn.classList.toggle('active', _kanbanViewMode === 'epics');
-            renderKanbanPlans(_kanbanPlansCache, kanbanFilters);
-        });
-    }
 
     const kanbanListPane = document.getElementById('kanban-list-pane');
     const kanbanPreviewPane = document.getElementById('kanban-preview-pane');
@@ -3532,13 +3531,41 @@ Return ONLY the drafted prompt with no additional commentary.`;
             filtered = filtered.filter(plan => plan.isEpic);
         }
 
+        kanbanListPane.innerHTML = '';
+
+        // Re-add sidebar toggle row
+        const toggleRow = document.createElement('div');
+        toggleRow.className = 'sidebar-toggle-row';
+
+        const foldersBtn = document.createElement('button');
+        foldersBtn.className = 'sidebar-folders-btn';
+        foldersBtn.id = 'kanban-view-epics-toggle';
+        foldersBtn.textContent = _kanbanViewMode === 'epics' ? 'Epics' : 'Plans';
+        foldersBtn.addEventListener('click', () => {
+            _kanbanViewMode = _kanbanViewMode === 'all' ? 'epics' : 'all';
+            foldersBtn.textContent = _kanbanViewMode === 'epics' ? 'Epics' : 'Plans';
+            renderKanbanPlans(_kanbanPlansCache, kanbanFilters);
+        });
+
+        const toggleBtn = document.createElement('button');
+        toggleBtn.className = 'sidebar-toggle-btn';
+        toggleBtn.title = 'Toggle sidebar';
+        toggleBtn.textContent = state.kanbanListCollapsed ? '»' : '«';
+        toggleBtn.addEventListener('click', toggleSidebarCollapsed);
+
+        toggleRow.appendChild(foldersBtn);
+        toggleRow.appendChild(toggleBtn);
+        kanbanListPane.appendChild(toggleRow);
+
         if (filtered.length === 0) {
             const emptyMsg = _kanbanViewMode === 'epics' ? 'No epics found' : 'No matching kanban plans';
-            kanbanListPane.innerHTML = '<div class="kanban-empty-state">' + emptyMsg + '</div>';
+            const emptyStateDiv = document.createElement('div');
+            emptyStateDiv.className = 'kanban-empty-state';
+            emptyStateDiv.textContent = emptyMsg;
+            kanbanListPane.appendChild(emptyStateDiv);
             return;
         }
 
-        kanbanListPane.innerHTML = '';
         const availableSubtaskOptions = _kanbanViewMode === 'epics'
             ? _kanbanPlansCache.filter(p => !p.isEpic && !p.epicId).map(p => `<option value="${escapeHtml(p.sessionId || p.planId)}">${escapeHtml(p.topic)}</option>`).join('')
             : '';

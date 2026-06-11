@@ -278,14 +278,16 @@
 
         .content-row.collapsed #tree-pane,
         .content-row.collapsed #tree-pane-online,
-        .content-row.collapsed #tree-pane-tickets {
+        .content-row.collapsed #tree-pane-tickets,
+        .content-row.collapsed #kanban-list-pane {
             padding: 4px;
             overflow: hidden;
         }
 
         .content-row.collapsed #tree-pane > *:not(.sidebar-toggle-row),
         .content-row.collapsed #tree-pane-online > *:not(.sidebar-toggle-row),
-        .content-row.collapsed #tree-pane-tickets > *:not(.sidebar-toggle-row) {
+        .content-row.collapsed #tree-pane-tickets > *:not(.sidebar-toggle-row),
+        .content-row.collapsed #kanban-list-pane > *:not(.sidebar-toggle-row) {
             display: none !important;
         }
 
@@ -3097,7 +3099,6 @@
                 <select id="kanban-column-filter">
                     <option value="">All Columns</option>
                 </select>
-                <button id="kanban-view-epics" class="strip-btn" style="margin: 0;">Epics</button>
                 <button id="btn-import-kanban-plans" class="strip-btn" title="Scan configured AI IDE folders and pick unclaimed plans to add (any age, bypasses the auto-claim window)">Import</button>
                 <button id="btn-edit-kanban" class="strip-btn" disabled>Edit</button>
                 <button id="btn-save-kanban" class="strip-btn" style="display:none;">Save</button>
@@ -3107,6 +3108,10 @@
             <!-- Split pane: list + preview -->
             <div class="content-row" id="kanban-content-row">
                 <div id="kanban-list-pane">
+                    <div class="sidebar-toggle-row">
+                        <button id="kanban-view-epics-toggle" class="sidebar-folders-btn">Plans</button>
+                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                    </div>
                     <!-- Plan rows rendered by JS -->
                 </div>
                 <div class="preview-panel-wrapper">

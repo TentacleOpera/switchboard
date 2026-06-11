@@ -225,6 +225,10 @@ Key risks: (1) `setStitchBusy()` omits the new generator button, enabling a race
 - Auto-dispatch to a Switchboard agent (Phase 2 agent integration).
 - User-editable prompt template via settings.
 
+## Review Findings
+
+Implementation is materially complete and matches all functional requirements. Two issues were found and fixed in-place: (1) `updateCopyButtonState()` was never called on initialization, leaving the "Copy Prompt" button enabled when the modal was empty — fixed by adding an immediate call after event listener wiring in `design.js:1222`; (2) the cyber-theme `backdrop-filter` was `blur(10px)` instead of the plan-specified `blur(12px)` — fixed in `design.html:3313`. Files changed: `src/webview/design.js`, `src/webview/design.html`. No compilation or test step required. Remaining risk: modal state is still ephemeral (not persisted via `vscode.setState()`), which is explicitly acceptable per the plan's MVP scope.
+
 ## Recommendation
 
 **Send to Coder**

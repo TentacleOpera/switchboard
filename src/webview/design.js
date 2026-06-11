@@ -34,7 +34,10 @@
         stitchCreativeRange: ['EXPLORE','REFINE','REIMAGINE'].includes(persistedState.stitchCreativeRange) ? persistedState.stitchCreativeRange : 'EXPLORE',
         stitchAspects: Array.isArray(persistedState.stitchAspects) && persistedState.stitchAspects.every(a => typeof a === 'string') ? persistedState.stitchAspects : ['LAYOUT','COLOR_SCHEME','IMAGES','TEXT_FONT','TEXT_CONTENT'],
         stitchGeneratorOpen: false,
-        stitchGeneratorImages: []
+        stitchGeneratorImages: [],
+        stitchReloadPending: false,  // true while waiting for a reload response
+        stitchReloadRetries: 0,    // count of retries so far
+        stitchReloadTimer: null,     // holds setTimeout id
     };
 
     // Tab switcher
@@ -1016,6 +1019,15 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
         return imageUrl;
     }
 
+    function clearStitchReloadTimer() {
+        if (state.stitchReloadTimer) {
+            clearTimeout(state.stitchReloadTimer);
+            state.stitchReloadTimer = null;
+        }
+        state.stitchReloadPending = false;
+        state.stitchReloadRetries = 0;
+    }
+
     function openStitchPreview(screen) {
         if (!screen) return;
         state.activePreviewScreenId = screen.id;
@@ -1032,6 +1044,26 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
             if (previewImage) {
                 previewImage.style.display = 'block';
                 previewImage.src = makeFifeHighResUrl(screen.imageUrl);
+                previewImage.onerror = () => {
+                    previewImage.style.display = 'none';
+                    previewImage.src = '';
+                    if (previewImagePlaceholder) {
+                        previewImagePlaceholder.style.display = 'flex';
+                        // Update placeholder text to indicate the image failed
+                        const label = previewImagePlaceholder.querySelector('span');
+                        if (label) label.textContent = 'Preview failed to load';
+                    }
+                    // Trigger an automatic reload attempt
+                    if (!state.stitchReloadPending) {
+                        state.stitchReloadPending = true;
+                        state.stitchReloadRetries = 0;
+                        vscode.postMessage({
+                            type: 'stitchRefreshScreen',
+                            projectId: screen.projectId || stitchProjectSelect.value,
+                            screenId: screen.id
+                        });
+                    }
+                };
             }
             if (previewImagePlaceholder) previewImagePlaceholder.style.display = 'none';
         } else {
@@ -1041,12 +1073,23 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
             }
             if (previewImagePlaceholder) {
                 previewImagePlaceholder.style.display = 'flex';
+                const label = previewImagePlaceholder.querySelector('span');
+                if (label) {
+                    if (screen.status === 'FAILED') {
+                        label.textContent = 'Rendering failed';
+                    } else if (screen.status === 'IN_PROGRESS' || !screen.status) {
+                        label.textContent = 'Preview not ready yet — still rendering';
+                    }
+                }
                 const reloadBtn = previewImagePlaceholder.querySelector('button');
                 if (reloadBtn) {
                     const newReloadBtn = reloadBtn.cloneNode(true);
                     reloadBtn.parentNode.replaceChild(newReloadBtn, reloadBtn);
                     newReloadBtn.addEventListener('click', () => {
                         if (state.stitchBusy) return;
+                        clearStitchReloadTimer();
+                        state.stitchReloadPending = true;
+                        state.stitchReloadRetries = 0;
                         setStitchStatus('Reloading screen…', 'busy');
                         setStitchBusy(true);
                         vscode.postMessage({
@@ -1092,6 +1135,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 if (state.stitchBusy) return;
                 const prompt = previewRefineInput ? previewRefineInput.value.trim() : '';
                 if (!prompt) { setStitchStatus('Type a change in the box above, then Apply Edit.', 'error'); return; }
+                clearStitchReloadTimer();
                 setStitchStatus('Editing screen…', 'busy');
                 setStitchBusy(true);
                 vscode.postMessage({
@@ -1109,6 +1153,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
             previewBtnVariants.addEventListener('click', () => {
                 if (state.stitchBusy) return;
                 const prompt = previewRefineInput ? previewRefineInput.value.trim() : '';
+                clearStitchReloadTimer();
                 setStitchStatus('Generating 3 variants of this screen…', 'busy');
                 setStitchBusy(true);
 
@@ -1140,6 +1185,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
     }
 
     function closeStitchPreview() {
+        clearStitchReloadTimer();
         state.activePreviewScreenId = null;
         if (stitchPreviewPane) stitchPreviewPane.style.display = 'none';
         if (stitchThumbnailStrip) stitchThumbnailStrip.style.display = 'none';
@@ -1219,6 +1265,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
     if (btnCopyStitchPrompt) {
         btnCopyStitchPrompt.addEventListener('click', copyStitchPromptToClipboard);
     }
+    updateCopyButtonState();
 
     if (btnNewStitchProject) {
         btnNewStitchProject.addEventListener('click', () => {
@@ -1252,6 +1299,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
             if (!prompt) { setStitchStatus('Enter a prompt describing the screen first.', 'error'); return; }
             if (state.stitchBusy) return;
 
+            clearStitchReloadTimer();
             setStitchStatus('Generating screen…', 'busy');
             setStitchBusy(true);
 
@@ -1269,6 +1317,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
         btnSyncStitchProject.addEventListener('click', () => {
             const projectId = stitchProjectSelect.value;
             if (!projectId || state.stitchBusy) return;
+            clearStitchReloadTimer();
             setStitchStatus('Syncing project to workspace…', 'busy');
             setStitchBusy(true);
             vscode.postMessage({
@@ -1281,6 +1330,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
     if (stitchProjectSelect) {
         stitchProjectSelect.addEventListener('change', () => {
             const projectId = stitchProjectSelect.value;
+            clearStitchReloadTimer();
             if (state.activePreviewScreenId) {
                 closeStitchPreview();
             }
@@ -1357,6 +1407,9 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 btnReload.title = 'Re-fetch this screen from Stitch (picks up the rendered preview and fresh download links)';
                 btnReload.addEventListener('click', () => {
                     if (state.stitchBusy) return;
+                    clearStitchReloadTimer();
+                    state.stitchReloadPending = true;
+                    state.stitchReloadRetries = 0;
                     setStitchStatus('Reloading screen…', 'busy');
                     setStitchBusy(true);
                     vscode.postMessage({
@@ -1584,8 +1637,44 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                     updatedScreens.unshift(msg.screen);
                 }
                 renderStitchScreens(updatedScreens);
-                setStitchBusy(false);
-                setStitchStatus('Screen ready', 'success');
+
+                const hasImage = !!msg.screen.imageUrl;
+                const isFailed = msg.screen.status === 'FAILED';
+
+                if (hasImage) {
+                    // Success — image loaded
+                    clearStitchReloadTimer();
+                    setStitchBusy(false);
+                    setStitchStatus('Screen ready', 'success');
+                } else if (isFailed) {
+                    // Terminal failure
+                    clearStitchReloadTimer();
+                    setStitchBusy(false);
+                    setStitchStatus(msg.screen.statusMessage || 'Rendering failed', 'error');
+                } else if (state.stitchReloadPending) {
+                    // Still in progress — schedule retry
+                    const delay = Math.min(4 * Math.pow(2, state.stitchReloadRetries), 32); // 4, 8, 16, 32...
+                    if (state.stitchReloadRetries < 6) {
+                        state.stitchReloadRetries += 1;
+                        setStitchStatus(`Still rendering… retry ${state.stitchReloadRetries}/6 in ${delay}s`, 'busy');
+                        state.stitchReloadTimer = setTimeout(() => {
+                            vscode.postMessage({
+                                type: 'stitchRefreshScreen',
+                                projectId: msg.screen.projectId || stitchProjectSelect.value,
+                                screenId: msg.screen.id
+                            });
+                        }, delay * 1000);
+                    } else {
+                        // Max retries exhausted
+                        clearStitchReloadTimer();
+                        setStitchBusy(false);
+                        setStitchStatus('Rendering is taking longer than expected. Click Reload Screen to try again.', 'error');
+                    }
+                } else {
+                    // Not a reload context — just a normal update with no image yet
+                    setStitchBusy(false);
+                    setStitchStatus('Screen created — rendering in progress', 'info');
+                }
                 break;
             }
 
@@ -1600,6 +1689,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 break;
 
             case 'stitchError':
+                clearStitchReloadTimer();
                 setStitchBusy(false);
                 setStitchStatus('Error: ' + msg.error, 'error');
                 break;
