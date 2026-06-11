@@ -177,3 +177,9 @@ Key risks: stale `validSubTabs` in `TaskViewerProvider.ts` could cause persisted
 ## Recommendation
 
 Send to Intern
+
+## Review Findings
+
+- **Files changed:** `src/webview/implementation.html`, `src/services/TaskViewerProvider.ts`, `src/test/kanban-linear-project-tab-regression.test.js`
+- **Validation:** Grepped for all ~40 removed state variables, functions, CSS selectors, and message handlers — zero references remain in `implementation.html`. Only unrelated `linear-gradient` CSS values survive. `TaskViewerProvider.ts` correctly uses `validSubTabs = ['agents', 'terminals']`. Regression test rewritten to assert absence of project tab artifacts.
+- **Remaining risks:** None material. The `isAutobanPanelInteracting && currentAgentTab === 'autoban'` guard in `renderAgentList` references a tab value not in `validSubTabs`, but this is pre-existing and unrelated to this change.
