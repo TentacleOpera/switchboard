@@ -128,3 +128,7 @@ Complexity 4 → **Send to Coder** (single focused fix, well-understood root cau
 
 **Remaining risks:**
 - None identified. No callers rely on epic fields being overwritten during conflict resolution; all epic mutations route through `updateEpicStatus` or `createEpic`.
+
+## Review Findings
+
+Reviewer pass completed. Files unchanged — implementation matches plan exactly. Validation: regression test passes 4/4 (SQL clause check, placeholder count, functional DB conflict preservation). No material issues found. The systemic vulnerability is closed: `is_epic` and `epic_id` are excluded from the `ON CONFLICT DO UPDATE SET` clause, so callers like `TaskViewerProvider`, `GlobalPlanWatcherService`, `SessionActionLog`, and `KanbanMigration` that omit epic fields in re-imports no longer silently wipe epic data. The `createEpic` handler now passes `isEpic: 1` explicitly in the initial `upsertPlan`, removing the race window before `updateEpicStatus` runs.

@@ -7640,6 +7640,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     case 'openPlanningPanel':
                         vscode.commands.executeCommand('switchboard.openPlanningPanel');
                         break;
+                    case 'openDesignPanel':
+                        vscode.commands.executeCommand('switchboard.openDesignPanel');
+                        break;
                     case 'openSetupPanel':
                         vscode.commands.executeCommand('switchboard.openSetupPanel', data.section);
                         break;
@@ -13411,20 +13414,7 @@ What would you like to find?`;
             const reviewsDir = path.join(resolvedWorkspaceRoot, '.switchboard', 'reviews');
             const reviewFiles = await this._findReviewFilesForSession(sessionId, reviewsDir);
 
-            // AP-3: Two distinct dialog texts — accurate language for each plan type
-            const reviewSuffix = reviewFiles.length > 0 ? ` and ${reviewFiles.length} associated review file${reviewFiles.length > 1 ? 's' : ''}` : '';
-            const baseDialogText = brainSourcePath
-                ? isManagedImport
-                    ? `Delete this plan? This will permanently delete the source file in the additional plan folder and the plan mirror${reviewSuffix}. This cannot be undone.`
-                    : `Delete this plan? This will permanently delete the brain file, plan mirror${reviewSuffix}. This cannot be undone.`
-                : `Delete this plan? The workspace plan file${reviewSuffix} will be removed.`;
-            const isLocked = this._activeDispatchSessions.has(sessionId) || (sheet?.planId ? this._activeDispatchSessions.has(sheet.planId) : false);
-            const dialogText = isLocked
-                ? `This plan is currently being processed. Delete anyway?\n\n${baseDialogText}`
-                : baseDialogText;
-            const answer = await vscode.window.showWarningMessage(dialogText, { modal: true }, 'Delete');
-            if (answer !== 'Delete') return false;
-            console.log(`[TaskViewerProvider] _handleDeletePlan: user confirmed deletion`);
+            // Deletes execute immediately — no confirmation dialogs anywhere in this extension.
 
             // Register paths in recently-deleted guard BEFORE attempting deletion
             if (mirrorPath) {

@@ -4,8 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'nonce-{{NONCE}}' 'unsafe-inline' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'unsafe-inline'; img-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: data:; font-src {{WEBVIEW_CSP_SOURCE}} https:; connect-src https:; frame-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: http: about:srcdoc blob: data:;">
-    <title>Switchboard Research</title>
+    <title>Switchboard Design Panel</title>
     <style>
+
         @keyframes spin {
             from { transform: rotate(0deg); }
             to { transform: rotate(360deg); }
@@ -173,6 +174,8 @@
         #local-content,
         #online-content,
         #kanban-content,
+        #design-content,
+        #html-preview-content,
         #tickets-content {
             display: none;
             flex-direction: column;
@@ -183,6 +186,8 @@
         #local-content.active,
         #online-content.active,
         #kanban-content.active,
+        #design-content.active,
+        #html-preview-content.active,
         #tickets-content.active {
             display: flex;
         }
@@ -2231,6 +2236,8 @@
         /* Local and online content views */
         .cyber-theme-enabled #local-content,
         .cyber-theme-enabled #online-content,
+        .cyber-theme-enabled #design-content,
+        .cyber-theme-enabled #html-preview-content,
         .cyber-theme-enabled #tickets-content {
             background: transparent;
         }
@@ -2911,99 +2918,183 @@
             background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
             border-color: var(--accent-teal);
         }
+    
+
+        /* Stitch UI styles */
+        .stitch-projects-container {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        .stitch-gallery {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+            gap: 16px;
+            padding: 16px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        .stitch-screen-card {
+            background: var(--card-bg);
+            border: var(--card-border);
+            border-radius: 4px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            transition: all 0.2s;
+        }
+        .stitch-screen-card:hover {
+            border-color: var(--accent-teal);
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+        .stitch-screen-thumbnail {
+            width: 100%;
+            height: 160px;
+            object-fit: cover;
+            border-radius: 2px;
+            background: #111;
+            border: 1px solid var(--border-color);
+        }
+        .stitch-screen-info {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .stitch-screen-title {
+            font-weight: 600;
+            font-size: 12px;
+            color: var(--text-primary);
+        }
+        .stitch-screen-meta {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+        .stitch-screen-actions {
+            display: flex;
+            gap: 6px;
+            margin-top: 4px;
+        }
+        .stitch-screen-actions .strip-btn {
+            flex: 1;
+            text-align: center;
+            padding: 3px 6px;
+        }
+        .stitch-refine-panel {
+            border-top: 1px solid var(--border-color);
+            padding-top: 8px;
+            margin-top: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .stitch-input {
+            width: 100%;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            padding: 6px 8px;
+            font-family: var(--font-family);
+            font-size: 12px;
+            box-sizing: border-box;
+        }
+        .stitch-input:focus {
+            outline: 1px solid var(--accent-teal);
+            border-color: var(--accent-teal);
+        }
+        .stitch-btn-primary {
+            background: var(--accent-teal-dim);
+            border-color: var(--accent-teal);
+            color: var(--accent-teal);
+            font-weight: 600;
+        }
+        .stitch-btn-primary:hover:not(:disabled) {
+            background: var(--accent-teal);
+            color: #000;
+        }
+        .stitch-empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            padding: 48px;
+            color: var(--text-secondary);
+            text-align: center;
+            flex: 1;
+        }
+        .stitch-setup-banner {
+            background: rgba(209, 134, 22, 0.1);
+            border: 1px solid var(--accent-orange);
+            border-radius: 4px;
+            padding: 16px;
+            margin: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .stitch-setup-banner h3 {
+            color: var(--accent-orange);
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .stitch-setup-banner p {
+            font-size: 12px;
+            line-height: 1.4;
+        }
     </style>
 </head>
 <body class="cyber-theme-enabled">
     <div id="research-tab-bar" class="research-tab-bar">
-        <button class="research-tab-btn active" data-tab="local">LOCAL DOCS</button>
-        <button class="research-tab-btn" data-tab="online">ONLINE DOCS</button>
-        <button class="research-tab-btn" data-tab="kanban">KANBAN PLANS</button>
-        <button class="research-tab-btn" data-tab="tickets">TICKETS</button>
-        <button class="research-tab-btn" data-tab="research">RESEARCH</button>
-        <button class="research-tab-btn" data-tab="notebook">NotebookLM</button>
+        <button class="research-tab-btn active" data-tab="design">DESIGN SYSTEM</button>
+        <button class="research-tab-btn" data-tab="html-preview">HTML PREVIEWS</button>
+        <button class="research-tab-btn" data-tab="stitch">STITCH</button>
     </div>
     <div class="container">
-        <!-- Local Docs Tab: breadcrumb on top, then sidebar + content -->
-        <div id="local-content" class="research-tab-content active">
-            <div class="active-doc-banner inactive" id="active-doc-banner-local">
-                <div class="active-doc-info">
-                    <span class="active-doc-label">Active Planning Epic:</span>
-                    <span class="active-doc-name" id="active-doc-name-local">None</span>
-                </div>
-                <button class="btn-disable-doc" id="btn-disable-doc-local">Turn off</button>
-            </div>
-            <div class="controls-strip" id="controls-strip-local">
-                <select id="local-workspace-filter" class="workspace-filter-select">
+        <!-- Design System Tab -->
+        <div id="design-content" class="research-tab-content active">
+            <div class="controls-strip" id="controls-strip-design">
+                <select id="design-workspace-filter" class="workspace-filter-select">
                     <option value="">All Workspaces</option>
                 </select>
-                <button id="btn-set-active-context-local" class="strip-btn" disabled>Set as Active Planning Context</button>
-                <button id="btn-import-full-doc" class="strip-btn" disabled style="display: none;">Import</button>
-                <button id="btn-export-to-source" class="strip-btn" disabled style="display: none;">Export to Source</button>
-                <button id="btn-edit-local" class="strip-btn" disabled>Edit</button>
-                <button id="btn-save-local" class="strip-btn" style="display:none;">Save</button>
-                <button id="btn-cancel-local" class="strip-btn" style="display:none;">Cancel</button>
-                <button id="btn-sync-to-online" class="strip-btn" disabled>Sync to Online</button>
-                <input type="text" id="local-docs-search" class="sidebar-search-input" placeholder="Search docs..." />
-                <span id="status" style="margin-left: 0;"></span>
-
+                <button id="btn-set-active-context-design" class="strip-btn" disabled>Set as Active Design Doc</button>
+                <button id="btn-link-to-doc-design" class="strip-btn" disabled>Link</button>
+                <button id="btn-edit-design" class="strip-btn" disabled>Edit</button>
+                <button id="btn-save-design" class="strip-btn" style="display:none;">Save</button>
+                <button id="btn-cancel-design" class="strip-btn" style="display:none;">Cancel</button>
+                <input type="text" id="design-docs-search" class="sidebar-search-input" placeholder="Search design..." />
+                <span id="status-design"></span>
             </div>
             <div class="content-row">
-                <div id="tree-pane">
+                <div id="tree-pane-design">
                     <div class="sidebar-toggle-row">
                         <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
                     </div>
-                    <div class="empty-state">Loading local docs...</div>
+                    <div class="empty-state">Loading design docs...</div>
                 </div>
                 <div class="preview-panel-wrapper">
-                    <div id="preview-pane" style="flex: 1; width: 100%; box-sizing: border-box;">
-                        <div class="preview-content-wrapper">
-                            <style>
-                                .page-navigation { margin-bottom: 16px; padding: 12px; background: var(--panel-bg2); border: 1px solid var(--accent-teal-dim); border-radius: 4px; }
-                                .page-item { padding: 6px 8px; cursor: pointer; border-radius: 3px; transition: background 0.1s; font-size: 13px; color: var(--accent-teal); }
-                                .page-item:hover { background: var(--accent-teal-dim); }
-                                .page-item.selected { background: var(--accent-teal-dim); }
-                            </style>
-                            <div id="markdown-preview">
-                                <div class="empty-state">Select a document from the sidebar to preview</div>
+                    <div id="preview-pane-design" style="flex: 1; width: 100%; box-sizing: border-box; overflow: auto; height: 100%;">
+                        <div class="preview-content-wrapper" style="height: 100%; display: flex; flex-direction: column;">
+                            <div id="markdown-preview-design">
+                                <div class="empty-state">Select a design document, image, JSON, or YAML file from the sidebar to preview</div>
                             </div>
-                            <textarea id="markdown-editor-local" class="markdown-editor" style="display:none;"></textarea>
-                        </div>
-                    </div>
-                    <div class="cyber-scanlines"></div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Online Docs Tab: same structure -->
-        <div id="online-content" class="research-tab-content">
-            <div class="active-doc-banner inactive" id="active-doc-banner-online">
-                <div class="active-doc-info">
-                    <span class="active-doc-label">Active Planning Epic:</span>
-                    <span class="active-doc-name" id="active-doc-name-online">None</span>
-                </div>
-                <button class="btn-disable-doc" id="btn-disable-doc-online">Turn off</button>
-            </div>
-            <div class="controls-strip" id="controls-strip-online">
-                <button id="btn-import-full-doc-online" class="strip-btn" disabled>Import</button>
-                <button id="btn-edit-online" class="strip-btn" disabled style="display:none;" title="Editing not available for remote docs">Edit</button>
-                <input type="text" id="online-docs-search" class="sidebar-search-input" placeholder="Search docs..." />
-                <span id="status-online"></span>
-            </div>
-            <div class="content-row">
-                <div id="tree-pane-online">
-                    <div class="sidebar-toggle-row">
-                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
-                    </div>
-                    <div class="sidebar-skeleton"></div>
-                    <div class="sidebar-skeleton"></div>
-                    <div class="sidebar-skeleton"></div>
-                    <div class="sidebar-skeleton" style="width: 60%;"></div>
-                </div>
-                <div class="preview-panel-wrapper">
-                    <div id="preview-pane-online" style="flex: 1; width: 100%; box-sizing: border-box;">
-                        <div class="preview-content-wrapper">
-                            <div id="markdown-preview-online">
-                                <div class="empty-state">Select a document from the sidebar to preview</div>
+                            <textarea id="markdown-editor-design" class="markdown-editor" style="display:none; width: 100%; height: 100%; box-sizing: border-box; resize: none;"></textarea>
+                            <div id="image-preview-container-design" class="zoomable-container" style="display: none; padding: 0;">
+                                <div class="zoomable-viewport">
+                                    <img id="image-preview-img-design" alt="Image preview" style="display: block;" />
+                                </div>
+                                <div class="zoom-toolbar">
+                                    <button class="zoom-btn" data-action="zoom-in" title="Zoom In (Cmd+Scroll)">+</button>
+                                    <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (Cmd+Scroll)">−</button>
+                                    <button class="zoom-btn" data-action="reset" title="Reset Zoom">⟲</button>
+                                    <button class="zoom-btn" data-action="fit" title="Fit to View">⤢</button>
+                                </div>
+                            </div>
+                            <div id="json-preview-container-design"
+                                 style="display: none; flex: 1; overflow: auto; padding: 16px; font-family: var(--font-mono);">
                             </div>
                         </div>
                     </div>
@@ -3011,173 +3102,58 @@
                 </div>
             </div>
         </div>
-        <div id="notebook-content" class="research-tab-content">
-            <!-- NotebookLM Card -->
-            <div class="planning-card">
-                <div class="planning-card-header">NOTEBOOKLM INTEGRATION</div>
-                <div class="planning-card-description">NotebookLM integration allows you to upload all your code into NotebookLM to access unlimited Gemini quota for planning features and diagnosing bugs.</div>
 
-                <div id="webai-status" class="planning-status"></div>
-
-                <div class="planning-card-section">
-                    <div class="planning-card-section-title">1. BUNDLE CODE</div>
-                    <div class="planning-card-description">Package code into docx files for NotebookLM compatibility.</div>
-                    <button id="btn-bundle-code" class="planning-button">BUNDLE CODE</button>
-                </div>
-
-                <div class="planning-card-section">
-                    <div class="planning-card-section-title">2. UPLOAD TO NOTEBOOKLM</div>
-                    <div class="planning-card-description">Create new Notebook and upload all files in the integration folder as sources.</div>
-                    <div class="planning-controls">
-                        <button id="btn-open-notebooklm" class="planning-button">OPEN NOTEBOOKLM</button>
-                        <button id="btn-open-airlock-folder" class="planning-button secondary">OPEN FOLDER</button>
-                    </div>
-                </div>
-
-                <div class="planning-card-section">
-                    <div class="planning-card-section-title">3. COPY SPRINT PLANNING PROMPT</div>
-                    <div class="planning-card-description">Generate a prompt for NotebookLM to write expanded plans for every plan in the NEW Kanban column. Copy the output and use Step 4 below to import.</div>
-                    <button id="btn-copy-sprint-prompt" class="planning-button secondary">COPY SPRINT PROMPT</button>
-                </div>
-
-                <div class="planning-card-section">
-                    <div class="planning-card-section-title">4. IMPORT PLANS</div>
-                    <div class="planning-card-description">
-                        Paste your expanded plans from NotebookLM. Plans matching titles in the NEW column will overwrite the originals; others will be created as new plans.
-                    </div>
-                    <button id="btn-import-notebooklm-plans" class="planning-button secondary">IMPORT PLANS</button>
-                </div>
-            </div>
-        </div>
-        <div id="research-content" class="research-tab-content">
-            <div style="margin-bottom: 16px; font-size: 12px; color: var(--text-secondary); line-height: 1.4;">
-                Switchboard Research offers an easy way to use Google AI Studio to quickly perform high quality research, and get the results back into your workspace as a fully formatted document.
-            </div>
-            <!-- Step 1: Draft Research Prompt -->
-            <div class="planning-card">
-                <div class="planning-card-header">STEP 1: DRAFT RESEARCH PROMPT</div>
-                <div class="planning-card-description">Copy a meta-prompt to your clipboard. Paste it into your IDE agent to draft a detailed research prompt for Google AI Studio.</div>
-
-                <div class="planning-card-section-title" style="margin-top: 12px;">Central Question / Topic</div>
-                <textarea id="research-prompt-input" class="planning-input" rows="4" placeholder="Enter research topic..." style="margin-top: 12px;"></textarea>
-
-                <div class="prompt-buttons-container" style="margin-top: 16px; display: flex; gap: 8px;">
-                    <button id="btn-copy-research-prompt" class="planning-button">COPY PROMPT TEMPLATE</button>
-                    <button id="btn-draft-with-analyst" class="planning-button secondary">DRAFT WITH ANALYST AGENT</button>
-                </div>
-            </div>
-
-            <!-- Step 2: Run Research in Google AI Studio -->
-            <div class="planning-card">
-                <div class="planning-card-header">STEP 2: RUN RESEARCH IN GOOGLE AI STUDIO</div>
-                <div class="planning-card-description">
-                    <ol style="margin-left: 16px; margin-top: 8px; display: flex; flex-direction: column; gap: 6px; padding-left: 0; list-style-position: inside;">
-                        <li>Open <span id="btn-open-ai-studio" style="color: var(--accent-teal); text-decoration: underline; cursor: pointer;">Google AI Studio (aistudio.google.com)</span>.</li>
-                        <li>Paste the drafted prompt.</li>
-                        <li>Enable <strong>Search Grounding</strong> for web search access.</li>
-                        <li>Run the prompt and use the response menu at the top right to copy as markdown.</li>
-                    </ol>
-                </div>
-            </div>
-
-            <!-- Step 3: Import Research Document -->
-            <div class="planning-card">
-                <div class="planning-card-header">STEP 3: IMPORT RESEARCH DOCUMENT</div>
-                <div class="planning-card-description">Import the research findings copied from Google AI Studio.</div>
-
-                <div class="planning-card-section" style="margin-top: 8px;">
-                    <div class="planning-card-description" style="margin-bottom: 4px;">Custom Document Title (optional)</div>
-                    <input type="text" id="research-doc-title" class="planning-input" placeholder="e.g. Technical Research on API">
-                </div>
-
-                <div class="planning-card-section" style="margin-top: 12px;">
-                    <div id="research-no-folders-warning" style="display: none; color: var(--accent-orange); font-size: 11px; margin-bottom: 6px;">No destination folders set — add folders in Local Docs or click MANAGE FOLDERS.</div>
-                    <div class="planning-card-description" style="margin-bottom: 4px;">Destination Folder</div>
-                    <div style="display: flex; gap: 8px; align-items: center;">
-                        <select id="research-destination-folder" class="planning-input" style="flex: 1; background-color: var(--input-bg); color: var(--input-fg); border: 1px solid var(--border-color); border-radius: 4px; padding: 6px 8px;">
-                        </select>
-                        <button id="btn-manage-research-folders" class="planning-button secondary" style="margin: 0; padding: 6px 12px; white-space: nowrap; height: auto;">MANAGE FOLDERS</button>
-                    </div>
-                </div>
-
-                <div class="planning-controls" style="margin-top: 16px;">
-                    <button id="btn-import-research-doc-clipboard" class="planning-button">IMPORT FROM CLIPBOARD</button>
-                </div>
-                <div id="research-import-status" class="planning-status"></div>
-            </div>
-        </div>
-        <!-- Kanban Plans Content -->
-        <div id="kanban-content" class="research-tab-content">
-
-            <!-- Controls strip -->
-            <div class="kanban-controls-strip">
-                <select id="kanban-workspace-filter">
+        <!-- HTML Previews Tab -->
+        <div id="html-preview-content" class="research-tab-content">
+            <div class="controls-strip" id="controls-strip-html">
+                <select id="html-workspace-filter" class="workspace-filter-select">
                     <option value="">All Workspaces</option>
                 </select>
-                <select id="kanban-project-filter">
-                    <option value="">All Projects</option>
-                </select>
-                <select id="kanban-column-filter">
-                    <option value="">All Columns</option>
-                </select>
-                <button id="kanban-view-epics" class="strip-btn" style="margin: 0;">Epics</button>
-                <button id="btn-import-kanban-plans" class="strip-btn" title="Scan configured AI IDE folders and pick unclaimed plans to add (any age, bypasses the auto-claim window)">Import</button>
-                <button id="btn-edit-kanban" class="strip-btn" disabled>Edit</button>
-                <button id="btn-save-kanban" class="strip-btn" style="display:none;">Save</button>
-                <button id="btn-cancel-kanban" class="strip-btn" style="display:none;">Cancel</button>
-                <input type="text" id="kanban-search" class="sidebar-search-input" placeholder="Search plans..." />
-            </div>
-            <!-- Split pane: list + preview -->
-            <div class="content-row" id="kanban-content-row">
-                <div id="kanban-list-pane">
-                    <!-- Plan rows rendered by JS -->
-                </div>
-                <div class="preview-panel-wrapper">
-                    <div id="kanban-preview-pane" class="kanban-preview-pane" style="flex: 1; height: 100%; width: 100%; box-sizing: border-box;">
-                        <div id="kanban-preview-meta-bar" style="display:none;"></div>
-                        <div id="kanban-preview-content">
-                            <!-- Markdown preview rendered by JS -->
-                        </div>
-                        <textarea id="kanban-editor" class="markdown-editor" style="display:none;"></textarea>
-                    </div>
-                    <div class="cyber-scanlines"></div>
-                </div>
-            </div>
-        </div>
-
-        <div id="tickets-content" class="research-tab-content">
-            <div class="controls-strip" id="controls-strip-tickets">
-                <select id="tickets-project-picker" style="display:none"></select>
-                <select id="tickets-state-filter" style="display:none"></select>
-                <select id="tickets-status-filter" style="display:none"></select>
-                <button id="tickets-create" class="strip-btn" disabled title="Configure an integration in Setup first">+ New Ticket</button>
-                <button id="tickets-refresh" class="strip-btn">Refresh</button>
-                <div id="tickets-hierarchy-nav" style="display:none; flex-wrap: wrap;"></div>
-                <input id="tickets-search" type="text" class="sidebar-search-input" placeholder="Search tickets..." />
+                <button id="btn-open-browser-html" class="strip-btn" disabled>Open in Browser</button>
+                <button id="btn-copy-link-html" class="strip-btn" disabled>Copy Link</button>
+                <input type="text" id="html-docs-search" class="sidebar-search-input" placeholder="Search previews..." />
+                <span id="status-html" style="margin-left: 0; font-size: 12px; color: var(--text-secondary);">No folder configured</span>
             </div>
             <div class="content-row">
-                <div id="tree-pane-tickets">
+                <div id="tree-pane-html">
                     <div class="sidebar-toggle-row">
                         <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
                     </div>
-                    <div id="tickets-empty-state" class="empty-state">No tickets loaded.</div>
-                    <div id="tickets-issues-container"></div>
-                    <button id="tickets-load-more" class="planning-button" style="display:none">Load More</button>
+                    <div class="empty-state">Configure a folder to browse HTML files</div>
                 </div>
                 <div class="preview-panel-wrapper">
-                    <div id="preview-pane-tickets" style="flex: 1; width: 100%; box-sizing: border-box;">
-                        <div class="preview-content-wrapper">
-                            <div id="tickets-loading-state" style="flex: 1; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 32px; color: var(--text-secondary);">
-                                <div style="width: 32px; height: 32px; border: 3px solid var(--border-color); border-top-color: var(--accent-teal); border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
-                                <div style="font-size: 12px;">Loading tickets...</div>
+                    <div id="preview-pane-html" style="flex: 1; width: 100%; box-sizing: border-box; height: 100%; display: flex; flex-direction: column; overflow: hidden;">
+                        <div id="html-initial-state" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 32px; color: var(--text-secondary);">
+                            <span style="font-size: 48px; opacity: 0.5;">🌐</span>
+                            <div style="text-align: center;">
+                                <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px;">HTML & Asset Previewer</div>
+                                <div style="font-size: 12px; max-width: 320px; line-height: 1.5;">Select a file from the sidebar to preview HTML pages, SVGs, and images. Configure folders using the Manage Folders button.</div>
                             </div>
-                            <!-- Markdown preview container matching local docs -->
-                            <div id="markdown-preview-tickets">
-                                <div id="tickets-empty-preview" class="empty-state">Select a ticket to preview</div>
-                                <!-- Subtasks navigation (injected at TOP by JS) -->
-                                <div id="tickets-subtasks-nav" style="display:none"></div>
-                                <!-- Ticket detail content (description + comments + attachments) -->
-                                <div id="tickets-detail-content"></div>
+                        </div>
+                        <div id="html-loading-state" style="flex: 1; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 32px; color: var(--text-secondary);">
+                            <div style="width: 32px; height: 32px; border: 3px solid var(--border-color); border-top-color: var(--accent-teal); border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+                            <div style="font-size: 12px;">Loading preview...</div>
+                        </div>
+                        <div id="html-preview-wrapper" class="zoomable-container" style="display: none; flex: 1;">
+                            <div class="zoomable-viewport" style="width: 100%; height: 100%;">
+                                <iframe id="html-preview-frame" sandbox="allow-scripts allow-same-origin" style="border: none; background: var(--panel-bg); width: 100%; height: 100%; display: block;"></iframe>
+                            </div>
+                            <div class="zoom-toolbar">
+                                <button class="zoom-btn" data-action="zoom-in" title="Zoom In (Cmd+Scroll)">+</button>
+                                <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (Cmd+Scroll)">−</button>
+                                <button class="zoom-btn" data-action="reset" title="Reset Zoom">⟲</button>
+                                <button class="zoom-btn" data-action="fit" title="Fit to View">⤢</button>
+                            </div>
+                        </div>
+                        <div id="image-preview-container" class="zoomable-container" style="display: none; padding: 0;">
+                            <div class="zoomable-viewport">
+                                <img id="image-preview-img" alt="Image preview" style="display: block;" />
+                            </div>
+                            <div class="zoom-toolbar">
+                                <button class="zoom-btn" data-action="zoom-in" title="Zoom In (Cmd+Scroll)">+</button>
+                                <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (Cmd+Scroll)">−</button>
+                                <button class="zoom-btn" data-action="reset" title="Reset Zoom">⟲</button>
+                                <button class="zoom-btn" data-action="fit" title="Fit to View">⤢</button>
                             </div>
                         </div>
                     </div>
@@ -3185,128 +3161,57 @@
                 </div>
             </div>
         </div>
-    </div>
-    <div class="comment-popup" id="kanban-comment-popup">
-        <div class="popup-label">Comment on selection</div>
-        <div class="selected-preview" id="kanban-selected-preview"></div>
-        <textarea id="kanban-comment-input" placeholder="Add your contextual feedback..."></textarea>
-        <div class="popup-actions">
-            <button id="kanban-cancel-comment">Cancel</button>
-            <button class="primary" id="kanban-submit-comment">Submit Comment</button>
-        </div>
-    </div>
 
-    <div class="folder-modal" id="folder-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="folder-modal-title">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3 id="folder-modal-title">Manage Local Docs Folders</h3>
-                <button class="modal-close-btn" id="btn-close-folder-modal" aria-label="Close">&times;</button>
-            </div>
-            <div class="modal-body">
-                <!-- Antigravity toggle section -->
-                <div class="modal-section">
-                    <div class="toggle-container" style="display: flex; align-items: center; gap: 10px;">
-                        <label class="toggle-switch">
-                            <input type="checkbox" id="antigravity-toggle-modal">
-                            <span class="toggle-slider"></span>
-                        </label>
-                        <span class="toggle-label" style="font-size:11px; letter-spacing:0.5px; text-transform:uppercase; color:var(--text-secondary);">Show Antigravity Brain</span>
-                    </div>
-                    <div style="font-size: 10px; color: var(--text-secondary); margin-top: 4px; margin-left: 40px; opacity: 0.8;">
-                        Shows Antigravity App, IDE and CLI folders
-                    </div>
-                </div>
-                
-                <!-- Folder list section -->
-                <div class="modal-section">
-                    <div class="section-header">
-                        <span class="section-title">Configured Folders</span>
-                        <div class="section-actions">
-                            <button id="btn-refresh-folders-modal" class="strip-btn" title="Refresh folders">&#8635;</button>
-                            <button id="btn-add-folder-modal" class="strip-btn">Add Folder</button>
-                        </div>
-                    </div>
-                    <div id="folder-list-modal" class="folder-list">
-                        <!-- Folder items rendered by JS -->
-                    </div>
+        <!-- Stitch Tab -->
+        <div id="stitch-content" class="research-tab-content">
+            <!-- Configure API key banner if not configured -->
+            <div id="stitch-api-banner" class="stitch-setup-banner" style="display: none;">
+                <h3>Configure Stitch API Key</h3>
+                <p>To use AI-generated UI screens from Stitch, please configure your Stitch API key. This will be stored locally in your VS Code settings.</p>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <input type="password" id="stitch-api-key-input" class="stitch-input" style="max-width: 300px;" placeholder="AIzaSy..." />
+                    <button id="btn-save-stitch-api-key" class="strip-btn stitch-btn-primary">Save Key</button>
                 </div>
             </div>
-        </div>
-    </div>
 
-    <div class="folder-modal" id="sync-online-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="sync-online-modal-title">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3 id="sync-online-modal-title">Sync to Online</h3>
-                <button class="modal-close-btn" id="btn-close-sync-online-modal" aria-label="Close">&times;</button>
+            <div class="controls-strip" id="controls-strip-stitch">
+                <div class="stitch-projects-container" style="margin-bottom: 0;">
+                    <select id="stitch-project-select" class="workspace-filter-select">
+                        <option value="">Select Project...</option>
+                    </select>
+                    <button id="btn-sync-stitch-project" class="strip-btn" disabled>Sync Project to Workspace</button>
+                </div>
+                <div style="flex: 1;"></div>
+                <span id="status-stitch" style="font-size: 12px; color: var(--text-secondary);"></span>
             </div>
-            <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px;">
-                <div id="sync-step-fast" style="display:none;">
-                    <p id="sync-fast-text" style="margin:0; font-size:13px;"></p>
-                    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:12px;">
-                        <button id="btn-sync-fast-elsewhere" class="strip-btn">Sync somewhere else…</button>
-                        <button id="btn-sync-fast-confirm" class="planning-button" style="margin:0; padding:4px 12px;">Update</button>
+
+            <!-- Generation strip -->
+            <div class="controls-strip" style="background: var(--panel-bg); border-bottom: 1px solid var(--border-color); flex-wrap: wrap; gap: 12px; padding: 10px 12px;">
+                <input type="text" id="stitch-prompt-input" class="stitch-input" style="flex: 1; min-width: 250px;" placeholder="Describe the UI screen you want to generate..." />
+                <select id="stitch-device-select" class="workspace-filter-select" style="max-width: 120px;">
+                    <option value="AGNOSTIC">Agnostic</option>
+                    <option value="DESKTOP">Desktop</option>
+                    <option value="MOBILE">Mobile</option>
+                    <option value="TABLET">Tablet</option>
+                </select>
+                <button id="btn-generate-stitch" class="strip-btn stitch-btn-primary">Generate Screen</button>
+            </div>
+
+            <div class="content-row" style="flex-direction: column;">
+                <div id="stitch-gallery-empty" class="stitch-empty-state">
+                    <span style="font-size: 48px; opacity: 0.5;">🎨</span>
+                    <div>
+                        <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px;">Stitch Screen Generator</div>
+                        <div style="font-size: 12px; max-width: 360px; line-height: 1.5; margin: 0 auto;">Enter a prompt to generate interactive, AI-designed UI screens, or select an existing project from the dropdown.</div>
                     </div>
                 </div>
-                <div id="sync-step-source" style="display:none;">
-                    <p style="margin:0 0 8px; font-size:12px; color:var(--text-secondary);">Select destination source:</p>
-                    <div id="sync-source-list" style="display:flex; flex-direction:column; gap:6px;"></div>
-                    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:12px;">
-                        <button id="btn-sync-source-next" class="planning-button" style="margin:0; padding:4px 12px;">Next</button>
-                    </div>
-                </div>
-                <div id="sync-step-location" style="display:none;">
-                    <p style="margin:0 0 8px; font-size:12px; color:var(--text-secondary);">Select upload location:</p>
-                    <select id="sync-location-select" class="workspace-filter-select" style="width:100%;"></select>
-                    <label style="display:flex; align-items:center; gap:6px; margin-top:8px; font-size:12px; color:var(--text-secondary);">
-                        <input type="checkbox" id="sync-remember-location" checked />
-                        Remember as upload location
-                    </label>
-                    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:12px;">
-                        <button id="btn-sync-location-back" class="strip-btn">Back</button>
-                        <button id="btn-sync-location-next" class="planning-button" style="margin:0; padding:4px 12px;">Next</button>
-                    </div>
-                </div>
-                <div id="sync-step-confirm" style="display:none;">
-                    <div id="sync-confirm-info" style="font-size:12px; color:var(--text-secondary); margin-bottom:4px;"></div>
-                    <div style="display:flex; flex-direction:column; gap:4px;">
-                        <label style="font-size:11px; text-transform:uppercase; color:var(--text-secondary);">Document name</label>
-                        <input type="text" id="sync-doc-name" class="planning-input" style="width:100%; box-sizing:border-box;" />
-                    </div>
-                    <div id="sync-progress" style="margin-top:8px; font-size:12px; color:var(--accent-teal); display:none;"></div>
-                    <div id="sync-result" style="margin-top:8px; display:none;">
-                        <a id="sync-result-link" href="#" target="_blank" style="color:var(--accent-teal); font-size:13px;"></a>
-                    </div>
-                    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:12px;">
-                        <button id="btn-sync-confirm-back" class="strip-btn">Back</button>
-                        <button id="btn-sync-confirm-sync" class="planning-button" style="margin:0; padding:4px 12px;">Sync</button>
-                    </div>
+
+                <div id="stitch-gallery" class="stitch-gallery" style="display: none;">
+                    <!-- Screen cards will be dynamically inserted here -->
                 </div>
             </div>
         </div>
     </div>
-    <div class="folder-modal" id="create-ticket-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="create-ticket-modal-title">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3 id="create-ticket-modal-title">Create New Ticket</h3>
-                <button class="modal-close-btn" id="btn-close-create-ticket-modal" aria-label="Close">&times;</button>
-            </div>
-            <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px;">
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                    <label for="create-ticket-title" style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Title *</label>
-                    <input type="text" id="create-ticket-title" class="planning-input" placeholder="Enter ticket title" required style="width: 100%; box-sizing: border-box;" />
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                    <label for="create-ticket-description" style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Description</label>
-                    <textarea id="create-ticket-description" class="planning-input" placeholder="Enter ticket description (optional)" style="width: 100%; height: 100px; resize: vertical; box-sizing: border-box; font-family: inherit;"></textarea>
-                </div>
-                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
-                    <button id="btn-cancel-create-ticket" class="strip-btn">Cancel</button>
-                    <button id="btn-submit-create-ticket" class="planning-button" style="margin: 0; padding: 4px 12px;">Create</button>
-                </div>
-            </div>
-        </div>
-    </div>
-    <script nonce="{{NONCE}}" src="{{PLANNING_JS_URI}}"></script>
+    <script nonce="{{NONCE}}" src="{{DESIGN_JS_URI}}"></script>
 </body>
 </html>

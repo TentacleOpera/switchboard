@@ -22,192 +22,28 @@
         filterRequestIds: {},
         researchMode: persistedState.researchMode || 'web',
         localFolderPathsByRoot: persistedState.localFolderPathsByRoot || {},
-        htmlFolderPathsByRoot: persistedState.htmlFolderPathsByRoot || {},
-        designFolderPathsByRoot: persistedState.designFolderPathsByRoot || (persistedState.designFolderPaths ? { [currentWorkspaceRoot || '']: persistedState.designFolderPaths } : {}),
-        htmlPreviewCollapsed: persistedState.htmlPreviewCollapsed || false,
-        designPreviewCollapsed: persistedState.designPreviewCollapsed || false,
         ticketsPreviewCollapsed: persistedState.ticketsPreviewCollapsed || false,
         analystAvailable: false,
         docsListCollapsed: persistedState.docsListCollapsed || false,
-        editMode: { local: false, kanban: false, design: false },
-        editOriginalContent: { local: null, kanban: null, design: null },
-        dirtyFlags: { local: false, kanban: false, design: false },
-        externalChangePending: { local: false, kanban: false, design: false },
+        editMode: { local: false, kanban: false },
+        editOriginalContent: { local: null, kanban: null },
+        dirtyFlags: { local: false, kanban: false },
+        externalChangePending: { local: false, kanban: false },
         reviewMode: { kanban: false },
         kanbanReviewSelectedText: '',
         localWorkspaceRootFilter: '',
-        htmlWorkspaceRootFilter: '',
-        designWorkspaceRootFilter: '',
         localDocsSearch: '',
         onlineDocsSearch: '',
-        htmlDocsSearch: '',
-        designDocsSearch: '',
         activeDesignDocEnabled: false,
         activeDesignDocSourceId: null,
         activeDesignDocId: null,
         designSystemDocEnabled: false,
         designSystemDocSourceId: null,
         designSystemDocId: null,
-        _lastLocalDocsMsg: null,
-        _lastHtmlDocsMsg: null,
-        _lastDesignDocsMsg: null
+        _lastLocalDocsMsg: null
     };
 
-    // ── Zoom/Pan Engine ──
-    const zoomState = {
-        html:     { scale: 1, panX: 0, panY: 0, isPanning: false, startX: 0, startY: 0 },
-        design:   { scale: 1, panX: 0, panY: 0, isPanning: false, startX: 0, startY: 0 },
-    };
 
-    const ZOOM_MIN = 0.1;
-    const ZOOM_MAX = 10.0;
-    const ZOOM_STEP = 0.1;
-
-    function resetZoom(tab) {
-        zoomState[tab] = { scale: 1, panX: 0, panY: 0, isPanning: false, startX: 0, startY: 0 };
-    }
-
-    function applyZoom(tab, viewportEl) {
-        if (!viewportEl) return;
-        viewportEl.style.transform = `translate(${zoomState[tab].panX}px, ${zoomState[tab].panY}px) scale(${zoomState[tab].scale})`;
-    }
-
-    function clampPan(tab, containerRect, contentWidth, contentHeight) {
-        const s = zoomState[tab].scale;
-        const minX = Math.min(0, containerRect.width - contentWidth * s);
-        const minY = Math.min(0, containerRect.height - contentHeight * s);
-        const maxX = Math.max(0, containerRect.width - contentWidth * s);
-        const maxY = Math.max(0, containerRect.height - contentHeight * s);
-        zoomState[tab].panX = Math.max(minX, Math.min(maxX, zoomState[tab].panX));
-        zoomState[tab].panY = Math.max(minY, Math.min(maxY, zoomState[tab].panY));
-    }
-
-    function fitToContainer(tab, containerEl, viewportEl, retriesLeft = 5) {
-        if (!containerEl || !viewportEl) return;
-        const containerRect = containerEl.getBoundingClientRect();
-        // Container not laid out yet (hidden tab / pending flex layout) → a fit now would
-        // compute scale 0 and render the content invisibly small. Retry next frame.
-        if (!containerRect.width || !containerRect.height) {
-            if (retriesLeft > 0) {
-                requestAnimationFrame(() => fitToContainer(tab, containerEl, viewportEl, retriesLeft - 1));
-            }
-            return;
-        }
-        // Measure content: first child of viewport (img or iframe)
-        const contentEl = viewportEl.firstElementChild;
-        if (!contentEl) return;
-        let contentW, contentH;
-        if (contentEl.tagName === 'IMG') {
-            contentW = contentEl.naturalWidth || contentEl.offsetWidth;
-            contentH = contentEl.naturalHeight || contentEl.offsetHeight;
-        } else {
-            contentW = contentEl.offsetWidth;
-            contentH = contentEl.offsetHeight;
-        }
-        if (!contentW || !contentH) return;
-        const fitScale = Math.min(containerRect.width / contentW, containerRect.height / contentH, 1);
-        zoomState[tab].scale = fitScale;
-        zoomState[tab].panX = (containerRect.width - contentW * fitScale) / 2;
-        zoomState[tab].panY = (containerRect.height - contentH * fitScale) / 2;
-        applyZoom(tab, viewportEl);
-    }
-
-    function getViewportContentSize(viewportEl) {
-        const contentEl = viewportEl ? viewportEl.firstElementChild : null;
-        if (!contentEl) return null;
-        const w = contentEl.tagName === 'IMG' ? (contentEl.naturalWidth || contentEl.offsetWidth) : contentEl.offsetWidth;
-        const h = contentEl.tagName === 'IMG' ? (contentEl.naturalHeight || contentEl.offsetHeight) : contentEl.offsetHeight;
-        return (w && h) ? { w, h } : null;
-    }
-
-    // Rescale about a fixed point (cx, cy in container coordinates) so the content under
-    // that point stays put, then clamp the pan so the content can't drift off-screen.
-    function zoomAt(tab, container, viewportEl, newScale, cx, cy) {
-        const oldScale = zoomState[tab].scale;
-        const clamped = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, newScale));
-        if (!oldScale || clamped === oldScale) {
-            zoomState[tab].scale = clamped || 1;
-            applyZoom(tab, viewportEl);
-            return;
-        }
-        const k = clamped / oldScale;
-        zoomState[tab].panX = cx - (cx - zoomState[tab].panX) * k;
-        zoomState[tab].panY = cy - (cy - zoomState[tab].panY) * k;
-        zoomState[tab].scale = clamped;
-        const containerRect = container.getBoundingClientRect();
-        const size = getViewportContentSize(viewportEl);
-        if (size) clampPan(tab, containerRect, size.w, size.h);
-        applyZoom(tab, viewportEl);
-    }
-
-    function initZoomListeners(containerId, viewportSelector, tab) {
-        const container = document.getElementById(containerId);
-        if (!container) return;
-
-        container.addEventListener('wheel', (e) => {
-            if (!e.metaKey && !e.ctrlKey) return; // Modifier not held — let native scroll pass
-            e.preventDefault();
-
-            const delta = e.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
-            const rect = container.getBoundingClientRect();
-            zoomAt(tab, container, container.querySelector(viewportSelector),
-                zoomState[tab].scale + delta,
-                e.clientX - rect.left, e.clientY - rect.top);
-        }, { passive: false });
-
-        container.addEventListener('mousedown', (e) => {
-            // Only left-click, ignore toolbar clicks
-            if (e.button !== 0 || e.target.closest('.zoom-toolbar')) return;
-            zoomState[tab].isPanning = true;
-            zoomState[tab].startX = e.clientX - zoomState[tab].panX;
-            zoomState[tab].startY = e.clientY - zoomState[tab].panY;
-            container.classList.add('panning');
-        });
-
-        window.addEventListener('mousemove', (e) => {
-            if (!zoomState[tab].isPanning) return;
-            zoomState[tab].panX = e.clientX - zoomState[tab].startX;
-            zoomState[tab].panY = e.clientY - zoomState[tab].startY;
-            // Clamp pan to keep content visible
-            const containerRect = container.getBoundingClientRect();
-            const viewportEl = container.querySelector(viewportSelector);
-            const contentEl = viewportEl ? viewportEl.firstElementChild : null;
-            if (contentEl) {
-                const cw = contentEl.tagName === 'IMG' ? (contentEl.naturalWidth || contentEl.offsetWidth) : contentEl.offsetWidth;
-                const ch = contentEl.tagName === 'IMG' ? (contentEl.naturalHeight || contentEl.offsetHeight) : contentEl.offsetHeight;
-                clampPan(tab, containerRect, cw, ch);
-            }
-            applyZoom(tab, viewportEl);
-        });
-
-        window.addEventListener('mouseup', () => {
-            if (!zoomState[tab].isPanning) return;
-            zoomState[tab].isPanning = false;
-            container.classList.remove('panning');
-        });
-
-        // Toolbar button delegation
-        container.addEventListener('click', (e) => {
-            const btn = e.target.closest('.zoom-btn');
-            if (!btn) return;
-            const action = btn.dataset.action;
-            const viewportEl = container.querySelector(viewportSelector);
-            const rect = container.getBoundingClientRect();
-            if (action === 'zoom-in') {
-                zoomAt(tab, container, viewportEl, zoomState[tab].scale + ZOOM_STEP * 2, rect.width / 2, rect.height / 2);
-                return;
-            } else if (action === 'zoom-out') {
-                zoomAt(tab, container, viewportEl, zoomState[tab].scale - ZOOM_STEP * 2, rect.width / 2, rect.height / 2);
-                return;
-            } else if (action === 'reset') {
-                resetZoom(tab);
-            } else if (action === 'fit') {
-                fitToContainer(tab, container, viewportEl);
-                return; // fitToContainer calls applyZoom internally
-            }
-            applyZoom(tab, viewportEl);
-        });
-    }
 
     let researchStatusTimeout = null;
 
@@ -338,23 +174,7 @@
         state.localWorkspaceRootFilter = e.target.value;
         handleLocalDocsReady(state._lastLocalDocsMsg || {});
     });
-    document.getElementById('html-workspace-filter')?.addEventListener('change', (e) => {
-        state.htmlWorkspaceRootFilter = e.target.value;
-        handleHtmlDocsReady(state._lastHtmlDocsMsg || {});
-    });
-    document.getElementById('design-workspace-filter')?.addEventListener('change', (e) => {
-        state.designWorkspaceRootFilter = e.target.value;
-        const msg = state._lastDesignDocsMsg || {};
-        state.designFolderPathsByRoot = msg.folderPathsByRoot || {};
-        const filteredNodes = state.designWorkspaceRootFilter
-            ? (msg.nodes || []).filter(n => n.metadata?.root === state.designWorkspaceRootFilter)
-            : (msg.nodes || []);
-        renderDesignDocs({
-            sourceId: msg.sourceId || 'design-folder',
-            nodes: filteredNodes,
-            folderPaths: getCurrentFolderPaths(state.designFolderPathsByRoot, state.designWorkspaceRootFilter)
-        });
-    });
+
 
     function wireSidebarSearch(inputId, onSearch) {
         const input = document.getElementById(inputId);
@@ -376,23 +196,7 @@
         state.onlineDocsSearch = value;
         applyOnlineDocsSearchFilter();
     });
-    wireSidebarSearch('html-docs-search', (value) => {
-        state.htmlDocsSearch = value;
-        handleHtmlDocsReady(state._lastHtmlDocsMsg || {});
-    });
-    wireSidebarSearch('design-docs-search', (value) => {
-        state.designDocsSearch = value;
-        const msg = state._lastDesignDocsMsg || {};
-        state.designFolderPathsByRoot = msg.folderPathsByRoot || {};
-        const filteredNodes = state.designWorkspaceRootFilter
-            ? (msg.nodes || []).filter(n => n.metadata?.root === state.designWorkspaceRootFilter)
-            : (msg.nodes || []);
-        renderDesignDocs({
-            sourceId: msg.sourceId || 'design-folder',
-            nodes: filteredNodes,
-            folderPaths: getCurrentFolderPaths(state.designFolderPathsByRoot, state.designWorkspaceRootFilter)
-        });
-    });
+
 
     wireSidebarSearch('tickets-search', (value) => {
         if (lastIntegrationProvider === 'linear') {
@@ -422,13 +226,7 @@
         }
     }     function toggleSidebarCollapsed() {
         const activeTab = getActiveTabName();
-        if (activeTab === 'html-preview') {
-            state.htmlPreviewCollapsed = !state.htmlPreviewCollapsed;
-            applySidebarState('html-preview', state.htmlPreviewCollapsed);
-        } else if (activeTab === 'design') {
-            state.designPreviewCollapsed = !state.designPreviewCollapsed;
-            applySidebarState('design', state.designPreviewCollapsed);
-        } else if (activeTab === 'tickets') {
+        if (activeTab === 'tickets') {
             state.ticketsPreviewCollapsed = !state.ticketsPreviewCollapsed;
             applySidebarState('tickets', state.ticketsPreviewCollapsed);
         } else {
@@ -444,8 +242,6 @@
         vscode.setState({
             ...currentPersisted,
             docsListCollapsed: state.docsListCollapsed,
-            htmlPreviewCollapsed: state.htmlPreviewCollapsed,
-            designPreviewCollapsed: state.designPreviewCollapsed,
             ticketsPreviewCollapsed: state.ticketsPreviewCollapsed
         });
     }
@@ -454,8 +250,6 @@
     applySidebarState('local', state.docsListCollapsed);
     applySidebarState('research', state.docsListCollapsed);
     applySidebarState('online', state.docsListCollapsed);
-    applySidebarState('design', state.designPreviewCollapsed);
-    applySidebarState('html-preview', state.htmlPreviewCollapsed);
     applySidebarState('tickets', state.ticketsPreviewCollapsed);
 
     // Bind sidebar toggle listeners
@@ -471,20 +265,13 @@
         // 1. Clean up dirty flags and edit/review modes (same logic as click handler)
         if (state.dirtyFlags.local && tabName !== 'local') { exitEditMode('local', true); }
         if (state.dirtyFlags.kanban && tabName !== 'kanban') { exitEditMode('kanban', true); }
-        if (state.dirtyFlags.design && tabName !== 'design') { exitEditMode('design', true); }
         if (state.editMode.local && tabName !== 'local') { exitEditMode('local', true); }
         if (state.editMode.kanban && tabName !== 'kanban') { exitEditMode('kanban', true); }
-        if (state.editMode.design && tabName !== 'design') { exitEditMode('design', true); }
         if (state.reviewMode.kanban && tabName !== 'kanban') { exitReviewMode('kanban', true); }
 
         // 2. Clear stale pending selection when navigating away from kanban
         if (tabName !== 'kanban' && _pendingKanbanSelection) {
             _pendingKanbanSelection = null;
-        }
-
-        // Reset HTML preview banner when leaving the HTML tab
-        if (tabName !== 'html-preview') {
-            resetHtmlBanner();
         }
 
         // 3. Update active classes
@@ -496,9 +283,7 @@
         if (targetContent) targetContent.classList.add('active');
 
         // 4. Apply sidebar state
-        if (tabName === 'html-preview') { applySidebarState('html-preview', state.htmlPreviewCollapsed); }
-        else if (tabName === 'design') { applySidebarState('design', state.designPreviewCollapsed); }
-        else if (tabName === 'tickets') { applySidebarState('tickets', state.ticketsPreviewCollapsed); }
+        if (tabName === 'tickets') { applySidebarState('tickets', state.ticketsPreviewCollapsed); }
         else if (tabName === 'local' || tabName === 'research' || tabName === 'online') {
             applySidebarState(tabName, state.docsListCollapsed);
         }
@@ -1367,130 +1152,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         return { wrapper: container, childContainer };
     }
 
-    function resetHtmlBanner() {
-        // "Banner" is gone — the Open in Browser / Copy Link actions now live in the controls strip
-        const openBtn = document.getElementById('btn-open-browser-html');
-        const copyBtn = document.getElementById('btn-copy-link-html');
-        if (openBtn) { openBtn.disabled = true; openBtn.onclick = null; }
-        if (copyBtn) { copyBtn.disabled = true; copyBtn.onclick = null; }
-    }
 
-    function loadDocumentPreview(sourceId, docId, docName) {
-        if (sourceId === 'html-folder') {
-            if (state.selectedEl) {
-                state.selectedEl.classList.remove('selected');
-            }
-            const wrapper = findTreeNode(sourceId, docId);
-            const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : undefined;
-            if (wrapper) {
-                wrapper.classList.add('selected');
-                state.selectedEl = wrapper;
-            }
-            state.activeSource = sourceId;
-            state.activeDocId = docId;
-            state.activeDocName = docName;
-
-            // Wire strip actions for the selected file
-            const openBtn = document.getElementById('btn-open-browser-html');
-            const copyBtn = document.getElementById('btn-copy-link-html');
-            const isHtmlFile = /\.html?$/i.test(docName || docId || '');
-            if (openBtn) {
-                openBtn.disabled = !isHtmlFile;
-                openBtn.onclick = !isHtmlFile ? null : () => {
-                    vscode.postMessage({
-                        type: 'serveAndOpenHtml',
-                        docId: docId,
-                        docName: docName,
-                        absolutePath: wrapper ? wrapper.dataset.absolutePath : undefined,
-                        sourceFolder: sourceFolder
-                    });
-                };
-            }
-            if (copyBtn) {
-                copyBtn.disabled = false;
-                copyBtn.onclick = () => {
-                    vscode.postMessage({
-                        type: 'linkToDocument',
-                        sourceId: sourceId,
-                        docId: docId,
-                        docName: docName,
-                        sourceFolder: sourceFolder
-                    });
-                };
-            }
-
-            state.previewRequestId++;
-            updateLocalActiveContextButtonState();
-
-            const statusHtml = document.getElementById('status-html');
-            if (statusHtml) {
-                statusHtml.textContent = 'Loading...';
-            }
-            const initialState = document.getElementById('html-initial-state');
-            const loadingState = document.getElementById('html-loading-state');
-            const previewFrame = document.getElementById('html-preview-frame');
-            const imageContainer = document.getElementById('image-preview-container');
-            const iframeWrapper = document.getElementById('html-preview-wrapper');
-            if (initialState) initialState.style.display = 'none';
-            if (loadingState) loadingState.style.display = 'flex';
-            if (iframeWrapper) iframeWrapper.style.display = 'none';
-            if (imageContainer) imageContainer.style.display = 'none';
-
-            vscode.postMessage({
-                type: 'fetchPreview',
-                sourceId,
-                docId,
-                requestId: state.previewRequestId,
-                sourceFolder
-            });
-            return;
-        }
-
-        if (sourceId === 'design-folder') {
-            if (state.dirtyFlags.design) {
-                exitEditMode('design', true);
-            }
-
-            if (state.selectedEl) {
-                state.selectedEl.classList.remove('selected');
-            }
-            const wrapper = findTreeNode(sourceId, docId);
-            const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : undefined;
-            if (wrapper) {
-                wrapper.classList.add('selected');
-                state.selectedEl = wrapper;
-            }
-            state.activeSource = sourceId;
-            state.activeDocId = docId;
-            state.activeDocName = docName;
-            state.previewRequestId++;
-            state.activeDocContent = null; // Force re-render; prevent stale-content short-circuit
-            updateLocalActiveContextButtonState();
-            updateDesignDocControls();
-
-            const statusDesign = document.getElementById('status-design');
-            if (statusDesign) {
-                statusDesign.textContent = 'Loading...';
-            }
-            const previewDesign = document.getElementById('markdown-preview-design');
-            if (previewDesign) {
-                previewDesign.innerHTML = '<div class="empty-state">Loading preview...</div>';
-                previewDesign.style.display = 'block';
-            }
-            const imageContainerDesign = document.getElementById('image-preview-container-design');
-            if (imageContainerDesign) {
-                imageContainerDesign.style.display = 'none';
-            }
-
-            vscode.postMessage({
-                type: 'fetchPreview',
-                sourceId,
-                docId,
-                requestId: state.previewRequestId,
-                sourceFolder
-            });
-            return;
-        }
         if (state.dirtyFlags.local) {
             exitEditMode('local', true);
         }
@@ -1666,471 +1328,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         });
     }
 
-    function handleHtmlDocsReady(msg) {
-        console.log('[PlanningPanel Webview] handleHtmlDocsReady called:', msg);
-        state._lastHtmlDocsMsg = msg;
-        state.htmlFolderPathsByRoot = msg.folderPathsByRoot || {};
-        populateWorkspaceDropdown('html-workspace-filter', msg.workspaceItems || [], state.htmlWorkspaceRootFilter);
-        const filteredNodes = state.htmlWorkspaceRootFilter
-            ? (msg.nodes || []).filter(n => n.metadata?.root === state.htmlWorkspaceRootFilter)
-            : (msg.nodes || []);
-        renderHtmlDocs({
-            sourceId: msg.sourceId || 'html-folder',
-            nodes: filteredNodes,
-            folderPaths: getCurrentFolderPaths(state.htmlFolderPathsByRoot, state.htmlWorkspaceRootFilter),
-            error: msg.error
-        });
-        renderHtmlFolderListModal();
-    }
 
-    function renderHtmlFolderListModal() {
-        const folderListModal = document.getElementById('html-folder-list-modal');
-        if (!folderListModal) return;
-        folderListModal.innerHTML = '';
-
-        const folderPaths = getCurrentFolderPaths(state.htmlFolderPathsByRoot, state.htmlWorkspaceRootFilter);
-
-        if (folderPaths.length === 0) {
-            const empty = document.createElement('div');
-            empty.className = 'folder-list-empty';
-            empty.textContent = 'No folders configured. Click Add Folder to get started.';
-            folderListModal.appendChild(empty);
-            return;
-        }
-
-        folderPaths.forEach(path => {
-            const row = document.createElement('div');
-            row.className = 'folder-list-item';
-
-            const pathSpan = document.createElement('span');
-            pathSpan.className = 'folder-path';
-            pathSpan.textContent = path;
-            pathSpan.title = path;
-
-            const removeBtn = document.createElement('button');
-            removeBtn.className = 'folder-list-remove-btn';
-            removeBtn.textContent = 'Remove';
-            removeBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                vscode.postMessage({ type: 'removeHtmlFolder', folderPath: path, workspaceRoot: state.htmlWorkspaceRootFilter || currentWorkspaceRoot });
-            });
-
-            row.appendChild(pathSpan);
-            row.appendChild(removeBtn);
-            folderListModal.appendChild(row);
-        });
-    }
-    
-    const TYPE_ORDER = ['html', 'markdown', 'yaml', 'json', 'image'];
-    const TYPE_LABELS = {
-        html: 'HTML',
-        markdown: 'Markdown',
-        yaml: 'YAML',
-        json: 'JSON',
-        image: 'Images'
-    };
-
-    function getDocType(doc) {
-        const name = doc.name || doc.id || '';
-        const ext = name.substring(name.lastIndexOf('.')).toLowerCase();
-        if (['.html', '.htm'].includes(ext)) return 'html';
-        if (['.md', '.markdown'].includes(ext)) return 'markdown';
-        if (['.yaml', '.yml'].includes(ext)) return 'yaml';
-        if (ext === '.json') return 'json';
-        if (['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(ext)) return 'image';
-        return 'other';
-    }
-
-    function groupDocsByType(docs) {
-        const groups = {
-            html: [],
-            markdown: [],
-            yaml: [],
-            json: [],
-            image: [],
-            other: []
-        };
-        docs.forEach(doc => {
-            const type = getDocType(doc);
-            (groups[type] || groups.other).push(doc);
-        });
-        return groups;
-    }
-
-    function renderHtmlDocs(rootEntry) {
-        const { sourceId, nodes, folderPaths } = rootEntry;
-        const treePaneHtml = document.getElementById('tree-pane-html');
-        if (!treePaneHtml) return;
-
-        resetHtmlBanner();
-        treePaneHtml.innerHTML = '';
-
-        // Re-add sidebar toggle
-        const toggleRow = document.createElement('div');
-        toggleRow.className = 'sidebar-toggle-row';
-
-        const foldersBtn = document.createElement('button');
-        foldersBtn.className = 'sidebar-folders-btn';
-        foldersBtn.title = 'Manage Folders';
-        foldersBtn.textContent = 'Manage Folders';
-        foldersBtn.addEventListener('click', () => {
-            const modal = document.getElementById('folder-modal-html');
-            if (modal) {
-                modal.style.display = 'flex';
-                renderHtmlFolderListModal();
-                vscode.postMessage({ type: 'listHtmlFolders', workspaceRoot: state.htmlWorkspaceRootFilter || currentWorkspaceRoot });
-            }
-        });
-
-        const toggleBtn = document.createElement('button');
-        toggleBtn.className = 'sidebar-toggle-btn';
-        toggleBtn.title = 'Toggle sidebar';
-        toggleBtn.textContent = state.htmlPreviewCollapsed ? '»' : '«';
-        toggleBtn.addEventListener('click', toggleSidebarCollapsed);
-
-        toggleRow.appendChild(foldersBtn);
-        toggleRow.appendChild(toggleBtn);
-        treePaneHtml.appendChild(toggleRow);
-
-        const docList = document.createElement('div');
-        docList.className = 'source-doc-list';
-        docList.dataset.sourceId = sourceId;
-        treePaneHtml.appendChild(docList);
-
-        if (!nodes || nodes.length === 0) {
-            docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No HTML preview folders configured or folders are empty. Click Folders to get started.</div>';
-            return;
-        }
-
-        const folderNodes = (nodes || []).filter(n => n.kind === 'folder');
-        let docNodes = (nodes || []).filter(n => n.kind === 'document');
-
-        // Apply sidebar search filter
-        const search = String(state.htmlDocsSearch || '').trim().toLowerCase();
-        if (search) {
-            docNodes = docNodes.filter(d => (d.title || d.name || '').toLowerCase().includes(search));
-        }
-
-        // Group nodes by sourceFolder
-        const docsBySourceFolder = new Map();
-        const foldersBySourceFolder = new Map();
-
-        docNodes.forEach(d => {
-            const sourceFolder = d.metadata?.sourceFolder;
-            if (!sourceFolder) return;
-            if (!docsBySourceFolder.has(sourceFolder)) {
-                docsBySourceFolder.set(sourceFolder, []);
-            }
-            docsBySourceFolder.get(sourceFolder).push(d);
-        });
-
-        folderNodes.forEach(f => {
-            const sourceFolder = f.metadata?.sourceFolder;
-            if (!sourceFolder) return;
-            if (!foldersBySourceFolder.has(sourceFolder)) {
-                foldersBySourceFolder.set(sourceFolder, []);
-            }
-            foldersBySourceFolder.get(sourceFolder).push(f);
-        });
-
-        const sourceFolders = [...new Set([
-            ...(folderPaths || []),
-            ...docsBySourceFolder.keys()
-        ])];
-
-        sourceFolders.forEach(sourceFolder => {
-            const folderDocs = docsBySourceFolder.get(sourceFolder) || [];
-            const sourceFolderNodes = foldersBySourceFolder.get(sourceFolder) || [];
-
-            // Skip source folders with no visible documents
-            if (folderDocs.length === 0) return;
-
-            const sourceHeader = document.createElement('div');
-            sourceHeader.className = 'folder-subheader source-folder-header';
-            const folderName = sourceFolder.split(/[\\/]/).filter(Boolean).pop() || sourceFolder;
-            sourceHeader.textContent = folderName;
-            sourceHeader.title = sourceFolder;
-            docList.appendChild(sourceHeader);
-
-            const folderNameMap = new Map();
-            sourceFolderNodes.forEach(f => folderNameMap.set(f.id, f.name));
-
-            const docsByFolder = new Map();
-            const rootDocs = [];
-            folderDocs.forEach(d => {
-                const docPath = d.id || d.relativePath || '';
-                const lastSlashIdx = docPath.lastIndexOf('/');
-                const parentFolderId = lastSlashIdx > 0 ? docPath.substring(0, lastSlashIdx) : null;
-
-                if (parentFolderId && folderNameMap.has(parentFolderId)) {
-                    if (!docsByFolder.has(parentFolderId)) {
-                        docsByFolder.set(parentFolderId, []);
-                    }
-                    docsByFolder.get(parentFolderId).push(d);
-                } else {
-                    rootDocs.push(d);
-                }
-            });
-
-            sourceFolderNodes.forEach(folder => {
-                const folderDocsInSource = docsByFolder.get(folder.id) || [];
-                if (folderDocsInSource.length === 0) return;
-
-                const subheader = document.createElement('div');
-                subheader.className = 'folder-subheader';
-                subheader.textContent = folder.name;
-                docList.appendChild(subheader);
-
-                const groups = groupDocsByType(folderDocsInSource);
-                TYPE_ORDER.forEach(type => {
-                    const typeDocs = groups[type] || [];
-                    if (typeDocs.length === 0) return;
-
-                    const typeSubheader = document.createElement('div');
-                    typeSubheader.className = 'type-subheader';
-                    typeSubheader.textContent = TYPE_LABELS[type];
-                    docList.appendChild(typeSubheader);
-
-                    typeDocs.forEach(doc => {
-                        const { wrapper } = renderNode(doc, sourceId);
-                        docList.appendChild(wrapper);
-                    });
-                });
-                const otherDocs = groups['other'] || [];
-                otherDocs.forEach(doc => {
-                    const { wrapper } = renderNode(doc, sourceId);
-                    docList.appendChild(wrapper);
-                });
-            });
-
-            const rootGroups = groupDocsByType(rootDocs);
-            TYPE_ORDER.forEach(type => {
-                const typeDocs = rootGroups[type] || [];
-                if (typeDocs.length === 0) return;
-
-                const typeSubheader = document.createElement('div');
-                typeSubheader.className = 'type-subheader';
-                typeSubheader.textContent = TYPE_LABELS[type];
-                docList.appendChild(typeSubheader);
-
-                typeDocs.forEach(doc => {
-                    const { wrapper } = renderNode(doc, sourceId);
-                    docList.appendChild(wrapper);
-                });
-            });
-            const otherRootDocs = rootGroups['other'] || [];
-            otherRootDocs.forEach(doc => {
-                const { wrapper } = renderNode(doc, sourceId);
-                docList.appendChild(wrapper);
-            });
-        });
-    }
-
-    function renderDesignFolderListModal() {
-        const folderListModal = document.getElementById('design-folder-list-modal');
-        if (!folderListModal) return;
-        folderListModal.innerHTML = '';
-
-        const folderPaths = getCurrentFolderPaths(state.designFolderPathsByRoot, state.designWorkspaceRootFilter);
-
-        if (folderPaths.length === 0) {
-            const empty = document.createElement('div');
-            empty.className = 'folder-list-empty';
-            empty.textContent = 'No folders configured. Click Add Folder to get started.';
-            folderListModal.appendChild(empty);
-            return;
-        }
-
-        folderPaths.forEach(path => {
-            const row = document.createElement('div');
-            row.className = 'folder-list-item';
-
-            const pathSpan = document.createElement('span');
-            pathSpan.className = 'folder-path';
-            pathSpan.textContent = path;
-            pathSpan.title = path;
-
-            const removeBtn = document.createElement('button');
-            removeBtn.className = 'folder-list-remove-btn';
-            removeBtn.textContent = 'Remove';
-            removeBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                vscode.postMessage({ type: 'removeDesignFolder', folderPath: path, workspaceRoot: state.designWorkspaceRootFilter || currentWorkspaceRoot });
-            });
-
-            row.appendChild(pathSpan);
-            row.appendChild(removeBtn);
-            folderListModal.appendChild(row);
-        });
-    }
-
-    function renderDesignDocs(rootEntry) {
-        const { sourceId, nodes, folderPaths } = rootEntry;
-        const treePaneDesign = document.getElementById('tree-pane-design');
-        if (!treePaneDesign) return;
-
-        treePaneDesign.innerHTML = '';
-
-        // Re-add sidebar toggle
-        const toggleRow = document.createElement('div');
-        toggleRow.className = 'sidebar-toggle-row';
-
-        const foldersBtn = document.createElement('button');
-        foldersBtn.className = 'sidebar-folders-btn';
-        foldersBtn.title = 'Manage Folders';
-        foldersBtn.textContent = 'Manage Folders';
-        foldersBtn.addEventListener('click', () => {
-            const modal = document.getElementById('folder-modal-design');
-            if (modal) {
-                modal.style.display = 'flex';
-                renderDesignFolderListModal();
-                vscode.postMessage({ type: 'listDesignFolders', workspaceRoot: state.designWorkspaceRootFilter || currentWorkspaceRoot });
-            }
-        });
-
-        const toggleBtn = document.createElement('button');
-        toggleBtn.className = 'sidebar-toggle-btn';
-        toggleBtn.title = 'Toggle sidebar';
-        toggleBtn.textContent = state.designPreviewCollapsed ? '»' : '«';
-        toggleBtn.addEventListener('click', toggleSidebarCollapsed);
-
-        toggleRow.appendChild(foldersBtn);
-        toggleRow.appendChild(toggleBtn);
-        treePaneDesign.appendChild(toggleRow);
-
-        const docList = document.createElement('div');
-        docList.className = 'source-doc-list';
-        docList.dataset.sourceId = sourceId;
-        treePaneDesign.appendChild(docList);
-
-        if (!nodes || nodes.length === 0) {
-            docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No design system folders configured or folders are empty. Click Manage Folders to get started.</div>';
-            return;
-        }
-
-        const folderNodes = (nodes || []).filter(n => n.kind === 'folder');
-        let docNodes = (nodes || []).filter(n => n.kind === 'document');
-
-        // Apply sidebar search filter
-        const search = String(state.designDocsSearch || '').trim().toLowerCase();
-        if (search) {
-            docNodes = docNodes.filter(d => (d.title || d.name || '').toLowerCase().includes(search));
-        }
-
-        // Group nodes by sourceFolder
-        const docsBySourceFolder = new Map();
-        const foldersBySourceFolder = new Map();
-
-        docNodes.forEach(d => {
-            const sourceFolder = d.metadata?.sourceFolder;
-            if (!sourceFolder) return;
-            if (!docsBySourceFolder.has(sourceFolder)) {
-                docsBySourceFolder.set(sourceFolder, []);
-            }
-            docsBySourceFolder.get(sourceFolder).push(d);
-        });
-
-        folderNodes.forEach(f => {
-            const sourceFolder = f.metadata?.sourceFolder;
-            if (!sourceFolder) return;
-            if (!foldersBySourceFolder.has(sourceFolder)) {
-                foldersBySourceFolder.set(sourceFolder, []);
-            }
-            foldersBySourceFolder.get(sourceFolder).push(f);
-        });
-
-        const sourceFolders = [...new Set([
-            ...(folderPaths || []),
-            ...docsBySourceFolder.keys()
-        ])];
-
-        sourceFolders.forEach(sourceFolder => {
-            const folderDocs = docsBySourceFolder.get(sourceFolder) || [];
-            const sourceFolderNodes = foldersBySourceFolder.get(sourceFolder) || [];
-
-            // Skip source folders with no visible documents
-            if (folderDocs.length === 0) return;
-
-            const sourceHeader = document.createElement('div');
-            sourceHeader.className = 'folder-subheader source-folder-header';
-            const folderName = sourceFolder.split(/[\\/]/).filter(Boolean).pop() || sourceFolder;
-            sourceHeader.textContent = folderName;
-            sourceHeader.title = sourceFolder;
-            docList.appendChild(sourceHeader);
-
-            const folderNameMap = new Map();
-            sourceFolderNodes.forEach(f => folderNameMap.set(f.id, f.name));
-
-            const docsByFolder = new Map();
-            const rootDocs = [];
-            folderDocs.forEach(d => {
-                const docPath = d.id || d.relativePath || '';
-                const lastSlashIdx = docPath.lastIndexOf('/');
-                const parentFolderId = lastSlashIdx > 0 ? docPath.substring(0, lastSlashIdx) : null;
-
-                if (parentFolderId && folderNameMap.has(parentFolderId)) {
-                    if (!docsByFolder.has(parentFolderId)) {
-                        docsByFolder.set(parentFolderId, []);
-                    }
-                    docsByFolder.get(parentFolderId).push(d);
-                } else {
-                    rootDocs.push(d);
-                }
-            });
-
-            sourceFolderNodes.forEach(folder => {
-                const folderDocsInSource = docsByFolder.get(folder.id) || [];
-                if (folderDocsInSource.length === 0) return;
-
-                const subheader = document.createElement('div');
-                subheader.className = 'folder-subheader';
-                subheader.textContent = folder.name;
-                docList.appendChild(subheader);
-
-                const groups = groupDocsByType(folderDocsInSource);
-                TYPE_ORDER.forEach(type => {
-                    const typeDocs = groups[type] || [];
-                    if (typeDocs.length === 0) return;
-
-                    const typeSubheader = document.createElement('div');
-                    typeSubheader.className = 'type-subheader';
-                    typeSubheader.textContent = TYPE_LABELS[type];
-                    docList.appendChild(typeSubheader);
-
-                    typeDocs.forEach(doc => {
-                        const { wrapper } = renderNode(doc, sourceId);
-                        docList.appendChild(wrapper);
-                    });
-                });
-                const otherDocs = groups['other'] || [];
-                otherDocs.forEach(doc => {
-                    const { wrapper } = renderNode(doc, sourceId);
-                    docList.appendChild(wrapper);
-                });
-            });
-
-            const rootGroups = groupDocsByType(rootDocs);
-            TYPE_ORDER.forEach(type => {
-                const typeDocs = rootGroups[type] || [];
-                if (typeDocs.length === 0) return;
-
-                const typeSubheader = document.createElement('div');
-                typeSubheader.className = 'type-subheader';
-                typeSubheader.textContent = TYPE_LABELS[type];
-                docList.appendChild(typeSubheader);
-
-                typeDocs.forEach(doc => {
-                    const { wrapper } = renderNode(doc, sourceId);
-                    docList.appendChild(wrapper);
-                });
-            });
-            const otherRootDocs = rootGroups['other'] || [];
-            otherRootDocs.forEach(doc => {
-                const { wrapper } = renderNode(doc, sourceId);
-                docList.appendChild(wrapper);
-            });
-        });
-    }
 
     function renderLocalDocs(rootEntry) {
         const { sourceId, nodes, folderPaths } = rootEntry;
@@ -2676,281 +1874,12 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         applyOnlineDocsSearchFilter();
     }
 
-    function viewRawJson() {
-        const jsonCont = document.getElementById('json-preview-container-design');
-        const mdPrev = document.getElementById('markdown-preview-design');
-        if (jsonCont) jsonCont.style.display = 'none';
-        if (mdPrev && !state.editMode.design) {
-            mdPrev.style.display = 'block';
-            mdPrev.innerHTML = `<pre><code>${escapeHtml(state.activeDocContent || '')}</code></pre>`;
-        }
-    }
+
 
     function handlePreviewReady(msg) {
         const { sourceId, requestId, content, docName, pages, isAutoRefreshed, filePath, htmlContent, webviewUri, isImage } = msg;
 
-        if (sourceId === 'html-folder') {
-            if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
 
-            // Reset zoom state for HTML tab on every new file load
-            resetZoom('html');
-
-            // Hide loading/initial states, show appropriate preview
-            const initialState = document.getElementById('html-initial-state');
-            const loadingState = document.getElementById('html-loading-state');
-            if (initialState) initialState.style.display = 'none';
-            if (loadingState) loadingState.style.display = 'none';
-
-            const iframe = document.getElementById('html-preview-frame');
-            const imageContainer = document.getElementById('image-preview-container');
-            const imageImg = document.getElementById('image-preview-img');
-
-            const iframeWrapper = document.getElementById('html-preview-wrapper');
-
-            // Helper: toggle scanlines on the HTML tab's preview-panel-wrapper
-            const htmlWrapper = document.querySelector('#html-preview-content .preview-panel-wrapper');
-
-            if (isImage && webviewUri) {
-                // Image preview: hide iframe wrapper, show image container
-                if (iframeWrapper) { iframeWrapper.style.display = 'none'; }
-                if (iframe) { iframe.removeAttribute('src'); iframe.removeAttribute('srcdoc'); }
-                if (imageContainer) { imageContainer.style.display = 'flex'; }
-                if (htmlWrapper) htmlWrapper.classList.add('scanlines-suppressed');
-                // Apply reset transform to image viewport (resetZoom cleared state but not DOM)
-                const imgViewport = imageContainer ? imageContainer.querySelector('.zoomable-viewport') : null;
-                if (imgViewport) {
-                    applyZoom('html', imgViewport);
-                }
-                if (imageImg) {
-                    imageImg.src = webviewUri + '?t=' + Date.now(); // cache-buster for refresh
-                    // Apply initial fit-to-container after image loads
-                    imageImg.onload = () => {
-                        const container = document.getElementById('image-preview-container');
-                        const viewport = container ? container.querySelector('.zoomable-viewport') : null;
-                        if (container && viewport) {
-                            fitToContainer('html', container, viewport);
-                        }
-                    };
-                }
-            } else if (msg.iframeSrc) {
-                // PRIMARY PATH: Use real http:// origin — fixes external fetch persistence
-                if (iframeWrapper) { iframeWrapper.style.display = 'flex'; }
-                if (htmlWrapper) htmlWrapper.classList.add('scanlines-suppressed');
-                if (iframe) {
-                    // Cross-origin isolation: remove allow-same-origin for localhost
-                    iframe.setAttribute('sandbox', 'allow-scripts');
-                    iframe.removeAttribute('srcdoc');
-                    // Only append cache-buster on auto-refresh to preserve scroll/form state on initial load
-                    iframe.src = isAutoRefreshed
-                        ? msg.iframeSrc + '?t=' + Date.now()
-                        : msg.iframeSrc;
-                    console.log('[PlanningPanel] Loading preview via iframe.src (localhost):', msg.iframeSrc);
-                }
-                if (imageContainer) { imageContainer.style.display = 'none'; }
-                if (imageImg) { imageImg.removeAttribute('src'); }
-                // Apply zoom
-                const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
-                if (iframeViewport) applyZoom('html', iframeViewport);
-            } else if (htmlContent) {
-                // FALLBACK: srcdoc (backward compat or when server can't start)
-                if (iframeWrapper) { iframeWrapper.style.display = 'flex'; }
-                if (htmlWrapper) htmlWrapper.classList.add('scanlines-suppressed');
-                if (iframe) {
-                    // Restore allow-same-origin for srcdoc mode (needed for <base> tag resolution)
-                    iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
-                    iframe.removeAttribute('src');
-                    iframe.removeAttribute('srcdoc');
-                    const htmlWithBase = injectBaseTag(htmlContent, webviewUri);
-                    console.log('[PlanningPanel] Loading preview via iframe.srcdoc (fallback), length:', htmlWithBase.length);
-                    iframe.srcdoc = htmlWithBase;
-                    iframe.onload = () => { console.log('[PlanningPanel] Preview iframe loaded successfully'); };
-                    iframe.onerror = (e) => { console.error('[PlanningPanel] Preview iframe error:', e); };
-                    const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
-                    if (iframeViewport) applyZoom('html', iframeViewport);
-                }
-                if (imageContainer) { imageContainer.style.display = 'none'; }
-                if (imageImg) { imageImg.removeAttribute('src'); }
-            } else if (webviewUri && iframe && iframe.srcdoc) {
-                // Cache hit: content hasn't changed, iframe already has srcdoc content
-                // Just ensure iframe is visible — do NOT modify src or srcdoc
-                if (iframeWrapper) { iframeWrapper.style.display = 'flex'; }
-                if (htmlWrapper) htmlWrapper.classList.add('scanlines-suppressed');
-                // Apply reset transform to viewport (resetZoom cleared state but not DOM)
-                const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
-                if (iframeViewport) {
-                    applyZoom('html', iframeViewport);
-                }
-                if (imageContainer) { imageContainer.style.display = 'none'; }
-                if (imageImg) { imageImg.removeAttribute('src'); }
-            } else if (webviewUri) {
-                // Fallback: iframe src if htmlContent not available and no existing srcdoc
-                // (e.g., backend file read failed on first attempt)
-                if (iframeWrapper) { iframeWrapper.style.display = 'flex'; }
-                if (htmlWrapper) htmlWrapper.classList.add('scanlines-suppressed');
-                // Apply reset transform to viewport (resetZoom cleared state but not DOM)
-                const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
-                if (iframeViewport) {
-                    applyZoom('html', iframeViewport);
-                }
-                if (iframe) {
-                    iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
-                    iframe.removeAttribute('srcdoc');
-                    iframe.src = webviewUri + '?t=' + Date.now(); // cache-buster for refresh
-                }
-                if (imageContainer) { imageContainer.style.display = 'none'; }
-                if (imageImg) { imageImg.removeAttribute('src'); }
-            }
-            const statusHtml = document.getElementById('status-html');
-            if (statusHtml) {
-                if (isAutoRefreshed) {
-                    statusHtml.textContent = (docName || 'Loaded') + ' — auto-refreshed';
-                    statusHtml.style.color = 'var(--accent-teal)';
-                } else {
-                    statusHtml.textContent = docName || 'Loaded';
-                    statusHtml.style.color = 'var(--accent-teal)';
-                }
-            }
-            return;
-        }
-
-        if (sourceId === 'design-folder') {
-            if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
-
-            // Reset zoom state for Design tab on every new file load
-            resetZoom('design');
-
-            state.activeDocFilePath = filePath || null;
-            state.activeFileType = msg.fileType || null;
-
-            const mdPrev = document.getElementById('markdown-preview-design');
-            const mdEd = document.getElementById('markdown-editor-design');
-            const imgCont = document.getElementById('image-preview-container-design');
-            const imgImg = document.getElementById('image-preview-img-design');
-            const jsonCont = document.getElementById('json-preview-container-design');
-            const statusDesign = document.getElementById('status-design');
-
-            // Helper: toggle scanlines on the Design tab's preview-panel-wrapper
-            const designWrapper = document.querySelector('#design-content .preview-panel-wrapper');
-
-            if (isImage && webviewUri) {
-                if (mdPrev) mdPrev.style.display = 'none';
-                if (mdEd) mdEd.style.display = 'none';
-                if (jsonCont) jsonCont.style.display = 'none';
-                if (imgCont) imgCont.style.display = 'flex';
-                if (imgImg) imgImg.src = webviewUri + '?t=' + Date.now();
-                if (designWrapper) designWrapper.classList.add('scanlines-suppressed');
-                // Apply reset transform to image viewport (resetZoom cleared state but not DOM)
-                const designImgViewport = imgCont ? imgCont.querySelector('.zoomable-viewport') : null;
-                if (designImgViewport) {
-                    applyZoom('design', designImgViewport);
-                }
-                // Apply initial fit-to-container after image loads
-                if (imgImg) {
-                    imgImg.onload = () => {
-                        const container = document.getElementById('image-preview-container-design');
-                        const viewport = container ? container.querySelector('.zoomable-viewport') : null;
-                        if (container && viewport) {
-                            fitToContainer('design', container, viewport);
-                        }
-                    };
-                }
-            } else if (msg.fileType === 'json') {
-                // JSON preview
-                if (imgCont) imgCont.style.display = 'none';
-                if (mdPrev) mdPrev.style.display = 'none';
-                if (mdEd && !state.editMode.design) mdEd.style.display = 'none';
-                if (jsonCont && !state.editMode.design) {
-                    jsonCont.style.display = 'block';
-                    jsonCont.innerHTML = '';
-                    try {
-                        jsonCont.appendChild(renderJsonTree(JSON.parse(content)));
-                    } catch (e) {
-                        jsonCont.innerHTML = `<div class="json-error">Failed to parse JSON: ${e.message}<br><button onclick="viewRawJson()">View Raw</button></div>`;
-                    }
-                }
-                if (designWrapper) designWrapper.classList.add('scanlines-suppressed');
-                state.activeDocContent = content || '';
-                if (mdEd) mdEd.value = content || '';
-            } else if (msg.fileType === 'yaml') {
-                // YAML preview — use pre-parsed JSON from backend
-                if (imgCont) imgCont.style.display = 'none';
-                if (mdPrev) mdPrev.style.display = 'none';
-                if (mdEd && !state.editMode.design) mdEd.style.display = 'none';
-                if (jsonCont && !state.editMode.design) {
-                    jsonCont.style.display = 'block';
-                    jsonCont.innerHTML = '';
-                    if (msg.parsedJson !== undefined) {
-                        try {
-                            jsonCont.appendChild(renderJsonTree(msg.parsedJson));
-                        } catch (e) {
-                            jsonCont.innerHTML = `<div class="json-error">Failed to render YAML tree: ${e.message}<br><button onclick="viewRawJson()">View Raw</button></div>`;
-                        }
-                    } else {
-                        // Backend parse failed — show raw
-                        jsonCont.innerHTML = `<div class="json-error">Invalid YAML on disk — cannot render tree.<br><button onclick="viewRawJson()">View Raw</button></div>`;
-                    }
-                }
-                if (designWrapper) designWrapper.classList.add('scanlines-suppressed');
-                state.activeDocContent = content || '';
-                if (mdEd) mdEd.value = content || '';
-            } else if (msg.fileType === 'css' || msg.fileType === 'xml' || msg.fileType === 'text') {
-                // Plain text / code preview in markdown container
-                if (imgCont) imgCont.style.display = 'none';
-                if (jsonCont) jsonCont.style.display = 'none';
-                if (mdEd && !state.editMode.design) mdEd.style.display = 'none';
-                if (mdPrev && !state.editMode.design) {
-                    mdPrev.style.display = 'block';
-                    const langClass = msg.fileType === 'css' ? 'language-css' : (msg.fileType === 'xml' ? 'language-xml' : '');
-                    mdPrev.innerHTML = `<pre><code class="${langClass}">${escapeHtml(content)}</code></pre>`;
-                }
-                if (designWrapper) designWrapper.classList.add('scanlines-suppressed');
-                state.activeDocContent = content || '';
-            } else {
-                // Markdown (default) — existing path
-                if (imgCont) imgCont.style.display = 'none';
-                if (jsonCont) jsonCont.style.display = 'none';
-                if (mdEd && !state.editMode.design) mdEd.style.display = 'none';
-                if (mdPrev && !state.editMode.design) mdPrev.style.display = 'block';
-                if (designWrapper) designWrapper.classList.remove('scanlines-suppressed');
-
-                // Skip re-render if content hasn't changed (prevents line-length flicker)
-                if (state.activeDocContent === (content || '')) {
-                    if (isAutoRefreshed) {
-                        if (statusDesign) {
-                            statusDesign.textContent = 'Auto-refreshed';
-                            statusDesign.style.color = 'var(--accent-teal)';
-                        }
-                    }
-                    return;
-                }
-
-                state.activeDocContent = content || '';
-                if (mdEd) mdEd.value = content || '';
-                if (mdPrev) mdPrev.innerHTML = renderMarkdown(content || '');
-            }
-
-            if (isAutoRefreshed) {
-                if (state.editMode.design) {
-                    state.externalChangePending.design = true;
-                    if (statusDesign) {
-                        statusDesign.textContent = 'File changed externally — save to overwrite or cancel to reload';
-                        statusDesign.style.color = 'var(--vscode-errorForeground, #ff6b6b)';
-                    }
-                    return;
-                }
-                if (statusDesign) {
-                    statusDesign.textContent = 'Auto-refreshed';
-                    statusDesign.style.color = 'var(--accent-teal)';
-                }
-            } else {
-                if (statusDesign) {
-                    statusDesign.textContent = '';
-                    statusDesign.style.color = '';
-                }
-            }
-            updateDesignDocControls();
-            return;
-        }
 
         // Auto-refresh notification
         if (isAutoRefreshed) {
@@ -3853,23 +2782,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 loadDocumentPreview('local-folder', docId, docName || docId);
                 break;
             }
-            case 'htmlDocsReady':
-                handleHtmlDocsReady(msg);
-                break;
-            case 'designDocsReady':
-                state._lastDesignDocsMsg = msg;
-                state.designFolderPathsByRoot = msg.folderPathsByRoot || {};
-                populateWorkspaceDropdown('design-workspace-filter', msg.workspaceItems || [], state.designWorkspaceRootFilter);
-                const filteredNodes = state.designWorkspaceRootFilter
-                    ? (msg.nodes || []).filter(n => n.metadata?.root === state.designWorkspaceRootFilter)
-                    : (msg.nodes || []);
-                renderDesignDocs({
-                    sourceId: msg.sourceId || 'design-folder',
-                    nodes: filteredNodes,
-                    folderPaths: getCurrentFolderPaths(state.designFolderPathsByRoot, state.designWorkspaceRootFilter)
-                });
-                renderDesignFolderListModal();
-                break;
+
             case 'onlineDocsReady':
                 handleOnlineDocsReady(msg);
                 break;
@@ -4086,14 +2999,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 renderFolderListModal();
                 populateResearchFolderSelect(msg.paths || []);
                 break;
-            case 'htmlFoldersListed':
-                state.htmlFolderPathsByRoot[msg.workspaceRoot || currentWorkspaceRoot || ''] = msg.paths || [];
-                renderHtmlFolderListModal();
-                break;
-            case 'designFoldersListed':
-                state.designFolderPathsByRoot[msg.workspaceRoot || currentWorkspaceRoot || ''] = msg.paths || [];
-                renderDesignFolderListModal();
-                break;
+
             case 'airlock_exportComplete':
                 handleAirlockExportComplete(msg);
                 break;
@@ -4106,9 +3012,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             case 'syncResult':
                 handleSyncResult(msg);
                 break;
-            case 'activeDesignDocUpdated':
-                updateActiveDocBanner(msg);
-                break;
+
             case 'duplicateDetected':
                 showDuplicateModal(msg);
                 break;
@@ -4541,7 +3445,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     function updateActiveDocBanner(msg) {
         // Support both old flat format and new nested format
         const planningEpic = msg.planningEpic || { enabled: msg.enabled, docName: msg.docName, sourceId: msg.sourceId, docId: msg.docId };
-        const designSystemDoc = msg.designSystemDoc || { enabled: false, docName: null };
 
         const bannerLocal = document.getElementById('active-doc-banner-local');
         const bannerOnline = document.getElementById('active-doc-banner-online');
@@ -4560,31 +3463,14 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             if (nameOnline) nameOnline.textContent = epicName;
         }
 
-        const bannerDesign = document.getElementById('active-doc-banner-design');
-        const nameDesign = document.getElementById('active-doc-name-design');
-        const isDsActive = designSystemDoc.enabled && designSystemDoc.docName;
-        const dsName = designSystemDoc.docName || 'None';
-        if (bannerDesign) {
-            bannerDesign.classList.toggle('inactive', !isDsActive);
-            if (nameDesign) nameDesign.textContent = dsName;
-        }
-
         state.activeDesignDocEnabled = planningEpic.enabled || false;
         state.activeDesignDocSourceId = planningEpic.sourceId || null;
         state.activeDesignDocId = planningEpic.docId || null;
-        state.designSystemDocEnabled = designSystemDoc.enabled || false;
-        state.designSystemDocSourceId = designSystemDoc.sourceId || null;
-        state.designSystemDocId = designSystemDoc.docId || null;
         updateLocalActiveContextButtonState();
-        updateDesignDocControls();
     }
 
     function handleDisablePlanningEpic() {
         vscode.postMessage({ type: 'disableDesignDoc', docType: 'planning-epic' });
-    }
-
-    function handleDisableDesignSystemDoc() {
-        vscode.postMessage({ type: 'disableDesignDoc', docType: 'design-system' });
     }
 
     if (btnDisableDocLocal) {
@@ -4592,10 +3478,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     }
     if (btnDisableDocOnline) {
         btnDisableDocOnline.addEventListener('click', handleDisablePlanningEpic);
-    }
-    const btnDisableDocDesign = document.getElementById('btn-disable-doc-design');
-    if (btnDisableDocDesign) {
-        btnDisableDocDesign.addEventListener('click', handleDisableDesignSystemDoc);
     }
 
     // Button handlers
@@ -5144,12 +4026,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
                     e.stopPropagation();
                     const details = btn.closest('.epic-accordion');
                     const sessionId = details ? details.dataset.planId : '';
-                    const summaryText = details ? details.querySelector('summary')?.textContent : '';
-                    const countMatch = summaryText?.match(/(\d+)/);
-                    const subtaskCount = countMatch ? parseInt(countMatch[1], 10) : 0;
-                    if (!confirm('Delete this epic?')) return;
-                    const deleteSubtasks = subtaskCount > 0 ? confirm('Also delete all subtasks? (Cancel to orphan them)') : true;
-                    vscode.postMessage({ type: 'deleteEpic', sessionId, workspaceRoot: currentWorkspaceRoot, deleteSubtasks });
+                    vscode.postMessage({ type: 'deleteEpic', sessionId, workspaceRoot: currentWorkspaceRoot, deleteSubtasks: true });
                 });
             });
         }
@@ -5230,9 +4107,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 const planId = columnSelect.dataset.planId;
                 columnSelect.style.display = 'none';
                 if (newColumn === '__delete__') {
-                    if (window.confirm('Delete this plan?')) {
-                        vscode.postMessage({ type: 'deleteKanbanPlan', planId, planFile, workspaceRoot });
-                    }
+                    vscode.postMessage({ type: 'deleteKanbanPlan', planId, planFile, workspaceRoot });
                 } else if (planFile && newColumn) {
                     vscode.postMessage({ type: 'moveKanbanPlanColumn', planFile, newColumn, workspaceRoot });
                 }
@@ -5294,108 +4169,14 @@ Return ONLY the drafted prompt with no additional commentary.`;
         const deleteBtn = document.getElementById('kanban-meta-delete-btn');
         if (deleteBtn) {
             deleteBtn.addEventListener('click', () => {
-                if (window.confirm('Delete this plan?')) {
-                    vscode.postMessage({ type: 'deleteKanbanPlan', planId: plan.planId, planFile: plan.planFile, workspaceRoot: plan.workspaceRoot });
-                }
+                vscode.postMessage({ type: 'deleteKanbanPlan', planId: plan.planId, planFile: plan.planFile, workspaceRoot: plan.workspaceRoot });
             });
         }
     }
 
     // Doc-scoped design controls live in the main controls strip (#controls-strip-design).
     // This derives their enabled state / labels from current selection state.
-    function updateDesignDocControls() {
-        const hasDoc = state.activeSource === 'design-folder' && !!state.activeDocId;
 
-        const docExt = (state.activeDocId || '').substring((state.activeDocId || '').lastIndexOf('.')).toLowerCase();
-        const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(docExt) || state.activeFileType === 'image';
-
-        const isActiveDoc = hasDoc && state.designSystemDocEnabled &&
-            state.designSystemDocSourceId === state.activeSource &&
-            state.designSystemDocId === state.activeDocId;
-
-        const btnSet = document.getElementById('btn-set-active-context-design');
-        const btnLink = document.getElementById('btn-link-to-doc-design');
-        const btnEdit = document.getElementById('btn-edit-design');
-
-        if (btnSet) {
-            btnSet.disabled = !hasDoc;
-            btnSet.textContent = isActiveDoc ? 'Turn off' : 'Set as Active Design Doc';
-            btnSet.dataset.active = isActiveDoc ? 'true' : 'false';
-        }
-        if (btnLink) btnLink.disabled = !hasDoc;
-        if (btnEdit) btnEdit.disabled = !hasDoc || isImage;
-    }
-
-    // Design strip doc-action buttons
-    (function() {
-        const btnSet = document.getElementById('btn-set-active-context-design');
-        const btnLink = document.getElementById('btn-link-to-doc-design');
-        const btnEdit = document.getElementById('btn-edit-design');
-        const btnSave = document.getElementById('btn-save-design');
-        const btnCancel = document.getElementById('btn-cancel-design');
-
-        if (btnSet) {
-            btnSet.addEventListener('click', () => {
-                if (!state.activeSource || !state.activeDocId) return;
-                if (btnSet.dataset.active === 'true') {
-                    vscode.postMessage({ type: 'disableDesignDoc', docType: 'design-system' });
-                    return;
-                }
-                btnSet.disabled = true;
-                const statusDesign = document.getElementById('status-design');
-                if (statusDesign) {
-                    statusDesign.textContent = 'Setting as active design doc...';
-                    statusDesign.style.color = '';
-                }
-                const wrapper = findTreeNode(state.activeSource, state.activeDocId);
-                const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : undefined;
-                vscode.postMessage({
-                    type: 'setActivePlanningContext',
-                    sourceId: state.activeSource,
-                    docId: state.activeDocId,
-                    docName: state.activeDocName || state.activeDocId,
-                    sourceFolder
-                });
-            });
-        }
-        if (btnLink) {
-            btnLink.addEventListener('click', () => {
-                if (!state.activeSource || !state.activeDocId) return;
-                const wrapper = findTreeNode(state.activeSource, state.activeDocId);
-                const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : undefined;
-                vscode.postMessage({
-                    type: 'linkToDocument',
-                    sourceId: state.activeSource,
-                    docId: state.activeDocId,
-                    docName: state.activeDocName || state.activeDocId,
-                    sourceFolder
-                });
-            });
-        }
-        if (btnEdit) {
-            btnEdit.addEventListener('click', () => enterEditMode('design'));
-        }
-        if (btnSave) {
-            btnSave.addEventListener('click', () => {
-                const filePath = state.activeDocFilePath;
-                const editor = document.getElementById('markdown-editor-design');
-                const content = editor ? editor.value : '';
-                const originalContent = state.editOriginalContent.design;
-                if (filePath) {
-                    vscode.postMessage({
-                        type: 'saveFileContent',
-                        filePath,
-                        content,
-                        originalContent,
-                        tab: 'design'
-                    });
-                }
-            });
-        }
-        if (btnCancel) {
-            btnCancel.addEventListener('click', () => exitEditMode('design', true));
-        }
-    })();
 
     function populateKanbanFilters() {
         if (!kanbanWorkspaceFilter || !kanbanProjectFilter) return;
@@ -5693,7 +4474,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         if (!previewPane || !textarea) return;
 
         let content = '';
-        if (tab === 'local' || tab === 'design') {
+        if (tab === 'local') {
             content = state.activeDocContent || '';
             state.editOriginalContent[tab] = content;
         } else {
@@ -5703,36 +4484,29 @@ Return ONLY the drafted prompt with no additional commentary.`;
         textarea.value = content;
         previewPane.classList.add('edit-mode');
 
-        const btnEdit = document.getElementById(tab === 'local' ? 'btn-edit-local' : (tab === 'design' ? 'btn-edit-design' : 'btn-edit-kanban'));
-        const btnSave = document.getElementById(tab === 'local' ? 'btn-save-local' : (tab === 'design' ? 'btn-save-design' : 'btn-save-kanban'));
-        const btnCancel = document.getElementById(tab === 'local' ? 'btn-cancel-local' : (tab === 'design' ? 'btn-cancel-design' : 'btn-cancel-kanban'));
+        const btnEdit = document.getElementById(tab === 'local' ? 'btn-edit-local' : 'btn-edit-kanban');
+        const btnSave = document.getElementById(tab === 'local' ? 'btn-save-local' : 'btn-save-kanban');
+        const btnCancel = document.getElementById(tab === 'local' ? 'btn-cancel-local' : 'btn-cancel-kanban');
 
         if (btnEdit) btnEdit.style.display = 'none';
         if (btnSave) btnSave.style.display = '';
         if (btnCancel) btnCancel.style.display = '';
 
-        // Hide JSON preview container when entering edit mode for design tab
-        if (tab === 'design') {
-            const jsonCont = document.getElementById('json-preview-container-design');
-            if (jsonCont) jsonCont.style.display = 'none';
-        }
-
         state.editMode[tab] = true;
         state.dirtyFlags[tab] = false;
-        if (tab === 'design') updateDesignDocControls();
     }
 
     function exitEditMode(tab, discard) {
         // No confirmation needed; proceed with exit
 
-        const previewPane = tab === 'local' ? document.getElementById('preview-pane') : (tab === 'design' ? document.getElementById('preview-pane-design') : document.getElementById('kanban-preview-pane'));
+        const previewPane = tab === 'local' ? document.getElementById('preview-pane') : document.getElementById('kanban-preview-pane');
         if (previewPane) {
             previewPane.classList.remove('edit-mode');
         }
 
-        const btnEdit = document.getElementById(tab === 'local' ? 'btn-edit-local' : (tab === 'design' ? 'btn-edit-design' : 'btn-edit-kanban'));
-        const btnSave = document.getElementById(tab === 'local' ? 'btn-save-local' : (tab === 'design' ? 'btn-save-design' : 'btn-save-kanban'));
-        const btnCancel = document.getElementById(tab === 'local' ? 'btn-cancel-local' : (tab === 'design' ? 'btn-cancel-design' : 'btn-cancel-kanban'));
+        const btnEdit = document.getElementById(tab === 'local' ? 'btn-edit-local' : 'btn-edit-kanban');
+        const btnSave = document.getElementById(tab === 'local' ? 'btn-save-local' : 'btn-save-kanban');
+        const btnCancel = document.getElementById(tab === 'local' ? 'btn-cancel-local' : 'btn-cancel-kanban');
 
         if (btnEdit) btnEdit.style.display = '';
         if (btnSave) btnSave.style.display = 'none';
@@ -5740,28 +4514,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         state.editMode[tab] = false;
         state.dirtyFlags[tab] = false;
-
-        // Show JSON tree instead of markdown preview for JSON/YAML files
-        if (tab === 'design' && !discard) {
-            if (state.activeFileType === 'json' || state.activeFileType === 'yaml') {
-                const mdPrev = document.getElementById('markdown-preview-design');
-                const jsonCont = document.getElementById('json-preview-container-design');
-                if (mdPrev) mdPrev.style.display = 'none';
-                if (jsonCont) {
-                    jsonCont.style.display = 'block';
-                    jsonCont.innerHTML = '';
-                    try {
-                        if (state.activeFileType === 'json') {
-                            jsonCont.appendChild(renderJsonTree(JSON.parse(state.activeDocContent)));
-                        }
-                        // For YAML: the tree was already rendered from parsedJson in handlePreviewReady;
-                        // after save, re-fetch triggers handlePreviewReady which will re-render
-                    } catch (e) {
-                        jsonCont.innerHTML = `<div class="json-error">Parse error: ${e.message}</div>`;
-                    }
-                }
-            }
-        }
 
         // Trigger deferred reload if an external change was pending
         if (state.externalChangePending[tab]) {
@@ -5773,8 +4525,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
                     filePath: _kanbanSelectedPlan.planFile,
                     requestId: _kanbanPreviewRequestId
                 });
-            } else if (tab === 'local' || tab === 'design') {
-                if (state.activeSource === 'local-folder' || state.activeSource === 'html-folder' || state.activeSource === 'design-folder') {
+            } else if (tab === 'local') {
+                if (state.activeSource === 'local-folder') {
                     const lastSlash = state.activeDocFilePath ? Math.max(state.activeDocFilePath.lastIndexOf('/'), state.activeDocFilePath.lastIndexOf('\\')) : -1;
                     vscode.postMessage({
                         type: 'fetchPreview',
@@ -5792,8 +4544,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 }
             }
         }
-
-        if (tab === 'design') updateDesignDocControls();
 
         return true;
     }
@@ -7268,15 +6018,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
     const _origMessageHandler = window.addEventListener ? null : null; // placeholder — actual dispatch is inline switch below
     // We will add cases to the main switch in the message handler block above
 
-    // Initialize zoom/pan listeners for image and iframe preview containers
-    initZoomListeners('image-preview-container',       '.zoomable-viewport', 'html');
-    initZoomListeners('html-preview-wrapper',           '.zoomable-viewport', 'html');
-    initZoomListeners('image-preview-container-design', '.zoomable-viewport', 'design');
-
     vscode.postMessage({ type: 'fetchRoots' });
     vscode.postMessage({ type: 'refreshSource', sourceId: 'local-folder' });
-    vscode.postMessage({ type: 'listHtmlFolders', workspaceRoot: currentWorkspaceRoot });
-    vscode.postMessage({ type: 'refreshSource', sourceId: 'html-folder' });
-    vscode.postMessage({ type: 'listDesignFolders', workspaceRoot: currentWorkspaceRoot });
-    vscode.postMessage({ type: 'refreshSource', sourceId: 'design-folder' });
 })();

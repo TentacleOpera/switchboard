@@ -22,6 +22,7 @@ import { ControlPlaneMigrationService } from './services/ControlPlaneMigrationSe
 import { WorkspaceExcludeService } from './services/WorkspaceExcludeService';
 import { cleanWorkspace, pruneZombieTerminalEntries } from './lifecycle/cleanWorkspace';
 import { PlanningPanelProvider } from './services/PlanningPanelProvider';
+import { DesignPanelProvider } from './services/DesignPanelProvider';
 import { PlannerPromptWriter } from './services/PlannerPromptWriter';
 import { PlanningPanelCacheService } from './services/PlanningPanelCacheService';
 import { ResearchImportService } from './services/ResearchImportService';
@@ -37,6 +38,7 @@ let terminalClearStatusBarItem: vscode.StatusBarItem;
 let terminalResetStatusBarItem: vscode.StatusBarItem;
 let kanbanStatusBarItem: vscode.StatusBarItem;
 let artifactsStatusBarItem: vscode.StatusBarItem;
+let designStatusBarItem: vscode.StatusBarItem;
 
 // Global references
 let outputChannel: vscode.OutputChannel | null = null;
@@ -771,11 +773,28 @@ export async function activate(context: vscode.ExtensionContext) {
     );
     context.subscriptions.push(planningPanelProvider);
     kanbanProvider!.setPlanningPanelProvider(planningPanelProvider);
+
+    const designPanelProvider = new DesignPanelProvider(
+        context.extensionUri,
+        () => {
+            return kanbanProvider!.getCurrentWorkspaceRoot()
+                ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        },
+        context
+    );
+    context.subscriptions.push(designPanelProvider);
+
     const openPlanningPanelDisposable = vscode.commands.registerCommand(
         'switchboard.openPlanningPanel',
         async () => { await planningPanelProvider.open(); }
     );
     context.subscriptions.push(openPlanningPanelDisposable);
+
+    const openDesignPanelDisposable = vscode.commands.registerCommand(
+        'switchboard.openDesignPanel',
+        async () => { await designPanelProvider.open(); }
+    );
+    context.subscriptions.push(openDesignPanelDisposable);
 
     const triggerPlanningPanelSyncDisposable = vscode.commands.registerCommand(
         'switchboard.triggerPlanningPanelSync',
@@ -1735,12 +1754,19 @@ export async function activate(context: vscode.ExtensionContext) {
     artifactsStatusBarItem.command = 'switchboard.openPlanningPanel';
     context.subscriptions.push(artifactsStatusBarItem);
 
+    designStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 93);
+    designStatusBarItem.text = '$(paintcan) Design';
+    designStatusBarItem.tooltip = 'Open Design Panel';
+    designStatusBarItem.command = 'switchboard.openDesignPanel';
+    context.subscriptions.push(designStatusBarItem);
+
     function updateStatusBarVisibility() {
         const config = vscode.workspace.getConfiguration('switchboard');
         const showAgentOpenToggle = config.get<boolean>('statusBar.showAgentOpenToggle', false);
         const showTerminalControls = config.get<boolean>('statusBar.showTerminalControls', false);
         const showKanbanButton = config.get<boolean>('statusBar.showKanbanButton', false);
         const showArtifactsButton = config.get<boolean>('statusBar.showArtifactsButton', false);
+        const showDesignButton = config.get<boolean>('statusBar.showDesignButton', false);
 
         if (showAgentOpenToggle) {
             fileOpeningPreventionStatusBarItem.show();
@@ -1770,6 +1796,12 @@ export async function activate(context: vscode.ExtensionContext) {
             artifactsStatusBarItem.hide();
         }
 
+        if (showDesignButton) {
+            designStatusBarItem.show();
+        } else {
+            designStatusBarItem.hide();
+        }
+
     }
 
     updateStatusBarVisibility();
@@ -1791,9 +1823,16 @@ export async function activate(context: vscode.ExtensionContext) {
             e.affectsConfiguration('switchboard.statusBar.showAgentOpenToggle') ||
             e.affectsConfiguration('switchboard.statusBar.showTerminalControls') ||
             e.affectsConfiguration('switchboard.statusBar.showKanbanButton') ||
-            e.affectsConfiguration('switchboard.statusBar.showArtifactsButton')
+            e.affectsConfiguration('switchboard.statusBar.showArtifactsButton') ||
+            e.affectsConfiguration('switchboard.statusBar.showDesignButton')
         ) {
             updateStatusBarVisibility();
+        }
+        if (e.affectsConfiguration('switchboard.stitch.apiKey')) {
+            const apiKey = vscode.workspace.getConfiguration('switchboard').get<string>('stitch.apiKey') || process.env.STITCH_API_KEY;
+            if (designPanelProvider.isOpen) {
+                designPanelProvider.postMessage({ type: 'stitchApiKeyStatus', configured: !!apiKey });
+            }
         }
     }));
 

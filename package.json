@@ -147,6 +147,11 @@
         "category": "Switchboard"
       },
       {
+        "command": "switchboard.openDesignPanel",
+        "title": "Switchboard: Open Design Panel",
+        "category": "Switchboard"
+      },
+      {
         "command": "switchboard.forceOpenFile",
         "title": "Override Open"
       },
@@ -171,6 +176,24 @@
           ],
           "default": "action",
           "description": "Default mode for switchboard commands"
+        },
+        "switchboard.stitch.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Google Stitch API key. Falls back to STITCH_API_KEY environment variable if empty.",
+          "scope": "application"
+        },
+        "switchboard.stitch.defaultProjectId": {
+          "type": "string",
+          "default": "",
+          "description": "Default Stitch project ID to pre-select in the Design panel.",
+          "scope": "application"
+        },
+        "switchboard.stitch.defaultOutputFolder": {
+          "type": "string",
+          "default": "",
+          "description": "Default folder path for downloaded Stitch assets (PNG/HTML). Relative to workspace root.",
+          "scope": "resource"
         },
         "switchboard.controlPlane.onboardingDismissed": {
           "type": "boolean",
@@ -602,6 +625,12 @@
           "description": "Controls visibility of the Open Planning Panel button on the status bar.",
           "scope": "window"
         },
+        "switchboard.statusBar.showDesignButton": {
+          "type": "boolean",
+          "default": false,
+          "description": "Controls visibility of the Open Design Panel button on the status bar.",
+          "scope": "window"
+        },
         "switchboard.theme.cyberPanel": {
           "type": "boolean",
           "default": false,
@@ -684,6 +713,7 @@
     "webpack-cli": "^6.0.1"
   },
   "dependencies": {
+    "@google/stitch-sdk": "^0.3.5",
     "@modelcontextprotocol/sdk": "^1.0.3",
     "@types/dompurify": "^3.0.5",
     "@types/jsdom": "^27.0.0",

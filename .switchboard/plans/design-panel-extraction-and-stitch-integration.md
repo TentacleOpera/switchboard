@@ -69,7 +69,7 @@ Create a new webview HTML file that replicates the planning panel's visual ident
 - **DOM structure per tab:**
   - Design System: workspace filter dropdown, search input, sidebar tree (`tree-pane-design`), preview area with markdown/image/JSON containers (identical to current `design-content`).
   - HTML Previews: workspace filter, "Open in Browser" / "Copy Link" buttons, sidebar tree (`tree-pane-html`), iframe preview + image preview with zoom toolbar (identical to current `html-preview-content`).
-  - Stitch: project selector dropdown, prompt input, device-type selector (DESKTOP / MOBILE / TABLET / AGNOSTIC), generate button, screen gallery with thumbnail + "Download PNG" / "Download HTML" buttons, edit/variant controls.
+  - Stitch: project selector dropdown, prompt input, device-type selector (DESKTOP / MOBILE / TABLET / AGNOSTIC), generate button, screen gallery with thumbnail + "Download PNG" / "Download HTML" buttons, edit/variant controls, and a **"Sync Project to Workspace"** button that triggers `stitchSyncProject` to download all screens and compile a `DESIGN.md` handoff file.
 - **Script loading:** `<script nonce="{{NONCE}}" src="{{DESIGN_JS_URI}}"></script>` at the bottom of `<body>`.
 - **Font placeholders:** `{{GEIST_PIXEL_FONT_URI}}`, `{{HANKEN_FONT_URI}}`, `{{POPPINS_SEMIBOLD_FONT_URI}}`, `{{POPPINS_BOLD_FONT_URI}}`.
 
@@ -84,6 +84,7 @@ Create the webview-side JavaScript:
   - `populateStitchProjects(projects)` — fill the project dropdown from `stitch.projects()`.
   - `sendStitchGenerate()` — post `stitchGenerate` message with prompt + deviceType.
   - `sendStitchEdit(screenId, prompt)` / `sendStitchVariants(screenId, prompt, count)` — refinement messages.
+  - `sendStitchSyncProject(projectId)` — post `stitchSyncProject` message to extension host to download all screens and compile `DESIGN.md`.
   - `renderStitchScreen(screen)` — display thumbnail (from `getImage()` URL) and download buttons.
   - `downloadStitchAsset(url, filename)` — post `stitchDownloadAsset` message to extension host.
 - **Message listeners:** Listen for `designDocsReady`, `htmlDocsReady`, `stitchProjectsReady`, `stitchScreenReady`, `stitchError`, `themeChanged`, `switchboardThemeChanged`, `cyberAnimationSetting`.
@@ -103,6 +104,7 @@ export class DesignPanelProvider implements vscode.Disposable {
     private _designFolderWatchers: vscode.FileSystemWatcher[] = [];
     private _htmlDocsDebounce?: NodeJS.Timeout;
     private _designDocsDebounce?: NodeJS.Timeout;
+    private _activeScreens = new Map<string, any>(); // Key: screen.id, Value: SDK Screen instance
     // ...
 }
 ```
@@ -124,10 +126,11 @@ export class DesignPanelProvider implements vscode.Disposable {
   - `ready` — trigger initial doc sends and theme messages.
   - `loadDocumentPreview` — handle design doc / HTML file preview loading.
   - `stitchListProjects` — call `stitch.projects()` and post results.
-  - `stitchGenerate` — call `project.generate(prompt, deviceType)`, then `screen.getHtml()` + `screen.getImage()`, post `stitchScreenReady`.
-  - `stitchEdit` — call `screen.edit(prompt)`, post updated screen.
-  - `stitchVariants` — call `screen.variants(prompt, options)`, post variant array.
-  - `stitchDownloadAsset` — `fetch()` the temporary URL, write to disk using VS Code `workspace.fs` or prompt for path.
+  - `stitchGenerate` — call `project.generate(prompt, deviceType)`, cache the returned `Screen` instance in `_activeScreens` (key: `screen.id`), then call `screen.getHtml()` + `screen.getImage()`, post `stitchScreenReady`.
+  - `stitchEdit` — resolve the `Screen` instance from `_activeScreens` using `message.screenId`; if missing, throw `Error('Screen instance not found in memory cache.')`. Call `screenInstance.edit(prompt)`, update cache with the returned screen, post updated screen.
+  - `stitchVariants` — resolve the `Screen` instance from `_activeScreens` using `message.screenId`; call `screenInstance.variants(prompt, options)`, post variant array.
+  - `stitchSyncProject` — call `stitch.project(message.projectId).screens()`, loop through all screens, fetch HTML (`.getHtml()`) and PNG (`.getImage()`) temporary URLs, write each screen's HTML and PNG to `workspaceRoot/<outputDir>/screens/<safeScreenId>.html` and `.png`, then compile a unified `DESIGN.md` manifest file at `workspaceRoot/<outputDir>/DESIGN.md`. Use `vscode.workspace.fs.createDirectory` and `vscode.workspace.fs.writeFile` for all disk operations.
+  - `stitchDownloadAsset` — `fetch()` the temporary URL. For binary assets (PNG), convert the response via `response.arrayBuffer()` then `Buffer.from(arrayBuffer)` before writing with `vscode.workspace.fs.writeFile(targetUri, binaryBuffer)`. For text assets (HTML), use `response.text()`.
   - `serveHtmlFile` — reuse the existing mini HTTP server logic from `PlanningPanelProvider` (or extract to a shared utility).
 
 **Stitch SDK usage:**
@@ -270,7 +273,10 @@ Add `@google/stitch-sdk` to `dependencies` in `package.json`:
 - [ ] The Stitch tab shows a "Configure API Key" prompt when no key is set.
 - [ ] After setting an API key, the Stitch tab lists projects from `stitch.projects()`.
 - [ ] Generating a screen from a prompt returns a thumbnail and download URLs.
+- [ ] Editing a previously generated screen (`stitchEdit`) succeeds because the `Screen` instance is cached in `_activeScreens`.
 - [ ] Downloading PNG/HTML writes files to the configured output folder or prompts for a path.
+- [ ] Downloaded PNG files are not corrupted (verify via `Buffer.from(await response.arrayBuffer())` before writing).
+- [ ] The "Sync Project to Workspace" button loops through all project screens, writes each screen's HTML and PNG to `./.stitch/screens/`, and compiles a `DESIGN.md` manifest file.
 - [ ] The Planning panel no longer shows Design System or HTML Previews tabs.
 - [ ] The Planning panel's remaining tabs (Local, Online, Kanban, Tickets, Research, NotebookLM) continue to work without regression.
 - [ ] The `implementation.html` sidebar shows the new Design quick-action button and opens the panel.
@@ -288,6 +294,10 @@ Add `@google/stitch-sdk` to `dependencies` in `package.json`:
 
 5. **HTTP server logic may be extracted:** The mini HTTP server used for serving local HTML files in `PlanningPanelProvider` (`_htmlServers`) should be evaluated for extraction into a shared utility (e.g., `HtmlPreviewServerService`) so both providers can use it without duplicating code.
 
+6. **Screen instances must be cached in extension host memory:** The Stitch SDK requires an active, in-memory `Screen` instance to call `.edit()` and `.variants()`. A string `screenId` sent from the webview is insufficient. `DesignPanelProvider` maintains a `_activeScreens` Map keyed by `screen.id` and clears it on `dispose()`.
+
+7. **Binary assets require `arrayBuffer()` conversion:** PNG downloads fetched via `fetch()` must be processed as `response.arrayBuffer()` and wrapped with `Buffer.from(arrayBuffer)` before writing through `vscode.workspace.fs.writeFile`. Passing a string representation of binary data will corrupt the image.
+
 ## Risks & Mitigations
 
 | Risk | Impact | Mitigation |
@@ -297,6 +307,8 @@ Add `@google/stitch-sdk` to `dependencies` in `package.json`:
 | Users with existing design/HTML configs see broken panels | High | The `LocalFolderService` config format and paths do not change. The new `DesignPanelProvider` reads the same `local-folder-config.json`. No migration needed. |
 | Two providers watch the same folders (race conditions) | Low | Remove `_htmlFolderWatchers` and `_designFolderWatchers` from `PlanningPanelProvider` entirely (lines 66–69, 453–540). Only `DesignPanelProvider` will watch design/HTML folders. |
 | Webview CSP issues with iframe src for HTML previews | Low | Continue using `srcdoc` or `blob:` URLs for HTML preview iframe content, or serve via the local HTTP server on `localhost` (existing server lifecycle at `PlanningPanelProvider.ts:5285–5432`, moved to `DesignPanelProvider`). The existing sandbox attributes (`allow-scripts`, `allow-same-origin` for srcdoc) remain. |
+| `stitchEdit`/`stitchVariants` fail because `Screen` instance was garbage-collected or lost | Medium | `_activeScreens` Map caches instances by `screen.id`. Ensure the Map is cleared in `dispose()` to prevent memory leaks. Document that edits require the panel to remain open since generation. |
+| PNG downloads are corrupted due to string conversion | Medium | Strictly use `response.arrayBuffer()` → `Buffer.from(arrayBuffer)` for all binary assets. Never pass a string representation of a PNG to `vscode.workspace.fs.writeFile`. |
 
 ## Files Changed
 

@@ -63,10 +63,6 @@ export class PlanningPanelProvider {
     private _lastLocalDocsSignature = ''; // content dedup: skip re-posting an unchanged local-docs list
     private _lastPreviewContentByPath: Map<string, string> = new Map(); // content dedup: skip re-sending unchanged preview content
     private _lastWebviewRootsSignature = ''; // skip reassigning webview.options when roots are unchanged (avoids reload loop)
-    private _htmlFolderWatchers: vscode.FileSystemWatcher[] = [];
-    private _htmlDocsDebounce: NodeJS.Timeout | undefined;
-    private _designFolderWatchers: vscode.FileSystemWatcher[] = [];
-    private _designDocsDebounce: NodeJS.Timeout | undefined;
     private _antigravityWatchers: vscode.FileSystemWatcher[] = [];
     private _activeDocWatcher: vscode.FileSystemWatcher | undefined;
     private _activeDocWatchDebounce: NodeJS.Timeout | undefined;
@@ -83,10 +79,6 @@ export class PlanningPanelProvider {
     private _watcherGeneration: number = 0;
     private _activeDesignDocSourceId: string | null = null;
     private _activeDesignDocId: string | null = null;
-    private _activeDesignSystemDocSourceId: string | null = null;
-    private _activeDesignSystemDocId: string | null = null;
-    private _htmlServers = new Map<string, { server: http.Server; port: number; timeoutId: NodeJS.Timeout }>();
-    private _htmlServerCreationPromises = new Map<string, Promise<{ server: http.Server; port: number; timeoutId: NodeJS.Timeout }>>();
     private readonly _SERVER_DENY_LIST: readonly string[] = [
         '.switchboard',
         '.git',
@@ -352,8 +344,7 @@ export class PlanningPanelProvider {
         // Watch the docs directory for changes and refresh imported docs list
         this._setupDocsFolderWatcher(workspaceRoot);
         this._setupLocalFolderWatchers();
-        this._setupHtmlFolderWatchers();
-        this._setupDesignFolderWatchers();
+
         this._setupAntigravityWatcher();
         this._setupKanbanPlansWatcher();
 
@@ -450,92 +441,7 @@ export class PlanningPanelProvider {
         }
     }
 
-    private _setupHtmlFolderWatchers(): void {
-        // Dispose and remove all existing watchers
-        for (const watcher of this._htmlFolderWatchers) {
-            watcher.dispose();
-            const idx = this._disposables.indexOf(watcher);
-            if (idx !== -1) { this._disposables.splice(idx, 1); }
-        }
-        this._htmlFolderWatchers = [];
 
-        const allRoots = this._getWorkspaceRoots();
-        const watchedPaths = new Set<string>();
-
-        for (const root of allRoots) {
-            const localFolderService = this._getLocalFolderService(root);
-            const folderPaths = localFolderService.getHtmlFolderPaths();
-
-            for (const folderPath of folderPaths) {
-                if (!folderPath) continue;
-                // Deduplicate: skip if already watching this absolute path
-                if (watchedPaths.has(folderPath)) continue;
-                watchedPaths.add(folderPath);
-
-                const folderUri = vscode.Uri.file(folderPath);
-
-                // Create watcher for the local HTML folder — recursive, html/htm
-                const watcher = vscode.workspace.createFileSystemWatcher(
-                    new vscode.RelativePattern(folderUri, '**/*.{html,htm}')
-                );
-
-                // Refresh HTML docs when files are created, deleted, or changed
-                const refreshHtmlDocs = () => {
-                    this._sendHtmlDocsReady();
-                };
-
-                watcher.onDidCreate(refreshHtmlDocs);
-                watcher.onDidDelete(refreshHtmlDocs);
-                watcher.onDidChange(refreshHtmlDocs);
-
-                this._htmlFolderWatchers.push(watcher);
-                this._disposables.push(watcher);
-            }
-        }
-    }
-
-    private _setupDesignFolderWatchers(): void {
-        // Dispose and remove all existing watchers
-        for (const watcher of this._designFolderWatchers) {
-            watcher.dispose();
-            const idx = this._disposables.indexOf(watcher);
-            if (idx !== -1) { this._disposables.splice(idx, 1); }
-        }
-        this._designFolderWatchers = [];
-
-        const allRoots = this._getWorkspaceRoots();
-        const watchedPaths = new Set<string>();
-
-        for (const root of allRoots) {
-            const localFolderService = this._getLocalFolderService(root);
-            const folderPaths = localFolderService.getDesignFolderPaths();
-
-            for (const folderPath of folderPaths) {
-                if (!folderPath) continue;
-                // Deduplicate: skip if already watching this absolute path
-                if (watchedPaths.has(folderPath)) continue;
-                watchedPaths.add(folderPath);
-
-                const folderUri = vscode.Uri.file(folderPath);
-
-                // Create watcher for the local design folder
-                const watcher = vscode.workspace.createFileSystemWatcher(
-                    new vscode.RelativePattern(folderUri, '**/*.{md,txt,markdown,rst,adoc,png,jpg,jpeg,gif,svg}')
-                );
-
-                const refreshDesignDocs = () => {
-                    this._sendDesignDocsReady();
-                };
-
-                watcher.onDidCreate(refreshDesignDocs);
-                watcher.onDidDelete(refreshDesignDocs);
-                watcher.onDidChange(refreshDesignDocs);
-
-                this._designFolderWatchers.push(watcher);
-                this._disposables.push(watcher);
-            }
-        }
-    }
 
     /**
      * Debounced local-docs refresh, used by file watchers. The Antigravity brain
@@ -1273,72 +1179,7 @@ export class PlanningPanelProvider {
                 this._panel?.webview.postMessage({ type: 'localFoldersListed', paths, workspaceRoot: root });
                 break;
             }
-            case 'addHtmlFolder': {
-                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
-                const result = await vscode.window.showOpenDialog({
-                    openLabel: 'Add HTML Folder',
-                    canSelectFiles: false,
-                    canSelectFolders: true,
-                    canSelectMany: false
-                });
-                if (result && result.length > 0) {
-                    const service = this._getLocalFolderService(root);
-                    await service.addHtmlFolderPath(result[0].fsPath);
-                    this._setupHtmlFolderWatchers();
-                    await this._sendHtmlDocsReady();
-                    this._panel?.webview.postMessage({ type: 'htmlFoldersListed', paths: service.getHtmlFolderPaths(), workspaceRoot: root });
-                }
-                break;
-            }
-            case 'removeHtmlFolder': {
-                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
-                const service = this._getLocalFolderService(root);
-                await service.removeHtmlFolderPath(msg.folderPath);
-                this._setupHtmlFolderWatchers();
-                await this._sendHtmlDocsReady();
-                this._panel?.webview.postMessage({ type: 'htmlFoldersListed', paths: service.getHtmlFolderPaths(), workspaceRoot: root });
-                break;
-            }
-            case 'listHtmlFolders': {
-                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
-                const service = this._getLocalFolderService(root);
-                const paths = service.getHtmlFolderPaths();
-                this._panel?.webview.postMessage({ type: 'htmlFoldersListed', paths, workspaceRoot: root });
-                break;
-            }
-            case 'addDesignFolder': {
-                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
-                const result = await vscode.window.showOpenDialog({
-                    openLabel: 'Add Design Folder',
-                    canSelectFiles: false,
-                    canSelectFolders: true,
-                    canSelectMany: false
-                });
-                if (result && result.length > 0) {
-                    const service = this._getLocalFolderService(root);
-                    await service.addDesignFolderPath(result[0].fsPath);
-                    this._setupDesignFolderWatchers();
-                    await this._sendDesignDocsReady();
-                    this._panel?.webview.postMessage({ type: 'designFoldersListed', paths: service.getDesignFolderPaths(), workspaceRoot: root });
-                }
-                break;
-            }
-            case 'removeDesignFolder': {
-                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
-                const service = this._getLocalFolderService(root);
-                await service.removeDesignFolderPath(msg.folderPath);
-                this._setupDesignFolderWatchers();
-                await this._sendDesignDocsReady();
-                this._panel?.webview.postMessage({ type: 'designFoldersListed', paths: service.getDesignFolderPaths(), workspaceRoot: root });
-                break;
-            }
-            case 'listDesignFolders': {
-                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
-                const service = this._getLocalFolderService(root);
-                const paths = service.getDesignFolderPaths();
-                this._panel?.webview.postMessage({ type: 'designFoldersListed', paths, workspaceRoot: root });
-                break;
-            }
+
             case 'refreshSource': {
                 const sourceId = msg.sourceId;
                 // Clear cache for this source to force fresh fetch
@@ -1346,10 +1187,7 @@ export class PlanningPanelProvider {
                 // Refresh only the affected pane to avoid cross-pane flicker
                 if (sourceId === 'local-folder') {
                     await this._sendLocalDocsReady(true);
-                } else if (sourceId === 'html-folder') {
-                    await this._sendHtmlDocsReady();
-                } else if (sourceId === 'design-folder') {
-                    await this._sendDesignDocsReady();
+
                 } else {
                     this._sendOnlineDocsReady();
                 }
@@ -1511,7 +1349,7 @@ export class PlanningPanelProvider {
                 break;
             }
             case 'disableDesignDoc': {
-                await this._handleDisableDesignDoc(msg.docType);
+                await this._handleDisableDesignDoc();
                 break;
             }
             case 'setActivePlanningContext': {
@@ -1530,14 +1368,7 @@ export class PlanningPanelProvider {
                 await this._handleCreateLocalDoc(workspaceRoot, msg.folderPath);
                 break;
             }
-            case 'serveAndOpenHtml': {
-                await this._handleServeAndOpenHtml(
-                    msg.absolutePath as string,
-                    msg.docName as string,
-                    msg.sourceFolder as string | undefined
-                );
-                break;
-            }
+
             case 'resolveDuplicate': {
                 const { docName, sourceId, docId, action } = msg;
                 await this._handleResolveDuplicate(workspaceRoot, docName, sourceId, docId, action);
@@ -2904,36 +2735,21 @@ export class PlanningPanelProvider {
         }
     }
 
-    private async _handleDisableDesignDoc(docType: 'planning-epic' | 'design-system' = 'planning-epic'): Promise<void> {
+    private async _handleDisableDesignDoc(): Promise<void> {
         try {
-            if (docType === 'design-system') {
-                await vscode.workspace.getConfiguration('switchboard').update(
-                    'planner.designSystemDocEnabled',
-                    false,
-                    vscode.ConfigurationTarget.Workspace
-                );
-                await vscode.workspace.getConfiguration('switchboard').update(
-                    'planner.designSystemDocLink',
-                    undefined,
-                    vscode.ConfigurationTarget.Workspace
-                );
-                this._activeDesignSystemDocSourceId = null;
-                this._activeDesignSystemDocId = null;
-            } else {
-                await vscode.workspace.getConfiguration('switchboard').update(
-                    'planner.designDocEnabled',
-                    false,
-                    vscode.ConfigurationTarget.Workspace
-                );
-                // Clear the designDocLink to remove stale references
-                await vscode.workspace.getConfiguration('switchboard').update(
-                    'planner.designDocLink',
-                    undefined,
-                    vscode.ConfigurationTarget.Workspace
-                );
-                this._activeDesignDocSourceId = null;
-                this._activeDesignDocId = null;
-            }
+            await vscode.workspace.getConfiguration('switchboard').update(
+                'planner.designDocEnabled',
+                false,
+                vscode.ConfigurationTarget.Workspace
+            );
+            // Clear the designDocLink to remove stale references
+            await vscode.workspace.getConfiguration('switchboard').update(
+                'planner.designDocLink',
+                undefined,
+                vscode.ConfigurationTarget.Workspace
+            );
+            this._activeDesignDocSourceId = null;
+            this._activeDesignDocId = null;
             // Send updated state back to panel
             await this._sendActiveDesignDocState();
         } catch (err) {
@@ -2941,7 +2757,6 @@ export class PlanningPanelProvider {
             this._panel?.webview.postMessage({
                 type: 'activeDesignDocUpdated',
                 planningEpic: { enabled: true, docName: this._getPlanningEpicName() || 'None', sourceId: this._activeDesignDocSourceId, docId: this._activeDesignDocId },
-                designSystemDoc: { enabled: this._getDesignSystemDocName() !== null, docName: this._getDesignSystemDocName() || 'None', sourceId: this._activeDesignSystemDocSourceId, docId: this._activeDesignSystemDocId },
                 error: String(err)
             });
         }
@@ -2957,14 +2772,14 @@ export class PlanningPanelProvider {
         try {
             let docPath: string | null = null;
 
-            if (sourceId === 'local-folder' || sourceId === 'design-folder') {
+            if (sourceId === 'local-folder') {
                 if (!sourceFolder) {
                     throw new Error('sourceFolder is required');
                 }
                 const localFolderService = this._getLocalFolderServiceForFolder(sourceFolder, workspaceRoot, sourceId)
                     || this._getLocalFolderService(workspaceRoot);
                 const resolvedSourceFolder = localFolderService.resolveFolderPath(sourceFolder);
-                const allowedPaths = sourceId === 'design-folder' ? localFolderService.getDesignFolderPaths() : localFolderService.getFolderPaths();
+                const allowedPaths = localFolderService.getFolderPaths();
                 if (!allowedPaths.includes(resolvedSourceFolder)) {
                     throw new Error('sourceFolder is not a configured folder path');
                 }
@@ -3002,25 +2817,14 @@ export class PlanningPanelProvider {
                 return;
             }
 
-            if (sourceId === 'design-folder') {
-                await vscode.workspace.getConfiguration('switchboard').update(
-                    'planner.designSystemDocLink', docPath, vscode.ConfigurationTarget.Workspace
-                );
-                await vscode.workspace.getConfiguration('switchboard').update(
-                    'planner.designSystemDocEnabled', true, vscode.ConfigurationTarget.Workspace
-                );
-                this._activeDesignSystemDocSourceId = sourceId;
-                this._activeDesignSystemDocId = docId;
-            } else {
-                await vscode.workspace.getConfiguration('switchboard').update(
-                    'planner.designDocLink', docPath, vscode.ConfigurationTarget.Workspace
-                );
-                await vscode.workspace.getConfiguration('switchboard').update(
-                    'planner.designDocEnabled', true, vscode.ConfigurationTarget.Workspace
-                );
-                this._activeDesignDocSourceId = sourceId;
-                this._activeDesignDocId = docId;
-            }
+            await vscode.workspace.getConfiguration('switchboard').update(
+                'planner.designDocLink', docPath, vscode.ConfigurationTarget.Workspace
+            );
+            await vscode.workspace.getConfiguration('switchboard').update(
+                'planner.designDocEnabled', true, vscode.ConfigurationTarget.Workspace
+            );
+            this._activeDesignDocSourceId = sourceId;
+            this._activeDesignDocId = docId;
             await this._sendActiveDesignDocState();
 
             this._panel?.webview.postMessage({ type: 'activeContextSet', success: true });
@@ -3043,18 +2847,14 @@ export class PlanningPanelProvider {
         try {
             let docPath: string | null = null;
 
-            if (sourceId === 'local-folder' || sourceId === 'design-folder' || sourceId === 'html-folder') {
+            if (sourceId === 'local-folder') {
                 if (!sourceFolder) {
                     throw new Error('sourceFolder is required');
                 }
                 const localFolderService = this._getLocalFolderServiceForFolder(sourceFolder, workspaceRoot, sourceId)
                     || this._getLocalFolderService(workspaceRoot);
                 const resolvedSourceFolder = localFolderService.resolveFolderPath(sourceFolder);
-                const allowedPaths = sourceId === 'design-folder'
-                    ? localFolderService.getDesignFolderPaths()
-                    : (sourceId === 'html-folder'
-                        ? localFolderService.getHtmlFolderPaths()
-                        : localFolderService.getFolderPaths());
+                const allowedPaths = localFolderService.getFolderPaths();
                 if (!allowedPaths.includes(resolvedSourceFolder)) {
                     throw new Error('sourceFolder is not a configured folder path');
                 }
@@ -3321,23 +3121,14 @@ export class PlanningPanelProvider {
         return path.basename(designDocLink, '.md');
     }
 
-    private _getDesignSystemDocName(): string | null {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const designSystemDocLink = config.get<string>('planner.designSystemDocLink');
-        if (!designSystemDocLink) return null;
-        return path.basename(designSystemDocLink, '.md');
-    }
 
     private async _sendActiveDesignDocState(): Promise<void> {
         const config = vscode.workspace.getConfiguration('switchboard');
         const enabled = config.get<boolean>('planner.designDocEnabled', false);
         const docName = enabled ? this._getPlanningEpicName() : null;
-        const dsEnabled = config.get<boolean>('planner.designSystemDocEnabled', false);
-        const dsDocName = dsEnabled ? this._getDesignSystemDocName() : null;
         this._panel?.webview.postMessage({
             type: 'activeDesignDocUpdated',
-            planningEpic: { enabled, docName: docName || 'None', sourceId: this._activeDesignDocSourceId, docId: this._activeDesignDocId },
-            designSystemDoc: { enabled: dsEnabled, docName: dsDocName || 'None', sourceId: this._activeDesignSystemDocSourceId, docId: this._activeDesignSystemDocId }
+            planningEpic: { enabled, docName: docName || 'None', sourceId: this._activeDesignDocSourceId, docId: this._activeDesignDocId }
         });
     }
 
@@ -3348,12 +3139,6 @@ export class PlanningPanelProvider {
         for (const r of allRoots) {
             try {
                 const service = this._getLocalFolderService(r);
-                for (const p of service.getDesignFolderPaths()) {
-                    folderUris.push(vscode.Uri.file(p));
-                }
-                for (const p of service.getHtmlFolderPaths()) {
-                    folderUris.push(vscode.Uri.file(p));
-                }
                 for (const p of service.getFolderPaths()) {
                     folderUris.push(vscode.Uri.file(p));
                 }
@@ -3396,7 +3181,7 @@ export class PlanningPanelProvider {
     private _getLocalFolderServiceForFolder(
         sourceFolder: string | undefined,
         workspaceRoot: string,
-        sourceId: 'local-folder' | 'html-folder' | 'design-folder' = 'local-folder'
+        sourceId: 'local-folder' = 'local-folder'
     ): LocalFolderService | null {
         if (!sourceFolder) { return null; }
         const allRoots = this._getWorkspaceRoots();
@@ -3405,9 +3190,7 @@ export class PlanningPanelProvider {
         // Try active root first (matches existing priority logic)
         if (activeRoot) {
             const service = this._getLocalFolderService(activeRoot);
-            const paths = sourceId === 'html-folder'
-                ? service.getHtmlFolderPaths()
-                : (sourceId === 'design-folder' ? service.getDesignFolderPaths() : service.getFolderPaths());
+            const paths = service.getFolderPaths();
             const resolved = service.resolveFolderPath(sourceFolder);
             if (paths.includes(resolved)) {
                 return service;
@@ -3418,9 +3201,7 @@ export class PlanningPanelProvider {
         for (const root of allRoots) {
             if (activeRoot && path.resolve(root) === path.resolve(activeRoot)) continue; // already tried
             const service = this._getLocalFolderService(root);
-            const paths = sourceId === 'html-folder'
-                ? service.getHtmlFolderPaths()
-                : (sourceId === 'design-folder' ? service.getDesignFolderPaths() : service.getFolderPaths());
+            const paths = service.getFolderPaths();
             const resolved = service.resolveFolderPath(sourceFolder);
             if (paths.includes(resolved)) {
                 return service;
@@ -3560,160 +3341,7 @@ export class PlanningPanelProvider {
         }
     }
 
-    private async _sendHtmlDocsReady(): Promise<void> {
-        if (this._htmlDocsDebounce) {
-            clearTimeout(this._htmlDocsDebounce);
-        }
-        this._htmlDocsDebounce = setTimeout(async () => {
-            this._htmlDocsDebounce = undefined;
-            try {
-                const allRoots = this._getWorkspaceRoots();
-                const allFiles: Array<{ id: string; name: string; relativePath: string; isFolder?: boolean; parentId?: string; _root?: string; sourceFolder?: string; title?: string }> = [];
-                const scannedPaths = new Set<string>();
-                const activeRoot = this._getWorkspaceRoot();
-                const configuredFolderPathsByRoot: Record<string, string[]> = {};
 
-                const seenFilePaths = new Set<string>();
-
-                for (const root of allRoots) {
-                    try {
-                        const localFolderService = this._getLocalFolderService(root);
-                        const folderPaths = localFolderService.getHtmlFolderPaths();
-                        configuredFolderPathsByRoot[root] = folderPaths;
-
-                        const allAlreadyScanned = folderPaths.length > 0 && folderPaths.every(p => p && scannedPaths.has(p));
-
-                        for (const folderPath of folderPaths) {
-                            if (folderPath && scannedPaths.has(folderPath)) {
-                                continue;
-                            }
-                            if (folderPath) {
-                                scannedPaths.add(folderPath);
-                            }
-                        }
-
-                        if (!allAlreadyScanned) {
-                            const files = await localFolderService.listHtmlFiles();
-                            for (const f of files) {
-                                const absPath = path.resolve(f.sourceFolder, f.relativePath);
-                                if (!seenFilePaths.has(absPath)) {
-                                    seenFilePaths.add(absPath);
-                                    allFiles.push({ ...f, _root: root });
-                                }
-                            }
-                        }
-                    } catch (err) {
-                        console.debug('[PlanningPanel] Failed to list HTML files for root:', root, err);
-                    }
-                }
-
-                if (!this._panel) {
-                    return;
-                }
-
-                // Update webview localResourceRoots — use _updateWebviewRoots() which
-                // has a dedup check to avoid unnecessary webview reloads (assigning
-                // webview.options unconditionally reloads the webview, resetting the
-                // DOM to "Loading…" placeholders and triggering the stuck-on-loading bug).
-                this._updateWebviewRoots();
-
-                const workspaceItems = this._buildKanbanWorkspaceItems();
-                this._panel.webview.postMessage({
-                    type: 'htmlDocsReady',
-                    sourceId: 'html-folder',
-                    folderPathsByRoot: configuredFolderPathsByRoot,
-                    nodes: this._mapLocalFilesToTreeNodes(allFiles),
-                    workspaceItems
-                });
-            } catch (err) {
-                console.error('[PlanningPanel] Failed to fetch html-folder roots:', err);
-                this._panel?.webview.postMessage({
-                    type: 'htmlDocsReady',
-                    sourceId: 'html-folder',
-                    folderPathsByRoot: {},
-                    nodes: [],
-                    workspaceItems: this._buildKanbanWorkspaceItems(),
-                    error: String(err)
-                });
-            }
-        }, 300);
-    }
-
-    private async _sendDesignDocsReady(): Promise<void> {
-        if (this._designDocsDebounce) {
-            clearTimeout(this._designDocsDebounce);
-        }
-        this._designDocsDebounce = setTimeout(async () => {
-            this._designDocsDebounce = undefined;
-            try {
-                const allRoots = this._getWorkspaceRoots();
-                const allFiles: Array<{ id: string; name: string; relativePath: string; isFolder?: boolean; parentId?: string; _root?: string; sourceFolder?: string; title?: string }> = [];
-                const scannedPaths = new Set<string>();
-                const activeRoot = this._getWorkspaceRoot();
-                const configuredFolderPathsByRoot: Record<string, string[]> = {};
-
-                const seenFilePaths = new Set<string>();
-
-                for (const root of allRoots) {
-                    try {
-                        const localFolderService = this._getLocalFolderService(root);
-                        const folderPaths = localFolderService.getDesignFolderPaths();
-                        configuredFolderPathsByRoot[root] = folderPaths;
-
-                        const allAlreadyScanned = folderPaths.length > 0 && folderPaths.every(p => p && scannedPaths.has(p));
-
-                        for (const folderPath of folderPaths) {
-                            if (folderPath && scannedPaths.has(folderPath)) {
-                                continue;
-                            }
-                            if (folderPath) {
-                                scannedPaths.add(folderPath);
-                            }
-                        }
-
-                        if (!allAlreadyScanned) {
-                            const files = await localFolderService.listDesignFiles();
-                            for (const f of files) {
-                                const absPath = path.resolve(f.sourceFolder, f.relativePath);
-                                if (!seenFilePaths.has(absPath)) {
-                                    seenFilePaths.add(absPath);
-                                    allFiles.push({ ...f, _root: root });
-                                }
-                            }
-                        }
-                    } catch (err) {
-                        console.debug('[PlanningPanel] Failed to list design files for root:', root, err);
-                    }
-                }
-
-                if (!this._panel) {
-                    return;
-                }
-
-                // Update webview options localResourceRoots
-                this._updateWebviewRoots();
-
-                const workspaceItems = this._buildKanbanWorkspaceItems();
-                this._panel.webview.postMessage({
-                    type: 'designDocsReady',
-                    sourceId: 'design-folder',
-                    folderPathsByRoot: configuredFolderPathsByRoot,
-                    nodes: this._mapLocalFilesToTreeNodes(allFiles),
-                    workspaceItems
-                });
-            } catch (err) {
-                console.error('[PlanningPanel] Failed to fetch design-folder roots:', err);
-                this._panel?.webview.postMessage({
-                    type: 'designDocsReady',
-                    sourceId: 'design-folder',
-                    folderPathsByRoot: {},
-                    nodes: [],
-                    workspaceItems: this._buildKanbanWorkspaceItems(),
-                    error: String(err)
-                });
-            }
-        }, 300);
-    }
 
     private async _sendOnlineDocsReady(): Promise<void> {
         const availableSources = this._researchImportService.getAvailableSources();
@@ -3745,8 +3373,6 @@ export class PlanningPanelProvider {
 
     private async _handleFetchRoots(forceLocalDocs: boolean = false): Promise<void> {
         await this._sendLocalDocsReady(forceLocalDocs);
-        await this._sendHtmlDocsReady();
-        await this._sendDesignDocsReady();
         await this._sendOnlineDocsReady();
         const cyberAnimationDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
         this._panel?.webview.postMessage({ type: 'cyberAnimationSetting', disabled: cyberAnimationDisabled });
@@ -3755,13 +3381,11 @@ export class PlanningPanelProvider {
     }
 
     private async _handleFetchChildren(workspaceRoot: string, sourceId: string, parentId?: string): Promise<void> {
-        // Handle local-folder, design-folder, html-folder directly without adapter
-        if (sourceId === 'local-folder' || sourceId === 'design-folder' || sourceId === 'html-folder') {
+        // Handle local-folder directly without adapter
+        if (sourceId === 'local-folder') {
             const localFolderService = this._getLocalFolderService(workspaceRoot);
             try {
-                const files = sourceId === 'local-folder'
-                    ? await localFolderService.listFiles()
-                    : (sourceId === 'design-folder' ? await localFolderService.listDesignFiles() : await localFolderService.listHtmlFiles());
+                const files = await localFolderService.listFiles();
                 const nodes = this._mapLocalFilesToTreeNodes(files)
                     .filter(node => node.parentId === parentId || (!parentId && !node.parentId));
                 this._panel?.webview.postMessage({ type: 'childrenReady', sourceId, parentId, nodes });
@@ -3803,244 +3427,7 @@ export class PlanningPanelProvider {
             }
         }
 
-        // Handle html-folder directly
-        if (sourceId === 'html-folder') {
-            if (!sourceFolder) {
-                this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: 'sourceFolder is required' });
-                return;
-            }
-            // Validate sourceFolder is a configured HTML folder
-            const localFolderService = this._getLocalFolderServiceForFolder(sourceFolder, workspaceRoot, 'html-folder')
-                || this._getLocalFolderService(workspaceRoot);
-            const resolvedSourceFolder = localFolderService.resolveFolderPath(sourceFolder);
-            if (!localFolderService.getHtmlFolderPaths().includes(resolvedSourceFolder)) {
-                this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: 'sourceFolder is not a configured HTML folder path' });
-                return;
-            }
-            const cleanDocId = docId.includes(':') ? docId.substring(docId.indexOf(':') + 1) : docId;
-            const resolvedPath = path.resolve(path.join(resolvedSourceFolder, cleanDocId));
-            // Prevent path traversal
-            if (!resolvedPath.startsWith(path.resolve(resolvedSourceFolder) + path.sep) && resolvedPath !== path.resolve(resolvedSourceFolder)) {
-                this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: 'Invalid file path' });
-                return;
-            }
-            if (!fs.existsSync(resolvedPath)) {
-                this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: 'File not found' });
-                return;
-            }
-            if (!this._panel) { return; }
-            const webviewUri = this._panel.webview.asWebviewUri(vscode.Uri.file(resolvedPath)).toString();
-            this._activePreviewPath = resolvedPath;
-            this._activePreviewSourceId = 'html-folder';
-            this._activePreviewDocId = docId;
-            this._activePreviewSourceFolder = sourceFolder;
-            this._activePreviewWorkspaceRoot = workspaceRoot;
-            this._setupActiveDocWatcher(resolvedPath);
 
-            // Compute iframeSrc via localhost server (with fallback on error)
-            let iframeSrc: string | undefined;
-            try {
-                const serverEntry = await this._getOrCreateHtmlServer(resolvedSourceFolder);
-                iframeSrc = this._buildLocalhostUrl(serverEntry, resolvedSourceFolder, resolvedPath);
-            } catch (err: any) {
-                console.warn('[PlanningPanel] Failed to start localhost server for inline preview, falling back to srcdoc:', err.message);
-                iframeSrc = undefined;
-            }
-
-            const fileExt = path.extname(resolvedPath).toLowerCase();
-            const isImage = PlanningPanelProvider.IMAGE_EXTENSIONS.has(fileExt);
-
-            if (isImage) {
-                // Skip UTF-8 read for binary image files
-                if (requestId !== this._latestRequestIds.get(sourceId)) { return; }
-                this._panel?.webview.postMessage({
-                    type: 'previewReady',
-                    sourceId,
-                    requestId,
-                    webviewUri,
-                    iframeSrc,
-                    docName: path.basename(resolvedPath),
-                    isImage: true,
-                    isAutoRefreshed: this._isAutoRefreshing
-                });
-                return;
-            }
-
-            try {
-                const htmlContent = await fs.promises.readFile(resolvedPath, 'utf8');
-
-                if (requestId !== this._latestRequestIds.get(sourceId)) { return; }
-
-                // Dedup: compare raw content before CSP injection (nonce may rotate)
-                const cacheKey = this._getPreviewCacheKey(sourceId, docId, sourceFolder);
-                const lastContent = this._lastPreviewContentByPath.get(cacheKey);
-                if (htmlContent === lastContent) {
-                    // Cache hit — notify frontend for user-initiated requests only
-                    // (auto-refresh dedup is preserved to prevent flicker)
-                    if (requestId >= 0) {
-                        this._panel?.webview.postMessage({
-                            type: 'previewReady',
-                            sourceId,
-                            requestId,
-                            webviewUri,
-                            iframeSrc,
-                            docName: path.basename(resolvedPath),
-                            isAutoRefreshed: false
-                        });
-                    }
-                    return;
-                }
-                this._lastPreviewContentByPath.set(cacheKey, htmlContent);
-
-                const htmlWithCsp = this._injectLocalCsp(htmlContent);
-                console.log('[PlanningPanel] HTML preview: nonce injected:', !!this._nonce, 'content length:', htmlWithCsp.length, 'hasNonceAttr:', /nonce="/.test(htmlWithCsp));
-                this._panel?.webview.postMessage({
-                    type: 'previewReady',
-                    sourceId,
-                    requestId,
-                    webviewUri,
-                    iframeSrc,
-                    htmlContent: htmlWithCsp,
-                    docName: path.basename(resolvedPath),
-                    isAutoRefreshed: this._isAutoRefreshing
-                });
-            } catch (err: any) {
-                // If file read fails, fall back to webviewUri-only delivery
-                if (requestId !== this._latestRequestIds.get(sourceId)) { return; }
-                this._panel?.webview.postMessage({
-                    type: 'previewReady',
-                    sourceId,
-                    requestId,
-                    webviewUri,
-                    iframeSrc,
-                    docName: path.basename(resolvedPath),
-                    isAutoRefreshed: this._isAutoRefreshing
-                });
-            }
-            return;
-        }
-
-        // Handle design-folder directly
-        if (sourceId === 'design-folder') {
-            if (!sourceFolder) {
-                this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: 'sourceFolder is required' });
-                return;
-            }
-            // Validate sourceFolder is a configured Design folder
-            const localFolderService = this._getLocalFolderServiceForFolder(sourceFolder, workspaceRoot, 'design-folder')
-                || this._getLocalFolderService(workspaceRoot);
-            const resolvedSourceFolder = localFolderService.resolveFolderPath(sourceFolder);
-            if (!localFolderService.getDesignFolderPaths().includes(resolvedSourceFolder)) {
-                this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: 'sourceFolder is not a configured Design folder path' });
-                return;
-            }
-            const cleanDocId = docId.includes(':') ? docId.substring(docId.indexOf(':') + 1) : docId;
-            const resolvedPath = path.resolve(path.join(resolvedSourceFolder, cleanDocId));
-            // Prevent path traversal
-            if (!resolvedPath.startsWith(path.resolve(resolvedSourceFolder) + path.sep) && resolvedPath !== path.resolve(resolvedSourceFolder)) {
-                this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: 'Invalid file path' });
-                return;
-            }
-            if (!fs.existsSync(resolvedPath)) {
-                this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: 'File not found' });
-                return;
-            }
-            if (!this._panel) { return; }
-            const webviewUri = this._panel.webview.asWebviewUri(vscode.Uri.file(resolvedPath)).toString();
-            this._activePreviewPath = resolvedPath;
-            this._activePreviewSourceId = 'design-folder';
-            this._activePreviewDocId = docId;
-            this._activePreviewSourceFolder = sourceFolder;
-            this._activePreviewWorkspaceRoot = workspaceRoot;
-            this._setupActiveDocWatcher(resolvedPath);
-
-            const fileExt = path.extname(resolvedPath).toLowerCase();
-            const isImage = PlanningPanelProvider.IMAGE_EXTENSIONS.has(fileExt);
-
-            if (isImage) {
-                // Skip UTF-8 read for binary image files
-                this._panel?.webview.postMessage({
-                    type: 'previewReady',
-                    sourceId,
-                    requestId,
-                    webviewUri,
-                    docName: path.basename(resolvedPath),
-                    isImage: true,
-                    isAutoRefreshed: this._isAutoRefreshing
-                });
-                return;
-            }
-
-            try {
-                const docContent = await fs.promises.readFile(resolvedPath, 'utf8');
-
-                // Map extension to a preview category
-                // Unmapped extensions default to 'text'
-                const fileTypeMap: Record<string, string> = {
-                    '.json': 'json',
-                    '.css': 'css', '.scss': 'css', '.less': 'css', '.sass': 'css',
-                    '.yaml': 'yaml', '.yml': 'yaml',
-                    '.xml': 'xml',
-                    '.md': 'markdown', '.txt': 'markdown', '.markdown': 'markdown',
-                    '.rst': 'markdown', '.adoc': 'markdown',
-                };
-                const fileType = isImage ? 'image' : (fileTypeMap[fileExt] || 'text');
-
-                // For YAML: parse on backend and send parsed result to frontend
-                let parsedJson: any = undefined;
-                if (fileType === 'yaml') {
-                    try {
-                        const yaml = require('js-yaml');
-                        parsedJson = yaml.load(docContent);
-                    } catch (e: any) {
-                        // Will be handled as error on frontend — send raw content only
-                    }
-                }
-
-                const cacheKey = this._getPreviewCacheKey(sourceId, docId, sourceFolder);
-                const lastContent = this._lastPreviewContentByPath.get(cacheKey);
-                if (docContent === lastContent) {
-                    // Cache hit — notify frontend for user-initiated requests only
-                    if (requestId >= 0) {
-                        this._panel?.webview.postMessage({
-                            type: 'previewReady',
-                            sourceId,
-                            requestId,
-                            webviewUri,
-                            content: docContent,
-                            docName: path.basename(resolvedPath),
-                            fileType,
-                            parsedJson,
-                            isAutoRefreshed: false,
-                            filePath: resolvedPath
-                        });
-                    }
-                    return;
-                }
-                this._lastPreviewContentByPath.set(cacheKey, docContent);
-
-                this._panel?.webview.postMessage({
-                    type: 'previewReady',
-                    sourceId,
-                    requestId,
-                    webviewUri,
-                    content: docContent,
-                    docName: path.basename(resolvedPath),
-                    fileType,
-                    parsedJson,
-                    isAutoRefreshed: this._isAutoRefreshing,
-                    filePath: resolvedPath
-                });
-            } catch (err: any) {
-                this._panel?.webview.postMessage({
-                    type: 'previewError',
-                    sourceId,
-                    requestId,
-                    error: String(err)
-                });
-            }
-            return;
-        }
 
         // Handle local-folder directly without adapter
         if (sourceId === 'local-folder') {
@@ -4269,22 +3656,7 @@ export class PlanningPanelProvider {
                     throw new Error(fetchResult.error || 'Failed to fetch local doc content');
                 }
                 finalContent = fetchResult.content;
-            } else if (sourceId === 'design-folder' && !finalContent) {
-                if (!sourceFolder) {
-                    throw new Error('sourceFolder is required');
-                }
-                const localFolderService = this._getLocalFolderServiceForFolder(sourceFolder, workspaceRoot, 'design-folder')
-                    || this._getLocalFolderService(workspaceRoot);
-                const resolvedSourceFolder = localFolderService.resolveFolderPath(sourceFolder);
-                if (!localFolderService.getDesignFolderPaths().includes(resolvedSourceFolder)) {
-                    throw new Error('sourceFolder is not a configured Design folder path');
-                }
-                const cleanDocId = docId.includes(':') ? docId.substring(docId.indexOf(':') + 1) : docId;
-                const resolvedPath = path.resolve(path.join(resolvedSourceFolder, cleanDocId));
-                if (!resolvedPath.startsWith(path.resolve(resolvedSourceFolder) + path.sep) && resolvedPath !== path.resolve(resolvedSourceFolder)) {
-                    throw new Error('Invalid file path');
-                }
-                finalContent = await fs.promises.readFile(resolvedPath, 'utf8');
+
             } else if (sourceId === 'antigravity' && !finalContent) {
                 // For antigravity: docId is an absolute path to the artifact
                 const localFolderService = this._getLocalFolderService(workspaceRoot);
@@ -5127,25 +4499,9 @@ export class PlanningPanelProvider {
             try { watcher.dispose(); } catch (e) {}
         }
         this._localFolderWatchers = [];
-        for (const watcher of this._htmlFolderWatchers) {
-            try { watcher.dispose(); } catch (e) {}
-        }
-        this._htmlFolderWatchers = [];
-        for (const watcher of this._designFolderWatchers) {
-            try { watcher.dispose(); } catch (e) {}
-        }
-        this._designFolderWatchers = [];
         if (this._localDocsDebounce) {
             clearTimeout(this._localDocsDebounce);
             this._localDocsDebounce = undefined;
-        }
-        if (this._htmlDocsDebounce) {
-            clearTimeout(this._htmlDocsDebounce);
-            this._htmlDocsDebounce = undefined;
-        }
-        if (this._designDocsDebounce) {
-            clearTimeout(this._designDocsDebounce);
-            this._designDocsDebounce = undefined;
         }
         if (this._kanbanPlansWatchDebounce) {
             clearTimeout(this._kanbanPlansWatchDebounce);
@@ -5155,15 +4511,7 @@ export class PlanningPanelProvider {
             try { watcher.dispose(); } catch (e) {}
         }
         this._kanbanPlansWatchers = [];
-        // Clean up HTML preview servers
-        for (const [sourceFolder, entry] of this._htmlServers) {
-            try {
-                clearTimeout(entry.timeoutId);
-                entry.server.close();
-            } catch (e) {}
-        }
-        this._htmlServers.clear();
-        this._htmlServerCreationPromises.clear();
+
         this._disposables.forEach(d => d.dispose());
         this._disposables = [];
         if (this._panel) {
@@ -5255,185 +4603,5 @@ export class PlanningPanelProvider {
         });
     }
 
-    private async _handleServeAndOpenHtml(absolutePath: string, docName: string, sourceFolder: string | undefined): Promise<void> {
-        if (!absolutePath) {
-            vscode.window.showErrorMessage('Cannot serve file: no absolute path available.');
-            return;
-        }
 
-        const resolvedSourceFolder = sourceFolder || path.dirname(absolutePath);
-
-        try {
-            // Verify file exists before spinning up a server
-            await fs.promises.access(absolutePath, fs.constants.R_OK);
-        } catch {
-            vscode.window.showErrorMessage(`File not found or not readable: ${absolutePath}`);
-            return;
-        }
-
-        try {
-            const entry = await this._getOrCreateHtmlServer(resolvedSourceFolder);
-            const url = this._buildLocalhostUrl(entry, resolvedSourceFolder, absolutePath);
-            await vscode.env.openExternal(vscode.Uri.parse(url));
-        } catch (err: any) {
-            console.error('[PlanningPanel] Failed to start local server:', err);
-            vscode.window.showErrorMessage(`Failed to start local server: ${err.message}`);
-        }
-    }
-
-    /**
-     * Get or create a localhost HTTP server for the given sourceFolder.
-     * Returns the server entry (with port) for URL construction.
-     * Uses a pending-promise map to prevent race conditions on concurrent calls.
-     */
-    private async _getOrCreateHtmlServer(sourceFolder: string): Promise<{ server: http.Server; port: number; timeoutId: NodeJS.Timeout }> {
-        // Reuse existing server if already running
-        const existing = this._htmlServers.get(sourceFolder);
-        if (existing) {
-            clearTimeout(existing.timeoutId);
-            existing.timeoutId = this._createServerTimeout(sourceFolder);
-            return existing;
-        }
-
-        // If another caller is already creating a server for this sourceFolder, await its result
-        const pendingPromise = this._htmlServerCreationPromises.get(sourceFolder);
-        if (pendingPromise) {
-            return pendingPromise;
-        }
-
-        // Start new server — store the creation promise to prevent race condition
-        const creationPromise = this._createHtmlServer(sourceFolder);
-        this._htmlServerCreationPromises.set(sourceFolder, creationPromise);
-
-        try {
-            const entry = await creationPromise;
-            return entry;
-        } finally {
-            // Always clean up the pending promise so future calls can retry on error
-            this._htmlServerCreationPromises.delete(sourceFolder);
-        }
-    }
-
-    private _createHtmlServer(sourceFolder: string): Promise<{ server: http.Server; port: number; timeoutId: NodeJS.Timeout }> {
-        const server = http.createServer((req, res) => {
-            this._handleHtmlServerRequest(req, res, sourceFolder);
-        });
-
-        return new Promise<{ server: http.Server; port: number; timeoutId: NodeJS.Timeout }>((resolve, reject) => {
-            server.listen(0, '127.0.0.1', () => {
-                const address = server.address() as { port: number };
-                const port = address.port;
-                const timeoutId = this._createServerTimeout(sourceFolder);
-                const entry = { server, port, timeoutId };
-                this._htmlServers.set(sourceFolder, entry);
-                console.log(`[PlanningPanel] HTML server started on port ${port} for ${sourceFolder}`);
-                resolve(entry);
-            });
-            server.on('error', (err: any) => {
-                console.error('[PlanningPanel] HTML server error:', err);
-                reject(err);
-            });
-        });
-    }
-
-    /**
-     * Construct a localhost URL for a file served by an HTML server entry.
-     */
-    private _buildLocalhostUrl(serverEntry: { port: number }, sourceFolder: string, filePath: string): string {
-        const relativeUrlPath = path.relative(sourceFolder, filePath);
-        const urlPath = relativeUrlPath.split(path.sep).map(encodeURIComponent).join('/');
-        return `http://127.0.0.1:${serverEntry.port}/${urlPath}`;
-    }
-
-    private _handleHtmlServerRequest(req: http.IncomingMessage, res: http.ServerResponse, sourceFolder: string): void {
-        const parsedUrl = new URL(req.url || '/', `http://127.0.0.1`);
-        const requestedPath = decodeURIComponent(parsedUrl.pathname);
-
-        // Reject bare directory requests (e.g. "/") — this server serves files only
-        if (requestedPath === '/' || requestedPath === '') {
-            res.writeHead(403, { 'Content-Type': 'text/plain' });
-            res.end('Forbidden: directory listing not available');
-            return;
-        }
-
-        // Resolve and validate path is within sourceFolder
-        const resolvedPath = path.resolve(sourceFolder, requestedPath.substring(1)); // strip leading /
-        const normalizedSource = path.normalize(sourceFolder).replace(/[\\/]+$/, '');
-        const normalizedResolved = path.normalize(resolvedPath);
-
-        // Path traversal guard
-        if (!normalizedResolved.startsWith(normalizedSource + path.sep) && normalizedResolved !== normalizedSource) {
-            res.writeHead(403, { 'Content-Type': 'text/plain' });
-            res.end('Forbidden: path traversal denied');
-            return;
-        }
-
-        // Deny-list guard: reject any request for paths containing sensitive directories
-        const pathParts = normalizedResolved.split(path.sep);
-        for (const part of pathParts) {
-            if (this._SERVER_DENY_LIST.some(denied => part === denied || part.startsWith(denied))) {
-                res.writeHead(403, { 'Content-Type': 'text/plain' });
-                res.end('Forbidden: access denied');
-                return;
-            }
-        }
-
-        // Serve file
-        fs.readFile(resolvedPath, (err, data) => {
-            if (err) {
-                res.writeHead(404, { 'Content-Type': 'text/plain' });
-                res.end('Not Found');
-                return;
-            }
-            const contentType = this._getMimeType(resolvedPath);
-            res.writeHead(200, { 'Content-Type': contentType });
-            res.end(data);
-        });
-
-        // Refresh inactivity timeout on each request
-        const entry = this._htmlServers.get(sourceFolder);
-        if (entry) {
-            clearTimeout(entry.timeoutId);
-            entry.timeoutId = this._createServerTimeout(sourceFolder);
-        }
-    }
-
-    private _getMimeType(filePath: string): string {
-        const ext = path.extname(filePath).toLowerCase();
-        const mimeMap: Record<string, string> = {
-            '.html': 'text/html; charset=utf-8',
-            '.htm': 'text/html; charset=utf-8',
-            '.css': 'text/css; charset=utf-8',
-            '.js': 'application/javascript; charset=utf-8',
-            '.mjs': 'application/javascript; charset=utf-8',
-            '.json': 'application/json; charset=utf-8',
-            '.png': 'image/png',
-            '.jpg': 'image/jpeg',
-            '.jpeg': 'image/jpeg',
-            '.gif': 'image/gif',
-            '.svg': 'image/svg+xml; charset=utf-8',
-            '.ico': 'image/x-icon',
-            '.webp': 'image/webp',
-            '.woff': 'font/woff',
-            '.woff2': 'font/woff2',
-            '.ttf': 'font/ttf',
-            '.eot': 'application/vnd.ms-fontobject',
-            '.webmanifest': 'application/manifest+json',
-            '.xml': 'application/xml',
-            '.txt': 'text/plain; charset=utf-8',
-            '.pdf': 'application/pdf',
-        };
-        return mimeMap[ext] || 'application/octet-stream';
-    }
-
-    private _createServerTimeout(sourceFolder: string): NodeJS.Timeout {
-        return setTimeout(() => {
-            const entry = this._htmlServers.get(sourceFolder);
-            if (entry) {
-                entry.server.close();
-                this._htmlServers.delete(sourceFolder);
-                console.log(`[PlanningPanel] HTML server auto-shutdown for ${sourceFolder}`);
-            }
-        }, 10 * 60 * 1000); // 10 minutes — extended for interactive chat sessions
-    }
 }

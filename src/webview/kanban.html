@@ -3434,7 +3434,6 @@
             const selectedProject = selectedOption?.dataset?.project;
             const workspaceRoot = selectedOption?.dataset?.workspaceRoot || currentWorkspaceRoot;
             if (!selectedProject) return;
-            if (!confirm(`Delete project "${selectedProject}"?\n\nAll plans in this project will have their project assignment cleared.`)) return;
             postKanbanMessage({ type: 'deleteProject', projectName: selectedProject, workspaceRoot });
         });
         let testingFailSourceColumn = '';
@@ -6679,10 +6678,7 @@
             const epicId = epicEntry ? epicEntry[0] : '';
             const epicCard = currentCards.find(c => (c.planId || c.sessionId) === epicId);
             if (!epicCard) return;
-            if (!confirm('Delete this epic?')) return;
-            const subtaskCount = epicCard.subtaskCount || 0;
-            const deleteSubtasks = subtaskCount > 0 ? confirm('Also delete all subtasks? (Cancel to orphan them)') : true;
-            postKanbanMessage({ type: 'deleteEpic', sessionId: epicCard.planId || epicCard.sessionId, workspaceRoot: epicCard.workspaceRoot, deleteSubtasks });
+            postKanbanMessage({ type: 'deleteEpic', sessionId: epicCard.planId || epicCard.sessionId, workspaceRoot: epicCard.workspaceRoot, deleteSubtasks: true });
             closeEpicManageModal();
             selectedCards.clear();
             document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
@@ -6696,10 +6692,6 @@
             const lockVal = lockCols ? lockCols.value : undefined;
             const tplVal = promptTpl ? promptTpl.value : undefined;
             const maxVal = maxSub ? maxSub.value : undefined;
-            // Guard: confirm if all fields are empty (would clear existing workspace config)
-            if (!lockVal && !tplVal && !maxVal) {
-                if (!confirm('All config fields are empty. Save will clear existing epic configuration. Continue?')) return;
-            }
             postKanbanMessage({
                 type: 'updateEpicConfig',
                 workspaceRoot: getActiveWorkspaceRoot(),
@@ -6818,12 +6810,6 @@
 
             modeSelect.addEventListener('change', () => {
                 const newMode = modeSelect.value;
-                if (state.enabled && currentAutomationMode !== newMode) {
-                    if (!window.confirm('Automation is currently running. Switch modes and stop automation?')) {
-                        modeSelect.value = currentAutomationMode;
-                        return;
-                    }
-                }
                 currentAutomationMode = newMode;
                 modeHelpText.textContent = modeDescriptions[newMode] || '';
                 try {
@@ -7669,7 +7655,6 @@
                 resetButton.style.cssText = 'padding:4px 8px; font-size:9px; color:var(--accent-red, #e55);';
                 resetButton.textContent = 'CLEAR & RESET';
                 resetButton.addEventListener('click', () => {
-                    if (!window.confirm('Clear autoban send counters and remove autoban backup terminals?')) return;
                     postKanbanMessage({ type: 'resetAutobanPools' });
                 });
 
@@ -8075,8 +8060,6 @@
         document.getElementById('btn-save-kanban-column')?.addEventListener('click', saveKanbanColumnDraft);
         document.getElementById('btn-cancel-kanban-column')?.addEventListener('click', closeKanbanColumnModal);
         document.getElementById('btn-restore-kanban-defaults')?.addEventListener('click', () => {
-            const confirmed = window.confirm('Restore the default Kanban structure? This removes custom columns.');
-            if (!confirmed) return;
             lastCustomKanbanColumns = [];
             postKanbanMessage({ type: 'restoreKanbanDefaults' });
             renderKanbanStructureList();
@@ -8363,11 +8346,9 @@
                     abandonBtn.textContent = 'ABANDON WORKTREE';
                     abandonBtn.addEventListener('click', () => {
                         if (abandonBtn.disabled) return;
-                        if (confirm('Are you sure you want to abandon this worktree? All worktree changes and the branch will be deleted!')) {
-                            abandonBtn.disabled = true;
-                            postKanbanMessage({ type: 'abandonSafetySession', workspaceRoot: currentWorkspaceRoot });
-                            setTimeout(() => { abandonBtn.disabled = false; }, 5000);
-                        }
+                        abandonBtn.disabled = true;
+                        postKanbanMessage({ type: 'abandonSafetySession', workspaceRoot: currentWorkspaceRoot });
+                        setTimeout(() => { abandonBtn.disabled = false; }, 5000);
                     });
                     btnGroup.appendChild(abandonBtn);
 
