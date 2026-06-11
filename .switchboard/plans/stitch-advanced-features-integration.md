@@ -195,4 +195,8 @@ Key risks: (1) Positional parameter trap in `screen.edit()` where `modelId` coul
 - UI controls persist across panel close/reopen.
 - Error handling provides clear feedback for invalid parameters.
 
+## Review Findings
+
+Code fixes applied to `src/webview/design.js` only. Validated persisted-state corruption guards were missing for `stitchModelId`, `stitchCreativeRange`, and `stitchAspects`; added enum validation and array-type checks on init plus defensive guard in `initStitchControls`. Backend handlers in `DesignPanelProvider.ts`, HTML controls in `design.html`, and `package.json` config properties all matched the plan exactly with no changes needed. Compilation and tests skipped per session instructions. Remaining risk: SDK enum drift on version bumps; UI layout of creative-range select uses `flex: 1` instead of planned `max-width: 140px` — monitor in real panel for overflow.
+
 **Recommendation:** Send to Coder

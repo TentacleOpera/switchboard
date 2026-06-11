@@ -30,9 +30,9 @@
         stitchScreens: [],
         stitchApiKeyConfigured: false,
         activePreviewScreenId: null,
-        stitchModelId: persistedState.stitchModelId || 'GEMINI_3_FLASH',
-        stitchCreativeRange: persistedState.stitchCreativeRange || 'EXPLORE',
-        stitchAspects: persistedState.stitchAspects || ['LAYOUT','COLOR_SCHEME','IMAGES','TEXT_FONT','TEXT_CONTENT'],
+        stitchModelId: ['GEMINI_3_FLASH','GEMINI_3_1_PRO'].includes(persistedState.stitchModelId) ? persistedState.stitchModelId : 'GEMINI_3_FLASH',
+        stitchCreativeRange: ['EXPLORE','REFINE','REIMAGINE'].includes(persistedState.stitchCreativeRange) ? persistedState.stitchCreativeRange : 'EXPLORE',
+        stitchAspects: Array.isArray(persistedState.stitchAspects) && persistedState.stitchAspects.every(a => typeof a === 'string') ? persistedState.stitchAspects : ['LAYOUT','COLOR_SCHEME','IMAGES','TEXT_FONT','TEXT_CONTENT'],
         stitchGeneratorOpen: false,
         stitchGeneratorImages: []
     };
@@ -1644,7 +1644,8 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
         if (stitchAspectsCheckboxesContainer) {
             const checkboxes = stitchAspectsCheckboxesContainer.querySelectorAll('input[type="checkbox"]');
             checkboxes.forEach(cb => {
-                cb.checked = state.stitchAspects.includes(cb.value);
+                const safeAspects = Array.isArray(state.stitchAspects) ? state.stitchAspects : ['LAYOUT','COLOR_SCHEME','IMAGES','TEXT_FONT','TEXT_CONTENT'];
+                cb.checked = safeAspects.includes(cb.value);
                 cb.addEventListener('change', () => {
                     const checked = [];
                     checkboxes.forEach(c => {

@@ -87,6 +87,7 @@
     let clickUpProjectLoading = false;
     let clickUpHierarchyLoading = false;
     let clickUpImportPending = false;
+    let isImportingAll = false;
     let _restoringClickUpHierarchy = false;
     let pendingClickUpDetailIssueId = '';
 
@@ -2608,8 +2609,15 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 break;
             case 'importAllTicketsComplete':
                 setTicketsLoadingState(false);
+                isImportingAll = false;
+                const importAllBtn = document.getElementById('btn-import-all-tickets');
+                if (importAllBtn) importAllBtn.disabled = false;
                 if (msg.success) {
-                    showTicketsStatus(`Imported ${msg.successCount} tickets, ${msg.failCount} failed.`, false);
+                    let statusText = `Imported ${msg.successCount} tickets, ${msg.failCount} failed.`;
+                    if (msg.errors && msg.errors.length > 0) {
+                        statusText += ' Failed: ' + msg.errors.map(e => e.id).join(', ');
+                    }
+                    showTicketsStatus(statusText, msg.failCount > 0);
                 } else {
                     showTicketsStatus(msg.error || 'Bulk import failed', true);
                 }
@@ -4441,6 +4449,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         // Import All button
         btnImportAllTickets?.addEventListener('click', () => {
+            if (isImportingAll) return;
             const provider = lastIntegrationProvider;
             let ids = [];
             if (provider === 'linear') {
@@ -4452,6 +4461,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 showTicketsStatus('No tickets to import', true);
                 return;
             }
+            isImportingAll = true;
+            btnImportAllTickets.disabled = true;
             setTicketsLoadingState(true);
             vscode.postMessage({
                 type: 'importAllTickets',
@@ -5532,12 +5543,13 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
     // ===== IMPORT/REFINE DELEGATION =====
 
-    function handleTicketsImport(provider, id, includeSubtasks) {
+    function handleTicketsImport(provider, id, includeSubtasks, mode) {
         vscode.postMessage({
             type: provider === 'clickup' ? 'clickupImportTask' : 'linearImportTask',
             workspaceRoot: currentWorkspaceRoot,
             [provider === 'clickup' ? 'taskId' : 'issueId']: id,
-            includeSubtasks
+            includeSubtasks,
+            mode
         });
     }
 

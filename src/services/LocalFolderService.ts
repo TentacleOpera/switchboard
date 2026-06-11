@@ -157,12 +157,14 @@ export class LocalFolderService {
                     localFolderPaths: parsed.localFolderPaths || [],
                     htmlFolderPaths: parsed.htmlFolderPaths || [],
                     designFolderPaths: parsed.designFolderPaths || [],
+                    ticketsFolderPaths: parsed.ticketsFolderPaths || [],
                     _migratedLocal: parsed._migratedLocal || false,
                     _migratedHtml: parsed._migratedHtml || false,
-                    _migratedDesign: parsed._migratedDesign || false
+                    _migratedDesign: parsed._migratedDesign || false,
+                    _migratedTickets: parsed._migratedTickets || false
                 };
             } catch {
-                cfg = { localFolderPaths: [], htmlFolderPaths: [], designFolderPaths: [], _migratedLocal: false, _migratedHtml: false, _migratedDesign: false };
+                cfg = { localFolderPaths: [], htmlFolderPaths: [], designFolderPaths: [], ticketsFolderPaths: [], _migratedLocal: false, _migratedHtml: false, _migratedDesign: false, _migratedTickets: false };
             }
             this._folderPathsCache = cfg;
         }
@@ -357,12 +359,14 @@ export class LocalFolderService {
                     localFolderPaths: parsed.localFolderPaths || [],
                     htmlFolderPaths: parsed.htmlFolderPaths || [],
                     designFolderPaths: parsed.designFolderPaths || [],
+                    ticketsFolderPaths: parsed.ticketsFolderPaths || [],
                     _migratedLocal: parsed._migratedLocal || false,
                     _migratedHtml: parsed._migratedHtml || false,
-                    _migratedDesign: parsed._migratedDesign || false
+                    _migratedDesign: parsed._migratedDesign || false,
+                    _migratedTickets: parsed._migratedTickets || false
                 };
             } catch {
-                cfg = { localFolderPaths: [], htmlFolderPaths: [], designFolderPaths: [], _migratedLocal: false, _migratedHtml: false, _migratedDesign: false };
+                cfg = { localFolderPaths: [], htmlFolderPaths: [], designFolderPaths: [], ticketsFolderPaths: [], _migratedLocal: false, _migratedHtml: false, _migratedDesign: false, _migratedTickets: false };
             }
             this._folderPathsCache = cfg;
         }
@@ -544,12 +548,14 @@ export class LocalFolderService {
                     localFolderPaths: parsed.localFolderPaths || [],
                     htmlFolderPaths: parsed.htmlFolderPaths || [],
                     designFolderPaths: parsed.designFolderPaths || [],
+                    ticketsFolderPaths: parsed.ticketsFolderPaths || [],
                     _migratedLocal: parsed._migratedLocal || false,
                     _migratedHtml: parsed._migratedHtml || false,
-                    _migratedDesign: parsed._migratedDesign || false
+                    _migratedDesign: parsed._migratedDesign || false,
+                    _migratedTickets: parsed._migratedTickets || false
                 };
             } catch {
-                cfg = { localFolderPaths: [], htmlFolderPaths: [], designFolderPaths: [], _migratedLocal: false, _migratedHtml: false, _migratedDesign: false };
+                cfg = { localFolderPaths: [], htmlFolderPaths: [], designFolderPaths: [], ticketsFolderPaths: [], _migratedLocal: false, _migratedHtml: false, _migratedDesign: false, _migratedTickets: false };
             }
             this._folderPathsCache = cfg;
         }

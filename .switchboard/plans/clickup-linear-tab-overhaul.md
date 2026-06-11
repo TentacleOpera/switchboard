@@ -382,3 +382,18 @@ Key risks: (1) persistent document may diverge from remote ticket if the user ed
 **Send to Coder.**
 
 Complexity is 6 — multi-file coordination across webview UI, VS Code extension host, and two third-party APIs. No new architectural patterns; the persistent document approach reuses existing file I/O and sync primitives. Bulk-import throttling and webview security for destructive actions are the primary remaining risks.
+
+## Review Findings
+
+**Files changed:** `src/webview/planning.js`, `src/services/LocalFolderService.ts`
+
+**Validation:** TypeScript `tsc --noEmit` passes with only pre-existing unrelated errors. No compilation issues introduced.
+
+**Fixes applied:**
+- `planning.js:5536`: `handleTicketsImport` now accepts and forwards `mode` parameter, fixing broken "Import Doc" card buttons.
+- `planning.js:90,4451-4464,2610-2623`: Added `isImportingAll` guard with button disable/enable to prevent overlapping batch imports; completion toast now enumerates failed ticket IDs.
+- `LocalFolderService.ts:156-167,358-369,547-558`: Added missing `ticketsFolderPaths` and `_migratedTickets` to `getFolderPaths`, `getHtmlFolderPaths`, and `getDesignFolderPaths` cache initializers to satisfy the `LocalFolderPathsConfig` interface and eliminate null-dereference/type errors.
+
+**Remaining risks:**
+- Preview meta bar buttons are not dynamically enabled/disabled based on document open state (Edit should disable when document is open; Push should disable when no document exists). UX is functional but not fully aligned with Phase 2.1 spec.
+- Empty preview text reads "Select a ticket to preview" rather than the specified "Select a ticket from the sidebar to view details and take actions."
