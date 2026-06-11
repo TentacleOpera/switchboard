@@ -2777,8 +2777,30 @@
         .complexity-dot.high { background: #da3633; }
         .complexity-dot.very-high { background: #ff00ff; }
 
+        /* Tickets local/online mode switch */
+        .tickets-mode-switch { display: flex; gap: 4px; flex: 1; min-width: 0; }
+        .tickets-mode-btn {
+            flex: 1; background: transparent; border: 1px solid var(--border-color, #333);
+            color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px;
+            letter-spacing: 1px; text-transform: uppercase; padding: 4px 6px;
+            cursor: pointer; border-radius: 3px;
+        }
+        .tickets-mode-btn.active {
+            border-color: var(--accent-teal); color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+        /* Online-only controls hidden while the Local view is active */
+        #controls-strip-tickets.tickets-local-mode #tickets-project-picker,
+        #controls-strip-tickets.tickets-local-mode #tickets-state-filter,
+        #controls-strip-tickets.tickets-local-mode #tickets-status-filter,
+        #controls-strip-tickets.tickets-local-mode #tickets-create,
+        #controls-strip-tickets.tickets-local-mode #btn-import-all-tickets,
+        #controls-strip-tickets.tickets-local-mode #tickets-hierarchy-nav {
+            display: none !important;
+        }
+
         /* Kanban preview meta bar */
-        #kanban-preview-meta-bar, #tickets-preview-meta-bar {
+        #kanban-preview-meta-bar, #tickets-preview-meta-bar, #tickets-local-meta-bar {
             display: flex;
             align-items: center;
             gap: 12px;
@@ -3142,11 +3164,17 @@
             <div class="content-row">
                 <div id="tree-pane-tickets">
                     <div class="sidebar-toggle-row">
+                        <div class="tickets-mode-switch">
+                            <button id="tickets-mode-online" class="tickets-mode-btn active" title="Browse tickets on ClickUp/Linear">Online</button>
+                            <button id="tickets-mode-local" class="tickets-mode-btn" title="Imported local copies — edit as markdown, push back when done">Local</button>
+                        </div>
                         <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
                     </div>
                     <div id="tickets-empty-state" class="empty-state">No tickets loaded.</div>
                     <div id="tickets-issues-container"></div>
                     <button id="tickets-load-more" class="planning-button" style="display:none">Load More</button>
+                    <div id="tickets-local-empty-state" class="empty-state" style="display:none">No imported tickets yet. Switch to Online and click Edit on a ticket to import it here.</div>
+                    <div id="tickets-local-container" style="display:none"></div>
                 </div>
                 <div class="preview-panel-wrapper">
                     <div id="preview-pane-tickets" style="flex: 1; width: 100%; box-sizing: border-box; display: flex; flex-direction: column;">
@@ -3160,11 +3188,13 @@
                             </div>
                             <button id="btn-comment-ticket" class="strip-btn">Comment</button>
                         </div>
-                        <div id="tickets-delete-confirm-banner" class="delete-confirm-banner" style="display:none; padding: 10px; background: rgba(218, 54, 51, 0.1); border: 1px solid #da3633; border-radius: 4px; margin: 10px; font-size: 12px;">
-                            <span style="color: #da3633; font-weight: bold; margin-right: 8px;">Delete Ticket:</span>
-                            Type the ticket title to confirm: <input id="delete-confirm-input" type="text" style="background: var(--input-bg, #000); border: 1px solid var(--border-color); color: var(--text-primary); padding: 2px 4px; font-size: 12px; margin-right: 8px;" />
-                            <button id="confirm-delete-ticket" class="strip-btn" style="background: #da3633; color: white;" disabled>Delete</button>
-                            <button id="cancel-delete-ticket" class="strip-btn">Cancel</button>
+                        <div id="tickets-local-meta-bar" style="display:none;">
+                            <button id="btn-edit-local-ticket" class="strip-btn">Edit</button>
+                            <button id="btn-save-local-ticket" class="strip-btn" style="display:none;">Save</button>
+                            <button id="btn-cancel-local-ticket" class="strip-btn" style="display:none;">Cancel</button>
+                            <button id="btn-push-local-ticket" class="strip-btn" title="Push this markdown back to the remote ticket">Push to Remote</button>
+                            <button id="btn-delete-local-ticket" class="strip-btn" title="Delete the local copy (remote ticket is untouched)">Delete Local</button>
+                            <span id="tickets-local-file-label" style="font-size:10px; margin-left:auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
                         </div>
                         <div id="tickets-comment-input-area" style="display:none; padding: 10px; border-bottom: 1px solid var(--border-color); background: var(--panel-bg2); margin: 10px;">
                             <textarea id="tickets-comment-textarea" placeholder="Type a comment..." style="width: 100%; height: 60px; background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-primary); font-family: inherit; font-size: 12px; padding: 4px; box-sizing: border-box; resize: vertical;"></textarea>
@@ -3185,6 +3215,12 @@
                                 <div id="tickets-subtasks-nav" style="display:none"></div>
                                 <!-- Ticket detail content (description + comments + attachments) -->
                                 <div id="tickets-detail-content"></div>
+                            </div>
+                            <!-- Local mode: imported ticket markdown preview + editor -->
+                            <div id="tickets-local-view" style="display:none; flex-direction: column; min-height: 100%;">
+                                <div id="tickets-local-empty-preview" class="empty-state">Select an imported ticket to preview</div>
+                                <div id="tickets-local-preview"></div>
+                                <textarea id="tickets-local-editor" class="markdown-editor" style="display:none; flex: 1; min-height: 400px;"></textarea>
                             </div>
                         </div>
                     </div>

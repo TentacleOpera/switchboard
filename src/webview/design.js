@@ -12,7 +12,13 @@
         activeDocName: null,
         activeDocContent: null,
         activeDocFilePath: null,
+        activeDocSourceFolder: null,
         activeFileType: null,
+        designEditMode: false,
+        designEditOriginalContent: '',
+        designSystemDocEnabled: false,
+        designSystemDocSourceId: null,
+        designSystemDocId: null,
         selectedEl: null,
         previewRequestId: 0,
         htmlFolderPathsByRoot: persistedState.htmlFolderPathsByRoot || {},
@@ -76,16 +82,15 @@
 
     // ── Zoom/Pan Engine ──
     const zoomState = {
-        html:     { scale: 1, panX: 0, panY: 0, isPanning: false, startX: 0, startY: 0 },
-        design:   { scale: 1, panX: 0, panY: 0, isPanning: false, startX: 0, startY: 0 },
+        html:     { scale: 1, panX: 0, panY: 0, isPanning: false, startX: 0, startY: 0, panSource: null },
+        design:   { scale: 1, panX: 0, panY: 0, isPanning: false, startX: 0, startY: 0, panSource: null },
     };
 
     const ZOOM_MIN = 0.1;
-    const ZOOM_MAX = 10.0;
-    const ZOOM_STEP = 0.1;
+    const ZOOM_MAX = 40.0;
 
     function resetZoom(tab) {
-        zoomState[tab] = { scale: 1, panX: 0, panY: 0, isPanning: false, startX: 0, startY: 0 };
+        zoomState[tab] = { scale: 1, panX: 0, panY: 0, isPanning: false, startX: 0, startY: 0, panSource: null };
     }
 
     function applyZoom(tab, viewportEl) {
@@ -93,14 +98,31 @@
         viewportEl.style.transform = `translate(${zoomState[tab].panX}px, ${zoomState[tab].panY}px) scale(${zoomState[tab].scale})`;
     }
 
+    function getContentDims(viewportEl) {
+        const el = viewportEl ? viewportEl.firstElementChild : null;
+        if (!el) return null;
+        const w = el.tagName === 'IMG' ? (el.naturalWidth || el.offsetWidth) : el.offsetWidth;
+        const h = el.tagName === 'IMG' ? (el.naturalHeight || el.offsetHeight) : el.offsetHeight;
+        return (w && h) ? { w, h } : null;
+    }
+
+    // Content that fits on an axis is locked centered; content larger than the
+    // container clamps so it always covers the canvas — it can never be zoomed
+    // or panned out of view.
     function clampPan(tab, containerRect, contentWidth, contentHeight) {
         const s = zoomState[tab].scale;
-        const minX = Math.min(0, containerRect.width - contentWidth * s);
-        const minY = Math.min(0, containerRect.height - contentHeight * s);
-        const maxX = Math.max(0, containerRect.width - contentWidth * s);
-        const maxY = Math.max(0, containerRect.height - contentHeight * s);
-        zoomState[tab].panX = Math.max(minX, Math.min(maxX, zoomState[tab].panX));
-        zoomState[tab].panY = Math.max(minY, Math.min(maxY, zoomState[tab].panY));
+        const scaledW = contentWidth * s;
+        const scaledH = contentHeight * s;
+        if (scaledW <= containerRect.width) {
+            zoomState[tab].panX = (containerRect.width - scaledW) / 2;
+        } else {
+            zoomState[tab].panX = Math.max(containerRect.width - scaledW, Math.min(0, zoomState[tab].panX));
+        }
+        if (scaledH <= containerRect.height) {
+            zoomState[tab].panY = (containerRect.height - scaledH) / 2;
+        } else {
+            zoomState[tab].panY = Math.max(containerRect.height - scaledH, Math.min(0, zoomState[tab].panY));
+        }
     }
 
     function fitToContainer(tab, containerEl, viewportEl, retriesLeft = 5) {
@@ -142,13 +164,8 @@
         zoomState[tab].panX = cx - (cx - zoomState[tab].panX) * k;
         zoomState[tab].panY = cy - (cy - zoomState[tab].panY) * k;
         zoomState[tab].scale = clamped;
-        const containerRect = container.getBoundingClientRect();
-        const contentEl = viewportEl ? viewportEl.firstElementChild : null;
-        if (contentEl) {
-            const w = contentEl.tagName === 'IMG' ? (contentEl.naturalWidth || contentEl.offsetWidth) : contentEl.offsetWidth;
-            const h = contentEl.tagName === 'IMG' ? (contentEl.naturalHeight || contentEl.offsetHeight) : contentEl.offsetHeight;
-            if (w && h) clampPan(tab, containerRect, w, h);
-        }
+        const dims = getContentDims(viewportEl);
+        if (dims) clampPan(tab, container.getBoundingClientRect(), dims.w, dims.h);
         applyZoom(tab, viewportEl);
     }
 
@@ -156,45 +173,51 @@
         const container = document.getElementById(containerId);
         if (!container) return;
 
+        // Plain scroll zooms at the cursor; trackpad pinch arrives as ctrl+wheel
+        // with small deltas, so it gets a stronger multiplier.
         container.addEventListener('wheel', (e) => {
-            if (!e.metaKey && !e.ctrlKey) return;
             e.preventDefault();
-
-            const delta = e.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
+            const factor = Math.exp(-e.deltaY * ((e.ctrlKey || e.metaKey) ? 0.01 : 0.002));
             const rect = container.getBoundingClientRect();
             zoomAt(tab, container, container.querySelector(viewportSelector),
-                zoomState[tab].scale + delta,
+                zoomState[tab].scale * factor,
                 e.clientX - rect.left, e.clientY - rect.top);
         }, { passive: false });
 
         container.addEventListener('mousedown', (e) => {
             if (e.button !== 0 || e.target.closest('.zoom-toolbar')) return;
+            // Without this, grabbing an <img> starts a native drag and the pan dies.
+            e.preventDefault();
             zoomState[tab].isPanning = true;
+            zoomState[tab].panSource = containerId;
             zoomState[tab].startX = e.clientX - zoomState[tab].panX;
             zoomState[tab].startY = e.clientY - zoomState[tab].panY;
             container.classList.add('panning');
         });
 
         window.addEventListener('mousemove', (e) => {
-            if (!zoomState[tab].isPanning) return;
+            // panSource guard: two containers share each tab's state; without it the
+            // hidden container's handler clamps against a 0×0 rect and wrecks the pan.
+            if (!zoomState[tab].isPanning || zoomState[tab].panSource !== containerId) return;
             zoomState[tab].panX = e.clientX - zoomState[tab].startX;
             zoomState[tab].panY = e.clientY - zoomState[tab].startY;
 
-            const containerRect = container.getBoundingClientRect();
             const viewportEl = container.querySelector(viewportSelector);
-            const contentEl = viewportEl ? viewportEl.firstElementChild : null;
-            if (contentEl) {
-                const cw = contentEl.tagName === 'IMG' ? (contentEl.naturalWidth || contentEl.offsetWidth) : contentEl.offsetWidth;
-                const ch = contentEl.tagName === 'IMG' ? (contentEl.naturalHeight || contentEl.offsetHeight) : contentEl.offsetHeight;
-                clampPan(tab, containerRect, cw, ch);
-            }
+            const dims = getContentDims(viewportEl);
+            if (dims) clampPan(tab, container.getBoundingClientRect(), dims.w, dims.h);
             applyZoom(tab, viewportEl);
         });
 
         window.addEventListener('mouseup', () => {
-            if (!zoomState[tab].isPanning) return;
+            if (!zoomState[tab].isPanning || zoomState[tab].panSource !== containerId) return;
             zoomState[tab].isPanning = false;
+            zoomState[tab].panSource = null;
             container.classList.remove('panning');
+        });
+
+        container.addEventListener('dblclick', (e) => {
+            if (e.target.closest('.zoom-toolbar')) return;
+            fitToContainer(tab, container, container.querySelector(viewportSelector));
         });
 
         container.addEventListener('click', (e) => {
@@ -204,11 +227,18 @@
             const viewportEl = container.querySelector(viewportSelector);
             const rect = container.getBoundingClientRect();
             if (action === 'zoom-in') {
-                zoomAt(tab, container, viewportEl, zoomState[tab].scale + ZOOM_STEP * 2, rect.width / 2, rect.height / 2);
+                zoomAt(tab, container, viewportEl, zoomState[tab].scale * 1.25, rect.width / 2, rect.height / 2);
             } else if (action === 'zoom-out') {
-                zoomAt(tab, container, viewportEl, zoomState[tab].scale - ZOOM_STEP * 2, rect.width / 2, rect.height / 2);
+                zoomAt(tab, container, viewportEl, zoomState[tab].scale / 1.25, rect.width / 2, rect.height / 2);
             } else if (action === 'reset') {
-                resetZoom(tab);
+                zoomState[tab].scale = 1;
+                const dims = getContentDims(viewportEl);
+                if (dims) {
+                    clampPan(tab, rect, dims.w, dims.h);
+                } else {
+                    zoomState[tab].panX = 0;
+                    zoomState[tab].panY = 0;
+                }
                 applyZoom(tab, viewportEl);
             } else if (action === 'fit') {
                 fitToContainer(tab, container, viewportEl);
@@ -220,6 +250,24 @@
     initZoomListeners('html-preview-wrapper', '.zoomable-viewport', 'html');
     initZoomListeners('image-preview-container', '.zoomable-viewport', 'html');
     initZoomListeners('image-preview-container-design', '.zoomable-viewport', 'design');
+
+    // Hold Space to pan/zoom over HTML previews. The iframe swallows mouse events,
+    // so a capture layer is shown only while Space is held — the rest of the time
+    // the previewed page stays fully interactive.
+    window.addEventListener('keydown', (e) => {
+        if (e.code !== 'Space' || e.repeat) return;
+        const t = e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+        document.body.classList.add('space-pan-active');
+        e.preventDefault(); // stop the page from scrolling on Space
+    });
+    window.addEventListener('keyup', (e) => {
+        if (e.code !== 'Space') return;
+        document.body.classList.remove('space-pan-active');
+    });
+    window.addEventListener('blur', () => {
+        document.body.classList.remove('space-pan-active');
+    });
 
     // Sidebar Collapsing
     function toggleSidebarCollapsed(e) {
@@ -264,6 +312,25 @@
             }
             select.appendChild(option);
         }
+    }
+
+    // srcdoc previews lose their file origin — a <base> tag pointed at the
+    // file's webview URI lets relative asset paths resolve.
+    function injectBaseTag(html, baseUri) {
+        if (!html || !baseUri) return html;
+        if (html.includes('<base ')) return html;
+        const baseTag = `<base href="${escapeHtml(baseUri)}">`;
+        const headMatch = html.match(/<head\b[^>]*>/i);
+        if (headMatch) {
+            const index = headMatch.index + headMatch[0].length;
+            return html.slice(0, index) + baseTag + html.slice(index);
+        }
+        const htmlMatch = html.match(/<html\b[^>]*>/i);
+        if (htmlMatch) {
+            const index = htmlMatch.index + htmlMatch[0].length;
+            return html.slice(0, index) + baseTag + html.slice(index);
+        }
+        return baseTag + html;
     }
 
     function getCurrentFolderPaths(folderPathsByRoot, filterRoot) {
@@ -497,8 +564,14 @@
                 btn.addEventListener('click', (e) => {
                     e.stopPropagation();
                     if (action === 'Set Context') {
+                        // Activates the kanban "Design Doc Reference" add-on with this doc
+                        const statusDesign = document.getElementById('status-design');
+                        if (statusDesign) {
+                            statusDesign.textContent = 'Setting as active design doc...';
+                            statusDesign.style.color = '';
+                        }
                         vscode.postMessage({
-                            type: 'appendToPlannerPrompt',
+                            type: 'setActivePlanningContext',
                             sourceId,
                             docId: nodeId,
                             docName: title,
@@ -602,6 +675,10 @@
                 sourceFolder
             });
         } else if (sourceId === 'design-folder') {
+            if (state.designEditMode) exitDesignEditMode();
+            state.activeDocSourceFolder = sourceFolder || null;
+            updateDesignDocControls();
+
             const statusDesign = document.getElementById('status-design');
             if (statusDesign) statusDesign.textContent = 'Loading...';
 
@@ -674,7 +751,8 @@
                 if (iframe) {
                     iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
                     iframe.removeAttribute('src');
-                    iframe.srcdoc = htmlContent;
+                    iframe.removeAttribute('srcdoc');
+                    iframe.srcdoc = injectBaseTag(htmlContent, webviewUri);
                     const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
                     if (iframeViewport) applyZoom('html', iframeViewport);
                 }
@@ -692,6 +770,8 @@
 
             state.activeDocFilePath = filePath || null;
             state.activeFileType = msg.fileType || null;
+            state.activeDocContent = isImage ? null : (content || '');
+            updateDesignDocControls();
 
             const mdPrev = document.getElementById('markdown-preview-design');
             const imgCont = document.getElementById('image-preview-container-design');
@@ -762,6 +842,132 @@
             }
         }
     }
+
+    // ── Design Doc Controls (controls strip: Set Active / Link / Edit / Save / Cancel) ──
+    function updateDesignDocControls() {
+        const hasDoc = state.activeSource === 'design-folder' && !!state.activeDocId;
+
+        const docExt = (state.activeDocId || '').substring((state.activeDocId || '').lastIndexOf('.')).toLowerCase();
+        const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(docExt) || state.activeFileType === 'image';
+
+        const isActiveDoc = hasDoc && state.designSystemDocEnabled &&
+            state.designSystemDocSourceId === state.activeSource &&
+            state.designSystemDocId === state.activeDocId;
+
+        const btnSet = document.getElementById('btn-set-active-context-design');
+        const btnLink = document.getElementById('btn-link-to-doc-design');
+        const btnEdit = document.getElementById('btn-edit-design');
+
+        if (btnSet) {
+            btnSet.disabled = !hasDoc;
+            btnSet.textContent = isActiveDoc ? 'Turn off' : 'Set as Active Design Doc';
+            btnSet.dataset.active = isActiveDoc ? 'true' : 'false';
+        }
+        if (btnLink) btnLink.disabled = !hasDoc;
+        if (btnEdit) btnEdit.disabled = !hasDoc || isImage || state.designEditMode;
+    }
+
+    function enterDesignEditMode() {
+        const previewPane = document.getElementById('preview-pane-design');
+        const textarea = document.getElementById('markdown-editor-design');
+        if (!previewPane || !textarea) return;
+
+        state.designEditOriginalContent = state.activeDocContent || '';
+        textarea.value = state.designEditOriginalContent;
+        previewPane.classList.add('edit-mode');
+
+        const btnEdit = document.getElementById('btn-edit-design');
+        const btnSave = document.getElementById('btn-save-design');
+        const btnCancel = document.getElementById('btn-cancel-design');
+        if (btnEdit) btnEdit.style.display = 'none';
+        if (btnSave) btnSave.style.display = '';
+        if (btnCancel) btnCancel.style.display = '';
+
+        state.designEditMode = true;
+        updateDesignDocControls();
+    }
+
+    function exitDesignEditMode() {
+        const previewPane = document.getElementById('preview-pane-design');
+        if (previewPane) previewPane.classList.remove('edit-mode');
+
+        const btnEdit = document.getElementById('btn-edit-design');
+        const btnSave = document.getElementById('btn-save-design');
+        const btnCancel = document.getElementById('btn-cancel-design');
+        if (btnEdit) btnEdit.style.display = '';
+        if (btnSave) btnSave.style.display = 'none';
+        if (btnCancel) btnCancel.style.display = 'none';
+
+        state.designEditMode = false;
+        updateDesignDocControls();
+    }
+
+    (function initDesignDocControls() {
+        const btnSet = document.getElementById('btn-set-active-context-design');
+        const btnLink = document.getElementById('btn-link-to-doc-design');
+        const btnEdit = document.getElementById('btn-edit-design');
+        const btnSave = document.getElementById('btn-save-design');
+        const btnCancel = document.getElementById('btn-cancel-design');
+
+        if (btnSet) {
+            btnSet.addEventListener('click', () => {
+                if (!state.activeSource || !state.activeDocId) return;
+                if (btnSet.dataset.active === 'true') {
+                    vscode.postMessage({ type: 'disableDesignDoc', docType: 'design-system' });
+                    return;
+                }
+                btnSet.disabled = true;
+                const statusDesign = document.getElementById('status-design');
+                if (statusDesign) {
+                    statusDesign.textContent = 'Setting as active design doc...';
+                    statusDesign.style.color = '';
+                }
+                const wrapper = findTreeNode(state.activeSource, state.activeDocId);
+                const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : state.activeDocSourceFolder;
+                vscode.postMessage({
+                    type: 'setActivePlanningContext',
+                    sourceId: state.activeSource,
+                    docId: state.activeDocId,
+                    docName: state.activeDocName || state.activeDocId,
+                    sourceFolder
+                });
+            });
+        }
+        if (btnLink) {
+            btnLink.addEventListener('click', () => {
+                if (!state.activeSource || !state.activeDocId) return;
+                const wrapper = findTreeNode(state.activeSource, state.activeDocId);
+                const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : state.activeDocSourceFolder;
+                vscode.postMessage({
+                    type: 'linkToDocument',
+                    sourceId: state.activeSource,
+                    docId: state.activeDocId,
+                    docName: state.activeDocName || state.activeDocId,
+                    sourceFolder
+                });
+            });
+        }
+        if (btnEdit) {
+            btnEdit.addEventListener('click', () => enterDesignEditMode());
+        }
+        if (btnSave) {
+            btnSave.addEventListener('click', () => {
+                const filePath = state.activeDocFilePath;
+                const editor = document.getElementById('markdown-editor-design');
+                if (!filePath || !editor) return;
+                vscode.postMessage({
+                    type: 'saveFileContent',
+                    filePath,
+                    content: editor.value,
+                    originalContent: state.designEditOriginalContent,
+                    tab: 'design'
+                });
+            });
+        }
+        if (btnCancel) {
+            btnCancel.addEventListener('click', () => exitDesignEditMode());
+        }
+    })();
 
     // ── Stitch UI Controls ──
     const stitchProjectSelect = document.getElementById('stitch-project-select');
@@ -1590,6 +1796,86 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 }
                 break;
 
+            case 'activeDesignDocUpdated': {
+                const ds = msg.designSystemDoc || {};
+                state.designSystemDocEnabled = !!ds.enabled;
+                state.designSystemDocSourceId = ds.sourceId || null;
+                state.designSystemDocId = ds.docId || null;
+                updateDesignDocControls();
+                break;
+            }
+
+            case 'activeContextSet': {
+                const statusDesign = document.getElementById('status-design');
+                if (statusDesign) {
+                    statusDesign.textContent = msg.success
+                        ? 'Set as active design doc'
+                        : 'Error: ' + (msg.error || 'Failed to set active context');
+                    statusDesign.style.color = msg.success ? 'var(--accent-teal)' : '#ff6b6b';
+                }
+                updateDesignDocControls();
+                break;
+            }
+
+            case 'saveFileContentResult': {
+                if (msg.tab !== 'design') break;
+                const editor = document.getElementById('markdown-editor-design');
+                const statusDesign = document.getElementById('status-design');
+                if (msg.success) {
+                    state.activeDocContent = editor ? editor.value : state.activeDocContent;
+                    exitDesignEditMode();
+                    if (state.activeFileType === 'json') {
+                        const jsonCont = document.getElementById('json-preview-container-design');
+                        if (jsonCont) {
+                            jsonCont.style.display = 'block';
+                            jsonCont.innerHTML = '';
+                            try {
+                                jsonCont.appendChild(renderJsonTree(JSON.parse(state.activeDocContent)));
+                            } catch (e) {
+                                jsonCont.innerHTML = `<div class="json-error">Parse error: ${e.message}</div>`;
+                            }
+                        }
+                    } else if (state.activeFileType === 'yaml') {
+                        // YAML tree needs parsedJson from the host — re-fetch the preview
+                        if (state.activeSource && state.activeDocId) {
+                            vscode.postMessage({
+                                type: 'fetchPreview',
+                                sourceId: state.activeSource,
+                                docId: state.activeDocId,
+                                requestId: ++state.previewRequestId,
+                                sourceFolder: state.activeDocSourceFolder
+                            });
+                        }
+                    } else {
+                        const mdPrevDesign = document.getElementById('markdown-preview-design');
+                        if (mdPrevDesign) mdPrevDesign.innerHTML = renderMarkdown(state.activeDocContent) || '';
+                    }
+                    if (statusDesign) {
+                        statusDesign.textContent = 'Saved successfully';
+                        statusDesign.style.color = 'var(--accent-teal)';
+                        setTimeout(() => { statusDesign.textContent = ''; statusDesign.style.color = ''; }, 2000);
+                    }
+                } else if (msg.conflict) {
+                    // Disk changed since the editor opened — retry against the disk
+                    // content so the user's edit wins (no confirm gates, by design).
+                    if (editor && state.activeDocFilePath) {
+                        vscode.postMessage({
+                            type: 'saveFileContent',
+                            filePath: state.activeDocFilePath,
+                            content: editor.value,
+                            originalContent: msg.diskContent,
+                            tab: 'design'
+                        });
+                    }
+                } else {
+                    if (statusDesign) {
+                        statusDesign.textContent = 'Save failed: ' + (msg.error || 'unknown error');
+                        statusDesign.style.color = '#ff6b6b';
+                    }
+                }
+                break;
+            }
+
             case 'stitchApiKeyStatus':
                 state.stitchApiKeyConfigured = msg.configured;
                 if (stitchApiBanner) {
@@ -1750,8 +2036,20 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
 
     initStitchControls();
 
+    function applySidebarState() {
+        const designRow = document.getElementById('tree-pane-design')?.closest('.content-row');
+        if (designRow) designRow.classList.toggle('collapsed', !!state.designPreviewCollapsed);
+        const htmlRow = document.getElementById('tree-pane-html')?.closest('.content-row');
+        if (htmlRow) htmlRow.classList.toggle('collapsed', !!state.htmlPreviewCollapsed);
+    }
+
     // Notify backend ready
     vscode.postMessage({ type: 'ready' });
 
+    // Stitch is the default tab, so the project list must load up front —
+    // switchTab() only fires on a click, which never happens for the initial tab.
+    vscode.postMessage({ type: 'stitchListProjects' });
+
     applySidebarState();
+    updateDesignDocControls();
 })();

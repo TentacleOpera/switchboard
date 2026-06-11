@@ -1,8 +1,10 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
+import * as http from 'http';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { LocalFolderService } from './LocalFolderService';
+import { TaskViewerProvider } from './TaskViewerProvider';
 
 // @google/stitch-sdk is ESM-only (its exports map has no "require" condition), so a
 // static import fails resolution in this CJS bundle. A dynamic import() resolves with
@@ -35,13 +37,29 @@ export class DesignPanelProvider implements vscode.Disposable {
     private _htmlDocsDebounce?: NodeJS.Timeout;
     private _designDocsDebounce?: NodeJS.Timeout;
     private _activeScreens = new Map<string, any>(); // Key: screen.id, Value: SDK Screen instance
+    private _activeDesignSystemDocSourceId: string | null = null;
+    private _activeDesignSystemDocId: string | null = null;
+    private _htmlServers = new Map<string, { server: http.Server; port: number; timeoutId: NodeJS.Timeout }>();
+    private _htmlServerCreationPromises = new Map<string, Promise<{ server: http.Server; port: number; timeoutId: NodeJS.Timeout }>>();
+    private readonly _SERVER_DENY_LIST: readonly string[] = [
+        '.switchboard',
+        '.git',
+        '.env',
+        '.env.',
+        'node_modules',
+        'secrets',
+        'credentials',
+        '.ssh',
+        '.aws',
+    ];
     private _lastWebviewRootsSignature?: string;
     private _themeListenersRegistered = false;
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
         private readonly _getWorkspaceRoot: () => string | undefined,
-        private readonly _context: vscode.ExtensionContext
+        private readonly _context: vscode.ExtensionContext,
+        private readonly _taskViewerProvider?: TaskViewerProvider
     ) {}
 
     public get isOpen(): boolean {
@@ -118,6 +136,12 @@ export class DesignPanelProvider implements vscode.Disposable {
         this._panel?.dispose();
         this.disposeWatchers();
         this._activeScreens.clear();
+        for (const [, entry] of this._htmlServers) {
+            clearTimeout(entry.timeoutId);
+            try { entry.server.close(); } catch {}
+        }
+        this._htmlServers.clear();
+        this._htmlServerCreationPromises.clear();
         this._disposables.forEach(disposable => disposable.dispose());
         this._disposables = [];
     }
@@ -434,6 +458,209 @@ export class DesignPanelProvider implements vscode.Disposable {
         return false;
     }
 
+    // The kanban "Design Doc Reference" planner add-on (roleConfig_planner.addons.designSystemDoc)
+    // gates whether planner.designSystemDocLink is injected into agent prompts. Setting/unsetting
+    // the active design doc here must flip that add-on so the kanban checkbox stays in sync.
+    private async _setPlannerDesignSystemAddon(enabled: boolean): Promise<void> {
+        if (!this._taskViewerProvider) return;
+        const key = 'roleConfig_planner';
+        const existing = (this._taskViewerProvider.getRoleConfig(key) as any) || {};
+        const updated = {
+            ...existing,
+            addons: { ...(existing.addons || {}), designSystemDoc: enabled }
+        };
+        await this._taskViewerProvider.saveRoleConfig(key, updated);
+    }
+
+    private _getDesignSystemDocName(): string | null {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        const designSystemDocLink = config.get<string>('planner.designSystemDocLink');
+        if (!designSystemDocLink) return null;
+        return path.basename(designSystemDocLink, '.md');
+    }
+
+    private async _sendActiveDesignDocState(): Promise<void> {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        const dsEnabled = config.get<boolean>('planner.designSystemDocEnabled', false);
+        const dsDocName = dsEnabled ? this._getDesignSystemDocName() : null;
+        this.postMessage({
+            type: 'activeDesignDocUpdated',
+            designSystemDoc: {
+                enabled: dsEnabled,
+                docName: dsDocName || 'None',
+                sourceId: this._activeDesignSystemDocSourceId,
+                docId: this._activeDesignSystemDocId
+            }
+        });
+    }
+
+    // Resolve a `${folderIndex}:${relativePath}` tree-node id against a configured
+    // design folder, returning the absolute path or null if unreadable/unconfigured.
+    private async _resolveDesignDocPath(sourceFolder: string | undefined, docId: string): Promise<string | null> {
+        if (!sourceFolder) return null;
+        const resolvedFolder = path.resolve(sourceFolder);
+        let isConfigured = false;
+        for (const root of this._getWorkspaceRoots()) {
+            try {
+                const svc = this._getLocalFolderService(root);
+                if (svc.getDesignFolderPaths().some(p => path.resolve(p) === resolvedFolder)) {
+                    isConfigured = true;
+                    break;
+                }
+            } catch {}
+        }
+        if (!isConfigured) return null;
+        const cleanDocId = docId.includes(':') ? docId.substring(docId.indexOf(':') + 1) : docId;
+        const docPath = path.resolve(resolvedFolder, cleanDocId);
+        if (docPath !== resolvedFolder && !docPath.startsWith(resolvedFolder + path.sep)) return null;
+        try {
+            await fs.promises.access(docPath, fs.constants.R_OK);
+            return docPath;
+        } catch {
+            return null;
+        }
+    }
+
+    // ── Localhost HTML preview server (ported from the planning panel) ──
+    // srcdoc iframes inherit the webview's CSP and break relative asset paths;
+    // serving from 127.0.0.1 gives previews a real origin (CSP frame-src allows http:).
+
+    private async _getOrCreateHtmlServer(sourceFolder: string): Promise<{ server: http.Server; port: number; timeoutId: NodeJS.Timeout }> {
+        const existing = this._htmlServers.get(sourceFolder);
+        if (existing) {
+            clearTimeout(existing.timeoutId);
+            existing.timeoutId = this._createServerTimeout(sourceFolder);
+            return existing;
+        }
+        const pendingPromise = this._htmlServerCreationPromises.get(sourceFolder);
+        if (pendingPromise) {
+            return pendingPromise;
+        }
+        const creationPromise = this._createHtmlServer(sourceFolder);
+        this._htmlServerCreationPromises.set(sourceFolder, creationPromise);
+        try {
+            return await creationPromise;
+        } finally {
+            this._htmlServerCreationPromises.delete(sourceFolder);
+        }
+    }
+
+    private _createHtmlServer(sourceFolder: string): Promise<{ server: http.Server; port: number; timeoutId: NodeJS.Timeout }> {
+        const server = http.createServer((req, res) => {
+            this._handleHtmlServerRequest(req, res, sourceFolder);
+        });
+        return new Promise((resolve, reject) => {
+            server.listen(0, '127.0.0.1', () => {
+                const address = server.address() as { port: number };
+                const timeoutId = this._createServerTimeout(sourceFolder);
+                const entry = { server, port: address.port, timeoutId };
+                this._htmlServers.set(sourceFolder, entry);
+                resolve(entry);
+            });
+            server.on('error', (err: any) => reject(err));
+        });
+    }
+
+    private _buildLocalhostUrl(serverEntry: { port: number }, sourceFolder: string, filePath: string): string {
+        const relativeUrlPath = path.relative(sourceFolder, filePath);
+        const urlPath = relativeUrlPath.split(path.sep).map(encodeURIComponent).join('/');
+        return `http://127.0.0.1:${serverEntry.port}/${urlPath}`;
+    }
+
+    private _handleHtmlServerRequest(req: http.IncomingMessage, res: http.ServerResponse, sourceFolder: string): void {
+        const parsedUrl = new URL(req.url || '/', `http://127.0.0.1`);
+        const requestedPath = decodeURIComponent(parsedUrl.pathname);
+
+        if (requestedPath === '/' || requestedPath === '') {
+            res.writeHead(403, { 'Content-Type': 'text/plain' });
+            res.end('Forbidden: directory listing not available');
+            return;
+        }
+
+        const resolvedPath = path.resolve(sourceFolder, requestedPath.substring(1));
+        const normalizedSource = path.normalize(sourceFolder).replace(/[\\/]+$/, '');
+        const normalizedResolved = path.normalize(resolvedPath);
+
+        if (!normalizedResolved.startsWith(normalizedSource + path.sep) && normalizedResolved !== normalizedSource) {
+            res.writeHead(403, { 'Content-Type': 'text/plain' });
+            res.end('Forbidden: path traversal denied');
+            return;
+        }
+
+        const pathParts = normalizedResolved.split(path.sep);
+        for (const part of pathParts) {
+            if (this._SERVER_DENY_LIST.some(denied => part === denied || part.startsWith(denied))) {
+                res.writeHead(403, { 'Content-Type': 'text/plain' });
+                res.end('Forbidden: access denied');
+                return;
+            }
+        }
+
+        fs.readFile(resolvedPath, (err, data) => {
+            if (err) {
+                res.writeHead(404, { 'Content-Type': 'text/plain' });
+                res.end('Not Found');
+                return;
+            }
+            res.writeHead(200, { 'Content-Type': this._getMimeType(resolvedPath) });
+            res.end(data);
+        });
+
+        const entry = this._htmlServers.get(sourceFolder);
+        if (entry) {
+            clearTimeout(entry.timeoutId);
+            entry.timeoutId = this._createServerTimeout(sourceFolder);
+        }
+    }
+
+    private _getMimeType(filePath: string): string {
+        const ext = path.extname(filePath).toLowerCase();
+        const mimeMap: Record<string, string> = {
+            '.html': 'text/html; charset=utf-8',
+            '.htm': 'text/html; charset=utf-8',
+            '.css': 'text/css; charset=utf-8',
+            '.js': 'application/javascript; charset=utf-8',
+            '.mjs': 'application/javascript; charset=utf-8',
+            '.json': 'application/json; charset=utf-8',
+            '.png': 'image/png',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.gif': 'image/gif',
+            '.svg': 'image/svg+xml; charset=utf-8',
+            '.ico': 'image/x-icon',
+            '.webp': 'image/webp',
+            '.woff': 'font/woff',
+            '.woff2': 'font/woff2',
+            '.ttf': 'font/ttf',
+            '.eot': 'application/vnd.ms-fontobject',
+            '.webmanifest': 'application/manifest+json',
+            '.xml': 'application/xml',
+            '.txt': 'text/plain; charset=utf-8',
+            '.pdf': 'application/pdf',
+        };
+        return mimeMap[ext] || 'application/octet-stream';
+    }
+
+    private _createServerTimeout(sourceFolder: string): NodeJS.Timeout {
+        return setTimeout(() => {
+            const entry = this._htmlServers.get(sourceFolder);
+            if (entry) {
+                entry.server.close();
+                this._htmlServers.delete(sourceFolder);
+            }
+        }, 10 * 60 * 1000); // 10 minutes idle shutdown
+    }
+
+    // srcdoc fallback only: strip the preview's own CSP metas (they'd double up with the
+    // inherited webview CSP) and stamp the webview nonce onto script tags so they run.
+    private _injectLocalCsp(html: string): string {
+        let processedHtml = html.replace(/<meta\b[^>]*\bhttp-equiv=["']Content-Security-Policy["'][^>]*>/gi, '');
+        if (this._nonce) {
+            processedHtml = processedHtml.replace(/<script(?![^>]*\bnonce=)(\s[^>]*)?>/gi, `<script nonce="${this._nonce}"$1>`);
+        }
+        return processedHtml;
+    }
+
     private async _handleMessage(message: any): Promise<void> {
         const hasKey = this._setupStitchApiKey();
 
@@ -445,6 +672,117 @@ export class DesignPanelProvider implements vscode.Disposable {
                 this.postMessage({ type: 'cyberAnimationSetting', disabled: themeConfig.get<boolean>('theme.disableCyberAnimation', false) });
                 await this._sendHtmlDocsReady();
                 await this._sendDesignDocsReady();
+                await this._sendActiveDesignDocState();
+                break;
+            }
+
+            case 'setActivePlanningContext': {
+                try {
+                    const docPath = await this._resolveDesignDocPath(message.sourceFolder, String(message.docId || ''));
+                    if (!docPath) {
+                        this.postMessage({ type: 'activeContextSet', success: false, error: 'Document not found' });
+                        break;
+                    }
+                    await vscode.workspace.getConfiguration('switchboard').update(
+                        'planner.designSystemDocLink', docPath, vscode.ConfigurationTarget.Workspace
+                    );
+                    await vscode.workspace.getConfiguration('switchboard').update(
+                        'planner.designSystemDocEnabled', true, vscode.ConfigurationTarget.Workspace
+                    );
+                    this._activeDesignSystemDocSourceId = message.sourceId;
+                    this._activeDesignSystemDocId = message.docId;
+                    await this._setPlannerDesignSystemAddon(true);
+                    await this._sendActiveDesignDocState();
+                    this.postMessage({ type: 'activeContextSet', success: true });
+                } catch (err: any) {
+                    this.postMessage({ type: 'activeContextSet', success: false, error: String(err) });
+                }
+                break;
+            }
+
+            case 'disableDesignDoc': {
+                try {
+                    await vscode.workspace.getConfiguration('switchboard').update(
+                        'planner.designSystemDocEnabled', false, vscode.ConfigurationTarget.Workspace
+                    );
+                    await vscode.workspace.getConfiguration('switchboard').update(
+                        'planner.designSystemDocLink', undefined, vscode.ConfigurationTarget.Workspace
+                    );
+                    this._activeDesignSystemDocSourceId = null;
+                    this._activeDesignSystemDocId = null;
+                    await this._setPlannerDesignSystemAddon(false);
+                    await this._sendActiveDesignDocState();
+                } catch (err: any) {
+                    this.postMessage({ type: 'activeContextSet', success: false, error: String(err) });
+                }
+                break;
+            }
+
+            case 'saveFileContent': {
+                const filePath = String(message.filePath || '');
+                const content = String(message.content || '');
+                const originalContent = String(message.originalContent || '');
+                const tab = String(message.tab || '');
+                const allRoots = this._getWorkspaceRoots();
+                if (!filePath || !path.isAbsolute(filePath)) {
+                    this.postMessage({ type: 'saveFileContentResult', success: false, error: 'Invalid file path', tab });
+                    break;
+                }
+                const resolved = path.resolve(filePath);
+                let isAllowed = allRoots.some(r => resolved.startsWith(path.resolve(r) + path.sep));
+                if (!isAllowed) {
+                    for (const r of allRoots) {
+                        try {
+                            const service = this._getLocalFolderService(r);
+                            const allAllowedPaths = [
+                                ...service.getDesignFolderPaths(),
+                                ...service.getHtmlFolderPaths()
+                            ];
+                            if (allAllowedPaths.some(dp => resolved.startsWith(path.resolve(dp) + path.sep))) {
+                                isAllowed = true;
+                                break;
+                            }
+                        } catch {}
+                    }
+                }
+                if (!isAllowed) {
+                    this.postMessage({ type: 'saveFileContentResult', success: false, error: 'Invalid file path', tab });
+                    break;
+                }
+                try {
+                    // Conflict detection: compare disk content with the content the editor started from
+                    let diskContent = '';
+                    if (fs.existsSync(resolved)) {
+                        diskContent = await fs.promises.readFile(resolved, 'utf8');
+                    }
+                    if (originalContent && diskContent !== originalContent) {
+                        this.postMessage({ type: 'saveFileContentResult', success: false, conflict: true, diskContent, tab });
+                        break;
+                    }
+
+                    // Validate JSON/YAML before write
+                    const saveExt = path.extname(resolved).toLowerCase();
+                    if (saveExt === '.json') {
+                        try { JSON.parse(content); }
+                        catch (e: any) {
+                            this.postMessage({ type: 'saveFileContentResult', success: false, error: `Invalid JSON: ${e.message}`, tab });
+                            break;
+                        }
+                    }
+                    if (saveExt === '.yaml' || saveExt === '.yml') {
+                        const yaml = require('js-yaml');
+                        try { yaml.load(content); }
+                        catch (e: any) {
+                            this.postMessage({ type: 'saveFileContentResult', success: false, error: `Invalid YAML: ${e.message}`, tab });
+                            break;
+                        }
+                    }
+
+                    await fs.promises.writeFile(resolved, content, 'utf8');
+                    this.postMessage({ type: 'saveFileContentResult', success: true, tab });
+                } catch (err) {
+                    this.postMessage({ type: 'saveFileContentResult', success: false, error: String(err), tab });
+                }
                 break;
             }
 
@@ -480,12 +818,47 @@ export class DesignPanelProvider implements vscode.Disposable {
                     const fileExt = path.extname(relativePath).toLowerCase();
                     const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(fileExt);
 
+                    const isHtmlFile = fileExt === '.html' || fileExt === '.htm';
+
                     let fileContent = '';
                     let webviewUri: string | undefined;
                     if (isImage) {
                         webviewUri = this._panel?.webview.asWebviewUri(vscode.Uri.file(absPath)).toString();
                     } else {
                         fileContent = await fs.promises.readFile(absPath, 'utf8');
+                        if (isHtmlFile) {
+                            webviewUri = this._panel?.webview.asWebviewUri(vscode.Uri.file(absPath)).toString();
+                        }
+                    }
+
+                    // HTML previews are served from a localhost server so the iframe gets a
+                    // real http origin — srcdoc (htmlContent) is only the fallback.
+                    let iframeSrc: string | undefined;
+                    if (isHtmlFile) {
+                        try {
+                            const serverEntry = await this._getOrCreateHtmlServer(resolvedFolder);
+                            iframeSrc = this._buildLocalhostUrl(serverEntry, resolvedFolder, absPath);
+                        } catch {
+                            iframeSrc = undefined;
+                        }
+                    }
+
+                    // Map extensions to the preview categories design.js switches on
+                    // ('json' / 'yaml' / everything else renders as markdown).
+                    const fileTypeMap: Record<string, string> = {
+                        '.json': 'json',
+                        '.yaml': 'yaml', '.yml': 'yaml',
+                        '.md': 'markdown', '.markdown': 'markdown', '.txt': 'markdown'
+                    };
+                    const fileType = isImage ? 'image' : (fileTypeMap[fileExt] || 'text');
+
+                    // YAML is parsed host-side; the webview renders the tree from parsedJson.
+                    let parsedJson: any = undefined;
+                    if (fileType === 'yaml') {
+                        try {
+                            const yaml = require('js-yaml');
+                            parsedJson = yaml.load(fileContent);
+                        } catch {}
                     }
 
                     this.postMessage({
@@ -494,11 +867,13 @@ export class DesignPanelProvider implements vscode.Disposable {
                         requestId: message.requestId,
                         content: isImage ? '' : fileContent,
                         docName: path.basename(relativePath),
-                        filePath: relativePath,
-                        fileType: fileExt.substring(1),
+                        filePath: absPath,
+                        fileType,
+                        parsedJson,
                         isImage,
                         webviewUri,
-                        htmlContent: fileExt === '.html' ? fileContent : undefined
+                        iframeSrc,
+                        htmlContent: isHtmlFile ? this._injectLocalCsp(fileContent) : undefined
                     });
                 } catch (err: any) {
                     this.postMessage({
@@ -511,18 +886,36 @@ export class DesignPanelProvider implements vscode.Disposable {
                 break;
             }
 
-            case 'linkToDocument':
-                vscode.env.clipboard.writeText(message.docId);
-                vscode.window.showInformationMessage(`Copied document path to clipboard: ${message.docId}`);
+            case 'linkToDocument': {
+                // Tree node ids are `${folderIndex}:${relativePath}` — strip the prefix.
+                const rawLinkId = String(message.docId || '');
+                const linkRelativePath = rawLinkId.includes(':')
+                    ? rawLinkId.substring(rawLinkId.indexOf(':') + 1)
+                    : rawLinkId;
+                const linkPath = message.sourceFolder
+                    ? path.resolve(message.sourceFolder, linkRelativePath)
+                    : linkRelativePath;
+                vscode.env.clipboard.writeText(linkPath);
+                vscode.window.showInformationMessage(`Copied document path to clipboard: ${linkPath}`);
                 break;
+            }
 
             case 'serveAndOpenHtml':
-                // Simple fallback to opening in browser directly via file protocol or workspace file opening
                 try {
-                    const fullPath = path.resolve(message.sourceFolder || this._getWorkspaceRoot() || '', message.docId);
-                    vscode.env.openExternal(vscode.Uri.file(fullPath));
+                    // Tree node ids are `${folderIndex}:${relativePath}` — strip the prefix.
+                    const rawOpenId = String(message.docId || '');
+                    const openRelativePath = rawOpenId.includes(':')
+                        ? rawOpenId.substring(rawOpenId.indexOf(':') + 1)
+                        : rawOpenId;
+                    const fullPath = message.absolutePath
+                        || path.resolve(message.sourceFolder || this._getWorkspaceRoot() || '', openRelativePath);
+                    const serveFolder = message.sourceFolder || path.dirname(fullPath);
+                    await fs.promises.access(fullPath, fs.constants.R_OK);
+                    const entry = await this._getOrCreateHtmlServer(path.resolve(serveFolder));
+                    const url = this._buildLocalhostUrl(entry, path.resolve(serveFolder), fullPath);
+                    await vscode.env.openExternal(vscode.Uri.parse(url));
                 } catch (err: any) {
-                    vscode.window.showErrorMessage('Failed to open HTML file: ' + err.message);
+                    vscode.window.showErrorMessage('Failed to serve HTML file: ' + err.message);
                 }
                 break;
 

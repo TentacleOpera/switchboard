@@ -2011,6 +2011,21 @@
             height: 100%;
         }
 
+        /* Transparent layer above iframe previews so pan/zoom mouse events
+           reach the container instead of disappearing into the iframe document.
+           Hidden by default so the HTML preview stays fully interactive —
+           it only appears while Space is held (hold Space + drag/scroll). */
+        .zoom-event-layer {
+            position: absolute;
+            inset: 0;
+            z-index: 5;
+            cursor: grab;
+            display: none;
+        }
+        body.space-pan-active .zoom-event-layer {
+            display: block;
+        }
+
         /* Class-based scanline suppression — toggled by JS */
         .preview-panel-wrapper.scanlines-suppressed > .cyber-scanlines {
             display: none !important;
@@ -2201,7 +2216,8 @@
         .cyber-theme-enabled #preview-pane-online,
         .cyber-theme-enabled #preview-pane-design,
         .cyber-theme-enabled #preview-pane-html,
-        .cyber-theme-enabled #preview-pane-tickets {
+        .cyber-theme-enabled #preview-pane-tickets,
+        .cyber-theme-enabled #stitch-preview-pane {
             background-color: rgba(255, 255, 255, 0.015);
             background-image:
                 linear-gradient(color-mix(in srgb, var(--accent-primary) 8%, transparent) 1px, transparent 1px),
@@ -2238,7 +2254,8 @@
         .cyber-theme-enabled #online-content,
         .cyber-theme-enabled #design-content,
         .cyber-theme-enabled #html-preview-content,
-        .cyber-theme-enabled #tickets-content {
+        .cyber-theme-enabled #tickets-content,
+        .cyber-theme-enabled #stitch-content {
             background: transparent;
         }
 
@@ -3356,10 +3373,10 @@
                                     <img id="image-preview-img-design" alt="Image preview" style="display: block;" />
                                 </div>
                                 <div class="zoom-toolbar">
-                                    <button class="zoom-btn" data-action="zoom-in" title="Zoom In (Cmd+Scroll)">+</button>
-                                    <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (Cmd+Scroll)">−</button>
-                                    <button class="zoom-btn" data-action="reset" title="Reset Zoom">⟲</button>
-                                    <button class="zoom-btn" data-action="fit" title="Fit to View">⤢</button>
+                                    <button class="zoom-btn" data-action="zoom-in" title="Zoom In (Scroll)">+</button>
+                                    <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (Scroll)">−</button>
+                                    <button class="zoom-btn" data-action="reset" title="Reset Zoom (100%)">⟲</button>
+                                    <button class="zoom-btn" data-action="fit" title="Fit to View (Double-click)">⤢</button>
                                 </div>
                             </div>
                             <div id="json-preview-container-design"
@@ -3407,11 +3424,14 @@
                             <div class="zoomable-viewport" style="width: 100%; height: 100%;">
                                 <iframe id="html-preview-frame" sandbox="allow-scripts allow-same-origin" style="border: none; background: var(--panel-bg); width: 100%; height: 100%; display: block;"></iframe>
                             </div>
+                            <!-- Shown only while Space is held — captures drag/scroll for
+                                 pan/zoom; otherwise the iframe stays fully interactive. -->
+                            <div class="zoom-event-layer"></div>
                             <div class="zoom-toolbar">
-                                <button class="zoom-btn" data-action="zoom-in" title="Zoom In (Cmd+Scroll)">+</button>
-                                <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (Cmd+Scroll)">−</button>
-                                <button class="zoom-btn" data-action="reset" title="Reset Zoom">⟲</button>
-                                <button class="zoom-btn" data-action="fit" title="Fit to View">⤢</button>
+                                <button class="zoom-btn" data-action="zoom-in" title="Zoom In (hold Space + Scroll)">+</button>
+                                <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (hold Space + Scroll)">−</button>
+                                <button class="zoom-btn" data-action="reset" title="Reset Zoom (100%)">⟲</button>
+                                <button class="zoom-btn" data-action="fit" title="Fit to View (Double-click)">⤢</button>
                             </div>
                         </div>
                         <div id="image-preview-container" class="zoomable-container" style="display: none; padding: 0;">
@@ -3419,10 +3439,10 @@
                                 <img id="image-preview-img" alt="Image preview" style="display: block;" />
                             </div>
                             <div class="zoom-toolbar">
-                                <button class="zoom-btn" data-action="zoom-in" title="Zoom In (Cmd+Scroll)">+</button>
-                                <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (Cmd+Scroll)">−</button>
-                                <button class="zoom-btn" data-action="reset" title="Reset Zoom">⟲</button>
-                                <button class="zoom-btn" data-action="fit" title="Fit to View">⤢</button>
+                                <button class="zoom-btn" data-action="zoom-in" title="Zoom In (Scroll)">+</button>
+                                <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (Scroll)">−</button>
+                                <button class="zoom-btn" data-action="reset" title="Reset Zoom (100%)">⟲</button>
+                                <button class="zoom-btn" data-action="fit" title="Fit to View (Double-click)">⤢</button>
                             </div>
                         </div>
                     </div>
@@ -3516,7 +3536,6 @@
                 <div id="stitch-thumbnail-strip" style="display: none;"></div>
 
                 <div id="stitch-gallery-empty" class="stitch-empty-state">
-                    <span style="font-size: 48px; opacity: 0.5;">🎨</span>
                     <div>
                         <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px;">Stitch Screen Generator</div>
                         <div style="font-size: 12px; max-width: 360px; line-height: 1.5; margin: 0 auto;">Enter a prompt to generate interactive, AI-designed UI screens, or select an existing project from the dropdown.</div>

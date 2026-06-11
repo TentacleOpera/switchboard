@@ -112,4 +112,12 @@ Key risks: header overflow on narrow panels, thumbnail strip displacement if the
 
 ---
 
+## Review Findings
+
+Implementation matches plan requirements. DOM restructure, CSS updates, and dead-rule cleanup are all correct. `design.js` event wiring verified by ID — no regressions. No code changes required.
+
+**Files reviewed:** `src/webview/design.html` (~lines 2954–3515), `src/webview/design.js` (~lines 1031–1177)
+**Validation:** Skipped per session directive (no compilation or test run).
+**Remaining risks:** Responsive header wrap at very narrow widths (< 350 px) may push close button to second line; pre-existing `.content-row > :first-child` `overflow-y: auto` can create nested scrollbars on short viewports.
+
 **Recommendation:** Send to Coder (complexity 3, routine UI relocation with well-scoped edge cases).

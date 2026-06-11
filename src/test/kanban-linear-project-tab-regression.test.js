@@ -31,19 +31,19 @@ function run() {
             `Expected AUTOBAN to no longer include stale project-view artifact "${unexpected}".`
         );
     });
-    assert.match(
+    assert.doesNotMatch(
         implementationSource,
         /<button[^>]*data-tab="project">/,
-        'Expected the main implementation sidebar to expose a visible Project tab alongside Agents, Planning, and Autoban.'
+        'Expected the main implementation sidebar to not expose a Project tab.'
     );
-    assert.match(
+    assert.doesNotMatch(
         implementationSource,
         /id="integration-tab-btn"/,
-        'Expected integration tab button to have id for dynamic label updates.'
+        'Expected integration tab button to be absent.'
     );
     assert.ok(
-        implementationSource.includes('id="agent-list-project"'),
-        'Expected the implementation sidebar to define a dedicated Project tab panel container.'
+        !implementationSource.includes('id="agent-list-project"'),
+        'Expected the implementation sidebar to not define a dedicated Project tab panel container.'
     );
     [
         'sidebar-project-list-view',
@@ -67,49 +67,29 @@ function run() {
         'sidebar-detail-import-task'
     ].forEach((id) => {
         assert.ok(
-            implementationSource.includes(`id="${id}"`),
-            `Expected the implementation sidebar Project tab to include #${id}.`
+            !implementationSource.includes(`id="${id}"`),
+            `Expected the implementation sidebar to not include #${id}.`
         );
     });
-    assert.match(
+    assert.doesNotMatch(
         implementationSource,
-        /const tabs = \{ agents: agentListStandard, terminals: agentListTerminals, project: agentListProject \};/,
-        'Expected sidebar tab switching to include the new Project tab panel.'
-    );
-    assert.match(
-        implementationSource,
-        /if \(tab === 'project'\) \{[\s\S]*renderSidebarLinearProjectPanel\(\);[\s\S]*loadLinearProject\(\);/s,
-        'Expected the sidebar Project tab to render and load Linear data when selected.'
-    );
-    assert.match(
-        implementationSource,
-        /(const newHtml = )?filteredIssues\.map\(\(issue\) => (?:\{[\s\S]*?)?`[\s\S]*escapeHtml\(issue\.title \|\| issue\.identifier \|\| issue\.id\)[\s\S]*escapeHtml\(issue\.state\?\.name \|\| 'Unknown state'\)/s,
-        'Expected the sidebar Project list rendering to escape issue titles and state labels before injecting HTML.'
-    );
-    assert.match(
-        implementationSource,
-        /(const plainHtml = )?escapeHtml\(\(issue\.description \|\| ''\)\.trim\(\) \|\| 'No description provided\.'\)\.replace\(\/\\n\/g, '<br>'\)/,
-        'Expected the sidebar Project detail rendering to escape issue descriptions before injecting HTML.'
-    );
-    assert.match(
-        implementationSource,
-        /type: 'copyTextToClipboard'/,
-        'Expected the sidebar Project tab to support copying agent context.'
-    );
-    assert.match(
-        implementationSource,
-        /type: 'linearImportTask'/,
-        'Expected the sidebar Project tab to support importing Linear tasks.'
-    );
-    assert.match(
-        implementationSource,
-        /type: 'openSetupPanel', section: 'project-mgmt'/,
-        'Expected the sidebar Project tab to deep-link into Project Management setup.'
+        /project: agentListProject/,
+        'Expected sidebar tab switching to not include project tab.'
     );
     assert.doesNotMatch(
         implementationSource,
-        /project-scope-required|Configure Linear project scope/,
-        'Expected the sidebar Project tab not to block loading when no Linear project scope is configured.'
+        /renderSidebarLinearProjectPanel/,
+        'Expected sidebar to not render Linear project panel.'
+    );
+    assert.doesNotMatch(
+        implementationSource,
+        /loadLinearProject/,
+        'Expected sidebar to not load Linear project.'
+    );
+    assert.doesNotMatch(
+        implementationSource,
+        /type: 'clickupLoadProject'/,
+        'Expected sidebar to not load ClickUp project.'
     );
     assert.doesNotMatch(
         taskViewerSource,
@@ -137,8 +117,8 @@ function run() {
         'linearError'
     ].forEach((messageName) => {
         assert.ok(
-            implementationSource.includes(messageName) || taskViewerSource.includes(messageName) || providerSource.includes(messageName),
-            `Expected sidebar Linear project wiring to reference "${messageName}".`
+            taskViewerSource.includes(messageName) || providerSource.includes(messageName),
+            `Expected background/Kanban provider Linear project wiring to reference "${messageName}".`
         );
     });
     assert.match(

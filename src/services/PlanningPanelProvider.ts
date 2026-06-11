@@ -692,6 +692,14 @@ export class PlanningPanelProvider {
             this._activePreviewDocId = filePath;
             this._setupActiveDocWatcher(resolved);
 
+            // Auto-refresh dedupe (mirrors _handleFetchPreview): skip the post when the
+            // content is unchanged so the webview doesn't re-render and visibly reflow.
+            const cacheKey = `kanban-plan:${resolved}`;
+            if (requestId === -1 && this._lastPreviewContentByPath.get(cacheKey) === content) {
+                return;
+            }
+            this._lastPreviewContentByPath.set(cacheKey, content);
+
             this._panel?.webview.postMessage({
                 type: 'kanbanPlanPreviewReady', requestId, content,
                 isAutoRefreshed: this._isAutoRefreshing
@@ -835,6 +843,20 @@ export class PlanningPanelProvider {
         // Fallback to first allowed root
         const firstAllowed = Array.from(allowedRoots)[0];
         return firstAllowed;
+    }
+
+    // Same locations importTaskAsDocument writes to (TaskViewerProvider).
+    private _getTicketDocumentDirs(resolvedRoot: string): string[] {
+        const dirs: string[] = [];
+        try {
+            const ticketsFolders = new LocalFolderService(resolvedRoot).getTicketsFolderPaths();
+            if (ticketsFolders.length > 0 && ticketsFolders[0]) {
+                dirs.push(path.join(ticketsFolders[0], 'documents'));
+            }
+        } catch { /* fall through to default */ }
+        const fallback = path.join(resolvedRoot, '.switchboard', 'plans', 'documents');
+        if (!dirs.includes(fallback)) { dirs.push(fallback); }
+        return dirs;
     }
 
     private _mapClickUpTaskToSidebar(task: any): any {
@@ -2487,6 +2509,7 @@ export class PlanningPanelProvider {
                         type: 'editTicketResult',
                         success: result.success,
                         id,
+                        filePath: result.filePath,
                         error: result.error
                     });
                 } catch (error) {
@@ -2494,6 +2517,70 @@ export class PlanningPanelProvider {
                         type: 'editTicketResult',
                         success: false,
                         id,
+                        error: error instanceof Error ? error.message : String(error)
+                    });
+                }
+                break;
+            }
+            case 'listLocalTickets': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const tickets: any[] = [];
+                if (workspaceRoot) {
+                    for (const dir of this._getTicketDocumentDirs(workspaceRoot)) {
+                        if (!fs.existsSync(dir)) { continue; }
+                        let files: string[] = [];
+                        try { files = fs.readdirSync(dir); } catch { continue; }
+                        for (const fileName of files) {
+                            const match = fileName.match(/^(linear|clickup)_([^_]+)_(.*)\.md$/);
+                            if (!match) { continue; }
+                            const filePath = path.join(dir, fileName);
+                            let mtime = 0;
+                            let title = match[3].replace(/-/g, ' ');
+                            try {
+                                mtime = fs.statSync(filePath).mtimeMs;
+                                const head = fs.readFileSync(filePath, 'utf8').split(/\r?\n/, 30);
+                                const heading = head.find(l => l.startsWith('# '));
+                                if (heading) { title = heading.substring(2).trim(); }
+                            } catch { /* keep slug-derived title */ }
+                            tickets.push({ provider: match[1], id: match[2], title, fileName, filePath, mtime });
+                        }
+                    }
+                }
+                tickets.sort((a, b) => b.mtime - a.mtime);
+                this._panel?.webview.postMessage({ type: 'localTicketsListed', tickets });
+                break;
+            }
+            case 'loadLocalTicket': {
+                try {
+                    const content = fs.readFileSync(msg.filePath, 'utf8');
+                    this._panel?.webview.postMessage({ type: 'localTicketLoaded', success: true, filePath: msg.filePath, content });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'localTicketLoaded', success: false, filePath: msg.filePath,
+                        error: error instanceof Error ? error.message : String(error)
+                    });
+                }
+                break;
+            }
+            case 'saveLocalTicket': {
+                try {
+                    fs.writeFileSync(msg.filePath, msg.content, 'utf8');
+                    this._panel?.webview.postMessage({ type: 'localTicketSaved', success: true, filePath: msg.filePath });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'localTicketSaved', success: false, filePath: msg.filePath,
+                        error: error instanceof Error ? error.message : String(error)
+                    });
+                }
+                break;
+            }
+            case 'deleteLocalTicket': {
+                try {
+                    fs.unlinkSync(msg.filePath);
+                    this._panel?.webview.postMessage({ type: 'localTicketDeleted', success: true, filePath: msg.filePath });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'localTicketDeleted', success: false, filePath: msg.filePath,
                         error: error instanceof Error ? error.message : String(error)
                     });
                 }

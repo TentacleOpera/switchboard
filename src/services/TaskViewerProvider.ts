@@ -8553,7 +8553,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         break;
                     }
                     case 'setActiveSubTab': {
-                        const validSubTabs = ['agents', 'terminals', 'project'];
+                        const validSubTabs = ['agents', 'terminals'];
                         const activeSubTab = validSubTabs.includes(data.tab) ? data.tab : 'terminals';
                         await this._context.workspaceState.update(TaskViewerProvider.ACTIVE_SUB_TAB_STATE_KEY, activeSubTab);
                         break;
@@ -17197,10 +17197,11 @@ What would you like to find?`;
                     subtasks: []
                 };
                 if (includeSubtasks) {
-                    const rootNode = await this._loadLinearImportNode(linear, id);
-                    if (rootNode) {
-                        node.subtasks = rootNode.subtasks;
-                    }
+                    // Shallow fetch only — the recursive _loadLinearImportNode walk
+                    // (comments + attachments per subtask, sequential) froze the UI
+                    // for a minute on nested issues. The doc only needs a checklist.
+                    const subtasks = await linear.getSubtasks(id);
+                    node.subtasks = subtasks.map((st: any) => ({ issue: st, subtasks: [] }));
                 }
                 content = this._buildLinearImportPlanContent(node, undefined, new Date().toISOString());
                 if (includeSubtasks && node.subtasks && node.subtasks.length > 0) {
@@ -17232,9 +17233,6 @@ What would you like to find?`;
             const filePath = path.join(targetDir, filename);
 
             fs.writeFileSync(filePath, content, 'utf8');
-
-            const doc = await vscode.workspace.openTextDocument(filePath);
-            await vscode.window.showTextDocument(doc);
 
             return { success: true, filePath };
         } catch (error) {

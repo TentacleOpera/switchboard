@@ -780,7 +780,8 @@ export async function activate(context: vscode.ExtensionContext) {
             return kanbanProvider!.getCurrentWorkspaceRoot()
                 ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         },
-        context
+        context,
+        taskViewerProvider
     );
     context.subscriptions.push(designPanelProvider);
 
