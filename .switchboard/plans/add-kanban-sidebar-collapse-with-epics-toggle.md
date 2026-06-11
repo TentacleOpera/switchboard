@@ -154,4 +154,11 @@ No automated tests required per session directives. The test suite will be run s
 8. Verify the controls strip no longer contains the old standalone "Epics" button.
 9. **Edge case:** Filter to a combination that yields zero plans (e.g., an unused project). Ensure the collapsed toggle row still renders with the collapse button visible, even when the empty-state message is shown.
 
+## Review Findings
+
+Extracted `buildKanbanToggleRow()` in `planning.js` and used it in both `renderKanbanPlans` and `handleKanbanPlansReady`'s error path, fixing a CRITICAL bug where a plan-load error destroyed the sidebar toggle row and stranded the user. All plan requirements (HTML structure, CSS collapse selectors, state persistence, dynamic label, and empty-state safety) were already correctly implemented. Per session directives, compilation and tests were skipped; verification was by targeted code-path audit. No remaining material risks.
+
+**Files changed:**
+- `src/webview/planning.js`
+
 **Recommendation:** Send to Intern

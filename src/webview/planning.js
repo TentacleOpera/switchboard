@@ -3499,6 +3499,30 @@ Return ONLY the drafted prompt with no additional commentary.`;
     }
 
 
+    function buildKanbanToggleRow() {
+        const toggleRow = document.createElement('div');
+        toggleRow.className = 'sidebar-toggle-row';
+
+        const foldersBtn = document.createElement('button');
+        foldersBtn.className = 'sidebar-folders-btn';
+        foldersBtn.id = 'kanban-view-epics-toggle';
+        foldersBtn.textContent = _kanbanViewMode === 'epics' ? 'Epics' : 'Plans';
+        foldersBtn.addEventListener('click', () => {
+            _kanbanViewMode = _kanbanViewMode === 'all' ? 'epics' : 'all';
+            renderKanbanPlans(_kanbanPlansCache, kanbanFilters);
+        });
+
+        const toggleBtn = document.createElement('button');
+        toggleBtn.className = 'sidebar-toggle-btn';
+        toggleBtn.title = 'Toggle sidebar';
+        toggleBtn.textContent = state.kanbanListCollapsed ? '»' : '«';
+        toggleBtn.addEventListener('click', toggleSidebarCollapsed);
+
+        toggleRow.appendChild(foldersBtn);
+        toggleRow.appendChild(toggleBtn);
+        return toggleRow;
+    }
+
     function renderKanbanPlans(plans, filters) {
         if (!kanbanListPane) return;
         
@@ -3534,28 +3558,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         kanbanListPane.innerHTML = '';
 
         // Re-add sidebar toggle row
-        const toggleRow = document.createElement('div');
-        toggleRow.className = 'sidebar-toggle-row';
-
-        const foldersBtn = document.createElement('button');
-        foldersBtn.className = 'sidebar-folders-btn';
-        foldersBtn.id = 'kanban-view-epics-toggle';
-        foldersBtn.textContent = _kanbanViewMode === 'epics' ? 'Epics' : 'Plans';
-        foldersBtn.addEventListener('click', () => {
-            _kanbanViewMode = _kanbanViewMode === 'all' ? 'epics' : 'all';
-            foldersBtn.textContent = _kanbanViewMode === 'epics' ? 'Epics' : 'Plans';
-            renderKanbanPlans(_kanbanPlansCache, kanbanFilters);
-        });
-
-        const toggleBtn = document.createElement('button');
-        toggleBtn.className = 'sidebar-toggle-btn';
-        toggleBtn.title = 'Toggle sidebar';
-        toggleBtn.textContent = state.kanbanListCollapsed ? '»' : '«';
-        toggleBtn.addEventListener('click', toggleSidebarCollapsed);
-
-        toggleRow.appendChild(foldersBtn);
-        toggleRow.appendChild(toggleBtn);
-        kanbanListPane.appendChild(toggleRow);
+        kanbanListPane.appendChild(buildKanbanToggleRow());
 
         if (filtered.length === 0) {
             const emptyMsg = _kanbanViewMode === 'epics' ? 'No epics found' : 'No matching kanban plans';
@@ -3994,7 +3997,13 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function handleKanbanPlansReady(msg) {
         if (msg.error) {
             if (kanbanListPane) {
-                kanbanListPane.innerHTML = `<div class="kanban-empty-state" style="color: var(--vscode-errorForeground, #ff6b6b);">Error loading plans: ${escapeHtml(msg.error)}</div>`;
+                kanbanListPane.innerHTML = '';
+                kanbanListPane.appendChild(buildKanbanToggleRow());
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'kanban-empty-state';
+                errorDiv.style.color = 'var(--vscode-errorForeground, #ff6b6b)';
+                errorDiv.textContent = `Error loading plans: ${escapeHtml(msg.error)}`;
+                kanbanListPane.appendChild(errorDiv);
             }
             return;
         }

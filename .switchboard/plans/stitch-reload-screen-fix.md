@@ -269,6 +269,16 @@ Skipped per session directive. Validation will be performed manually:
 - **Backend returns FAILED:** The retry loop must not run. Addressed by the `isFailed` check in Step 3.
 - **Image loads but `onerror` fires due to CORS:** The `onerror` handler in Step 5 will trigger a reload. This is safe — the next `get_screen` call may return a fresh signed URL.
 
+## Review Findings
+
+**Reviewer-executor pass completed 2026-06-11.**
+
+Implementation matches plan requirements across all 8 steps. `DesignPanelProvider.ts` now passes `status`/`statusMessage` through `_formatScreen`, and `design.js` implements the retry state machine, `onerror` fallback, contextual placeholder text, and timer cleanup in all action initiators. Node syntax check on `design.js` passed. No CRITICAL or MAJOR issues found.
+
+**Files changed:** `src/services/DesignPanelProvider.ts`, `src/webview/design.js` (committed as `ffa5034`).
+
+**Remaining risks:** (1) `onerror` auto-reload path does not set `stitchBusy = true`, so a brief stale-status window is possible; (2) switching to a different screen via thumbnail click does not clear the previous screen's retry timer, allowing its status message to overwrite the current screen's status bar when it eventually fires.
+
 ## Recommendation
 
 Complexity 5 → **Send to Coder**
