@@ -161,3 +161,7 @@ Key risks: build drift is mitigated because `webpack.config.js` already glob-cop
 ---
 
 **Recommendation:** Send to Coder
+
+## Review Findings
+
+Implementation reviewed against plan requirements. All extracted functions (`TABLE_SEPARATOR_REGEX`, `parseTableBlock`, `renderMarkdown`, `renderJsonTree`) moved to `src/webview/sharedUtils.js`. Zero local shadows remain in `design.js` or `planning.js`. Both HTML templates load the shared script with `nonce` before the panel script. Both providers substitute `{{SHARED_UTILS_URI}}`. Webpack `CopyPlugin` covers `src/webview/*.js` so no build config changes needed. One pre-existing MAJOR issue identified: `renderMarkdown` regex pipeline processes inline formatting inside `<pre><code>` blocks; deferred as out-of-scope logic change.

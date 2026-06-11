@@ -3467,6 +3467,7 @@
                     <option value="GEMINI_3_FLASH">Flash (Fast)</option>
                     <option value="GEMINI_3_1_PRO">Pro (Quality)</option>
                 </select>
+                <button id="btn-stitch-prompt-generator" class="strip-btn">Prompt Generator</button>
                 <button id="btn-generate-stitch" class="strip-btn stitch-btn-primary" disabled>Generate Screen</button>
             </div>
 
@@ -3530,6 +3531,22 @@
 
                 <div id="stitch-gallery" class="stitch-gallery" style="display: none;">
                     <!-- Screen cards will be dynamically inserted here -->
+                </div>
+            </div>
+
+            <!-- Design Prompt Generator Modal -->
+            <div id="stitch-prompt-modal" class="stitch-prompt-modal" style="display: none;">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3>Design Prompt Generator</h3>
+                        <button class="modal-close-btn" id="btn-close-stitch-generator">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <textarea id="stitch-generator-input" rows="4" placeholder="Describe the UI you want..."></textarea>
+                        <input type="file" id="stitch-generator-image-input" accept="image/png,image/jpeg,image/webp" multiple />
+                        <div id="stitch-generator-thumbnails" class="stitch-generator-thumbnails"></div>
+                        <button id="btn-copy-stitch-prompt" class="strip-btn stitch-btn-primary">Copy Prompt</button>
+                    </div>
                 </div>
             </div>
         </div>

@@ -32,7 +32,9 @@
         activePreviewScreenId: null,
         stitchModelId: persistedState.stitchModelId || 'GEMINI_3_FLASH',
         stitchCreativeRange: persistedState.stitchCreativeRange || 'EXPLORE',
-        stitchAspects: persistedState.stitchAspects || ['LAYOUT','COLOR_SCHEME','IMAGES','TEXT_FONT','TEXT_CONTENT']
+        stitchAspects: persistedState.stitchAspects || ['LAYOUT','COLOR_SCHEME','IMAGES','TEXT_FONT','TEXT_CONTENT'],
+        stitchGeneratorOpen: false,
+        stitchGeneratorImages: []
     };
 
     // Tab switcher
@@ -801,6 +803,14 @@
     const previewBtnReload = document.getElementById('preview-btn-reload');
     const stitchThumbnailStrip = document.getElementById('stitch-thumbnail-strip');
 
+    const btnStitchPromptGenerator = document.getElementById('btn-stitch-prompt-generator');
+    const stitchPromptModal = document.getElementById('stitch-prompt-modal');
+    const btnCloseStitchGenerator = document.getElementById('btn-close-stitch-generator');
+    const stitchGeneratorInput = document.getElementById('stitch-generator-input');
+    const stitchGeneratorImageInput = document.getElementById('stitch-generator-image-input');
+    const stitchGeneratorThumbnails = document.getElementById('stitch-generator-thumbnails');
+    const btnCopyStitchPrompt = document.getElementById('btn-copy-stitch-prompt');
+
     // Single place that controls status colour — errors red, success teal,
     // everything else neutral. Direct .textContent writes left the colour
     // sticky-red after any error.
@@ -841,6 +851,159 @@
         if (previewBtnEdit) previewBtnEdit.disabled = busy;
         if (previewBtnVariants) previewBtnVariants.disabled = busy;
         if (previewBtnReload) previewBtnReload.disabled = busy;
+
+        if (btnStitchPromptGenerator) btnStitchPromptGenerator.disabled = busy;
+        updateCopyButtonState();
+    }
+
+    function updateCopyButtonState() {
+        if (!btnCopyStitchPrompt) return;
+        const hasText = !!(stitchGeneratorInput && stitchGeneratorInput.value.trim());
+        const hasImages = state.stitchGeneratorImages && state.stitchGeneratorImages.length > 0;
+        btnCopyStitchPrompt.disabled = state.stitchBusy || (!hasText && !hasImages);
+    }
+
+    function openStitchGenerator() {
+        if (state.stitchBusy) return;
+        state.stitchGeneratorOpen = true;
+        if (stitchPromptModal) {
+            stitchPromptModal.style.display = 'flex';
+        }
+        if (stitchGeneratorInput) {
+            stitchGeneratorInput.value = '';
+            stitchGeneratorInput.focus();
+        }
+        clearStitchGeneratorImages();
+        updateCopyButtonState();
+    }
+
+    function closeStitchGenerator() {
+        state.stitchGeneratorOpen = false;
+        if (stitchPromptModal) {
+            stitchPromptModal.style.display = 'none';
+        }
+        clearStitchGeneratorImages();
+    }
+
+    function clearStitchGeneratorImages() {
+        if (state.stitchGeneratorImages && state.stitchGeneratorImages.length > 0) {
+            state.stitchGeneratorImages.forEach(imgObj => {
+                if (imgObj.objectUrl) {
+                    URL.revokeObjectURL(imgObj.objectUrl);
+                }
+            });
+        }
+        state.stitchGeneratorImages = [];
+        if (stitchGeneratorThumbnails) {
+            stitchGeneratorThumbnails.innerHTML = '';
+        }
+        if (stitchGeneratorImageInput) {
+            stitchGeneratorImageInput.value = '';
+        }
+        updateCopyButtonState();
+    }
+
+    function handleStitchGeneratorImagesChange(e) {
+        const files = e.target.files;
+        if (!files) return;
+
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            const objectUrl = URL.createObjectURL(file);
+            const imgObj = {
+                name: file.name,
+                objectUrl: objectUrl
+            };
+            state.stitchGeneratorImages.push(imgObj);
+            renderThumbnail(imgObj);
+        }
+        updateCopyButtonState();
+    }
+
+    function renderThumbnail(imgObj) {
+        if (!stitchGeneratorThumbnails) return;
+
+        const container = document.createElement('div');
+        container.className = 'stitch-generator-thumb-container';
+
+        const img = document.createElement('img');
+        img.className = 'stitch-generator-thumb';
+        img.src = imgObj.objectUrl;
+        img.alt = imgObj.name;
+        img.title = imgObj.name;
+
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'stitch-generator-thumb-remove';
+        removeBtn.innerHTML = '&times;';
+        removeBtn.title = 'Remove image';
+        removeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            URL.revokeObjectURL(imgObj.objectUrl);
+            state.stitchGeneratorImages = state.stitchGeneratorImages.filter(item => item !== imgObj);
+            container.remove();
+            updateCopyButtonState();
+        });
+
+        container.appendChild(img);
+        container.appendChild(removeBtn);
+        stitchGeneratorThumbnails.appendChild(container);
+    }
+
+    function generateStitchMetaPrompt(userDescription, imageRefs) {
+        const baseTemplate = `You are a UI/UX design prompt engineer. Your job is to transform a rough design idea and reference images into a single, detailed, high-quality text prompt suitable for an AI screen generator (Stitch by Google).
+
+User's design intent:
+---
+{{USER_DESCRIPTION}}
+---
+
+Reference images (inspect these for style, layout, colour palette, typography, and mood):
+{{IMAGE_REFS}}
+
+Output a single paragraph prompt (150-400 words) that describes:
+- The overall layout and visual hierarchy
+- Colour palette and mood
+- Typography style
+- Specific UI components and their arrangement
+- Any animations, interactions, or micro-copy
+- Device type considerations
+
+Do not output markdown headers, bullet lists, or explanations. Output only the final prompt text.`;
+
+        let imagesList = 'None';
+        if (imageRefs && imageRefs.length > 0) {
+            imagesList = imageRefs.map(name => `- Image: ${name}`).join('\n');
+        }
+
+        return baseTemplate
+            .replace('{{USER_DESCRIPTION}}', userDescription || '')
+            .replace('{{IMAGE_REFS}}', imagesList);
+    }
+
+    async function copyStitchPromptToClipboard() {
+        if (!btnCopyStitchPrompt) return;
+        const description = stitchGeneratorInput ? stitchGeneratorInput.value.trim() : '';
+        const imageRefs = state.stitchGeneratorImages.map(img => img.name);
+
+        const promptText = generateStitchMetaPrompt(description, imageRefs);
+        const originalText = btnCopyStitchPrompt.innerText || 'Copy Prompt';
+
+        try {
+            await navigator.clipboard.writeText(promptText);
+            btnCopyStitchPrompt.innerText = 'COPIED';
+            btnCopyStitchPrompt.disabled = true;
+            setTimeout(() => {
+                btnCopyStitchPrompt.innerText = originalText;
+                updateCopyButtonState();
+            }, 2000);
+        } catch (err) {
+            console.error('Failed to copy text: ', err);
+            btnCopyStitchPrompt.innerText = 'FAILED';
+            setTimeout(() => {
+                btnCopyStitchPrompt.innerText = originalText;
+                updateCopyButtonState();
+            }, 2000);
+        }
     }
 
     function makeFifeHighResUrl(imageUrl) {
@@ -1027,9 +1190,35 @@
             if (state.activePreviewScreenId) {
                 closeStitchPreview();
                 e.stopPropagation();
+            } else if (state.stitchGeneratorOpen) {
+                closeStitchGenerator();
+                e.stopPropagation();
             }
         }
     });
+
+    if (btnStitchPromptGenerator) {
+        btnStitchPromptGenerator.addEventListener('click', openStitchGenerator);
+    }
+    if (btnCloseStitchGenerator) {
+        btnCloseStitchGenerator.addEventListener('click', closeStitchGenerator);
+    }
+    if (stitchPromptModal) {
+        stitchPromptModal.addEventListener('click', (e) => {
+            if (e.target === stitchPromptModal) {
+                closeStitchGenerator();
+            }
+        });
+    }
+    if (stitchGeneratorInput) {
+        stitchGeneratorInput.addEventListener('input', updateCopyButtonState);
+    }
+    if (stitchGeneratorImageInput) {
+        stitchGeneratorImageInput.addEventListener('change', handleStitchGeneratorImagesChange);
+    }
+    if (btnCopyStitchPrompt) {
+        btnCopyStitchPrompt.addEventListener('click', copyStitchPromptToClipboard);
+    }
 
     if (btnNewStitchProject) {
         btnNewStitchProject.addEventListener('click', () => {
