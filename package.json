@@ -195,6 +195,20 @@
           "description": "Default folder path for downloaded Stitch assets (PNG/HTML). Relative to workspace root.",
           "scope": "resource"
         },
+        "switchboard.stitch.defaultModelId": {
+          "type": "string",
+          "enum": ["GEMINI_3_FLASH", "GEMINI_3_1_PRO"],
+          "default": "GEMINI_3_FLASH",
+          "description": "Default AI model for Stitch generation.",
+          "scope": "resource"
+        },
+        "switchboard.stitch.defaultCreativeRange": {
+          "type": "string",
+          "enum": ["EXPLORE", "REFINE", "REIMAGINE"],
+          "default": "EXPLORE",
+          "description": "Default creative range for Stitch variant generation.",
+          "scope": "resource"
+        },
         "switchboard.controlPlane.onboardingDismissed": {
           "type": "boolean",
           "default": false,

@@ -14,9 +14,11 @@ export interface LocalFolderPathsConfig {
     localFolderPaths: string[];
     htmlFolderPaths: string[];
     designFolderPaths: string[];
+    ticketsFolderPaths: string[];
     _migratedLocal?: boolean;
     _migratedHtml?: boolean;
     _migratedDesign?: boolean;
+    _migratedTickets?: boolean;
 }
 
 export class LocalFolderService {
@@ -69,7 +71,7 @@ export class LocalFolderService {
             const content = await fs.promises.readFile(this._configPath, 'utf8');
             const parsed = JSON.parse(content);
             // Strip folder-path and migration fields so they don't leak into LocalFolderConfig consumers
-            const { localFolderPaths, htmlFolderPaths, designFolderPaths, _migrated, _migratedLocal, _migratedHtml, _migratedDesign, ...rest } = parsed;
+            const { localFolderPaths, htmlFolderPaths, designFolderPaths, ticketsFolderPaths, _migrated, _migratedLocal, _migratedHtml, _migratedDesign, _migratedTickets, ...rest } = parsed;
             return rest;
         } catch { return null; }
     }
@@ -93,12 +95,14 @@ export class LocalFolderService {
                 localFolderPaths: parsed.localFolderPaths || [],
                 htmlFolderPaths: parsed.htmlFolderPaths || [],
                 designFolderPaths: parsed.designFolderPaths || [],
+                ticketsFolderPaths: parsed.ticketsFolderPaths || [],
                 _migratedLocal: parsed._migratedLocal || false,
                 _migratedHtml: parsed._migratedHtml || false,
-                _migratedDesign: parsed._migratedDesign || false
+                _migratedDesign: parsed._migratedDesign || false,
+                _migratedTickets: parsed._migratedTickets || false
             };
         } catch {
-            return { localFolderPaths: [], htmlFolderPaths: [], designFolderPaths: [], _migratedLocal: false, _migratedHtml: false, _migratedDesign: false };
+            return { localFolderPaths: [], htmlFolderPaths: [], designFolderPaths: [], ticketsFolderPaths: [], _migratedLocal: false, _migratedHtml: false, _migratedDesign: false, _migratedTickets: false };
         }
     }
 
@@ -590,6 +594,71 @@ export class LocalFolderService {
         const resolvedToRemove = this.resolveFolderPath(folderPath);
 
         cfg.designFolderPaths = currentPaths.filter(p => this.resolveFolderPath(p) !== resolvedToRemove);
+        await this.saveFolderPathsConfig(cfg);
+    }
+
+    getTicketsFolderPaths(): string[] {
+        let cfg = this._folderPathsCache;
+        if (!cfg) {
+            try {
+                const content = fs.readFileSync(this._configPath, 'utf8');
+                const parsed = JSON.parse(content);
+                cfg = {
+                    localFolderPaths: parsed.localFolderPaths || [],
+                    htmlFolderPaths: parsed.htmlFolderPaths || [],
+                    designFolderPaths: parsed.designFolderPaths || [],
+                    ticketsFolderPaths: parsed.ticketsFolderPaths || [],
+                    _migratedLocal: parsed._migratedLocal || false,
+                    _migratedHtml: parsed._migratedHtml || false,
+                    _migratedDesign: parsed._migratedDesign || false,
+                    _migratedTickets: parsed._migratedTickets || false
+                };
+            } catch {
+                cfg = { localFolderPaths: [], htmlFolderPaths: [], designFolderPaths: [], ticketsFolderPaths: [], _migratedLocal: false, _migratedHtml: false, _migratedDesign: false, _migratedTickets: false };
+            }
+            this._folderPathsCache = cfg;
+        }
+
+        if (!cfg._migratedTickets) {
+            const config = vscode.workspace.getConfiguration('switchboard');
+            const globalPaths = config.get<string[]>('research.ticketsFolderPaths', []);
+            cfg.ticketsFolderPaths = globalPaths;
+            cfg._migratedTickets = true;
+            this._folderPathsCache = cfg;
+            this.saveFolderPathsConfig(cfg).then(() => {
+                config.update('research.ticketsFolderPaths', undefined, vscode.ConfigurationTarget.Global);
+            }).catch(() => {});
+        }
+
+        const seen = new Set<string>();
+        return (cfg.ticketsFolderPaths || [])
+            .map(p => this.resolveFolderPath(p))
+            .filter(p => p && !seen.has(p) && seen.add(p) as unknown as boolean);
+    }
+
+    getTicketsFolderPath(): string {
+        const paths = this.getTicketsFolderPaths();
+        return paths[0] ?? '';
+    }
+
+    async addTicketsFolderPath(folderPath: string): Promise<void> {
+        const cfg = await this.loadFolderPathsConfig();
+        const currentPaths = cfg.ticketsFolderPaths || [];
+        const resolvedInput = this.resolveFolderPath(folderPath);
+
+        const isDuplicate = currentPaths.some(p => this.resolveFolderPath(p) === resolvedInput);
+        if (!isDuplicate) {
+            cfg.ticketsFolderPaths = [...currentPaths, folderPath];
+            await this.saveFolderPathsConfig(cfg);
+        }
+    }
+
+    async removeTicketsFolderPath(folderPath: string): Promise<void> {
+        const cfg = await this.loadFolderPathsConfig();
+        const currentPaths = cfg.ticketsFolderPaths || [];
+        const resolvedToRemove = this.resolveFolderPath(folderPath);
+
+        cfg.ticketsFolderPaths = currentPaths.filter(p => this.resolveFolderPath(p) !== resolvedToRemove);
         await this.saveFolderPathsConfig(cfg);
     }
 

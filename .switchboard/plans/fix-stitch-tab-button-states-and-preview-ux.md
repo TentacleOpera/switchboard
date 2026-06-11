@@ -168,3 +168,7 @@ Key risks: FIFE URL fragility (appending `=w1200` to non-FIFE URLs breaks images
 > **Note:** Automated tests are not run in this session; they are provided as the verification specification for the user to execute separately.
 
 **Recommendation:** Send to Coder
+
+## Review Findings
+
+Reviewer-executor pass complete. All plan requirements satisfied: `#btn-generate-stitch` and `#btn-open-design-md` default-disabled in HTML and guarded by `setStitchBusy()`; lightbox markup/CSS/JS fully removed; inline `#stitch-preview-pane` and `#stitch-thumbnail-strip` added with high-res FIFE URL helper, auto-preview on `stitchScreensReady`, Escape-to-close, and project-switch close-then-load. One fix applied in `src/webview/design.js`: anchored `makeFifeHighResUrl` regex from `.*` to `$` to prevent over-consumption on malformed FIFE URLs. Files reviewed: `design.html`, `design.js`, `DesignPanelProvider.ts` (no changes). No compilation or test errors introduced. Remaining risk: FIFE URL format assumptions (domain/path matching, size param position, query string handling, hardcoded `=w1200`) — these require manual integration testing against live Stitch API responses after deployment to validate. Deferred enhancement: add a CSS transition on `#stitch-preview-pane` and `#stitch-gallery` using `opacity` and `max-height` to avoid the one-frame gallery flash before auto-preview — e.g. `transition: opacity 0.2s ease, max-height 0.3s ease;` and toggle visibility via a `.visible` class instead of direct `display` changes.

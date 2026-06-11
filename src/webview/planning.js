@@ -130,6 +130,21 @@
         }
     }
 
+    function setTicketsLoadingState(isLoading) {
+        const loadingState = document.getElementById('tickets-loading-state');
+        const previewContent = document.getElementById('markdown-preview-tickets');
+        if (loadingState && previewContent) {
+            loadingState.style.display = isLoading ? 'flex' : 'none';
+            previewContent.style.opacity = isLoading ? '0.4' : '1';
+        }
+        const metaBar = document.getElementById('tickets-preview-meta-bar');
+        if (metaBar) {
+            metaBar.querySelectorAll('button, select').forEach(el => {
+                el.disabled = isLoading;
+            });
+        }
+    }
+
     function getTicketsTabElements() {
         return {
             listView: document.getElementById('tree-pane-tickets'),
@@ -146,7 +161,23 @@
             subtasksNav: document.getElementById('tickets-subtasks-nav'),
             detailContent: document.getElementById('tickets-detail-content'),
             hierarchyNav: document.getElementById('tickets-hierarchy-nav'),
-            createButton: document.getElementById('tickets-create')
+            createButton: document.getElementById('tickets-create'),
+            btnManageTicketFolders: document.getElementById('btn-manage-ticket-folders'),
+            btnImportAllTickets: document.getElementById('btn-import-all-tickets'),
+            previewMetaBar: document.getElementById('tickets-preview-meta-bar'),
+            btnEditTicket: document.getElementById('btn-edit-ticket'),
+            btnPushTicket: document.getElementById('btn-push-ticket'),
+            btnDeleteTicket: document.getElementById('btn-delete-ticket'),
+            selectStatusTicket: document.getElementById('select-status-ticket'),
+            btnCommentTicket: document.getElementById('btn-comment-ticket'),
+            deleteConfirmBanner: document.getElementById('tickets-delete-confirm-banner'),
+            deleteConfirmInput: document.getElementById('delete-confirm-input'),
+            confirmDeleteTicket: document.getElementById('confirm-delete-ticket'),
+            cancelDeleteTicket: document.getElementById('cancel-delete-ticket'),
+            commentInputArea: document.getElementById('tickets-comment-input-area'),
+            commentTextarea: document.getElementById('tickets-comment-textarea'),
+            btnPostCommentCancel: document.getElementById('btn-post-comment-cancel'),
+            btnPostCommentSubmit: document.getElementById('btn-post-comment-submit')
         };
     }
 
@@ -522,11 +553,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         return null;
     }
 
-    // Attribute-escape for values that land inside href="..." attributes.
-    function escapeAttr(s) {
-        return String(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    }
-
     // Inject <base> tag for relative asset resolution in srcdoc iframes
     function injectBaseTag(html, baseUri) {
         if (!html || !baseUri) return html;
@@ -544,359 +570,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             return html.slice(0, index) + baseTag + html.slice(index);
         }
         return baseTag + html;  // Fallback: prepend for fragment HTML
-    }
-
-    // Allowlist safe URL schemes and block dangerous ones
-    function sanitizeUrl(rawUrl) {
-        const trimmed = String(rawUrl).trim();
-        if (/^(#|\/|\.{1,2}\/)/.test(trimmed)) { return trimmed; }
-        const schemeMatch = trimmed.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):/);
-        if (schemeMatch) {
-            const scheme = schemeMatch[1].toLowerCase();
-            if (scheme === 'http' || scheme === 'https' || scheme === 'mailto' || scheme === 'tel') {
-                return trimmed;
-            }
-            return '#';
-        }
-        return trimmed;
-    }
-
-    function renderInlineMarkdown(text) {
-        if (!text) return '';
-        return text
-            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-            .replace(/\*(.+?)\*/g, '<em>$1</em>')
-            .replace(/`([^`]+)`/g, '<code>$1</code>')
-            .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, t, url) => {
-                const safeUrl = escapeAttr(sanitizeUrl(url));
-                return `<a href="${safeUrl}">${t}</a>`;
-            })
-            .replace(/\\([\\`*_{}[\]()#+\-.!|])/g, '$1');
-    }
-
-    const TABLE_SEPARATOR_REGEX = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
-
-    function parseTableBlock(lines) {
-        if (lines.length < 2) return '';
-        // Find separator row index (typically 1, but we scan to be robust)
-        let sepIdx = -1;
-        for (let i = 0; i < lines.length; i++) {
-            if (TABLE_SEPARATOR_REGEX.test(lines[i])) {
-                sepIdx = i;
-                break;
-            }
-        }
-        if (sepIdx === -1) return '';
-
-        const splitRow = (row) => {
-            const trimmed = row.trim();
-            let rawCells = trimmed.split('|');
-            if (trimmed.startsWith('|')) rawCells.shift();
-            if (trimmed.endsWith('|') && rawCells.length > 0) rawCells.pop();
-            return rawCells.map(c => c.trim());
-        };
-
-        const headerCells = splitRow(lines[0]);
-        const sepCells = splitRow(lines[sepIdx]);
-        const alignments = sepCells.map(cell => {
-            const left = cell.startsWith(':');
-            const right = cell.endsWith(':');
-            if (left && right) return 'center';
-            if (right) return 'right';
-            if (left) return 'left';
-            return '';
-        });
-
-        let html = '<div class="table-wrapper"><table><thead><tr>';
-        for (let i = 0; i < headerCells.length; i++) {
-            const align = alignments[i] || '';
-            const style = align ? ` style="text-align: ${align}"` : '';
-            html += `<th${style}>${renderInlineMarkdown(headerCells[i])}</th>`;
-        }
-        html += '</tr></thead><tbody>';
-
-        for (let i = sepIdx + 1; i < lines.length; i++) {
-            const cells = splitRow(lines[i]);
-            // GFM spec: if line is entirely empty and starts/ends with no content, it might split weirdly or be skipped,
-            // but we process all accumulated lines.
-            html += '<tr>';
-            for (let j = 0; j < headerCells.length; j++) {
-                const align = alignments[j] || '';
-                const style = align ? ` style="text-align: ${align}"` : '';
-                const cellContent = j < cells.length ? cells[j] : '';
-                html += `<td${style}>${renderInlineMarkdown(cellContent)}</td>`;
-            }
-            html += '</tr>';
-        }
-        html += '</tbody></table></div>';
-        return html;
-    }
-
-    // Simple markdown renderer with header deduplication
-    function renderMarkdown(markdown) {
-        if (!markdown) return '';
-
-        // Normalize line endings to prevent layout differences
-        let processed = markdown.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-
-        // Escape HTML first
-        processed = processed
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;');
-
-        // Temporarily protect escaped backticks to prevent them from breaking the inline code block parser
-        processed = processed.replace(/\\`/g, '__ESCAPED_BACKTICK__');
-
-        // Process line by line to deduplicate consecutive headers
-        const lines = processed.split('\n');
-        const resultLines = [];
-        let lastHeaderText = null;
-
-        for (const line of lines) {
-            const headerMatch = line.match(/^(#{1,6})\s+(.+)$/);
-            if (headerMatch) {
-                const headerText = headerMatch[2].trim();
-                // Skip if this header has the same text as the previous one
-                if (headerText === lastHeaderText) {
-                    continue;
-                }
-                lastHeaderText = headerText;
-            }
-            resultLines.push(line);
-        }
-
-        // Group consecutive blockquote lines
-        // NOTE(escape-order coupling): This regex matches '&gt;' because HTML escaping
-        // runs first (lines 388-391). If the escape order ever changes, this regex
-        // must be updated accordingly or blockquote rendering will silently break.
-        const groupedLines = [];
-        let inBlockquote = false;
-        let blockquoteLines = [];
-        for (const line of resultLines) {
-            const bqMatch = line.match(/^&gt;\s?(.*)$/);
-            if (bqMatch) {
-                if (!inBlockquote) { inBlockquote = true; blockquoteLines = []; }
-                blockquoteLines.push(bqMatch[1]);
-            } else {
-                if (inBlockquote) {
-                    groupedLines.push({ type: 'blockquote', lines: blockquoteLines });
-                    inBlockquote = false;
-                    blockquoteLines = [];
-                }
-                groupedLines.push(line);
-            }
-        }
-        if (inBlockquote) { groupedLines.push({ type: 'blockquote', lines: blockquoteLines }); }
-
-        const processedLines = [];
-        let inCodeFence = false;
-        let tableBlockLines = [];
-
-        const flushTableBlock = () => {
-            if (tableBlockLines.length >= 2) {
-                let hasSep = false;
-                for (const l of tableBlockLines) {
-                    if (TABLE_SEPARATOR_REGEX.test(l)) {
-                        hasSep = true;
-                        break;
-                    }
-                }
-                if (hasSep) {
-                    const tableHtml = parseTableBlock(tableBlockLines);
-                    processedLines.push(`HTML_TABLE_START${tableHtml}HTML_TABLE_END`);
-                } else {
-                    for (const l of tableBlockLines) {
-                        processedLines.push(l);
-                    }
-                }
-            } else {
-                for (const l of tableBlockLines) {
-                    processedLines.push(l);
-                }
-            }
-            tableBlockLines = [];
-        };
-
-        for (const item of groupedLines) {
-            if (typeof item === 'string') {
-                if (item.trim().startsWith('```')) {
-                    flushTableBlock();
-                    inCodeFence = !inCodeFence;
-                    processedLines.push(item);
-                } else if (inCodeFence) {
-                    processedLines.push(item);
-                } else {
-                    // Table line detection — only lines starting with '|' (GFM pipe tables with leading pipe)
-                    const isTableLine = item.trim().startsWith('|');
-                    if (isTableLine) {
-                        tableBlockLines.push(item);
-                    } else {
-                        flushTableBlock();
-                        processedLines.push(item);
-                    }
-                }
-            } else if (item && item.type === 'blockquote') {
-                flushTableBlock();
-                const content = item.lines.join('\n');
-                const alertMatch = content.match(/^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*([\s\S]*)$/i);
-                if (alertMatch) {
-                    const type = alertMatch[1].toLowerCase();
-                    const title = alertMatch[1].charAt(0).toUpperCase() + alertMatch[1].slice(1).toLowerCase();
-                    const body = alertMatch[2].trim();
-                    processedLines.push(`HTML_ALERT_START_${type}_${title}HTML_ALERT_CONTENT${body}HTML_ALERT_END`);
-                } else {
-                    processedLines.push(`HTML_BLOCKQUOTE_START${content}HTML_BLOCKQUOTE_END`);
-                }
-            }
-        }
-        flushTableBlock();
-
-        processed = processedLines.join('\n');
-
-        // Now apply markdown transformations
-        let html = processed
-            .replace(/```(\w*)([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
-            .replace(/^\s*###### (.+)$/gm, '<h6>$1</h6>')
-            .replace(/^\s*##### (.+)$/gm, '<h5>$1</h5>')
-            .replace(/^\s*#### (.+)$/gm, '<h4>$1</h4>')
-            .replace(/^\s*### (.+)$/gm, '<h3>$1</h3>')
-            .replace(/^\s*## (.+)$/gm, '<h2>$1</h2>')
-            .replace(/^\s*# (.+)$/gm, '<h1>$1</h1>')
-            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-            .replace(/\*(.+?)\*/g, '<em>$1</em>')
-            .replace(/`([^`]+)`/g, '<code>$1</code>')
-            .replace(/^\* (.+)$/gm, '<li>$1</li>')
-            .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
-            .replace(/^\d+\. (.+)$/gm, '<li>$1</li>')
-            .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, text, url) => {
-                const safeUrl = escapeAttr(sanitizeUrl(url));
-                return `<a href="${safeUrl}">${text}</a>`;
-            })
-            .replace(/\\([\\`*_{}[\]()#+\-.!|])/g, '$1');
-
-        // Protect <pre> blocks from newline-to-<br> conversion.
-        // Code blocks must preserve literal newlines for correct rendering;
-        // non-code content converts single newlines to <br> (GFM hard_wrap).
-        const parts = html.split(/(<pre><code>[\s\S]*?<\/code><\/pre>)/);
-        html = parts.map((part, i) => {
-            if (i % 2 === 1) return part; // pre block — preserve newlines
-            return part.replace(/\n\n+/g, '</p><p>').replace(/\n/g, '<br>');
-        }).join('');
-
-        // Clean up spurious <br> between list items inside <ul>/<ol>.
-        // The list-wrapping regex (above) captures \n between <li> items,
-        // which the <br> conversion turns into visible extra spacing.
-        html = html.replace(/<\/li><br><li>/g, '</li><li>');
-
-        html = `<p>${html}</p>`;
-        html = html.replace(/<p>\s*<\/p>/g, '');
-
-        // Replace placeholders
-        html = html.replace(/HTML_TABLE_START([\s\S]*?)HTML_TABLE_END/g, (_, tableHtml) => {
-            return `</p>${tableHtml}<p>`;
-        });
-        html = html.replace(/HTML_ALERT_START_([a-z]+)_([A-Za-z]+)HTML_ALERT_CONTENT([\s\S]*?)HTML_ALERT_END/g, (_, type, title, body) => {
-            return `</p><div class="markdown-alert alert-${type}"><div class="markdown-alert-title">${title}</div><div>${body}</div></div><p>`;
-        });
-        html = html.replace(/HTML_BLOCKQUOTE_START([\s\S]*?)HTML_BLOCKQUOTE_END/g, (_, body) => {
-            return `</p><blockquote>${body}</blockquote><p>`;
-        });
-        html = html.replace(/<p>\s*<\/p>/g, '');
-
-        // Restore escaped backticks
-        // If it is inside <code> or <pre> tags, restore to \\` (preserving backslash)
-        // If it is outside, restore to ` (removing backslash)
-        let inCode = false;
-        html = html.replace(/(<code\b[^>]*>|<\/code>|<pre\b[^>]*>|<\/pre>|__ESCAPED_BACKTICK__)/g, (match) => {
-            if (match.startsWith('<code') || match.startsWith('<pre')) {
-                inCode = true;
-                return match;
-            } else if (match.startsWith('</code') || match.startsWith('</pre')) {
-                inCode = false;
-                return match;
-            } else if (match === '__ESCAPED_BACKTICK__') {
-                return inCode ? '\\`' : '`';
-            }
-            return match;
-        });
-
-        return html;
-    }
-
-    function renderJsonTree(data, depth, maxDepth, seen) {
-        depth = depth || 0;
-        maxDepth = maxDepth || 2;
-        seen = seen || new WeakSet();
-
-        // Primitives
-        if (data === null) {
-            const span = document.createElement('span');
-            span.className = 'json-null';
-            span.textContent = 'null';
-            return span;
-        }
-        if (typeof data !== 'object') {
-            const span = document.createElement('span');
-            span.className = 'json-' + typeof data;
-            span.textContent = typeof data === 'string' ? '"' + data + '"' : String(data);
-            return span;
-        }
-
-        // Circular reference guard — only track objects/arrays
-        if (seen.has(data)) {
-            const span = document.createElement('span');
-            span.className = 'json-null';
-            span.textContent = '[Circular]';
-            return span;
-        }
-        seen.add(data);
-
-        const isArray = Array.isArray(data);
-        const isOpen = depth < maxDepth;
-
-        const details = document.createElement('details');
-        details.className = 'json-node';
-        if (isOpen) details.open = true;
-
-        const summary = document.createElement('summary');
-        summary.className = 'json-bracket';
-        const countLabel = isArray
-            ? `${data.length} items`
-            : `${Object.keys(data).length} keys`;
-        summary.textContent = isArray ? `[ ${countLabel} ]` : `{ ${countLabel} }`;
-        details.appendChild(summary);
-
-        const children = document.createElement('div');
-        children.className = 'json-children';
-
-        if (isArray) {
-            data.forEach((item, i) => {
-                const row = document.createElement('div');
-                row.className = 'json-row';
-                const idx = document.createElement('span');
-                idx.className = 'json-number';
-                idx.textContent = String(i) + ':';
-                row.appendChild(idx);
-                row.appendChild(renderJsonTree(item, depth + 1, maxDepth, seen));
-                children.appendChild(row);
-            });
-        } else {
-            for (const [key, val] of Object.entries(data)) {
-                const row = document.createElement('div');
-                row.className = 'json-row';
-                const keySpan = document.createElement('span');
-                keySpan.className = 'json-key';
-                keySpan.textContent = '"' + key + '"';
-                row.appendChild(keySpan);
-                row.appendChild(document.createTextNode(': '));
-                row.appendChild(renderJsonTree(val, depth + 1, maxDepth, seen));
-                children.appendChild(row);
-            }
-        }
-
-        details.appendChild(children);
-        return details;
     }
 
     function renderDocCard({ title, subtitle, sourceId, nodeId, nodeMetadata, actions, isSelected, clickHandler, deleteHandler, syncHandler, extraClass }) {
@@ -1256,7 +929,12 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         if (!folderListModal) return;
         folderListModal.innerHTML = '';
 
-        const folderPaths = getCurrentFolderPaths(state.localFolderPathsByRoot, state.localWorkspaceRootFilter);
+        let folderPaths = [];
+        if (folderModalScope === 'tickets') {
+            folderPaths = getCurrentFolderPaths(state.ticketsFolderPathsByRoot || {}, state.localWorkspaceRootFilter);
+        } else {
+            folderPaths = getCurrentFolderPaths(state.localFolderPathsByRoot, state.localWorkspaceRootFilter);
+        }
 
         if (folderPaths.length === 0) {
             const empty = document.createElement('div');
@@ -1280,7 +958,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             removeBtn.textContent = 'Remove';
             removeBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                vscode.postMessage({ type: 'removeLocalFolder', folderPath: path, workspaceRoot: state.localWorkspaceRootFilter || currentWorkspaceRoot });
+                if (folderModalScope === 'tickets') {
+                    vscode.postMessage({ type: 'removeTicketsFolder', folderPath: path, workspaceRoot: state.localWorkspaceRootFilter || currentWorkspaceRoot });
+                } else {
+                    vscode.postMessage({ type: 'removeLocalFolder', folderPath: path, workspaceRoot: state.localWorkspaceRootFilter || currentWorkspaceRoot });
+                }
             });
 
             row.appendChild(pathSpan);
@@ -1757,6 +1439,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         console.log('[PlanningPanel Webview] handleLocalDocsReady called:', msg);
         state._lastLocalDocsMsg = msg;
         state.localFolderPathsByRoot = msg.folderPathsByRoot || {};
+        state.ticketsFolderPathsByRoot = msg.ticketsFolderPathsByRoot || {};
         populateWorkspaceDropdown('local-workspace-filter', msg.workspaceItems || [], state.localWorkspaceRootFilter);
         const filteredNodes = state.localWorkspaceRootFilter
             ? (msg.nodes || []).filter(n => n.metadata?.root === state.localWorkspaceRootFilter)
@@ -2916,6 +2599,112 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 renderFolderList(msg.paths || []);
                 renderFolderListModal();
                 populateResearchFolderSelect(msg.paths || []);
+                break;
+
+            case 'ticketsFoldersListed':
+                if (!state.ticketsFolderPathsByRoot) { state.ticketsFolderPathsByRoot = {}; }
+                state.ticketsFolderPathsByRoot[msg.workspaceRoot || currentWorkspaceRoot || ''] = msg.paths || [];
+                renderFolderListModal();
+                break;
+            case 'importAllTicketsComplete':
+                setTicketsLoadingState(false);
+                if (msg.success) {
+                    showTicketsStatus(`Imported ${msg.successCount} tickets, ${msg.failCount} failed.`, false);
+                } else {
+                    showTicketsStatus(msg.error || 'Bulk import failed', true);
+                }
+                break;
+            case 'editTicketResult':
+                if (!msg.success) {
+                    showTicketsStatus(msg.error || 'Failed to edit ticket', true);
+                }
+                break;
+            case 'pushTicketResult':
+                setTicketsLoadingState(false);
+                if (msg.success) {
+                    showTicketsStatus('Pushed ✓', false);
+                    if (lastIntegrationProvider === 'linear') {
+                        loadLinearTaskDetails(msg.id);
+                    } else {
+                        loadClickUpTaskDetails(msg.id);
+                    }
+                } else {
+                    showTicketsStatus(msg.error || 'Failed to push edits', true);
+                }
+                break;
+            case 'ticketDeleted':
+                setTicketsLoadingState(false);
+                if (msg.success) {
+                    showTicketsStatus('Archived/Deleted ✓', false);
+                    const banner = document.getElementById('tickets-delete-confirm-banner');
+                    if (banner) banner.style.display = 'none';
+                    selectedLinearIssue = null;
+                    selectedClickUpIssue = null;
+                    if (lastIntegrationProvider === 'linear') {
+                        linearProjectIssues = linearProjectIssues.filter(i => i.id !== msg.id);
+                        renderTicketsLinearList();
+                        renderTicketsLinearTaskDetail();
+                    } else {
+                        clickUpProjectIssues = clickUpProjectIssues.filter(t => t.id !== msg.id);
+                        renderTicketsClickUpList();
+                        renderTicketsClickUpTaskDetail();
+                    }
+                } else {
+                    showTicketsStatus(msg.error || 'Failed to delete ticket', true);
+                }
+                break;
+            case 'changeTicketStatusResult':
+                setTicketsLoadingState(false);
+                if (msg.success) {
+                    showTicketsStatus('Status updated ✓', false);
+                    if (lastIntegrationProvider === 'linear') {
+                        const issue = linearProjectIssues.find(i => i.id === msg.id);
+                        if (issue) {
+                            const stateSelect = document.getElementById('select-status-ticket');
+                            const selectedOption = stateSelect?.querySelector(`option[value="${msg.statusId}"]`);
+                            if (selectedOption && issue.state) {
+                                issue.state.name = selectedOption.textContent;
+                            }
+                        }
+                        loadLinearTaskDetails(msg.id);
+                        renderTicketsLinearList();
+                    } else {
+                        const task = clickUpProjectIssues.find(t => t.id === msg.id);
+                        if (task) {
+                            const stateSelect = document.getElementById('select-status-ticket');
+                            const selectedOption = stateSelect?.querySelector(`option[value="${msg.statusId}"]`);
+                            if (selectedOption) {
+                                task.status = selectedOption.textContent;
+                            }
+                        }
+                        loadClickUpTaskDetails(msg.id);
+                        renderTicketsClickUpList();
+                    }
+                } else {
+                    showTicketsStatus(msg.error || 'Failed to update status', true);
+                }
+                break;
+            case 'postTicketCommentResult':
+                setTicketsLoadingState(false);
+                if (msg.success) {
+                    showTicketsStatus('Comment posted ✓', false);
+                    const commentArea = document.getElementById('tickets-comment-input-area');
+                    if (commentArea) commentArea.style.display = 'none';
+                    if (lastIntegrationProvider === 'linear') {
+                        loadLinearTaskDetails(msg.id);
+                    } else {
+                        loadClickUpTaskDetails(msg.id);
+                    }
+                } else {
+                    showTicketsStatus(msg.error || 'Failed to post comment', true);
+                }
+                break;
+            case 'attachmentDownloaded':
+                if (msg.success) {
+                    showTicketsStatus('Attachment downloaded ✓', false);
+                } else {
+                    showTicketsStatus(msg.error || 'Failed to download attachment', true);
+                }
                 break;
 
             case 'airlock_exportComplete':
@@ -4567,12 +4356,19 @@ Return ONLY the drafted prompt with no additional commentary.`;
     }
 
     // Folder modal open logic
-    function openFoldersModal() {
+    function openFoldersModal(scope = 'local') {
+        folderModalScope = scope;
         const modal = document.getElementById('folder-modal');
+        const modalTitle = document.getElementById('folder-modal-title');
+        if (modalTitle) {
+            modalTitle.textContent = scope === 'tickets' ? 'Manage Tickets Folders' : 'Manage Local Docs Folders';
+        }
         modal.style.display = 'flex';
         // Sync antigravity toggle state from JS state
         const modalToggle = document.getElementById('antigravity-toggle-modal');
-        modalToggle.checked = !!state.antigravityEnabled;
+        if (modalToggle) {
+            modalToggle.checked = !!state.antigravityEnabled;
+        }
         // Render folder list from current state (fast-path for pre-warmed state)
         renderFolderListModal();
         // Request fresh folder list from backend to ensure sync (catches startup race)
@@ -4623,13 +4419,157 @@ Return ONLY the drafted prompt with no additional commentary.`;
     });
 
     document.getElementById('btn-add-folder-modal').addEventListener('click', () => {
-        vscode.postMessage({ type: 'addLocalFolder', workspaceRoot: state.localWorkspaceRootFilter || currentWorkspaceRoot });
+        if (folderModalScope === 'tickets') {
+            vscode.postMessage({ type: 'addTicketsFolder', workspaceRoot: state.localWorkspaceRootFilter || currentWorkspaceRoot });
+        } else {
+            vscode.postMessage({ type: 'addLocalFolder', workspaceRoot: state.localWorkspaceRootFilter || currentWorkspaceRoot });
+        }
     });
 
     // ===== TICKETS TAB IMPLEMENTATION =====
 
     function initTicketsTab() {
-        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, loadMoreButton } = getTicketsTabElements();
+        const {
+            searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, loadMoreButton,
+            btnManageTicketFolders, btnImportAllTickets
+        } = getTicketsTabElements();
+
+        // Manage Folders button
+        btnManageTicketFolders?.addEventListener('click', () => {
+            openFoldersModal('tickets');
+        });
+
+        // Import All button
+        btnImportAllTickets?.addEventListener('click', () => {
+            const provider = lastIntegrationProvider;
+            let ids = [];
+            if (provider === 'linear') {
+                ids = getFilteredLinearIssues().map(issue => issue.id);
+            } else if (provider === 'clickup') {
+                ids = getFilteredClickUpTasks().map(task => task.id);
+            }
+            if (ids.length === 0) {
+                showTicketsStatus('No tickets to import', true);
+                return;
+            }
+            setTicketsLoadingState(true);
+            vscode.postMessage({
+                type: 'importAllTickets',
+                workspaceRoot: currentWorkspaceRoot,
+                provider,
+                ids,
+                importMode: 'plan'
+            });
+        });
+
+        // Action bar: Edit
+        document.getElementById('btn-edit-ticket')?.addEventListener('click', () => {
+            const provider = lastIntegrationProvider;
+            const id = provider === 'linear'
+                ? selectedLinearIssue?.issue.id
+                : selectedClickUpIssue?.task.id;
+            if (!id) return;
+            vscode.postMessage({ type: 'editTicket', provider, id, workspaceRoot: currentWorkspaceRoot });
+        });
+
+        // Action bar: Push
+        document.getElementById('btn-push-ticket')?.addEventListener('click', () => {
+            const provider = lastIntegrationProvider;
+            const id = provider === 'linear'
+                ? selectedLinearIssue?.issue.id
+                : selectedClickUpIssue?.task.id;
+            if (!id) return;
+            setTicketsLoadingState(true);
+            vscode.postMessage({ type: 'pushTicket', provider, id, workspaceRoot: currentWorkspaceRoot });
+        });
+
+        // Action bar: Delete
+        document.getElementById('btn-delete-ticket')?.addEventListener('click', () => {
+            const banner = document.getElementById('tickets-delete-confirm-banner');
+            if (banner) {
+                banner.style.display = banner.style.display === 'none' ? 'block' : 'none';
+                const confirmInput = document.getElementById('delete-confirm-input');
+                if (confirmInput) {
+                    confirmInput.value = '';
+                    confirmInput.focus();
+                }
+                const confirmBtn = document.getElementById('confirm-delete-ticket');
+                if (confirmBtn) confirmBtn.disabled = true;
+            }
+        });
+
+        // Delete banner input listener
+        document.getElementById('delete-confirm-input')?.addEventListener('input', (e) => {
+            const provider = lastIntegrationProvider;
+            const title = provider === 'linear'
+                ? (selectedLinearIssue?.issue.title || selectedLinearIssue?.issue.identifier || '')
+                : (selectedClickUpIssue?.task.name || selectedClickUpIssue?.task.title || '');
+            const confirmBtn = document.getElementById('confirm-delete-ticket');
+            if (confirmBtn) {
+                confirmBtn.disabled = e.target.value.trim() !== title.trim();
+            }
+        });
+
+        // Delete banner: Confirm
+        document.getElementById('confirm-delete-ticket')?.addEventListener('click', () => {
+            const provider = lastIntegrationProvider;
+            const id = provider === 'linear'
+                ? selectedLinearIssue?.issue.id
+                : selectedClickUpIssue?.task.id;
+            if (!id) return;
+            setTicketsLoadingState(true);
+            vscode.postMessage({ type: 'deleteTicketConfirmed', provider, id, workspaceRoot: currentWorkspaceRoot });
+        });
+
+        // Delete banner: Cancel
+        document.getElementById('cancel-delete-ticket')?.addEventListener('click', () => {
+            const banner = document.getElementById('tickets-delete-confirm-banner');
+            if (banner) banner.style.display = 'none';
+        });
+
+        // Action bar: Change Status
+        document.getElementById('select-status-ticket')?.addEventListener('change', (e) => {
+            const provider = lastIntegrationProvider;
+            const id = provider === 'linear'
+                ? selectedLinearIssue?.issue.id
+                : selectedClickUpIssue?.task.id;
+            if (!id) return;
+            const statusId = e.target.value;
+            setTicketsLoadingState(true);
+            vscode.postMessage({ type: 'changeTicketStatus', provider, id, statusId, workspaceRoot: currentWorkspaceRoot });
+        });
+
+        // Action bar: Comment button toggle
+        document.getElementById('btn-comment-ticket')?.addEventListener('click', () => {
+            const commentArea = document.getElementById('tickets-comment-input-area');
+            if (commentArea) {
+                commentArea.style.display = commentArea.style.display === 'none' ? 'block' : 'none';
+                const textarea = document.getElementById('tickets-comment-textarea');
+                if (textarea) {
+                    textarea.value = '';
+                    textarea.focus();
+                }
+            }
+        });
+
+        // Comment post cancel
+        document.getElementById('btn-post-comment-cancel')?.addEventListener('click', () => {
+            const commentArea = document.getElementById('tickets-comment-input-area');
+            if (commentArea) commentArea.style.display = 'none';
+        });
+
+        // Comment post submit
+        document.getElementById('btn-post-comment-submit')?.addEventListener('click', () => {
+            const provider = lastIntegrationProvider;
+            const id = provider === 'linear'
+                ? selectedLinearIssue?.issue.id
+                : selectedClickUpIssue?.task.id;
+            const textarea = document.getElementById('tickets-comment-textarea');
+            const comment = textarea?.value?.trim();
+            if (!id || !comment) return;
+            setTicketsLoadingState(true);
+            vscode.postMessage({ type: 'postTicketComment', provider, id, comment, workspaceRoot: currentWorkspaceRoot });
+        });
 
         // Project picker (Linear)
         projectPicker?.addEventListener('change', (e) => {
@@ -4667,14 +4607,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         // Detail action buttons (delegated)
         document.getElementById('preview-pane-tickets')?.addEventListener('click', (e) => {
-            const importBtn = e.target.closest('[data-import-issue-id], [data-import-task-id]');
             const refineBtn = e.target.closest('[data-refine-issue-id], [data-refine-task-id]');
-
-            if (importBtn) {
-                const id = importBtn.dataset.importIssueId || importBtn.dataset.importTaskId;
-                const provider = lastIntegrationProvider;
-                handleTicketsImport(provider, id, true);
-            }
+            const attachmentBtn = e.target.closest('.tickets-attachment-item');
 
             if (refineBtn) {
                 const id = refineBtn.dataset.refineIssueId || refineBtn.dataset.refineTaskId;
@@ -4684,6 +4618,26 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 handleTicketsRefine(provider, id, title, description);
             }
 
+            if (attachmentBtn) {
+                const provider = lastIntegrationProvider;
+                const url = attachmentBtn.dataset.linearAttachmentUrl || attachmentBtn.dataset.clickupAttachmentUrl;
+                const filename = attachmentBtn.textContent.trim();
+                const ticketId = provider === 'linear'
+                    ? selectedLinearIssue?.issue.id
+                    : selectedClickUpIssue?.task.id;
+                const ticketTitle = provider === 'linear'
+                    ? selectedLinearIssue?.issue.title
+                    : selectedClickUpIssue?.task.name;
+                vscode.postMessage({
+                    type: 'downloadAttachment',
+                    workspaceRoot: currentWorkspaceRoot,
+                    provider,
+                    url,
+                    filename,
+                    ticketId,
+                    ticketTitle
+                });
+            }
         });
 
         // Subtask navigation clicks
@@ -4704,14 +4658,9 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         // Issue card clicks (delegated)
         document.getElementById('tickets-issues-container')?.addEventListener('click', (e) => {
-            const importBtn = e.target.closest('[data-import-issue-id], [data-import-task-id]');
             const refineBtn = e.target.closest('[data-refine-issue-id], [data-refine-task-id]');
-            const askAgentBtn = e.target.closest('[data-ask-agent-issue-id], [data-ask-agent-task-id]');
-            if (importBtn) {
-                const id = importBtn.dataset.importIssueId || importBtn.dataset.importTaskId;
-                handleTicketsImport(lastIntegrationProvider, id, true);
-                return;
-            }
+            const importPlanBtn = e.target.closest('[data-import-plan-id]');
+            const importDocBtn = e.target.closest('[data-import-doc-id]');
             if (refineBtn) {
                 const id = refineBtn.dataset.refineIssueId || refineBtn.dataset.refineTaskId;
                 const title = refineBtn.dataset.issueTitle || '';
@@ -4719,9 +4668,14 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 handleTicketsRefine(lastIntegrationProvider, id, title, description);
                 return;
             }
-            if (askAgentBtn) {
-                const id = askAgentBtn.dataset.askAgentIssueId || askAgentBtn.dataset.askAgentTaskId;
-                handleTicketsAskAgent(lastIntegrationProvider, id);
+            if (importPlanBtn) {
+                const id = importPlanBtn.dataset.importPlanId;
+                handleTicketsImport(lastIntegrationProvider, id, true, 'plan');
+                return;
+            }
+            if (importDocBtn) {
+                const id = importDocBtn.dataset.importDocId;
+                handleTicketsImport(lastIntegrationProvider, id, true, 'document');
                 return;
             }
             const card = e.target.closest('[data-linear-issue-id], [data-clickup-task-id]');
@@ -4979,9 +4933,9 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 <div class="tickets-issue-meta">${escapeHtml(issue.assignee?.name || issue.assignee?.email || 'Unassigned')}</div>
                 <div class="tickets-issue-meta">${escapeHtml((issue.description || '').trim().slice(0, 180) || 'No description provided.')}</div>
                 <div class="card-actions">
-                    <button type="button" class="card-icon-btn" data-ask-agent-issue-id="${escapeAttr(issue.id)}">ASK AGENT</button>
                     <button type="button" class="card-icon-btn" data-refine-issue-id="${escapeAttr(issue.id)}" data-issue-title="${escapeAttr(issue.title || '')}" data-issue-description="${escapeAttr(issue.description || '')}">REFINE</button>
-                    <button type="button" class="card-icon-btn" data-import-issue-id="${escapeAttr(issue.id)}">IMPORT</button>
+                    <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(issue.id)}" data-provider="linear">Import Plan</button>
+                    <button type="button" class="card-icon-btn" data-import-doc-id="${escapeAttr(issue.id)}" data-provider="linear">Import Doc</button>
                 </div>
             </div>
             `;
@@ -4996,16 +4950,41 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function renderTicketsLinearTaskDetail() {
         if (!isTicketsTabActive()) return;
 
-        const { subtasksNav, detailContent } = getTicketsTabElements();
+        const { subtasksNav, detailContent, previewMetaBar, deleteConfirmBanner, commentInputArea } = getTicketsTabElements();
         if (!detailContent) return;
 
         if (!selectedLinearIssue) {
             if (subtasksNav) { subtasksNav.innerHTML = ''; subtasksNav.style.display = 'none'; }
             if (_lastTicketsDetailContentHtml !== '') { detailContent.innerHTML = ''; _lastTicketsDetailContentHtml = ''; }
+            if (previewMetaBar) previewMetaBar.style.display = 'none';
+            if (deleteConfirmBanner) deleteConfirmBanner.style.display = 'none';
+            if (commentInputArea) commentInputArea.style.display = 'none';
             return;
         }
 
         const issue = selectedLinearIssue.issue;
+
+        if (previewMetaBar) {
+            previewMetaBar.style.display = 'flex';
+            const statusSelect = document.getElementById('select-status-ticket');
+            if (statusSelect) {
+                const stateMap = new Map();
+                linearProjectIssues.forEach(i => {
+                    if (i.state && i.state.id && i.state.name) {
+                        stateMap.set(i.state.name, i.state.id);
+                    }
+                });
+                statusSelect.innerHTML = Array.from(stateMap.entries())
+                    .map(([name, id]) => `<option value="${escapeAttr(id)}">${escapeHtml(name)}</option>`)
+                    .join('');
+                if (issue.state && issue.state.id) {
+                    statusSelect.value = issue.state.id;
+                } else if (issue.state && issue.state.name) {
+                    const matchedId = stateMap.get(issue.state.name);
+                    if (matchedId) statusSelect.value = matchedId;
+                }
+            }
+        }
 
         if (subtasksNav) {
             const subtasks = selectedLinearIssue.subtasks;
@@ -5377,9 +5356,9 @@ Return ONLY the drafted prompt with no additional commentary.`;
                     <div class="tickets-issue-meta">${escapeHtml(task.status || 'Unknown')}</div>
                     <div class="tickets-issue-meta">${task.assignees?.length ? escapeHtml(task.assignees.map(a => a.username || a.email).join(', ')) : 'Unassigned'}</div>
                     <div class="card-actions">
-                        <button type="button" class="card-icon-btn" data-ask-agent-task-id="${escapeAttr(task.id)}">ASK AGENT</button>
                         <button type="button" class="card-icon-btn" data-refine-task-id="${escapeAttr(task.id)}" data-issue-title="${escapeAttr(task.title || '')}" data-issue-description="${escapeAttr(task.markdownDescription || task.description || '')}">REFINE</button>
-                        <button type="button" class="card-icon-btn" data-import-task-id="${escapeAttr(task.id)}">IMPORT</button>
+                        <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(task.id)}" data-provider="clickup">Import Plan</button>
+                        <button type="button" class="card-icon-btn" data-import-doc-id="${escapeAttr(task.id)}" data-provider="clickup">Import Doc</button>
                     </div>
                 </div>
                 `;
@@ -5398,16 +5377,35 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function renderTicketsClickUpTaskDetail() {
         if (!isTicketsTabActive()) return;
 
-        const { subtasksNav, detailContent } = getTicketsTabElements();
+        const { subtasksNav, detailContent, previewMetaBar, deleteConfirmBanner, commentInputArea } = getTicketsTabElements();
         if (!detailContent) return;
 
         if (!selectedClickUpIssue) {
             if (subtasksNav) { subtasksNav.innerHTML = ''; subtasksNav.style.display = 'none'; }
             if (_lastTicketsClickUpDetailContentHtml !== '') { detailContent.innerHTML = ''; _lastTicketsClickUpDetailContentHtml = ''; }
+            if (previewMetaBar) previewMetaBar.style.display = 'none';
+            if (deleteConfirmBanner) deleteConfirmBanner.style.display = 'none';
+            if (commentInputArea) commentInputArea.style.display = 'none';
             return;
         }
 
         const task = selectedClickUpIssue.task;
+
+        if (previewMetaBar) {
+            previewMetaBar.style.display = 'flex';
+            const statusSelect = document.getElementById('select-status-ticket');
+            if (statusSelect) {
+                const statuses = Array.from(new Set(
+                    clickUpProjectIssues.map(t => t.status || 'Unknown')
+                )).sort();
+                statusSelect.innerHTML = statuses
+                    .map(status => `<option value="${escapeAttr(status)}">${escapeHtml(status)}</option>`)
+                    .join('');
+                if (task.status) {
+                    statusSelect.value = task.status;
+                }
+            }
+        }
 
         if (subtasksNav) {
             const subtasks = selectedClickUpIssue.subtasks;

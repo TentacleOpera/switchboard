@@ -740,6 +740,11 @@ export class PlanningPanelProvider {
         );
         htmlContent = htmlContent.replace(/\{\{PLANNING_JS_URI\}\}/g, planningJsUri.toString());
 
+        const sharedUtilsUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'sharedUtils.js')
+        );
+        htmlContent = htmlContent.replace(/\{\{SHARED_UTILS_URI\}\}/g, sharedUtilsUri.toString());
+
         const geistPixelFontUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this._extensionUri, 'designs', 'GeistPixel-Square.woff2')
         );
@@ -1177,6 +1182,47 @@ export class PlanningPanelProvider {
                 const service = this._getLocalFolderService(root);
                 const paths = service.getFolderPaths();
                 this._panel?.webview.postMessage({ type: 'localFoldersListed', paths, workspaceRoot: root });
+                break;
+            }
+            case 'addTicketsFolder': {
+                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
+                const result = await vscode.window.showOpenDialog({
+                    openLabel: 'Add Tickets Folder',
+                    canSelectFiles: false,
+                    canSelectFolders: true,
+                    canSelectMany: false
+                });
+                if (result && result.length > 0) {
+                    const service = this._getLocalFolderService(root);
+                    await service.addTicketsFolderPath(result[0].fsPath);
+                    await this._sendLocalDocsReady(true);
+                    this._panel?.webview.postMessage({ type: 'ticketsFoldersListed', paths: service.getTicketsFolderPaths(), workspaceRoot: root });
+                }
+                break;
+            }
+            case 'removeTicketsFolder': {
+                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
+                const service = this._getLocalFolderService(root);
+                await service.removeTicketsFolderPath(msg.folderPath);
+                await this._sendLocalDocsReady(true);
+                this._panel?.webview.postMessage({ type: 'ticketsFoldersListed', paths: service.getTicketsFolderPaths(), workspaceRoot: root });
+                break;
+            }
+            case 'listTicketsFolders': {
+                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
+                const service = this._getLocalFolderService(root);
+                const paths = service.getTicketsFolderPaths();
+                this._panel?.webview.postMessage({ type: 'ticketsFoldersListed', paths, workspaceRoot: root });
+                break;
+            }
+            case 'saveTicketsFolderPaths': {
+                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
+                const service = this._getLocalFolderService(root);
+                const config = await service.loadFolderPathsConfig();
+                config.ticketsFolderPaths = msg.paths || [];
+                await service.saveFolderPathsConfig(config);
+                await this._sendLocalDocsReady(true);
+                this._panel?.webview.postMessage({ type: 'ticketsFoldersListed', paths: service.getTicketsFolderPaths(), workspaceRoot: root });
                 break;
             }
 
@@ -2327,6 +2373,7 @@ export class PlanningPanelProvider {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const issueId = String(msg.issueId || '').trim();
                 const includeSubtasks = Boolean(msg.includeSubtasks);
+                const mode = msg.mode || 'plan';
 
                 if (!workspaceRoot || !issueId) {
                     this._panel?.webview.postMessage({
@@ -2338,10 +2385,17 @@ export class PlanningPanelProvider {
                 }
 
                 try {
-                    const result = await vscode.commands.executeCommand(
-                        'switchboard.importLinearTask',
-                        { workspaceRoot, issueId, includeSubtasks }
-                    );
+                    if (mode === 'document') {
+                        await vscode.commands.executeCommand(
+                            'switchboard.importTaskAsDocument',
+                            { workspaceRoot, provider: 'linear', id: issueId, includeSubtasks }
+                        );
+                    } else {
+                        await vscode.commands.executeCommand(
+                            'switchboard.importLinearTask',
+                            { workspaceRoot, issueId, includeSubtasks }
+                        );
+                    }
                     this._panel?.webview.postMessage({
                         type: 'linearTaskImported',
                         success: true
@@ -2360,6 +2414,7 @@ export class PlanningPanelProvider {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const taskId = String(msg.taskId || '').trim();
                 const includeSubtasks = Boolean(msg.includeSubtasks);
+                const mode = msg.mode || 'plan';
 
                 if (!workspaceRoot || !taskId) {
                     this._panel?.webview.postMessage({
@@ -2371,10 +2426,17 @@ export class PlanningPanelProvider {
                 }
 
                 try {
-                    const result = await vscode.commands.executeCommand(
-                        'switchboard.importClickUpTask',
-                        { workspaceRoot, taskId, includeSubtasks }
-                    );
+                    if (mode === 'document') {
+                        await vscode.commands.executeCommand(
+                            'switchboard.importTaskAsDocument',
+                            { workspaceRoot, provider: 'clickup', id: taskId, includeSubtasks }
+                        );
+                    } else {
+                        await vscode.commands.executeCommand(
+                            'switchboard.importClickUpTask',
+                            { workspaceRoot, taskId, includeSubtasks }
+                        );
+                    }
                     this._panel?.webview.postMessage({
                         type: 'clickupTaskImported',
                         success: true
@@ -2384,6 +2446,179 @@ export class PlanningPanelProvider {
                     this._panel?.webview.postMessage({
                         type: 'clickupTaskImported',
                         success: false,
+                        error: error instanceof Error ? error.message : String(error)
+                    });
+                }
+                break;
+            }
+            case 'importAllTickets': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const { provider, ids, importMode } = msg;
+                try {
+                    const result: any = await vscode.commands.executeCommand(
+                        'switchboard.importAllTasks',
+                        { workspaceRoot, provider, ids, importMode }
+                    );
+                    this._panel?.webview.postMessage({
+                        type: 'importAllTicketsComplete',
+                        success: result.success,
+                        successCount: result.successCount,
+                        failCount: result.failCount,
+                        errors: result.errors
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'importAllTicketsComplete',
+                        success: false,
+                        error: error instanceof Error ? error.message : String(error)
+                    });
+                }
+                break;
+            }
+            case 'editTicket': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const { provider, id } = msg;
+                try {
+                    const result: any = await vscode.commands.executeCommand(
+                        'switchboard.importTaskAsDocument',
+                        { workspaceRoot, provider, id, includeSubtasks: true }
+                    );
+                    this._panel?.webview.postMessage({
+                        type: 'editTicketResult',
+                        success: result.success,
+                        id,
+                        error: result.error
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'editTicketResult',
+                        success: false,
+                        id,
+                        error: error instanceof Error ? error.message : String(error)
+                    });
+                }
+                break;
+            }
+            case 'pushTicket': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const { provider, id } = msg;
+                try {
+                    const result: any = await vscode.commands.executeCommand(
+                        'switchboard.pushTicketEdits',
+                        { workspaceRoot, provider, id }
+                    );
+                    this._panel?.webview.postMessage({
+                        type: 'pushTicketResult',
+                        success: result.success,
+                        id,
+                        error: result.error,
+                        message: result.message
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'pushTicketResult',
+                        success: false,
+                        id,
+                        error: error instanceof Error ? error.message : String(error)
+                    });
+                }
+                break;
+            }
+            case 'deleteTicketConfirmed': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const { provider, id } = msg;
+                try {
+                    const result: any = await vscode.commands.executeCommand(
+                        'switchboard.deleteTicket',
+                        { workspaceRoot, provider, id }
+                    );
+                    this._panel?.webview.postMessage({
+                        type: 'ticketDeleted',
+                        success: result.success,
+                        id,
+                        error: result.error
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'ticketDeleted',
+                        success: false,
+                        id,
+                        error: error instanceof Error ? error.message : String(error)
+                    });
+                }
+                break;
+            }
+            case 'changeTicketStatus': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const { provider, id, statusId } = msg;
+                try {
+                    const result: any = await vscode.commands.executeCommand(
+                        'switchboard.changeTicketStatus',
+                        { workspaceRoot, provider, id, statusId }
+                    );
+                    this._panel?.webview.postMessage({
+                        type: 'changeTicketStatusResult',
+                        success: result.success,
+                        id,
+                        statusId,
+                        error: result.error
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'changeTicketStatusResult',
+                        success: false,
+                        id,
+                        statusId,
+                        error: error instanceof Error ? error.message : String(error)
+                    });
+                }
+                break;
+            }
+            case 'postTicketComment': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const { provider, id, comment } = msg;
+                try {
+                    const result: any = await vscode.commands.executeCommand(
+                        'switchboard.postTicketComment',
+                        { workspaceRoot, provider, id, comment }
+                    );
+                    this._panel?.webview.postMessage({
+                        type: 'postTicketCommentResult',
+                        success: result.success,
+                        id,
+                        comment,
+                        error: result.error
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'postTicketCommentResult',
+                        success: false,
+                        id,
+                        comment,
+                        error: error instanceof Error ? error.message : String(error)
+                    });
+                }
+                break;
+            }
+            case 'downloadAttachment': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const { provider, url, filename, ticketId, ticketTitle } = msg;
+                try {
+                    const result: any = await vscode.commands.executeCommand(
+                        'switchboard.downloadAttachment',
+                        { workspaceRoot, provider, url, filename, ticketId, ticketTitle }
+                    );
+                    this._panel?.webview.postMessage({
+                        type: 'attachmentDownloaded',
+                        success: result.success,
+                        url,
+                        error: result.error
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'attachmentDownloaded',
+                        success: false,
+                        url,
                         error: error instanceof Error ? error.message : String(error)
                     });
                 }
@@ -3239,6 +3474,7 @@ export class PlanningPanelProvider {
             const scannedPaths = new Set<string>();
             const activeRoot = this._getWorkspaceRoot();
             const configuredFolderPathsByRoot: Record<string, string[]> = {};
+            const ticketsFolderPathsByRoot: Record<string, string[]> = {};
 
             const seenFilePaths = new Set<string>(); // Deduplicate files across roots
 
@@ -3247,6 +3483,7 @@ export class PlanningPanelProvider {
                     const localFolderService = this._getLocalFolderService(root);
                     const folderPaths = localFolderService.getFolderPaths();
                     configuredFolderPathsByRoot[root] = folderPaths;
+                    ticketsFolderPathsByRoot[root] = localFolderService.getTicketsFolderPaths();
 
                     // Skip this root entirely if all its folder paths have already been scanned
                     const allAlreadyScanned = folderPaths.length > 0 && folderPaths.every(p => p && scannedPaths.has(p));
@@ -3307,6 +3544,7 @@ export class PlanningPanelProvider {
             // "loading local docs", and steals the active tab. Skip when nothing changed.
             const signature = JSON.stringify({
                 folderPathsByRoot: configuredFolderPathsByRoot,
+                ticketsFolderPathsByRoot,
                 nodes: mappedNodes,
                 antigravitySessions,
                 antigravityEnabled: agEnabled,
@@ -3322,6 +3560,7 @@ export class PlanningPanelProvider {
                 type: 'localDocsReady',
                 sourceId: 'local-folder',
                 folderPathsByRoot: configuredFolderPathsByRoot,
+                ticketsFolderPathsByRoot,
                 nodes: mappedNodes,
                 workspaceItems,
                 antigravitySessions,
@@ -3334,6 +3573,7 @@ export class PlanningPanelProvider {
                 type: 'localDocsReady',
                 sourceId: 'local-folder',
                 folderPathsByRoot: {},
+                ticketsFolderPathsByRoot: {},
                 nodes: [],
                 workspaceItems: this._buildKanbanWorkspaceItems(),
                 error: String(err)

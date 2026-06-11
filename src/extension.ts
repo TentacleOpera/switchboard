@@ -1422,6 +1422,41 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(importClickUpTaskDisposable);
 
+    const importTaskAsDocumentDisposable = vscode.commands.registerCommand('switchboard.importTaskAsDocument', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; id: string; includeSubtasks?: boolean }) => {
+        return taskViewerProvider.importTaskAsDocument(data.workspaceRoot, data);
+    });
+    context.subscriptions.push(importTaskAsDocumentDisposable);
+
+    const pushTicketEditsDisposable = vscode.commands.registerCommand('switchboard.pushTicketEdits', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; id: string }) => {
+        return taskViewerProvider.pushTicketEdits(data.workspaceRoot, data);
+    });
+    context.subscriptions.push(pushTicketEditsDisposable);
+
+    const importAllTasksDisposable = vscode.commands.registerCommand('switchboard.importAllTasks', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; ids: string[]; importMode: 'plan' | 'document' }) => {
+        return taskViewerProvider.importAllTasks(data.workspaceRoot, data);
+    });
+    context.subscriptions.push(importAllTasksDisposable);
+
+    const deleteTicketDisposable = vscode.commands.registerCommand('switchboard.deleteTicket', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; id: string }) => {
+        return taskViewerProvider.deleteTicket(data.workspaceRoot, data);
+    });
+    context.subscriptions.push(deleteTicketDisposable);
+
+    const changeTicketStatusDisposable = vscode.commands.registerCommand('switchboard.changeTicketStatus', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; id: string; statusId: string }) => {
+        return taskViewerProvider.changeTicketStatus(data.workspaceRoot, data);
+    });
+    context.subscriptions.push(changeTicketStatusDisposable);
+
+    const postTicketCommentDisposable = vscode.commands.registerCommand('switchboard.postTicketComment', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; id: string; comment: string }) => {
+        return taskViewerProvider.postTicketComment(data.workspaceRoot, data);
+    });
+    context.subscriptions.push(postTicketCommentDisposable);
+
+    const downloadAttachmentDisposable = vscode.commands.registerCommand('switchboard.downloadAttachment', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; url: string; filename: string; ticketId: string; ticketTitle: string }) => {
+        return taskViewerProvider.downloadAttachment(data.workspaceRoot, data);
+    });
+    context.subscriptions.push(downloadAttachmentDisposable);
+
     const refineTaskDisposable = vscode.commands.registerCommand('switchboard.refineTask', async (data: { workspaceRoot: string; id: string; title: string; description: string; provider: 'linear' | 'clickup' }) => {
         return taskViewerProvider.refineTask(data.workspaceRoot, { id: data.id, title: data.title, description: data.description, provider: data.provider });
     });

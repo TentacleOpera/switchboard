@@ -29,7 +29,10 @@
         selectedStitchProjectId: '',
         stitchScreens: [],
         stitchApiKeyConfigured: false,
-        activePreviewScreenId: null
+        activePreviewScreenId: null,
+        stitchModelId: persistedState.stitchModelId || 'GEMINI_3_FLASH',
+        stitchCreativeRange: persistedState.stitchCreativeRange || 'EXPLORE',
+        stitchAspects: persistedState.stitchAspects || ['LAYOUT','COLOR_SCHEME','IMAGES','TEXT_FONT','TEXT_CONTENT']
     };
 
     // Tab switcher
@@ -229,11 +232,7 @@
         } else {
             state.htmlPreviewCollapsed = isCollapsed;
         }
-        vscode.setState({
-            ...vscode.getState(),
-            designPreviewCollapsed: state.designPreviewCollapsed,
-            htmlPreviewCollapsed: state.htmlPreviewCollapsed
-        });
+        saveState();
     }
 
     // Helpers
@@ -244,71 +243,6 @@
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#39;');
-    }
-
-    function renderJsonTree(data, depth = 0, maxDepth = 2, seen = new WeakSet()) {
-        if (data === null) {
-            const span = document.createElement('span');
-            span.className = 'json-null';
-            span.textContent = 'null';
-            return span;
-        }
-        if (typeof data !== 'object') {
-            const span = document.createElement('span');
-            span.className = 'json-' + typeof data;
-            span.textContent = typeof data === 'string' ? '"' + data + '"' : String(data);
-            return span;
-        }
-        if (seen.has(data)) {
-            const span = document.createElement('span');
-            span.className = 'json-null';
-            span.textContent = '[Circular]';
-            return span;
-        }
-        seen.add(data);
-
-        const isArray = Array.isArray(data);
-        const isOpen = depth < maxDepth;
-
-        const details = document.createElement('details');
-        details.className = 'json-node';
-        if (isOpen) details.open = true;
-
-        const summary = document.createElement('summary');
-        summary.summary = 'json-bracket';
-        const countLabel = isArray ? `${data.length} items` : `${Object.keys(data).length} keys`;
-        summary.textContent = isArray ? `[ ${countLabel} ]` : `{ ${countLabel} }`;
-        details.appendChild(summary);
-
-        const children = document.createElement('div');
-        children.className = 'json-children';
-
-        if (isArray) {
-            data.forEach((item, i) => {
-                const row = document.createElement('div');
-                row.className = 'json-row';
-                const idx = document.createElement('span');
-                idx.className = 'json-number';
-                idx.textContent = String(i) + ':';
-                row.appendChild(idx);
-                row.appendChild(renderJsonTree(item, depth + 1, maxDepth, seen));
-                children.appendChild(row);
-            });
-        } else {
-            for (const [key, val] of Object.entries(data)) {
-                const row = document.createElement('div');
-                row.className = 'json-row';
-                const keySpan = document.createElement('span');
-                keySpan.className = 'json-key';
-                keySpan.textContent = '"' + key + '"';
-                row.appendChild(keySpan);
-                row.appendChild(document.createTextNode(': '));
-                row.appendChild(renderJsonTree(val, depth + 1, maxDepth, seen));
-                children.appendChild(row);
-            }
-        }
-        details.appendChild(children);
-        return details;
     }
 
     function populateWorkspaceDropdown(selectElementId, workspaceItems, selectedValue) {
@@ -812,7 +746,7 @@
                 if (jsonCont) jsonCont.style.display = 'none';
                 if (mdPrev) {
                     mdPrev.style.display = 'block';
-                    mdPrev.innerHTML = content || '';
+                    mdPrev.innerHTML = renderMarkdown(content) || '';
                 }
                 if (designWrapper) designWrapper.classList.remove('scanlines-suppressed');
             }
@@ -829,6 +763,9 @@
     const btnSyncStitchProject = document.getElementById('btn-sync-stitch-project');
     const stitchPromptInput = document.getElementById('stitch-prompt-input');
     const stitchDeviceSelect = document.getElementById('stitch-device-select');
+    const stitchModelSelect = document.getElementById('stitch-model-select');
+    const stitchCreativeRangeSelect = document.getElementById('stitch-creative-range-select');
+    const stitchAspectsCheckboxesContainer = document.getElementById('stitch-aspects-checkboxes');
     const btnGenerateStitch = document.getElementById('btn-generate-stitch');
     const stitchGallery = document.getElementById('stitch-gallery');
     const stitchGalleryEmpty = document.getElementById('stitch-gallery-empty');
@@ -838,6 +775,17 @@
     const statusStitch = document.getElementById('status-stitch');
     const btnNewStitchProject = document.getElementById('btn-new-stitch-project');
     const btnOpenDesignMd = document.getElementById('btn-open-design-md');
+
+    function saveState() {
+        vscode.setState({
+            ...vscode.getState(),
+            stitchModelId: state.stitchModelId,
+            stitchCreativeRange: state.stitchCreativeRange,
+            stitchAspects: state.stitchAspects,
+            designPreviewCollapsed: state.designPreviewCollapsed,
+            htmlPreviewCollapsed: state.htmlPreviewCollapsed
+        });
+    }
 
     const stitchPreviewPane = document.getElementById('stitch-preview-pane');
     const previewImage = document.getElementById('preview-image');
@@ -898,7 +846,8 @@
     function makeFifeHighResUrl(imageUrl) {
         if (!imageUrl) return '';
         if (imageUrl.includes('/fife/') || imageUrl.includes('lh3.googleusercontent.com')) {
-            const cleanUrl = imageUrl.replace(/=[wsh]\d+(?:-[wsh]\d+)?.*/, '');
+            if (imageUrl.includes('?')) return imageUrl;
+            const cleanUrl = imageUrl.replace(/=[wsh]\d+(?:-[wsh]\d+)?$/, '');
             return cleanUrl + '=w1200';
         }
         return imageUrl;
@@ -985,7 +934,8 @@
                 vscode.postMessage({
                     type: 'stitchEdit',
                     screenId: screen.id,
-                    prompt
+                    prompt,
+                    modelId: state.stitchModelId
                 });
             });
         }
@@ -998,11 +948,27 @@
                 const prompt = previewRefineInput ? previewRefineInput.value.trim() : '';
                 setStitchStatus('Generating 3 variants of this screen…', 'busy');
                 setStitchBusy(true);
+
+                let checkedAspects = [];
+                if (stitchAspectsCheckboxesContainer) {
+                    const checkboxes = stitchAspectsCheckboxesContainer.querySelectorAll('input[type="checkbox"]');
+                    checkboxes.forEach(cb => {
+                        if (cb.checked) {
+                            checkedAspects.push(cb.value);
+                        }
+                    });
+                } else {
+                    checkedAspects = state.stitchAspects;
+                }
+
                 vscode.postMessage({
                     type: 'stitchVariants',
                     screenId: screen.id,
                     prompt: prompt || undefined,
-                    count: 3
+                    count: 3,
+                    creativeRange: state.stitchCreativeRange,
+                    aspects: checkedAspects.length ? checkedAspects : undefined,
+                    modelId: state.stitchModelId
                 });
             });
         }
@@ -1104,7 +1070,8 @@
                 type: 'stitchGenerate',
                 prompt,
                 deviceType,
-                projectId: projectId || undefined
+                projectId: projectId || undefined,
+                modelId: state.stitchModelId
             });
         });
     }
@@ -1391,6 +1358,14 @@
             case 'stitchProjectsReady':
                 state.stitchProjects = msg.projects || [];
                 populateStitchProjects(state.stitchProjects, msg.defaultProjectId);
+                if (!persistedState.stitchModelId && msg.defaultModelId) {
+                    state.stitchModelId = msg.defaultModelId;
+                    if (stitchModelSelect) stitchModelSelect.value = state.stitchModelId;
+                }
+                if (!persistedState.stitchCreativeRange && msg.defaultCreativeRange) {
+                    state.stitchCreativeRange = msg.defaultCreativeRange;
+                    if (stitchCreativeRangeSelect) stitchCreativeRangeSelect.value = state.stitchCreativeRange;
+                }
                 setStitchBusy(false); // recompute Generate/Sync disabled state for the new selection
                 if (msg.selectProjectId) {
                     setStitchStatus('Project created — describe a screen and press Generate', 'success');
@@ -1461,6 +1436,39 @@
                 break;
         }
     });
+
+    function initStitchControls() {
+        if (stitchModelSelect) {
+            stitchModelSelect.value = state.stitchModelId;
+            stitchModelSelect.addEventListener('change', () => {
+                state.stitchModelId = stitchModelSelect.value;
+                saveState();
+            });
+        }
+        if (stitchCreativeRangeSelect) {
+            stitchCreativeRangeSelect.value = state.stitchCreativeRange;
+            stitchCreativeRangeSelect.addEventListener('change', () => {
+                state.stitchCreativeRange = stitchCreativeRangeSelect.value;
+                saveState();
+            });
+        }
+        if (stitchAspectsCheckboxesContainer) {
+            const checkboxes = stitchAspectsCheckboxesContainer.querySelectorAll('input[type="checkbox"]');
+            checkboxes.forEach(cb => {
+                cb.checked = state.stitchAspects.includes(cb.value);
+                cb.addEventListener('change', () => {
+                    const checked = [];
+                    checkboxes.forEach(c => {
+                        if (c.checked) checked.push(c.value);
+                    });
+                    state.stitchAspects = checked;
+                    saveState();
+                });
+            });
+        }
+    }
+
+    initStitchControls();
 
     // Notify backend ready
     vscode.postMessage({ type: 'ready' });

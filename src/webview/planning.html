@@ -2776,7 +2776,7 @@
         .complexity-dot.very-high { background: #ff00ff; }
 
         /* Kanban preview meta bar */
-        #kanban-preview-meta-bar {
+        #kanban-preview-meta-bar, #tickets-preview-meta-bar {
             display: flex;
             align-items: center;
             gap: 12px;
@@ -3129,6 +3129,8 @@
                 <select id="tickets-status-filter" style="display:none"></select>
                 <button id="tickets-create" class="strip-btn" disabled title="Configure an integration in Setup first">+ New Ticket</button>
                 <button id="tickets-refresh" class="strip-btn">Refresh</button>
+                <button id="btn-manage-ticket-folders" class="strip-btn">Manage Folders</button>
+                <button id="btn-import-all-tickets" class="strip-btn">Import All</button>
                 <div id="tickets-hierarchy-nav" style="display:none; flex-wrap: wrap;"></div>
                 <input id="tickets-search" type="text" class="sidebar-search-input" placeholder="Search tickets..." />
             </div>
@@ -3142,8 +3144,31 @@
                     <button id="tickets-load-more" class="planning-button" style="display:none">Load More</button>
                 </div>
                 <div class="preview-panel-wrapper">
-                    <div id="preview-pane-tickets" style="flex: 1; width: 100%; box-sizing: border-box;">
-                        <div class="preview-content-wrapper">
+                    <div id="preview-pane-tickets" style="flex: 1; width: 100%; box-sizing: border-box; display: flex; flex-direction: column;">
+                        <div id="tickets-preview-meta-bar" style="display:none;">
+                            <button id="btn-edit-ticket" class="strip-btn">Edit</button>
+                            <button id="btn-push-ticket" class="strip-btn">Push</button>
+                            <button id="btn-delete-ticket" class="strip-btn">Delete</button>
+                            <div class="kanban-meta-group">
+                                <span class="kanban-meta-label">Status:</span>
+                                <select id="select-status-ticket" class="kanban-meta-dropdown" style="display:inline-block; background: var(--panel-bg2, #1a1a2e); border: 1px solid var(--border-color); color: var(--text-secondary); font-size: 11px;"></select>
+                            </div>
+                            <button id="btn-comment-ticket" class="strip-btn">Comment</button>
+                        </div>
+                        <div id="tickets-delete-confirm-banner" class="delete-confirm-banner" style="display:none; padding: 10px; background: rgba(218, 54, 51, 0.1); border: 1px solid #da3633; border-radius: 4px; margin: 10px; font-size: 12px;">
+                            <span style="color: #da3633; font-weight: bold; margin-right: 8px;">Delete Ticket:</span>
+                            Type the ticket title to confirm: <input id="delete-confirm-input" type="text" style="background: var(--input-bg, #000); border: 1px solid var(--border-color); color: var(--text-primary); padding: 2px 4px; font-size: 12px; margin-right: 8px;" />
+                            <button id="confirm-delete-ticket" class="strip-btn" style="background: #da3633; color: white;" disabled>Delete</button>
+                            <button id="cancel-delete-ticket" class="strip-btn">Cancel</button>
+                        </div>
+                        <div id="tickets-comment-input-area" style="display:none; padding: 10px; border-bottom: 1px solid var(--border-color); background: var(--panel-bg2); margin: 10px;">
+                            <textarea id="tickets-comment-textarea" placeholder="Type a comment..." style="width: 100%; height: 60px; background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-primary); font-family: inherit; font-size: 12px; padding: 4px; box-sizing: border-box; resize: vertical;"></textarea>
+                            <div style="margin-top: 6px; display: flex; justify-content: flex-end; gap: 8px;">
+                                <button id="btn-post-comment-cancel" class="strip-btn">Cancel</button>
+                                <button id="btn-post-comment-submit" class="strip-btn" style="background: var(--accent-teal); color: black;">Post Comment</button>
+                            </div>
+                        </div>
+                        <div class="preview-content-wrapper" style="flex: 1; overflow-y: auto;">
                             <div id="tickets-loading-state" style="flex: 1; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 32px; color: var(--text-secondary);">
                                 <div style="width: 32px; height: 32px; border: 3px solid var(--border-color); border-top-color: var(--accent-teal); border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
                                 <div style="font-size: 12px;">Loading tickets...</div>
@@ -3284,6 +3309,7 @@
             </div>
         </div>
     </div>
+    <script nonce="{{NONCE}}" src="{{SHARED_UTILS_URI}}"></script>
     <script nonce="{{NONCE}}" src="{{PLANNING_JS_URI}}"></script>
 </body>
 </html>

@@ -3183,6 +3183,135 @@
             font-size: 12px;
             line-height: 1.4;
         }
+
+        /* Stitch Prompt Generator Modal */
+        .stitch-prompt-modal {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.65);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .stitch-prompt-modal .modal-content {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+        }
+        .stitch-prompt-modal .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .stitch-prompt-modal .modal-header h3 {
+            margin: 0;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .stitch-prompt-modal .modal-close-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 24px;
+            cursor: pointer;
+            padding: 0;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            transition: all 0.15s;
+        }
+        .stitch-prompt-modal .modal-close-btn:hover {
+            background: var(--card-bg-hover);
+            color: var(--text-primary);
+        }
+        .stitch-prompt-modal .modal-body {
+            padding: 20px;
+            overflow-y: auto;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .stitch-prompt-modal textarea {
+            width: 100%;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            padding: 6px 8px;
+            font-family: var(--font-family);
+            font-size: 12px;
+            resize: vertical;
+            box-sizing: border-box;
+        }
+        .stitch-prompt-modal textarea:focus {
+            outline: 1px solid var(--accent-teal);
+            border-color: var(--accent-teal);
+        }
+        .stitch-generator-thumbnails {
+            display: flex;
+            flex-direction: row;
+            gap: 8px;
+            max-height: 80px;
+            overflow-x: auto;
+            padding: 4px 0;
+        }
+        .stitch-generator-thumb-container {
+            position: relative;
+            flex-shrink: 0;
+            width: 60px;
+            height: 60px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .stitch-generator-thumb {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .stitch-generator-thumb-remove {
+            position: absolute;
+            top: 2px;
+            right: 2px;
+            background: rgba(0, 0, 0, 0.7);
+            color: #fff;
+            border: none;
+            border-radius: 50%;
+            width: 16px;
+            height: 16px;
+            font-size: 10px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            line-height: 1;
+        }
+        .stitch-generator-thumb-remove:hover {
+            background: #f14c4c;
+        }
+
+        .cyber-theme-enabled .stitch-prompt-modal .modal-content {
+            border: 1px solid var(--accent-neon);
+            box-shadow: 0 0 15px color-mix(in srgb, var(--accent-neon) 40%, transparent);
+            background: rgba(10, 10, 10, 0.9);
+            backdrop-filter: blur(10px);
+        }
     </style>
 </head>
 <body class="cyber-theme-enabled">
@@ -3334,6 +3463,10 @@
                     <option value="MOBILE">Mobile</option>
                     <option value="TABLET">Tablet</option>
                 </select>
+                <select id="stitch-model-select" class="workspace-filter-select" style="max-width: 150px;">
+                    <option value="GEMINI_3_FLASH">Flash (Fast)</option>
+                    <option value="GEMINI_3_1_PRO">Pro (Quality)</option>
+                </select>
                 <button id="btn-generate-stitch" class="strip-btn stitch-btn-primary" disabled>Generate Screen</button>
             </div>
 
@@ -3361,6 +3494,22 @@
                             </div>
                             <div class="preview-refine">
                                 <input type="text" id="preview-refine-input" class="stitch-input" style="width: 100%; box-sizing: border-box;" placeholder="Describe a change, e.g. 'make the header dark blue'..." />
+                                <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 8px; width: 100%;">
+                                    <div style="display: flex; gap: 8px; align-items: center; width: 100%;">
+                                        <select id="stitch-creative-range-select" class="workspace-filter-select" style="flex: 1;">
+                                            <option value="EXPLORE">Explore</option>
+                                            <option value="REFINE">Refine</option>
+                                            <option value="REIMAGINE">Reimagine</option>
+                                        </select>
+                                    </div>
+                                    <div id="stitch-aspects-checkboxes" style="display: flex; gap: 8px; flex-wrap: wrap; font-size: 11px; color: var(--text-secondary);">
+                                        <label><input type="checkbox" value="LAYOUT" checked> Layout</label>
+                                        <label><input type="checkbox" value="COLOR_SCHEME" checked> Color</label>
+                                        <label><input type="checkbox" value="IMAGES" checked> Images</label>
+                                        <label><input type="checkbox" value="TEXT_FONT" checked> Font</label>
+                                        <label><input type="checkbox" value="TEXT_CONTENT" checked> Text</label>
+                                    </div>
+                                </div>
                                 <div style="display: flex; gap: 6px; margin-top: 6px; width: 100%;">
                                     <button id="preview-btn-edit" class="strip-btn stitch-btn-primary" style="flex: 1;">Apply Edit</button>
                                     <button id="preview-btn-variants" class="strip-btn" style="flex: 1;">+3 Variants</button>
@@ -3385,6 +3534,7 @@
             </div>
         </div>
     </div>
+    <script nonce="{{NONCE}}" src="{{SHARED_UTILS_URI}}"></script>
     <script nonce="{{NONCE}}" src="{{DESIGN_JS_URI}}"></script>
 </body>
 </html>

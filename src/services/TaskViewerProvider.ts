@@ -17169,4 +17169,422 @@ What would you like to find?`;
         this._julesDiagnosticsChannel.dispose();
         void this._stopLocalApiServer();
     }
+
+    public async importTaskAsDocument(
+        workspaceRoot: string,
+        data: { provider: 'linear' | 'clickup'; id: string; includeSubtasks?: boolean }
+    ): Promise<{ success: boolean; filePath?: string; error?: string }> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) {
+            return { success: false, error: 'No workspace open.' };
+        }
+        const provider = data.provider;
+        const id = data.id;
+        const includeSubtasks = data.includeSubtasks !== false;
+
+        try {
+            let title = '';
+            let content = '';
+            if (provider === 'linear') {
+                const linear = this._getLinearService(resolvedRoot);
+                const issue = await linear.getIssue(id);
+                if (!issue) {
+                    return { success: false, error: `Linear issue ${id} not found.` };
+                }
+                title = issue.title || id;
+                const node: any = {
+                    issue,
+                    subtasks: []
+                };
+                if (includeSubtasks) {
+                    const rootNode = await this._loadLinearImportNode(linear, id);
+                    if (rootNode) {
+                        node.subtasks = rootNode.subtasks;
+                    }
+                }
+                content = this._buildLinearImportPlanContent(node, undefined, new Date().toISOString());
+                if (includeSubtasks && node.subtasks && node.subtasks.length > 0) {
+                    content += '\n\n## Subtasks\n\n' + node.subtasks.map((st: any) => `- [ ] ${st.issue.title || st.issue.id} (${st.issue.identifier || ''})`).join('\n');
+                }
+            } else {
+                const clickUp = this._getClickUpService(resolvedRoot);
+                const details = await clickUp.getTaskDetails(id);
+                if (!details || !details.task) {
+                    return { success: false, error: `ClickUp task ${id} not found.` };
+                }
+                title = details.task.name || id;
+                content = this._buildClickUpImportPlanContent(details.task, new Date().toISOString());
+                const subtasks = includeSubtasks && details.subtasks ? details.subtasks : [];
+                if (includeSubtasks && subtasks.length > 0) {
+                    content += '\n\n## Subtasks\n\n' + subtasks.map((st: any) => `- [ ] ${st.name || st.id}`).join('\n');
+                }
+            }
+
+            const localFolderService = new LocalFolderService(resolvedRoot);
+            const ticketsFolders = localFolderService.getTicketsFolderPaths();
+            const targetDir = ticketsFolders.length > 0 && ticketsFolders[0]
+                ? path.join(ticketsFolders[0], 'documents')
+                : path.join(resolvedRoot, '.switchboard', 'plans', 'documents');
+
+            fs.mkdirSync(targetDir, { recursive: true });
+            const slug = this._slugify(title);
+            const filename = `${provider}_${id}_${slug}.md`;
+            const filePath = path.join(targetDir, filename);
+
+            fs.writeFileSync(filePath, content, 'utf8');
+
+            const doc = await vscode.workspace.openTextDocument(filePath);
+            await vscode.window.showTextDocument(doc);
+
+            return { success: true, filePath };
+        } catch (error) {
+            return { success: false, error: error instanceof Error ? error.message : String(error) };
+        }
+    }
+
+    private _slugify(text: string): string {
+        return text.toString().toLowerCase()
+            .replace(/\s+/g, '-')
+            .replace(/[^\w\-]+/g, '')
+            .replace(/\-\-+/g, '-')
+            .replace(/^-+/, '')
+            .replace(/-+$/, '');
+    }
+
+    private _findTicketDocument(resolvedRoot: string, provider: string, id: string): string | null {
+        const localFolderService = new LocalFolderService(resolvedRoot);
+        const ticketsFolders = localFolderService.getTicketsFolderPaths();
+        const searchDirs = [];
+        if (ticketsFolders.length > 0 && ticketsFolders[0]) {
+            searchDirs.push(path.join(ticketsFolders[0], 'documents'));
+        }
+        searchDirs.push(path.join(resolvedRoot, '.switchboard', 'plans', 'documents'));
+
+        const prefix = `${provider}_${id}_`;
+        for (const dir of searchDirs) {
+            if (fs.existsSync(dir)) {
+                try {
+                    const files = fs.readdirSync(dir);
+                    const matched = files.find(f => f.startsWith(prefix) && f.endsWith('.md'));
+                    if (matched) {
+                        return path.join(dir, matched);
+                    }
+                } catch { /* ignore */ }
+            }
+        }
+        return null;
+    }
+
+    public async pushTicketEdits(
+        workspaceRoot: string,
+        data: { provider: 'linear' | 'clickup'; id: string }
+    ): Promise<{ success: boolean; message?: string; error?: string }> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) {
+            return { success: false, error: 'No workspace open.' };
+        }
+        const { provider, id } = data;
+        const filePath = this._findTicketDocument(resolvedRoot, provider, id);
+        if (!filePath || !fs.existsSync(filePath)) {
+            return { success: false, error: `Document file not found for ticket ${id}. Re-open with Edit.` };
+        }
+
+        try {
+            const content = fs.readFileSync(filePath, 'utf8');
+            const rawBody = this._stripFrontmatter(content);
+            const lines = rawBody.split(/\r?\n/);
+            
+            let startIdx = 0;
+            if (lines[0] && lines[0].startsWith('# ')) {
+                startIdx = 1;
+            }
+            
+            while (startIdx < lines.length) {
+                const line = lines[startIdx].trim();
+                if (line === '' || line.startsWith('>')) {
+                    startIdx++;
+                } else {
+                    break;
+                }
+            }
+
+            const bodyLines = lines.slice(startIdx);
+            
+            let endIdx = bodyLines.length;
+            for (let i = 0; i < bodyLines.length; i++) {
+                if (bodyLines[i].trim() === '## Subtasks') {
+                    endIdx = i;
+                    break;
+                }
+            }
+            const description = bodyLines.slice(0, endIdx).join('\n').trim();
+
+            if (provider === 'linear') {
+                const linear = this._getLinearService(resolvedRoot);
+                await linear.updateIssueDescription(id, description);
+            } else {
+                const clickUp = this._getClickUpService(resolvedRoot);
+                let name: string | undefined;
+                if (lines[0] && lines[0].startsWith('# ')) {
+                    name = lines[0].substring(2).trim();
+                }
+                await clickUp.updateTask(id, {
+                    description,
+                    ...(name ? { name } : {})
+                });
+            }
+
+            return { success: true, message: `Pushed edits to remote ticket ${id}.` };
+        } catch (error) {
+            return { success: false, error: error instanceof Error ? error.message : String(error) };
+        }
+    }
+
+    private _stripFrontmatter(content: string): string {
+        const lines = content.split(/\r?\n/);
+        if (lines[0] === '---') {
+            const endIdx = lines.indexOf('---', 1);
+            if (endIdx !== -1) {
+                return lines.slice(endIdx + 1).join('\n').trim();
+            }
+        }
+        return content.trim();
+    }
+
+    public async importAllTasks(
+        workspaceRoot: string,
+        data: { provider: 'linear' | 'clickup'; ids: string[]; importMode: 'plan' | 'document' }
+    ): Promise<{ success: boolean; successCount: number; failCount: number; errors: { id: string; error: string }[] }> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) {
+            return { success: false, successCount: 0, failCount: 0, errors: [{ id: 'all', error: 'No workspace open.' }] };
+        }
+        const { provider, ids, importMode } = data;
+        let successCount = 0;
+        let failCount = 0;
+        const errors: { id: string; error: string }[] = [];
+
+        const pool: Promise<void>[] = [];
+        for (const id of ids) {
+            if (pool.length >= 3) {
+                await Promise.race(pool);
+            }
+            
+            const promise = (async () => {
+                try {
+                    if (importMode === 'document') {
+                        const res = await this.importTaskAsDocument(resolvedRoot, { provider, id, includeSubtasks: true });
+                        if (res.success) {
+                            successCount++;
+                        } else {
+                            failCount++;
+                            errors.push({ id, error: res.error || 'Failed to import as document' });
+                        }
+                    } else {
+                        if (provider === 'linear') {
+                            const res = await this.importLinearTask(resolvedRoot, id, true, true);
+                            if (res.success) {
+                                successCount++;
+                            } else {
+                                failCount++;
+                                errors.push({ id, error: res.error || 'Failed to import Linear task' });
+                            }
+                        } else {
+                            const res = await this.importClickUpTask(resolvedRoot, id, true, true);
+                            if (res.success) {
+                                successCount++;
+                            } else {
+                                failCount++;
+                                errors.push({ id, error: res.error || 'Failed to import ClickUp task' });
+                            }
+                        }
+                    }
+                } catch (err: any) {
+                    failCount++;
+                    errors.push({ id, error: err.message || String(err) });
+                }
+                await new Promise(resolve => setTimeout(resolve, 200));
+            })();
+
+            pool.push(promise);
+            promise.then(() => {
+                const idx = pool.indexOf(promise);
+                if (idx !== -1) {
+                    pool.splice(idx, 1);
+                }
+            });
+        }
+        
+        await Promise.all(pool);
+
+        if (importMode === 'plan') {
+            await this._syncFilesAndRefreshRunSheets(resolvedRoot);
+        }
+
+        return { success: true, successCount, failCount, errors };
+    }
+
+    public async deleteTicket(
+        workspaceRoot: string,
+        data: { provider: 'linear' | 'clickup'; id: string }
+    ): Promise<{ success: boolean; error?: string }> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) {
+            return { success: false, error: 'No workspace open.' };
+        }
+        const { provider, id } = data;
+
+        try {
+            if (provider === 'linear') {
+                const linear = this._getLinearService(resolvedRoot);
+                const res = await linear.archiveIssue(id);
+                return res;
+            } else {
+                const clickup = this._getClickUpService(resolvedRoot);
+                const res = await clickup.archiveTask(id);
+                return res;
+            }
+        } catch (error) {
+            return { success: false, error: error instanceof Error ? error.message : String(error) };
+        }
+    }
+
+    public async changeTicketStatus(
+        workspaceRoot: string,
+        data: { provider: 'linear' | 'clickup'; id: string; statusId: string }
+    ): Promise<{ success: boolean; error?: string }> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) {
+            return { success: false, error: 'No workspace open.' };
+        }
+        const { provider, id, statusId } = data;
+
+        try {
+            if (provider === 'linear') {
+                const linear = this._getLinearService(resolvedRoot);
+                await linear.updateIssueState(id, statusId);
+            } else {
+                const clickup = this._getClickUpService(resolvedRoot);
+                await clickup.updateTask(id, { status: statusId });
+            }
+            return { success: true };
+        } catch (error) {
+            return { success: false, error: error instanceof Error ? error.message : String(error) };
+        }
+    }
+
+    public async postTicketComment(
+        workspaceRoot: string,
+        data: { provider: 'linear' | 'clickup'; id: string; comment: string }
+    ): Promise<{ success: boolean; error?: string }> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) {
+            return { success: false, error: 'No workspace open.' };
+        }
+        const { provider, id, comment } = data;
+
+        try {
+            if (provider === 'linear') {
+                const linear = this._getLinearService(resolvedRoot);
+                await linear.addIssueComment(id, comment);
+            } else {
+                const clickup = this._getClickUpService(resolvedRoot);
+                await clickup.addTaskComment(id, comment);
+            }
+            return { success: true };
+        } catch (error) {
+            return { success: false, error: error instanceof Error ? error.message : String(error) };
+        }
+    }
+
+    public async downloadAttachment(
+        workspaceRoot: string,
+        data: { provider: 'linear' | 'clickup'; url: string; filename: string; ticketId: string; ticketTitle: string }
+    ): Promise<{ success: boolean; filePath?: string; error?: string }> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) {
+            return { success: false, error: 'No workspace open.' };
+        }
+        const { provider, url, filename, ticketId, ticketTitle } = data;
+
+        try {
+            const localFolderService = new LocalFolderService(resolvedRoot);
+            const ticketsFolders = localFolderService.getTicketsFolderPaths();
+            const baseFolder = ticketsFolders.length > 0 && ticketsFolders[0]
+                ? ticketsFolders[0]
+                : path.join(resolvedRoot, '.switchboard', 'plans');
+            
+            const targetDir = path.join(baseFolder, 'attachments');
+            
+            const resolvedTargetDir = path.resolve(targetDir);
+            const resolvedBaseFolder = path.resolve(baseFolder);
+            if (!resolvedTargetDir.startsWith(resolvedBaseFolder + path.sep) && resolvedTargetDir !== resolvedBaseFolder) {
+                return { success: false, error: 'Path traversal detected.' };
+            }
+
+            fs.mkdirSync(resolvedTargetDir, { recursive: true });
+
+            let finalFilename = filename;
+            if (!finalFilename) {
+                try {
+                    const parsedUrl = new URL(url);
+                    finalFilename = path.basename(parsedUrl.pathname);
+                } catch {
+                    finalFilename = `attachment-${ticketId}-${Date.now()}`;
+                }
+            }
+
+            const targetFilePath = path.join(resolvedTargetDir, finalFilename);
+
+            const headers: Record<string, string> = {};
+            const isLinearAsset = url.includes('.linear.app') || url.includes('linear-asset');
+            if (provider === 'linear' && isLinearAsset) {
+                const token = await this._context.secrets.get('switchboard.linear.apiToken');
+                if (token) {
+                    headers['Authorization'] = token;
+                }
+            }
+
+            const https = require('https');
+            await new Promise<void>((resolve, reject) => {
+                const requestOptions = {
+                    headers
+                };
+                https.get(url, requestOptions, (res: any) => {
+                    if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                        https.get(res.headers.location, (redirectRes: any) => {
+                            if (redirectRes.statusCode !== 200) {
+                                reject(new Error(`Failed to download attachment: status ${redirectRes.statusCode}`));
+                                return;
+                            }
+                            const fileStream = fs.createWriteStream(targetFilePath);
+                            redirectRes.pipe(fileStream);
+                            fileStream.on('finish', () => {
+                                fileStream.close();
+                                resolve();
+                            });
+                            fileStream.on('error', (err: any) => reject(err));
+                        }).on('error', (err: any) => reject(err));
+                        return;
+                    }
+                    if (res.statusCode !== 200) {
+                        reject(new Error(`Failed to download attachment: status ${res.statusCode}`));
+                        return;
+                    }
+                    const fileStream = fs.createWriteStream(targetFilePath);
+                    res.pipe(fileStream);
+                    fileStream.on('finish', () => {
+                        fileStream.close();
+                        resolve();
+                    });
+                    fileStream.on('error', (err: any) => reject(err));
+                }).on('error', (err: any) => reject(err));
+            });
+
+            vscode.window.showInformationMessage(`Downloaded ${finalFilename} to ${targetFilePath}`);
+            return { success: true, filePath: targetFilePath };
+        } catch (error) {
+            return { success: false, error: error instanceof Error ? error.message : String(error) };
+        }
+    }
 }

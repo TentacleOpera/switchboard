@@ -162,6 +162,11 @@ export class DesignPanelProvider implements vscode.Disposable {
         );
         htmlContent = htmlContent.replace(/\{\{DESIGN_JS_URI\}\}/g, designJsUri.toString());
 
+        const sharedUtilsUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'sharedUtils.js')
+        );
+        htmlContent = htmlContent.replace(/\{\{SHARED_UTILS_URI\}\}/g, sharedUtilsUri.toString());
+
         const geistPixelFontUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this._extensionUri, 'designs', 'GeistPixel-Square.woff2')
         );
@@ -540,9 +545,17 @@ export class DesignPanelProvider implements vscode.Disposable {
                     const stitch = await loadStitch();
                     const list = await stitch.projects();
                     const projects = list.map((p: any) => ({ id: p.id, name: p.data?.title || p.data?.name || p.id }));
-                    const defaultProjectId = vscode.workspace.getConfiguration('switchboard')
-                        .get<string>('stitch.defaultProjectId') || '';
-                    this.postMessage({ type: 'stitchProjectsReady', projects, defaultProjectId });
+                    const config = vscode.workspace.getConfiguration('switchboard');
+                    const defaultProjectId = config.get<string>('stitch.defaultProjectId') || '';
+                    const defaultModelId = config.get<string>('stitch.defaultModelId') || 'GEMINI_3_FLASH';
+                    const defaultCreativeRange = config.get<string>('stitch.defaultCreativeRange') || 'EXPLORE';
+                    this.postMessage({
+                        type: 'stitchProjectsReady',
+                        projects,
+                        defaultProjectId,
+                        defaultModelId,
+                        defaultCreativeRange
+                    });
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err) });
                 }
@@ -619,7 +632,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                     }
                     const stitch = await loadStitch();
                     const projectInstance = stitch.project(message.projectId);
-                    const screen = await projectInstance.generate(message.prompt, message.deviceType);
+                    const screen = await projectInstance.generate(message.prompt, message.deviceType, message.modelId);
                     this._activeScreens.set(screen.id, screen);
                     this.postMessage({ type: 'stitchScreenReady', screen: await this._formatScreen(screen) });
                 } catch (err: any) {
@@ -631,7 +644,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                 try {
                     const screen = this._activeScreens.get(message.screenId);
                     if (!screen) throw new Error('Screen instance not found in memory cache.');
-                    const updated = await screen.edit(message.prompt);
+                    const updated = await screen.edit(message.prompt, undefined, message.modelId);
                     this._activeScreens.set(updated.id, updated);
                     this.postMessage({ type: 'stitchScreenReady', screen: await this._formatScreen(updated) });
                 } catch (err: any) {
@@ -643,7 +656,13 @@ export class DesignPanelProvider implements vscode.Disposable {
                 try {
                     const screen = this._activeScreens.get(message.screenId);
                     if (!screen) throw new Error('Screen instance not found in memory cache.');
-                    const list = await screen.variants(message.prompt, { variantCount: message.count || 3 });
+                    const aspects = message.aspects?.length ? message.aspects : undefined;
+                    const variantOptions = {
+                        variantCount: message.count || 3,
+                        creativeRange: message.creativeRange,
+                        aspects
+                    };
+                    const list = await screen.variants(message.prompt, variantOptions, undefined, message.modelId);
                     const formatted = await Promise.all(list.map(async (v: any) => {
                         this._activeScreens.set(v.id, v);
                         return this._formatScreen(v);
