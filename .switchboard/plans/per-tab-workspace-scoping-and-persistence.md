@@ -95,19 +95,28 @@ Dev-only project: delete the old `vscode.setState` tickets persistence outright,
 - **Edge Cases:** If no workspace folders open, panel already errors early; empty dropdown is harmless.
 
 ### `src/webview/planning.js`
-- **Context:** `currentWorkspaceRoot` (line 55) is shared with local-folder paths (e.g. `removeLocalFolder` line 932, `localFoldersListed` line 2623). Global rename would break non-tickets code.
-- **Logic:** Introduce `let ticketsWorkspaceRoot = '';` near line 55. Migrate **only** tickets POST messages to carry it. Keep `currentWorkspaceRoot` untouched for local-folder paths.
-- **Implementation:**
+- **Context:** `currentWorkspaceRoot` (line 55) is used by **three distinct code paths**: tickets, local docs, and kanban epic/subtask ops. A global rename would break all of them.
+- **Complete non-tickets usages (must NOT be touched or must be redirected to their own tab-local root):**
+  - **Local Docs / Folder modal** — `removeLocalFolder` (line 932), `removeLocalFolder` inside modal (line 989), `handleLocalFolderPathUpdated` fallback (line 1885), `localFoldersListed` fallback (line 2623), `addLocalFolder` from modal (line 4549). These correctly fall back to `currentWorkspaceRoot` only when `state.localWorkspaceRootFilter` is empty. They should continue to do so; Local Docs already has its own filter (`state.localWorkspaceRootFilter`).
+  - **Kanban epic/subtask ops** — `getEpicDetails` (line 3826), `addSubtaskToEpic` (line 3838), `deleteEpic` (line 3847), `removeSubtaskFromEpic` (line 3860). These use `currentWorkspaceRoot` but **should** use `kanbanFilters.workspaceRoot` (the Kanban tab already owns a workspace filter). This is an existing cross-tab coupling bug: if tickets tab switched `currentWorkspaceRoot` to repo B while Kanban is filtered to repo A, clicking an epic fetches details from repo B.
+- **Logic:** Introduce `let ticketsWorkspaceRoot = '';` near line 55. Migrate **only** tickets POST messages to carry it. Keep `currentWorkspaceRoot` untouched for local-folder fallback paths. Redirect Kanban epic ops to `kanbanFilters.workspaceRoot`.
+- **Tickets migration checklist (exact line numbers from grep):**
   1. Declare `ticketsWorkspaceRoot` (~line 55).
-  2. Add dropdown listener near line 217 (next to `local-workspace-filter` listener).
-  3. Update `loadLinearProject` (5778), `loadLinearTaskDetails` (5781), `clickupLoadProject` (5798), `loadMoreClickUpTasks` (5809), `loadClickUpSpaces` (5835), `requestLocalTickets` (5017), `sendTicketToAgent` (5881), and import/refine/askAgent messages to use `ticketsWorkspaceRoot`.
-  4. Replace `saveTicketsState()` (5891) and `restoreTicketsState()` (5910) to post `persistTabState` to provider instead of `vscode.setState`.
-  5. Persist `ticketsWorkspaceRoot` itself as a panel-level value.
-  6. On workspace switch: save outgoing state → reset ClickUp/Linear vars → restore incoming state → kick restore chain if needed (lines 5923-5933).
+  2. Add dropdown listener near line 217.
+  3. `integrationProviderPreference` (line 3137): stop assigning `currentWorkspaceRoot` for tickets; set `ticketsWorkspaceRoot` instead.
+  4. ClickUp hierarchy: `clickupLoadFolders` (3047), `clickupLoadLists` (3072).
+  5. Load functions: `loadLinearProject` (5778), `loadLinearTaskDetails` (5781), `clickupLoadProject` (5798), `loadMoreClickUpTasks` (5809), `loadClickUpSpaces` (5835), `requestLocalTickets` (5017).
+  6. Ticket actions: `importAllTickets` (4585), `editTicket` (4602), `pushTicket` (4649, 4667), `deleteTicketConfirmed` (4678), `changeTicketStatus` (4690), `postTicketComment` (4722), `downloadAttachment` (4786), `sendTicketToAgent` (5881).
+  7. Folder modal: `removeTicketsFolder` (987), `addTicketsFolder` (4547).
+  8. Replace `saveTicketsState()` (5891) and `restoreTicketsState()` (5910) to post `persistTabState` to provider instead of `vscode.setState`.
+  9. Persist `ticketsWorkspaceRoot` itself as a panel-level value.
+  10. On workspace switch: save outgoing state → reset ClickUp/Linear vars → restore incoming state → kick restore chain if needed (lines 5923-5933).
+- **Kanban fix (same file, separate concern):**
+  - Epic/subtask ops (lines 3826, 3838, 3847, 3860): change `workspaceRoot: currentWorkspaceRoot` → `workspaceRoot: kanbanFilters.workspaceRoot || currentWorkspaceRoot` so they respect the Kanban tab's own filter.
 - **Edge Cases:**
   - Stale response discard: add `if (msg.workspaceRoot !== ticketsWorkspaceRoot) return;` in every tickets response handler before mutating DOM or state.
-  - Do not delete `currentWorkspaceRoot`; only stop reading it in tickets paths.
-  - `integrationProviderPreference` (line 3137): stop assigning `currentWorkspaceRoot` for tickets; if `isTicketsTabActive()`, set `ticketsWorkspaceRoot = msg.workspaceRoot || ticketsWorkspaceRoot`.
+  - Do not delete `currentWorkspaceRoot`; it is still the local-folder fallback.
+  - Verify `grep -n "currentWorkspaceRoot" planning.js` returns **only** non-tickets hits (local-folder fallbacks + kanban epic ops) before marking Phase 2 done.
 
 ### `src/services/PlanningPanelProvider.ts`
 - **Context:** Provider messages default to `this._getWorkspaceRoot() || allRoots[0]` (line 1000), breaking per-root tickets scoping.

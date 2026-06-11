@@ -176,6 +176,7 @@
         #kanban-content,
         #design-content,
         #html-preview-content,
+        #images-content,
         #tickets-content {
             display: none;
             flex-direction: column;
@@ -188,6 +189,7 @@
         #kanban-content.active,
         #design-content.active,
         #html-preview-content.active,
+        #images-content.active,
         #tickets-content.active {
             display: flex;
         }
@@ -285,6 +287,7 @@
         .content-row.collapsed #tree-pane-online,
         .content-row.collapsed #tree-pane-design,
         .content-row.collapsed #tree-pane-html,
+        .content-row.collapsed #tree-pane-images,
         .content-row.collapsed #tree-pane-tickets {
             padding: 4px;
             overflow: hidden;
@@ -294,6 +297,7 @@
         .content-row.collapsed #tree-pane-online > *:not(.sidebar-toggle-row),
         .content-row.collapsed #tree-pane-design > *:not(.sidebar-toggle-row),
         .content-row.collapsed #tree-pane-html > *:not(.sidebar-toggle-row),
+        .content-row.collapsed #tree-pane-images > *:not(.sidebar-toggle-row),
         .content-row.collapsed #tree-pane-tickets > *:not(.sidebar-toggle-row) {
             display: none !important;
         }
@@ -658,7 +662,9 @@
 
         #tree-pane,
         #tree-pane-online,
+        #tree-pane-design,
         #tree-pane-html,
+        #tree-pane-images,
         #tree-pane-tickets {
             position: relative;
             background: var(--panel-bg2);

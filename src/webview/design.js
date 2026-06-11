@@ -25,12 +25,16 @@
         designFolderPathsByRoot: persistedState.designFolderPathsByRoot || {},
         htmlPreviewCollapsed: persistedState.htmlPreviewCollapsed || false,
         designPreviewCollapsed: persistedState.designPreviewCollapsed || false,
+        imagesPreviewCollapsed: persistedState.imagesPreviewCollapsed || false,
         htmlWorkspaceRootFilter: '',
         designWorkspaceRootFilter: '',
+        imagesWorkspaceRootFilter: '',
         htmlDocsSearch: '',
         designDocsSearch: '',
+        imagesDocsSearch: '',
         _lastHtmlDocsMsg: null,
         _lastDesignDocsMsg: null,
+        _lastImagesDocsMsg: null,
         stitchProjects: [],
         selectedStitchProjectId: '',
         stitchScreens: [],
@@ -83,6 +87,7 @@
     // ── Zoom/Pan Engine ──
     const zoomState = {
         html:     { scale: 1, panX: 0, panY: 0, isPanning: false, startX: 0, startY: 0, panSource: null },
+        images:   { scale: 1, panX: 0, panY: 0, isPanning: false, startX: 0, startY: 0, panSource: null },
         design:   { scale: 1, panX: 0, panY: 0, isPanning: false, startX: 0, startY: 0, panSource: null },
     };
 
@@ -249,6 +254,7 @@
     // Initialize Zoom for Previews
     initZoomListeners('html-preview-wrapper', '.zoomable-viewport', 'html');
     initZoomListeners('image-preview-container', '.zoomable-viewport', 'html');
+    initZoomListeners('image-preview-container-images', '.zoomable-viewport', 'images');
     initZoomListeners('image-preview-container-design', '.zoomable-viewport', 'design');
 
     // Hold Space to pan/zoom over HTML previews. The iframe swallows mouse events,
@@ -272,7 +278,7 @@
     // Sidebar Collapsing
     function toggleSidebarCollapsed(e) {
         const btn = e.target;
-        const pane = btn.closest('#tree-pane-design') || btn.closest('#tree-pane-html');
+        const pane = btn.closest('#tree-pane-design') || btn.closest('#tree-pane-html') || btn.closest('#tree-pane-images');
         if (!pane) return;
         const row = pane.closest('.content-row');
         if (!row) return;
@@ -282,8 +288,10 @@
 
         if (pane.id === 'tree-pane-design') {
             state.designPreviewCollapsed = isCollapsed;
-        } else {
+        } else if (pane.id === 'tree-pane-html') {
             state.htmlPreviewCollapsed = isCollapsed;
+        } else if (pane.id === 'tree-pane-images') {
+            state.imagesPreviewCollapsed = isCollapsed;
         }
         saveState();
     }
@@ -473,38 +481,106 @@
         }
 
         let docNodes = (nodes || []).filter(n => n.kind === 'document');
+        docNodes = docNodes.filter(d => {
+            const ext = d.name.substring(d.name.lastIndexOf('.')).toLowerCase();
+            return ['.html', '.htm'].includes(ext);
+        });
+
         const search = String(state.htmlDocsSearch || '').trim().toLowerCase();
         if (search) {
             docNodes = docNodes.filter(d => (d.title || d.name || '').toLowerCase().includes(search));
         }
 
-        const groups = groupDocsByType(docNodes);
-        TYPE_ORDER.forEach(type => {
-            const typeDocs = groups[type] || [];
-            if (typeDocs.length === 0) return;
+        if (docNodes.length === 0) {
+            docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No matching HTML preview files found.</div>';
+            return;
+        }
 
-            const typeSubheader = document.createElement('div');
-            typeSubheader.className = 'type-subheader';
-            typeSubheader.textContent = TYPE_LABELS[type];
-            docList.appendChild(typeSubheader);
+        const typeSubheader = document.createElement('div');
+        typeSubheader.className = 'type-subheader';
+        typeSubheader.textContent = 'HTML Previews';
+        docList.appendChild(typeSubheader);
 
-            typeDocs.forEach(doc => {
-                const isHtmlFile = type === 'html';
-                const actions = isHtmlFile ? ['Serve & Open', 'Link Doc'] : ['Link Doc'];
-                const card = renderDocCard({
-                    title: doc.name || doc.id,
-                    subtitle: TYPE_LABELS[type],
-                    sourceId,
-                    nodeId: doc.id,
-                    nodeMetadata: doc.metadata,
-                    actions,
-                    isSelected: state.activeSource === sourceId && state.activeDocId === doc.id,
-                    clickHandler: () => {
-                        loadDocumentPreview(sourceId, doc.id, doc.name);
-                    }
-                });
-                docList.appendChild(card);
+        docNodes.forEach(doc => {
+            const card = renderDocCard({
+                title: doc.name || doc.id,
+                subtitle: 'HTML',
+                sourceId,
+                nodeId: doc.id,
+                nodeMetadata: doc.metadata,
+                actions: ['Serve & Open', 'Link Doc'],
+                isSelected: state.activeSource === sourceId && state.activeDocId === doc.id,
+                clickHandler: () => {
+                    loadDocumentPreview(sourceId, doc.id, doc.name);
+                }
             });
+            docList.appendChild(card);
+        });
+    }
+
+    function renderImagesDocs(rootEntry) {
+        const { sourceId, nodes, folderPaths } = rootEntry;
+        const treePaneImages = document.getElementById('tree-pane-images');
+        if (!treePaneImages) return;
+
+        treePaneImages.innerHTML = '';
+
+        const toggleRow = document.createElement('div');
+        toggleRow.className = 'sidebar-toggle-row';
+
+        const toggleBtn = document.createElement('button');
+        toggleBtn.className = 'sidebar-toggle-btn';
+        toggleBtn.title = 'Toggle sidebar';
+        toggleBtn.textContent = state.imagesPreviewCollapsed ? '»' : '«';
+        toggleBtn.addEventListener('click', toggleSidebarCollapsed);
+        toggleRow.appendChild(toggleBtn);
+        treePaneImages.appendChild(toggleRow);
+
+        const docList = document.createElement('div');
+        docList.className = 'source-doc-list';
+        docList.dataset.sourceId = 'images-folder';
+        treePaneImages.appendChild(docList);
+
+        if (!nodes || nodes.length === 0) {
+            docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No image files found.</div>';
+            return;
+        }
+
+        let docNodes = (nodes || []).filter(n => n.kind === 'document');
+        docNodes = docNodes.filter(d => {
+            const ext = d.name.substring(d.name.lastIndexOf('.')).toLowerCase();
+            return ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(ext);
+        });
+
+        const search = String(state.imagesDocsSearch || '').trim().toLowerCase();
+        if (search) {
+            docNodes = docNodes.filter(d => (d.title || d.name || '').toLowerCase().includes(search));
+        }
+
+        if (docNodes.length === 0) {
+            docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No matching image files found.</div>';
+            return;
+        }
+
+        const typeSubheader = document.createElement('div');
+        typeSubheader.className = 'type-subheader';
+        typeSubheader.textContent = 'Images';
+        docList.appendChild(typeSubheader);
+
+        docNodes.forEach(doc => {
+            const card = renderDocCard({
+                title: doc.name || doc.id,
+                subtitle: 'Image',
+                sourceId: 'images-folder',
+                nodeId: doc.id,
+                nodeMetadata: doc.metadata,
+                actions: ['Link Doc'],
+                isSelected: state.activeSource === 'images-folder' && state.activeDocId === doc.id,
+                clickHandler: () => {
+                    loadDocumentPreview('images-folder', doc.id, doc.name);
+                }
+            });
+            docList.appendChild(card);
         });
     }
 
@@ -674,6 +750,38 @@
                 requestId: state.previewRequestId,
                 sourceFolder
             });
+        } else if (sourceId === 'images-folder') {
+            const copyBtn = document.getElementById('btn-copy-link-images');
+            if (copyBtn) {
+                copyBtn.disabled = false;
+                copyBtn.onclick = () => {
+                    vscode.postMessage({
+                        type: 'linkToDocument',
+                        sourceId: 'html-folder',
+                        docId,
+                        docName,
+                        sourceFolder
+                    });
+                };
+            }
+
+            const statusImages = document.getElementById('status-images');
+            if (statusImages) statusImages.textContent = 'Loading...';
+
+            const initialState = document.getElementById('images-initial-state');
+            const loadingState = document.getElementById('images-loading-state');
+            const imageContainer = document.getElementById('image-preview-container-images');
+            if (initialState) initialState.style.display = 'none';
+            if (loadingState) loadingState.style.display = 'flex';
+            if (imageContainer) imageContainer.style.display = 'none';
+
+            vscode.postMessage({
+                type: 'fetchPreview',
+                sourceId: 'images-folder',
+                docId,
+                requestId: state.previewRequestId,
+                sourceFolder
+            });
         } else if (sourceId === 'design-folder') {
             if (state.designEditMode) exitDesignEditMode();
             state.activeDocSourceFolder = sourceFolder || null;
@@ -763,6 +871,38 @@
             if (statusHtml) {
                 statusHtml.textContent = isAutoRefreshed ? `${docName || 'Loaded'} — auto-refreshed` : (docName || 'Loaded');
                 statusHtml.style.color = 'var(--accent-teal)';
+            }
+        } else if (sourceId === 'images-folder') {
+            if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
+            resetZoom('images');
+
+            const initialState = document.getElementById('images-initial-state');
+            const loadingState = document.getElementById('images-loading-state');
+            if (initialState) initialState.style.display = 'none';
+            if (loadingState) loadingState.style.display = 'none';
+
+            const imageContainer = document.getElementById('image-preview-container-images');
+            const imageImg = document.getElementById('image-preview-img-images');
+            const wrapper = document.querySelector('#images-content .preview-panel-wrapper');
+
+            if (isImage && webviewUri) {
+                if (imageContainer) { imageContainer.style.display = 'flex'; }
+                if (wrapper) wrapper.classList.add('scanlines-suppressed');
+                const imgViewport = imageContainer ? imageContainer.querySelector('.zoomable-viewport') : null;
+                if (imgViewport) applyZoom('images', imgViewport);
+                if (imageImg) {
+                    imageImg.src = webviewUri + '?t=' + Date.now();
+                    imageImg.onload = () => {
+                        const container = document.getElementById('image-preview-container-images');
+                        const viewport = container ? container.querySelector('.zoomable-viewport') : null;
+                        if (container && viewport) fitToContainer('images', container, viewport);
+                    };
+                }
+            }
+            const statusImages = document.getElementById('status-images');
+            if (statusImages) {
+                statusImages.textContent = docName || 'Loaded';
+                statusImages.style.color = 'var(--accent-teal)';
             }
         } else if (sourceId === 'design-folder') {
             if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
@@ -994,7 +1134,8 @@
             stitchCreativeRange: state.stitchCreativeRange,
             stitchAspects: state.stitchAspects,
             designPreviewCollapsed: state.designPreviewCollapsed,
-            htmlPreviewCollapsed: state.htmlPreviewCollapsed
+            htmlPreviewCollapsed: state.htmlPreviewCollapsed,
+            imagesPreviewCollapsed: state.imagesPreviewCollapsed
         });
     }
 
@@ -1706,6 +1847,20 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
         });
     });
 
+    document.getElementById('images-workspace-filter')?.addEventListener('change', (e) => {
+        state.imagesWorkspaceRootFilter = e.target.value;
+        const msg = state._lastImagesDocsMsg || state._lastHtmlDocsMsg || {};
+        const filteredNodes = state.imagesWorkspaceRootFilter
+            ? (msg.nodes || []).filter(n => n.metadata?.root === state.imagesWorkspaceRootFilter)
+            : (msg.nodes || []);
+        renderImagesDocs({
+            sourceId: 'images-folder',
+            nodes: filteredNodes,
+            folderPaths: getCurrentFolderPaths(state.htmlFolderPathsByRoot, state.imagesWorkspaceRootFilter),
+            error: msg.error
+        });
+    });
+
     document.getElementById('design-workspace-filter')?.addEventListener('change', (e) => {
         state.designWorkspaceRootFilter = e.target.value;
         const msg = state._lastDesignDocsMsg || {};
@@ -1747,6 +1902,20 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
         });
     });
 
+    document.getElementById('images-docs-search')?.addEventListener('input', (e) => {
+        state.imagesDocsSearch = e.target.value;
+        const msg = state._lastImagesDocsMsg || state._lastHtmlDocsMsg || {};
+        const filteredNodes = state.imagesWorkspaceRootFilter
+            ? (msg.nodes || []).filter(n => n.metadata?.root === state.imagesWorkspaceRootFilter)
+            : (msg.nodes || []);
+        renderImagesDocs({
+            sourceId: 'images-folder',
+            nodes: filteredNodes,
+            folderPaths: getCurrentFolderPaths(state.htmlFolderPathsByRoot, state.imagesWorkspaceRootFilter),
+            error: msg.error
+        });
+    });
+
     // Message event listener
     window.addEventListener('message', (event) => {
         const msg = event.data;
@@ -1769,8 +1938,10 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
 
             case 'htmlDocsReady':
                 state._lastHtmlDocsMsg = msg;
+                state._lastImagesDocsMsg = msg;
                 state.htmlFolderPathsByRoot = msg.folderPathsByRoot || {};
                 populateWorkspaceDropdown('html-workspace-filter', msg.workspaceItems || [], state.htmlWorkspaceRootFilter);
+                populateWorkspaceDropdown('images-workspace-filter', msg.workspaceItems || [], state.imagesWorkspaceRootFilter);
                 const filteredHtmlNodes = state.htmlWorkspaceRootFilter
                     ? (msg.nodes || []).filter(n => n.metadata?.root === state.htmlWorkspaceRootFilter)
                     : (msg.nodes || []);
@@ -1778,6 +1949,15 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                     sourceId: msg.sourceId || 'html-folder',
                     nodes: filteredHtmlNodes,
                     folderPaths: getCurrentFolderPaths(state.htmlFolderPathsByRoot, state.htmlWorkspaceRootFilter),
+                    error: msg.error
+                });
+                const filteredImagesNodes = state.imagesWorkspaceRootFilter
+                    ? (msg.nodes || []).filter(n => n.metadata?.root === state.imagesWorkspaceRootFilter)
+                    : (msg.nodes || []);
+                renderImagesDocs({
+                    sourceId: 'images-folder',
+                    nodes: filteredImagesNodes,
+                    folderPaths: getCurrentFolderPaths(state.htmlFolderPathsByRoot, state.imagesWorkspaceRootFilter),
                     error: msg.error
                 });
                 break;
@@ -1788,7 +1968,14 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
 
             case 'previewError':
                 console.error('[DesignPanel Webview] Preview error:', msg.error);
-                const activeStatus = msg.sourceId === 'design-folder' ? 'status-design' : 'status-html';
+                let activeStatus;
+                if (msg.sourceId === 'design-folder') {
+                    activeStatus = 'status-design';
+                } else if (msg.sourceId === 'images-folder') {
+                    activeStatus = 'status-images';
+                } else {
+                    activeStatus = 'status-html';
+                }
                 const statusEl = document.getElementById(activeStatus);
                 if (statusEl) {
                     statusEl.textContent = 'Preview error: ' + msg.error;

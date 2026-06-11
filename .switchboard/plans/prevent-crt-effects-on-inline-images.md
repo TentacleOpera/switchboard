@@ -145,3 +145,7 @@ Update the preview container image CSS rule in `src/webview/planning.html` to se
 ---
 
 **Recommendation:** Send to Intern
+
+## Review Findings
+
+Implementation matches plan exactly. Both `planning.html` and `design.html` updated with `position: relative; z-index: 7; box-shadow: ...`. Static inspection verified `.cyber-scanlines` is `z-index: 5` and sweep `::before` is `z-index: 6` in both files, confirming `z-index: 7` clears all overlays. No CRITICAL or MAJOR issues found. No code changes required. Remaining risk: future overlays at `z-index: 6` may be obscured by elevated images.
