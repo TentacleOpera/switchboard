@@ -211,6 +211,10 @@ The overlay bars should feel like a **cinema UI** — the kind you see on Apple 
 
 ---
 
+## Review Findings
+
+Review completed with no material issues. All structural changes, overlay positioning, gradient styling, opacity behaviours, thumbnail strip collapse logic, and state persistence match the plan. No code changes were required. No compilation or test regressions. Remaining risks: select dropdown native styling in non-Chromium webviews; loading placeholder could benefit from a shimmer animation for visual polish.
+
 ## Metadata
 - **Complexity:** 4
 - **Tags:** frontend, ui, ux, stitch, layout

@@ -39,3 +39,7 @@ Research and NotebookLM tabs each get their own workspace dropdown and send an e
 - Multi-root: set Local Docs dropdown to repo A, Research dropdown to repo B → research folder select shows repo B's folders; import a research doc → file lands in repo B. Change Local Docs dropdown → research destination unchanged.
 - NotebookLM pointed at repo B: bundle/export reads repo B's code; import-plans writes plans into repo B's `.switchboard/plans`.
 - Selections survive panel close/reopen and VS Code reload.
+
+## Review Findings
+
+Implementation solid. No code changes required. All plan requirements satisfied: both tabs have independent workspace dropdowns, cross-tab coupling severed (`populateResearchFolderSelect` now uses `researchWorkspaceRoot`), explicit `workspaceRoot` sent on all relevant messages, backend handlers use passed root with fallback, old `lastResearchFolder` `setState` writes removed in favor of per-root persistence via `persistTab`, and dropdowns survive panel reload via `restoredPanelState`. Remaining risk: `airlock_openNotebookLM` backend handler receives `msg.workspaceRoot` but ignores it (harmless — it only opens a static external URL).
