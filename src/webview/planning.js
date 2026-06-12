@@ -314,12 +314,16 @@
 
     document.getElementById('local-workspace-filter')?.addEventListener('change', (e) => {
         state.localWorkspaceRootFilter = e.target.value;
+        // keep the in-memory snapshot in sync so later workspaceItemsUpdated
+        // re-derivations don't reset the live selection to the boot-time value
+        _restoredPanelState.panel['localDocs.root'] = e.target.value;
         persistTab('localDocs.root', state.localWorkspaceRootFilter);
         handleLocalDocsReady(state._lastLocalDocsMsg || {});
     });
 
     document.getElementById('online-workspace-filter')?.addEventListener('change', (e) => {
         state.onlineWorkspaceRootFilter = e.target.value;
+        _restoredPanelState.panel['onlineDocs.root'] = e.target.value;
         persistTab('onlineDocs.root', state.onlineWorkspaceRootFilter);
         handleOnlineDocsReady(state._lastOnlineDocsMsg || {});
     });
@@ -2433,7 +2437,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 _restoredPanelState.byRoot = msg.byRoot || {};
                 if (!ticketsWorkspaceRoot) {
                     const restoredRoot = _restoredPanelState.panel['tickets.root'];
-                    if (restoredRoot) {
+                    if (restoredRoot && _workspaceItems.some(item => item.workspaceRoot === restoredRoot)) {
                         ticketsWorkspaceRoot = restoredRoot;
                         const dropdown = document.getElementById('tickets-workspace-filter');
                         if (dropdown) dropdown.value = ticketsWorkspaceRoot;

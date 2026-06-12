@@ -981,16 +981,15 @@
             margin-bottom: 8px;
         }
 
-        /* Unified Markdown Preview Styling (Local, Online & Design) */
+        /* Unified Markdown Preview Styling (Local, Online, Design & Kanban) */
         #markdown-preview,
         #markdown-preview-online,
         #markdown-preview-design,
-        #markdown-preview-tickets {
+        #markdown-preview-tickets,
+        #kanban-preview-pane {
             flex: 1;
             overflow-y: auto;
-            /* Center an ~800px reading column via padding (not max-width+margin:auto) so the
-               scrollbar stays on the pane's right edge instead of hugging the text column. */
-            padding: 26px max(26px, calc((100% - 800px) / 2));
+            padding: 16px;
             width: 100%;
             box-sizing: border-box;
             margin: 0;
@@ -999,16 +998,6 @@
             line-height: 1.5;
             word-wrap: break-word;
             color: var(--vscode-editor-foreground, #cccccc);
-        }
-
-        /* Kanban preview pane: inherits font/text styling but keeps its own layout */
-        #kanban-preview-pane {
-            font-family: var(--font-family);
-            font-size: 13px;
-            line-height: 1.5;
-            word-wrap: break-word;
-            color: var(--vscode-editor-foreground, #cccccc);
-            padding: 8px 16px;
         }
 
         #markdown-preview h1, #markdown-preview h2, #markdown-preview h3, #markdown-preview h4, #markdown-preview h5, #markdown-preview h6,

@@ -2458,6 +2458,9 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
         const newRoot = e.target.value;
         if (newRoot && newRoot !== state.stitchWorkspaceRoot) {
             state.stitchWorkspaceRoot = newRoot;
+            // sync the snapshot so later workspaceItemsUpdated re-derivations
+            // don't reset the live selection to the boot-time restored value
+            _restoredPanelState.panel['stitch.root'] = newRoot;
             persistTab('stitch.root', state.stitchWorkspaceRoot);
             
             // reset in-memory stitch state
