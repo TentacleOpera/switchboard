@@ -47,3 +47,28 @@ Where globalState now covers a value, delete the setState path (dev-only, no mig
 - Online Docs: filter to one repo → only that repo's Notion/ClickUp/Linear sections render; "All Workspaces" → merged view as today.
 - Set every tab's dropdown (kanban, local docs, online docs, tickets, research, notebook, stitch, html previews, design system) to non-default values; close both panels, reopen; reload VS Code → all selections restored.
 - `src/test/kanban-linear-project-tab-regression.test.js` passes.
+
+## Execution Summary
+
+### Status: COMPLETED
+
+### Files Changed
+- `src/services/ResearchImportService.ts` — added `workspaceRoot?` to `ResearchSourceAdapter`, added `getAdapters()`, updated `NotionResearchAdapter` constructor to accept/store `workspaceRoot`.
+- `src/services/ClickUpDocsAdapter.ts` — changed `_workspaceRoot` to public `readonly workspaceRoot`; updated internal reference.
+- `src/services/LinearDocsAdapter.ts` — changed `_workspaceRoot` to public `readonly workspaceRoot`.
+- `src/services/PlanningPanelProvider.ts` — passed `workspaceRoot` to `NotionResearchAdapter`; updated `_sendOnlineDocsReady` to build `roots` from adapters with `workspaceRoot`.
+- `src/webview/planning.js` — deleted `currentWorkspaceRoot`; replaced all 9 references; added `online-workspace-filter` registration, listener, and `handleOnlineDocsReady` filtering/persistence; added `localDocs.root` persistence; added `kanban.root` and `kanban.project` persistence and restore in `restoredTabState` / `handleKanbanPlansReady`; added validation fallbacks for local/online/kanban filters against current `workspaceItems`.
+- `src/webview/design.js` — registered `html-workspace-filter` and `design-workspace-filter`; added `html.root` and `design.root` persistence in listeners; restored both filters in `restoredTabState`.
+
+### Findings & Fixes
+- The backend `_sendOnlineDocsReady` did not include per-root `workspaceRoot` on `roots` entries, contradicting the plan assumption. Fixed by exposing `workspaceRoot` on all adapters and mapping it into `roots`.
+- `currentWorkspaceRoot` was already partially removed from epic-operation lines (they now use `details.dataset.workspaceRoot || ''`), so only 9 references remained — all replaced.
+- No superseded `vscode.setState` writes remain in `planning.js` or `design.js` (the collapsed-state writes are not yet covered by globalState).
+
+### Validation
+- `grep -c "currentWorkspaceRoot" src/webview/planning.js` → **0**.
+- Skipped compilation and tests per session instructions.
+
+### Remaining Risks
+- Online Docs filter relies on adapter `workspaceRoot` being set correctly; if an adapter is missing the property, its section is hidden when any workspace filter is active. All three current adapters now expose it.
+- If `workspaceItemsUpdated` arrives before `restoredTabState` for registered dropdowns, the restored value is set on the select element after options exist, which works for HTML/Design but could leave Online Docs in an unfiltered state until the user interacts. This matches existing behavior for other tabs.

@@ -375,22 +375,6 @@
             .replace(/'/g, '&#39;');
     }
 
-    function populateWorkspaceDropdown(selectElementId, workspaceItems, selectedValue) {
-        const select = document.getElementById(selectElementId);
-        if (!select) return;
-        const current = selectedValue || '';
-        select.innerHTML = '<option value="">All Workspaces</option>';
-        for (const item of workspaceItems) {
-            const option = document.createElement('option');
-            option.value = item.workspaceRoot;
-            option.textContent = item.label;
-            if (item.workspaceRoot === current) {
-                option.selected = true;
-            }
-            select.appendChild(option);
-        }
-    }
-
     // srcdoc previews lose their file origin — a <base> tag pointed at the
     // file's webview URI lets relative asset paths resolve.
     function injectBaseTag(html, baseUri) {

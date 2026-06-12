@@ -83,3 +83,9 @@ Message protocol:
 - `npm run compile`.
 - Temporary smoke check (manual, no tab changes yet): from devtools console of the planning webview, confirm `workspaceItemsUpdated` and `restoredTabState` messages arrive on panel open; post a `persistTabState` and confirm it round-trips after a full panel close/reopen and after a VS Code reload.
 - Kanban tab still populates its workspace filter (existing path untouched).
+
+## Review Findings
+
+- **Files changed:** `src/webview/design.js` — removed a stale duplicate `populateWorkspaceDropdown` (line ~378) that overwrote the new generic helper at line 55, breaking `includeAllOption` and DOM-element first-arg support for registered dropdowns.
+- **Validation:** Verified all direct callers of `populateWorkspaceDropdown` in both `planning.js` and `design.js` are compatible with the surviving generic signature (`selectElOrId`, `workspaceItems`, `selectedValue`, `includeAllOption = true`). The `_registeredDropdowns` update path in `design.js` now works correctly, including `registerWorkspaceDropdown('stitch-workspace-filter', 'stitch.root', false)`.
+- **Remaining risks:** `PlanningPanelProvider.open()` does not proactively broadcast `workspaceItemsUpdated` + `restoredTabState` on panel creation; it waits for the webview's `fetchRoots` handshake. This matches the existing pattern and is harmless today, but should be refactored if the webview init sequence ever changes.
