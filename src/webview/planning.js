@@ -1589,9 +1589,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     node.style.display = 'none';
                 }
             });
-            // Hide/show corresponding source header
-            const sourceId = docList.dataset.sourceId;
-            const headerRow = treePaneOnline.querySelector(`.source-header-row:has(.source-header[data-source-id="${sourceId}"])`);
+            // Hide/show corresponding source header (previous sibling in DOM order)
+            let headerRow = docList.previousElementSibling;
+            while (headerRow && !headerRow.classList.contains('source-header-row')) {
+                headerRow = headerRow.previousElementSibling;
+            }
             if (headerRow) {
                 headerRow.style.display = hasVisible ? '' : 'none';
             }

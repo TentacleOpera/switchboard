@@ -936,7 +936,7 @@ export class PlanningPanelProvider {
                 
                 // Send workspaceItems and restoredTabState
                 const items = buildWorkspaceItems(allRoots);
-                const tabKeys = ['local', 'online', 'kanban', 'tickets', 'research', 'notebook'];
+                const tabKeys = ['local', 'online', 'kanban', 'tickets', 'research', 'notebook', 'localDocs.root', 'onlineDocs.root', 'kanban.root', 'kanban.project'];
                 const statePayload = this._stateStore.getAllStates(tabKeys, allRoots);
                 this._panel?.webview.postMessage({
                     type: 'workspaceItemsUpdated',

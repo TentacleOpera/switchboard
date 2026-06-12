@@ -72,3 +72,24 @@ Where globalState now covers a value, delete the setState path (dev-only, no mig
 ### Remaining Risks
 - Online Docs filter relies on adapter `workspaceRoot` being set correctly; if an adapter is missing the property, its section is hidden when any workspace filter is active. All three current adapters now expose it.
 - If `workspaceItemsUpdated` arrives before `restoredTabState` for registered dropdowns, the restored value is set on the select element after options exist, which works for HTML/Design but could leave Online Docs in an unfiltered state until the user interacts. This matches existing behavior for other tabs.
+
+## Review Findings
+
+**Reviewer-executor pass completed.**
+
+- **CRITICAL** (fixed): New persistence keys (`localDocs.root`, `onlineDocs.root`, `kanban.root`, `kanban.project`, `html.root`, `design.root`) were written by the webview but never included in the backend `tabKeys` arrays passed to `getAllStates`. This meant `restoredTabState` never contained them, so all workspace dropdown filters silently reset to default on every panel reopen despite being persisted. Fixed by adding the keys to `PlanningPanelProvider.ts` and `DesignPanelProvider.ts` `tabKeys` arrays.
+- **MAJOR** (partially fixed): `_sendOnlineDocsReady` now emits per-adapter `roots` entries, which can produce duplicate `sourceId` values when multiple workspaces configure the same source (e.g., two workspaces with ClickUp). `renderOnlineDocs` and related DOM selectors use `data-source-id` as a unique key, so search-filter header toggling, container dropdown attachment, and child rendering all target the first matching section instead of the correct one. Applied a minimal fix to `applyOnlineDocsSearchFilter` to locate the header row via `previousElementSibling` instead of `querySelector`, making search robust to duplicates. The remaining selectors in `handleContainersReady` and `handleChildrenReady` still need a follow-up to include `workspaceRoot` in their targeting.
+- **NIT**: `_sendOnlineDocsReady` does not send `msg.workspaceItems`; the webview falls back to `_workspaceItems`, which works because `workspaceItemsUpdated` is sent first. Adding `workspaceItems` to the message would make the contract self-contained.
+
+**Files changed in review:**
+- `src/services/PlanningPanelProvider.ts` — added `localDocs.root`, `onlineDocs.root`, `kanban.root`, `kanban.project` to `tabKeys`.
+- `src/services/DesignPanelProvider.ts` — added `html.root`, `design.root` to `tabKeys`.
+- `src/webview/planning.js` — fixed `applyOnlineDocsSearchFilter` header-row lookup to use `previousElementSibling` for duplicate-`sourceId` robustness.
+
+**Validation:**
+- `grep -c "currentWorkspaceRoot" src/webview/planning.js` → **0**.
+- Skipped compilation and tests per session instructions.
+
+**Remaining risks:**
+- Online Docs duplicate-`sourceId` DOM targeting in `handleContainersReady`/`handleChildrenReady` remains unfixed; a follow-up should either deduplicate `roots` in `_sendOnlineDocsReady` or pass `workspaceRoot` through the message protocol and update all DOM selectors.
+- Pre-existing `research.root` and `notebook.root` keys are also absent from `tabKeys` and appear to have the same silent-reset bug; they were out of scope for this plan but should be fixed in a follow-up.
