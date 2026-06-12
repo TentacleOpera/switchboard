@@ -1531,10 +1531,20 @@ export async function activate(context: vscode.ExtensionContext) {
 
             // 3. STATE SYNC: Wire terminal registry sync into TaskViewerProvider's existing
             // state watcher so each state.json change triggers exactly one sync + one refresh.
+            // Re-entry guard: while a sync is outstanding, skip instead of queueing — the
+            // waiter queue in syncTerminalRegistryWithState only resolves at full quiescence,
+            // which continuous agent state writes never reach.
+            let hookSyncOutstanding = false;
             taskViewerProvider.setStateSyncHook(async () => {
-                const currentRoot = kanbanProvider!.getCurrentWorkspaceRoot();
-                const stateRoot = currentRoot ? (resolveEffectiveStateRoot(currentRoot) || currentRoot) : runtimeStateRoot;
-                await syncTerminalRegistryWithState(stateRoot);
+                if (hookSyncOutstanding) return;
+                hookSyncOutstanding = true;
+                try {
+                    const currentRoot = kanbanProvider!.getCurrentWorkspaceRoot();
+                    const stateRoot = currentRoot ? (resolveEffectiveStateRoot(currentRoot) || currentRoot) : runtimeStateRoot;
+                    await syncTerminalRegistryWithState(stateRoot);
+                } finally {
+                    hookSyncOutstanding = false;
+                }
             });
 
         } catch (e) {

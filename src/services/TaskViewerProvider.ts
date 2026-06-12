@@ -8891,13 +8891,21 @@ What would you like to find?`;
         // Debounced: coalesces rapid file-watcher events (e.g. during batch grid creation).
         // Self-write guard: ignore watcher events caused by our own state.json writes.
         let stateRefreshTimer: NodeJS.Timeout | undefined;
+        let lastStateSyncAt = 0;
         const refreshState = () => {
             if (Date.now() < this._selfStateWriteUntil) return; // suppress self-triggered events
             if (stateRefreshTimer) clearTimeout(stateRefreshTimer);
             stateRefreshTimer = setTimeout(() => {
                 void this._refreshConfiguredPlanWatcher();
-                const sync = this._stateSyncHook ? this._stateSyncHook() : Promise.resolve();
-                void sync.catch(() => { /* sync errors are non-fatal */ }).finally(() => this.refresh());
+                // Terminal-registry sync is fire-and-forget and throttled: the extension-side
+                // sync serializes via a waiter queue that only resolves at full quiescence,
+                // so chaining refresh() onto it starves the board (and leaks waiters) while
+                // an agent is writing state.json continuously. Refresh must not wait on it.
+                if (this._stateSyncHook && Date.now() - lastStateSyncAt > 3000) {
+                    lastStateSyncAt = Date.now();
+                    void this._stateSyncHook().catch(() => { /* sync errors are non-fatal */ });
+                }
+                this.refresh();
             }, 200);
         };
 

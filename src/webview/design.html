@@ -2996,27 +2996,19 @@
             object-fit: contain;
         }
 
-        /* Top overlay */
-        .preview-top-overlay {
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            z-index: 10;
+        /* Preview Header */
+        .preview-header {
             min-height: 48px;
-            background: linear-gradient(to bottom, rgba(10,10,10,0.82) 0%, rgba(10,10,10,0.60) 60%, transparent 100%);
+            background: var(--panel-bg);
+            border-bottom: 1px solid var(--border-color);
             padding: 8px 12px;
             display: flex;
             justify-content: space-between;
-            align-items: flex-start;
-            opacity: 0.75;
-            transition: opacity 0.15s ease;
+            align-items: center;
+            opacity: 1;
             pointer-events: auto;
         }
-        .preview-top-overlay:hover {
-            opacity: 1;
-        }
-        #stitch-preview-pane.loading .preview-top-overlay {
+        #stitch-preview-pane.loading .preview-header {
             opacity: 0.95;
         }
         #preview-screen-title {
@@ -3063,28 +3055,19 @@
             background: var(--accent-teal-bright);
         }
 
-        /* Bottom overlay */
-        .preview-bottom-overlay {
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            z-index: 10;
+        /* Preview Footer */
+        .preview-footer {
             min-height: 56px;
-            background: linear-gradient(to top, rgba(10,10,10,0.88) 0%, rgba(10,10,10,0.65) 65%, transparent 100%);
+            background: var(--panel-bg);
+            border-top: 1px solid var(--border-color);
             padding: 10px 12px;
             display: flex;
             flex-direction: column;
             gap: 5px;
-            opacity: 0.80;
-            transition: opacity 0.15s ease;
+            opacity: 1;
             pointer-events: auto;
         }
-        .preview-bottom-overlay:hover,
-        .preview-bottom-overlay:focus-within {
-            opacity: 1;
-        }
-        #stitch-preview-pane.loading .preview-bottom-overlay {
+        #stitch-preview-pane.loading .preview-footer {
             display: none;
         }
         .preview-edit-row {
@@ -3510,6 +3493,7 @@
                 <select id="design-workspace-filter" class="workspace-filter-select">
                     <option value="">All Workspaces</option>
                 </select>
+                <button id="btn-manage-folders-design" class="strip-btn">Manage Folders</button>
                 <button id="btn-set-active-context-design" class="strip-btn" disabled>Set as Active Design Doc</button>
                 <button id="btn-link-to-doc-design" class="strip-btn" disabled>Link</button>
                 <button id="btn-edit-design" class="strip-btn" disabled>Edit</button>
@@ -3559,6 +3543,7 @@
                 <select id="html-workspace-filter" class="workspace-filter-select">
                     <option value="">All Workspaces</option>
                 </select>
+                <button id="btn-manage-folders-html" class="strip-btn">Manage Folders</button>
                 <button id="btn-open-browser-html" class="strip-btn" disabled>Open in Browser</button>
                 <button id="btn-copy-link-html" class="strip-btn" disabled>Copy Link</button>
                 <input type="text" id="html-docs-search" class="sidebar-search-input" placeholder="Search previews..." />
@@ -3610,6 +3595,7 @@
                 <select id="images-workspace-filter" class="workspace-filter-select">
                     <option value="">All Workspaces</option>
                 </select>
+                <button id="btn-manage-folders-images" class="strip-btn">Manage Folders</button>
                 <button id="btn-copy-link-images" class="strip-btn" disabled>Copy Link</button>
                 <input type="text" id="images-docs-search" class="sidebar-search-input" placeholder="Search images..." />
                 <span id="status-images" style="margin-left: 0; font-size: 12px; color: var(--text-secondary);">No folder configured</span>
@@ -3664,18 +3650,22 @@
             </div>
 
             <div class="controls-strip" id="controls-strip-stitch">
-                <select id="stitch-workspace-filter" class="workspace-filter-select">
-                </select>
                 <div class="stitch-projects-container" style="margin-bottom: 0;">
                     <select id="stitch-project-select" class="workspace-filter-select">
                         <option value="">Select Project...</option>
                     </select>
                     <button id="btn-new-stitch-project" class="strip-btn" title="Create a new Stitch project">+ New Project</button>
-                    <button id="btn-sync-stitch-project" class="strip-btn" disabled title="Download all screens (HTML + PNG) and the design-system palette into the workspace, compiled into DESIGN.md">Sync Project to Workspace</button>
-                    <button id="btn-open-design-md" class="strip-btn" disabled title="Open the DESIGN.md handoff file produced by Sync (screens index + colour palette / design tokens)">Open DESIGN.md</button>
+                    <button id="btn-manage-folders-stitch" class="strip-btn">Manage Folders</button>
+                    <button id="btn-download-palette" class="strip-btn" disabled title="Download just the color palette / design tokens from the selected project">Download Design Tokens</button>
+                    <button id="btn-open-design-md" class="strip-btn" disabled title="Open the DESIGN.md handoff file (generated on-demand if it does not exist)">Open DESIGN.md</button>
                 </div>
                 <div style="flex: 1;"></div>
-                <span id="status-stitch" style="font-size: 12px; color: var(--text-secondary);"></span>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <span style="font-size: 11px; color: var(--text-secondary);">Sync Destination:</span>
+                    <select id="stitch-workspace-filter" class="workspace-filter-select" style="margin-bottom: 0; max-width: 140px;">
+                    </select>
+                </div>
+                <span id="status-stitch" style="font-size: 12px; color: var(--text-secondary); margin-left: 8px;"></span>
             </div>
 
             <!-- Generation strip -->
@@ -3691,48 +3681,62 @@
                     <option value="GEMINI_3_FLASH">Flash (Fast)</option>
                     <option value="GEMINI_3_1_PRO">Pro (Quality)</option>
                 </select>
-                <button id="btn-stitch-prompt-generator" class="strip-btn">Prompt Generator</button>
+                <button id="btn-stitch-prompt-generator" class="strip-btn" title="Convert uploaded images to Stitch design prompts">Image to Prompt</button>
                 <button id="btn-generate-stitch" class="strip-btn stitch-btn-primary" disabled>Generate Screen</button>
             </div>
 
             <div class="content-row" style="flex-direction: column;">
-                <div id="stitch-preview-pane" style="display: none;">
-                    <div class="preview-image-container">
-                        <img id="preview-image" alt="Screen Preview" />
+                <div id="stitch-preview-pane" style="display: none; display: flex; flex-direction: column; height: 100%;">
+                    <div class="preview-header">
+                        <div class="preview-title-block">
+                            <div id="preview-screen-title" style="font-size: 13px; font-weight: 600; color: #fff;"></div>
+                            <div id="preview-screen-meta" style="font-size: 10px; color: rgba(255,255,255,0.55); letter-spacing: 0.08em; text-transform: uppercase;"></div>
+                        </div>
+                        <div class="preview-header-actions">
+                            <div style="display: inline-flex; align-items: center; margin-right: 8px;">
+                                <span style="font-size: 11px; color: var(--text-secondary); margin-right: 6px;">To:</span>
+                                <select id="preview-destination-select" class="workspace-filter-select" style="margin-bottom: 0; padding: 2px 4px; font-size: 11px;">
+                                    <option value="">Default (.stitch)</option>
+                                </select>
+                            </div>
+                            <button id="preview-btn-html" class="preview-overlay-btn">DL HTML</button>
+                            <button id="preview-btn-png" class="preview-overlay-btn">DL PNG</button>
+                            <button id="btn-close-preview" class="preview-overlay-btn close-btn">✕ Close</button>
+                        </div>
+                    </div>
+
+                    <div class="preview-image-container" style="flex: 1; position: relative; overflow: auto; display: flex; align-items: center; justify-content: center; background: var(--panel-bg2); min-height: 0;">
+                        <img id="preview-image" alt="Screen Preview" style="max-width: 100%; max-height: 100%; object-fit: contain;" />
                         <div id="preview-image-placeholder" class="stitch-thumb-placeholder" style="display: none; width: 100%; height: 100%;">
                             <span>Preview not ready yet</span>
                             <button id="preview-btn-reload" class="strip-btn">↻ Reload Screen</button>
                         </div>
+                    </div>
 
-                        <div class="preview-top-overlay">
-                            <div class="preview-title-block">
-                                <div id="preview-screen-title"></div>
-                                <div id="preview-screen-meta"></div>
-                            </div>
-                            <div class="preview-header-actions">
-                                <button id="preview-btn-html" class="preview-overlay-btn">DL HTML</button>
-                                <button id="preview-btn-png" class="preview-overlay-btn">DL PNG</button>
-                                <button id="btn-close-preview" class="preview-overlay-btn close-btn">✕ Close</button>
-                            </div>
-                        </div>
-
-                        <div class="preview-bottom-overlay">
-                            <div class="preview-edit-row">
-                                <input type="text" id="preview-refine-input" class="stitch-input" placeholder="Describe a change, e.g. 'make the header dark blue'..." />
-                                <select id="stitch-creative-range-select">
-                                    <option value="EXPLORE">Explore</option>
-                                    <option value="REFINE">Refine</option>
-                                    <option value="REIMAGINE">Reimagine</option>
-                                </select>
-                                <button id="preview-btn-edit" class="preview-overlay-btn primary">Apply Edit</button>
-                                <button id="preview-btn-variants" class="preview-overlay-btn">+3 Variants</button>
-                            </div>
-                            <div id="stitch-aspects-checkboxes" class="preview-aspects-row">
-                                <label class="aspect-chip"><input type="checkbox" value="LAYOUT" checked><span>Layout</span></label>
-                                <label class="aspect-chip"><input type="checkbox" value="COLOR_SCHEME" checked><span>Color</span></label>
-                                <label class="aspect-chip"><input type="checkbox" value="IMAGES" checked><span>Images</span></label>
-                                <label class="aspect-chip"><input type="checkbox" value="TEXT_FONT" checked><span>Font</span></label>
-                                <label class="aspect-chip"><input type="checkbox" value="TEXT_CONTENT" checked><span>Text</span></label>
+                    <div class="preview-footer">
+                        <div class="preview-edit-row" style="display: flex; gap: 8px; align-items: center; width: 100%;">
+                            <input type="text" id="preview-refine-input" class="stitch-input" style="flex: 1;" placeholder="Describe a change, e.g. 'make the header dark blue'..." />
+                            <select id="stitch-creative-range-select" class="workspace-filter-select" style="margin-bottom: 0; max-width: 120px;">
+                                <option value="EXPLORE">Explore</option>
+                                <option value="REFINE">Refine</option>
+                                <option value="REIMAGINE">Reimagine</option>
+                            </select>
+                            <button id="preview-btn-edit" class="preview-overlay-btn primary">Apply Edit</button>
+                            
+                            <div class="split-button-container" style="display: inline-flex; position: relative;">
+                                <button id="preview-btn-variants" class="preview-overlay-btn" style="border-top-right-radius: 0; border-bottom-right-radius: 0; margin-right: 0;">+3 Variants</button>
+                                <button id="preview-btn-variants-dropdown-toggle" class="preview-overlay-btn" style="border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid var(--border-color); padding: 0 8px; margin-left: 0;">▾</button>
+                                
+                                <div id="stitch-variants-dropdown-menu" class="stitch-variants-dropdown" style="display: none; position: absolute; bottom: 100%; right: 0; background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); z-index: 1000; padding: 8px 12px; min-width: 140px; margin-bottom: 4px;">
+                                    <div style="font-weight: 600; font-size: 11px; margin-bottom: 6px; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.5px;">Aspects to Vary</div>
+                                    <div id="stitch-aspects-checkboxes" style="display: flex; flex-direction: column; gap: 6px;">
+                                        <label class="aspect-chip-vertical" style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;"><input type="checkbox" value="LAYOUT" checked><span>Layout</span></label>
+                                        <label class="aspect-chip-vertical" style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;"><input type="checkbox" value="COLOR_SCHEME" checked><span>Color</span></label>
+                                        <label class="aspect-chip-vertical" style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;"><input type="checkbox" value="IMAGES" checked><span>Images</span></label>
+                                        <label class="aspect-chip-vertical" style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;"><input type="checkbox" value="TEXT_FONT" checked><span>Font</span></label>
+                                        <label class="aspect-chip-vertical" style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;"><input type="checkbox" value="TEXT_CONTENT" checked><span>Text</span></label>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -3757,14 +3761,39 @@
                 </div>
             </div>
 
-            <!-- Design Prompt Generator Modal -->
+            <!-- Folder Management Modal (Copied from planning panel) -->
+            <div class="folder-modal" id="folder-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="folder-modal-title">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3 id="folder-modal-title">Manage Local Folders</h3>
+                        <button class="modal-close-btn" id="btn-close-folder-modal" aria-label="Close">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="modal-section">
+                            <div class="section-header">
+                                <span class="section-title">Configured Folders</span>
+                                <div class="section-actions">
+                                    <button id="btn-refresh-folders-modal" class="strip-btn" title="Refresh folders">&#8635;</button>
+                                    <button id="btn-add-folder-modal" class="strip-btn">Add Folder</button>
+                                </div>
+                            </div>
+                            <div id="folder-list-modal" class="folder-list">
+                                <!-- Folder items rendered by JS -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Image to Prompt Modal -->
             <div id="stitch-prompt-modal" class="stitch-prompt-modal" style="display: none;">
                 <div class="modal-content">
                     <div class="modal-header">
-                        <h3>Design Prompt Generator</h3>
+                        <h3>Image to Prompt</h3>
                         <button class="modal-close-btn" id="btn-close-stitch-generator">&times;</button>
                     </div>
                     <div class="modal-body">
+                        <p style="font-size: 11px; color: var(--text-secondary); margin: 0 0 12px 0;">Upload mockups or screenshots to describe them and generate prompts for Stitch.</p>
                         <textarea id="stitch-generator-input" rows="4" placeholder="Describe the UI you want..."></textarea>
                         <input type="file" id="stitch-generator-image-input" accept="image/png,image/jpeg,image/webp" multiple />
                         <div id="stitch-generator-thumbnails" class="stitch-generator-thumbnails"></div>

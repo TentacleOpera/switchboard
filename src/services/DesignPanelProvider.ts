@@ -438,8 +438,7 @@ export class DesignPanelProvider implements vscode.Disposable {
     }
 
     private _getStitchOutputDir(workspaceRoot: string): string {
-        const configured = vscode.workspace.getConfiguration('switchboard')
-            .get<string>('stitch.defaultOutputFolder') || '.stitch';
+        const configured = this._getLocalFolderService(workspaceRoot).getStitchFolderPath() || '.stitch';
         return path.resolve(workspaceRoot, configured);
     }
 
@@ -1040,21 +1039,239 @@ export class DesignPanelProvider implements vscode.Disposable {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
                 }
                 break;
-
             case 'stitchOpenManifest':
                 try {
                     const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
                     if (!workspaceRoot) throw new Error('No active workspace root found');
                     const manifestPath = path.join(this._getStitchOutputDir(workspaceRoot), 'DESIGN.md');
-                    if (fs.existsSync(manifestPath)) {
-                        await vscode.window.showTextDocument(vscode.Uri.file(manifestPath), { preview: false });
-                    } else {
-                        vscode.window.showInformationMessage('No DESIGN.md yet — run "Sync Project to Workspace" first to download screens and the design-system palette.');
+                    if (!fs.existsSync(manifestPath)) {
+                        if (!message.projectId) throw new Error('No project selected to generate DESIGN.md');
+                        const stitch = await loadStitch();
+                        const projectInstance = stitch.project(message.projectId);
+                        const screens = await projectInstance.screens();
+
+                        const outputDir = this._getStitchOutputDir(workspaceRoot);
+                        await vscode.workspace.fs.createDirectory(vscode.Uri.file(outputDir));
+
+                        let designMd = `# Design Handoff - Project ${message.projectId}\n\n`;
+                        designMd += `Sync timestamp (on-demand): ${new Date().toISOString()}\n\n`;
+                        designMd += `## Screens\n\n`;
+
+                        const skipped: string[] = [];
+                        for (const s of screens) {
+                            const screenName = s.data?.title || s.data?.displayName || s.id;
+                            const htmlUrl = await s.getHtml();
+                            const imageUrl = await s.getImage();
+
+                            if (!htmlUrl || !imageUrl) {
+                                skipped.push(screenName);
+                                continue;
+                            }
+
+                            designMd += `### ${screenName}\n`;
+                            designMd += `- Device: ${s.data?.deviceType || 'AGNOSTIC'}\n`;
+                            designMd += `- HTML Link: [Open HTML](${htmlUrl})\n`;
+                            designMd += `- Image: ![${screenName}](${imageUrl})\n\n`;
+                        }
+                        if (skipped.length > 0) {
+                            designMd += `> Skipped (no download URLs yet): ${skipped.join(', ')}\n\n`;
+                        }
+
+                        try {
+                            const designSystems = await projectInstance.listDesignSystems();
+                            if (designSystems && designSystems.length > 0) {
+                                designMd += `## Design Systems\n\n`;
+                                for (const ds of designSystems) {
+                                    designMd += `### ${ds.data?.displayName || ds.data?.name || ds.id}\n\n`;
+                                    const tokens = ds.data?.designTokens;
+                                    if (tokens) {
+                                        designMd += '```\n' + String(tokens) + '\n```\n\n';
+                                    } else if (ds.data) {
+                                        designMd += '```json\n' + JSON.stringify(ds.data, null, 2) + '\n```\n\n';
+                                    }
+                                }
+                            }
+                        } catch {
+                            designMd += `> Design systems could not be fetched for this project.\n\n`;
+                        }
+
+                        await vscode.workspace.fs.writeFile(vscode.Uri.file(manifestPath), Buffer.from(designMd, 'utf8'));
                     }
+                    await vscode.window.showTextDocument(vscode.Uri.file(manifestPath), { preview: false });
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
                 }
                 break;
+
+            case 'stitchDownloadPalette':
+                try {
+                    const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
+                    if (!workspaceRoot) throw new Error('No active workspace root found');
+                    if (!message.projectId) throw new Error('No project selected');
+
+                    const stitch = await loadStitch();
+                    const projectInstance = stitch.project(message.projectId);
+                    const designSystems = await projectInstance.listDesignSystems();
+
+                    let outputDir = this._getStitchOutputDir(workspaceRoot);
+                    if (message.destination) {
+                        const resolvedDest = path.resolve(message.destination);
+                        const allRoots = this._getWorkspaceRoots();
+                        let isAllowed = allRoots.some(r => resolvedDest === path.resolve(r) || resolvedDest.startsWith(path.resolve(r) + path.sep));
+                        if (!isAllowed) {
+                            throw new Error('Invalid download destination folder path');
+                        }
+                        outputDir = resolvedDest;
+                    }
+                    await vscode.workspace.fs.createDirectory(vscode.Uri.file(outputDir));
+
+                    const tokens: any = {};
+                    if (designSystems && designSystems.length > 0) {
+                        for (const ds of designSystems) {
+                            if (ds.data?.designTokens) {
+                                tokens[ds.data.displayName || ds.data.name || ds.id] = ds.data.designTokens;
+                            } else if (ds.data) {
+                                tokens[ds.data.displayName || ds.data.name || ds.id] = ds.data;
+                            }
+                        }
+                    }
+
+                    const targetPath = path.join(outputDir, 'design-tokens.json');
+                    await vscode.workspace.fs.writeFile(vscode.Uri.file(targetPath), Buffer.from(JSON.stringify(tokens, null, 2), 'utf8'));
+
+                    vscode.window.showInformationMessage(`Downloaded design tokens to ${path.basename(outputDir)}/design-tokens.json`);
+                } catch (err: any) {
+                    vscode.window.showErrorMessage('Download failed: ' + err.message);
+                }
+                break;
+
+            case 'listDesignFolders': {
+                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                const service = this._getLocalFolderService(root);
+                const paths = service.getDesignFolderPaths();
+                this.postMessage({ type: 'designFoldersListed', paths, workspaceRoot: root });
+                break;
+            }
+            case 'addDesignFolder': {
+                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                const result = await vscode.window.showOpenDialog({
+                    openLabel: 'Add Design Folder',
+                    canSelectFiles: false,
+                    canSelectFolders: true,
+                    canSelectMany: false
+                });
+                if (result && result.length > 0) {
+                    const service = this._getLocalFolderService(root);
+                    await service.addDesignFolderPath(result[0].fsPath);
+                    this._setupDesignFolderWatchers();
+                    await this._sendDesignDocsReady();
+                    this.postMessage({ type: 'designFoldersListed', paths: service.getDesignFolderPaths(), workspaceRoot: root });
+                }
+                break;
+            }
+            case 'removeDesignFolder': {
+                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                const service = this._getLocalFolderService(root);
+                await service.removeDesignFolderPath(message.folderPath);
+                this._setupDesignFolderWatchers();
+                await this._sendDesignDocsReady();
+                this.postMessage({ type: 'designFoldersListed', paths: service.getDesignFolderPaths(), workspaceRoot: root });
+                break;
+            }
+
+            case 'listHtmlFolders': {
+                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                const service = this._getLocalFolderService(root);
+                const paths = service.getHtmlFolderPaths();
+                this.postMessage({ type: 'htmlFoldersListed', paths, workspaceRoot: root });
+                break;
+            }
+            case 'addHtmlFolder': {
+                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                const result = await vscode.window.showOpenDialog({
+                    openLabel: 'Add HTML Folder',
+                    canSelectFiles: false,
+                    canSelectFolders: true,
+                    canSelectMany: false
+                });
+                if (result && result.length > 0) {
+                    const service = this._getLocalFolderService(root);
+                    await service.addHtmlFolderPath(result[0].fsPath);
+                    this._setupHtmlFolderWatchers();
+                    await this._sendHtmlDocsReady();
+                    this.postMessage({ type: 'htmlFoldersListed', paths: service.getHtmlFolderPaths(), workspaceRoot: root });
+                }
+                break;
+            }
+            case 'removeHtmlFolder': {
+                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                const service = this._getLocalFolderService(root);
+                await service.removeHtmlFolderPath(message.folderPath);
+                this._setupHtmlFolderWatchers();
+                await this._sendHtmlDocsReady();
+                this.postMessage({ type: 'htmlFoldersListed', paths: service.getHtmlFolderPaths(), workspaceRoot: root });
+                break;
+            }
+
+            case 'listImagesFolders': {
+                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                const service = this._getLocalFolderService(root);
+                const paths = service.getImagesFolderPaths();
+                this.postMessage({ type: 'imagesFoldersListed', paths, workspaceRoot: root });
+                break;
+            }
+            case 'addImagesFolder': {
+                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                const result = await vscode.window.showOpenDialog({
+                    openLabel: 'Add Images Folder',
+                    canSelectFiles: false,
+                    canSelectFolders: true,
+                    canSelectMany: false
+                });
+                if (result && result.length > 0) {
+                    const service = this._getLocalFolderService(root);
+                    await service.addImagesFolderPath(result[0].fsPath);
+                    this.postMessage({ type: 'imagesFoldersListed', paths: service.getImagesFolderPaths(), workspaceRoot: root });
+                }
+                break;
+            }
+            case 'removeImagesFolder': {
+                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                const service = this._getLocalFolderService(root);
+                await service.removeImagesFolderPath(message.folderPath);
+                this.postMessage({ type: 'imagesFoldersListed', paths: service.getImagesFolderPaths(), workspaceRoot: root });
+                break;
+            }
+
+            case 'listStitchFolders': {
+                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                const service = this._getLocalFolderService(root);
+                const paths = service.getStitchFolderPaths();
+                this.postMessage({ type: 'stitchFoldersListed', paths, workspaceRoot: root });
+                break;
+            }
+            case 'addStitchFolder': {
+                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                const result = await vscode.window.showOpenDialog({
+                    openLabel: 'Add Stitch Folder',
+                    canSelectFiles: false,
+                    canSelectFolders: true,
+                    canSelectMany: false
+                });
+                if (result && result.length > 0) {
+                    const service = this._getLocalFolderService(root);
+                    await service.addStitchFolderPath(result[0].fsPath);
+                    this.postMessage({ type: 'stitchFoldersListed', paths: service.getStitchFolderPaths(), workspaceRoot: root });
+                }
+                break;
+            }
+            case 'removeStitchFolder': {
+                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                const service = this._getLocalFolderService(root);
+                await service.removeStitchFolderPath(message.folderPath);
+                this.postMessage({ type: 'stitchFoldersListed', paths: service.getStitchFolderPaths(), workspaceRoot: root });
+                break;
+            }
 
             case 'stitchGenerate':
                 try {
@@ -1109,88 +1326,6 @@ export class DesignPanelProvider implements vscode.Disposable {
                 }
                 break;
 
-            case 'stitchSyncProject':
-                try {
-                    const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
-                    if (!workspaceRoot) throw new Error('No active workspace root found');
-
-                    const stitch = await loadStitch();
-                    const projectInstance = stitch.project(message.projectId);
-                    const screens = await projectInstance.screens();
-
-                    const outputDir = this._getStitchOutputDir(workspaceRoot);
-                    await vscode.workspace.fs.createDirectory(vscode.Uri.file(outputDir));
-                    const screensDir = path.join(outputDir, 'screens');
-                    await vscode.workspace.fs.createDirectory(vscode.Uri.file(screensDir));
-
-                    let designMd = `# Design Handoff - Project ${message.projectId}\n\n`;
-                    designMd += `Sync timestamp: ${new Date().toISOString()}\n\n`;
-                    designMd += `## Screens\n\n`;
-
-                    const skipped: string[] = [];
-                    for (const s of screens) {
-                        const safeId = s.id.replace(/[^a-zA-Z0-9_-]/g, '_');
-                        const screenName = s.data?.title || s.data?.displayName || s.id;
-                        const htmlUrl = await s.getHtml();
-                        const imageUrl = await s.getImage();
-
-                        // Screens still rendering have no download URLs yet — fetch('')
-                        // throws "Failed to parse URL"; skip them and say so in the manifest.
-                        if (!htmlUrl || !imageUrl) {
-                            skipped.push(screenName);
-                            continue;
-                        }
-
-                        // Fetch and save HTML
-                        const htmlRes = await fetch(htmlUrl);
-                        const htmlText = await htmlRes.text();
-                        const htmlPath = path.join(screensDir, `${safeId}.html`);
-                        await vscode.workspace.fs.writeFile(vscode.Uri.file(htmlPath), Buffer.from(htmlText, 'utf8'));
-
-                        // Fetch and save PNG
-                        const pngRes = await fetch(imageUrl);
-                        const pngBuffer = Buffer.from(await pngRes.arrayBuffer());
-                        const pngPath = path.join(screensDir, `${safeId}.png`);
-                        await vscode.workspace.fs.writeFile(vscode.Uri.file(pngPath), pngBuffer);
-
-                        designMd += `### ${screenName}\n`;
-                        designMd += `- Device: ${s.data?.deviceType || 'AGNOSTIC'}\n`;
-                        designMd += `- HTML: [${safeId}.html](./screens/${safeId}.html)\n`;
-                        designMd += `- Image: ![${screenName}](./screens/${safeId}.png)\n\n`;
-                    }
-                    if (skipped.length > 0) {
-                        designMd += `> Skipped (no download URLs yet — re-sync later): ${skipped.join(', ')}\n\n`;
-                    }
-
-                    // Design systems carry the project's palette/tokens — include them in the handoff.
-                    try {
-                        const designSystems = await projectInstance.listDesignSystems();
-                        if (designSystems && designSystems.length > 0) {
-                            designMd += `## Design Systems\n\n`;
-                            for (const ds of designSystems) {
-                                designMd += `### ${ds.data?.displayName || ds.data?.name || ds.id}\n\n`;
-                                const tokens = ds.data?.designTokens;
-                                if (tokens) {
-                                    designMd += '```\n' + String(tokens) + '\n```\n\n';
-                                } else if (ds.data) {
-                                    designMd += '```json\n' + JSON.stringify(ds.data, null, 2) + '\n```\n\n';
-                                }
-                            }
-                        }
-                    } catch {
-                        designMd += `> Design systems could not be fetched for this project.\n\n`;
-                    }
-
-                    const manifestPath = path.join(outputDir, 'DESIGN.md');
-                    await vscode.workspace.fs.writeFile(vscode.Uri.file(manifestPath), Buffer.from(designMd, 'utf8'));
-
-                    this.postMessage({ type: 'stitchSyncComplete', manifestPath, skippedCount: skipped.length, workspaceRoot });
-                    await vscode.window.showTextDocument(vscode.Uri.file(manifestPath), { preview: false });
-                } catch (err: any) {
-                    this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
-                }
-                break;
-
             case 'stitchDownloadAsset':
                 try {
                     const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
@@ -1202,7 +1337,18 @@ export class DesignPanelProvider implements vscode.Disposable {
                     // basename() so a webview-supplied filename can't traverse out of the output dir
                     const safeFilename = path.basename(String(message.filename));
                     const isPng = safeFilename.endsWith('.png');
-                    const outputDir = this._getStitchOutputDir(workspaceRoot);
+                    
+                    let outputDir = this._getStitchOutputDir(workspaceRoot);
+                    if (message.destination) {
+                        const resolvedDest = path.resolve(message.destination);
+                        const allRoots = this._getWorkspaceRoots();
+                        let isAllowed = allRoots.some(r => resolvedDest === path.resolve(r) || resolvedDest.startsWith(path.resolve(r) + path.sep));
+                        if (!isAllowed) {
+                            throw new Error('Invalid download destination folder path');
+                        }
+                        outputDir = resolvedDest;
+                    }
+                    
                     await vscode.workspace.fs.createDirectory(vscode.Uri.file(outputDir));
 
                     const targetPath = path.join(outputDir, safeFilename);

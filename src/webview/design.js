@@ -1164,7 +1164,7 @@
 
     // ── Stitch UI Controls ──
     const stitchProjectSelect = document.getElementById('stitch-project-select');
-    const btnSyncStitchProject = document.getElementById('btn-sync-stitch-project');
+    const btnDownloadPalette = document.getElementById('btn-download-palette');
     const stitchPromptInput = document.getElementById('stitch-prompt-input');
     const stitchDeviceSelect = document.getElementById('stitch-device-select');
     const stitchModelSelect = document.getElementById('stitch-model-select');
@@ -1249,7 +1249,7 @@
                 ? 'Generate a new screen in the selected project from the prompt'
                 : 'Select a project (or click + New Project) first';
         }
-        if (btnSyncStitchProject) btnSyncStitchProject.disabled = busy || !hasProject;
+        if (btnDownloadPalette) btnDownloadPalette.disabled = busy || !hasProject;
         if (btnOpenDesignMd) {
             btnOpenDesignMd.disabled = busy || !hasProject;
             btnOpenDesignMd.title = hasProject
@@ -1443,6 +1443,15 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
         if (!screen) return;
         state.activePreviewScreenId = screen.id;
 
+        const generationStrip = document.getElementById('stitch-prompt-input')?.closest('.controls-strip');
+        if (generationStrip) {
+            generationStrip.style.display = 'none';
+        }
+        if (previewRefineInput) {
+            previewRefineInput.placeholder = "Describe a change to edit this screen (Active Input)...";
+        }
+        updateDestinationDropdowns();
+
         if (stitchGallery) stitchGallery.style.display = 'none';
         if (stitchGalleryEmpty) stitchGalleryEmpty.style.display = 'none';
         if (stitchPreviewPane) {
@@ -1528,10 +1537,13 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
             previewBtnHtml.parentNode.replaceChild(newHtmlBtn, previewBtnHtml);
             previewBtnHtml = newHtmlBtn;
             previewBtnHtml.addEventListener('click', () => {
+                const destSelect = document.getElementById('preview-destination-select');
+                const destination = destSelect ? destSelect.value : '';
                 vscode.postMessage({
                     type: 'stitchDownloadAsset',
                     url: screen.htmlUrl,
                     filename: `${screen.id}.html`,
+                    destination,
                     workspaceRoot: state.stitchWorkspaceRoot
                 });
             });
@@ -1541,10 +1553,13 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
             previewBtnPng.parentNode.replaceChild(newPngBtn, previewBtnPng);
             previewBtnPng = newPngBtn;
             previewBtnPng.addEventListener('click', () => {
+                const destSelect = document.getElementById('preview-destination-select');
+                const destination = destSelect ? destSelect.value : '';
                 vscode.postMessage({
                     type: 'stitchDownloadAsset',
                     url: screen.imageUrl,
                     filename: `${screen.id}.png`,
+                    destination,
                     workspaceRoot: state.stitchWorkspaceRoot
                 });
             });
@@ -1612,6 +1627,15 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
     function closeStitchPreview() {
         clearStitchReloadTimer();
         state.activePreviewScreenId = null;
+
+        const generationStrip = document.getElementById('stitch-prompt-input')?.closest('.controls-strip');
+        if (generationStrip) {
+            generationStrip.style.display = 'flex';
+        }
+        if (stitchPromptInput) {
+            stitchPromptInput.placeholder = "Describe the UI screen you want to generate (Active Input)...";
+        }
+
         if (stitchPreviewPane) stitchPreviewPane.style.display = 'none';
         if (stitchThumbnailStrip) stitchThumbnailStrip.style.display = 'none';
         if (previewImage) previewImage.src = '';
@@ -1715,6 +1739,22 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
         btnOpenDesignMd.addEventListener('click', () => {
             vscode.postMessage({ 
                 type: 'stitchOpenManifest',
+                projectId: stitchProjectSelect ? stitchProjectSelect.value : undefined,
+                workspaceRoot: state.stitchWorkspaceRoot
+            });
+        });
+    }
+
+    if (btnDownloadPalette) {
+        btnDownloadPalette.addEventListener('click', () => {
+            const projectId = stitchProjectSelect.value;
+            if (!projectId || state.stitchBusy) return;
+            const destSelect = document.getElementById('preview-destination-select');
+            const destination = destSelect ? destSelect.value : '';
+            vscode.postMessage({
+                type: 'stitchDownloadPalette',
+                projectId,
+                destination,
                 workspaceRoot: state.stitchWorkspaceRoot
             });
         });
@@ -1748,21 +1788,6 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 deviceType,
                 projectId: projectId || undefined,
                 modelId: state.stitchModelId,
-                workspaceRoot: state.stitchWorkspaceRoot
-            });
-        });
-    }
-
-    if (btnSyncStitchProject) {
-        btnSyncStitchProject.addEventListener('click', () => {
-            const projectId = stitchProjectSelect.value;
-            if (!projectId || state.stitchBusy) return;
-            clearStitchReloadTimer();
-            setStitchStatus('Syncing project to workspace…', 'busy');
-            setStitchBusy(true);
-            vscode.postMessage({
-                type: 'stitchSyncProject',
-                projectId,
                 workspaceRoot: state.stitchWorkspaceRoot
             });
         });
@@ -2047,6 +2072,11 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                     updateDropdown(d.selectElOrId, d.tabKey, d.includeAllOption);
                 });
                 
+                // Load folders for all workspace items
+                _workspaceItems.forEach(item => {
+                    requestAllFolders(item.workspaceRoot);
+                });
+
                 // If stitchWorkspaceRoot is empty or not in current list, pick first one or restored
                 if (_workspaceItems.length > 0) {
                     const restoredVal = getRestoredState('stitch.root');
@@ -2178,6 +2208,44 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                     error: msg.error
                 });
                 break;
+
+            case 'designFoldersListed': {
+                if (!state.designFolderPathsByRoot) state.designFolderPathsByRoot = {};
+                state.designFolderPathsByRoot[msg.workspaceRoot] = msg.paths || [];
+                if (folderModalScope === 'design') {
+                    renderFolderListModal();
+                }
+                updateDesignDocControls();
+                updateDestinationDropdowns();
+                break;
+            }
+            case 'htmlFoldersListed': {
+                if (!state.htmlFolderPathsByRoot) state.htmlFolderPathsByRoot = {};
+                state.htmlFolderPathsByRoot[msg.workspaceRoot] = msg.paths || [];
+                if (folderModalScope === 'html') {
+                    renderFolderListModal();
+                }
+                updateDestinationDropdowns();
+                break;
+            }
+            case 'imagesFoldersListed': {
+                if (!state.imagesFolderPathsByRoot) state.imagesFolderPathsByRoot = {};
+                state.imagesFolderPathsByRoot[msg.workspaceRoot] = msg.paths || [];
+                if (folderModalScope === 'images') {
+                    renderFolderListModal();
+                }
+                updateDestinationDropdowns();
+                break;
+            }
+            case 'stitchFoldersListed': {
+                if (!state.stitchFolderPathsByRoot) state.stitchFolderPathsByRoot = {};
+                state.stitchFolderPathsByRoot[msg.workspaceRoot] = msg.paths || [];
+                if (folderModalScope === 'stitch') {
+                    renderFolderListModal();
+                }
+                updateDestinationDropdowns();
+                break;
+            }
 
             case 'previewReady':
                 handlePreviewReady(msg);
@@ -2483,6 +2551,222 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 type: 'stitchListProjects',
                 workspaceRoot: state.stitchWorkspaceRoot
             });
+        }
+    });
+
+    // ===== FOLDER MANAGEMENT & PREVIEW HELPERS =====
+    let folderModalScope = 'design'; // design, html, images, stitch
+
+    function requestAllFolders(root) {
+        if (!root) return;
+        vscode.postMessage({ type: 'listDesignFolders', workspaceRoot: root });
+        vscode.postMessage({ type: 'listHtmlFolders', workspaceRoot: root });
+        vscode.postMessage({ type: 'listImagesFolders', workspaceRoot: root });
+        vscode.postMessage({ type: 'listStitchFolders', workspaceRoot: root });
+    }
+
+    function updateDestinationDropdowns() {
+        const destSelect = document.getElementById('preview-destination-select');
+        if (!destSelect) return;
+        const currentVal = destSelect.value;
+        destSelect.innerHTML = '<option value="">Default (.stitch)</option>';
+        
+        const root = state.stitchWorkspaceRoot;
+        if (!root) return;
+
+        const seen = new Set();
+        const addPaths = (paths) => {
+            if (Array.isArray(paths)) {
+                paths.forEach(p => {
+                    if (p && !seen.has(p)) {
+                        seen.add(p);
+                        const opt = document.createElement('option');
+                        opt.value = p;
+                        opt.textContent = p.replace(root, '').replace(/^[\\\/]/, '') || p;
+                        destSelect.appendChild(opt);
+                    }
+                });
+            }
+        };
+
+        if (state.stitchFolderPathsByRoot) addPaths(state.stitchFolderPathsByRoot[root]);
+        if (state.htmlFolderPathsByRoot) addPaths(state.htmlFolderPathsByRoot[root]);
+        if (state.imagesFolderPathsByRoot) addPaths(state.imagesFolderPathsByRoot[root]);
+        if (state.designFolderPathsByRoot) addPaths(state.designFolderPathsByRoot[root]);
+
+        if (seen.has(currentVal)) {
+            destSelect.value = currentVal;
+        }
+    }
+
+    function openFoldersModal(scope = 'design') {
+        folderModalScope = scope;
+        const modal = document.getElementById('folder-modal');
+        const modalTitle = document.getElementById('folder-modal-title');
+        if (modalTitle) {
+            if (scope === 'design') modalTitle.textContent = 'Manage Design Folders';
+            else if (scope === 'html') modalTitle.textContent = 'Manage HTML Previews Folders';
+            else if (scope === 'images') modalTitle.textContent = 'Manage Images Folders';
+            else if (scope === 'stitch') modalTitle.textContent = 'Manage Stitch Folders';
+        }
+        if (modal) {
+            modal.style.display = 'flex';
+            renderFolderListModal();
+        }
+    }
+
+    function renderFolderListModal() {
+        const folderListModal = document.getElementById('folder-list-modal');
+        if (!folderListModal) return;
+        folderListModal.innerHTML = '';
+
+        let folderPaths = [];
+        let root = '';
+        if (folderModalScope === 'design') {
+            root = state.designWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            folderPaths = state.designFolderPathsByRoot ? (state.designFolderPathsByRoot[root] || []) : [];
+        } else if (folderModalScope === 'html') {
+            root = state.htmlWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            folderPaths = state.htmlFolderPathsByRoot ? (state.htmlFolderPathsByRoot[root] || []) : [];
+        } else if (folderModalScope === 'images') {
+            root = state.imagesWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            folderPaths = state.imagesFolderPathsByRoot ? (state.imagesFolderPathsByRoot[root] || []) : [];
+        } else if (folderModalScope === 'stitch') {
+            root = state.stitchWorkspaceRoot || '';
+            folderPaths = state.stitchFolderPathsByRoot ? (state.stitchFolderPathsByRoot[root] || []) : [];
+        }
+
+        if (folderPaths.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'folder-list-empty';
+            empty.textContent = 'No folders configured. Click Add Folder to get started.';
+            folderListModal.appendChild(empty);
+            return;
+        }
+
+        folderPaths.forEach(path => {
+            const row = document.createElement('div');
+            row.className = 'folder-list-item';
+            row.style.display = 'flex';
+            row.style.justifyContent = 'space-between';
+            row.style.alignItems = 'center';
+            row.style.padding = '6px 8px';
+            row.style.borderBottom = '1px solid var(--border-color)';
+
+            const pathSpan = document.createElement('span');
+            pathSpan.className = 'folder-path';
+            pathSpan.textContent = path;
+            pathSpan.title = path;
+            pathSpan.style.fontFamily = 'var(--font-mono)';
+            pathSpan.style.fontSize = '11px';
+
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'folder-list-remove-btn strip-btn';
+            removeBtn.textContent = 'Remove';
+            removeBtn.style.color = '#ff6b6b';
+            removeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (folderModalScope === 'design') {
+                    vscode.postMessage({ type: 'removeDesignFolder', folderPath: path, workspaceRoot: root });
+                } else if (folderModalScope === 'html') {
+                    vscode.postMessage({ type: 'removeHtmlFolder', folderPath: path, workspaceRoot: root });
+                } else if (folderModalScope === 'images') {
+                    vscode.postMessage({ type: 'removeImagesFolder', folderPath: path, workspaceRoot: root });
+                } else if (folderModalScope === 'stitch') {
+                    vscode.postMessage({ type: 'removeStitchFolder', folderPath: path, workspaceRoot: root });
+                }
+            });
+
+            row.appendChild(pathSpan);
+            row.appendChild(removeBtn);
+            folderListModal.appendChild(row);
+        });
+    }
+
+    // Event delegation on the split button container for dropdown toggle
+    document.addEventListener('click', (e) => {
+        const toggle = e.target.closest('#preview-btn-variants-dropdown-toggle');
+        if (toggle) {
+            e.stopPropagation();
+            const menu = document.getElementById('stitch-variants-dropdown-menu');
+            if (menu) {
+                const visible = menu.style.display === 'block';
+                menu.style.display = visible ? 'none' : 'block';
+            }
+            return;
+        }
+
+        const menu = document.getElementById('stitch-variants-dropdown-menu');
+        if (menu && menu.style.display === 'block') {
+            const container = e.target.closest('.split-button-container');
+            if (!container) {
+                menu.style.display = 'none';
+            }
+        }
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            const tag = e.target.tagName.toLowerCase();
+            if (tag === 'textarea' || tag === 'input' || tag === 'select') return;
+            const modal = document.getElementById('folder-modal');
+            if (modal && modal.style.display !== 'none') {
+                modal.style.display = 'none';
+            }
+            const menu = document.getElementById('stitch-variants-dropdown-menu');
+            if (menu) {
+                menu.style.display = 'none';
+            }
+        }
+    });
+
+    document.getElementById('btn-manage-folders-design')?.addEventListener('click', () => openFoldersModal('design'));
+    document.getElementById('btn-manage-folders-html')?.addEventListener('click', () => openFoldersModal('html'));
+    document.getElementById('btn-manage-folders-images')?.addEventListener('click', () => openFoldersModal('images'));
+    document.getElementById('btn-manage-folders-stitch')?.addEventListener('click', () => openFoldersModal('stitch'));
+
+    document.getElementById('btn-close-folder-modal')?.addEventListener('click', () => {
+        const modal = document.getElementById('folder-modal');
+        if (modal) modal.style.display = 'none';
+    });
+
+    document.getElementById('folder-modal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'folder-modal') {
+            e.target.style.display = 'none';
+        }
+    });
+
+    document.getElementById('btn-refresh-folders-modal')?.addEventListener('click', () => {
+        let root = '';
+        if (folderModalScope === 'design') {
+            root = state.designWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            vscode.postMessage({ type: 'listDesignFolders', workspaceRoot: root });
+        } else if (folderModalScope === 'html') {
+            root = state.htmlWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            vscode.postMessage({ type: 'listHtmlFolders', workspaceRoot: root });
+        } else if (folderModalScope === 'images') {
+            root = state.imagesWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            vscode.postMessage({ type: 'listImagesFolders', workspaceRoot: root });
+        } else if (folderModalScope === 'stitch') {
+            root = state.stitchWorkspaceRoot || '';
+            vscode.postMessage({ type: 'listStitchFolders', workspaceRoot: root });
+        }
+    });
+
+    document.getElementById('btn-add-folder-modal')?.addEventListener('click', () => {
+        let root = '';
+        if (folderModalScope === 'design') {
+            root = state.designWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            vscode.postMessage({ type: 'addDesignFolder', workspaceRoot: root });
+        } else if (folderModalScope === 'html') {
+            root = state.htmlWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            vscode.postMessage({ type: 'addHtmlFolder', workspaceRoot: root });
+        } else if (folderModalScope === 'images') {
+            root = state.imagesWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            vscode.postMessage({ type: 'addImagesFolder', workspaceRoot: root });
+        } else if (folderModalScope === 'stitch') {
+            root = state.stitchWorkspaceRoot || '';
+            vscode.postMessage({ type: 'addStitchFolder', workspaceRoot: root });
         }
     });
 
