@@ -137,7 +137,7 @@ export class PlanningPanelProvider {
                 const notionBrowseService = this._adapterFactories.getNotionBrowseService?.(workspaceRoot);
                 if (notionService && notionBrowseService) {
                     this._researchImportService.registerAdapter(
-                        new NotionResearchAdapter(notionService, notionBrowseService)
+                        new NotionResearchAdapter(workspaceRoot, notionService, notionBrowseService)
                     );
                     console.log('[PlanningPanel] Registered Notion adapter for:', workspaceRoot);
                 }
@@ -3775,9 +3775,10 @@ export class PlanningPanelProvider {
         const availableSources = this._researchImportService.getAvailableSources();
         console.log('[PlanningPanel] Available sources before filtering:', availableSources);
 
-        const roots = availableSources
-            .filter(sourceId => sourceId !== 'local-folder')
-            .map(sourceId => ({ sourceId, nodes: [] as TreeNode[] }));
+        const adapters = this._researchImportService.getAdapters();
+        const roots = adapters
+            .filter(a => a.sourceId !== 'local-folder')
+            .map(a => ({ sourceId: a.sourceId, workspaceRoot: a.workspaceRoot || '', nodes: [] as TreeNode[] }));
 
         // Load saved browse filter containers from unified config
         const { config } = await this._resolveSyncConfig();

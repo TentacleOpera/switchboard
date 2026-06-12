@@ -121,7 +121,6 @@
     let ticketsInitialized = false;
     let ticketsLoadedOnce = false;
     let lastIntegrationProvider = null;
-    let currentWorkspaceRoot = '';
     let ticketsWorkspaceRoot = '';
     let researchWorkspaceRoot = '';
     let notebookWorkspaceRoot = '';
@@ -315,9 +314,15 @@
 
     document.getElementById('local-workspace-filter')?.addEventListener('change', (e) => {
         state.localWorkspaceRootFilter = e.target.value;
+        persistTab('localDocs.root', state.localWorkspaceRootFilter);
         handleLocalDocsReady(state._lastLocalDocsMsg || {});
     });
 
+    document.getElementById('online-workspace-filter')?.addEventListener('change', (e) => {
+        state.onlineWorkspaceRootFilter = e.target.value;
+        persistTab('onlineDocs.root', state.onlineWorkspaceRootFilter);
+        handleOnlineDocsReady(state._lastOnlineDocsMsg || {});
+    });
 
     function wireSidebarSearch(inputId, onSearch) {
         const input = document.getElementById(inputId);
@@ -574,6 +579,7 @@
 
     registerWorkspaceDropdown('research-workspace-filter', 'research', false);
     registerWorkspaceDropdown('notebook-workspace-filter', 'notebook', false);
+    registerWorkspaceDropdown('online-workspace-filter', 'onlineDocs');
 
     document.getElementById('research-workspace-filter')?.addEventListener('change', (e) => {
         const newRoot = e.target.value;
@@ -1062,7 +1068,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             removeBtn.textContent = 'Remove';
             removeBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                vscode.postMessage({ type: 'removeLocalFolder', folderPath: path, workspaceRoot: state.localWorkspaceRootFilter || currentWorkspaceRoot });
+                vscode.postMessage({ type: 'removeLocalFolder', folderPath: path, workspaceRoot: state.localWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '' });
             });
 
             row.appendChild(pathSpan);
@@ -1117,9 +1123,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             removeBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 if (folderModalScope === 'tickets') {
-                    vscode.postMessage({ type: 'removeTicketsFolder', folderPath: path, workspaceRoot: state.localWorkspaceRootFilter || currentWorkspaceRoot });
+                    vscode.postMessage({ type: 'removeTicketsFolder', folderPath: path, workspaceRoot: state.localWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '' });
                 } else {
-                    vscode.postMessage({ type: 'removeLocalFolder', folderPath: path, workspaceRoot: state.localWorkspaceRootFilter || currentWorkspaceRoot });
+                    vscode.postMessage({ type: 'removeLocalFolder', folderPath: path, workspaceRoot: state.localWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '' });
                 }
             });
 
@@ -1598,6 +1604,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         state._lastLocalDocsMsg = msg;
         state.localFolderPathsByRoot = msg.folderPathsByRoot || {};
         state.ticketsFolderPathsByRoot = msg.ticketsFolderPathsByRoot || {};
+        if (state.localWorkspaceRootFilter && !(msg.workspaceItems || []).some(item => item.workspaceRoot === state.localWorkspaceRootFilter)) {
+            state.localWorkspaceRootFilter = '';
+        }
         populateWorkspaceDropdown('local-workspace-filter', msg.workspaceItems || [], state.localWorkspaceRootFilter);
         const filteredNodes = state.localWorkspaceRootFilter
             ? (msg.nodes || []).filter(n => n.metadata?.root === state.localWorkspaceRootFilter)
@@ -1640,10 +1649,22 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     }
 
     function handleOnlineDocsReady(msg) {
+        state._lastOnlineDocsMsg = msg;
         // Stash saved filter containers for re-application after containers load
         _savedBrowseFilterContainers = msg.browseFilterContainers || {};
         state.enabledSources = msg.enabledSources || {};
-        renderOnlineDocs(msg.roots || [], msg.enabledSources || {
+
+        // Validate workspace filter against current items
+        if (state.onlineWorkspaceRootFilter && !_workspaceItems.some(item => item.workspaceRoot === state.onlineWorkspaceRootFilter)) {
+            state.onlineWorkspaceRootFilter = '';
+        }
+
+        populateWorkspaceDropdown('online-workspace-filter', msg.workspaceItems || _workspaceItems, state.onlineWorkspaceRootFilter);
+        const allRoots = msg.roots || [];
+        const filteredRoots = state.onlineWorkspaceRootFilter
+            ? allRoots.filter(r => r.workspaceRoot === state.onlineWorkspaceRootFilter)
+            : allRoots;
+        renderOnlineDocs(filteredRoots, msg.enabledSources || {
             clickup: true,
             linear: true,
             notion: true
@@ -2015,7 +2036,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
     function handleLocalFolderPathUpdated(msg) {
         const { folderPath, folderPaths, nodes } = msg;
-        const targetRoot = msg.workspaceRoot || currentWorkspaceRoot || '';
+        const targetRoot = msg.workspaceRoot || '';
         if (folderPaths) {
             state.localFolderPathsByRoot[targetRoot] = folderPaths;
         } else if (folderPath) {
@@ -2443,6 +2464,37 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     const dropdown = document.getElementById('notebook-workspace-filter');
                     if (dropdown) dropdown.value = notebookWorkspaceRoot;
                 }
+
+                // Restore Local Docs workspace filter
+                const restoredLocalRoot = _restoredPanelState.panel['localDocs.root'] || '';
+                if (_workspaceItems.length === 0 || restoredLocalRoot === '' || _workspaceItems.some(item => item.workspaceRoot === restoredLocalRoot)) {
+                    state.localWorkspaceRootFilter = restoredLocalRoot;
+                } else {
+                    state.localWorkspaceRootFilter = '';
+                }
+                const localDropdown = document.getElementById('local-workspace-filter');
+                if (localDropdown) localDropdown.value = state.localWorkspaceRootFilter;
+
+                // Restore Online Docs workspace filter
+                const restoredOnlineRoot = _restoredPanelState.panel['onlineDocs.root'] || '';
+                if (_workspaceItems.length === 0 || restoredOnlineRoot === '' || _workspaceItems.some(item => item.workspaceRoot === restoredOnlineRoot)) {
+                    state.onlineWorkspaceRootFilter = restoredOnlineRoot;
+                } else {
+                    state.onlineWorkspaceRootFilter = '';
+                }
+                const onlineDropdown = document.getElementById('online-workspace-filter');
+                if (onlineDropdown) onlineDropdown.value = state.onlineWorkspaceRootFilter;
+
+                // Restore Kanban filters
+                const restoredKanbanRoot = _restoredPanelState.panel['kanban.root'] || '';
+                if (_workspaceItems.length === 0 || restoredKanbanRoot === '' || _workspaceItems.some(item => item.workspaceRoot === restoredKanbanRoot)) {
+                    kanbanFilters.workspaceRoot = restoredKanbanRoot;
+                } else {
+                    kanbanFilters.workspaceRoot = '';
+                }
+                kanbanFilters.project = _restoredPanelState.panel['kanban.project'] || '';
+                if (kanbanWorkspaceFilter) kanbanWorkspaceFilter.value = kanbanFilters.workspaceRoot;
+                if (kanbanProjectFilter) kanbanProjectFilter.value = kanbanFilters.project;
                 break;
             }
             case 'cyberAnimationSetting': {
@@ -2826,7 +2878,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 handleLocalFolderPathUpdated(msg);
                 break;
             case 'localFoldersListed': {
-                const targetRoot = msg.workspaceRoot || currentWorkspaceRoot || '';
+                const targetRoot = msg.workspaceRoot || '';
                 state.localFolderPathsByRoot[targetRoot] = msg.paths || [];
                 renderFolderList(msg.paths || []);
                 renderFolderListModal();
@@ -2838,7 +2890,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
             case 'ticketsFoldersListed':
                 if (!state.ticketsFolderPathsByRoot) { state.ticketsFolderPathsByRoot = {}; }
-                state.ticketsFolderPathsByRoot[msg.workspaceRoot || currentWorkspaceRoot || ''] = msg.paths || [];
+                state.ticketsFolderPathsByRoot[msg.workspaceRoot || ''] = msg.paths || [];
                 renderFolderListModal();
                 break;
             case 'importAllTicketsComplete':
@@ -4332,6 +4384,10 @@ Return ONLY the drafted prompt with no additional commentary.`;
         _kanbanAllWorkspaceProjects = msg.allWorkspaceProjects || {};
         _kanbanAvailableColumns = msg.columns || [];  // NEW: store available columns
 
+        if (kanbanFilters.workspaceRoot && !_kanbanWorkspaceItems.some(ws => ws.workspaceRoot === kanbanFilters.workspaceRoot)) {
+            kanbanFilters.workspaceRoot = '';
+        }
+
         populateKanbanFilters();
         updateKanbanColumnFilter();  // NEW: populate column dropdown
         renderKanbanPlans(_kanbanPlansCache, kanbanFilters);
@@ -4487,6 +4543,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
     if (kanbanWorkspaceFilter) {
         kanbanWorkspaceFilter.addEventListener('change', () => {
             kanbanFilters.workspaceRoot = kanbanWorkspaceFilter.value;
+            persistTab('kanban.root', kanbanFilters.workspaceRoot);
             // Reset project filter when workspace changes to avoid stale selection
             kanbanFilters.project = '';
             if (kanbanProjectFilter) kanbanProjectFilter.value = '';
@@ -4498,6 +4555,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
     if (kanbanProjectFilter) {
         kanbanProjectFilter.addEventListener('change', () => {
             kanbanFilters.project = kanbanProjectFilter.value;
+            persistTab('kanban.project', kanbanFilters.project);
             renderKanbanPlans(_kanbanPlansCache, kanbanFilters);
         });
     }
@@ -4777,9 +4835,9 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
     document.getElementById('btn-add-folder-modal').addEventListener('click', () => {
         if (folderModalScope === 'tickets') {
-            vscode.postMessage({ type: 'addTicketsFolder', workspaceRoot: state.localWorkspaceRootFilter || currentWorkspaceRoot });
+            vscode.postMessage({ type: 'addTicketsFolder', workspaceRoot: state.localWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '' });
         } else {
-            vscode.postMessage({ type: 'addLocalFolder', workspaceRoot: state.localWorkspaceRootFilter || currentWorkspaceRoot });
+            vscode.postMessage({ type: 'addLocalFolder', workspaceRoot: state.localWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '' });
         }
     });
 

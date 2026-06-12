@@ -59,3 +59,7 @@ The kanban tab filters and renders correctly per-root, and normal card actions a
 
 **Remaining Risks:**
 - None identified. All four epic handlers now use per-card workspace roots with empty-string fallback as specified.
+
+## Review Findings
+
+Reviewer pass completed. All four epic handlers in `src/webview/planning.js` correctly source `workspaceRoot` from the per-card `data-workspace-root` attribute rather than the global `currentWorkspaceRoot`. The subtask candidate select is properly filtered by matching `workspaceRoot`. No CRITICAL or MAJOR issues were found; three NIT-level observations were logged but do not require code changes. Files changed: none (implementation verified as correct). Validation skipped per session instructions. Remaining risk: backend `_resolveWorkspaceRoot('')` still falls back to `currentWorkspaceRoot` for edge cases where a plan lacks `workspaceRoot`, but this matches the plan's specified behavior.

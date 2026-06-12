@@ -44,6 +44,7 @@
         stitchModelId: ['GEMINI_3_FLASH','GEMINI_3_1_PRO'].includes(persistedState.stitchModelId) ? persistedState.stitchModelId : 'GEMINI_3_FLASH',
         stitchCreativeRange: ['EXPLORE','REFINE','REIMAGINE'].includes(persistedState.stitchCreativeRange) ? persistedState.stitchCreativeRange : 'EXPLORE',
         stitchAspects: Array.isArray(persistedState.stitchAspects) && persistedState.stitchAspects.every(a => typeof a === 'string') ? persistedState.stitchAspects : ['LAYOUT','COLOR_SCHEME','IMAGES','TEXT_FONT','TEXT_CONTENT'],
+        stitchThumbnailStripCollapsed: persistedState.stitchThumbnailStripCollapsed || false,
         stitchGeneratorOpen: false,
         stitchGeneratorImages: [],
         stitchReloadPending: false,  // true while waiting for a reload response
@@ -1200,7 +1201,8 @@
             ...vscode.getState(),
             designPreviewCollapsed: state.designPreviewCollapsed,
             htmlPreviewCollapsed: state.htmlPreviewCollapsed,
-            imagesPreviewCollapsed: state.imagesPreviewCollapsed
+            imagesPreviewCollapsed: state.imagesPreviewCollapsed,
+            stitchThumbnailStripCollapsed: state.stitchThumbnailStripCollapsed
         });
     }
 
@@ -1217,6 +1219,19 @@
     let previewBtnVariants = document.getElementById('preview-btn-variants');
     const previewBtnReload = document.getElementById('preview-btn-reload');
     const stitchThumbnailStrip = document.getElementById('stitch-thumbnail-strip');
+
+    if (stitchThumbnailStrip) {
+        const stripCollapseBtn = stitchThumbnailStrip.querySelector('.strip-collapse-btn');
+        if (stripCollapseBtn) {
+            stripCollapseBtn.addEventListener('click', () => {
+                const isCollapsed = stitchThumbnailStrip.classList.toggle('collapsed');
+                state.stitchThumbnailStripCollapsed = isCollapsed;
+                saveState();
+                const arrow = stripCollapseBtn.querySelector('.strip-arrow');
+                if (arrow) arrow.textContent = isCollapsed ? '▼' : '▲';
+            });
+        }
+    }
 
     const btnStitchPromptGenerator = document.getElementById('btn-stitch-prompt-generator');
     const stitchPromptModal = document.getElementById('stitch-prompt-modal');
@@ -1446,8 +1461,16 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
 
         if (stitchGallery) stitchGallery.style.display = 'none';
         if (stitchGalleryEmpty) stitchGalleryEmpty.style.display = 'none';
-        if (stitchPreviewPane) stitchPreviewPane.style.display = 'flex';
-        if (stitchThumbnailStrip) stitchThumbnailStrip.style.display = 'flex';
+        if (stitchPreviewPane) {
+            stitchPreviewPane.style.display = 'flex';
+            if (screen.imageUrl) stitchPreviewPane.classList.remove('loading');
+            else stitchPreviewPane.classList.add('loading');
+        }
+        if (stitchThumbnailStrip) {
+            stitchThumbnailStrip.style.display = 'flex';
+            if (state.stitchThumbnailStripCollapsed) stitchThumbnailStrip.classList.add('collapsed');
+            else stitchThumbnailStrip.classList.remove('collapsed');
+        }
 
         if (previewScreenTitle) previewScreenTitle.textContent = screen.name || 'Untitled Screen';
         if (previewScreenMeta) previewScreenMeta.textContent = `Device: ${screen.deviceType || 'AGNOSTIC'}`;
@@ -1621,8 +1644,16 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
 
     function renderThumbnailStrip(screens, activeId) {
         if (!stitchThumbnailStrip) return;
-        stitchThumbnailStrip.innerHTML = '';
+        const wrapper = stitchThumbnailStrip.querySelector('.strip-thumbs-wrapper');
+        if (wrapper) wrapper.innerHTML = '';
+        else stitchThumbnailStrip.innerHTML = '';
+        const countEl = stitchThumbnailStrip.querySelector('.strip-count');
+        const arrowEl = stitchThumbnailStrip.querySelector('.strip-arrow');
+        const count = screens.length;
+        if (countEl) countEl.textContent = count + (count === 1 ? ' screen' : ' screens');
+        if (arrowEl) arrowEl.textContent = stitchThumbnailStrip.classList.contains('collapsed') ? '▼' : '▲';
         screens.forEach(screen => {
+            const target = wrapper || stitchThumbnailStrip;
             if (screen.imageUrl) {
                 const img = document.createElement('img');
                 img.className = `stitch-strip-thumb${screen.id === activeId ? ' active' : ''}`;
@@ -1632,7 +1663,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 img.addEventListener('click', () => {
                     openStitchPreview(screen);
                 });
-                stitchThumbnailStrip.appendChild(img);
+                target.appendChild(img);
             } else {
                 const ph = document.createElement('div');
                 ph.className = `stitch-strip-thumb-placeholder${screen.id === activeId ? ' active' : ''}`;
@@ -1640,7 +1671,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 ph.addEventListener('click', () => {
                     openStitchPreview(screen);
                 });
-                stitchThumbnailStrip.appendChild(ph);
+                target.appendChild(ph);
             }
         });
     }
@@ -1931,6 +1962,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
     // Workspace change listeners
     document.getElementById('html-workspace-filter')?.addEventListener('change', (e) => {
         state.htmlWorkspaceRootFilter = e.target.value;
+        persistTab('html.root', state.htmlWorkspaceRootFilter);
         const msg = state._lastHtmlDocsMsg || {};
         const filteredNodes = state.htmlWorkspaceRootFilter
             ? (msg.nodes || []).filter(n => n.metadata?.root === state.htmlWorkspaceRootFilter)
@@ -1959,6 +1991,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
 
     document.getElementById('design-workspace-filter')?.addEventListener('change', (e) => {
         state.designWorkspaceRootFilter = e.target.value;
+        persistTab('design.root', state.designWorkspaceRootFilter);
         const msg = state._lastDesignDocsMsg || {};
         const filteredNodes = state.designWorkspaceRootFilter
             ? (msg.nodes || []).filter(n => n.metadata?.root === state.designWorkspaceRootFilter)
@@ -2101,6 +2134,25 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                         });
                     }
                 }
+
+                // Restore HTML and Design workspace filters
+                const restoredHtmlRoot = _restoredPanelState.panel['html.root'] || '';
+                if (_workspaceItems.length === 0 || restoredHtmlRoot === '' || _workspaceItems.some(i => i.workspaceRoot === restoredHtmlRoot)) {
+                    state.htmlWorkspaceRootFilter = restoredHtmlRoot;
+                } else {
+                    state.htmlWorkspaceRootFilter = '';
+                }
+                const htmlSelect = document.getElementById('html-workspace-filter');
+                if (htmlSelect) htmlSelect.value = state.htmlWorkspaceRootFilter;
+
+                const restoredDesignRoot = _restoredPanelState.panel['design.root'] || '';
+                if (_workspaceItems.length === 0 || restoredDesignRoot === '' || _workspaceItems.some(i => i.workspaceRoot === restoredDesignRoot)) {
+                    state.designWorkspaceRootFilter = restoredDesignRoot;
+                } else {
+                    state.designWorkspaceRootFilter = '';
+                }
+                const designSelect = document.getElementById('design-workspace-filter');
+                if (designSelect) designSelect.value = state.designWorkspaceRootFilter;
                 break;
             }
             case 'designDocsReady':
@@ -2412,6 +2464,8 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
     }
 
     // Register workspace dropdowns
+    registerWorkspaceDropdown('html-workspace-filter', 'html.root');
+    registerWorkspaceDropdown('design-workspace-filter', 'design.root');
     registerWorkspaceDropdown('stitch-workspace-filter', 'stitch.root', false);
 
     // Dropdown change listener

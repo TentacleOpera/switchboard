@@ -27,6 +27,7 @@ export interface TreeNode {
 
 export interface ResearchSourceAdapter {
     readonly sourceId: string;
+    readonly workspaceRoot?: string;
     listFiles(): Promise<ResearchFile[]>;
     fetchContent(fileId: string): Promise<string>;
     fetchChildren(parentId?: string): Promise<TreeNode[]>;
@@ -47,12 +48,14 @@ export interface ResearchSourceAdapter {
 
 export class NotionResearchAdapter implements ResearchSourceAdapter {
     readonly sourceId = 'notion';
+    readonly workspaceRoot: string;
     private _service: NotionFetchService;
     private _browseService: NotionBrowseService;
     // Single-flight guard: collapse duplicate fetchContent() calls for the same page.
     private _inFlight = new Map<string, Promise<string>>();
 
-    constructor(service: NotionFetchService, browseService: NotionBrowseService) {
+    constructor(workspaceRoot: string, service: NotionFetchService, browseService: NotionBrowseService) {
+        this.workspaceRoot = workspaceRoot;
         this._service = service;
         this._browseService = browseService;
     }
@@ -271,6 +274,10 @@ export class ResearchImportService {
 
     getAvailableSources(): string[] {
         return Array.from(this._adapters.keys());
+    }
+
+    getAdapters(): ResearchSourceAdapter[] {
+        return Array.from(this._adapters.values());
     }
 
     clearAdapters(): void {

@@ -13,14 +13,14 @@ export interface LinearDocConfig {
 
 export class LinearDocsAdapter implements ResearchSourceAdapter {
     readonly sourceId = 'linear';
-    private _workspaceRoot: string;
+    readonly workspaceRoot: string;
     private _configPath: string;
     private _cachePath: string;
     private _linearService: LinearSyncService;
     private readonly MAX_CHARS = 50000;
 
     constructor(workspaceRoot: string, linearService: LinearSyncService) {
-        this._workspaceRoot = workspaceRoot;
+        this.workspaceRoot = workspaceRoot;
         this._configPath = path.join(workspaceRoot, '.switchboard', 'linear-docs-config.json');
         this._cachePath = path.join(workspaceRoot, '.switchboard', 'linear-docs-cache.md');
         this._linearService = linearService;

@@ -14,7 +14,7 @@ export interface ClickUpDocConfig {
 
 export class ClickUpDocsAdapter implements ResearchSourceAdapter {
     readonly sourceId = 'clickup';
-    private _workspaceRoot: string;
+    readonly workspaceRoot: string;
     private _configPath: string;
     private _cachePath: string;
     private _clickUpService: ClickUpSyncService;
@@ -23,7 +23,7 @@ export class ClickUpDocsAdapter implements ResearchSourceAdapter {
     private readonly MAX_PAGES = 200;
 
     constructor(workspaceRoot: string, clickUpService: ClickUpSyncService, cacheService?: PlanningPanelCacheService) {
-        this._workspaceRoot = workspaceRoot;
+        this.workspaceRoot = workspaceRoot;
         this._configPath = path.join(workspaceRoot, '.switchboard', 'clickup-docs-config.json');
         this._cachePath = path.join(workspaceRoot, '.switchboard', 'clickup-docs-cache.md');
         this._clickUpService = clickUpService;
@@ -568,7 +568,7 @@ export class ClickUpDocsAdapter implements ResearchSourceAdapter {
 
         // Fallback: direct file read
         try {
-            const mapPath = path.join(this._workspaceRoot, '.switchboard', 'planning-cache', 'clickup', 'documentIdMap.json');
+            const mapPath = path.join(this.workspaceRoot, '.switchboard', 'planning-cache', 'clickup', 'documentIdMap.json');
             const raw = await fs.promises.readFile(mapPath, 'utf8');
             const data = JSON.parse(raw);
             if (data.idMap && Array.isArray(data.idMap) && data.idMap.length > 0) {
