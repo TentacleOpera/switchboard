@@ -2968,7 +2968,8 @@ export class PlanningPanelProvider {
                     this._panel?.webview.postMessage({
                         type: 'ticketsAskAgentResult',
                         success: false,
-                        error: 'Missing workspace or ticket ID'
+                        error: 'Missing workspace or ticket ID',
+                        workspaceRoot: askWorkspaceRoot || msg.workspaceRoot || undefined
                     });
                     break;
                 }
@@ -2984,13 +2985,14 @@ export class PlanningPanelProvider {
                             provider
                         }
                     );
-                    this._panel?.webview.postMessage({ type: 'ticketsAskAgentResult', success: true });
+                    this._panel?.webview.postMessage({ type: 'ticketsAskAgentResult', success: true, workspaceRoot: askWorkspaceRoot });
                 } catch (error) {
                     console.error('[PlanningPanel] Failed to send ticket to agent:', error);
                     this._panel?.webview.postMessage({
                         type: 'ticketsAskAgentResult',
                         success: false,
-                        error: error instanceof Error ? error.message : String(error)
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot: askWorkspaceRoot
                     });
                 }
                 break;

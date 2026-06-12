@@ -45,3 +45,6 @@ Add `<select id="stitch-workspace-filter">` to the Stitch title-bar controls. No
 - `npm run compile`.
 - Multi-root window: point Stitch at the second repo; generate + sync a design → files appear under that repo's `.stitch/`, not the first root's. Download an asset → same. Flip roots → project lists swap correctly; flip rapidly → no cross-root render (race guard).
 - Close/reopen panel and reload VS Code → dropdown, project selection, and model/creative-range/aspect prefs all restored.
+
+## Review Findings
+One CRITICAL issue found and fixed: the auto-reload retry timer in `stitchScreenReady` (`design.js:2363`) posted `stitchRefreshScreen` without `workspaceRoot`, breaking the cross-root race guard. File changed: `src/webview/design.js` (added `workspaceRoot` to the retry postMessage). All other plan requirements verified: dropdown present, every stitch message (except harmless global `stitchSaveApiKey`) carries `workspaceRoot`, provider handlers thread root to `_getStitchOutputDir`, race guard drops stale responses, and persistence keys (`stitch.root`, `stitch.projectId`, `stitchModelId`, `stitchCreativeRange`, `stitchAspects`) are wired correctly. Remaining risk: vestigial `vscode.getState()` reads for model/creative/aspects on first load (overridden by restored state, so non-functional).

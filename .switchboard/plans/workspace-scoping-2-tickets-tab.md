@@ -84,3 +84,11 @@ For each tickets handler in `PlanningPanelProvider.ts`: when `msg.workspaceRoot`
 - Manual, multi-root (switchboard + viaapp): navigate to a deep ClickUp list (e.g. Sprint 116) under repo A; flip dropdown to repo B, navigate somewhere else; flip back → repo A restores Sprint 116 without refetching the whole hierarchy manually. Close panel, reopen → same. Reload VS Code → same. Kanban tab pointed at repo B throughout, unaffected.
 - Import/edit/push/delete/comment/create on a ticket while the dropdown points at repo B → files and API calls hit repo B.
 - `src/test/kanban-linear-project-tab-regression.test.js` passes; entering the tickets tab twice does not double-fetch.
+
+## Review Findings
+
+**Files changed:** `src/services/PlanningPanelProvider.ts` (added missing `workspaceRoot` to `ticketsAskAgentResult` responses at lines ~2967, ~2988, ~2991 for race-protection parity).
+
+**Validation results:** `kanban-linear-project-tab-regression.test.js` passes. `grep -c "ticketsWorkspaceRoot" src/webview/planning.js` returns 47. `grep -c "tickets-workspace-filter" src/webview/planning.html` returns 1.
+
+**Key deviations and remaining risks:** The implementation fully removed `currentWorkspaceRoot` from `planning.js` (0 occurrences) instead of leaving the 10+ references the plan reserved for other sub-plans. The remaining use sites were refactored to use context-appropriate variables (e.g., `node.metadata.root`, `kanbanFilters.workspaceRoot`), so functionality is preserved and the design is cleaner, but this is an architectural deviation from the plan's stated verification criterion. Race protection is complete after the `ticketsAskAgentResult` fix; all other tickets responses already echo `workspaceRoot` back correctly.

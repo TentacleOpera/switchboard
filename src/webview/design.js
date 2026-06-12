@@ -2360,7 +2360,8 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                             vscode.postMessage({
                                 type: 'stitchRefreshScreen',
                                 projectId: msg.screen.projectId || stitchProjectSelect.value,
-                                screenId: msg.screen.id
+                                screenId: msg.screen.id,
+                                workspaceRoot: state.stitchWorkspaceRoot
                             });
                         }, delay * 1000);
                     } else {
