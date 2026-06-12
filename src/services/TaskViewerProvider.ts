@@ -15284,10 +15284,10 @@ What would you like to find?`;
         await this._importMultiplePlansFromClipboard(text);
     }
 
-    public async importNotebookLMPlans(): Promise<{ overwritten: number; created: number; errors: number }> {
+    public async importNotebookLMPlans(workspaceRootOverride?: string): Promise<{ overwritten: number; created: number; errors: number }> {
         // LAZY CHANGE: Ensure DB exists before import
         try {
-            const workspaceRoot = this._getWorkspaceRoot();
+            const workspaceRoot = workspaceRootOverride || this._getWorkspaceRoot();
             if (workspaceRoot) {
                 const db = await this._getKanbanDb(workspaceRoot);
                 if (db) {
@@ -15385,7 +15385,7 @@ What would you like to find?`;
             return { overwritten: 0, created: 0, errors: 0 };
         }
 
-        const workspaceRoot = this._resolveWorkspaceRoot();
+        const workspaceRoot = workspaceRootOverride || this._resolveWorkspaceRoot();
         if (!workspaceRoot) {
             vscode.window.showErrorMessage('No workspace folder found.');
             return { overwritten: 0, created: 0, errors: 1 };
@@ -15399,10 +15399,10 @@ What would you like to find?`;
             try {
                 const existing = await this._findExistingPlanInNewColumn(plan.title, workspaceRoot);
                 if (existing) {
-                    await this._overwriteExistingPlan(existing, plan.content);
+                    await this._overwriteExistingPlan(existing, plan.content, workspaceRoot);
                     overwritten++;
                 } else {
-                    await this._createInitiatedPlan(plan.title, plan.content, false, { skipBrainPromotion: true });
+                    await this._createInitiatedPlan(plan.title, plan.content, false, { skipBrainPromotion: true, workspaceRoot });
                     created++;
                 }
             } catch (err: any) {
@@ -15444,8 +15444,8 @@ What would you like to find?`;
         return null;
     }
 
-    private async _overwriteExistingPlan(record: KanbanPlanRecord, newContent: string): Promise<void> {
-        const workspaceRoot = this._resolveWorkspaceRoot();
+    private async _overwriteExistingPlan(record: KanbanPlanRecord, newContent: string, workspaceRootOverride?: string): Promise<void> {
+        const workspaceRoot = workspaceRootOverride || this._resolveWorkspaceRoot();
         if (!workspaceRoot) {
             throw new Error('No workspace folder found.');
         }
@@ -15574,9 +15574,10 @@ What would you like to find?`;
             suppressIntegrationSync?: boolean;
             createdAt?: string;
             projectName?: string;
+            workspaceRoot?: string;
         } = {}
     ): Promise<{ planFileAbsolute: string; }> {
-        const workspaceRoot = this._resolveWorkspaceRoot();
+        const workspaceRoot = options.workspaceRoot || this._resolveWorkspaceRoot();
         if (!workspaceRoot) {
             throw new Error('No workspace folder found.');
         }

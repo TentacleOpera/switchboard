@@ -962,6 +962,9 @@
         #preview-pane-html {
             background: var(--panel-bg);
         }
+        #preview-pane-images {
+            background: var(--panel-bg);
+        }
 
         .preview-content-wrapper {
             display: flex;
@@ -2015,6 +2018,7 @@
            and fitToContainer's top-left-origin pan math holds — mirrors the inline
            width/height:100% on the iframe viewport (#html-preview-wrapper). */
         #image-preview-container .zoomable-viewport,
+        #image-preview-container-images .zoomable-viewport,
         #image-preview-container-design .zoomable-viewport {
             width: 100%;
             height: 100%;
@@ -2198,6 +2202,7 @@
         .cyber-theme-enabled #tree-pane-online,
         .cyber-theme-enabled #tree-pane-design,
         .cyber-theme-enabled #tree-pane-html,
+        .cyber-theme-enabled #tree-pane-images,
         .cyber-theme-enabled #tree-pane-tickets {
             background: rgba(10, 10, 10, 0.70);
             backdrop-filter: blur(8px);
@@ -2225,6 +2230,7 @@
         .cyber-theme-enabled #preview-pane-online,
         .cyber-theme-enabled #preview-pane-design,
         .cyber-theme-enabled #preview-pane-html,
+        .cyber-theme-enabled #preview-pane-images,
         .cyber-theme-enabled #preview-pane-tickets,
         .cyber-theme-enabled #stitch-preview-pane {
             background-color: rgba(255, 255, 255, 0.015);
@@ -2263,6 +2269,7 @@
         .cyber-theme-enabled #online-content,
         .cyber-theme-enabled #design-content,
         .cyber-theme-enabled #html-preview-content,
+        .cyber-theme-enabled #images-content,
         .cyber-theme-enabled #tickets-content,
         .cyber-theme-enabled #stitch-content {
             background: transparent;
@@ -3346,6 +3353,7 @@
     <div id="research-tab-bar" class="research-tab-bar">
         <button class="research-tab-btn active" data-tab="stitch">STITCH</button>
         <button class="research-tab-btn" data-tab="html-preview">HTML PREVIEWS</button>
+        <button class="research-tab-btn" data-tab="images">IMAGES</button>
         <button class="research-tab-btn" data-tab="design">DESIGN SYSTEM</button>
     </div>
     <div class="container">
@@ -3421,8 +3429,8 @@
                         <div id="html-initial-state" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 32px; color: var(--text-secondary);">
                             <span style="font-size: 48px; opacity: 0.5;">🌐</span>
                             <div style="text-align: center;">
-                                <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px;">HTML & Asset Previewer</div>
-                                <div style="font-size: 12px; max-width: 320px; line-height: 1.5;">Select a file from the sidebar to preview HTML pages, SVGs, and images. Configure folders using the Manage Folders button.</div>
+                                <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px;">HTML Previewer</div>
+                                <div style="font-size: 12px; max-width: 320px; line-height: 1.5;">Select a file from the sidebar to preview HTML pages. Configure folders using the Manage Folders button.</div>
                             </div>
                         </div>
                         <div id="html-loading-state" style="flex: 1; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 32px; color: var(--text-secondary);">
@@ -3443,9 +3451,45 @@
                                 <button class="zoom-btn" data-action="fit" title="Fit to View (Double-click)">⤢</button>
                             </div>
                         </div>
-                        <div id="image-preview-container" class="zoomable-container" style="display: none; padding: 0;">
+                    </div>
+                    <div class="cyber-scanlines"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Images Tab -->
+        <div id="images-content" class="research-tab-content">
+            <div class="controls-strip" id="controls-strip-images">
+                <select id="images-workspace-filter" class="workspace-filter-select">
+                    <option value="">All Workspaces</option>
+                </select>
+                <button id="btn-copy-link-images" class="strip-btn" disabled>Copy Link</button>
+                <input type="text" id="images-docs-search" class="sidebar-search-input" placeholder="Search images..." />
+                <span id="status-images" style="margin-left: 0; font-size: 12px; color: var(--text-secondary);">No folder configured</span>
+            </div>
+            <div class="content-row">
+                <div id="tree-pane-images">
+                    <div class="sidebar-toggle-row">
+                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                    </div>
+                    <div class="empty-state">Configure a folder to browse image files</div>
+                </div>
+                <div class="preview-panel-wrapper">
+                    <div id="preview-pane-images" style="flex: 1; width: 100%; box-sizing: border-box; height: 100%; display: flex; flex-direction: column; overflow: hidden;">
+                        <div id="images-initial-state" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 32px; color: var(--text-secondary);">
+                            <span style="font-size: 48px; opacity: 0.5;">🖼️</span>
+                            <div style="text-align: center;">
+                                <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px;">Image Previewer</div>
+                                <div style="font-size: 12px; max-width: 320px; line-height: 1.5;">Select a file from the sidebar to preview image files. Configure folders using the Manage Folders button.</div>
+                            </div>
+                        </div>
+                        <div id="images-loading-state" style="flex: 1; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 32px; color: var(--text-secondary);">
+                            <div style="width: 32px; height: 32px; border: 3px solid var(--border-color); border-top-color: var(--accent-teal); border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+                            <div style="font-size: 12px;">Loading preview...</div>
+                        </div>
+                        <div id="image-preview-container-images" class="zoomable-container" style="display: none; padding: 0;">
                             <div class="zoomable-viewport">
-                                <img id="image-preview-img" alt="Image preview" style="display: block;" />
+                                <img id="image-preview-img-images" alt="Image preview" style="display: block;" />
                             </div>
                             <div class="zoom-toolbar">
                                 <button class="zoom-btn" data-action="zoom-in" title="Zoom In (Scroll)">+</button>
@@ -3473,6 +3517,8 @@
             </div>
 
             <div class="controls-strip" id="controls-strip-stitch">
+                <select id="stitch-workspace-filter" class="workspace-filter-select">
+                </select>
                 <div class="stitch-projects-container" style="margin-bottom: 0;">
                     <select id="stitch-project-select" class="workspace-filter-select">
                         <option value="">Select Project...</option>

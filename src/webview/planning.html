@@ -2988,6 +2988,9 @@
                 <button class="btn-disable-doc" id="btn-disable-doc-online">Turn off</button>
             </div>
             <div class="controls-strip" id="controls-strip-online">
+                <select id="online-workspace-filter" class="workspace-filter-select">
+                    <option value="">All Workspaces</option>
+                </select>
                 <button id="btn-import-full-doc-online" class="strip-btn" disabled>Import</button>
                 <button id="btn-edit-online" class="strip-btn" disabled style="display:none;" title="Editing not available for remote docs">Edit</button>
                 <input type="text" id="online-docs-search" class="sidebar-search-input" placeholder="Search docs..." />
@@ -3022,6 +3025,12 @@
                 <div class="planning-card-description">NotebookLM integration allows you to upload all your code into NotebookLM to access unlimited Gemini quota for planning features and diagnosing bugs.</div>
 
                 <div id="webai-status" class="planning-status"></div>
+
+                <div class="planning-card-section" style="margin-bottom: 16px;">
+                    <div class="planning-card-description" style="margin-bottom: 4px;">Workspace</div>
+                    <select id="notebook-workspace-filter" class="planning-input" style="width: 100%; background-color: var(--input-bg); color: var(--input-fg); border: 1px solid var(--border-color); border-radius: 4px; padding: 6px 8px;">
+                    </select>
+                </div>
 
                 <div class="planning-card-section">
                     <div class="planning-card-section-title">1. BUNDLE CODE</div>
@@ -3095,6 +3104,12 @@
                 </div>
 
                 <div class="planning-card-section" style="margin-top: 12px;">
+                    <div class="planning-card-description" style="margin-bottom: 4px;">Workspace</div>
+                    <select id="research-workspace-filter" class="planning-input" style="width: 100%; background-color: var(--input-bg); color: var(--input-fg); border: 1px solid var(--border-color); border-radius: 4px; padding: 6px 8px;">
+                    </select>
+                </div>
+
+                <div class="planning-card-section" style="margin-top: 12px;">
                     <div id="research-no-folders-warning" style="display: none; color: var(--accent-orange); font-size: 11px; margin-bottom: 6px;">No destination folders set — add folders in Local Docs or click MANAGE FOLDERS.</div>
                     <div class="planning-card-description" style="margin-bottom: 4px;">Destination Folder</div>
                     <div style="display: flex; gap: 8px; align-items: center;">
@@ -3154,6 +3169,7 @@
 
         <div id="tickets-content" class="research-tab-content">
             <div class="controls-strip" id="controls-strip-tickets">
+                <select id="tickets-workspace-filter" class="workspace-filter-select"></select>
                 <select id="tickets-project-picker" style="display:none"></select>
                 <select id="tickets-state-filter" style="display:none"></select>
                 <select id="tickets-status-filter" style="display:none"></select>

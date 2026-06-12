@@ -20,7 +20,8 @@ import { buildKanbanColumns, KanbanColumnDefinition, CustomKanbanColumnConfig, C
 import { ReviewCommentRequest, ReviewCommentResult } from './reviewTypes';
 import { isValidComplexityValue, legacyToScore } from './complexityScale';
 import { formatReviewLogEntries } from './reviewLogUtils';
-
+import { PanelStateStore } from './PanelStateStore';
+import { buildWorkspaceItems } from './workspaceUtils';
 
 export interface PlanningPanelAdapterFactories {
     getNotionService: (root: string) => NotionFetchService;
@@ -103,7 +104,8 @@ export class PlanningPanelProvider {
         private _plannerPromptWriter: PlannerPromptWriter,
         private _getWorkspaceRoot: () => string | undefined,
         private _adapterFactories: PlanningPanelAdapterFactories,
-        private _context: vscode.ExtensionContext
+        private _context: vscode.ExtensionContext,
+        private _stateStore: PanelStateStore
     ) {}
 
     // Ensure adapters are registered for current workspace roots.
@@ -338,6 +340,10 @@ export class PlanningPanelProvider {
                 console.log('[PlanningPanel] Workspace folders changed, re-registering adapters');
                 this._ensureAdaptersRegistered();
                 this._setupKanbanPlansWatcher();
+                this._panel?.webview.postMessage({
+                    type: 'workspaceItemsUpdated',
+                    items: buildWorkspaceItems(this._getWorkspaceRoots())
+                });
             })
         );
 
@@ -906,87 +912,7 @@ export class PlanningPanelProvider {
     }
 
     private _buildKanbanWorkspaceItems(): Array<{ label: string; workspaceRoot: string }> {
-        let mappings: any[] = [];
-        let enabled = false;
-        try {
-            const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
-            const cfg = getMappingsFromIndex();
-            if (cfg?.enabled && Array.isArray(cfg.mappings)) {
-                mappings = cfg.mappings;
-                enabled = true;
-            }
-        } catch { /* ignore */ }
-
-        const items: Array<{ label: string; workspaceRoot: string }> = [];
-        const openRoots = this._getWorkspaceRoots();
-
-        // Check if ANY of the currently open workspace folders is mapped
-        let anyOpenFolderIsMapped = false;
-        if (enabled && mappings.length > 0) {
-            for (const root of openRoots) {
-                const resolvedRoot = path.resolve(root);
-                for (const m of mappings) {
-                    const parent = m.parentFolder || (m as any).parentWorkspaceFolder
-                        || (Array.isArray(m.workspaceFolders) && m.workspaceFolders.length > 0 ? m.workspaceFolders[0] : undefined);
-                    if (parent) {
-                        const expandedParent = parent.startsWith('~')
-                            ? path.join(os.homedir(), parent.slice(1))
-                            : parent;
-                        if (path.resolve(expandedParent) === resolvedRoot) {
-                            anyOpenFolderIsMapped = true;
-                            break;
-                        }
-                    }
-                    for (const wf of m.workspaceFolders || []) {
-                        const expandedWf = wf.startsWith('~')
-                            ? path.join(os.homedir(), wf.slice(1))
-                            : wf;
-                        if (path.resolve(expandedWf) === resolvedRoot) {
-                            anyOpenFolderIsMapped = true;
-                            break;
-                        }
-                    }
-                    if (anyOpenFolderIsMapped) break;
-                }
-                if (anyOpenFolderIsMapped) break;
-            }
-        }
-
-        if (enabled && mappings.length > 0 && anyOpenFolderIsMapped) {
-            // Multi-root/mapped context: display the custom configured parent mapping names
-            const addedRoots = new Set<string>();
-            for (const m of mappings) {
-                const parent = m.parentFolder || (m as any).parentWorkspaceFolder
-                    || (Array.isArray(m.workspaceFolders) && m.workspaceFolders.length > 0 ? m.workspaceFolders[0] : undefined);
-                if (parent) {
-                    const expanded = parent.startsWith('~')
-                        ? path.join(os.homedir(), parent.slice(1))
-                        : parent;
-                    const resolvedParent = path.resolve(expanded);
-                    if (!addedRoots.has(resolvedParent)) {
-                        addedRoots.add(resolvedParent);
-                        items.push({
-                            label: m.name || path.basename(resolvedParent),
-                            workspaceRoot: resolvedParent
-                        });
-                    }
-                }
-            }
-        } else {
-            // Independent context or mappings disabled: display standard workspace folders
-            for (const root of openRoots) {
-                const resolvedRoot = path.resolve(root);
-                const folder = (vscode.workspace.workspaceFolders || []).find(
-                    f => path.resolve(f.uri.fsPath) === resolvedRoot
-                );
-                items.push({
-                    label: folder ? folder.name : path.basename(resolvedRoot),
-                    workspaceRoot: resolvedRoot
-                });
-            }
-        }
-
-        return items;
+        return buildWorkspaceItems(this._getWorkspaceRoots());
     }
 
     private async _handleMessage(msg: any): Promise<void> {
@@ -1007,6 +933,21 @@ export class PlanningPanelProvider {
                 console.log('[PlanningPanel] Received fetchRoots, _panel exists:', !!this._panel);
                 const sources = this._researchImportService.getAvailableSources();
                 console.log('[PlanningPanel] Available sources at fetchRoots:', sources);
+                
+                // Send workspaceItems and restoredTabState
+                const items = buildWorkspaceItems(allRoots);
+                const tabKeys = ['local', 'online', 'kanban', 'tickets', 'research', 'notebook'];
+                const statePayload = this._stateStore.getAllStates(tabKeys, allRoots);
+                this._panel?.webview.postMessage({
+                    type: 'workspaceItemsUpdated',
+                    items
+                });
+                this._panel?.webview.postMessage({
+                    type: 'restoredTabState',
+                    panel: statePayload.panel,
+                    byRoot: statePayload.byRoot
+                });
+
                 await this._handleFetchRoots(true);
 
                 // Send integration provider preference
@@ -1021,6 +962,106 @@ export class PlanningPanelProvider {
                     this._panel?.webview.postMessage({ type: 'integrationProviderPreference', provider, workspaceRoot });
                 } catch (err) {
                     console.warn('[PlanningPanel] Failed to determine integration provider preference:', err);
+                }
+                break;
+            }
+            case 'persistTabState': {
+                const { tabKey, workspaceRoot: root, state } = msg;
+                if (tabKey) {
+                    if (root) {
+                        await this._stateStore.setRootState(tabKey, root, state);
+                    } else {
+                        await this._stateStore.setPanelState(tabKey, state);
+                    }
+                }
+                break;
+            }
+            case 'ticketsDefaultRoot': {
+                const restoredRoot = this._stateStore.getPanelState<string>('tickets.root');
+                let defaultRoot: string | undefined;
+                let defaultProvider: 'clickup' | 'linear' | null = null;
+
+                if (restoredRoot && allRoots.includes(restoredRoot)) {
+                    try {
+                        const [clickUpConfig, linearConfig] = await Promise.all([
+                            this._adapterFactories.getClickUpSyncService(restoredRoot).loadConfig(),
+                            this._adapterFactories.getLinearSyncService(restoredRoot).loadConfig()
+                        ]);
+                        defaultProvider = (clickUpConfig?.setupComplete) ? 'clickup'
+                            : (linearConfig?.setupComplete) ? 'linear'
+                            : null;
+                    } catch (err) {
+                        console.warn('[PlanningPanel] Failed loading config for restoredRoot:', restoredRoot, err);
+                    }
+                    defaultRoot = restoredRoot;
+                }
+
+                if (!defaultRoot || !defaultProvider) {
+                    for (const root of allRoots) {
+                        if (root === restoredRoot) continue;
+                        try {
+                            const [clickUpConfig, linearConfig] = await Promise.all([
+                                this._adapterFactories.getClickUpSyncService(root).loadConfig(),
+                                this._adapterFactories.getLinearSyncService(root).loadConfig()
+                            ]);
+                            const provider = (clickUpConfig?.setupComplete) ? 'clickup'
+                                : (linearConfig?.setupComplete) ? 'linear'
+                                : null;
+                            if (provider) {
+                                defaultRoot = root;
+                                defaultProvider = provider;
+                                break;
+                            }
+                        } catch (err) {
+                            console.warn('[PlanningPanel] Failed to check integration preference for root:', root, err);
+                        }
+                    }
+                }
+
+                if (!defaultRoot) {
+                    defaultRoot = (restoredRoot && allRoots.includes(restoredRoot)) ? restoredRoot : allRoots[0];
+                }
+
+                if (!defaultProvider && defaultRoot) {
+                    try {
+                        const [clickUpConfig, linearConfig] = await Promise.all([
+                            this._adapterFactories.getClickUpSyncService(defaultRoot).loadConfig(),
+                            this._adapterFactories.getLinearSyncService(defaultRoot).loadConfig()
+                        ]);
+                        defaultProvider = (clickUpConfig?.setupComplete) ? 'clickup'
+                            : (linearConfig?.setupComplete) ? 'linear'
+                            : null;
+                    } catch (err) {
+                        console.warn('[PlanningPanel] Failed to determine defaultProvider for root:', defaultRoot, err);
+                    }
+                }
+
+                this._panel?.webview.postMessage({
+                    type: 'ticketsDefaultRoot',
+                    workspaceRoot: defaultRoot,
+                    provider: defaultProvider
+                });
+                break;
+            }
+            case 'ticketsRootChanged': {
+                const root = msg.workspaceRoot;
+                if (root && allRoots.includes(root)) {
+                    try {
+                        const [clickUpConfig, linearConfig] = await Promise.all([
+                            this._adapterFactories.getClickUpSyncService(root).loadConfig(),
+                            this._adapterFactories.getLinearSyncService(root).loadConfig()
+                        ]);
+                        const provider = (clickUpConfig?.setupComplete) ? 'clickup'
+                            : (linearConfig?.setupComplete) ? 'linear'
+                            : null;
+                        this._panel?.webview.postMessage({
+                            type: 'integrationProviderPreference',
+                            provider,
+                            workspaceRoot: root
+                        });
+                    } catch (err) {
+                        console.warn('[PlanningPanel] Failed to determine integration preference for root:', root, err);
+                    }
                 }
                 break;
             }
@@ -1390,16 +1431,19 @@ export class PlanningPanelProvider {
                 break;
             }
             case 'importNotebookLMPlans': {
-                const result = await vscode.commands.executeCommand('switchboard.importNotebookLMPlans') as { overwritten: number; created: number; errors: number } | undefined;
+                const targetRoot = msg.workspaceRoot && allRoots.includes(msg.workspaceRoot) ? msg.workspaceRoot : workspaceRoot;
+                const result = await vscode.commands.executeCommand('switchboard.importNotebookLMPlans', targetRoot) as { overwritten: number; created: number; errors: number } | undefined;
                 this._panel?.webview.postMessage({ type: 'importNotebookLMPlansResult', overwritten: result?.overwritten ?? 0, created: result?.created ?? 0, errors: result?.errors ?? 0 });
                 break;
             }
             case 'importResearchDoc': {
-                await this._handleImportResearchDoc(workspaceRoot, msg.docTitle, msg.folderPath);
+                const targetRoot = msg.workspaceRoot && allRoots.includes(msg.workspaceRoot) ? msg.workspaceRoot : workspaceRoot;
+                await this._handleImportResearchDoc(targetRoot, msg.docTitle, msg.folderPath);
                 break;
             }
             case 'airlock_export': {
-                const result = await this._handleAirlockExport(workspaceRoot);
+                const targetRoot = msg.workspaceRoot && allRoots.includes(msg.workspaceRoot) ? msg.workspaceRoot : workspaceRoot;
+                const result = await this._handleAirlockExport(targetRoot);
                 this._panel?.webview.postMessage({ type: 'airlock_exportComplete', ...result });
                 break;
             }
@@ -1412,7 +1456,8 @@ export class PlanningPanelProvider {
                 break;
             }
             case 'airlock_openFolder': {
-                const folderUri = vscode.Uri.file(path.join(workspaceRoot, '.switchboard', 'NotebookLM'));
+                const targetRoot = msg.workspaceRoot && allRoots.includes(msg.workspaceRoot) ? msg.workspaceRoot : workspaceRoot;
+                const folderUri = vscode.Uri.file(path.join(targetRoot, '.switchboard', 'NotebookLM'));
                 await vscode.commands.executeCommand('revealFileInOS', folderUri);
                 break;
             }
@@ -1972,7 +2017,8 @@ export class PlanningPanelProvider {
                         type: 'linearProjectLoaded',
                         status: 'error',
                         issues: [],
-                        message: 'No workspace open.'
+                        message: 'No workspace open.',
+                        workspaceRoot: msg.workspaceRoot || undefined
                     });
                     break;
                 }
@@ -1984,7 +2030,8 @@ export class PlanningPanelProvider {
                         type: 'linearProjectLoaded',
                         status: 'setup-required',
                         issues: [],
-                        message: 'Set up Linear in Setup before using the Project tab.'
+                        message: 'Set up Linear in Setup before using the Project tab.',
+                        workspaceRoot
                     });
                     break;
                 }
@@ -2006,13 +2053,15 @@ export class PlanningPanelProvider {
                         type: 'linearProjectLoaded',
                         status: 'loaded',
                         issues,
-                        projectName
+                        projectName,
+                        workspaceRoot
                     });
                 } catch (error) {
                     this._panel?.webview.postMessage({
                         type: 'linearError',
                         scope: 'project',
-                        error: error instanceof Error ? error.message : String(error)
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
                     });
                 }
                 break;
@@ -2024,7 +2073,8 @@ export class PlanningPanelProvider {
                         type: 'linearProjectsLoaded',
                         status: 'error',
                         projects: [],
-                        message: 'No workspace open.'
+                        message: 'No workspace open.',
+                        workspaceRoot: msg.workspaceRoot || undefined
                     });
                     break;
                 }
@@ -2036,7 +2086,8 @@ export class PlanningPanelProvider {
                         type: 'linearProjectsLoaded',
                         status: 'setup-required',
                         projects: [],
-                        message: 'Set up Linear in Setup before using the Project tab.'
+                        message: 'Set up Linear in Setup before using the Project tab.',
+                        workspaceRoot
                     });
                     break;
                 }
@@ -2046,13 +2097,15 @@ export class PlanningPanelProvider {
                     this._panel?.webview.postMessage({
                         type: 'linearProjectsLoaded',
                         status: 'loaded',
-                        projects
+                        projects,
+                        workspaceRoot
                     });
                 } catch (error) {
                     this._panel?.webview.postMessage({
                         type: 'linearError',
                         scope: 'project',
-                        error: error instanceof Error ? error.message : String(error)
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
                     });
                 }
                 break;
@@ -2065,7 +2118,8 @@ export class PlanningPanelProvider {
                         type: 'linearError',
                         scope: 'task',
                         issueId,
-                        error: 'Select a Linear issue first.'
+                        error: 'Select a Linear issue first.',
+                        workspaceRoot: workspaceRoot || msg.workspaceRoot || undefined
                     });
                     break;
                 }
@@ -2093,7 +2147,8 @@ export class PlanningPanelProvider {
                             type: 'linearError',
                             scope: 'task',
                             issueId,
-                            error: `Linear issue ${issueId} was not found.`
+                            error: `Linear issue ${issueId} was not found.`,
+                            workspaceRoot
                         });
                         break;
                     }
@@ -2112,14 +2167,16 @@ export class PlanningPanelProvider {
                         subtasks,
                         comments,
                         attachments,
-                        renderedDescriptionHtml
+                        renderedDescriptionHtml,
+                        workspaceRoot
                     });
                 } catch (error) {
                     this._panel?.webview.postMessage({
                         type: 'linearError',
                         scope: 'task',
                         issueId,
-                        error: error instanceof Error ? error.message : String(error)
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
                     });
                 }
                 break;
@@ -2148,7 +2205,8 @@ export class PlanningPanelProvider {
                     this._panel?.webview.postMessage({
                         type: 'clickupError',
                         scope: 'hierarchy',
-                        error: 'No workspace folder found'
+                        error: 'No workspace folder found',
+                        workspaceRoot: msg.workspaceRoot || undefined
                     });
                     break;
                 }
@@ -2158,13 +2216,15 @@ export class PlanningPanelProvider {
                     const spaces = await clickUp.getSpaces();
                     this._panel?.webview.postMessage({
                         type: 'clickupSpacesLoaded',
-                        spaces
+                        spaces,
+                        workspaceRoot
                     });
                 } catch (error) {
                     this._panel?.webview.postMessage({
                         type: 'clickupError',
                         scope: 'hierarchy',
-                        error: error instanceof Error ? error.message : 'Failed to load Spaces'
+                        error: error instanceof Error ? error.message : 'Failed to load Spaces',
+                        workspaceRoot
                     });
                 }
                 break;
@@ -2175,7 +2235,8 @@ export class PlanningPanelProvider {
                     this._panel?.webview.postMessage({
                         type: 'clickupError',
                         scope: 'hierarchy',
-                        error: 'No workspace folder found'
+                        error: 'No workspace folder found',
+                        workspaceRoot: msg.workspaceRoot || undefined
                     });
                     break;
                 }
@@ -2187,13 +2248,15 @@ export class PlanningPanelProvider {
                         type: 'clickupFoldersLoaded',
                         spaceId: msg.spaceId,
                         folders,
-                        directLists: await clickUp.getLists(msg.spaceId)
+                        directLists: await clickUp.getLists(msg.spaceId),
+                        workspaceRoot
                     });
                 } catch (error) {
                     this._panel?.webview.postMessage({
                         type: 'clickupError',
                         scope: 'hierarchy',
-                        error: error instanceof Error ? error.message : 'Failed to load Folders'
+                        error: error instanceof Error ? error.message : 'Failed to load Folders',
+                        workspaceRoot
                     });
                 }
                 break;
@@ -2204,7 +2267,8 @@ export class PlanningPanelProvider {
                     this._panel?.webview.postMessage({
                         type: 'clickupError',
                         scope: 'hierarchy',
-                        error: 'No workspace folder found'
+                        error: 'No workspace folder found',
+                        workspaceRoot: msg.workspaceRoot || undefined
                     });
                     break;
                 }
@@ -2216,13 +2280,15 @@ export class PlanningPanelProvider {
                         type: 'clickupListsLoaded',
                         spaceId: msg.spaceId,
                         folderId: msg.folderId,
-                        lists
+                        lists,
+                        workspaceRoot
                     });
                 } catch (error) {
                     this._panel?.webview.postMessage({
                         type: 'clickupError',
                         scope: 'hierarchy',
-                        error: error instanceof Error ? error.message : 'Failed to load Lists'
+                        error: error instanceof Error ? error.message : 'Failed to load Lists',
+                        workspaceRoot
                     });
                 }
                 break;
@@ -2235,7 +2301,8 @@ export class PlanningPanelProvider {
                         type: 'clickupProjectLoaded',
                         status: 'error',
                         message: 'No workspace open.',
-                        loadSeq
+                        loadSeq,
+                        workspaceRoot: msg.workspaceRoot || undefined
                     });
                     break;
                 }
@@ -2248,7 +2315,8 @@ export class PlanningPanelProvider {
                         type: 'clickupProjectLoaded',
                         status: 'setup-required',
                         message: 'ClickUp setup is incomplete. Please complete setup in the Setup panel.',
-                        loadSeq
+                        loadSeq,
+                        workspaceRoot
                     });
                     break;
                 }
@@ -2259,7 +2327,8 @@ export class PlanningPanelProvider {
                         type: 'clickupProjectLoaded',
                         status: 'setup-required',
                         message: 'No list selected. Please select a Space, Folder, and List to view tasks.',
-                        loadSeq
+                        loadSeq,
+                        workspaceRoot
                     });
                     break;
                 }
@@ -2275,14 +2344,16 @@ export class PlanningPanelProvider {
                         status: 'loaded',
                         tasks: tasks.map((t: any) => this._mapClickUpTaskToSidebar(t)),
                         listName: config.selectedListName || 'Unknown List',
-                        loadSeq
+                        loadSeq,
+                        workspaceRoot
                     });
                 } catch (error) {
                     this._panel?.webview.postMessage({
                         type: 'clickupError',
                         scope: 'project',
                         error: error instanceof Error ? error.message : 'Failed to load ClickUp project',
-                        loadSeq
+                        loadSeq,
+                        workspaceRoot
                     });
                 }
                 break;
@@ -2293,7 +2364,8 @@ export class PlanningPanelProvider {
                     this._panel?.webview.postMessage({
                         type: 'clickupError',
                         scope: 'task',
-                        error: 'No workspace folder found'
+                        error: 'No workspace folder found',
+                        workspaceRoot: msg.workspaceRoot || undefined
                     });
                     break;
                 }
@@ -2316,14 +2388,16 @@ export class PlanningPanelProvider {
                         subtasks: details.subtasks.map((s: any) => this._mapClickUpTaskToSidebar(s)),
                         comments: details.comments.map((c: any) => this._mapClickUpComment(c)),
                         attachments: details.attachments.map((a: any) => this._mapClickUpAttachment(a)),
-                        renderedDescriptionHtml
+                        renderedDescriptionHtml,
+                        workspaceRoot
                     });
                 } catch (error) {
                     this._panel?.webview.postMessage({
                         type: 'clickupError',
                         scope: 'task',
                         taskId: msg.taskId,
-                        error: error instanceof Error ? error.message : 'Failed to load task details'
+                        error: error instanceof Error ? error.message : 'Failed to load task details',
+                        workspaceRoot
                     });
                 }
                 break;
@@ -2401,7 +2475,8 @@ export class PlanningPanelProvider {
                     this._panel?.webview.postMessage({
                         type: 'linearTaskImported',
                         success: false,
-                        error: 'Missing workspace or issue ID'
+                        error: 'Missing workspace or issue ID',
+                        workspaceRoot: workspaceRoot || msg.workspaceRoot || undefined
                     });
                     break;
                 }
@@ -2420,14 +2495,16 @@ export class PlanningPanelProvider {
                     }
                     this._panel?.webview.postMessage({
                         type: 'linearTaskImported',
-                        success: true
+                        success: true,
+                        workspaceRoot
                     });
                 } catch (error) {
                     console.error('[PlanningPanel] Failed to import Linear task:', error);
                     this._panel?.webview.postMessage({
                         type: 'linearTaskImported',
                         success: false,
-                        error: error instanceof Error ? error.message : String(error)
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
                     });
                 }
                 break;
@@ -2442,7 +2519,8 @@ export class PlanningPanelProvider {
                     this._panel?.webview.postMessage({
                         type: 'clickupTaskImported',
                         success: false,
-                        error: 'Missing workspace or task ID'
+                        error: 'Missing workspace or task ID',
+                        workspaceRoot: workspaceRoot || msg.workspaceRoot || undefined
                     });
                     break;
                 }
@@ -2461,14 +2539,16 @@ export class PlanningPanelProvider {
                     }
                     this._panel?.webview.postMessage({
                         type: 'clickupTaskImported',
-                        success: true
+                        success: true,
+                        workspaceRoot
                     });
                 } catch (error) {
                     console.error('[PlanningPanel] Failed to import ClickUp task:', error);
                     this._panel?.webview.postMessage({
                         type: 'clickupTaskImported',
                         success: false,
-                        error: error instanceof Error ? error.message : String(error)
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
                     });
                 }
                 break;
@@ -2486,13 +2566,15 @@ export class PlanningPanelProvider {
                         success: result.success,
                         successCount: result.successCount,
                         failCount: result.failCount,
-                        errors: result.errors
+                        errors: result.errors,
+                        workspaceRoot
                     });
                 } catch (error) {
                     this._panel?.webview.postMessage({
                         type: 'importAllTicketsComplete',
                         success: false,
-                        error: error instanceof Error ? error.message : String(error)
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
                     });
                 }
                 break;
@@ -2510,14 +2592,16 @@ export class PlanningPanelProvider {
                         success: result.success,
                         id,
                         filePath: result.filePath,
-                        error: result.error
+                        error: result.error,
+                        workspaceRoot
                     });
                 } catch (error) {
                     this._panel?.webview.postMessage({
                         type: 'editTicketResult',
                         success: false,
                         id,
-                        error: error instanceof Error ? error.message : String(error)
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
                     });
                 }
                 break;
@@ -2547,7 +2631,7 @@ export class PlanningPanelProvider {
                     }
                 }
                 tickets.sort((a, b) => b.mtime - a.mtime);
-                this._panel?.webview.postMessage({ type: 'localTicketsListed', tickets });
+                this._panel?.webview.postMessage({ type: 'localTicketsListed', tickets, workspaceRoot });
                 break;
             }
             case 'loadLocalTicket': {
@@ -2599,14 +2683,16 @@ export class PlanningPanelProvider {
                         success: result.success,
                         id,
                         error: result.error,
-                        message: result.message
+                        message: result.message,
+                        workspaceRoot
                     });
                 } catch (error) {
                     this._panel?.webview.postMessage({
                         type: 'pushTicketResult',
                         success: false,
                         id,
-                        error: error instanceof Error ? error.message : String(error)
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
                     });
                 }
                 break;
@@ -2623,14 +2709,16 @@ export class PlanningPanelProvider {
                         type: 'ticketDeleted',
                         success: result.success,
                         id,
-                        error: result.error
+                        error: result.error,
+                        workspaceRoot
                     });
                 } catch (error) {
                     this._panel?.webview.postMessage({
                         type: 'ticketDeleted',
                         success: false,
                         id,
-                        error: error instanceof Error ? error.message : String(error)
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
                     });
                 }
                 break;
@@ -2648,7 +2736,8 @@ export class PlanningPanelProvider {
                         success: result.success,
                         id,
                         statusId,
-                        error: result.error
+                        error: result.error,
+                        workspaceRoot
                     });
                 } catch (error) {
                     this._panel?.webview.postMessage({
@@ -2656,7 +2745,8 @@ export class PlanningPanelProvider {
                         success: false,
                         id,
                         statusId,
-                        error: error instanceof Error ? error.message : String(error)
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
                     });
                 }
                 break;
@@ -2674,7 +2764,8 @@ export class PlanningPanelProvider {
                         success: result.success,
                         id,
                         comment,
-                        error: result.error
+                        error: result.error,
+                        workspaceRoot
                     });
                 } catch (error) {
                     this._panel?.webview.postMessage({
@@ -2682,7 +2773,8 @@ export class PlanningPanelProvider {
                         success: false,
                         id,
                         comment,
-                        error: error instanceof Error ? error.message : String(error)
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
                     });
                 }
                 break;
@@ -2699,14 +2791,16 @@ export class PlanningPanelProvider {
                         type: 'attachmentDownloaded',
                         success: result.success,
                         url,
-                        error: result.error
+                        error: result.error,
+                        workspaceRoot
                     });
                 } catch (error) {
                     this._panel?.webview.postMessage({
                         type: 'attachmentDownloaded',
                         success: false,
                         url,
-                        error: error instanceof Error ? error.message : String(error)
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
                     });
                 }
                 break;
@@ -2717,7 +2811,8 @@ export class PlanningPanelProvider {
                     this._panel?.webview.postMessage({
                         type: 'clickupTaskCreated',
                         success: false,
-                        error: 'No workspace folder found'
+                        error: 'No workspace folder found',
+                        workspaceRoot: msg.workspaceRoot || undefined
                     });
                     break;
                 }
@@ -2731,20 +2826,23 @@ export class PlanningPanelProvider {
                     if (task) {
                         this._panel?.webview.postMessage({
                             type: 'clickupTaskCreated',
-                            success: true
+                            success: true,
+                            workspaceRoot
                         });
                     } else {
                         this._panel?.webview.postMessage({
                             type: 'clickupTaskCreated',
                             success: false,
-                            error: 'Failed to create ClickUp task (empty result).'
+                            error: 'Failed to create ClickUp task (empty result).',
+                            workspaceRoot
                         });
                     }
                 } catch (error) {
                     this._panel?.webview.postMessage({
                         type: 'clickupTaskCreated',
                         success: false,
-                        error: error instanceof Error ? error.message : String(error)
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
                     });
                 }
                 break;
@@ -2755,7 +2853,8 @@ export class PlanningPanelProvider {
                     this._panel?.webview.postMessage({
                         type: 'linearIssueCreated',
                         success: false,
-                        error: 'No workspace folder found'
+                        error: 'No workspace folder found',
+                        workspaceRoot: msg.workspaceRoot || undefined
                     });
                     break;
                 }
@@ -2779,13 +2878,15 @@ export class PlanningPanelProvider {
                     this._panel?.webview.postMessage({
                         type: 'linearIssueCreated',
                         success: true,
-                        result
+                        result,
+                        workspaceRoot
                     });
                 } catch (error) {
                     this._panel?.webview.postMessage({
                         type: 'linearIssueCreated',
                         success: false,
-                        error: error instanceof Error ? error.message : String(error)
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
                     });
                 }
                 break;

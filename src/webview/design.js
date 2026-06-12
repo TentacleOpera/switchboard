@@ -29,6 +29,7 @@
         htmlWorkspaceRootFilter: '',
         designWorkspaceRootFilter: '',
         imagesWorkspaceRootFilter: '',
+        stitchWorkspaceRoot: '',
         htmlDocsSearch: '',
         designDocsSearch: '',
         imagesDocsSearch: '',
@@ -48,6 +49,70 @@
         stitchReloadPending: false,  // true while waiting for a reload response
         stitchReloadRetries: 0,    // count of retries so far
         stitchReloadTimer: null,     // holds setTimeout id
+    };
+
+    function populateWorkspaceDropdown(selectElOrId, workspaceItems, selectedValue, includeAllOption = true) {
+        const select = typeof selectElOrId === 'string' ? document.getElementById(selectElOrId) : selectElOrId;
+        if (!select) return;
+        const current = selectedValue || '';
+        select.innerHTML = '';
+        if (includeAllOption) {
+            select.innerHTML = '<option value="">All Workspaces</option>';
+        }
+        for (const item of workspaceItems) {
+            const option = document.createElement('option');
+            option.value = item.workspaceRoot;
+            option.textContent = item.label;
+            if (item.workspaceRoot === current) {
+                option.selected = true;
+            }
+            select.appendChild(option);
+        }
+    }
+
+    let _restoredPanelState = { panel: {}, byRoot: {} };
+    let _registeredDropdowns = []; // Array of { selectElOrId, tabKey, includeAllOption }
+    let _workspaceItems = [];
+
+    // Helper to register a dropdown for updates
+    function registerWorkspaceDropdown(selectElOrId, tabKey, includeAllOption = true) {
+        _registeredDropdowns.push({ selectElOrId, tabKey, includeAllOption });
+        if (_workspaceItems.length > 0) {
+            updateDropdown(selectElOrId, tabKey, includeAllOption);
+        }
+    }
+
+    function updateDropdown(selectElOrId, tabKey, includeAllOption) {
+        const select = typeof selectElOrId === 'string' ? document.getElementById(selectElOrId) : selectElOrId;
+        if (!select) return;
+        const currentVal = select.value;
+        populateWorkspaceDropdown(select, _workspaceItems, currentVal, includeAllOption);
+    }
+
+    const _debounceTimers = {};
+    function persistTab(tabKey, tabState, workspaceRoot) {
+        const timerKey = tabKey + (workspaceRoot ? '::' + workspaceRoot : '');
+        if (_debounceTimers[timerKey]) {
+            clearTimeout(_debounceTimers[timerKey]);
+        }
+        _debounceTimers[timerKey] = setTimeout(() => {
+            vscode.postMessage({
+                type: 'persistTabState',
+                tabKey,
+                workspaceRoot,
+                state: tabState
+            });
+            delete _debounceTimers[timerKey];
+        }, 300);
+    }
+
+    window.persistTab = persistTab;
+    window.registerWorkspaceDropdown = registerWorkspaceDropdown;
+    window.getRestoredState = function(tabKey, workspaceRoot) {
+        if (workspaceRoot) {
+            return (_restoredPanelState.byRoot[tabKey] || {})[workspaceRoot];
+        }
+        return _restoredPanelState.panel[tabKey];
     };
 
     // Tab switcher
@@ -74,7 +139,10 @@
 
         // Trigger updates if needed
         if (tabName === 'stitch') {
-            vscode.postMessage({ type: 'stitchListProjects' });
+            vscode.postMessage({
+                type: 'stitchListProjects',
+                workspaceRoot: state.stitchWorkspaceRoot
+            });
         }
     }
 
@@ -1130,9 +1198,6 @@
     function saveState() {
         vscode.setState({
             ...vscode.getState(),
-            stitchModelId: state.stitchModelId,
-            stitchCreativeRange: state.stitchCreativeRange,
-            stitchAspects: state.stitchAspects,
             designPreviewCollapsed: state.designPreviewCollapsed,
             htmlPreviewCollapsed: state.htmlPreviewCollapsed,
             imagesPreviewCollapsed: state.imagesPreviewCollapsed
@@ -1407,7 +1472,8 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                         vscode.postMessage({
                             type: 'stitchRefreshScreen',
                             projectId: screen.projectId || stitchProjectSelect.value,
-                            screenId: screen.id
+                            screenId: screen.id,
+                            workspaceRoot: state.stitchWorkspaceRoot
                         });
                     }
                 };
@@ -1442,7 +1508,8 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                         vscode.postMessage({
                             type: 'stitchRefreshScreen',
                             projectId: screen.projectId || stitchProjectSelect.value,
-                            screenId: screen.id
+                            screenId: screen.id,
+                            workspaceRoot: state.stitchWorkspaceRoot
                         });
                     });
                 }
@@ -1457,7 +1524,8 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 vscode.postMessage({
                     type: 'stitchDownloadAsset',
                     url: screen.htmlUrl,
-                    filename: `${screen.id}.html`
+                    filename: `${screen.id}.html`,
+                    workspaceRoot: state.stitchWorkspaceRoot
                 });
             });
         }
@@ -1469,7 +1537,8 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 vscode.postMessage({
                     type: 'stitchDownloadAsset',
                     url: screen.imageUrl,
-                    filename: `${screen.id}.png`
+                    filename: `${screen.id}.png`,
+                    workspaceRoot: state.stitchWorkspaceRoot
                 });
             });
         }
@@ -1489,7 +1558,8 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                     type: 'stitchEdit',
                     screenId: screen.id,
                     prompt,
-                    modelId: state.stitchModelId
+                    modelId: state.stitchModelId,
+                    workspaceRoot: state.stitchWorkspaceRoot
                 });
             });
         }
@@ -1523,7 +1593,8 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                     count: 3,
                     creativeRange: state.stitchCreativeRange,
                     aspects: checkedAspects.length ? checkedAspects : undefined,
-                    modelId: state.stitchModelId
+                    modelId: state.stitchModelId,
+                    workspaceRoot: state.stitchWorkspaceRoot
                 });
             });
         }
@@ -1618,13 +1689,19 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
         btnNewStitchProject.addEventListener('click', () => {
             if (state.stitchBusy) return;
             // Title is collected via a native VS Code input box on the host side.
-            vscode.postMessage({ type: 'stitchCreateProject' });
+            vscode.postMessage({ 
+                type: 'stitchCreateProject',
+                workspaceRoot: state.stitchWorkspaceRoot
+            });
         });
     }
 
     if (btnOpenDesignMd) {
         btnOpenDesignMd.addEventListener('click', () => {
-            vscode.postMessage({ type: 'stitchOpenManifest' });
+            vscode.postMessage({ 
+                type: 'stitchOpenManifest',
+                workspaceRoot: state.stitchWorkspaceRoot
+            });
         });
     }
 
@@ -1655,7 +1732,8 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 prompt,
                 deviceType,
                 projectId: projectId || undefined,
-                modelId: state.stitchModelId
+                modelId: state.stitchModelId,
+                workspaceRoot: state.stitchWorkspaceRoot
             });
         });
     }
@@ -1669,7 +1747,8 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
             setStitchBusy(true);
             vscode.postMessage({
                 type: 'stitchSyncProject',
-                projectId
+                projectId,
+                workspaceRoot: state.stitchWorkspaceRoot
             });
         });
     }
@@ -1677,6 +1756,10 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
     if (stitchProjectSelect) {
         stitchProjectSelect.addEventListener('change', () => {
             const projectId = stitchProjectSelect.value;
+            state.selectedStitchProjectId = projectId;
+            if (state.stitchWorkspaceRoot) {
+                persistTab('stitch.projectId', projectId, state.stitchWorkspaceRoot);
+            }
             clearStitchReloadTimer();
             if (state.activePreviewScreenId) {
                 closeStitchPreview();
@@ -1684,7 +1767,11 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
             if (projectId) {
                 setStitchStatus('Loading project screens…', 'busy');
                 setStitchBusy(true);
-                vscode.postMessage({ type: 'stitchGetProjectScreens', projectId });
+                vscode.postMessage({
+                    type: 'stitchGetProjectScreens',
+                    projectId,
+                    workspaceRoot: state.stitchWorkspaceRoot
+                });
             } else {
                 setStitchBusy(false);
                 renderStitchScreens([]);
@@ -1694,8 +1781,8 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
 
     function populateStitchProjects(projects, defaultProjectId) {
         if (!stitchProjectSelect) return;
-        // Keep the user's in-session choice; fall back to the configured default on first load.
-        const current = stitchProjectSelect.value || defaultProjectId || '';
+        // Prioritize in-memory selectedStitchProjectId, then dropdown value, then configured default
+        const current = state.selectedStitchProjectId || stitchProjectSelect.value || defaultProjectId || '';
         stitchProjectSelect.innerHTML = '<option value="">Select Project...</option>';
         projects.forEach(p => {
             const opt = document.createElement('option');
@@ -1704,6 +1791,12 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
             if (p.id === current) opt.selected = true;
             stitchProjectSelect.appendChild(opt);
         });
+        
+        // Update selectedStitchProjectId to whatever was selected
+        state.selectedStitchProjectId = stitchProjectSelect.value;
+        if (state.stitchWorkspaceRoot && state.selectedStitchProjectId) {
+            persistTab('stitch.projectId', state.selectedStitchProjectId, state.stitchWorkspaceRoot);
+        }
     }
 
     function renderStitchScreens(screens) {
@@ -1762,7 +1855,8 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                     vscode.postMessage({
                         type: 'stitchRefreshScreen',
                         projectId: screen.projectId || stitchProjectSelect.value,
-                        screenId: screen.id
+                        screenId: screen.id,
+                        workspaceRoot: state.stitchWorkspaceRoot
                     });
                 });
                 ph.appendChild(btnReload);
@@ -1809,7 +1903,8 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 vscode.postMessage({
                     type: 'stitchDownloadAsset',
                     url: screen.htmlUrl,
-                    filename: `${screen.id}.html`
+                    filename: `${screen.id}.html`,
+                    workspaceRoot: state.stitchWorkspaceRoot
                 });
             });
             actions.appendChild(btnHtml);
@@ -1821,7 +1916,8 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 vscode.postMessage({
                     type: 'stitchDownloadAsset',
                     url: screen.imageUrl,
-                    filename: `${screen.id}.png`
+                    filename: `${screen.id}.png`,
+                    workspaceRoot: state.stitchWorkspaceRoot
                 });
             });
             actions.appendChild(btnPng);
@@ -1921,7 +2017,92 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
         const msg = event.data;
         console.log('[DesignPanel Webview] Received message:', msg.type, msg);
 
+        // Cross-cutting rule 2: Drop responses whose root != stitchWorkspaceRoot
+        if (msg.type && msg.type.startsWith('stitch') && msg.workspaceRoot && msg.workspaceRoot !== state.stitchWorkspaceRoot) {
+            console.log('[DesignPanel Webview] Dropping message for mismatched root:', msg.type, msg.workspaceRoot, 'vs', state.stitchWorkspaceRoot);
+            return;
+        }
+
         switch (msg.type) {
+            case 'workspaceItemsUpdated': {
+                _workspaceItems = msg.items || [];
+                _registeredDropdowns.forEach(d => {
+                    updateDropdown(d.selectElOrId, d.tabKey, d.includeAllOption);
+                });
+                
+                // If stitchWorkspaceRoot is empty or not in current list, pick first one or restored
+                if (_workspaceItems.length > 0) {
+                    const restoredVal = getRestoredState('stitch.root');
+                    const isRestoredOpen = restoredVal && _workspaceItems.some(i => i.workspaceRoot === restoredVal);
+                    const defaultRoot = isRestoredOpen ? restoredVal : _workspaceItems[0].workspaceRoot;
+                    
+                    if (state.stitchWorkspaceRoot !== defaultRoot) {
+                        state.stitchWorkspaceRoot = defaultRoot;
+                        const filterSelect = document.getElementById('stitch-workspace-filter');
+                        if (filterSelect) {
+                            filterSelect.value = state.stitchWorkspaceRoot;
+                        }
+                        
+                        // Restore project selection for this root
+                        const rootState = getRestoredState('stitch.projectId', state.stitchWorkspaceRoot);
+                        state.selectedStitchProjectId = rootState || '';
+                        
+                        vscode.postMessage({
+                            type: 'stitchListProjects',
+                            workspaceRoot: state.stitchWorkspaceRoot
+                        });
+                    }
+                }
+                break;
+            }
+            case 'restoredTabState': {
+                _restoredPanelState.panel = msg.panel || {};
+                _restoredPanelState.byRoot = msg.byRoot || {};
+                
+                // Restore preferences
+                const mId = getRestoredState('stitchModelId');
+                if (mId && ['GEMINI_3_FLASH','GEMINI_3_1_PRO'].includes(mId)) {
+                    state.stitchModelId = mId;
+                    if (stitchModelSelect) stitchModelSelect.value = state.stitchModelId;
+                }
+                const cr = getRestoredState('stitchCreativeRange');
+                if (cr && ['EXPLORE','REFINE','REIMAGINE'].includes(cr)) {
+                    state.stitchCreativeRange = cr;
+                    if (stitchCreativeRangeSelect) stitchCreativeRangeSelect.value = state.stitchCreativeRange;
+                }
+                const asp = getRestoredState('stitchAspects');
+                if (asp && Array.isArray(asp)) {
+                    state.stitchAspects = asp;
+                    if (stitchAspectsCheckboxesContainer) {
+                        const checkboxes = stitchAspectsCheckboxesContainer.querySelectorAll('input[type="checkbox"]');
+                        checkboxes.forEach(cb => {
+                            cb.checked = state.stitchAspects.includes(cb.value);
+                        });
+                    }
+                }
+
+                // Restore values if not set yet
+                const restoredVal = getRestoredState('stitch.root');
+                if (restoredVal && _workspaceItems.length > 0) {
+                    const isRestoredOpen = _workspaceItems.some(i => i.workspaceRoot === restoredVal);
+                    const finalRoot = isRestoredOpen ? restoredVal : _workspaceItems[0].workspaceRoot;
+                    if (state.stitchWorkspaceRoot !== finalRoot) {
+                        state.stitchWorkspaceRoot = finalRoot;
+                        const filterSelect = document.getElementById('stitch-workspace-filter');
+                        if (filterSelect) {
+                            filterSelect.value = state.stitchWorkspaceRoot;
+                        }
+                        const rootState = getRestoredState('stitch.projectId', state.stitchWorkspaceRoot);
+                        state.selectedStitchProjectId = rootState || '';
+                        
+                        vscode.postMessage({
+                            type: 'stitchListProjects',
+                            workspaceRoot: state.stitchWorkspaceRoot
+                        });
+                    }
+                }
+                break;
+            }
             case 'designDocsReady':
                 state._lastDesignDocsMsg = msg;
                 state.designFolderPathsByRoot = msg.folderPathsByRoot || {};
@@ -2085,6 +2266,15 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 if (msg.selectProjectId) {
                     setStitchStatus('Project created — describe a screen and press Generate', 'success');
                     renderStitchScreens([]);
+                } else if (state.selectedStitchProjectId) {
+                    // Automatically load screens for the selected project
+                    setStitchStatus('Loading project screens…', 'busy');
+                    setStitchBusy(true);
+                    vscode.postMessage({
+                        type: 'stitchGetProjectScreens',
+                        projectId: state.selectedStitchProjectId,
+                        workspaceRoot: state.stitchWorkspaceRoot
+                    });
                 } else {
                     setStitchStatus('', 'info');
                 }
@@ -2194,14 +2384,14 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
             stitchModelSelect.value = state.stitchModelId;
             stitchModelSelect.addEventListener('change', () => {
                 state.stitchModelId = stitchModelSelect.value;
-                saveState();
+                persistTab('stitchModelId', state.stitchModelId);
             });
         }
         if (stitchCreativeRangeSelect) {
             stitchCreativeRangeSelect.value = state.stitchCreativeRange;
             stitchCreativeRangeSelect.addEventListener('change', () => {
                 state.stitchCreativeRange = stitchCreativeRangeSelect.value;
-                saveState();
+                persistTab('stitchCreativeRange', state.stitchCreativeRange);
             });
         }
         if (stitchAspectsCheckboxesContainer) {
@@ -2215,11 +2405,44 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                         if (c.checked) checked.push(c.value);
                     });
                     state.stitchAspects = checked;
-                    saveState();
+                    persistTab('stitchAspects', state.stitchAspects);
                 });
             });
         }
     }
+
+    // Register workspace dropdowns
+    registerWorkspaceDropdown('stitch-workspace-filter', 'stitch.root', false);
+
+    // Dropdown change listener
+    document.getElementById('stitch-workspace-filter')?.addEventListener('change', (e) => {
+        const newRoot = e.target.value;
+        if (newRoot && newRoot !== state.stitchWorkspaceRoot) {
+            state.stitchWorkspaceRoot = newRoot;
+            persistTab('stitch.root', state.stitchWorkspaceRoot);
+            
+            // reset in-memory stitch state
+            state.selectedStitchProjectId = '';
+            state.stitchScreens = [];
+            state.activePreviewScreenId = null;
+            if (stitchProjectSelect) {
+                stitchProjectSelect.value = '';
+            }
+            closeStitchPreview();
+            
+            // restore that root's persisted selectedStitchProjectId if it exists
+            const rootState = getRestoredState('stitch.projectId', state.stitchWorkspaceRoot);
+            if (rootState) {
+                state.selectedStitchProjectId = rootState;
+            }
+            
+            // re-request the project list for the new root
+            vscode.postMessage({
+                type: 'stitchListProjects',
+                workspaceRoot: state.stitchWorkspaceRoot
+            });
+        }
+    });
 
     initStitchControls();
 
@@ -2235,7 +2458,10 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
 
     // Stitch is the default tab, so the project list must load up front —
     // switchTab() only fires on a click, which never happens for the initial tab.
-    vscode.postMessage({ type: 'stitchListProjects' });
+    vscode.postMessage({
+        type: 'stitchListProjects',
+        workspaceRoot: state.stitchWorkspaceRoot
+    });
 
     applySidebarState();
     updateDesignDocControls();

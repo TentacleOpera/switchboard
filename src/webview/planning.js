@@ -6,7 +6,6 @@
 
     // State object (must be declared before use)
     const state = {
-        lastResearchFolder: persistedState.lastResearchFolder || null,
         switchboardTheme: 'afterburner',  // Track active Switchboard visual theme for cyber-theme toggle
         activeSource: null,
         activeDocId: null,
@@ -33,6 +32,7 @@
         reviewMode: { kanban: false },
         kanbanReviewSelectedText: '',
         localWorkspaceRootFilter: '',
+        onlineWorkspaceRootFilter: '',
         localDocsSearch: '',
         onlineDocsSearch: '',
         activeDesignDocEnabled: false,
@@ -41,7 +41,76 @@
         designSystemDocEnabled: false,
         designSystemDocSourceId: null,
         designSystemDocId: null,
-        _lastLocalDocsMsg: null
+        _lastLocalDocsMsg: null,
+        _lastOnlineDocsMsg: null
+    };
+
+    let _restoredPanelState = { panel: {}, byRoot: {} };
+    let _registeredDropdowns = []; // Array of { selectElOrId, tabKey, includeAllOption }
+    let _workspaceItems = [];
+
+    // Helper to register a dropdown for updates
+    function registerWorkspaceDropdown(selectElOrId, tabKey, includeAllOption = true) {
+        _registeredDropdowns.push({ selectElOrId, tabKey, includeAllOption });
+        if (_workspaceItems.length > 0) {
+            updateDropdown(selectElOrId, tabKey, includeAllOption);
+        }
+    }
+
+    function updateDropdown(selectElOrId, tabKey, includeAllOption) {
+        const select = typeof selectElOrId === 'string' ? document.getElementById(selectElOrId) : selectElOrId;
+        if (!select) return;
+        let currentVal = select.value;
+        if (tabKey === 'tickets' && ticketsWorkspaceRoot) {
+            currentVal = ticketsWorkspaceRoot;
+        } else if (tabKey === 'research' && researchWorkspaceRoot) {
+            currentVal = researchWorkspaceRoot;
+        } else if (tabKey === 'notebook' && notebookWorkspaceRoot) {
+            currentVal = notebookWorkspaceRoot;
+        } else if (tabKey === 'localDocs') {
+            const restoredLocalRoot = _restoredPanelState.panel['localDocs.root'] || '';
+            if (restoredLocalRoot === '' || _workspaceItems.some(item => item.workspaceRoot === restoredLocalRoot)) {
+                state.localWorkspaceRootFilter = restoredLocalRoot;
+            } else {
+                state.localWorkspaceRootFilter = '';
+            }
+            currentVal = state.localWorkspaceRootFilter;
+        } else if (tabKey === 'onlineDocs') {
+            const restoredOnlineRoot = _restoredPanelState.panel['onlineDocs.root'] || '';
+            if (restoredOnlineRoot === '' || _workspaceItems.some(item => item.workspaceRoot === restoredOnlineRoot)) {
+                state.onlineWorkspaceRootFilter = restoredOnlineRoot;
+            } else {
+                state.onlineWorkspaceRootFilter = '';
+            }
+            currentVal = state.onlineWorkspaceRootFilter;
+        }
+        populateWorkspaceDropdown(select, _workspaceItems, currentVal, includeAllOption);
+    }
+
+    const _debounceTimers = {};
+    function persistTab(tabKey, tabState, workspaceRoot) {
+        const timerKey = tabKey + (workspaceRoot ? '::' + workspaceRoot : '');
+        if (_debounceTimers[timerKey]) {
+            clearTimeout(_debounceTimers[timerKey]);
+        }
+        _debounceTimers[timerKey] = setTimeout(() => {
+            vscode.postMessage({
+                type: 'persistTabState',
+                tabKey,
+                workspaceRoot,
+                state: tabState
+            });
+            delete _debounceTimers[timerKey];
+        }, 300);
+    }
+
+    window.persistTab = persistTab;
+    window.registerWorkspaceDropdown = registerWorkspaceDropdown;
+    window.getRestoredState = function(tabKey, workspaceRoot) {
+        if (workspaceRoot) {
+            return (_restoredPanelState.byRoot[tabKey] || {})[workspaceRoot];
+        }
+        return _restoredPanelState.panel[tabKey];
     };
 
 
@@ -53,6 +122,33 @@
     let ticketsLoadedOnce = false;
     let lastIntegrationProvider = null;
     let currentWorkspaceRoot = '';
+    let ticketsWorkspaceRoot = '';
+    let researchWorkspaceRoot = '';
+    let notebookWorkspaceRoot = '';
+    let lastResearchFolderByRoot = {};
+
+    function persistResearchState() {
+        if (!researchWorkspaceRoot) return;
+        const rState = {
+            lastResearchFolder: lastResearchFolderByRoot[researchWorkspaceRoot] || null
+        };
+        persistTab('research', rState, researchWorkspaceRoot);
+        persistTab('research.root', researchWorkspaceRoot);
+    }
+
+    function restoreResearchStateForRoot() {
+        if (!researchWorkspaceRoot) return;
+        const restoredState = getRestoredState('research', researchWorkspaceRoot) || {};
+        const folder = restoredState.lastResearchFolder || null;
+        lastResearchFolderByRoot[researchWorkspaceRoot] = folder;
+        
+        const currentPaths = getCurrentFolderPaths(state.localFolderPathsByRoot, researchWorkspaceRoot);
+        populateResearchFolderSelect(currentPaths);
+        
+        if (!state.localFolderPathsByRoot[researchWorkspaceRoot] || state.localFolderPathsByRoot[researchWorkspaceRoot].length === 0) {
+            vscode.postMessage({ type: 'listLocalFolders', workspaceRoot: researchWorkspaceRoot });
+        }
+    }
 
     // Linear state
     let linearProjectIssues = [];
@@ -198,11 +294,14 @@
         return document.querySelector('.research-tab-btn.active')?.dataset.tab === 'tickets';
     }
 
-    function populateWorkspaceDropdown(selectElementId, workspaceItems, selectedValue) {
-        const select = document.getElementById(selectElementId);
+    function populateWorkspaceDropdown(selectElOrId, workspaceItems, selectedValue, includeAllOption = true) {
+        const select = typeof selectElOrId === 'string' ? document.getElementById(selectElOrId) : selectElOrId;
         if (!select) return;
         const current = selectedValue || '';
-        select.innerHTML = '<option value="">All Workspaces</option>';
+        select.innerHTML = '';
+        if (includeAllOption) {
+            select.innerHTML = '<option value="">All Workspaces</option>';
+        }
         for (const item of workspaceItems) {
             const option = document.createElement('option');
             option.value = item.workspaceRoot;
@@ -249,9 +348,11 @@
         } else if (lastIntegrationProvider === 'linear') {
             linearProjectSearchValue = value;
             renderTicketsLinearList();
+            saveTicketsState();
         } else if (lastIntegrationProvider === 'clickup') {
             clickUpProjectSearchValue = value;
             renderTicketsClickUpList();
+            saveTicketsState();
         }
     });
 
@@ -398,7 +499,8 @@
         vscode.postMessage({
             type: 'importResearchDoc',
             docTitle: docTitle || undefined,
-            folderPath: folderPath || undefined
+            folderPath: folderPath || undefined,
+            workspaceRoot: researchWorkspaceRoot || undefined
         });
     };
 
@@ -470,6 +572,24 @@
         });
     }
 
+    registerWorkspaceDropdown('research-workspace-filter', 'research', false);
+    registerWorkspaceDropdown('notebook-workspace-filter', 'notebook', false);
+
+    document.getElementById('research-workspace-filter')?.addEventListener('change', (e) => {
+        const newRoot = e.target.value;
+        if (!newRoot) return;
+        researchWorkspaceRoot = newRoot;
+        persistResearchState();
+        restoreResearchStateForRoot();
+    });
+
+    document.getElementById('notebook-workspace-filter')?.addEventListener('change', (e) => {
+        const newRoot = e.target.value;
+        if (!newRoot) return;
+        notebookWorkspaceRoot = newRoot;
+        persistTab('notebook.root', notebookWorkspaceRoot);
+    });
+
     const manageResearchFoldersBtn = document.getElementById('btn-manage-research-folders');
     if (manageResearchFoldersBtn) {
         manageResearchFoldersBtn.addEventListener('click', openFoldersModal);
@@ -478,9 +598,10 @@
     const researchFolderSelect = document.getElementById('research-destination-folder');
     if (researchFolderSelect) {
         researchFolderSelect.addEventListener('change', () => {
-            state.lastResearchFolder = researchFolderSelect.value || null;
-            const currentPersisted = vscode.getState() || {};
-            vscode.setState({ ...currentPersisted, lastResearchFolder: state.lastResearchFolder });
+            if (researchWorkspaceRoot) {
+                lastResearchFolderByRoot[researchWorkspaceRoot] = researchFolderSelect.value || null;
+                persistResearchState();
+            }
         });
     }
 
@@ -494,19 +615,28 @@
         bundleCodeBtn.addEventListener('click', () => {
             bundleCodeBtn.disabled = true;
             bundleCodeBtn.textContent = 'BUNDLING...';
-            vscode.postMessage({ type: 'airlock_export' });
+            vscode.postMessage({
+                type: 'airlock_export',
+                workspaceRoot: notebookWorkspaceRoot || undefined
+            });
         });
     }
 
     if (openNotebookLMBtn) {
         openNotebookLMBtn.addEventListener('click', () => {
-            vscode.postMessage({ type: 'airlock_openNotebookLM' });
+            vscode.postMessage({
+                type: 'airlock_openNotebookLM',
+                workspaceRoot: notebookWorkspaceRoot || undefined
+            });
         });
     }
 
     if (openAirlockFolderBtn) {
         openAirlockFolderBtn.addEventListener('click', () => {
-            vscode.postMessage({ type: 'airlock_openFolder' });
+            vscode.postMessage({
+                type: 'airlock_openFolder',
+                workspaceRoot: notebookWorkspaceRoot || undefined
+            });
         });
     }
 
@@ -543,7 +673,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         importNotebookLMBtn.addEventListener('click', () => {
             importNotebookLMBtn.disabled = true;
             importNotebookLMBtn.textContent = 'IMPORTING...';
-            vscode.postMessage({ type: 'importNotebookLMPlans' });
+            vscode.postMessage({
+                type: 'importNotebookLMPlans',
+                workspaceRoot: notebookWorkspaceRoot || undefined
+            });
         });
     }
 
@@ -1486,7 +1619,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
         // Keep modal folder list and research destination dropdown in sync when docs are refreshed
         renderFolderListModal();
-        populateResearchFolderSelect(getCurrentFolderPaths(state.localFolderPathsByRoot, state.localWorkspaceRootFilter));
+        populateResearchFolderSelect(getCurrentFolderPaths(state.localFolderPathsByRoot, researchWorkspaceRoot));
 
         // Retry pending import selection if the doc just appeared
         if (state._pendingImportDocName) {
@@ -1891,7 +2024,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         const currentPaths = getCurrentFolderPaths(state.localFolderPathsByRoot, state.localWorkspaceRootFilter);
         renderFolderList(currentPaths);
         renderFolderListModal();
-        populateResearchFolderSelect(currentPaths);
+        populateResearchFolderSelect(getCurrentFolderPaths(state.localFolderPathsByRoot, researchWorkspaceRoot));
 
         // Delegate to renderLocalDocs to ensure consistent source-folder grouping
         renderLocalDocs({
@@ -1937,18 +2070,22 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             }
 
             if (hasFolders) {
-                if (state.lastResearchFolder && paths.includes(state.lastResearchFolder)) {
-                    folderSelect.value = state.lastResearchFolder;
+                const lastFolder = researchWorkspaceRoot ? lastResearchFolderByRoot[researchWorkspaceRoot] : null;
+                if (lastFolder && paths.includes(lastFolder)) {
+                    folderSelect.value = lastFolder;
                 } else {
-                    state.lastResearchFolder = paths[0];
-                    const currentPersisted = vscode.getState() || {};
-                    vscode.setState({ ...currentPersisted, lastResearchFolder: state.lastResearchFolder });
-                    folderSelect.value = state.lastResearchFolder;
+                    const defaultFolder = paths[0];
+                    if (researchWorkspaceRoot) {
+                        lastResearchFolderByRoot[researchWorkspaceRoot] = defaultFolder;
+                        persistResearchState();
+                    }
+                    folderSelect.value = defaultFolder;
                 }
             } else {
-                state.lastResearchFolder = null;
-                const currentPersisted = vscode.getState() || {};
-                vscode.setState({ ...currentPersisted, lastResearchFolder: null });
+                if (researchWorkspaceRoot) {
+                    lastResearchFolderByRoot[researchWorkspaceRoot] = null;
+                    persistResearchState();
+                }
             }
         }
     }
@@ -2235,12 +2372,79 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
     window.addEventListener('message', (event) => {
         const msg = event.data;
+
+        // Race protection for tickets messages
+        const ticketsMsgTypes = [
+            'clickupSpacesLoaded', 'clickupFoldersLoaded', 'clickupListsLoaded', 
+            'clickupProjectLoaded', 'clickupTaskDetailsLoaded', 
+            'linearProjectLoaded', 'linearTaskDetailsLoaded', 
+            'localTicketsListed', 'clickupTaskCreated', 'linearIssueCreated',
+            'ticketCommentPosted', 'ticketStatusChanged', 'ticketAttachmentDownloaded',
+            'ticketDeleted', 'ticketEditsSaved', 'changeTicketStatusResult',
+            'postTicketCommentResult', 'attachmentDownloaded', 'clickupTaskImported',
+            'linearTaskImported', 'editTicketResult', 'pushTicketResult',
+            'importAllTicketsComplete', 'ticketsAskAgentResult', 'linearError', 'clickupError'
+        ];
+        if (ticketsMsgTypes.includes(msg.type)) {
+            if (msg.workspaceRoot && msg.workspaceRoot !== ticketsWorkspaceRoot) {
+                console.log(`[PlanningPanel Webview] Dropping tickets message ${msg.type} for non-matching root: ${msg.workspaceRoot} (current: ${ticketsWorkspaceRoot})`);
+                return;
+            }
+        }
+
         console.log('[PlanningPanel Webview] Received message:', msg.type, msg);
 
         switch (msg.type) {
             case 'error':
                 console.error('[PlanningPanel Webview] Backend error:', msg.message);
                 break;
+            case 'workspaceItemsUpdated': {
+                _workspaceItems = msg.items || [];
+                _registeredDropdowns.forEach(d => {
+                    updateDropdown(d.selectElOrId, d.tabKey, d.includeAllOption);
+                });
+                break;
+            }
+            case 'restoredTabState': {
+                _restoredPanelState.panel = msg.panel || {};
+                _restoredPanelState.byRoot = msg.byRoot || {};
+                if (!ticketsWorkspaceRoot) {
+                    const restoredRoot = _restoredPanelState.panel['tickets.root'];
+                    if (restoredRoot) {
+                        ticketsWorkspaceRoot = restoredRoot;
+                        const dropdown = document.getElementById('tickets-workspace-filter');
+                        if (dropdown) dropdown.value = ticketsWorkspaceRoot;
+                        const restoredState = getRestoredState('tickets', restoredRoot);
+                        if (restoredState) {
+                            restoreTicketsStateForRoot(restoredState);
+                        }
+                    } else {
+                        vscode.postMessage({ type: 'ticketsDefaultRoot' });
+                    }
+                }
+                if (!researchWorkspaceRoot) {
+                    const restoredRoot = _restoredPanelState.panel['research.root'];
+                    if (restoredRoot && _workspaceItems.some(item => item.workspaceRoot === restoredRoot)) {
+                        researchWorkspaceRoot = restoredRoot;
+                    } else if (_workspaceItems.length > 0) {
+                        researchWorkspaceRoot = _workspaceItems[0].workspaceRoot;
+                    }
+                    const dropdown = document.getElementById('research-workspace-filter');
+                    if (dropdown) dropdown.value = researchWorkspaceRoot;
+                    restoreResearchStateForRoot();
+                }
+                if (!notebookWorkspaceRoot) {
+                    const restoredRoot = _restoredPanelState.panel['notebook.root'];
+                    if (restoredRoot && _workspaceItems.some(item => item.workspaceRoot === restoredRoot)) {
+                        notebookWorkspaceRoot = restoredRoot;
+                    } else if (_workspaceItems.length > 0) {
+                        notebookWorkspaceRoot = _workspaceItems[0].workspaceRoot;
+                    }
+                    const dropdown = document.getElementById('notebook-workspace-filter');
+                    if (dropdown) dropdown.value = notebookWorkspaceRoot;
+                }
+                break;
+            }
             case 'cyberAnimationSetting': {
                 document.body.classList.toggle('cyber-animation-disabled', msg.disabled);
                 break;
@@ -2353,7 +2557,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             }
             case 'epicDetails': {
                 const epicId = msg.epic ? msg.epic.planId : '';
-                const container = kanbanListPane && kanbanListPane.querySelector(`.epic-accordion[data-plan-id="${epicId}"] .epic-subtasks`);
+                const accordion = kanbanListPane && kanbanListPane.querySelector(`.epic-accordion[data-plan-id="${epicId}"]`);
+                const container = accordion && accordion.querySelector('.epic-subtasks');
+                const epicWorkspaceRoot = accordion ? (accordion.dataset.workspaceRoot || '') : '';
                 if (container) {
                     if (!msg.epic) {
                         container.innerHTML = '<span style="color: var(--vscode-errorForeground, #ff6b6b);">Epic not found</span>';
@@ -2363,7 +2569,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         container.innerHTML = msg.subtasks.map(st => `
                             <div style="display: flex; justify-content: space-between; align-items: center; padding: 2px 0;">
                                 <span>${escapeHtml(st.topic)}</span>
-                                <button class="epic-remove-subtask-btn strip-btn" data-subtask-session="${escapeHtml(st.sessionId || st.planId)}" style="margin: 0; padding: 1px 4px; font-size: 10px;">Remove</button>
+                                <button class="epic-remove-subtask-btn strip-btn" data-subtask-session="${escapeHtml(st.sessionId || st.planId)}" data-workspace-root="${escapeHtml(epicWorkspaceRoot)}" style="margin: 0; padding: 1px 4px; font-size: 10px;">Remove</button>
                             </div>
                         `).join('');
                     }
@@ -2619,12 +2825,16 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             case 'localFolderPathUpdated':
                 handleLocalFolderPathUpdated(msg);
                 break;
-            case 'localFoldersListed':
-                state.localFolderPathsByRoot[msg.workspaceRoot || currentWorkspaceRoot || ''] = msg.paths || [];
+            case 'localFoldersListed': {
+                const targetRoot = msg.workspaceRoot || currentWorkspaceRoot || '';
+                state.localFolderPathsByRoot[targetRoot] = msg.paths || [];
                 renderFolderList(msg.paths || []);
                 renderFolderListModal();
-                populateResearchFolderSelect(msg.paths || []);
+                if (targetRoot === researchWorkspaceRoot) {
+                    populateResearchFolderSelect(msg.paths || []);
+                }
                 break;
+            }
 
             case 'ticketsFoldersListed':
                 if (!state.ticketsFolderPathsByRoot) { state.ticketsFolderPathsByRoot = {}; }
@@ -3044,7 +3254,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         vscode.postMessage({
                             type: 'clickupLoadFolders',
                             spaceId: clickUpSelectedSpaceId,
-                            workspaceRoot: currentWorkspaceRoot || undefined
+                            workspaceRoot: ticketsWorkspaceRoot || undefined
                         });
                     } else {
                         clickUpSelectedSpaceId = '';
@@ -3069,7 +3279,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                                 type: 'clickupLoadLists',
                                 spaceId: clickUpSelectedSpaceId,
                                 folderId: clickUpSelectedFolderId,
-                                workspaceRoot: currentWorkspaceRoot || undefined
+                                workspaceRoot: ticketsWorkspaceRoot || undefined
                             });
                         } else {
                             clickUpSelectedFolderId = '';
@@ -3132,14 +3342,39 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 };
                 renderTicketsTab();
                 break;
-            case 'integrationProviderPreference':
+            case 'ticketsDefaultRoot': {
+                ticketsWorkspaceRoot = msg.workspaceRoot || '';
                 lastIntegrationProvider = msg.provider || null;
-                currentWorkspaceRoot = msg.workspaceRoot || '';
-                if (isTicketsTabActive()) {
-                    if (lastIntegrationProvider === 'clickup') {
-                        loadClickUpSpaces();
-                    } else if (lastIntegrationProvider === 'linear') {
-                        loadLinearProject();
+                const select = document.getElementById('tickets-workspace-filter');
+                if (select) {
+                    select.value = ticketsWorkspaceRoot;
+                }
+                if (ticketsWorkspaceRoot) {
+                    const restoredState = getRestoredState('tickets', ticketsWorkspaceRoot);
+                    if (restoredState) {
+                        restoreTicketsStateForRoot(restoredState);
+                    } else {
+                        ticketsLoadedOnce = false;
+                        if (isTicketsTabActive()) {
+                            if (lastIntegrationProvider === 'clickup') {
+                                loadClickUpSpaces();
+                            } else if (lastIntegrationProvider === 'linear') {
+                                loadLinearProject();
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+            case 'integrationProviderPreference':
+                if (msg.workspaceRoot === ticketsWorkspaceRoot) {
+                    lastIntegrationProvider = msg.provider || null;
+                    if (isTicketsTabActive()) {
+                        if (lastIntegrationProvider === 'clickup') {
+                            loadClickUpSpaces();
+                        } else if (lastIntegrationProvider === 'linear') {
+                            loadLinearProject();
+                        }
                     }
                 }
                 break;
@@ -3642,9 +3877,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
             return;
         }
 
-        const availableSubtaskOptions = _kanbanViewMode === 'epics'
-            ? _kanbanPlansCache.filter(p => !p.isEpic && !p.epicId).map(p => `<option value="${escapeHtml(p.sessionId || p.planId)}">${escapeHtml(p.topic)}</option>`).join('')
-            : '';
         filtered.forEach(plan => {
             const itemDiv = document.createElement('div');
             itemDiv.className = 'kanban-plan-item';
@@ -3667,11 +3899,11 @@ Return ONLY the drafted prompt with no additional commentary.`;
             const complexityClass = _complexityToCssClass(plan.complexity);
             const epicAccordion = (_kanbanViewMode === 'epics' && plan.isEpic)
                 ? `
-                    <details class="epic-accordion" data-plan-id="${escapeHtml(plan.planId)}" style="margin-top: 6px; font-size: 11px;">
+                    <details class="epic-accordion" data-plan-id="${escapeHtml(plan.planId)}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}" style="margin-top: 6px; font-size: 11px;">
                         <summary style="cursor: pointer; color: var(--text-secondary);">Subtasks (${plan.subtaskCount || 0}) — click to expand</summary>
                         <div class="epic-subtasks" style="margin-top: 4px; padding-left: 8px;">Loading...</div>
                         <div style="margin-top: 6px; display: flex; gap: 4px; align-items: center;">
-                            <select class="epic-add-subtask-select" style="flex: 1; font-size: 11px;"><option value="">Add subtask...</option>${availableSubtaskOptions}</select>
+                            <select class="epic-add-subtask-select" style="flex: 1; font-size: 11px;"><option value="">Add subtask...</option>${_kanbanPlansCache.filter(p => !p.isEpic && !p.epicId && (p.workspaceRoot || '') === (plan.workspaceRoot || '')).map(p => `<option value="${escapeHtml(p.sessionId || p.planId)}">${escapeHtml(p.topic)}</option>`).join('')}</select>
                             <button class="epic-add-subtask-btn strip-btn" style="margin: 0; padding: 2px 6px; font-size: 10px;">Add</button>
                             <button class="epic-delete-btn strip-btn" style="margin: 0; padding: 2px 6px; font-size: 10px; color: #ff6b6b;">Delete Epic</button>
                         </div>
@@ -3823,7 +4055,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 details.addEventListener('toggle', () => {
                     if (details.open) {
                         const planId = details.dataset.planId;
-                        vscode.postMessage({ type: 'getEpicDetails', sessionId: planId, workspaceRoot: currentWorkspaceRoot });
+                        vscode.postMessage({ type: 'getEpicDetails', sessionId: planId, workspaceRoot: details.dataset.workspaceRoot || '' });
                     }
                 });
             });
@@ -3835,7 +4067,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
                     const select = btn.parentElement.querySelector('.epic-add-subtask-select');
                     const subtaskSessionId = select ? select.value : '';
                     if (epicSessionId && subtaskSessionId) {
-                        vscode.postMessage({ type: 'addSubtaskToEpic', epicSessionId, subtaskSessionId, workspaceRoot: currentWorkspaceRoot });
+                        vscode.postMessage({ type: 'addSubtaskToEpic', epicSessionId, subtaskSessionId, workspaceRoot: details.dataset.workspaceRoot || '' });
                     }
                 });
             });
@@ -3844,7 +4076,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
                     e.stopPropagation();
                     const details = btn.closest('.epic-accordion');
                     const sessionId = details ? details.dataset.planId : '';
-                    vscode.postMessage({ type: 'deleteEpic', sessionId, workspaceRoot: currentWorkspaceRoot, deleteSubtasks: true });
+                    vscode.postMessage({ type: 'deleteEpic', sessionId, workspaceRoot: details.dataset.workspaceRoot || '', deleteSubtasks: true });
                 });
             });
         }
@@ -3856,8 +4088,9 @@ Return ONLY the drafted prompt with no additional commentary.`;
             if (removeBtn) {
                 e.stopPropagation();
                 const subtaskSessionId = removeBtn.dataset.subtaskSession;
+                const epicWorkspaceRoot = removeBtn.dataset.workspaceRoot || '';
                 if (subtaskSessionId) {
-                    vscode.postMessage({ type: 'removeSubtaskFromEpic', subtaskSessionId, workspaceRoot: currentWorkspaceRoot });
+                    vscode.postMessage({ type: 'removeSubtaskFromEpic', subtaskSessionId, workspaceRoot: epicWorkspaceRoot });
                 }
             }
         });
@@ -4558,6 +4791,32 @@ Return ONLY the drafted prompt with no additional commentary.`;
             btnManageTicketFolders, btnImportAllTickets
         } = getTicketsTabElements();
 
+        registerWorkspaceDropdown('tickets-workspace-filter', 'tickets', false);
+
+        document.getElementById('tickets-workspace-filter')?.addEventListener('change', (e) => {
+            const newRoot = e.target.value;
+            if (!newRoot) return;
+
+            // 1. Save outgoing root's nav state
+            saveTicketsState();
+
+            // 2. Reset ALL in-memory ClickUp/Linear state
+            resetTicketsInMemoryState();
+
+            // 3. Set ticketsWorkspaceRoot, request that root's provider preference
+            ticketsWorkspaceRoot = newRoot;
+            persistTab('tickets.root', ticketsWorkspaceRoot);
+            vscode.postMessage({ type: 'ticketsRootChanged', workspaceRoot: ticketsWorkspaceRoot });
+
+            // 4. Load the new root's persisted nav
+            const rootState = (_restoredPanelState.byRoot['tickets'] || {})[newRoot];
+            if (rootState) {
+                restoreTicketsStateForRoot(rootState);
+            } else {
+                ticketsLoadedOnce = false;
+            }
+        });
+
         // Manage Folders button
         btnManageTicketFolders?.addEventListener('click', () => {
             openFoldersModal('tickets');
@@ -4582,7 +4841,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             setTicketsLoadingState(true);
             vscode.postMessage({
                 type: 'importAllTickets',
-                workspaceRoot: currentWorkspaceRoot,
+                workspaceRoot: ticketsWorkspaceRoot,
                 provider,
                 ids,
                 importMode: 'plan'
@@ -4599,7 +4858,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             if (!id) return;
             setTicketsLoadingState(true);
             showTicketsStatus('Importing to local…', false);
-            vscode.postMessage({ type: 'editTicket', provider, id, workspaceRoot: currentWorkspaceRoot });
+            vscode.postMessage({ type: 'editTicket', provider, id, workspaceRoot: ticketsWorkspaceRoot });
         });
 
         // Local/Online mode switch
@@ -4646,7 +4905,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 type: 'pushTicket',
                 provider: selectedLocalTicket.provider,
                 id: selectedLocalTicket.id,
-                workspaceRoot: currentWorkspaceRoot
+                workspaceRoot: ticketsWorkspaceRoot
             });
         });
 
@@ -4664,7 +4923,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 : selectedClickUpIssue?.task.id;
             if (!id) return;
             setTicketsLoadingState(true);
-            vscode.postMessage({ type: 'pushTicket', provider, id, workspaceRoot: currentWorkspaceRoot });
+            vscode.postMessage({ type: 'pushTicket', provider, id, workspaceRoot: ticketsWorkspaceRoot });
         });
 
         // Action bar: Delete — immediate, no confirm gate
@@ -4675,7 +4934,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 : selectedClickUpIssue?.task.id;
             if (!id) return;
             setTicketsLoadingState(true);
-            vscode.postMessage({ type: 'deleteTicketConfirmed', provider, id, workspaceRoot: currentWorkspaceRoot });
+            vscode.postMessage({ type: 'deleteTicketConfirmed', provider, id, workspaceRoot: ticketsWorkspaceRoot });
         });
 
         // Action bar: Change Status
@@ -4687,7 +4946,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             if (!id) return;
             const statusId = e.target.value;
             setTicketsLoadingState(true);
-            vscode.postMessage({ type: 'changeTicketStatus', provider, id, statusId, workspaceRoot: currentWorkspaceRoot });
+            vscode.postMessage({ type: 'changeTicketStatus', provider, id, statusId, workspaceRoot: ticketsWorkspaceRoot });
         });
 
         // Action bar: Comment button toggle
@@ -4719,25 +4978,28 @@ Return ONLY the drafted prompt with no additional commentary.`;
             const comment = textarea?.value?.trim();
             if (!id || !comment) return;
             setTicketsLoadingState(true);
-            vscode.postMessage({ type: 'postTicketComment', provider, id, comment, workspaceRoot: currentWorkspaceRoot });
+            vscode.postMessage({ type: 'postTicketComment', provider, id, comment, workspaceRoot: ticketsWorkspaceRoot });
         });
 
         // Project picker (Linear)
         projectPicker?.addEventListener('change', (e) => {
             linearProjectPickerValue = e.target.value;
             renderTicketsLinearList();
+            saveTicketsState();
         });
 
         // State filter (Linear)
         stateFilter?.addEventListener('change', (e) => {
             linearProjectStateFilterValue = e.target.value;
             renderTicketsLinearList();
+            saveTicketsState();
         });
 
         // Status filter (ClickUp)
         clickUpStatusFilter?.addEventListener('change', (e) => {
             clickUpProjectStatusFilterValue = e.target.value;
             renderTicketsClickUpList();
+            saveTicketsState();
         });
 
         // Refresh button
@@ -4783,7 +5045,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
                     : selectedClickUpIssue?.task.name;
                 vscode.postMessage({
                     type: 'downloadAttachment',
-                    workspaceRoot: currentWorkspaceRoot,
+                    workspaceRoot: ticketsWorkspaceRoot,
                     provider,
                     url,
                     filename,
@@ -4901,7 +5163,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
             vscode.postMessage({
                 type: lastIntegrationProvider === 'clickup' ? 'clickupCreateTask' : 'linearCreateIssue',
-                workspaceRoot: currentWorkspaceRoot || undefined,
+                workspaceRoot: ticketsWorkspaceRoot || undefined,
                 title,
                 description: description || undefined,
                 listId: clickUpSelectedListId || undefined,
@@ -5014,7 +5276,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
     // ===== LOCAL (IMPORTED) TICKETS VIEW =====
 
     function requestLocalTickets() {
-        vscode.postMessage({ type: 'listLocalTickets', workspaceRoot: currentWorkspaceRoot });
+        vscode.postMessage({ type: 'listLocalTickets', workspaceRoot: ticketsWorkspaceRoot });
     }
 
     function setTicketsViewMode(mode) {
@@ -5501,15 +5763,16 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 clickUpAvailableDirectLists = [];
                 clickUpHierarchyLoading = true;
                 renderTicketsClickUpPanel();
+                saveTicketsState();
                 vscode.postMessage({
                     type: 'clickupSaveSpaceSelection',
                     spaceId,
-                    workspaceRoot: currentWorkspaceRoot || undefined
+                    workspaceRoot: ticketsWorkspaceRoot || undefined
                 });
                 vscode.postMessage({
                     type: 'clickupLoadFolders',
                     spaceId,
-                    workspaceRoot: currentWorkspaceRoot || undefined
+                    workspaceRoot: ticketsWorkspaceRoot || undefined
                 });
             }
         });
@@ -5524,10 +5787,11 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 clickUpAvailableListsInFolder = [];
                 clickUpHierarchyLoading = true;
                 renderTicketsClickUpPanel();
+                saveTicketsState();
                 vscode.postMessage({
                     type: 'clickupSaveFolderSelection',
                     folderId: clickUpSelectedFolderId,
-                    workspaceRoot: currentWorkspaceRoot || undefined
+                    workspaceRoot: ticketsWorkspaceRoot || undefined
                 });
                 if (folderId === '_root_') {
                     clickUpHierarchyLoading = false;
@@ -5537,7 +5801,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
                         type: 'clickupLoadLists',
                         spaceId: clickUpSelectedSpaceId,
                         folderId: clickUpSelectedFolderId,
-                        workspaceRoot: currentWorkspaceRoot || undefined
+                        workspaceRoot: ticketsWorkspaceRoot || undefined
                     });
                 }
             }
@@ -5551,12 +5815,13 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 clickUpSelectedListId = listId;
                 clickUpProjectLoading = false;
                 clickUpProjectIssues = [];
+                saveTicketsState();
                 vscode.postMessage({
                     type: 'clickupSaveListSelection',
                     spaceId: clickUpSelectedSpaceId,
                     folderId: clickUpSelectedFolderId,
                     listId,
-                    workspaceRoot: currentWorkspaceRoot || undefined
+                    workspaceRoot: ticketsWorkspaceRoot || undefined
                 });
                 loadClickUpProject(false, listId);
             }
@@ -5580,6 +5845,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
                     clickUpSelectedListId = '';
                     clickUpProjectIssues = [];
                 }
+                saveTicketsState();
                 renderTicketsClickUpPanel();
             });
         });
@@ -5605,6 +5871,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             clickUpStatusFilter.onchange = (e) => {
                 clickUpProjectStatusFilterValue = e.target.value;
                 renderTicketsClickUpList();
+                saveTicketsState();
             };
         }
     }
@@ -5775,14 +6042,14 @@ Return ONLY the drafted prompt with no additional commentary.`;
         linearProjectStatus = 'loading';
         linearProjectMessage = 'Loading Linear project...';
         renderTicketsLinearPanel();
-        vscode.postMessage({ type: 'linearLoadProject', workspaceRoot: currentWorkspaceRoot || undefined });
+        vscode.postMessage({ type: 'linearLoadProject', workspaceRoot: ticketsWorkspaceRoot || undefined });
     }
 
     function loadLinearTaskDetails(issueId) {
         if (!issueId) return;
         selectedLinearIssue = null;
         renderTicketsLinearPanel();
-        vscode.postMessage({ type: 'linearLoadTaskDetails', issueId, workspaceRoot: currentWorkspaceRoot || undefined });
+        vscode.postMessage({ type: 'linearLoadTaskDetails', issueId, workspaceRoot: ticketsWorkspaceRoot || undefined });
     }
 
     function loadClickUpProject(force = false, listIdOverride = undefined) {
@@ -5795,7 +6062,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         renderTicketsClickUpPanel();
         vscode.postMessage({
             type: 'clickupLoadProject',
-            workspaceRoot: currentWorkspaceRoot || undefined,
+            workspaceRoot: ticketsWorkspaceRoot || undefined,
             page: 0,
             statusFilter: clickUpProjectStatusFilterValue || undefined,
             searchQuery: clickUpProjectSearchValue || undefined,
@@ -5807,7 +6074,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         if (!clickUpProjectHasMore) return;
         vscode.postMessage({
             type: 'clickupLoadProject',
-            workspaceRoot: currentWorkspaceRoot || undefined,
+            workspaceRoot: ticketsWorkspaceRoot || undefined,
             page: clickUpCurrentPage + 1,
             statusFilter: clickUpProjectStatusFilterValue || undefined,
             searchQuery: clickUpProjectSearchValue || undefined,
@@ -5823,7 +6090,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         vscode.postMessage({
             type: 'clickupLoadTaskDetails',
             taskId,
-            workspaceRoot: currentWorkspaceRoot || undefined
+            workspaceRoot: ticketsWorkspaceRoot || undefined
         });
     }
 
@@ -5832,7 +6099,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         renderTicketsClickUpPanel();
         vscode.postMessage({
             type: 'clickupLoadSpaces',
-            workspaceRoot: currentWorkspaceRoot || undefined
+            workspaceRoot: ticketsWorkspaceRoot || undefined
         });
     }
 
@@ -5841,7 +6108,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function handleTicketsImport(provider, id, includeSubtasks, mode) {
         vscode.postMessage({
             type: provider === 'clickup' ? 'clickupImportTask' : 'linearImportTask',
-            workspaceRoot: currentWorkspaceRoot,
+            workspaceRoot: ticketsWorkspaceRoot,
             [provider === 'clickup' ? 'taskId' : 'issueId']: id,
             includeSubtasks,
             mode
@@ -5851,7 +6118,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function handleTicketsRefine(provider, id, title, description) {
         vscode.postMessage({
             type: provider === 'clickup' ? 'clickupRefineTask' : 'linearRefineTask',
-            workspaceRoot: currentWorkspaceRoot,
+            workspaceRoot: ticketsWorkspaceRoot,
             [provider === 'clickup' ? 'taskId' : 'issueId']: id,
             title,
             description
@@ -5878,7 +6145,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         vscode.postMessage({
             type: 'ticketsAskAgent',
             provider,
-            workspaceRoot: currentWorkspaceRoot,
+            workspaceRoot: ticketsWorkspaceRoot,
             id,
             title,
             description
@@ -5888,29 +6155,103 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
     // ===== STATE PERSISTENCE =====
 
-    function saveTicketsState() {
-        const currentPersisted = vscode.getState() || {};
-        vscode.setState({
-            ...currentPersisted,
-            tickets: {
-                lastIntegrationProvider,
-                ticketsViewMode,
-                linearProjectSearchValue,
-                linearProjectStateFilterValue,
-                linearProjectPickerValue,
-                clickUpSelectedSpaceId,
-                clickUpSelectedFolderId,
-                clickUpSelectedListId,
-                clickUpProjectSearchValue,
-                clickUpProjectStatusFilterValue
-            }
-        });
+    function resetTicketsInMemoryState() {
+        linearProjectIssues = [];
+        selectedLinearIssue = null;
+        linearProjectStatus = 'idle';
+        linearProjectMessage = '';
+        linearProjectSearchValue = '';
+        linearProjectStateFilterValue = '';
+        linearProjectPickerValue = '';
+        _restoredLinearProjectPickerValue = '';
+        linearAvailableProjects = [];
+        linearProjectLoadedOnce = false;
+        linearProjectLoading = false;
+        if (linearTaskDetailsTimeoutId) {
+            clearTimeout(linearTaskDetailsTimeoutId);
+            linearTaskDetailsTimeoutId = null;
+        }
+
+        clickUpProjectIssues = [];
+        selectedClickUpIssue = null;
+        clickUpProjectStatus = 'idle';
+        clickUpProjectMessage = '';
+        clickUpAvailableSpaces = [];
+        clickUpAvailableFolders = [];
+        clickUpAvailableListsInFolder = [];
+        clickUpAvailableDirectLists = [];
+        clickUpSelectedSpaceId = '';
+        clickUpSelectedFolderId = '';
+        clickUpSelectedListId = '';
+        clickUpProjectSearchValue = '';
+        clickUpProjectStatusFilterValue = '';
+        clickUpCurrentPage = 0;
+        clickUpProjectHasMore = false;
+        clickUpSpacesLoadedOnce = false;
+        clickUpProjectLoading = false;
+        clickUpHierarchyLoading = false;
+        clickUpImportPending = false;
+        isImportingAll = false;
+        _restoringClickUpHierarchy = false;
+        pendingClickUpDetailIssueId = '';
+
+        ticketsViewMode = 'online';
+        localTickets = [];
+        selectedLocalTicket = null;
+        localTicketContent = '';
+        localTicketEditMode = false;
+        localTicketsSearchValue = '';
+        pendingLocalTicketSelection = '';
+
+        _lastTicketsStateFilterHtml = '';
+        _lastTicketsProjectPickerHtml = '';
+        _lastTicketsIssuesContainerHtml = '';
+        _lastTicketsDetailContentHtml = '';
+        _lastTicketsHierarchyHtml = '';
+        _lastTicketsClickUpIssuesContainerHtml = '';
+        _lastTicketsClickUpDetailContentHtml = '';
+        _lastTicketsClickUpStateFilterHtml = '';
+
+        const elements = getTicketsTabElements();
+        if (elements.issuesContainer) elements.issuesContainer.innerHTML = '';
+        if (elements.detailContent) elements.detailContent.innerHTML = '';
+        if (elements.subtasksNav) { elements.subtasksNav.innerHTML = ''; elements.subtasksNav.style.display = 'none'; }
+        if (elements.previewMetaBar) elements.previewMetaBar.style.display = 'none';
+        if (elements.deleteConfirmBanner) elements.deleteConfirmBanner.style.display = 'none';
+        if (elements.commentInputArea) elements.commentInputArea.style.display = 'none';
+        
+        const localContainer = document.getElementById('tickets-local-container');
+        if (localContainer) localContainer.innerHTML = '';
+        const localPreview = document.getElementById('tickets-local-preview');
+        if (localPreview) localPreview.innerHTML = '';
+        const localEditor = document.getElementById('tickets-local-editor');
+        if (localEditor) { localEditor.value = ''; localEditor.style.display = 'none'; }
+        const localMetaBar = document.getElementById('tickets-local-meta-bar');
+        if (localMetaBar) localMetaBar.style.display = 'none';
     }
 
-    function restoreTicketsState() {
-        const state = vscode.getState()?.tickets;
+    function saveTicketsState() {
+        if (!ticketsWorkspaceRoot) return;
+        const state = {
+            lastIntegrationProvider,
+            ticketsViewMode,
+            linearProjectSearchValue,
+            linearProjectStateFilterValue,
+            linearProjectPickerValue,
+            clickUpSelectedSpaceId,
+            clickUpSelectedFolderId,
+            clickUpSelectedListId,
+            clickUpProjectSearchValue,
+            clickUpProjectStatusFilterValue
+        };
+        persistTab('tickets', state, ticketsWorkspaceRoot);
+        persistTab('tickets.root', ticketsWorkspaceRoot);
+    }
+
+    function restoreTicketsStateForRoot(state) {
         if (!state) return;
         lastIntegrationProvider = state.lastIntegrationProvider || null;
+        ticketsViewMode = state.ticketsViewMode || 'online';
         linearProjectSearchValue = state.linearProjectSearchValue || '';
         linearProjectStateFilterValue = state.linearProjectStateFilterValue || '';
         linearProjectPickerValue = state.linearProjectPickerValue || '';
@@ -5922,14 +6263,20 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         if (clickUpSelectedSpaceId) {
             _restoringClickUpHierarchy = true;
-            ticketsLoadedOnce = true; // Prevent double-load from tab activation guard
-            loadClickUpSpaces(); // Kick off restore chain — spaces load triggers folder load, etc.
+            ticketsLoadedOnce = true;
+            loadClickUpSpaces();
+        } else {
+            _restoringClickUpHierarchy = false;
         }
         if (state.linearProjectPickerValue) {
             _restoredLinearProjectPickerValue = state.linearProjectPickerValue;
         }
-        if (state.ticketsViewMode === 'local') {
-            setTicketsViewMode('local');
+        setTicketsViewMode(ticketsViewMode);
+    }
+
+    function restoreTicketsState() {
+        if (!ticketsWorkspaceRoot) {
+            vscode.postMessage({ type: 'ticketsDefaultRoot' });
         }
     }
 

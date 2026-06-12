@@ -458,3 +458,9 @@ Update the `previewError` branch so `images-folder` errors target `status-images
 ---
 
 **Recommendation:** Send to Coder
+
+## Review Findings
+
+- **Files changed:** `src/webview/design.html` — added missing IMAGES tab button, added complete `#images-content` tab pane HTML, removed old `#image-preview-container` from HTML tab, added all missing CSS selectors (`#preview-pane-images` base background, `#image-preview-container-images .zoomable-viewport`, `.cyber-theme-enabled #tree-pane-images`, `.cyber-theme-enabled #preview-pane-images`, `.cyber-theme-enabled #images-content`), updated HTML tab title and description to remove image/SVG references.
+- **Validation:** No compilation step applicable (webview HTML/JS). Structural verification confirms all required DOM elements, CSS selectors, and JS state/event bindings are present and aligned with plan requirements.
+- **Remaining risks:** (1) `handlePreviewReady` `html-folder` branch retains a dead `isImage` code path referencing the removed `#image-preview-container` element — harmless due to null checks, but should be cleaned up in a future refactor. (2) Old `#image-preview-container .zoomable-viewport` CSS selector still exists; non-breaking but orphaned. (3) Manual end-to-end testing in VS Code required to confirm zoom/pan, workspace filtering, search, sidebar collapse persistence, and error routing all function correctly in the new IMAGES tab.

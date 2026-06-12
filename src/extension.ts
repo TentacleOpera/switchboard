@@ -23,6 +23,7 @@ import { WorkspaceExcludeService } from './services/WorkspaceExcludeService';
 import { cleanWorkspace, pruneZombieTerminalEntries } from './lifecycle/cleanWorkspace';
 import { PlanningPanelProvider } from './services/PlanningPanelProvider';
 import { DesignPanelProvider } from './services/DesignPanelProvider';
+import { PanelStateStore } from './services/PanelStateStore';
 import { PlannerPromptWriter } from './services/PlannerPromptWriter';
 import { PlanningPanelCacheService } from './services/PlanningPanelCacheService';
 import { ResearchImportService } from './services/ResearchImportService';
@@ -662,8 +663,8 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(importFromClipboardDisposable);
 
-    const importNotebookLMPlansDisposable = vscode.commands.registerCommand('switchboard.importNotebookLMPlans', async () => {
-        return await taskViewerProvider?.importNotebookLMPlans();
+    const importNotebookLMPlansDisposable = vscode.commands.registerCommand('switchboard.importNotebookLMPlans', async (workspaceRoot?: string) => {
+        return await taskViewerProvider?.importNotebookLMPlans(workspaceRoot);
     });
     context.subscriptions.push(importNotebookLMPlansDisposable);
 
@@ -752,6 +753,9 @@ export async function activate(context: vscode.ExtensionContext) {
     const researchImportService = new ResearchImportService();
     // Adapters will be registered lazily when needed via KanbanProvider factory methods
 
+    const planningStateStore = new PanelStateStore(context.globalState, 'planning');
+    const designStateStore = new PanelStateStore(context.globalState, 'design');
+
     const planningPanelProvider = new PlanningPanelProvider(
         context.extensionUri,
         researchImportService,
@@ -769,7 +773,8 @@ export async function activate(context: vscode.ExtensionContext) {
             getLinearSyncService: (root) => (kanbanProvider as any)._getLinearService(root),
             getClickUpSyncService: (root) => (kanbanProvider as any)._getClickUpService(root)
         },
-        context
+        context,
+        planningStateStore
     );
     context.subscriptions.push(planningPanelProvider);
     kanbanProvider!.setPlanningPanelProvider(planningPanelProvider);
@@ -781,6 +786,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         },
         context,
+        designStateStore,
         taskViewerProvider
     );
     context.subscriptions.push(designPanelProvider);
