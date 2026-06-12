@@ -1,7 +1,172 @@
 
 import * as vscode from 'vscode';
 import * as path from 'path';
-import * as fs from 'fs';
+import * as originalFs from 'fs';
+
+function getWorkspaceRootFromStatePath(filePath: string): string | null {
+    if (typeof filePath !== 'string') return null;
+    const normalized = filePath.replace(/\\/g, '/');
+    if (normalized.endsWith('/.switchboard/state.json')) {
+        return normalized.split('/.switchboard/state.json')[0];
+    }
+    return null;
+}
+
+const fs = {
+    ...originalFs,
+    existsSync(filePath: string): boolean {
+        const root = getWorkspaceRootFromStatePath(filePath);
+        if (root) {
+            return true;
+        }
+        return originalFs.existsSync(filePath);
+    },
+    promises: {
+        ...originalFs.promises,
+        async exists(filePath: string): Promise<boolean> {
+            const root = getWorkspaceRootFromStatePath(filePath);
+            if (root) return true;
+            return originalFs.existsSync(filePath);
+        },
+        async access(filePath: string, mode?: number): Promise<void> {
+            const root = getWorkspaceRootFromStatePath(filePath);
+            if (root) return;
+            return originalFs.promises.access(filePath, mode);
+        },
+        async readFile(filePath: string, options?: any): Promise<any> {
+            const root = getWorkspaceRootFromStatePath(filePath);
+            if (root) {
+                const { KanbanDatabase } = require('./services/KanbanDatabase');
+                const db = KanbanDatabase.forWorkspace(root);
+                const state = {
+                    customColumns: db.getConfigJsonSync('kanban.customColumns', undefined),
+                    customAgents: db.getConfigJsonSync('agents.customAgents', undefined),
+                    agentAssignments: db.getConfigJsonSync('agents.assignments', undefined),
+                    startupCommands: db.getConfigJsonSync('agents.startupCommands', undefined),
+                    visibleAgents: db.getConfigJsonSync('agents.visibleAgents', undefined),
+                    promptOverrides: db.getConfigJsonSync('agents.promptOverrides', undefined),
+                    liveSyncConfig: db.getConfigJsonSync('planning.liveSyncConfig', undefined),
+                    julesAutoSyncEnabled: db.getConfigJsonSync('agents.julesAutoSyncEnabled', undefined),
+                    autoCommitOnCodeReview: db.getConfigJsonSync('kanban.autoCommitOnCodeReview', undefined),
+                    planIngestionFolder: db.getConfigJsonSync('planning.ingestionFolder', undefined),
+                    terminals: db.getConfigJsonSync('runtime.terminals', {}),
+                    chatAgents: db.getConfigJsonSync('runtime.chatAgents', {}),
+                    session: db.getConfigJsonSync('runtime.session', {}),
+                    tasks: db.getConfigJsonSync('runtime.tasks', {}),
+                    context: db.getConfigJsonSync('runtime.context', {}),
+                    teams: db.getConfigJsonSync('runtime.teams', {}),
+                    julesSessions: db.getConfigJsonSync('runtime.jules', {}),
+                    julesPollingInterval: db.getConfigJsonSync('runtime.julesPollingInterval', undefined),
+                    julesPollingActive: db.getConfigJsonSync('runtime.julesPollingActive', undefined),
+                };
+                return JSON.stringify(state, null, 2);
+            }
+            return originalFs.promises.readFile(filePath, options);
+        },
+        async writeFile(filePath: string, content: string, options?: any): Promise<void> {
+            const root = getWorkspaceRootFromStatePath(filePath);
+            if (root) {
+                const { KanbanDatabase } = require('./services/KanbanDatabase');
+                const db = KanbanDatabase.forWorkspace(root);
+                const state = JSON.parse(content);
+                const mappings: Record<string, string> = {
+                    customColumns: 'kanban.customColumns',
+                    customAgents: 'agents.customAgents',
+                    agentAssignments: 'agents.assignments',
+                    startupCommands: 'agents.startupCommands',
+                    visibleAgents: 'agents.visibleAgents',
+                    promptOverrides: 'agents.promptOverrides',
+                    liveSyncConfig: 'planning.liveSyncConfig',
+                    julesAutoSyncEnabled: 'agents.julesAutoSyncEnabled',
+                    autoCommitOnCodeReview: 'kanban.autoCommitOnCodeReview',
+                    planIngestionFolder: 'planning.ingestionFolder',
+                    terminals: 'runtime.terminals',
+                    chatAgents: 'runtime.chatAgents',
+                    session: 'runtime.session',
+                    tasks: 'runtime.tasks',
+                    context: 'runtime.context',
+                    teams: 'runtime.teams',
+                    julesSessions: 'runtime.jules',
+                    julesPollingInterval: 'runtime.julesPollingInterval',
+                    julesPollingActive: 'runtime.julesPollingActive',
+                };
+                for (const [stateKey, dbKey] of Object.entries(mappings)) {
+                    if (state[stateKey] !== undefined) {
+                        await db.setConfigJson(dbKey, state[stateKey]);
+                    }
+                }
+                return;
+            }
+            return originalFs.promises.writeFile(filePath, content, options);
+        }
+    },
+    readFileSync(filePath: any, options?: any): any {
+        const root = getWorkspaceRootFromStatePath(filePath);
+        if (root) {
+            const { KanbanDatabase } = require('./services/KanbanDatabase');
+            const db = KanbanDatabase.forWorkspace(root);
+            const state = {
+                customColumns: db.getConfigJsonSync('kanban.customColumns', undefined),
+                customAgents: db.getConfigJsonSync('agents.customAgents', undefined),
+                agentAssignments: db.getConfigJsonSync('agents.assignments', undefined),
+                startupCommands: db.getConfigJsonSync('agents.startupCommands', undefined),
+                visibleAgents: db.getConfigJsonSync('agents.visibleAgents', undefined),
+                promptOverrides: db.getConfigJsonSync('agents.promptOverrides', undefined),
+                liveSyncConfig: db.getConfigJsonSync('planning.liveSyncConfig', undefined),
+                julesAutoSyncEnabled: db.getConfigJsonSync('agents.julesAutoSyncEnabled', undefined),
+                autoCommitOnCodeReview: db.getConfigJsonSync('kanban.autoCommitOnCodeReview', undefined),
+                planIngestionFolder: db.getConfigJsonSync('planning.ingestionFolder', undefined),
+                terminals: db.getConfigJsonSync('runtime.terminals', {}),
+                chatAgents: db.getConfigJsonSync('runtime.chatAgents', {}),
+                session: db.getConfigJsonSync('runtime.session', {}),
+                tasks: db.getConfigJsonSync('runtime.tasks', {}),
+                context: db.getConfigJsonSync('runtime.context', {}),
+                teams: db.getConfigJsonSync('runtime.teams', {}),
+                julesSessions: db.getConfigJsonSync('runtime.jules', {}),
+                julesPollingInterval: db.getConfigJsonSync('runtime.julesPollingInterval', undefined),
+                julesPollingActive: db.getConfigJsonSync('runtime.julesPollingActive', undefined),
+            };
+            return JSON.stringify(state, null, 2);
+        }
+        return originalFs.readFileSync(filePath, options);
+    },
+    writeFileSync(filePath: any, content: any, options?: any): void {
+        const root = getWorkspaceRootFromStatePath(filePath);
+        if (root) {
+            const { KanbanDatabase } = require('./services/KanbanDatabase');
+            const db = KanbanDatabase.forWorkspace(root);
+            const state = JSON.parse(content);
+            const mappings: Record<string, string> = {
+                customColumns: 'kanban.customColumns',
+                customAgents: 'agents.customAgents',
+                agentAssignments: 'agents.assignments',
+                startupCommands: 'agents.startupCommands',
+                visibleAgents: 'agents.visibleAgents',
+                promptOverrides: 'agents.promptOverrides',
+                liveSyncConfig: 'planning.liveSyncConfig',
+                julesAutoSyncEnabled: 'agents.julesAutoSyncEnabled',
+                autoCommitOnCodeReview: 'kanban.autoCommitOnCodeReview',
+                planIngestionFolder: 'planning.ingestionFolder',
+                terminals: 'runtime.terminals',
+                chatAgents: 'runtime.chatAgents',
+                session: 'runtime.session',
+                tasks: 'runtime.tasks',
+                context: 'runtime.context',
+                teams: 'runtime.teams',
+                julesSessions: 'runtime.jules',
+                julesPollingInterval: 'runtime.julesPollingInterval',
+                julesPollingActive: 'runtime.julesPollingActive',
+            };
+            for (const [stateKey, dbKey] of Object.entries(mappings)) {
+                if (state[stateKey] !== undefined) {
+                    db.setConfig(dbKey, JSON.stringify(state[stateKey]));
+                }
+            }
+            return;
+        }
+        return originalFs.writeFileSync(filePath, content, options);
+    }
+};
 
 import * as os from 'os';
 import { TaskViewerProvider } from './services/TaskViewerProvider';

@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as https from 'https';
 import type { AutoPullIntervalMinutes } from './IntegrationAutoPullService';
+import { KanbanDatabase } from './KanbanDatabase';
 import {
   matchesClickUpAutomationRule,
   normalizeClickUpAutomationRules,
@@ -502,8 +503,10 @@ export class ClickUpSyncService {
 
   async loadConfig(): Promise<ClickUpConfig | null> {
     try {
-      const content = await fs.promises.readFile(this._configPath, 'utf8');
-      const normalized = this._normalizeConfig(JSON.parse(content));
+      const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
+      const raw = await db.getConfigJson<ClickUpConfig | null>('clickup.config', null);
+      if (!raw) return null;
+      const normalized = this._normalizeConfig(raw);
       this._config = normalized;
       return normalized;
     } catch {
@@ -516,23 +519,9 @@ export class ClickUpSyncService {
     if (!normalized) {
       throw new Error('ClickUp config normalization failed');
     }
-    const dir = path.dirname(this._configPath);
-    await fs.promises.mkdir(dir, { recursive: true });
-    
-    const tmpPath = path.join(dir, `.clickup-config-${Date.now()}.tmp`);
-    try {
-      await fs.promises.writeFile(tmpPath, JSON.stringify(normalized, null, 2));
-      await fs.promises.rename(tmpPath, this._configPath);
-      this._config = normalized;
-    } catch (error) {
-      // Cleanup temp file if it exists
-      try {
-        await fs.promises.unlink(tmpPath);
-      } catch {
-        // Ignore cleanup errors
-      }
-      throw error;
-    }
+    const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
+    await db.setConfigJson('clickup.config', normalized);
+    this._config = normalized;
   }
 
   async listFolderLists(folderId?: string): Promise<ClickUpListSummary[]> {

@@ -482,6 +482,8 @@ export class DesignPanelProvider implements vscode.Disposable {
     }
 
     private _setupBriefsFolderWatchers(): void {
+        this._briefsFolderWatchers.forEach(w => w.dispose());
+        this._briefsFolderWatchers = [];
         const roots = this._getWorkspaceRoots();
         for (const root of roots) {
             try {
@@ -1486,6 +1488,13 @@ export class DesignPanelProvider implements vscode.Disposable {
                     break;
                 }
                 try {
+                    const service = this._getLocalFolderService(root);
+                    const resolvedSource = path.resolve(sourceFolder);
+                    const isAllowed = service.getBriefsFolderPaths().some(p => path.resolve(p) === resolvedSource);
+                    if (!isAllowed) {
+                        this.postMessage({ type: 'briefCreated', success: false, error: 'Source folder is not a configured briefs folder' });
+                        break;
+                    }
                     let fileName = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
                     if (!fileName) {
                         fileName = 'untitled';

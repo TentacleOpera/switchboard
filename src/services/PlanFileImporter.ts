@@ -259,17 +259,14 @@ export function extractRepoScope(content: string): string {
 }
 
 async function detectControlPlaneWorkspace(workspaceRoot: string): Promise<boolean> {
-    // Check for workspace database mappings configuration
-    const mappingsPath = path.join(workspaceRoot, '.switchboard', 'workspace_database_mappings.json');
-    if (fs.existsSync(mappingsPath)) {
-        try {
-            const content = await fs.promises.readFile(mappingsPath, 'utf-8');
-            const config = JSON.parse(content);
-            return config.enabled === true && Array.isArray(config.mappings) && config.mappings.length > 0;
-        } catch {
-            return false;
-        }
+    try {
+        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+        const raw = await db.getConfig('workspace_mappings');
+        if (!raw) return false;
+        const mappings = JSON.parse(raw);
+        return Array.isArray(mappings) && mappings.length > 0;
+    } catch {
+        return false;
     }
-    return false;
 }
 

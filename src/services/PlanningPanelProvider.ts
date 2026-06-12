@@ -175,7 +175,13 @@ export class PlanningPanelProvider {
 
     private async _resolveSyncConfig(): Promise<{
         configPath: string | null;
-        config: { syncMode?: string; browseFilterContainers?: Record<string, string>; selectedContainers?: string[]; uploadLocations?: Record<string, string>; docMappings?: Record<string, { sourceId: string; docId: string; url?: string }> };
+        config: {
+            syncMode: string;
+            browseFilterContainers: Record<string, string>;
+            selectedContainers: string[];
+            uploadLocations: Record<string, string>;
+            docMappings: Record<string, { sourceId: string; docId: string; url?: string }>;
+        };
         sourceRoot: string;
     }> {
         // Return cached result if available (resolves race condition on repeated calls)
@@ -188,20 +194,23 @@ export class PlanningPanelProvider {
 
         // Search all roots for config
         for (const root of allRoots) {
-            const configPath = path.join(root, '.switchboard', 'planning-sync-config.json');
             try {
-                const raw = await fs.promises.readFile(configPath, 'utf8');
-                const config = JSON.parse(raw);
-                console.log(`[PlanningPanel] Using sync config from: ${root}`);
-                const result = { configPath, config, sourceRoot: root };
-                this._resolvedConfigCache = result;
-                return result;
+                const { KanbanDatabase } = require('./KanbanDatabase');
+                const db = KanbanDatabase.forWorkspace(root);
+                const syncMode = await db.getConfig('planning.syncMode');
+                if (syncMode !== null) {
+                    const selectedContainers = await db.getConfigJson<string[]>('planning.selectedContainers', []);
+                    const browseFilterContainers = await db.getConfigJson<Record<string, string>>('planning.browseFilterContainers', {});
+                    const uploadLocations = await db.getConfigJson<Record<string, string>>('planning.uploadLocations', {});
+                    const docMappings = await db.getConfigJson<Record<string, { sourceId: string; docId: string; url?: string }>>('planning.docMappings', {});
+                    const config = { syncMode, browseFilterContainers, selectedContainers, uploadLocations, docMappings };
+                    console.log(`[PlanningPanel] Using sync config from DB for: ${root}`);
+                    const result = { configPath: 'db', config, sourceRoot: root };
+                    this._resolvedConfigCache = result;
+                    return result;
+                }
             } catch (err) {
                 // Config not found in this root, continue searching
-                // Clarification: Only swallow ENOENT errors; log others for debugging
-                if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-                    console.warn(`[PlanningPanel] Error reading config from ${root}:`, err);
-                }
             }
         }
 
@@ -1126,12 +1135,12 @@ export class PlanningPanelProvider {
                     let targetRoot = sourceRoot;
 
                     // No existing config — create in first root
-                    if (!targetConfigPath) {
+                    if (!targetRoot) {
                         const allRoots = this._getWorkspaceRoots();
                         if (allRoots.length === 0) { break; }
                         targetRoot = allRoots[0];
-                        targetConfigPath = path.join(targetRoot, '.switchboard', 'planning-sync-config.json');
-                        console.log(`[PlanningPanel] Creating new config in: ${targetRoot}`);
+                        targetConfigPath = 'db';
+                        console.log(`[PlanningPanel] Creating new config in DB for: ${targetRoot}`);
                     }
 
                     // Build updated config
@@ -1145,12 +1154,17 @@ export class PlanningPanelProvider {
                         delete config.browseFilterContainers[sourceId];
                     }
 
-                    await fs.promises.mkdir(path.dirname(targetConfigPath), { recursive: true });
-                    await fs.promises.writeFile(targetConfigPath, JSON.stringify(config, null, 2), 'utf8');
+                    const { KanbanDatabase } = require('./KanbanDatabase');
+                    const db = KanbanDatabase.forWorkspace(targetRoot);
+                    await db.setConfig('planning.syncMode', config.syncMode);
+                    await db.setConfigJson('planning.selectedContainers', config.selectedContainers);
+                    await db.setConfigJson('planning.browseFilterContainers', config.browseFilterContainers);
+                    await db.setConfigJson('planning.uploadLocations', config.uploadLocations);
+                    await db.setConfigJson('planning.docMappings', config.docMappings);
 
                     // Update cache to reflect new state
                     this._resolvedConfigCache = {
-                        configPath: targetConfigPath,
+                        configPath: 'db',
                         config,
                         sourceRoot: targetRoot
                     };
@@ -4859,16 +4873,16 @@ export class PlanningPanelProvider {
 
         const intervalMs = intervalMinutes * 60 * 1000;
         this._periodicSyncTimer = setInterval(async () => {
-            const configPath = path.join(workspaceRoot, '.switchboard', 'planning-sync-config.json');
             try {
-                const raw = await fs.promises.readFile(configPath, 'utf8');
-                const config = JSON.parse(raw);
-                const mode = config.syncMode || 'no-sync';
+                const { KanbanDatabase } = require('./KanbanDatabase');
+                const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                const mode = await db.getConfig('planning.syncMode') || 'no-sync';
                 
                 if (mode === 'auto-sync-all') {
                     await this.syncAllDocuments(workspaceRoot);
-                } else if (mode === 'sync-selected' && Array.isArray(config.selectedContainers)) {
-                    await this.syncSelectedContainers(workspaceRoot, config.selectedContainers);
+                } else if (mode === 'sync-selected') {
+                    const selectedContainers = await db.getConfigJson<string[]>('planning.selectedContainers', []);
+                    await this.syncSelectedContainers(workspaceRoot, selectedContainers);
                 }
             } catch { /* no config yet */ }
         }, intervalMs);

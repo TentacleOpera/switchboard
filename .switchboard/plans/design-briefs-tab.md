@@ -188,6 +188,10 @@ Edge Cases:
 7. Select a different brief → existing brief block in prompt is replaced, not duplicated.
 8. Reload VS Code: window → Briefs tab state restores.
 
+## Review Findings
+
+Review executed in-place. Four valid MAJOR findings were identified and fixed: (1) `_setupBriefsFolderWatchers()` now disposes old briefs watchers before recreating them, preventing duplicate watcher leaks on add/remove; (2) `createBrief` handler now validates `sourceFolder` against configured briefs folders before writing; (3) `briefDeleted` handler now calls `exitBriefEditMode()` to prevent stale edit UI; (4) `folderModalScope` comment updated to include `briefs`. Files changed: `src/services/DesignPanelProvider.ts` (+9 lines), `src/webview/design.js` (+2 lines). Compilation and tests skipped per session instructions. Remaining risk: workspace-folder-change handler does not re-register file watchers for any tab (pre-existing architectural gap, out of scope for this plan).
+
 ## Recommendation
 
 **Send to Coder.** Complexity 6. The plan follows well-established patterns across four files, but requires careful attention to three critical validation gates (saveFileContent, fetchPreview, _updateWebviewRoots) and correct file watcher lifecycle management. A mid-level coder can execute this with the line-number references provided.

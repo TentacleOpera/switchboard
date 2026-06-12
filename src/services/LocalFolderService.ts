@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
+import { KanbanDatabase } from './KanbanDatabase';
 
 export interface LocalFolderConfig {
     selectedFile: string;       // relative path within the configured folder
@@ -18,13 +19,6 @@ export interface LocalFolderPathsConfig {
     imagesFolderPaths: string[];
     stitchFolderPaths: string[];
     briefsFolderPaths: string[];
-    _migratedLocal?: boolean;
-    _migratedHtml?: boolean;
-    _migratedDesign?: boolean;
-    _migratedTickets?: boolean;
-    _migratedImages?: boolean;
-    _migratedStitch?: boolean;
-    _migratedBriefs?: boolean;
 }
 
 export class LocalFolderService {
@@ -53,6 +47,9 @@ export class LocalFolderService {
         this._effectiveWorkspaceRoot = effective;
         this._configPath = path.join(effective, '.switchboard', 'local-folder-config.json');
         this._cachePath = path.join(effective, '.switchboard', 'local-folder-cache.md');
+        this.loadFolderPathsConfig().then(cfg => {
+            this._folderPathsCache = cfg;
+        }).catch(() => {});
     }
 
     private _assertAllowedWrite(): void {
@@ -74,29 +71,32 @@ export class LocalFolderService {
 
     async loadConfig(): Promise<LocalFolderConfig | null> {
         try {
-            const content = await fs.promises.readFile(this._configPath, 'utf8');
-            const parsed = JSON.parse(content);
-            // Strip folder-path and migration fields so they don't leak into LocalFolderConfig consumers
-            const { localFolderPaths, htmlFolderPaths, designFolderPaths, ticketsFolderPaths, imagesFolderPaths, stitchFolderPaths, briefsFolderPaths, _migrated, _migratedLocal, _migratedHtml, _migratedDesign, _migratedTickets, _migratedImages, _migratedStitch, _migratedBriefs, ...rest } = parsed;
-            return rest;
+            const db = KanbanDatabase.forWorkspace(this._effectiveWorkspaceRoot);
+            return await db.getConfigJson<LocalFolderConfig | null>('folders.config', null);
         } catch { return null; }
     }
 
     async saveConfig(config: LocalFolderConfig): Promise<void> {
         this._assertAllowedWrite();
-        await fs.promises.mkdir(path.dirname(this._configPath), { recursive: true });
-        let existing: any = {};
-        try {
-            existing = JSON.parse(await fs.promises.readFile(this._configPath, 'utf8'));
-        } catch { /* file may not exist yet */ }
+        const db = KanbanDatabase.forWorkspace(this._effectiveWorkspaceRoot);
+        let existing = await this.loadConfig() || {};
         const merged = { ...existing, ...config };
-        await fs.promises.writeFile(this._configPath, JSON.stringify(merged, null, 2));
+        await db.setConfigJson('folders.config', merged);
     }
 
     async loadFolderPathsConfig(): Promise<LocalFolderPathsConfig> {
         try {
-            const content = await fs.promises.readFile(this._configPath, 'utf8');
-            const parsed = JSON.parse(content);
+            const db = KanbanDatabase.forWorkspace(this._effectiveWorkspaceRoot);
+            const parsed = await db.getConfigJson<any>('folders.paths', null);
+            if (!parsed) return {
+                localFolderPaths: [],
+                htmlFolderPaths: [],
+                designFolderPaths: [],
+                ticketsFolderPaths: [],
+                imagesFolderPaths: [],
+                stitchFolderPaths: [],
+                briefsFolderPaths: []
+            };
             return {
                 localFolderPaths: parsed.localFolderPaths || [],
                 htmlFolderPaths: parsed.htmlFolderPaths || [],
@@ -104,14 +104,7 @@ export class LocalFolderService {
                 ticketsFolderPaths: parsed.ticketsFolderPaths || [],
                 imagesFolderPaths: parsed.imagesFolderPaths || [],
                 stitchFolderPaths: parsed.stitchFolderPaths || [],
-                briefsFolderPaths: parsed.briefsFolderPaths || [],
-                _migratedLocal: parsed._migratedLocal || false,
-                _migratedHtml: parsed._migratedHtml || false,
-                _migratedDesign: parsed._migratedDesign || false,
-                _migratedTickets: parsed._migratedTickets || false,
-                _migratedImages: parsed._migratedImages || false,
-                _migratedStitch: parsed._migratedStitch || false,
-                _migratedBriefs: parsed._migratedBriefs || false
+                briefsFolderPaths: parsed.briefsFolderPaths || []
             };
         } catch {
             return {
@@ -121,28 +114,17 @@ export class LocalFolderService {
                 ticketsFolderPaths: [],
                 imagesFolderPaths: [],
                 stitchFolderPaths: [],
-                briefsFolderPaths: [],
-                _migratedLocal: false,
-                _migratedHtml: false,
-                _migratedDesign: false,
-                _migratedTickets: false,
-                _migratedImages: false,
-                _migratedStitch: false,
-                _migratedBriefs: false
+                briefsFolderPaths: []
             };
         }
     }
 
     async saveFolderPathsConfig(config: LocalFolderPathsConfig): Promise<void> {
         this._assertAllowedWrite();
-        await fs.promises.mkdir(path.dirname(this._configPath), { recursive: true });
-        let existing: any = {};
-        try {
-            existing = JSON.parse(await fs.promises.readFile(this._configPath, 'utf8'));
-        } catch { /* file may not exist yet */ }
-        const merged = { ...existing, ...config };
-        await fs.promises.writeFile(this._configPath, JSON.stringify(merged, null, 2));
-        this._folderPathsCache = config;
+        const db = KanbanDatabase.forWorkspace(this._effectiveWorkspaceRoot);
+        const { _migratedLocal, _migratedHtml, _migratedDesign, _migratedTickets, _migratedImages, _migratedStitch, _migratedBriefs, ...cleanConfig } = config as any;
+        await db.setConfigJson('folders.paths', cleanConfig);
+        this._folderPathsCache = cleanConfig;
     }
 
     async loadCachedContent(): Promise<string | null> {
@@ -166,44 +148,15 @@ export class LocalFolderService {
     private _getOrLoadCachedConfig(): LocalFolderPathsConfig {
         let cfg = this._folderPathsCache;
         if (!cfg) {
-            try {
-                const content = fs.readFileSync(this._configPath, 'utf8');
-                const parsed = JSON.parse(content);
-                cfg = {
-                    localFolderPaths: parsed.localFolderPaths || [],
-                    htmlFolderPaths: parsed.htmlFolderPaths || [],
-                    designFolderPaths: parsed.designFolderPaths || [],
-                    ticketsFolderPaths: parsed.ticketsFolderPaths || [],
-                    imagesFolderPaths: parsed.imagesFolderPaths || [],
-                    stitchFolderPaths: parsed.stitchFolderPaths || [],
-                    briefsFolderPaths: parsed.briefsFolderPaths || [],
-                    _migratedLocal: parsed._migratedLocal || false,
-                    _migratedHtml: parsed._migratedHtml || false,
-                    _migratedDesign: parsed._migratedDesign || false,
-                    _migratedTickets: parsed._migratedTickets || false,
-                    _migratedImages: parsed._migratedImages || false,
-                    _migratedStitch: parsed._migratedStitch || false,
-                    _migratedBriefs: parsed._migratedBriefs || false
-                };
-            } catch {
-                cfg = {
-                    localFolderPaths: [],
-                    htmlFolderPaths: [],
-                    designFolderPaths: [],
-                    ticketsFolderPaths: [],
-                    imagesFolderPaths: [],
-                    stitchFolderPaths: [],
-                    briefsFolderPaths: [],
-                    _migratedLocal: false,
-                    _migratedHtml: false,
-                    _migratedDesign: false,
-                    _migratedTickets: false,
-                    _migratedImages: false,
-                    _migratedStitch: false,
-                    _migratedBriefs: false
-                };
-            }
-            this._folderPathsCache = cfg;
+            cfg = {
+                localFolderPaths: [],
+                htmlFolderPaths: [],
+                designFolderPaths: [],
+                ticketsFolderPaths: [],
+                imagesFolderPaths: [],
+                stitchFolderPaths: [],
+                briefsFolderPaths: []
+            };
         }
         return cfg;
     }

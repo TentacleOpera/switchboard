@@ -147,6 +147,11 @@ CREATE TABLE IF NOT EXISTS worktrees (
     UNIQUE(branch, workspace_id)
 );
 CREATE INDEX IF NOT EXISTS idx_worktrees_workspace ON worktrees(workspace_id);
+CREATE TABLE IF NOT EXISTS linear_issue_links (
+    issue_id   TEXT PRIMARY KEY,
+    plan_path  TEXT NOT NULL,
+    synced_at  TEXT
+);
 `;
 
 // Migration SQL to add new columns to existing databases
@@ -1108,7 +1113,7 @@ export class KanbanDatabase {
             if (!wsId) {
                 wsId = crypto.createHash('sha256').update(this._workspaceRoot).digest('hex').slice(0, 16);
             }
-            void this.migrateFromJsonRegistry(this._workspaceRoot, wsId);
+            await this._runConfigMigrations();
 
             return true;
         } catch (error) {
@@ -1913,127 +1918,7 @@ export class KanbanDatabase {
         return { succeeded, failed };
     }
 
-    // Migration from legacy JSON registry
-    public async migrateFromJsonRegistry(workspaceRoot: string, workspaceId: string): Promise<{ migrated: number; skipped: number }> {
-        if (!(await this.ensureReady()) || !this._db) return { migrated: 0, skipped: 0 };
 
-        const legacyPath = path.join(workspaceRoot, '.switchboard', 'imported-docs.json');
-        if (!fs.existsSync(legacyPath)) {
-            return { migrated: 0, skipped: 0 };
-        }
-        
-        // Check if already migrated
-        const alreadyMigrated = await this.getConfig('import_registry_migrated');
-        if (alreadyMigrated === 'true') {
-            return { migrated: 0, skipped: 0 };
-        }
-        
-        const raw = await fs.promises.readFile(legacyPath, 'utf8');
-        const legacy: Record<string, any> = JSON.parse(raw);
-        const docsDir = path.join(workspaceRoot, '.switchboard', 'docs');
-        
-        let migrated = 0;
-        let skipped = 0;
-        
-        // Prepare migration entries outside transaction to avoid blocking
-        const entriesToMigrate: any[] = [];
-        
-        let filesInDocsDir: string[] = [];
-        try {
-            filesInDocsDir = await fs.promises.readdir(docsDir);
-        } catch (err) {
-            console.warn(`[KanbanDatabase] Failed to read docs directory:`, err);
-        }
-
-        for (const [slugPrefix, entry] of Object.entries(legacy)) {
-            // Find file starting with slugPrefix (could have _hash suffix)
-            const matches = filesInDocsDir.filter(f => f.startsWith(slugPrefix) && f.endsWith('.md'));
-            
-            // Skip if file doesn't exist (orphaned entry)
-            if (matches.length === 0) {
-                skipped++;
-                continue;
-            }
-            
-            // Use the most recently modified if multiple
-            let latest = matches[0];
-            let latestMtime = 0;
-            for (const match of matches) {
-                try {
-                    const stat = await fs.promises.stat(path.join(docsDir, match));
-                    if (stat.mtimeMs > latestMtime) {
-                        latestMtime = stat.mtimeMs;
-                        latest = match;
-                    }
-                } catch {}
-            }
-            
-            const filePath = path.join(docsDir, latest);
-            
-            try {
-                // Calculate content hash from existing file
-                const content = await fs.promises.readFile(filePath, 'utf8');
-                const contentWithoutFm = content.replace(/^---\n[\s\S]*?\n---\n*/, '');
-                const hash = crypto.createHash('sha256').update(contentWithoutFm).digest('hex');
-                
-                entriesToMigrate.push({
-                    slugPrefix,
-                    sourceId: entry.sourceId,
-                    docId: entry.docId || null,
-                    docName: entry.docName,
-                    parentDocName: entry.parentDocName || entry.docName,
-                    filePath,
-                    importedAt: entry.importedAt,
-                    lastSyncedAt: entry.lastSyncedAt || null,
-                    hash: entry.remoteContentHash || hash
-                });
-            } catch (err) {
-                console.error(`[KanbanDatabase] Failed to read legacy doc ${slugPrefix}:`, err);
-                skipped++;
-            }
-        }
-        
-        this._db.run('BEGIN');
-        try {
-            for (const item of entriesToMigrate) {
-                this._db.run(
-                    `INSERT OR IGNORE INTO imported_docs 
-                     (slug_prefix, source_id, remote_doc_id, doc_name, parent_doc_name, 
-                      file_path, imported_at, last_synced_at, content_hash, workspace_id)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                    [
-                        item.slugPrefix,
-                        item.sourceId,
-                        item.docId,
-                        item.docName,
-                        item.parentDocName,
-                        item.filePath,
-                        item.importedAt,
-                        item.lastSyncedAt,
-                        item.hash,
-                        workspaceId
-                    ]
-                );
-                migrated++;
-            }
-            this._db.run('COMMIT');
-        } catch {
-            try { this._db.run('ROLLBACK'); } catch {}
-            return { migrated: 0, skipped: Object.keys(legacy).length };
-        }
-        
-        await this._persist();
-        await this.setConfig('import_registry_migrated', 'true');
-        
-        // Rename legacy file to .migrated
-        try {
-            await fs.promises.rename(legacyPath, legacyPath + '.migrated');
-        } catch (err) {
-            console.warn(`[KanbanDatabase] Failed to rename legacy registry ${legacyPath}:`, err);
-        }
-        
-        return { migrated, skipped };
-    }
 
     public async getBoard(workspaceId: string): Promise<KanbanPlanRecord[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
@@ -2601,6 +2486,228 @@ export class KanbanDatabase {
             [key, value]
         );
         return this._persist();
+    }
+
+    public async getConfigJson<T>(key: string, defaultValue: T): Promise<T> {
+        const raw = await this.getConfig(key);
+        if (raw === null) { return defaultValue; }
+        try { return JSON.parse(raw) as T; } catch { return defaultValue; }
+    }
+
+    public async setConfigJson(key: string, value: unknown): Promise<boolean> {
+        return this.setConfig(key, JSON.stringify(value));
+    }
+
+    public getConfigSync(key: string): string | null {
+        if (!this._db) return null;
+        const stmt = this._db.prepare('SELECT value FROM config WHERE key = ? LIMIT 1', [key]);
+        try {
+            if (!stmt.step()) return null;
+            return String(stmt.getAsObject().value ?? '');
+        } finally {
+            stmt.free();
+        }
+    }
+
+    public getConfigJsonSync<T>(key: string, defaultValue: T): T {
+        const raw = this.getConfigSync(key);
+        if (raw === null) { return defaultValue; }
+        try { return JSON.parse(raw) as T; } catch { return defaultValue; }
+    }
+
+    /** Reads a legacy .switchboard JSON file, writes selected keys to the config
+     *  table, deletes the file. No-op if the file is absent. */
+    public async migrateJsonFileToConfig(
+        filePath: string,
+        mapKeys: (parsed: any) => Record<string, unknown>
+    ): Promise<void> {
+        if (!fs.existsSync(filePath)) {
+            return;
+        }
+        try {
+            const content = fs.readFileSync(filePath, 'utf8');
+            const parsed = JSON.parse(content);
+            const mapped = mapKeys(parsed);
+            for (const [key, val] of Object.entries(mapped)) {
+                await this.setConfigJson(key, val);
+            }
+            fs.unlinkSync(filePath);
+            console.log(`[KanbanDatabase] Migrated legacy config file: ${filePath}`);
+        } catch (err) {
+            console.error(`[KanbanDatabase] Failed to migrate JSON file ${filePath}:`, err);
+        }
+    }
+
+    // ── Linear issue link table ───────────────────────────────────
+
+    public async getLinearIssueLink(issueId: string): Promise<{ issueId: string; planPath: string; syncedAt: string | null } | null> {
+        if (!(await this.ensureReady()) || !this._db) return null;
+        const stmt = this._db.prepare('SELECT plan_path, synced_at FROM linear_issue_links WHERE issue_id = ? LIMIT 1', [issueId]);
+        try {
+            if (!stmt.step()) return null;
+            const res = stmt.getAsObject();
+            return {
+                issueId,
+                planPath: String(res.plan_path ?? ''),
+                syncedAt: res.synced_at ? String(res.synced_at) : null
+            };
+        } finally {
+            stmt.free();
+        }
+    }
+
+    public async getLinearIssueLinkByPlan(planPath: string): Promise<{ issueId: string; planPath: string; syncedAt: string | null } | null> {
+        if (!(await this.ensureReady()) || !this._db) return null;
+        const stmt = this._db.prepare('SELECT issue_id, synced_at FROM linear_issue_links WHERE plan_path = ? LIMIT 1', [planPath]);
+        try {
+            if (!stmt.step()) return null;
+            const res = stmt.getAsObject();
+            return {
+                issueId: String(res.issue_id ?? ''),
+                planPath,
+                syncedAt: res.synced_at ? String(res.synced_at) : null
+            };
+        } finally {
+            stmt.free();
+        }
+    }
+
+    public async setLinearIssueLink(issueId: string, planPath: string, syncedAt?: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        const now = syncedAt || new Date().toISOString();
+        this._db.run(
+            'INSERT INTO linear_issue_links (issue_id, plan_path, synced_at) VALUES (?, ?, ?) ON CONFLICT(issue_id) DO UPDATE SET plan_path = excluded.plan_path, synced_at = excluded.synced_at',
+            [issueId, planPath, now]
+        );
+        return this._persist();
+    }
+
+    public async getAllLinearIssueLinks(): Promise<Record<string, string>> {
+        if (!(await this.ensureReady()) || !this._db) return {};
+        const stmt = this._db.prepare('SELECT issue_id, plan_path FROM linear_issue_links');
+        const map: Record<string, string> = {};
+        try {
+            while (stmt.step()) {
+                const res = stmt.getAsObject();
+                if (res.plan_path && res.issue_id) {
+                    map[String(res.plan_path)] = String(res.issue_id);
+                }
+            }
+        } finally {
+            stmt.free();
+        }
+        return map;
+    }
+
+    private async _runConfigMigrations(): Promise<void> {
+        const sbDir = path.join(this._workspaceRoot, '.switchboard');
+        
+        // Delete imported-docs.json and workspace_database_mappings.json if present
+        const legacyDocs = path.join(sbDir, 'imported-docs.json');
+        if (fs.existsSync(legacyDocs)) {
+            try { fs.unlinkSync(legacyDocs); } catch {}
+        }
+        const legacyDocsMigrated = path.join(sbDir, 'imported-docs.json.migrated');
+        if (fs.existsSync(legacyDocsMigrated)) {
+            try { fs.unlinkSync(legacyDocsMigrated); } catch {}
+        }
+        const legacyMappings = path.join(sbDir, 'workspace_database_mappings.json');
+        if (fs.existsSync(legacyMappings)) {
+            try { fs.unlinkSync(legacyMappings); } catch {}
+        }
+
+        // Migrate state.json
+        await this.migrateJsonFileToConfig(path.join(sbDir, 'state.json'), (parsed) => {
+            const map: Record<string, unknown> = {};
+            const keys: Record<string, string> = {
+                customColumns: 'kanban.customColumns',
+                customAgents: 'agents.customAgents',
+                agentAssignments: 'agents.assignments',
+                startupCommands: 'agents.startupCommands',
+                visibleAgents: 'agents.visibleAgents',
+                promptOverrides: 'agents.promptOverrides',
+                liveSyncConfig: 'planning.liveSyncConfig',
+                julesAutoSyncEnabled: 'agents.julesAutoSyncEnabled',
+                autoCommitOnCodeReview: 'kanban.autoCommitOnCodeReview',
+                planIngestionFolder: 'planning.ingestionFolder',
+                terminals: 'runtime.terminals',
+                chatAgents: 'runtime.chatAgents',
+                session: 'runtime.session',
+                tasks: 'runtime.tasks',
+                context: 'runtime.context',
+                teams: 'runtime.teams',
+                julesSessions: 'runtime.jules',
+                julesPollingInterval: 'runtime.julesPollingInterval',
+                julesPollingActive: 'runtime.julesPollingActive',
+            };
+            for (const [k, v] of Object.entries(keys)) {
+                if (parsed && parsed[k] !== undefined) {
+                    map[v] = parsed[k];
+                }
+            }
+            return map;
+        });
+
+        // Migrate local-folder-config.json
+        await this.migrateJsonFileToConfig(path.join(sbDir, 'local-folder-config.json'), (parsed) => {
+            return { 'folders.paths': parsed };
+        });
+
+        // Migrate planning-sync-config.json
+        await this.migrateJsonFileToConfig(path.join(sbDir, 'planning-sync-config.json'), (parsed) => {
+            const map: Record<string, unknown> = {};
+            if (parsed) {
+                if (parsed.syncMode !== undefined) map['planning.syncMode'] = parsed.syncMode;
+                if (parsed.selectedContainers !== undefined) map['planning.selectedContainers'] = parsed.selectedContainers;
+            }
+            return map;
+        });
+
+        // Migrate clickup-config.json
+        await this.migrateJsonFileToConfig(path.join(sbDir, 'clickup-config.json'), (parsed) => {
+            return { 'clickup.config': parsed };
+        });
+
+        // Migrate linear-config.json
+        await this.migrateJsonFileToConfig(path.join(sbDir, 'linear-config.json'), (parsed) => {
+            return { 'linear.config': parsed };
+        });
+
+        // Migrate notion-config.json
+        await this.migrateJsonFileToConfig(path.join(sbDir, 'notion-config.json'), (parsed) => {
+            return { 'notion.config': parsed };
+        });
+
+        // Migrate linear-sync.json
+        const linearSyncPath = path.join(sbDir, 'linear-sync.json');
+        if (fs.existsSync(linearSyncPath)) {
+            try {
+                const content = fs.readFileSync(linearSyncPath, 'utf8');
+                const map = JSON.parse(content) as Record<string, string>;
+                for (const [planPath, issueId] of Object.entries(map)) {
+                    this._db.run(
+                        'INSERT OR IGNORE INTO linear_issue_links (issue_id, plan_path, synced_at) VALUES (?, ?, ?)',
+                        [issueId, planPath, new Date().toISOString()]
+                    );
+                }
+                fs.unlinkSync(linearSyncPath);
+                console.log(`[KanbanDatabase] Migrated legacy config file: ${linearSyncPath}`);
+            } catch (err) {
+                console.error(`[KanbanDatabase] Failed to migrate linear-sync.json:`, err);
+            }
+        }
+        
+        // Delete legacy task caches if present
+        const oldClickupCache = path.join(sbDir, 'clickup-tasks.json');
+        if (fs.existsSync(oldClickupCache)) {
+            try { fs.unlinkSync(oldClickupCache); } catch {}
+        }
+        const oldLinearCache = path.join(sbDir, 'linear-tasks.json');
+        if (fs.existsSync(oldLinearCache)) {
+            try { fs.unlinkSync(oldLinearCache); } catch {}
+        }
+
+        await this._persist();
     }
 
     /** Get workspace ID from DB config, or null if not set. */
@@ -3291,7 +3398,7 @@ export class KanbanDatabase {
                 // Fallback: derived from root if not yet in config
                 wsId = crypto.createHash('sha256').update(this._workspaceRoot).digest('hex').slice(0, 16);
             }
-            void this.migrateFromJsonRegistry(this._workspaceRoot, wsId);
+            await this._runConfigMigrations();
 
             return true;
         } catch (error) {

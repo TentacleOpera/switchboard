@@ -1242,57 +1242,38 @@ export class SetupPanelProvider implements vscode.Disposable {
 
     // Planning Panel sync helper methods
     private async _getPlanningPanelSyncMode(workspaceRoot: string): Promise<string> {
-        const configPath = path.join(workspaceRoot, '.switchboard', 'planning-sync-config.json');
         try {
-            await fs.promises.access(configPath, fs.constants.R_OK);
-            const content = await fs.promises.readFile(configPath, 'utf8');
-            const config = JSON.parse(content);
-            return config.syncMode || 'no-sync';
+            const db = KanbanDatabase.forWorkspace(workspaceRoot);
+            return await db.getConfig('planning.syncMode') || 'no-sync';
         } catch {
             return 'no-sync';
         }
     }
 
     private async _setPlanningPanelSyncMode(workspaceRoot: string, syncMode: string): Promise<void> {
-        const configDir = path.join(workspaceRoot, '.switchboard');
-        await fs.promises.mkdir(configDir, { recursive: true });
-        const configPath = path.join(configDir, 'planning-sync-config.json');
-        let config: any = {};
         try {
-            const content = await fs.promises.readFile(configPath, 'utf8');
-            config = JSON.parse(content);
-        } catch { /* file doesn't exist yet — start fresh */ }
-        config.syncMode = syncMode;
-        config.lastSyncAt = new Date().toISOString();
-        await fs.promises.writeFile(configPath, JSON.stringify(config, null, 2), 'utf8');
+            const db = KanbanDatabase.forWorkspace(workspaceRoot);
+            await db.setConfig('planning.syncMode', syncMode);
+        } catch (err) {
+            console.error('[SetupPanelProvider] Failed to save syncMode:', err);
+        }
     }
 
     private async _getPlanningPanelSelectedContainers(workspaceRoot: string): Promise<string[]> {
-        const configPath = path.join(workspaceRoot, '.switchboard', 'planning-sync-config.json');
         try {
-            await fs.promises.access(configPath, fs.constants.R_OK);
-            const content = await fs.promises.readFile(configPath, 'utf8');
-            const config = JSON.parse(content);
-            return config.selectedContainers || [];
+            const db = KanbanDatabase.forWorkspace(workspaceRoot);
+            return await db.getConfigJson<string[]>('planning.selectedContainers', []);
         } catch {
             return [];
         }
     }
 
     private async _setPlanningPanelSelectedContainers(workspaceRoot: string, containers: string[]): Promise<void> {
-        const configPath = path.join(workspaceRoot, '.switchboard', 'planning-sync-config.json');
         try {
-            await fs.promises.access(configPath, fs.constants.R_OK);
-            const content = await fs.promises.readFile(configPath, 'utf8');
-            const config = JSON.parse(content);
-            config.selectedContainers = containers;
-            await fs.promises.writeFile(configPath, JSON.stringify(config, null, 2), 'utf8');
-        } catch {
-            // If config doesn't exist, create it with sync-selected mode
-            const configDir = path.join(workspaceRoot, '.switchboard');
-            await fs.promises.mkdir(configDir, { recursive: true });
-            const config = { syncMode: 'sync-selected', selectedContainers: containers };
-            await fs.promises.writeFile(configPath, JSON.stringify(config, null, 2), 'utf8');
+            const db = KanbanDatabase.forWorkspace(workspaceRoot);
+            await db.setConfigJson('planning.selectedContainers', containers);
+        } catch (err) {
+            console.error('[SetupPanelProvider] Failed to save selectedContainers:', err);
         }
     }
 

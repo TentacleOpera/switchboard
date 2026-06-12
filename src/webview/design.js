@@ -2491,6 +2491,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                     state.activeBriefDocId = null;
                     state.activeDocContent = null;
                     state.activeDocFilePath = null;
+                    if (state.briefEditMode) exitBriefEditMode();
                     const previewBriefs = document.getElementById('markdown-preview-briefs');
                     if (previewBriefs) {
                         previewBriefs.innerHTML = '<div class="empty-state">Select a brief from the sidebar to preview</div>';
@@ -2979,7 +2980,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
     });
 
     // ===== FOLDER MANAGEMENT & PREVIEW HELPERS =====
-    let folderModalScope = 'design'; // design, html, images, stitch
+    let folderModalScope = 'design'; // design, html, images, stitch, briefs
 
     function requestAllFolders(root) {
         if (!root) return;

@@ -46,8 +46,8 @@ export class PlanningPanelCacheService {
     constructor(workspaceRoot: string, kanbanDb?: KanbanDatabase) {
         this._workspaceRoot = workspaceRoot;
         this._cacheBaseDir = path.join(workspaceRoot, '.switchboard', 'planning-cache');
-        this._clickupMetadataPath = path.join(workspaceRoot, '.switchboard', 'clickup-tasks.json');
-        this._linearMetadataPath = path.join(workspaceRoot, '.switchboard', 'linear-tasks.json');
+        this._clickupMetadataPath = path.join(this._cacheBaseDir, 'clickup-tasks.json');
+        this._linearMetadataPath = path.join(this._cacheBaseDir, 'linear-tasks.json');
         this._kanbanDb = kanbanDb;
     }
 

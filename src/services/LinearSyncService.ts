@@ -231,8 +231,9 @@ export class LinearSyncService {
 
   async loadConfig(): Promise<LinearConfig | null> {
     try {
-      const content = await fs.promises.readFile(this._configPath, 'utf8');
-      const raw = JSON.parse(content);
+      const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
+      const raw = await db.getConfigJson<LinearConfig | null>('linear.config', null);
+      if (!raw) return null;
 
       // Migration: legacy projectId → includeProjectNames
       if (raw.projectId && (!raw.includeProjectNames || raw.includeProjectNames.length === 0)) {
@@ -243,8 +244,7 @@ export class LinearSyncService {
             raw.includeProjectNames = [resolvedName];
             delete raw.projectId;
             // Save migrated config
-            await fs.promises.mkdir(path.dirname(this._configPath), { recursive: true });
-            await fs.promises.writeFile(this._configPath, JSON.stringify(raw, null, 2));
+            await db.setConfigJson('linear.config', raw);
           } else {
             console.warn(`[LinearSync] Failed to resolve legacy projectId to name, deferring migration. API may be unavailable.`);
           }
@@ -264,8 +264,8 @@ export class LinearSyncService {
     if (!normalized) {
       throw new Error('Linear config normalization failed');
     }
-    await fs.promises.mkdir(path.dirname(this._configPath), { recursive: true });
-    await fs.promises.writeFile(this._configPath, JSON.stringify(normalized, null, 2));
+    const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
+    await db.setConfigJson('linear.config', normalized);
     this._config = normalized;
     this._cachedProjects = null;
   }
@@ -1183,26 +1183,26 @@ export class LinearSyncService {
   // ── Local Sync Map (planFile → Linear issueId) ──────────────
 
   async loadSyncMap(): Promise<Record<string, string>> {
-    try {
-      const content = await fs.promises.readFile(this._syncMapPath, 'utf8');
-      return JSON.parse(content);
-    } catch { return {}; }
+    const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
+    return db.getAllLinearIssueLinks();
   }
 
   async saveSyncMap(map: Record<string, string>): Promise<void> {
-    await fs.promises.mkdir(path.dirname(this._syncMapPath), { recursive: true });
-    await fs.promises.writeFile(this._syncMapPath, JSON.stringify(map, null, 2));
+    const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
+    for (const [planFile, issueId] of Object.entries(map)) {
+      await db.setLinearIssueLink(issueId, planFile);
+    }
   }
 
   async getIssueIdForPlan(planFile: string): Promise<string | null> {
-    const map = await this.loadSyncMap();
-    return map[planFile] || null;
+    const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
+    const link = await db.getLinearIssueLinkByPlan(planFile);
+    return link ? link.issueId : null;
   }
 
   async setIssueIdForPlan(planFile: string, issueId: string): Promise<void> {
-    const map = await this.loadSyncMap();
-    map[planFile] = issueId;
-    await this.saveSyncMap(map);
+    const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
+    await db.setLinearIssueLink(issueId, planFile);
   }
 
   // ── Token Management ─────────────────────────────────────────

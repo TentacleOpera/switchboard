@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as https from 'https';
+import { KanbanDatabase } from './KanbanDatabase';
 
 export interface NotionConfig {
   pageUrl: string;
@@ -30,14 +31,14 @@ export class NotionFetchService {
 
   async loadConfig(): Promise<NotionConfig | null> {
     try {
-      const content = await fs.promises.readFile(this._configPath, 'utf8');
-      return JSON.parse(content);
+      const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
+      return await db.getConfigJson<NotionConfig | null>('notion.config', null);
     } catch { return null; }
   }
 
   async saveConfig(config: NotionConfig): Promise<void> {
-    await fs.promises.mkdir(path.dirname(this._configPath), { recursive: true });
-    await fs.promises.writeFile(this._configPath, JSON.stringify(config, null, 2));
+    const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
+    await db.setConfigJson('notion.config', config);
   }
 
   // ── Cache I/O ───────────────────────────────────────────────
