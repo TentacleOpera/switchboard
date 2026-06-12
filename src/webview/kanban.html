@@ -2212,8 +2212,8 @@
             <button id="btn-delete-project" class="strip-icon-btn" data-tooltip="Select a project to delete" disabled>
                 <img src="{{ICON_DELETE_PROJECT}}" alt="Delete Project">
             </button>
-            <button class="strip-icon-btn" id="btn-import-plans" data-tooltip="Scan all configured AI IDE folders and pick unclaimed plans to add to the board (any age, bypasses the auto-claim window)">
-                <img src="{{ICON_IMPORT_PLANS}}" alt="Import Plans">
+            <button class="strip-icon-btn" id="btn-scan-folders" data-tooltip="Scan all configured folders for plan files now (forces immediate pickup of anything the watchers missed)">
+                <img src="{{ICON_IMPORT_PLANS}}" alt="Scan Folders">
             </button>
             <button class="strip-icon-btn" id="btn-chat-copy-prompt" data-tooltip="Copy chat prompt. If plans are selected, copies a multi-plan prompt and clears selection. Otherwise starts a general chat consultation.">
                 <img src="{{ICON_41}}" alt="Chat Copy Prompt">
@@ -3424,8 +3424,8 @@
             postKanbanMessage({ type: 'addProject', workspaceRoot });
         });
 
-        document.getElementById('btn-import-plans')?.addEventListener('click', () => {
-            postKanbanMessage({ type: 'importPlans' });
+        document.getElementById('btn-scan-folders')?.addEventListener('click', () => {
+            postKanbanMessage({ type: 'scanFoldersNow' });
         });
 
         btnDeleteProject?.addEventListener('click', () => {
@@ -3849,7 +3849,6 @@
                 mcToggle.checked = !!clearTerminalBeforePrompt;
             }
         }
-
 
         /** Get the next column in the pipeline (returns null for last column). */
         function getNextColumn(col) {

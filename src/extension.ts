@@ -27,7 +27,6 @@ import { PanelStateStore } from './services/PanelStateStore';
 import { PlannerPromptWriter } from './services/PlannerPromptWriter';
 import { PlanningPanelCacheService } from './services/PlanningPanelCacheService';
 import { ResearchImportService } from './services/ResearchImportService';
-import { isAllowedSwitchboardLocation } from './utils/switchboardLocationGuard';
 
 // Status bar item for setup notification
 let setupStatusBarItem: vscode.StatusBarItem;
@@ -1530,47 +1529,13 @@ export async function activate(context: vscode.ExtensionContext) {
                 taskViewerProvider.handleTerminalClosed(terminal);
             }));
 
-            // 3. STATE SYNC: Watch state.json for server-side changes (e.g. agent registering or renaming terminals)
-            // Debounce: state.json is written frequently (terminal registrations, config updates).
-            // Without debounce, each write triggers a sync + refresh, which can race with
-            // the write itself and cause "Unexpected end of JSON input" parse errors.
-            let stateSyncTimer: NodeJS.Timeout | undefined;
-            const debouncedStateSync = () => {
-                if (stateSyncTimer) clearTimeout(stateSyncTimer);
-                stateSyncTimer = setTimeout(() => {
-                    void syncTerminalRegistryWithState(runtimeStateRoot).finally(() => {
-                        taskViewerProvider.refresh();
-                    });
-                }, 200);
-            };
-            const stateWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(runtimeStateRoot, '.switchboard/state.json'));
-            stateWatcher.onDidChange(debouncedStateSync);
-            stateWatcher.onDidCreate(debouncedStateSync);
-            context.subscriptions.push(stateWatcher);
-
-            // fs.watch fallback for state.json — VS Code's createFileSystemWatcher
-            // can miss changes in gitignored directories (.switchboard is gitignored).
-            const switchboardDir = path.join(runtimeStateRoot, '.switchboard');
-            try {
-                if (!fs.existsSync(switchboardDir)) {
-                    // VALIDATION: Only create .switchboard in allowed locations
-                    // Blocks creation in mapped child workspace folders
-                    if (!isAllowedSwitchboardLocation(runtimeStateRoot, workspaceRoot)) {
-                        outputChannel?.appendLine(`[Extension] Skipping .switchboard creation in ${runtimeStateRoot} — mapped child workspace`);
-                        console.warn(`[Extension] Blocked .switchboard creation in child workspace: ${runtimeStateRoot}`);
-                    } else {
-                        fs.mkdirSync(switchboardDir, { recursive: true });
-                    }
-                }
-                const fsStateWatcher = fs.watch(switchboardDir, (_eventType, filename) => {
-                    if (filename && filename.toString() === 'state.json') {
-                        debouncedStateSync();
-                    }
-                });
-                context.subscriptions.push({ dispose: () => { try { fsStateWatcher.close(); } catch { } } });
-            } catch (e) {
-                outputChannel?.appendLine(`[Extension] fs.watch fallback for state.json failed: ${e}`);
-            }
+            // 3. STATE SYNC: Wire terminal registry sync into TaskViewerProvider's existing
+            // state watcher so each state.json change triggers exactly one sync + one refresh.
+            taskViewerProvider.setStateSyncHook(async () => {
+                const currentRoot = kanbanProvider!.getCurrentWorkspaceRoot();
+                const stateRoot = currentRoot ? (resolveEffectiveStateRoot(currentRoot) || currentRoot) : runtimeStateRoot;
+                await syncTerminalRegistryWithState(stateRoot);
+            });
 
         } catch (e) {
             console.error('[Extension] Failed to initialize Control Plane Runtime:', e);

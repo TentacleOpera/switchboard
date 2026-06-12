@@ -1015,7 +1015,7 @@
             <div class="db-subsection" style="margin-top:12px;">
                 <div class="subsection-header"><span>Scan Speed</span></div>
                 <div class="setup-section-description" style="font-size:11px; color:var(--text-secondary); margin:4px 0 8px;">
-                    How often to sweep for new plans. Faster = plans appear sooner; slower = less background work.
+                    How often Switchboard sweeps for plans as a fallback when file watchers miss an event. Faster = plans appear sooner; slower = less background work. Also controls the internal <code>.switchboard/plans</code> fallback sweep.
                 </div>
                 <select id="plan-scanner-interval" style="width:100%;">
                     <option value="3">Very Fast (3s)</option>
@@ -1023,6 +1023,7 @@
                     <option value="10">Normal (10s)</option>
                     <option value="30">Relaxed (30s)</option>
                     <option value="60">Slow (60s)</option>
+                    <option value="0">Off</option>
                 </select>
             </div>
 
@@ -3567,9 +3568,16 @@
         // ===== Plan Scanner tab =====
         function renderPlanScannerConfig(config) {
             const enabledEl = document.getElementById('plan-scanner-enabled');
-            if (enabledEl) enabledEl.checked = config.enabled !== false;
             const intervalEl = document.getElementById('plan-scanner-interval');
-            if (intervalEl) intervalEl.value = String(config.intervalSeconds || 10);
+            const isOff = config.planWatcherEnabled === false;
+            if (enabledEl) enabledEl.checked = !isOff;
+            if (intervalEl) {
+                if (isOff) {
+                    intervalEl.value = '0';
+                } else {
+                    intervalEl.value = String(config.intervalSeconds || 10);
+                }
+            }
             const swEl = document.getElementById('plan-scanner-switchboard');
             if (swEl) swEl.checked = config.scanSwitchboardPlans !== false;
 
@@ -3673,9 +3681,13 @@
                 const dir = (row.querySelector('.ps-chat-dest-path')?.value || '').trim();
                 if (dir) chatPlanDestinations.push(dir);
             });
+            const intervalVal = parseInt(document.getElementById('plan-scanner-interval')?.value || '10', 10);
+            const isOff = intervalVal === 0;
             return {
-                enabled: !!document.getElementById('plan-scanner-enabled')?.checked,
-                intervalSeconds: parseInt(document.getElementById('plan-scanner-interval')?.value || '10', 10),
+                enabled: !isOff,
+                intervalSeconds: isOff ? undefined : intervalVal,
+                planWatcherEnabled: !isOff,
+                planWatcherIntervalMs: isOff ? undefined : intervalVal * 1000,
                 scanSwitchboardPlans: !!document.getElementById('plan-scanner-switchboard')?.checked,
                 presets,
                 customSources,

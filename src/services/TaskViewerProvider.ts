@@ -1223,6 +1223,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     public handleGetPlanScannerConfig(): {
         enabled: boolean;
         intervalSeconds: number;
+        planWatcherEnabled: boolean;
+        planWatcherIntervalMs: number;
         scanSwitchboardPlans: boolean;
         customSources: Array<{ label?: string; scope?: string; globs?: string[] }>;
         chatPlanDestinations: string[];
@@ -1236,9 +1238,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 : p.globs.some((g) => expandFlatGlob(g.pattern, repoRoots).some((t) => fs.existsSync(t.dir)));
             return { id: p.id, label: p.label, shape: p.shape, enabled: config.presets[p.id] !== false, detected };
         });
+        const planWatcherCfg = vscode.workspace.getConfiguration('switchboard.planWatcher');
+        const planWatcherEnabled = planWatcherCfg.get<boolean>('periodicScanEnabled', true);
+        const planWatcherIntervalMs = planWatcherCfg.get<number>('scanIntervalMs', 10000);
         return {
             enabled: config.enabled,
             intervalSeconds: config.intervalSeconds,
+            planWatcherEnabled,
+            planWatcherIntervalMs,
             scanSwitchboardPlans: config.scanSwitchboardPlans,
             customSources: config.customSources,
             chatPlanDestinations: config.chatPlanDestinations,
@@ -1284,9 +1291,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             await cfg.update('chatPlanDestinations', cleanDest, target);
         }
 
-        // NOTE: deliberately does NOT touch switchboard.planWatcher.* — GlobalPlanWatcher
-        // independently owns .switchboard/plans detection. The Plan Scanner only governs
-        // external IDE plan sources (Antigravity brain + flat Cursor/Claude/Devin/custom).
+        // Unified Scan Speed: also update the internal .switchboard/plans fallback sweep.
+        const pwc = vscode.workspace.getConfiguration('switchboard.planWatcher');
+        if (typeof payload?.planWatcherEnabled === 'boolean') {
+            await pwc.update('periodicScanEnabled', payload.planWatcherEnabled, target);
+        }
+        if (typeof payload?.planWatcherIntervalMs === 'number' && Number.isFinite(payload.planWatcherIntervalMs)) {
+            await pwc.update('scanIntervalMs', Math.min(300000, Math.max(2000, Math.round(payload.planWatcherIntervalMs))), target);
+        }
         this.startPlanScanner();
     }
 
@@ -1665,6 +1677,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 this.refresh();
             });
         });
+    }
+
+    private _stateSyncHook?: () => Promise<void>;
+    public setStateSyncHook(hook: () => Promise<void>): void {
+        this._stateSyncHook = hook;
     }
 
     public setSetupPanelProvider(provider: SetupPanelProvider) {
@@ -8873,10 +8890,15 @@ What would you like to find?`;
 
         // Debounced: coalesces rapid file-watcher events (e.g. during batch grid creation).
         // Self-write guard: ignore watcher events caused by our own state.json writes.
+        let stateRefreshTimer: NodeJS.Timeout | undefined;
         const refreshState = () => {
             if (Date.now() < this._selfStateWriteUntil) return; // suppress self-triggered events
-            void this._refreshConfiguredPlanWatcher();
-            this.refresh();
+            if (stateRefreshTimer) clearTimeout(stateRefreshTimer);
+            stateRefreshTimer = setTimeout(() => {
+                void this._refreshConfiguredPlanWatcher();
+                const sync = this._stateSyncHook ? this._stateSyncHook() : Promise.resolve();
+                void sync.catch(() => { /* sync errors are non-fatal */ }).finally(() => this.refresh());
+            }, 200);
         };
 
         this._stateWatcher.onDidChange(refreshState);

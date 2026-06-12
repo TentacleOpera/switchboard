@@ -134,3 +134,9 @@ Same consolidation as `planning.html`.
 5. Verify build artifacts: confirm `dist/webview/planning.html` and `dist/webview/design.html` reflect the source changes after running the build step.
 
 **Recommendation:** Send to Intern
+
+## Review Findings
+
+- **Files changed**: `src/webview/planning.html`, `src/webview/design.html` (source edits correct), `dist/webview/planning.html`, `dist/webview/design.html` (synced from source — stale artifacts were a CRITICAL runtime blocker).
+- **Validation**: Verified no `800px` constraint or standalone `#kanban-preview-pane` block remains in any of the four files; unified five-element selector with `padding: 16px` is present in both source and dist.
+- **Remaining risks**: On ultra-wide monitors, removal of the 800px reading column may reduce readability; users can resize the VS Code panel to compensate. No other risks.

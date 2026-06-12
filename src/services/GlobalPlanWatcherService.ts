@@ -31,6 +31,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
     private _scanInProgress = false; // Guard against overlapping scans
     private _recentRenames = new Set<string>();
     private _currentProjects = new Map<string, string>();
+    private _scanSeenPaths = new Map<string, Set<string>>();
 
     // Paths currently being written by _createInitiatedPlan — skip watcher insert to avoid duplicates
     private static _pendingCreations = new Map<string, NodeJS.Timeout>();
@@ -141,6 +142,37 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
         if (!fs.existsSync(plansDir)) { return; }
 
         try {
+            const currentPaths = new Set<string>();
+
+            const collectPaths = async (dir: string): Promise<void> => {
+                const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+                for (const entry of entries) {
+                    const entryPath = path.join(dir, entry.name);
+                    if (entry.isDirectory()) {
+                        await collectPaths(entryPath);
+                    } else if (entry.isFile() && entry.name.endsWith('.md')) {
+                        currentPaths.add(entryPath.replace(/\\/g, '/'));
+                    }
+                }
+            };
+
+            await collectPaths(plansDir);
+
+            const prevPaths = this._scanSeenPaths.get(workspaceRoot);
+            this._scanSeenPaths.set(workspaceRoot, currentPaths);
+
+            let filesToProcess: string[];
+            if (prevPaths === undefined) {
+                // First cycle: preserve current behavior — process all files (imports files that predate startup)
+                filesToProcess = [...currentPaths];
+            } else {
+                filesToProcess = [...currentPaths].filter(p => !prevPaths.has(p));
+                if (filesToProcess.length === 0) {
+                    // Steady state: nothing new, skip DB query and stats
+                    return;
+                }
+            }
+
             const db = KanbanDatabase.forWorkspace(workspaceRoot);
             await db.ensureReady();
             const workspaceId = await db.getWorkspaceId();
@@ -160,37 +192,24 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             );
             const now = Date.now();
             const lastScan = this._lastScanTime.get(workspaceRoot) || 0;
-            
-            // Set lastScanTime BEFORE scanning so mid-scan errors don't cause re-processing
-            // on the next cycle.
             this._lastScanTime.set(workspaceRoot, now);
 
-            const scanDir = async (dir: string): Promise<void> => {
-                const entries = await fs.promises.readdir(dir, { withFileTypes: true });
-                for (const entry of entries) {
-                    const entryPath = path.join(dir, entry.name);
-                    if (entry.isDirectory()) {
-                        await scanDir(entryPath);
-                    } else if (entry.isFile() && entry.name.endsWith('.md')) {
-                        const relativePath = path.relative(workspaceRoot, entryPath).replace(/\\/g, '/');
-                        const absolutePath = entryPath.replace(/\\/g, '/');
-                        if (existingPaths.has(relativePath) || existingAbsolutePaths.has(absolutePath)) { continue; }
+            for (const entryPath of filesToProcess) {
+                const normalizedPath = entryPath.replace(/\\/g, '/');
+                const relativePath = path.relative(workspaceRoot, entryPath).replace(/\\/g, '/');
+                if (existingPaths.has(relativePath) || existingAbsolutePaths.has(normalizedPath)) { continue; }
 
-                        const stats = await fs.promises.stat(entryPath);
-                        // Skip files older than the last scan to avoid re-importing
-                        if (stats.mtimeMs < lastScan) { continue; }
-                        // Skip very recently created files to avoid reading partial writes
-                        if (now - stats.mtimeMs < 500) { continue; }
+                const stats = await fs.promises.stat(entryPath);
+                // Skip files older than the last scan to avoid re-importing
+                if (stats.mtimeMs < lastScan) { continue; }
+                // Skip very recently created files to avoid reading partial writes
+                if (now - stats.mtimeMs < 500) { continue; }
 
-                        this._outputChannel?.appendLine(`[GlobalPlanWatcher] Periodic scan found new file: ${relativePath}`);
-                        const uri = vscode.Uri.file(entryPath);
-                        // Route through debounce to avoid races with fs.watch events
-                        this._debounceHandleFile(uri, workspaceRoot);
-                    }
-                }
-            };
-
-            await scanDir(plansDir);
+                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Periodic scan found new file: ${relativePath}`);
+                const uri = vscode.Uri.file(entryPath);
+                // Route through debounce to avoid races with fs.watch events
+                this._debounceHandleFile(uri, workspaceRoot);
+            }
         } catch (err) {
             this._outputChannel?.appendLine(`[GlobalPlanWatcher] Periodic scan error in ${workspaceRoot}: ${err}`);
         }
@@ -211,7 +230,8 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     try { native.close(); } catch {}
                     this._nativeWatchers.delete(folder);
                 }
-                
+                this._scanSeenPaths.delete(folder);
+
                 this._outputChannel?.appendLine(`[GlobalPlanWatcher] Stopped watching: ${folder}`);
             }
         }
