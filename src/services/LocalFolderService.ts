@@ -17,12 +17,14 @@ export interface LocalFolderPathsConfig {
     ticketsFolderPaths: string[];
     imagesFolderPaths: string[];
     stitchFolderPaths: string[];
+    briefsFolderPaths: string[];
     _migratedLocal?: boolean;
     _migratedHtml?: boolean;
     _migratedDesign?: boolean;
     _migratedTickets?: boolean;
     _migratedImages?: boolean;
     _migratedStitch?: boolean;
+    _migratedBriefs?: boolean;
 }
 
 export class LocalFolderService {
@@ -75,7 +77,7 @@ export class LocalFolderService {
             const content = await fs.promises.readFile(this._configPath, 'utf8');
             const parsed = JSON.parse(content);
             // Strip folder-path and migration fields so they don't leak into LocalFolderConfig consumers
-            const { localFolderPaths, htmlFolderPaths, designFolderPaths, ticketsFolderPaths, imagesFolderPaths, stitchFolderPaths, _migrated, _migratedLocal, _migratedHtml, _migratedDesign, _migratedTickets, _migratedImages, _migratedStitch, ...rest } = parsed;
+            const { localFolderPaths, htmlFolderPaths, designFolderPaths, ticketsFolderPaths, imagesFolderPaths, stitchFolderPaths, briefsFolderPaths, _migrated, _migratedLocal, _migratedHtml, _migratedDesign, _migratedTickets, _migratedImages, _migratedStitch, _migratedBriefs, ...rest } = parsed;
             return rest;
         } catch { return null; }
     }
@@ -102,12 +104,14 @@ export class LocalFolderService {
                 ticketsFolderPaths: parsed.ticketsFolderPaths || [],
                 imagesFolderPaths: parsed.imagesFolderPaths || [],
                 stitchFolderPaths: parsed.stitchFolderPaths || [],
+                briefsFolderPaths: parsed.briefsFolderPaths || [],
                 _migratedLocal: parsed._migratedLocal || false,
                 _migratedHtml: parsed._migratedHtml || false,
                 _migratedDesign: parsed._migratedDesign || false,
                 _migratedTickets: parsed._migratedTickets || false,
                 _migratedImages: parsed._migratedImages || false,
-                _migratedStitch: parsed._migratedStitch || false
+                _migratedStitch: parsed._migratedStitch || false,
+                _migratedBriefs: parsed._migratedBriefs || false
             };
         } catch {
             return {
@@ -117,12 +121,14 @@ export class LocalFolderService {
                 ticketsFolderPaths: [],
                 imagesFolderPaths: [],
                 stitchFolderPaths: [],
+                briefsFolderPaths: [],
                 _migratedLocal: false,
                 _migratedHtml: false,
                 _migratedDesign: false,
                 _migratedTickets: false,
                 _migratedImages: false,
-                _migratedStitch: false
+                _migratedStitch: false,
+                _migratedBriefs: false
             };
         }
     }
@@ -157,6 +163,51 @@ export class LocalFolderService {
         return config.get<string>('research.localFolderPath', '');
     }
 
+    private _getOrLoadCachedConfig(): LocalFolderPathsConfig {
+        let cfg = this._folderPathsCache;
+        if (!cfg) {
+            try {
+                const content = fs.readFileSync(this._configPath, 'utf8');
+                const parsed = JSON.parse(content);
+                cfg = {
+                    localFolderPaths: parsed.localFolderPaths || [],
+                    htmlFolderPaths: parsed.htmlFolderPaths || [],
+                    designFolderPaths: parsed.designFolderPaths || [],
+                    ticketsFolderPaths: parsed.ticketsFolderPaths || [],
+                    imagesFolderPaths: parsed.imagesFolderPaths || [],
+                    stitchFolderPaths: parsed.stitchFolderPaths || [],
+                    briefsFolderPaths: parsed.briefsFolderPaths || [],
+                    _migratedLocal: parsed._migratedLocal || false,
+                    _migratedHtml: parsed._migratedHtml || false,
+                    _migratedDesign: parsed._migratedDesign || false,
+                    _migratedTickets: parsed._migratedTickets || false,
+                    _migratedImages: parsed._migratedImages || false,
+                    _migratedStitch: parsed._migratedStitch || false,
+                    _migratedBriefs: parsed._migratedBriefs || false
+                };
+            } catch {
+                cfg = {
+                    localFolderPaths: [],
+                    htmlFolderPaths: [],
+                    designFolderPaths: [],
+                    ticketsFolderPaths: [],
+                    imagesFolderPaths: [],
+                    stitchFolderPaths: [],
+                    briefsFolderPaths: [],
+                    _migratedLocal: false,
+                    _migratedHtml: false,
+                    _migratedDesign: false,
+                    _migratedTickets: false,
+                    _migratedImages: false,
+                    _migratedStitch: false,
+                    _migratedBriefs: false
+                };
+            }
+            this._folderPathsCache = cfg;
+        }
+        return cfg;
+    }
+
     // ── Folder Path Resolution (matches kanban.dbPath pattern) ──
 
     resolveFolderPath(folderPath: string): string {
@@ -169,26 +220,7 @@ export class LocalFolderService {
     }
 
     getFolderPaths(): string[] {
-        let cfg = this._folderPathsCache;
-        if (!cfg) {
-            try {
-                const content = fs.readFileSync(this._configPath, 'utf8');
-                const parsed = JSON.parse(content);
-                cfg = {
-                    localFolderPaths: parsed.localFolderPaths || [],
-                    htmlFolderPaths: parsed.htmlFolderPaths || [],
-                    designFolderPaths: parsed.designFolderPaths || [],
-                    ticketsFolderPaths: parsed.ticketsFolderPaths || [],
-                    _migratedLocal: parsed._migratedLocal || false,
-                    _migratedHtml: parsed._migratedHtml || false,
-                    _migratedDesign: parsed._migratedDesign || false,
-                    _migratedTickets: parsed._migratedTickets || false
-                };
-            } catch {
-                cfg = { localFolderPaths: [], htmlFolderPaths: [], designFolderPaths: [], ticketsFolderPaths: [], _migratedLocal: false, _migratedHtml: false, _migratedDesign: false, _migratedTickets: false };
-            }
-            this._folderPathsCache = cfg;
-        }
+        const cfg = this._getOrLoadCachedConfig();
 
         // One-time migration from global settings
         if (!cfg._migratedLocal) {
@@ -371,26 +403,7 @@ export class LocalFolderService {
     }
 
     getHtmlFolderPaths(): string[] {
-        let cfg = this._folderPathsCache;
-        if (!cfg) {
-            try {
-                const content = fs.readFileSync(this._configPath, 'utf8');
-                const parsed = JSON.parse(content);
-                cfg = {
-                    localFolderPaths: parsed.localFolderPaths || [],
-                    htmlFolderPaths: parsed.htmlFolderPaths || [],
-                    designFolderPaths: parsed.designFolderPaths || [],
-                    ticketsFolderPaths: parsed.ticketsFolderPaths || [],
-                    _migratedLocal: parsed._migratedLocal || false,
-                    _migratedHtml: parsed._migratedHtml || false,
-                    _migratedDesign: parsed._migratedDesign || false,
-                    _migratedTickets: parsed._migratedTickets || false
-                };
-            } catch {
-                cfg = { localFolderPaths: [], htmlFolderPaths: [], designFolderPaths: [], ticketsFolderPaths: [], _migratedLocal: false, _migratedHtml: false, _migratedDesign: false, _migratedTickets: false };
-            }
-            this._folderPathsCache = cfg;
-        }
+        const cfg = this._getOrLoadCachedConfig();
 
         if (!cfg._migratedHtml) {
             const config = vscode.workspace.getConfiguration('switchboard');
@@ -559,27 +572,118 @@ export class LocalFolderService {
         return ['.html', '.htm', '.png', '.jpg', '.jpeg', '.gif', '.svg'].includes(ext);
     }
 
-    getDesignFolderPaths(): string[] {
-        let cfg = this._folderPathsCache;
-        if (!cfg) {
+    private _isImageFile(filename: string): boolean {
+        const ext = path.extname(filename).toLowerCase();
+        return ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico'].includes(ext);
+    }
+
+    async listImagesFiles(): Promise<Array<{
+        id: string;
+        name: string;
+        relativePath: string;
+        isFolder?: boolean;
+        parentId?: string;
+        sourceFolder: string;
+        title?: string;
+    }>> {
+        const folderPaths = this.getImagesFolderPaths();
+        if (folderPaths.length === 0) { return []; }
+
+        const items: Array<{
+            id: string;
+            name: string;
+            relativePath: string;
+            isFolder?: boolean;
+            parentId?: string;
+            sourceFolder: string;
+            title?: string;
+        }> = [];
+
+        const seenAbsolutePaths = new Set<string>();
+
+        for (let i = 0; i < folderPaths.length; i++) {
+            const folderPath = folderPaths[i];
             try {
-                const content = fs.readFileSync(this._configPath, 'utf8');
-                const parsed = JSON.parse(content);
-                cfg = {
-                    localFolderPaths: parsed.localFolderPaths || [],
-                    htmlFolderPaths: parsed.htmlFolderPaths || [],
-                    designFolderPaths: parsed.designFolderPaths || [],
-                    ticketsFolderPaths: parsed.ticketsFolderPaths || [],
-                    _migratedLocal: parsed._migratedLocal || false,
-                    _migratedHtml: parsed._migratedHtml || false,
-                    _migratedDesign: parsed._migratedDesign || false,
-                    _migratedTickets: parsed._migratedTickets || false
-                };
-            } catch {
-                cfg = { localFolderPaths: [], htmlFolderPaths: [], designFolderPaths: [], ticketsFolderPaths: [], _migratedLocal: false, _migratedHtml: false, _migratedDesign: false, _migratedTickets: false };
-            }
-            this._folderPathsCache = cfg;
+                const stat = await fs.promises.stat(folderPath);
+                if (!stat.isDirectory()) { continue; }
+            } catch { continue; }
+
+            await this._scanImagesFolder(folderPath, folderPath, items, null, i, seenAbsolutePaths, 0);
         }
+
+        return items;
+    }
+
+    private async _scanImagesFolder(
+        root: string,
+        current: string,
+        results: Array<{
+            id: string;
+            name: string;
+            relativePath: string;
+            isFolder?: boolean;
+            parentId?: string;
+            sourceFolder: string;
+            title?: string;
+        }>,
+        parentId: string | null,
+        folderIndex: number,
+        seenAbsolutePaths: Set<string>,
+        depth: number = 0
+    ): Promise<void> {
+        if (depth >= LocalFolderService._MAX_DEPTH) { return; }
+
+        let entries: fs.Dirent[];
+        try {
+            entries = await fs.promises.readdir(current, { withFileTypes: true });
+        } catch { return; }
+
+        const subfolderScans: Promise<void>[] = [];
+
+        for (const entry of entries) {
+            if (entry.name.startsWith('.')) { continue; }
+            if (entry.isSymbolicLink()) { continue; }
+            if (entry.isDirectory() && LocalFolderService._EXCLUDED_DIRS.has(entry.name)) { continue; }
+
+            const fullPath = path.join(current, entry.name);
+            const resolvedPath = path.resolve(fullPath);
+
+            if (seenAbsolutePaths.has(resolvedPath)) { continue; }
+            seenAbsolutePaths.add(resolvedPath);
+
+            const relativePath = path.relative(root, fullPath);
+            const id = `${folderIndex}:${relativePath}`;
+            const parentIdVal = parentId ? `${folderIndex}:${parentId}` : undefined;
+
+            if (entry.isDirectory()) {
+                results.push({
+                    id,
+                    name: entry.name,
+                    relativePath,
+                    isFolder: true,
+                    parentId: parentIdVal,
+                    sourceFolder: root
+                });
+                subfolderScans.push(
+                    this._scanImagesFolder(root, fullPath, results, relativePath, folderIndex, seenAbsolutePaths, depth + 1)
+                );
+            } else if (entry.isFile() && this._isImageFile(entry.name)) {
+                results.push({
+                    id,
+                    name: entry.name,
+                    relativePath,
+                    isFolder: false,
+                    parentId: parentIdVal,
+                    sourceFolder: root
+                });
+            }
+        }
+
+        await Promise.all(subfolderScans);
+    }
+
+    getDesignFolderPaths(): string[] {
+        const cfg = this._getOrLoadCachedConfig();
 
         if (!cfg._migratedDesign) {
             const config = vscode.workspace.getConfiguration('switchboard');
@@ -625,26 +729,7 @@ export class LocalFolderService {
     }
 
     getTicketsFolderPaths(): string[] {
-        let cfg = this._folderPathsCache;
-        if (!cfg) {
-            try {
-                const content = fs.readFileSync(this._configPath, 'utf8');
-                const parsed = JSON.parse(content);
-                cfg = {
-                    localFolderPaths: parsed.localFolderPaths || [],
-                    htmlFolderPaths: parsed.htmlFolderPaths || [],
-                    designFolderPaths: parsed.designFolderPaths || [],
-                    ticketsFolderPaths: parsed.ticketsFolderPaths || [],
-                    _migratedLocal: parsed._migratedLocal || false,
-                    _migratedHtml: parsed._migratedHtml || false,
-                    _migratedDesign: parsed._migratedDesign || false,
-                    _migratedTickets: parsed._migratedTickets || false
-                };
-            } catch {
-                cfg = { localFolderPaths: [], htmlFolderPaths: [], designFolderPaths: [], ticketsFolderPaths: [], _migratedLocal: false, _migratedHtml: false, _migratedDesign: false, _migratedTickets: false };
-            }
-            this._folderPathsCache = cfg;
-        }
+        const cfg = this._getOrLoadCachedConfig();
 
         if (!cfg._migratedTickets) {
             const config = vscode.workspace.getConfiguration('switchboard');
@@ -690,43 +775,7 @@ export class LocalFolderService {
     }
 
     getImagesFolderPaths(): string[] {
-        let cfg = this._folderPathsCache;
-        if (!cfg) {
-            try {
-                const content = fs.readFileSync(this._configPath, 'utf8');
-                const parsed = JSON.parse(content);
-                cfg = {
-                    localFolderPaths: parsed.localFolderPaths || [],
-                    htmlFolderPaths: parsed.htmlFolderPaths || [],
-                    designFolderPaths: parsed.designFolderPaths || [],
-                    ticketsFolderPaths: parsed.ticketsFolderPaths || [],
-                    imagesFolderPaths: parsed.imagesFolderPaths || [],
-                    stitchFolderPaths: parsed.stitchFolderPaths || [],
-                    _migratedLocal: parsed._migratedLocal || false,
-                    _migratedHtml: parsed._migratedHtml || false,
-                    _migratedDesign: parsed._migratedDesign || false,
-                    _migratedTickets: parsed._migratedTickets || false,
-                    _migratedImages: parsed._migratedImages || false,
-                    _migratedStitch: parsed._migratedStitch || false
-                };
-            } catch {
-                cfg = {
-                    localFolderPaths: [],
-                    htmlFolderPaths: [],
-                    designFolderPaths: [],
-                    ticketsFolderPaths: [],
-                    imagesFolderPaths: [],
-                    stitchFolderPaths: [],
-                    _migratedLocal: false,
-                    _migratedHtml: false,
-                    _migratedDesign: false,
-                    _migratedTickets: false,
-                    _migratedImages: false,
-                    _migratedStitch: false
-                };
-            }
-            this._folderPathsCache = cfg;
-        }
+        const cfg = this._getOrLoadCachedConfig();
 
         if (!cfg._migratedImages) {
             const config = vscode.workspace.getConfiguration('switchboard');
@@ -772,43 +821,7 @@ export class LocalFolderService {
     }
 
     getStitchFolderPaths(): string[] {
-        let cfg = this._folderPathsCache;
-        if (!cfg) {
-            try {
-                const content = fs.readFileSync(this._configPath, 'utf8');
-                const parsed = JSON.parse(content);
-                cfg = {
-                    localFolderPaths: parsed.localFolderPaths || [],
-                    htmlFolderPaths: parsed.htmlFolderPaths || [],
-                    designFolderPaths: parsed.designFolderPaths || [],
-                    ticketsFolderPaths: parsed.ticketsFolderPaths || [],
-                    imagesFolderPaths: parsed.imagesFolderPaths || [],
-                    stitchFolderPaths: parsed.stitchFolderPaths || [],
-                    _migratedLocal: parsed._migratedLocal || false,
-                    _migratedHtml: parsed._migratedHtml || false,
-                    _migratedDesign: parsed._migratedDesign || false,
-                    _migratedTickets: parsed._migratedTickets || false,
-                    _migratedImages: parsed._migratedImages || false,
-                    _migratedStitch: parsed._migratedStitch || false
-                };
-            } catch {
-                cfg = {
-                    localFolderPaths: [],
-                    htmlFolderPaths: [],
-                    designFolderPaths: [],
-                    ticketsFolderPaths: [],
-                    imagesFolderPaths: [],
-                    stitchFolderPaths: [],
-                    _migratedLocal: false,
-                    _migratedHtml: false,
-                    _migratedDesign: false,
-                    _migratedTickets: false,
-                    _migratedImages: false,
-                    _migratedStitch: false
-                };
-            }
-            this._folderPathsCache = cfg;
-        }
+        const cfg = this._getOrLoadCachedConfig();
 
         if (!cfg._migratedStitch) {
             const config = vscode.workspace.getConfiguration('switchboard');
@@ -856,6 +869,89 @@ export class LocalFolderService {
 
         cfg.stitchFolderPaths = currentPaths.filter(p => this.resolveFolderPath(p) !== resolvedToRemove);
         await this.saveFolderPathsConfig(cfg);
+    }
+
+    getBriefsFolderPaths(): string[] {
+        const cfg = this._getOrLoadCachedConfig();
+
+        if (!cfg._migratedBriefs) {
+            const config = vscode.workspace.getConfiguration('switchboard');
+            const globalPaths = config.get<string[]>('research.briefsFolderPaths', []);
+            cfg.briefsFolderPaths = globalPaths;
+            cfg._migratedBriefs = true;
+            this._folderPathsCache = cfg;
+            this.saveFolderPathsConfig(cfg).then(() => {
+                config.update('research.briefsFolderPaths', undefined, vscode.ConfigurationTarget.Global);
+            }).catch(() => {});
+        }
+
+        const seen = new Set<string>();
+        return (cfg.briefsFolderPaths || [])
+            .map(p => this.resolveFolderPath(p))
+            .filter(p => p && !seen.has(p) && seen.add(p) as unknown as boolean);
+    }
+
+    getBriefsFolderPath(): string {
+        const paths = this.getBriefsFolderPaths();
+        return paths[0] ?? '';
+    }
+
+    async addBriefsFolderPath(folderPath: string): Promise<void> {
+        const cfg = await this.loadFolderPathsConfig();
+        const currentPaths = cfg.briefsFolderPaths || [];
+        const resolvedInput = this.resolveFolderPath(folderPath);
+
+        const isDuplicate = currentPaths.some(p => this.resolveFolderPath(p) === resolvedInput);
+        if (!isDuplicate) {
+            cfg.briefsFolderPaths = [...currentPaths, folderPath];
+            await this.saveFolderPathsConfig(cfg);
+        }
+    }
+
+    async removeBriefsFolderPath(folderPath: string): Promise<void> {
+        const cfg = await this.loadFolderPathsConfig();
+        const currentPaths = cfg.briefsFolderPaths || [];
+        const resolvedToRemove = this.resolveFolderPath(folderPath);
+
+        cfg.briefsFolderPaths = currentPaths.filter(p => this.resolveFolderPath(p) !== resolvedToRemove);
+        await this.saveFolderPathsConfig(cfg);
+    }
+
+    async listBriefsFiles(): Promise<Array<{
+        id: string;
+        name: string;
+        relativePath: string;
+        isFolder?: boolean;
+        parentId?: string;
+        sourceFolder: string;
+        title?: string;
+    }>> {
+        const folderPaths = this.getBriefsFolderPaths();
+        if (folderPaths.length === 0) { return []; }
+
+        const items: Array<{
+            id: string;
+            name: string;
+            relativePath: string;
+            isFolder?: boolean;
+            parentId?: string;
+            sourceFolder: string;
+            title?: string;
+        }> = [];
+
+        const seenAbsolutePaths = new Set<string>();
+
+        for (let i = 0; i < folderPaths.length; i++) {
+            const folderPath = folderPaths[i];
+            try {
+                const stat = await fs.promises.stat(folderPath);
+                if (!stat.isDirectory()) { continue; }
+            } catch { continue; }
+
+            await this._scanFolder(folderPath, folderPath, items, null, i, seenAbsolutePaths, 0);
+        }
+
+        return items;
     }
 
     async listDesignFiles(): Promise<Array<{

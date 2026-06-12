@@ -294,5 +294,8 @@ Mitigations: keep workspace picker relabeled as "Sync Destination" rather than r
 - Footer controls are consolidated into a single compact toolbar row
 - Aspects checkboxes are accessible via the split-button dropdown and correctly affect variant generation
 
+## Review Findings
+Implementation reviewed and verified against plan requirements. Material issues found and fixed: `_updateWebviewRoots` was missing `getImagesFolderPaths()` and `getStitchFolderPaths()`, which would have blocked webview access to resources in those configured folders; `setStitchBusy` did not disable the variants dropdown toggle, allowing users to open the aspects menu while an operation was in progress; Images tab shared the same file discovery path as HTML Previews (`htmlFolderPaths`) because `_sendImagesDocsReady` and `listImagesFiles` were missing — now added with a dedicated `imagesDocsReady` message, independent folder watchers, and image-only file filter. No compilation or test regressions introduced. Remaining minor risk: `stitchSyncComplete` handler remains in `design.js` as harmless dead code, and `_getStitchOutputDir` uses only the first configured stitch folder path when multiple are present.
+
 ## Recommendation
 **Send to Lead Coder** — Complexity 8 with multi-file coordination, shared config schema changes, new message handlers across `DesignPanelProvider.ts` and `LocalFolderService.ts`, and UI layout refactor with event delegation requirements.

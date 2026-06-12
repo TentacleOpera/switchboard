@@ -23,19 +23,28 @@
         previewRequestId: 0,
         htmlFolderPathsByRoot: persistedState.htmlFolderPathsByRoot || {},
         designFolderPathsByRoot: persistedState.designFolderPathsByRoot || {},
+        briefsFolderPathsByRoot: persistedState.briefsFolderPathsByRoot || {},
         htmlPreviewCollapsed: persistedState.htmlPreviewCollapsed || false,
         designPreviewCollapsed: persistedState.designPreviewCollapsed || false,
         imagesPreviewCollapsed: persistedState.imagesPreviewCollapsed || false,
+        briefsPreviewCollapsed: persistedState.briefsPreviewCollapsed || false,
         htmlWorkspaceRootFilter: '',
         designWorkspaceRootFilter: '',
         imagesWorkspaceRootFilter: '',
+        briefsWorkspaceRootFilter: '',
         stitchWorkspaceRoot: '',
         htmlDocsSearch: '',
         designDocsSearch: '',
         imagesDocsSearch: '',
+        briefsDocsSearch: '',
         _lastHtmlDocsMsg: null,
         _lastDesignDocsMsg: null,
         _lastImagesDocsMsg: null,
+        _lastBriefsDocsMsg: null,
+        activeBriefSourceId: null,
+        activeBriefDocId: null,
+        briefEditMode: false,
+        briefEditOriginalContent: '',
         stitchProjects: [],
         selectedStitchProjectId: '',
         stitchScreens: [],
@@ -347,7 +356,7 @@
     // Sidebar Collapsing
     function toggleSidebarCollapsed(e) {
         const btn = e.target;
-        const pane = btn.closest('#tree-pane-design') || btn.closest('#tree-pane-html') || btn.closest('#tree-pane-images');
+        const pane = btn.closest('#tree-pane-design') || btn.closest('#tree-pane-html') || btn.closest('#tree-pane-images') || btn.closest('#tree-pane-briefs');
         if (!pane) return;
         const row = pane.closest('.content-row');
         if (!row) return;
@@ -361,6 +370,8 @@
             state.htmlPreviewCollapsed = isCollapsed;
         } else if (pane.id === 'tree-pane-images') {
             state.imagesPreviewCollapsed = isCollapsed;
+        } else if (pane.id === 'tree-pane-briefs') {
+            state.briefsPreviewCollapsed = isCollapsed;
         }
         saveState();
     }
@@ -466,6 +477,60 @@
                 nodeMetadata: node.metadata,
                 actions,
                 isSelected: state.activeSource === sourceId && state.activeDocId === node.id,
+                clickHandler: () => {
+                    loadDocumentPreview(sourceId, node.id, node.name);
+                }
+            });
+            docList.appendChild(card);
+        });
+    }
+
+    // ── Tree Rendering: Briefs ──
+    function renderBriefsDocs(rootEntry) {
+        const { sourceId, nodes, folderPaths } = rootEntry;
+        const treePaneBriefs = document.getElementById('tree-pane-briefs');
+        if (!treePaneBriefs) return;
+
+        treePaneBriefs.innerHTML = '';
+
+        const toggleRow = document.createElement('div');
+        toggleRow.className = 'sidebar-toggle-row';
+
+        const toggleBtn = document.createElement('button');
+        toggleBtn.className = 'sidebar-toggle-btn';
+        toggleBtn.title = 'Toggle sidebar';
+        toggleBtn.textContent = state.briefsPreviewCollapsed ? '»' : '«';
+        toggleBtn.addEventListener('click', toggleSidebarCollapsed);
+        toggleRow.appendChild(toggleBtn);
+        treePaneBriefs.appendChild(toggleRow);
+
+        const docList = document.createElement('div');
+        docList.className = 'source-doc-list';
+        docList.dataset.sourceId = sourceId;
+        treePaneBriefs.appendChild(docList);
+
+        if (!nodes || nodes.length === 0) {
+            docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No design briefs found.</div>';
+            return;
+        }
+
+        let docNodes = (nodes || []).filter(n => n.kind === 'document');
+        const search = String(state.briefsDocsSearch || '').trim().toLowerCase();
+        if (search) {
+            docNodes = docNodes.filter(d => (d.title || d.name || '').toLowerCase().includes(search));
+        }
+
+        docNodes.forEach(node => {
+            const fullName = node.name || node.id || '';
+            const lastDot = fullName.lastIndexOf('.');
+            const title = lastDot > 0 ? fullName.substring(0, lastDot) : fullName;
+            const card = renderDocCard({
+                title: node.title || title,
+                subtitle: 'Markdown',
+                sourceId,
+                nodeId: node.id,
+                nodeMetadata: node.metadata,
+                isSelected: state.activeBriefSourceId === sourceId && state.activeBriefDocId === node.id,
                 clickHandler: () => {
                     loadDocumentPreview(sourceId, node.id, node.name);
                 }
@@ -858,6 +923,29 @@
                 requestId: state.previewRequestId,
                 sourceFolder
             });
+        } else if (sourceId === 'briefs-folder') {
+            if (state.briefEditMode) exitBriefEditMode();
+            state.activeBriefSourceId = sourceId;
+            state.activeBriefDocId = docId;
+            state.activeDocSourceFolder = sourceFolder || null;
+            updateBriefDocControls();
+
+            const statusBriefs = document.getElementById('status-briefs');
+            if (statusBriefs) statusBriefs.textContent = 'Loading...';
+
+            const previewBriefs = document.getElementById('markdown-preview-briefs');
+            if (previewBriefs) {
+                previewBriefs.innerHTML = '<div class="empty-state">Loading preview...</div>';
+                previewBriefs.style.display = 'block';
+            }
+
+            vscode.postMessage({
+                type: 'fetchPreview',
+                sourceId,
+                docId,
+                requestId: state.previewRequestId,
+                sourceFolder
+            });
         }
     }
 
@@ -1033,6 +1121,28 @@
                 statusDesign.textContent = isAutoRefreshed ? 'Auto-refreshed' : 'Loaded';
                 statusDesign.style.color = 'var(--accent-teal)';
             }
+        } else if (sourceId === 'briefs-folder') {
+            if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
+
+            state.activeDocFilePath = filePath || null;
+            state.activeFileType = msg.fileType || null;
+            state.activeDocContent = content || '';
+            updateBriefDocControls();
+
+            const mdPrev = document.getElementById('markdown-preview-briefs');
+            const statusBriefs = document.getElementById('status-briefs');
+            const briefsWrapper = document.querySelector('#briefs-content .preview-panel-wrapper');
+
+            if (mdPrev) {
+                mdPrev.style.display = 'block';
+                mdPrev.innerHTML = renderMarkdown(content) || '';
+            }
+            if (briefsWrapper) briefsWrapper.classList.remove('scanlines-suppressed');
+
+            if (statusBriefs) {
+                statusBriefs.textContent = isAutoRefreshed ? 'Auto-refreshed' : 'Loaded';
+                statusBriefs.style.color = 'var(--accent-teal)';
+            }
         }
     }
 
@@ -1162,6 +1272,115 @@
         }
     })();
 
+    function updateBriefDocControls() {
+        const hasDoc = state.activeBriefSourceId === 'briefs-folder' && !!state.activeBriefDocId;
+        const btnEdit = document.getElementById('btn-edit-brief');
+        const btnDelete = document.getElementById('btn-delete-brief');
+        
+        if (btnEdit) btnEdit.disabled = !hasDoc || state.briefEditMode;
+        if (btnDelete) btnDelete.disabled = !hasDoc;
+    }
+
+    function enterBriefEditMode() {
+        const previewPane = document.getElementById('preview-pane-briefs');
+        const textarea = document.getElementById('markdown-editor-briefs');
+        if (!previewPane || !textarea) return;
+
+        state.briefEditOriginalContent = state.activeDocContent || '';
+        textarea.value = state.briefEditOriginalContent;
+        previewPane.classList.add('edit-mode');
+
+        const btnEdit = document.getElementById('btn-edit-brief');
+        const btnSave = document.getElementById('btn-save-brief');
+        const btnCancel = document.getElementById('btn-cancel-brief');
+        if (btnEdit) btnEdit.style.display = 'none';
+        if (btnSave) btnSave.style.display = '';
+        if (btnCancel) btnCancel.style.display = '';
+
+        state.briefEditMode = true;
+        updateBriefDocControls();
+    }
+
+    function exitBriefEditMode() {
+        const previewPane = document.getElementById('preview-pane-briefs');
+        if (previewPane) previewPane.classList.remove('edit-mode');
+
+        const btnEdit = document.getElementById('btn-edit-brief');
+        const btnSave = document.getElementById('btn-save-brief');
+        const btnCancel = document.getElementById('btn-cancel-brief');
+        if (btnEdit) btnEdit.style.display = '';
+        if (btnSave) btnSave.style.display = 'none';
+        if (btnCancel) btnCancel.style.display = 'none';
+
+        state.briefEditMode = false;
+        updateBriefDocControls();
+    }
+
+    (function initBriefDocControls() {
+        const btnEdit = document.getElementById('btn-edit-brief');
+        const btnSave = document.getElementById('btn-save-brief');
+        const btnCancel = document.getElementById('btn-cancel-brief');
+        const btnNew = document.getElementById('btn-new-brief');
+        const btnDelete = document.getElementById('btn-delete-brief');
+
+        if (btnEdit) {
+            btnEdit.addEventListener('click', () => enterBriefEditMode());
+        }
+        if (btnSave) {
+            btnSave.addEventListener('click', () => {
+                const filePath = state.activeDocFilePath;
+                const editor = document.getElementById('markdown-editor-briefs');
+                if (!filePath || !editor) return;
+                vscode.postMessage({
+                    type: 'saveFileContent',
+                    filePath,
+                    content: editor.value,
+                    originalContent: state.briefEditOriginalContent,
+                    tab: 'briefs'
+                });
+            });
+        }
+        if (btnCancel) {
+            btnCancel.addEventListener('click', () => exitBriefEditMode());
+        }
+        if (btnNew) {
+            btnNew.addEventListener('click', () => {
+                const title = prompt('Enter a title for the new design brief:');
+                if (!title) return;
+                const root = state.briefsWorkspaceRootFilter || Object.keys(state.briefsFolderPathsByRoot)[0];
+                if (!root) {
+                    alert('Please configure at least one briefs folder first.');
+                    return;
+                }
+                const folders = state.briefsFolderPathsByRoot[root] || [];
+                if (folders.length === 0) {
+                    alert('Please configure at least one briefs folder first.');
+                    return;
+                }
+                const sourceFolder = folders[0];
+                vscode.postMessage({
+                    type: 'createBrief',
+                    workspaceRoot: root,
+                    sourceFolder,
+                    title
+                });
+            });
+        }
+        if (btnDelete) {
+            btnDelete.addEventListener('click', () => {
+                if (!state.activeBriefSourceId || !state.activeBriefDocId) return;
+                if (!confirm('Are you sure you want to delete this brief? This action cannot be undone.')) return;
+                const wrapper = findTreeNode(state.activeBriefSourceId, state.activeBriefDocId);
+                const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : state.activeDocSourceFolder;
+                vscode.postMessage({
+                    type: 'deleteBrief',
+                    docId: state.activeBriefDocId,
+                    sourceFolder
+                });
+            });
+        }
+    })();
+
     // ── Stitch UI Controls ──
     const stitchProjectSelect = document.getElementById('stitch-project-select');
     const btnDownloadPalette = document.getElementById('btn-download-palette');
@@ -1186,6 +1405,7 @@
             designPreviewCollapsed: state.designPreviewCollapsed,
             htmlPreviewCollapsed: state.htmlPreviewCollapsed,
             imagesPreviewCollapsed: state.imagesPreviewCollapsed,
+            briefsPreviewCollapsed: state.briefsPreviewCollapsed,
             stitchThumbnailStripCollapsed: state.stitchThumbnailStripCollapsed
         });
     }
@@ -1264,6 +1484,8 @@
         if (previewBtnPng) previewBtnPng.disabled = busy;
         if (previewBtnEdit) previewBtnEdit.disabled = busy;
         if (previewBtnVariants) previewBtnVariants.disabled = busy;
+        const previewBtnVariantsDropdownToggle = document.getElementById('preview-btn-variants-dropdown-toggle');
+        if (previewBtnVariantsDropdownToggle) previewBtnVariantsDropdownToggle.disabled = busy;
         if (previewBtnReload) previewBtnReload.disabled = busy;
 
         if (btnStitchPromptGenerator) btnStitchPromptGenerator.disabled = busy;
@@ -1986,14 +2208,14 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
 
     document.getElementById('images-workspace-filter')?.addEventListener('change', (e) => {
         state.imagesWorkspaceRootFilter = e.target.value;
-        const msg = state._lastImagesDocsMsg || state._lastHtmlDocsMsg || {};
+        const msg = state._lastImagesDocsMsg || {};
         const filteredNodes = state.imagesWorkspaceRootFilter
             ? (msg.nodes || []).filter(n => n.metadata?.root === state.imagesWorkspaceRootFilter)
             : (msg.nodes || []);
         renderImagesDocs({
             sourceId: 'images-folder',
             nodes: filteredNodes,
-            folderPaths: getCurrentFolderPaths(state.htmlFolderPathsByRoot, state.imagesWorkspaceRootFilter),
+            folderPaths: getCurrentFolderPaths(state.imagesFolderPathsByRoot, state.imagesWorkspaceRootFilter),
             error: msg.error
         });
     });
@@ -2009,6 +2231,33 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
             sourceId: msg.sourceId || 'design-folder',
             nodes: filteredNodes,
             folderPaths: getCurrentFolderPaths(state.designFolderPathsByRoot, state.designWorkspaceRootFilter)
+        });
+    });
+
+    document.getElementById('briefs-workspace-filter')?.addEventListener('change', (e) => {
+        state.briefsWorkspaceRootFilter = e.target.value;
+        persistTab('briefs.root', state.briefsWorkspaceRootFilter);
+        const msg = state._lastBriefsDocsMsg || {};
+        const filteredNodes = state.briefsWorkspaceRootFilter
+            ? (msg.nodes || []).filter(n => n.metadata?.root === state.briefsWorkspaceRootFilter)
+            : (msg.nodes || []);
+        renderBriefsDocs({
+            sourceId: msg.sourceId || 'briefs-folder',
+            nodes: filteredNodes,
+            folderPaths: getCurrentFolderPaths(state.briefsFolderPathsByRoot, state.briefsWorkspaceRootFilter)
+        });
+    });
+
+    document.getElementById('briefs-docs-search')?.addEventListener('input', (e) => {
+        state.briefsDocsSearch = e.target.value;
+        const msg = state._lastBriefsDocsMsg || {};
+        const filteredNodes = state.briefsWorkspaceRootFilter
+            ? (msg.nodes || []).filter(n => n.metadata?.root === state.briefsWorkspaceRootFilter)
+            : (msg.nodes || []);
+        renderBriefsDocs({
+            sourceId: msg.sourceId || 'briefs-folder',
+            nodes: filteredNodes,
+            folderPaths: getCurrentFolderPaths(state.briefsFolderPathsByRoot, state.briefsWorkspaceRootFilter)
         });
     });
 
@@ -2042,14 +2291,14 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
 
     document.getElementById('images-docs-search')?.addEventListener('input', (e) => {
         state.imagesDocsSearch = e.target.value;
-        const msg = state._lastImagesDocsMsg || state._lastHtmlDocsMsg || {};
+        const msg = state._lastImagesDocsMsg || {};
         const filteredNodes = state.imagesWorkspaceRootFilter
             ? (msg.nodes || []).filter(n => n.metadata?.root === state.imagesWorkspaceRootFilter)
             : (msg.nodes || []);
         renderImagesDocs({
             sourceId: 'images-folder',
             nodes: filteredNodes,
-            folderPaths: getCurrentFolderPaths(state.htmlFolderPathsByRoot, state.imagesWorkspaceRootFilter),
+            folderPaths: getCurrentFolderPaths(state.imagesFolderPathsByRoot, state.imagesWorkspaceRootFilter),
             error: msg.error
         });
     });
@@ -2167,8 +2416,98 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 }
                 const designSelect = document.getElementById('design-workspace-filter');
                 if (designSelect) designSelect.value = state.designWorkspaceRootFilter;
+
+                const restoredBriefsRoot = _restoredPanelState.panel['briefs.root'] || '';
+                if (_workspaceItems.length === 0 || restoredBriefsRoot === '' || _workspaceItems.some(i => i.workspaceRoot === restoredBriefsRoot)) {
+                    state.briefsWorkspaceRootFilter = restoredBriefsRoot;
+                } else {
+                    state.briefsWorkspaceRootFilter = '';
+                }
+                const briefsSelect = document.getElementById('briefs-workspace-filter');
+                if (briefsSelect) briefsSelect.value = state.briefsWorkspaceRootFilter;
                 break;
             }
+            case 'briefsDocsReady':
+                state._lastBriefsDocsMsg = msg;
+                state.briefsFolderPathsByRoot = msg.folderPathsByRoot || {};
+                populateWorkspaceDropdown('briefs-workspace-filter', msg.workspaceItems || [], state.briefsWorkspaceRootFilter);
+                const filteredBriefsNodes = state.briefsWorkspaceRootFilter
+                    ? (msg.nodes || []).filter(n => n.metadata?.root === state.briefsWorkspaceRootFilter)
+                    : (msg.nodes || []);
+                renderBriefsDocs({
+                    sourceId: msg.sourceId || 'briefs-folder',
+                    nodes: filteredBriefsNodes,
+                    folderPaths: getCurrentFolderPaths(state.briefsFolderPathsByRoot, state.briefsWorkspaceRootFilter)
+                });
+                break;
+
+            case 'briefContentForInjectionReady': {
+                const promptInput = document.getElementById('stitch-prompt-input');
+                if (!promptInput) break;
+                
+                const templateHeader = "Here is the design brief for this task:";
+                const briefText = msg.content || '';
+                const injectionBlock = `\n\n${templateHeader}\n${briefText}`;
+                
+                const regex = /\n*Here is the design brief for this task:[\s\S]*$/;
+                if (regex.test(promptInput.value)) {
+                    promptInput.value = promptInput.value.replace(regex, injectionBlock);
+                } else {
+                    promptInput.value = promptInput.value + injectionBlock;
+                }
+                
+                promptInput.dispatchEvent(new Event('input'));
+                break;
+            }
+
+            case 'briefsFoldersListed': {
+                if (!state.briefsFolderPathsByRoot) state.briefsFolderPathsByRoot = {};
+                state.briefsFolderPathsByRoot[msg.workspaceRoot] = msg.paths || [];
+                if (folderModalScope === 'briefs') {
+                    renderFolderListModal();
+                }
+                updateBriefDocControls();
+                updateDestinationDropdowns();
+                break;
+            }
+
+            case 'briefCreated': {
+                if (msg.success) {
+                    const statusBriefs = document.getElementById('status-briefs');
+                    if (statusBriefs) {
+                        statusBriefs.textContent = 'Brief created';
+                        statusBriefs.style.color = 'var(--accent-teal)';
+                        setTimeout(() => { statusBriefs.textContent = ''; }, 2000);
+                    }
+                } else {
+                    alert('Failed to create brief: ' + (msg.error || 'unknown error'));
+                }
+                break;
+            }
+
+            case 'briefDeleted': {
+                if (msg.success) {
+                    state.activeBriefSourceId = null;
+                    state.activeBriefDocId = null;
+                    state.activeDocContent = null;
+                    state.activeDocFilePath = null;
+                    const previewBriefs = document.getElementById('markdown-preview-briefs');
+                    if (previewBriefs) {
+                        previewBriefs.innerHTML = '<div class="empty-state">Select a brief from the sidebar to preview</div>';
+                    }
+                    updateBriefDocControls();
+                    const statusBriefs = document.getElementById('status-briefs');
+                    if (statusBriefs) {
+                        statusBriefs.textContent = 'Brief deleted';
+                        statusBriefs.style.color = 'var(--accent-teal)';
+                        setTimeout(() => { statusBriefs.textContent = ''; }, 2000);
+                    }
+                } else {
+                    alert('Failed to delete brief: ' + (msg.error || 'unknown error'));
+                }
+                break;
+            }
+
             case 'designDocsReady':
                 state._lastDesignDocsMsg = msg;
                 state.designFolderPathsByRoot = msg.folderPathsByRoot || {};
@@ -2185,10 +2524,8 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
 
             case 'htmlDocsReady':
                 state._lastHtmlDocsMsg = msg;
-                state._lastImagesDocsMsg = msg;
                 state.htmlFolderPathsByRoot = msg.folderPathsByRoot || {};
                 populateWorkspaceDropdown('html-workspace-filter', msg.workspaceItems || [], state.htmlWorkspaceRootFilter);
-                populateWorkspaceDropdown('images-workspace-filter', msg.workspaceItems || [], state.imagesWorkspaceRootFilter);
                 const filteredHtmlNodes = state.htmlWorkspaceRootFilter
                     ? (msg.nodes || []).filter(n => n.metadata?.root === state.htmlWorkspaceRootFilter)
                     : (msg.nodes || []);
@@ -2198,13 +2535,19 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                     folderPaths: getCurrentFolderPaths(state.htmlFolderPathsByRoot, state.htmlWorkspaceRootFilter),
                     error: msg.error
                 });
+                break;
+
+            case 'imagesDocsReady':
+                state._lastImagesDocsMsg = msg;
+                state.imagesFolderPathsByRoot = msg.folderPathsByRoot || {};
+                populateWorkspaceDropdown('images-workspace-filter', msg.workspaceItems || [], state.imagesWorkspaceRootFilter);
                 const filteredImagesNodes = state.imagesWorkspaceRootFilter
                     ? (msg.nodes || []).filter(n => n.metadata?.root === state.imagesWorkspaceRootFilter)
                     : (msg.nodes || []);
                 renderImagesDocs({
                     sourceId: 'images-folder',
                     nodes: filteredImagesNodes,
-                    folderPaths: getCurrentFolderPaths(state.htmlFolderPathsByRoot, state.imagesWorkspaceRootFilter),
+                    folderPaths: getCurrentFolderPaths(state.imagesFolderPathsByRoot, state.imagesWorkspaceRootFilter),
                     error: msg.error
                 });
                 break;
@@ -2258,6 +2601,8 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                     activeStatus = 'status-design';
                 } else if (msg.sourceId === 'images-folder') {
                     activeStatus = 'status-images';
+                } else if (msg.sourceId === 'briefs-folder') {
+                    activeStatus = 'status-briefs';
                 } else {
                     activeStatus = 'status-html';
                 }
@@ -2290,6 +2635,37 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
             }
 
             case 'saveFileContentResult': {
+                if (msg.tab === 'briefs') {
+                    const editor = document.getElementById('markdown-editor-briefs');
+                    const statusBriefs = document.getElementById('status-briefs');
+                    if (msg.success) {
+                        state.activeDocContent = editor ? editor.value : state.activeDocContent;
+                        exitBriefEditMode();
+                        const mdPrevBriefs = document.getElementById('markdown-preview-briefs');
+                        if (mdPrevBriefs) mdPrevBriefs.innerHTML = renderMarkdown(state.activeDocContent) || '';
+                        if (statusBriefs) {
+                            statusBriefs.textContent = 'Saved successfully';
+                            statusBriefs.style.color = 'var(--accent-teal)';
+                            setTimeout(() => { statusBriefs.textContent = ''; statusBriefs.style.color = ''; }, 2000);
+                        }
+                    } else if (msg.conflict) {
+                        if (editor && state.activeDocFilePath) {
+                            vscode.postMessage({
+                                type: 'saveFileContent',
+                                filePath: state.activeDocFilePath,
+                                content: editor.value,
+                                originalContent: msg.diskContent,
+                                tab: 'briefs'
+                            });
+                        }
+                    } else {
+                        if (statusBriefs) {
+                            statusBriefs.textContent = 'Save failed: ' + (msg.error || 'unknown error');
+                            statusBriefs.style.color = '#ff6b6b';
+                        }
+                    }
+                    break;
+                }
                 if (msg.tab !== 'design') break;
                 const editor = document.getElementById('markdown-editor-design');
                 const statusDesign = document.getElementById('status-design');
@@ -2485,6 +2861,54 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
     });
 
     function initStitchControls() {
+        const btnAddBrief = document.getElementById('btn-stitch-add-brief');
+        const briefDropdownMenu = document.getElementById('stitch-briefs-dropdown-menu');
+        const briefListContainer = document.getElementById('stitch-briefs-list');
+
+        if (btnAddBrief && briefDropdownMenu && briefListContainer) {
+            btnAddBrief.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const visible = briefDropdownMenu.style.display === 'block';
+                if (!visible) {
+                    briefListContainer.innerHTML = '';
+                    const briefsMsg = state._lastBriefsDocsMsg || {};
+                    const nodes = briefsMsg.nodes || [];
+                    const briefs = nodes.filter(n => n.kind === 'document');
+                    if (briefs.length === 0) {
+                        briefListContainer.innerHTML = '<div style="font-size: 11px; color: var(--text-secondary); padding: 4px;">No briefs available</div>';
+                    } else {
+                        briefs.forEach(brief => {
+                            const item = document.createElement('div');
+                            item.className = 'dropdown-item';
+                            item.style.padding = '6px 8px';
+                            item.style.cursor = 'pointer';
+                            item.style.fontSize = '12px';
+                            item.style.borderBottom = '1px solid var(--border-color)';
+                            item.textContent = brief.title || brief.name;
+                            item.addEventListener('click', () => {
+                                briefDropdownMenu.style.display = 'none';
+                                vscode.postMessage({
+                                    type: 'fetchBriefForInjection',
+                                    docId: brief.id,
+                                    sourceFolder: brief.metadata ? brief.metadata.sourceFolder : undefined
+                                });
+                            });
+                            briefListContainer.appendChild(item);
+                        });
+                    }
+                    briefDropdownMenu.style.display = 'block';
+                } else {
+                    briefDropdownMenu.style.display = 'none';
+                }
+            });
+
+            document.addEventListener('click', (e) => {
+                if (!e.target.closest('.dropdown-container')) {
+                    briefDropdownMenu.style.display = 'none';
+                }
+            });
+        }
+
         if (stitchModelSelect) {
             stitchModelSelect.value = state.stitchModelId;
             stitchModelSelect.addEventListener('change', () => {
@@ -2563,6 +2987,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
         vscode.postMessage({ type: 'listHtmlFolders', workspaceRoot: root });
         vscode.postMessage({ type: 'listImagesFolders', workspaceRoot: root });
         vscode.postMessage({ type: 'listStitchFolders', workspaceRoot: root });
+        vscode.postMessage({ type: 'listBriefsFolders', workspaceRoot: root });
     }
 
     function updateDestinationDropdowns() {
@@ -2608,6 +3033,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
             else if (scope === 'html') modalTitle.textContent = 'Manage HTML Previews Folders';
             else if (scope === 'images') modalTitle.textContent = 'Manage Images Folders';
             else if (scope === 'stitch') modalTitle.textContent = 'Manage Stitch Folders';
+            else if (scope === 'briefs') modalTitle.textContent = 'Manage Briefs Folders';
         }
         if (modal) {
             modal.style.display = 'flex';
@@ -2634,6 +3060,9 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
         } else if (folderModalScope === 'stitch') {
             root = state.stitchWorkspaceRoot || '';
             folderPaths = state.stitchFolderPathsByRoot ? (state.stitchFolderPathsByRoot[root] || []) : [];
+        } else if (folderModalScope === 'briefs') {
+            root = state.briefsWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            folderPaths = state.briefsFolderPathsByRoot ? (state.briefsFolderPathsByRoot[root] || []) : [];
         }
 
         if (folderPaths.length === 0) {
@@ -2674,6 +3103,8 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                     vscode.postMessage({ type: 'removeImagesFolder', folderPath: path, workspaceRoot: root });
                 } else if (folderModalScope === 'stitch') {
                     vscode.postMessage({ type: 'removeStitchFolder', folderPath: path, workspaceRoot: root });
+                } else if (folderModalScope === 'briefs') {
+                    vscode.postMessage({ type: 'removeBriefsFolder', folderPath: path, workspaceRoot: root });
                 }
             });
 
@@ -2724,6 +3155,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
     document.getElementById('btn-manage-folders-html')?.addEventListener('click', () => openFoldersModal('html'));
     document.getElementById('btn-manage-folders-images')?.addEventListener('click', () => openFoldersModal('images'));
     document.getElementById('btn-manage-folders-stitch')?.addEventListener('click', () => openFoldersModal('stitch'));
+    document.getElementById('btn-manage-folders-briefs')?.addEventListener('click', () => openFoldersModal('briefs'));
 
     document.getElementById('btn-close-folder-modal')?.addEventListener('click', () => {
         const modal = document.getElementById('folder-modal');
@@ -2750,6 +3182,9 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
         } else if (folderModalScope === 'stitch') {
             root = state.stitchWorkspaceRoot || '';
             vscode.postMessage({ type: 'listStitchFolders', workspaceRoot: root });
+        } else if (folderModalScope === 'briefs') {
+            root = state.briefsWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            vscode.postMessage({ type: 'listBriefsFolders', workspaceRoot: root });
         }
     });
 
@@ -2767,8 +3202,13 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
         } else if (folderModalScope === 'stitch') {
             root = state.stitchWorkspaceRoot || '';
             vscode.postMessage({ type: 'addStitchFolder', workspaceRoot: root });
+        } else if (folderModalScope === 'briefs') {
+            root = state.briefsWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            vscode.postMessage({ type: 'addBriefsFolder', workspaceRoot: root });
         }
     });
+
+    registerWorkspaceDropdown('briefs-workspace-filter', 'briefs.root');
 
     initStitchControls();
 
@@ -2777,6 +3217,10 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
         if (designRow) designRow.classList.toggle('collapsed', !!state.designPreviewCollapsed);
         const htmlRow = document.getElementById('tree-pane-html')?.closest('.content-row');
         if (htmlRow) htmlRow.classList.toggle('collapsed', !!state.htmlPreviewCollapsed);
+        const briefsRow = document.getElementById('tree-pane-briefs')?.closest('.content-row');
+        if (briefsRow) briefsRow.classList.toggle('collapsed', !!state.briefsPreviewCollapsed);
+        const imagesRow = document.getElementById('tree-pane-images')?.closest('.content-row');
+        if (imagesRow) imagesRow.classList.toggle('collapsed', !!state.imagesPreviewCollapsed);
     }
 
     // Notify backend ready

@@ -175,6 +175,7 @@
         #online-content,
         #kanban-content,
         #design-content,
+        #briefs-content,
         #html-preview-content,
         #images-content,
         #tickets-content {
@@ -188,6 +189,7 @@
         #online-content.active,
         #kanban-content.active,
         #design-content.active,
+        #briefs-content.active,
         #html-preview-content.active,
         #images-content.active,
         #tickets-content.active {
@@ -286,6 +288,7 @@
         .content-row.collapsed #tree-pane,
         .content-row.collapsed #tree-pane-online,
         .content-row.collapsed #tree-pane-design,
+        .content-row.collapsed #tree-pane-briefs,
         .content-row.collapsed #tree-pane-html,
         .content-row.collapsed #tree-pane-images,
         .content-row.collapsed #tree-pane-tickets {
@@ -296,6 +299,7 @@
         .content-row.collapsed #tree-pane > *:not(.sidebar-toggle-row),
         .content-row.collapsed #tree-pane-online > *:not(.sidebar-toggle-row),
         .content-row.collapsed #tree-pane-design > *:not(.sidebar-toggle-row),
+        .content-row.collapsed #tree-pane-briefs > *:not(.sidebar-toggle-row),
         .content-row.collapsed #tree-pane-html > *:not(.sidebar-toggle-row),
         .content-row.collapsed #tree-pane-images > *:not(.sidebar-toggle-row),
         .content-row.collapsed #tree-pane-tickets > *:not(.sidebar-toggle-row) {
@@ -663,6 +667,7 @@
         #tree-pane,
         #tree-pane-online,
         #tree-pane-design,
+        #tree-pane-briefs,
         #tree-pane-html,
         #tree-pane-images,
         #tree-pane-tickets {
@@ -2190,6 +2195,7 @@
         .cyber-theme-enabled #tree-pane,
         .cyber-theme-enabled #tree-pane-online,
         .cyber-theme-enabled #tree-pane-design,
+        .cyber-theme-enabled #tree-pane-briefs,
         .cyber-theme-enabled #tree-pane-html,
         .cyber-theme-enabled #tree-pane-images,
         .cyber-theme-enabled #tree-pane-tickets {
@@ -2257,6 +2263,7 @@
         .cyber-theme-enabled #local-content,
         .cyber-theme-enabled #online-content,
         .cyber-theme-enabled #design-content,
+        .cyber-theme-enabled #briefs-content,
         .cyber-theme-enabled #html-preview-content,
         .cyber-theme-enabled #images-content,
         .cyber-theme-enabled #tickets-content,
@@ -3481,12 +3488,49 @@
 </head>
 <body class="cyber-theme-enabled">
     <div id="research-tab-bar" class="research-tab-bar">
+        <button class="research-tab-btn" data-tab="briefs">BRIEFS</button>
         <button class="research-tab-btn active" data-tab="stitch">STITCH</button>
         <button class="research-tab-btn" data-tab="html-preview">HTML PREVIEWS</button>
         <button class="research-tab-btn" data-tab="images">IMAGES</button>
         <button class="research-tab-btn" data-tab="design">DESIGN SYSTEM</button>
     </div>
     <div class="container">
+        <!-- Briefs Tab -->
+        <div id="briefs-content" class="research-tab-content">
+            <div class="controls-strip" id="controls-strip-briefs">
+                <select id="briefs-workspace-filter" class="workspace-filter-select">
+                    <option value="">All Workspaces</option>
+                </select>
+                <button id="btn-manage-folders-briefs" class="strip-btn">Manage Folders</button>
+                <button id="btn-new-brief" class="strip-btn">New Brief</button>
+                <button id="btn-delete-brief" class="strip-btn" disabled>Delete</button>
+                <button id="btn-edit-brief" class="strip-btn" disabled>Edit</button>
+                <button id="btn-save-brief" class="strip-btn" style="display:none;">Save</button>
+                <button id="btn-cancel-brief" class="strip-btn" style="display:none;">Cancel</button>
+                <input type="text" id="briefs-docs-search" class="sidebar-search-input" placeholder="Search briefs..." />
+                <span id="status-briefs"></span>
+            </div>
+            <div class="content-row">
+                <div id="tree-pane-briefs">
+                    <div class="sidebar-toggle-row">
+                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                    </div>
+                    <div class="empty-state">Loading briefs...</div>
+                </div>
+                <div class="preview-panel-wrapper">
+                    <div id="preview-pane-briefs" style="flex: 1; width: 100%; box-sizing: border-box; overflow: auto; height: 100%;">
+                        <div class="preview-content-wrapper" style="height: 100%; display: flex; flex-direction: column;">
+                            <div id="markdown-preview-briefs">
+                                <div class="empty-state">Select a brief from the sidebar to preview</div>
+                            </div>
+                            <textarea id="markdown-editor-briefs" class="markdown-editor" style="display:none; width: 100%; height: 100%; box-sizing: border-box; resize: none;"></textarea>
+                        </div>
+                    </div>
+                    <div class="cyber-scanlines"></div>
+                </div>
+            </div>
+        </div>
+
         <!-- Design System Tab -->
         <div id="design-content" class="research-tab-content">
             <div class="controls-strip" id="controls-strip-design">
@@ -3682,6 +3726,15 @@
                     <option value="GEMINI_3_1_PRO">Pro (Quality)</option>
                 </select>
                 <button id="btn-stitch-prompt-generator" class="strip-btn" title="Convert uploaded images to Stitch design prompts">Image to Prompt</button>
+                <div class="dropdown-container" style="display: inline-flex; position: relative;">
+                    <button id="btn-stitch-add-brief" class="strip-btn" title="Append design brief to prompt">Add Brief</button>
+                    <div id="stitch-briefs-dropdown-menu" style="display: none; position: absolute; bottom: 100%; left: 0; background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); z-index: 1000; padding: 8px; min-width: 200px; margin-bottom: 4px;">
+                        <div style="font-weight: 600; font-size: 11px; margin-bottom: 6px; color: var(--text-primary); text-transform: uppercase;">Select Brief</div>
+                        <div id="stitch-briefs-list" style="display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto;">
+                            <!-- populated dynamically in JS -->
+                        </div>
+                    </div>
+                </div>
                 <button id="btn-generate-stitch" class="strip-btn stitch-btn-primary" disabled>Generate Screen</button>
             </div>
 

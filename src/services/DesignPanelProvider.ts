@@ -36,8 +36,12 @@ export class DesignPanelProvider implements vscode.Disposable {
     private _nonce: string = '';
     private _htmlFolderWatchers: vscode.FileSystemWatcher[] = [];
     private _designFolderWatchers: vscode.FileSystemWatcher[] = [];
+    private _imagesFolderWatchers: vscode.FileSystemWatcher[] = [];
+    private _briefsFolderWatchers: vscode.FileSystemWatcher[] = [];
     private _htmlDocsDebounce?: NodeJS.Timeout;
     private _designDocsDebounce?: NodeJS.Timeout;
+    private _imagesDocsDebounce?: NodeJS.Timeout;
+    private _briefsDocsDebounce?: NodeJS.Timeout;
     private _activeScreens = new Map<string, any>(); // Key: screen.id, Value: SDK Screen instance
     private _activeDesignSystemDocSourceId: string | null = null;
     private _activeDesignSystemDocId: string | null = null;
@@ -108,6 +112,8 @@ export class DesignPanelProvider implements vscode.Disposable {
 
         this._setupHtmlFolderWatchers();
         this._setupDesignFolderWatchers();
+        this._setupImagesFolderWatchers();
+        this._setupBriefsFolderWatchers();
 
         this._disposables.push(
             vscode.workspace.onDidChangeWorkspaceFolders(() => {
@@ -163,6 +169,10 @@ export class DesignPanelProvider implements vscode.Disposable {
         this._htmlFolderWatchers = [];
         this._designFolderWatchers.forEach(w => w.dispose());
         this._designFolderWatchers = [];
+        this._imagesFolderWatchers.forEach(w => w.dispose());
+        this._imagesFolderWatchers = [];
+        this._briefsFolderWatchers.forEach(w => w.dispose());
+        this._briefsFolderWatchers = [];
     }
 
     private _getHtml(webview: vscode.Webview): string {
@@ -399,6 +409,150 @@ export class DesignPanelProvider implements vscode.Disposable {
         }, 300);
     }
 
+    private _setupImagesFolderWatchers(): void {
+        const roots = this._getWorkspaceRoots();
+        for (const root of roots) {
+            try {
+                const service = this._getLocalFolderService(root);
+                const paths = service.getImagesFolderPaths();
+                for (const p of paths) {
+                    if (fs.existsSync(p)) {
+                        const pattern = new vscode.RelativePattern(p, '**/*');
+                        const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+                        watcher.onDidChange(() => this._sendImagesDocsReady());
+                        watcher.onDidCreate(() => this._sendImagesDocsReady());
+                        watcher.onDidDelete(() => this._sendImagesDocsReady());
+                        this._imagesFolderWatchers.push(watcher);
+                    }
+                }
+            } catch {}
+        }
+    }
+
+    private async _sendImagesDocsReady(): Promise<void> {
+        if (this._imagesDocsDebounce) {
+            clearTimeout(this._imagesDocsDebounce);
+        }
+        this._imagesDocsDebounce = setTimeout(async () => {
+            this._imagesDocsDebounce = undefined;
+            try {
+                const allRoots = this._getWorkspaceRoots();
+                const allFiles: any[] = [];
+                const seenFilePaths = new Set<string>();
+                const configuredFolderPathsByRoot: Record<string, string[]> = {};
+
+                for (const root of allRoots) {
+                    try {
+                        const localFolderService = this._getLocalFolderService(root);
+                        const folderPaths = localFolderService.getImagesFolderPaths();
+                        configuredFolderPathsByRoot[root] = folderPaths;
+
+                        const files = await localFolderService.listImagesFiles();
+                        for (const f of files) {
+                            const absPath = path.resolve(f.sourceFolder, f.relativePath);
+                            if (!seenFilePaths.has(absPath)) {
+                                seenFilePaths.add(absPath);
+                                allFiles.push({ ...f, _root: root });
+                            }
+                        }
+                    } catch {}
+                }
+
+                if (!this._panel) return;
+                this._updateWebviewRoots();
+
+                this._panel.webview.postMessage({
+                    type: 'imagesDocsReady',
+                    sourceId: 'images-folder',
+                    folderPathsByRoot: configuredFolderPathsByRoot,
+                    nodes: this._mapLocalFilesToTreeNodes(allFiles),
+                    workspaceItems: this._buildKanbanWorkspaceItems()
+                });
+            } catch (err) {
+                this._panel?.webview.postMessage({
+                    type: 'imagesDocsReady',
+                    sourceId: 'images-folder',
+                    folderPathsByRoot: {},
+                    nodes: [],
+                    workspaceItems: this._buildKanbanWorkspaceItems(),
+                    error: String(err)
+                });
+            }
+        }, 300);
+    }
+
+    private _setupBriefsFolderWatchers(): void {
+        const roots = this._getWorkspaceRoots();
+        for (const root of roots) {
+            try {
+                const service = this._getLocalFolderService(root);
+                const paths = service.getBriefsFolderPaths();
+                for (const p of paths) {
+                    if (fs.existsSync(p)) {
+                        const pattern = new vscode.RelativePattern(p, '**/*');
+                        const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+                        watcher.onDidChange(() => this._sendBriefsDocsReady());
+                        watcher.onDidCreate(() => this._sendBriefsDocsReady());
+                        watcher.onDidDelete(() => this._sendBriefsDocsReady());
+                        this._briefsFolderWatchers.push(watcher);
+                    }
+                }
+            } catch {}
+        }
+    }
+
+    private async _sendBriefsDocsReady(): Promise<void> {
+        if (this._briefsDocsDebounce) {
+            clearTimeout(this._briefsDocsDebounce);
+        }
+        this._briefsDocsDebounce = setTimeout(async () => {
+            this._briefsDocsDebounce = undefined;
+            try {
+                const allRoots = this._getWorkspaceRoots();
+                const allFiles: any[] = [];
+                const seenFilePaths = new Set<string>();
+                const configuredFolderPathsByRoot: Record<string, string[]> = {};
+
+                for (const root of allRoots) {
+                    try {
+                        const localFolderService = this._getLocalFolderService(root);
+                        const folderPaths = localFolderService.getBriefsFolderPaths();
+                        configuredFolderPathsByRoot[root] = folderPaths;
+
+                        const files = await localFolderService.listBriefsFiles();
+                        for (const f of files) {
+                            const absPath = path.resolve(f.sourceFolder, f.relativePath);
+                            if (!seenFilePaths.has(absPath)) {
+                                seenFilePaths.add(absPath);
+                                allFiles.push({ ...f, _root: root });
+                            }
+                        }
+                    } catch {}
+                }
+
+                if (!this._panel) return;
+                this._updateWebviewRoots();
+
+                this._panel.webview.postMessage({
+                    type: 'briefsDocsReady',
+                    sourceId: 'briefs-folder',
+                    folderPathsByRoot: configuredFolderPathsByRoot,
+                    nodes: this._mapLocalFilesToTreeNodes(allFiles),
+                    workspaceItems: this._buildKanbanWorkspaceItems()
+                });
+            } catch (err) {
+                this._panel?.webview.postMessage({
+                    type: 'briefsDocsReady',
+                    sourceId: 'briefs-folder',
+                    folderPathsByRoot: {},
+                    nodes: [],
+                    workspaceItems: this._buildKanbanWorkspaceItems(),
+                    error: String(err)
+                });
+            }
+        }, 300);
+    }
+
     private _updateWebviewRoots(): void {
         if (!this._panel) return;
         const allRoots = this._getWorkspaceRoots();
@@ -413,6 +567,15 @@ export class DesignPanelProvider implements vscode.Disposable {
                     folderUris.push(vscode.Uri.file(p));
                 }
                 for (const p of service.getFolderPaths()) {
+                    folderUris.push(vscode.Uri.file(p));
+                }
+                for (const p of service.getImagesFolderPaths()) {
+                    folderUris.push(vscode.Uri.file(p));
+                }
+                for (const p of service.getStitchFolderPaths()) {
+                    folderUris.push(vscode.Uri.file(p));
+                }
+                for (const p of service.getBriefsFolderPaths()) {
                     folderUris.push(vscode.Uri.file(p));
                 }
             } catch {}
@@ -675,7 +838,7 @@ export class DesignPanelProvider implements vscode.Disposable {
             case 'ready': {
                 const allRoots = this._getWorkspaceRoots();
                 const items = buildWorkspaceItems(allRoots);
-                const tabKeys = ['stitch', 'html-preview', 'images', 'design', 'html.root', 'design.root'];
+                const tabKeys = ['stitch', 'html-preview', 'images', 'design', 'html.root', 'design.root', 'briefs', 'briefs.root'];
                 const statePayload = this._stateStore.getAllStates(tabKeys, allRoots);
                 this.postMessage({
                     type: 'workspaceItemsUpdated',
@@ -693,6 +856,8 @@ export class DesignPanelProvider implements vscode.Disposable {
                 this.postMessage({ type: 'cyberAnimationSetting', disabled: themeConfig.get<boolean>('theme.disableCyberAnimation', false) });
                 await this._sendHtmlDocsReady();
                 await this._sendDesignDocsReady();
+                await this._sendImagesDocsReady();
+                await this._sendBriefsDocsReady();
                 await this._sendActiveDesignDocState();
                 break;
             }
@@ -768,7 +933,8 @@ export class DesignPanelProvider implements vscode.Disposable {
                             const service = this._getLocalFolderService(r);
                             const allAllowedPaths = [
                                 ...service.getDesignFolderPaths(),
-                                ...service.getHtmlFolderPaths()
+                                ...service.getHtmlFolderPaths(),
+                                ...service.getBriefsFolderPaths()
                             ];
                             if (allAllowedPaths.some(dp => resolved.startsWith(path.resolve(dp) + path.sep))) {
                                 isAllowed = true;
@@ -829,18 +995,19 @@ export class DesignPanelProvider implements vscode.Disposable {
                         ? rawDocId.substring(rawDocId.indexOf(':') + 1)
                         : rawDocId;
 
-                    // Only configured design/html folders may be read from.
+                    // Only configured design/html/briefs folders may be read from.
                     const allowedFolders = new Set<string>();
                     for (const root of this._getWorkspaceRoots()) {
                         try {
                             const svc = this._getLocalFolderService(root);
                             svc.getDesignFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
                             svc.getHtmlFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
+                            svc.getBriefsFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
                         } catch {}
                     }
                     const resolvedFolder = path.resolve(sourceFolder);
                     if (!allowedFolders.has(resolvedFolder)) {
-                        throw new Error('sourceFolder is not a configured design/html folder');
+                        throw new Error('sourceFolder is not a configured design/html/briefs folder');
                     }
                     const absPath = path.resolve(resolvedFolder, relativePath);
                     if (absPath !== resolvedFolder && !absPath.startsWith(resolvedFolder + path.sep)) {
@@ -1231,6 +1398,8 @@ export class DesignPanelProvider implements vscode.Disposable {
                 if (result && result.length > 0) {
                     const service = this._getLocalFolderService(root);
                     await service.addImagesFolderPath(result[0].fsPath);
+                    this._setupImagesFolderWatchers();
+                    await this._sendImagesDocsReady();
                     this.postMessage({ type: 'imagesFoldersListed', paths: service.getImagesFolderPaths(), workspaceRoot: root });
                 }
                 break;
@@ -1239,6 +1408,8 @@ export class DesignPanelProvider implements vscode.Disposable {
                 const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
                 const service = this._getLocalFolderService(root);
                 await service.removeImagesFolderPath(message.folderPath);
+                this._setupImagesFolderWatchers();
+                await this._sendImagesDocsReady();
                 this.postMessage({ type: 'imagesFoldersListed', paths: service.getImagesFolderPaths(), workspaceRoot: root });
                 break;
             }
@@ -1270,6 +1441,140 @@ export class DesignPanelProvider implements vscode.Disposable {
                 const service = this._getLocalFolderService(root);
                 await service.removeStitchFolderPath(message.folderPath);
                 this.postMessage({ type: 'stitchFoldersListed', paths: service.getStitchFolderPaths(), workspaceRoot: root });
+                break;
+            }
+
+            case 'listBriefsFolders': {
+                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                const service = this._getLocalFolderService(root);
+                const paths = service.getBriefsFolderPaths();
+                this.postMessage({ type: 'briefsFoldersListed', paths, workspaceRoot: root });
+                break;
+            }
+            case 'addBriefsFolder': {
+                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                const result = await vscode.window.showOpenDialog({
+                    openLabel: 'Add Briefs Folder',
+                    canSelectFiles: false,
+                    canSelectFolders: true,
+                    canSelectMany: false
+                });
+                if (result && result.length > 0) {
+                    const service = this._getLocalFolderService(root);
+                    await service.addBriefsFolderPath(result[0].fsPath);
+                    this._setupBriefsFolderWatchers();
+                    await this._sendBriefsDocsReady();
+                    this.postMessage({ type: 'briefsFoldersListed', paths: service.getBriefsFolderPaths(), workspaceRoot: root });
+                }
+                break;
+            }
+            case 'removeBriefsFolder': {
+                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                const service = this._getLocalFolderService(root);
+                await service.removeBriefsFolderPath(message.folderPath);
+                this._setupBriefsFolderWatchers();
+                await this._sendBriefsDocsReady();
+                this.postMessage({ type: 'briefsFoldersListed', paths: service.getBriefsFolderPaths(), workspaceRoot: root });
+                break;
+            }
+            case 'createBrief': {
+                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                const sourceFolder = message.sourceFolder;
+                const title = message.title;
+                if (!sourceFolder || !title) {
+                    this.postMessage({ type: 'briefCreated', success: false, error: 'Source folder and title are required' });
+                    break;
+                }
+                try {
+                    let fileName = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+                    if (!fileName) {
+                        fileName = 'untitled';
+                    }
+                    fileName = fileName + '.md';
+                    const fullPath = path.join(sourceFolder, fileName);
+                    
+                    let finalPath = fullPath;
+                    let counter = 1;
+                    while (fs.existsSync(finalPath)) {
+                        finalPath = path.join(sourceFolder, `${path.basename(fileName, '.md')}-${counter}.md`);
+                        counter++;
+                    }
+                    
+                    const content = `# ${title}\n\n`;
+                    await fs.promises.mkdir(path.dirname(finalPath), { recursive: true });
+                    await fs.promises.writeFile(finalPath, content, 'utf8');
+                    
+                    await this._sendBriefsDocsReady();
+                    this.postMessage({ type: 'briefCreated', success: true });
+                } catch (err: any) {
+                    this.postMessage({ type: 'briefCreated', success: false, error: String(err) });
+                }
+                break;
+            }
+            case 'deleteBrief': {
+                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                const sourceFolder = message.sourceFolder;
+                const docId = message.docId;
+                if (!sourceFolder || !docId) {
+                    this.postMessage({ type: 'briefDeleted', success: false, error: 'Source folder and docId are required' });
+                    break;
+                }
+                try {
+                    const relativePath = docId.includes(':')
+                        ? docId.substring(docId.indexOf(':') + 1)
+                        : docId;
+                    
+                    const resolvedFolder = path.resolve(sourceFolder);
+                    const absPath = path.resolve(resolvedFolder, relativePath);
+                    if (absPath !== resolvedFolder && !absPath.startsWith(resolvedFolder + path.sep)) {
+                        throw new Error('Invalid path traversal');
+                    }
+                    
+                    const service = this._getLocalFolderService(root);
+                    if (!service.getBriefsFolderPaths().map(p => path.resolve(p)).includes(resolvedFolder)) {
+                        throw new Error('Folder is not a configured briefs folder');
+                    }
+                    
+                    if (fs.existsSync(absPath)) {
+                        await fs.promises.unlink(absPath);
+                    }
+                    await this._sendBriefsDocsReady();
+                    this.postMessage({ type: 'briefDeleted', success: true });
+                } catch (err: any) {
+                    this.postMessage({ type: 'briefDeleted', success: false, error: String(err) });
+                }
+                break;
+            }
+            case 'fetchBriefForInjection': {
+                try {
+                    const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                    const sourceFolder = message.sourceFolder;
+                    if (!sourceFolder) throw new Error('sourceFolder is required');
+                    
+                    const rawDocId = String(message.docId || '');
+                    const relativePath = rawDocId.includes(':')
+                        ? rawDocId.substring(rawDocId.indexOf(':') + 1)
+                        : rawDocId;
+                    
+                    const resolvedFolder = path.resolve(sourceFolder);
+                    const absPath = path.resolve(resolvedFolder, relativePath);
+                    if (absPath !== resolvedFolder && !absPath.startsWith(resolvedFolder + path.sep)) {
+                        throw new Error('Invalid file path');
+                    }
+                    
+                    const service = this._getLocalFolderService(root);
+                    if (!service.getBriefsFolderPaths().map(p => path.resolve(p)).includes(resolvedFolder)) {
+                        throw new Error('Folder is not configured briefs folder');
+                    }
+
+                    const content = await fs.promises.readFile(absPath, 'utf8');
+                    this.postMessage({
+                        type: 'briefContentForInjectionReady',
+                        content
+                    });
+                } catch (err: any) {
+                    vscode.window.showErrorMessage('Failed to fetch brief: ' + err.message);
+                }
                 break;
             }
 
