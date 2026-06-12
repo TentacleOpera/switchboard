@@ -1602,6 +1602,7 @@ export async function activate(context: vscode.ExtensionContext) {
     );
 
     async function _syncTerminalRegistryWithStateImpl(workspaceRoot: string) {
+        outputChannel?.appendLine(`[Extension] syncTerminalRegistryWithState called for ${workspaceRoot}`);
         // NOTE: PID resolution retained for backward compatibility — name + ideName matching is preferred
         const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
         if (!fs.existsSync(statePath)) return;
@@ -2228,6 +2229,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }
         const verifyWorkspace = () => kanbanProvider!.getCurrentWorkspaceRoot() === currentWorkspaceRoot;
         const effectiveWorkspaceRoot = kanbanProvider!.resolveEffectiveWorkspaceRoot(currentWorkspaceRoot);
+        const gridTerminals = new Map<string, vscode.Terminal>();
         let effectiveCwd = effectiveWorkspaceRoot;
         if (options?.cwdOverride) {
             if (fs.existsSync(options.cwdOverride)) {
@@ -2382,6 +2384,7 @@ export async function activate(context: vscode.ExtensionContext) {
                     worktreePath: effectiveCwd
                 });
                 outputChannel?.appendLine(`[Extension] Queued grid terminal '${agent.name}' (PID: null — skipParentResolution) for batch registration`);
+                gridTerminals.set(suffixedName(agent.name), terminal);
                 registeredTerminals.set(suffixedName(agent.name), terminal);
                 terminal.show();
                 if (!alreadyExisted) {
@@ -2440,7 +2443,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 for (const agent of agents) {
                     let cmd = await taskViewerProvider.getAgentStartupCommand(agent.role, effectiveWorkspaceRoot);
                     if (cmd && cmd.trim()) {
-                        const terminal = registeredTerminals.get(suffixedName(agent.name));
+                        const terminal = gridTerminals.get(suffixedName(agent.name));
                         if (terminal) {
                             terminal.sendText(cmd.trim(), true);
                             outputChannel?.appendLine(`[Extension] Sent startup command for '${agent.name}' (${agent.role}): ${cmd.trim()}`);
@@ -2449,8 +2452,12 @@ export async function activate(context: vscode.ExtensionContext) {
                             const binary = cmd.trim().split(/\s+/)[0];
                             const displayName = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase() + ' CLI';
                             taskViewerProvider.setTerminalAgentInfo(suffixedName(agent.name), agent.role, displayName);
+
+                            if (!registeredTerminals.has(suffixedName(agent.name))) {
+                                outputChannel?.appendLine(`[Extension] Startup command sent via local reference (registeredTerminals missing for '${agent.name}')`);
+                            }
                         } else {
-                            outputChannel?.appendLine(`[Extension] WARNING: terminal not found in registeredTerminals for '${agent.name}' (key=${suffixedName(agent.name)})`);
+                            outputChannel?.appendLine(`[Extension] WARNING: terminal not found in gridTerminals for '${agent.name}' (key=${suffixedName(agent.name)})`);
                         }
                     } else {
                         outputChannel?.appendLine(`[Extension] WARNING: empty startup command for '${agent.name}' (${agent.role}), cmd='${cmd || ''}'`);
