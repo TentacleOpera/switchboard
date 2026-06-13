@@ -118,58 +118,6 @@
             height: calc(100vh - 40px);
         }
 
-        /* Tab Bar - Kanban Dark Theme */
-        .research-tab-bar {
-            display: flex;
-            flex-direction: row;
-            border-bottom: 1px solid var(--border-color);
-            background: var(--panel-bg2);
-            height: 40px;
-            overflow-x: auto;
-        }
-
-        .research-tab-btn {
-            flex-shrink: 0;
-            white-space: nowrap;
-            padding: 0 16px;
-            font-size: 11px;
-            font-family: var(--font-mono);
-            letter-spacing: 0.5px;
-            text-transform: uppercase;
-            background: transparent;
-            color: var(--text-secondary);
-            border: 1px solid transparent;
-            border-bottom: none;
-            border-radius: 3px 3px 0 0;
-            position: relative;
-            top: 1px;
-            cursor: pointer;
-            transition: all 0.15s;
-        }
-
-        .research-tab-btn:hover {
-            color: var(--text-primary);
-            background: color-mix(in srgb, var(--accent-teal) 5%, transparent);
-        }
-
-        .research-tab-btn.active {
-            color: var(--accent-teal);
-            background: var(--panel-bg2);
-            border-color: var(--border-color);
-            border-bottom-color: var(--panel-bg2);
-        }
-
-        /* Tab Content Areas */
-        .research-tab-content {
-            display: none;
-            flex: 1;
-            overflow: hidden;
-        }
-
-        .research-tab-content.active {
-            display: block;
-        }
-
         #local-content,
         #online-content,
         #kanban-content,
@@ -2106,10 +2054,7 @@
         .cyber-theme-enabled .kanban-column-badge[data-column="CODE_REVIEWED"] { box-shadow: 0 0 6px rgba(255, 138, 101, 0.3); }
         .cyber-theme-enabled .kanban-column-badge[data-column="COMPLETED"] { box-shadow: 0 0 6px rgba(102, 187, 106, 0.3); }
 
-        /* Active tab: glow accent */
-        .cyber-theme-enabled .research-tab-btn.active {
-            box-shadow: 0 -2px 8px color-mix(in srgb, var(--accent-teal) 30%, transparent);
-        }
+
 
         /* Controls strip buttons: glow on hover */
         .cyber-theme-enabled .strip-btn:hover:not(:disabled) {
@@ -2128,13 +2073,7 @@
             background-size: 40px 40px, 40px 40px;
         }
 
-        /* Tab bar */
-        .cyber-theme-enabled .research-tab-bar {
-            background: rgba(10, 10, 10, 0.65);
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            border-bottom-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
-        }
+
 
         /* Controls strip */
         .cyber-theme-enabled .controls-strip {
@@ -2902,22 +2841,21 @@
         }
         .kanban-log-close:hover {
             background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
-            border-color: var(--accent-teal);
-        }
     </style>
+    <link rel="stylesheet" href="shared-tabs.css">
 </head>
 <body class="cyber-theme-enabled">
-    <div id="research-tab-bar" class="research-tab-bar">
-        <button class="research-tab-btn active" data-tab="local">LOCAL DOCS</button>
-        <button class="research-tab-btn" data-tab="online">ONLINE DOCS</button>
-        <button class="research-tab-btn" data-tab="kanban">KANBAN PLANS</button>
-        <button class="research-tab-btn" data-tab="tickets">TICKETS</button>
-        <button class="research-tab-btn" data-tab="research">RESEARCH</button>
-        <button class="research-tab-btn" data-tab="notebook">NotebookLM</button>
+    <div id="research-tab-bar" class="shared-tab-bar">
+        <button class="shared-tab-btn active" data-tab="local">LOCAL DOCS</button>
+        <button class="shared-tab-btn" data-tab="online">ONLINE DOCS</button>
+        <button class="shared-tab-btn" data-tab="kanban">KANBAN PLANS</button>
+        <button class="shared-tab-btn" data-tab="tickets">TICKETS</button>
+        <button class="shared-tab-btn" data-tab="research">RESEARCH</button>
+        <button class="shared-tab-btn" data-tab="notebook">NotebookLM</button>
     </div>
     <div class="container">
         <!-- Local Docs Tab: breadcrumb on top, then sidebar + content -->
-        <div id="local-content" class="research-tab-content active">
+        <div id="local-content" class="shared-tab-content active">
             <div class="active-doc-banner inactive" id="active-doc-banner-local">
                 <div class="active-doc-info">
                     <span class="active-doc-label">Active Planning Epic:</span>
@@ -2968,7 +2906,7 @@
         </div>
 
         <!-- Online Docs Tab: same structure -->
-        <div id="online-content" class="research-tab-content">
+        <div id="online-content" class="shared-tab-content">
             <div class="active-doc-banner inactive" id="active-doc-banner-online">
                 <div class="active-doc-info">
                     <span class="active-doc-label">Active Planning Epic:</span>
@@ -3007,7 +2945,7 @@
                 </div>
             </div>
         </div>
-        <div id="notebook-content" class="research-tab-content">
+        <div id="notebook-content" class="shared-tab-content">
             <!-- NotebookLM Card -->
             <div class="planning-card">
                 <div class="planning-card-header">NOTEBOOKLM INTEGRATION</div>
@@ -3051,7 +2989,7 @@
                 </div>
             </div>
         </div>
-        <div id="research-content" class="research-tab-content">
+        <div id="research-content" class="shared-tab-content">
             <div style="margin-bottom: 16px; font-size: 12px; color: var(--text-secondary); line-height: 1.4;">
                 Switchboard Research offers an easy way to use Google AI Studio to quickly perform high quality research, and get the results back into your workspace as a fully formatted document.
             </div>
@@ -3115,7 +3053,7 @@
             </div>
         </div>
         <!-- Kanban Plans Content -->
-        <div id="kanban-content" class="research-tab-content">
+        <div id="kanban-content" class="shared-tab-content">
 
             <!-- Controls strip -->
             <div class="kanban-controls-strip">
@@ -3156,7 +3094,7 @@
             </div>
         </div>
 
-        <div id="tickets-content" class="research-tab-content">
+        <div id="tickets-content" class="shared-tab-content">
             <div class="controls-strip" id="controls-strip-tickets">
                 <div class="tickets-workspace-picker">
                     <select id="tickets-workspace-filter" class="workspace-filter-select" style="display:none;"></select>

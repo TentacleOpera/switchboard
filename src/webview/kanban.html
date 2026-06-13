@@ -977,59 +977,6 @@
           margin-bottom: 2px !important; /* Clarification: Scoped explicitly to prevent regressions */
         }
 
-        /* Kanban Tab Navigation Styles */
-        .kanban-tab-bar {
-            display: flex;
-            align-items: center;
-            gap: 2px;
-            padding: 8px 16px 0;
-            background: var(--panel-bg);
-            border-bottom: 1px solid var(--border-color);
-            overflow-x: auto;
-        }
-
-        .kanban-tab-btn {
-            flex-shrink: 0;
-            white-space: nowrap;
-            background: transparent;
-            border: 1px solid transparent;
-            border-bottom: none;
-            color: var(--text-secondary);
-            font-family: var(--font-mono);
-            font-size: 10px;
-            letter-spacing: 1px;
-            text-transform: uppercase;
-            padding: 8px 16px;
-            cursor: pointer;
-            border-radius: 3px 3px 0 0;
-            transition: all 0.15s;
-            position: relative;
-            top: 1px;
-        }
-
-        .kanban-tab-btn:hover {
-            color: var(--text-primary);
-            background: color-mix(in srgb, var(--accent-teal) 5%, transparent);
-        }
-
-        .kanban-tab-btn.active {
-            color: var(--accent-teal);
-            background: var(--panel-bg2);
-            border-color: var(--border-color);
-            border-bottom-color: var(--panel-bg2);
-        }
-
-        .kanban-tab-content {
-            display: none;
-            flex: 1;
-            flex-direction: column;
-            overflow: hidden;
-        }
-
-        .kanban-tab-content.active {
-            display: flex;
-        }
-
         /* Drag-Drop Mode Toggle Styles */
         .mode-toggle {
             display: flex;
@@ -2187,22 +2134,23 @@
         }
 
     </style>
+    <link rel="stylesheet" href="shared-tabs.css">
 </head>
 
     <body>
-    <div class="kanban-tab-bar">
-        <button class="kanban-tab-btn active" data-tab="kanban">KANBAN</button>
-        <button class="kanban-tab-btn" data-tab="agents">AGENTS</button>
-        <button class="kanban-tab-btn" data-tab="prompts">PROMPTS</button>
-        <button class="kanban-tab-btn" data-tab="automation">AUTOMATION</button>
-        <button class="kanban-tab-btn" data-tab="worktrees">WORKTREES</button>
+    <div class="shared-tab-bar">
+        <button class="shared-tab-btn active" data-tab="kanban">KANBAN</button>
+        <button class="shared-tab-btn" data-tab="agents">AGENTS</button>
+        <button class="shared-tab-btn" data-tab="prompts">PROMPTS</button>
+        <button class="shared-tab-btn" data-tab="automation">AUTOMATION</button>
+        <button class="shared-tab-btn" data-tab="worktrees">WORKTREES</button>
 
-        <button class="kanban-tab-btn" data-tab="uat">UAT</button>
-        <button class="kanban-tab-btn" data-tab="setup">SETUP</button>
+        <button class="shared-tab-btn" data-tab="uat">UAT</button>
+        <button class="shared-tab-btn" data-tab="setup">SETUP</button>
     </div>
 
     <!-- Kanban Tab Content -->
-    <div id="kanban-tab-content" class="kanban-tab-content active">
+    <div id="kanban-tab-content" class="shared-tab-content active">
         <div class="controls-strip">
             <!-- Left Side: Workspace/Project controls -->
             <select id="workspace-project-select" class="workspace-project-select" data-tooltip="Select workspace and project" style="min-width:280px;"></select>
@@ -2265,14 +2213,14 @@
     </div>
 
     <!-- Automation Tab Content -->
-    <div id="automation-tab-content" class="kanban-tab-content">
+    <div id="automation-tab-content" class="shared-tab-content">
         <div id="automation-panel-root" class="automation-panel"></div>
     </div>
 
 
 
     <!-- UAT Tab Content -->
-    <div id="uat-tab-content" class="kanban-tab-content">
+    <div id="uat-tab-content" class="shared-tab-content">
         <div style="padding:12px; overflow-y:auto; height:100%;">
             <div class="db-subsection">
                 <div class="subsection-header"><span>User Acceptance Testing</span></div>
@@ -2287,7 +2235,7 @@
     </div>
 
     <!-- Setup Tab Content -->
-    <div id="setup-tab-content" class="kanban-tab-content">
+    <div id="setup-tab-content" class="shared-tab-content">
         <div style="padding:12px; overflow-y:auto; height:100%;">
             <div class="db-subsection">
                 <div class="subsection-header"><span>Routing Configuration</span></div>
@@ -2357,7 +2305,7 @@
     </div>
 
     <!-- Agents Tab Content -->
-    <div id="agents-tab-content" class="kanban-tab-content">
+    <div id="agents-tab-content" class="shared-tab-content">
       <div style="padding:12px; overflow-y:auto; height:100%;">
 
         <!-- Agent Visibility & CLI Commands -->
@@ -2424,7 +2372,7 @@
     </div>
 
     <!-- Prompts Tab Content -->
-    <div id="prompts-tab-content" class="kanban-tab-content">
+    <div id="prompts-tab-content" class="shared-tab-content">
       <div class="prompts-tab">
 
         <!-- Role Selector -->
@@ -2808,7 +2756,7 @@
     <div id="tooltip-overlay"></div>
 
     <!-- Worktrees Tab Content -->
-    <div id="worktrees-tab-content" class="kanban-tab-content">
+    <div id="worktrees-tab-content" class="shared-tab-content">
         <div id="worktree-panel-root" class="automation-panel"></div>
     </div>
 
@@ -3465,14 +3413,14 @@
 
 
         // Tab switching logic
-        const kanbanTabButtons = document.querySelectorAll('.kanban-tab-btn');
-        const kanbanTabContents = document.querySelectorAll('.kanban-tab-content');
+        const kanbanTabButtons = document.querySelectorAll('.shared-tab-btn');
+        const kanbanTabContents = document.querySelectorAll('.shared-tab-content');
         let kanbanViewStateBeforeHide = null;
 
         kanbanTabButtons.forEach(btn => {
             btn.addEventListener('click', () => {
                 const tabName = btn.dataset.tab;
-                const currentTab = document.querySelector('.kanban-tab-content.active');
+                const currentTab = document.querySelector('.shared-tab-content.active');
                 const currentTabId = currentTab ? currentTab.id.replace('-tab-content', '') : null;
 
                 // Capture state before leaving Kanban tab
@@ -5509,7 +5457,7 @@
                 case 'switchToTab': {
                     const tabName = msg.tab;
                     if (!tabName) break;
-                    const targetBtn = document.querySelector(`.kanban-tab-btn[data-tab="${tabName}"]`);
+                    const targetBtn = document.querySelector(`.shared-tab-btn[data-tab="${tabName}"]`);
                     if (targetBtn) {
                         targetBtn.click();
                     }

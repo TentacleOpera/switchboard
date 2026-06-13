@@ -291,7 +291,7 @@
     }
 
     function isTicketsTabActive() {
-        return document.querySelector('.research-tab-btn.active')?.dataset.tab === 'tickets';
+        return document.querySelector('.shared-tab-btn.active')?.dataset.tab === 'tickets';
     }
 
     function populateWorkspaceDropdown(selectElOrId, workspaceItems, selectedValue, includeAllOption = true) {
@@ -367,7 +367,7 @@
     });
 
     function getActiveTabName() {
-        const activeBtn = document.querySelector('.research-tab-btn.active');
+        const activeBtn = document.querySelector('.shared-tab-btn.active');
         return activeBtn ? activeBtn.dataset.tab : 'local';
     }
 
@@ -421,8 +421,8 @@
     });
 
     // Tab management
-    const tabButtons = document.querySelectorAll('.research-tab-btn');
-    const tabContents = document.querySelectorAll('.research-tab-content');
+    const tabButtons = document.querySelectorAll('.shared-tab-btn');
+    const tabContents = document.querySelectorAll('.shared-tab-content');
 
     function switchToTab(tabName) {
         // 1. Clean up dirty flags and edit/review modes (same logic as click handler)
@@ -440,7 +440,7 @@
         // 3. Update active classes
         tabButtons.forEach(b => b.classList.remove('active'));
         tabContents.forEach(c => c.classList.remove('active'));
-        const targetBtn = document.querySelector(`.research-tab-btn[data-tab="${tabName}"]`);
+        const targetBtn = document.querySelector(`.shared-tab-btn[data-tab="${tabName}"]`);
         if (targetBtn) targetBtn.classList.add('active');
         const targetContent = document.getElementById(`${tabName}-content`);
         if (targetContent) targetContent.classList.add('active');

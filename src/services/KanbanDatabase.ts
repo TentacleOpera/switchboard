@@ -497,7 +497,9 @@ ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     dispatched_ide = excluded.dispatched_ide,
     clickup_task_id = excluded.clickup_task_id,
     linear_issue_id = excluded.linear_issue_id,
-    worktree_id = excluded.worktree_id
+    worktree_id = excluded.worktree_id,
+    is_epic = COALESCE(excluded.is_epic, is_epic),
+    epic_id = CASE WHEN excluded.epic_id IS NOT NULL AND excluded.epic_id != '' THEN excluded.epic_id ELSE epic_id END
 `;
 
 const MIGRATION_VERSION_KEY = 'kanban_db_migration_version';

@@ -86,6 +86,10 @@ const extensionConfig = {
                     noErrorOnMissing: true
                 },
                 {
+                    from: 'src/webview/*.css',
+                    to: 'webview/[name][ext]'
+                },
+                {
                     from: path.resolve(__dirname, 'node_modules', 'sql.js', 'dist', 'sql-wasm.js'),
                     to: 'sql-wasm.js'
                 },

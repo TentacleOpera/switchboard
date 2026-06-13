@@ -35,6 +35,7 @@ import { type AutoPullIntegration, type AutoPullIntervalMinutes, IntegrationAuto
 import { ContinuousSyncService } from './ContinuousSyncService';
 import type { LiveSyncState } from '../models/LiveSyncTypes';
 import { resolveEffectiveWorkspaceRootFromMappings } from './WorkspaceIdentityService';
+import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 
 /**
  * Schedules a fire-and-forget write of the kanban state section to the plan file.
@@ -6485,9 +6486,14 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 const yamlSafeDesc = (msg.description ? String(msg.description).trim() : '').replace(/'/g, "''");
                 const epicContent = `---\ndescription: '${yamlSafeName}'\n---\n\n# ${name}\n\n${msg.description ? String(msg.description).trim() : ''}`;
                 await fs.promises.mkdir(path.dirname(epicPath), { recursive: true });
+                // Register before writing so the file watcher skips this file —
+                // the DB record is already committed above with is_epic=1.
+                GlobalPlanWatcherService.registerPendingCreation(epicPath);
                 await fs.promises.writeFile(epicPath, epicContent, 'utf8');
                 for (const st of subtasks) {
-                    await db.updateEpicStatus(st.sessionId, 0, planId);
+                    // Use planId (not sessionId) — file-watcher-imported plans have session_id=''
+                    // and getPlanBySessionId('') would find an arbitrary other plan instead.
+                    await db.updateEpicStatus(st.planId || st.sessionId, 0, planId);
                 }
                 await this._refreshBoard(workspaceRoot);
                 break;

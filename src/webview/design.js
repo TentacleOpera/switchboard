@@ -126,8 +126,8 @@
     };
 
     // Tab switcher
-    const tabBtns = document.querySelectorAll('.research-tab-btn');
-    const tabContents = document.querySelectorAll('.research-tab-content');
+    const tabBtns = document.querySelectorAll('.shared-tab-btn');
+    const tabContents = document.querySelectorAll('.shared-tab-content');
 
     function switchTab(tabName) {
         tabBtns.forEach(btn => {
@@ -1348,12 +1348,22 @@
                 const title = 'untitled-brief';
                 const root = state.briefsWorkspaceRootFilter || Object.keys(state.briefsFolderPathsByRoot)[0];
                 if (!root) {
-                    alert('Please configure at least one briefs folder first.');
+                    const statusBriefs = document.getElementById('status-briefs');
+                    if (statusBriefs) {
+                        statusBriefs.textContent = 'Please configure at least one briefs folder first.';
+                        statusBriefs.style.color = '#ff6b6b';
+                        setTimeout(() => { statusBriefs.textContent = ''; }, 3000);
+                    }
                     return;
                 }
                 const folders = state.briefsFolderPathsByRoot[root] || [];
                 if (folders.length === 0) {
-                    alert('Please configure at least one briefs folder first.');
+                    const statusBriefs = document.getElementById('status-briefs');
+                    if (statusBriefs) {
+                        statusBriefs.textContent = 'Please configure at least one briefs folder first.';
+                        statusBriefs.style.color = '#ff6b6b';
+                        setTimeout(() => { statusBriefs.textContent = ''; }, 3000);
+                    }
                     return;
                 }
                 const sourceFolder = folders[0];
@@ -2489,7 +2499,12 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                         setTimeout(() => { statusBriefs.textContent = ''; }, 2000);
                     }
                 } else {
-                    alert('Failed to create brief: ' + (msg.error || 'unknown error'));
+                    const statusBriefs = document.getElementById('status-briefs');
+                    if (statusBriefs) {
+                        statusBriefs.textContent = 'Failed to create brief: ' + (msg.error || 'unknown error');
+                        statusBriefs.style.color = '#ff6b6b';
+                        setTimeout(() => { statusBriefs.textContent = ''; }, 4000);
+                    }
                 }
                 break;
             }
@@ -2513,7 +2528,12 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                         setTimeout(() => { statusBriefs.textContent = ''; }, 2000);
                     }
                 } else {
-                    alert('Failed to delete brief: ' + (msg.error || 'unknown error'));
+                    const statusBriefs = document.getElementById('status-briefs');
+                    if (statusBriefs) {
+                        statusBriefs.textContent = 'Failed to delete brief: ' + (msg.error || 'unknown error');
+                        statusBriefs.style.color = '#ff6b6b';
+                        setTimeout(() => { statusBriefs.textContent = ''; }, 4000);
+                    }
                 }
                 break;
             }
@@ -2973,6 +2993,25 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 stitchProjectSelect.value = '';
             }
             closeStitchPreview();
+            
+            // FIX: Clear Images tab selection to prevent carry-over
+            if (state.activeSource === 'images-folder') {
+                state.activeSource = null;
+                state.activeDocId = null;
+                state.selectedEl = null;
+                state.activeDocName = null;
+                state.activeDocContent = null;
+                state.activeDocFilePath = null;
+                state.activeDocSourceFolder = null;
+                state.activeFileType = null;
+                // Clear the preview pane
+                const initialState = document.getElementById('images-initial-state');
+                const loadingState = document.getElementById('images-loading-state');
+                const imageContainer = document.getElementById('image-preview-container-images');
+                if (initialState) initialState.style.display = 'flex';
+                if (loadingState) loadingState.style.display = 'none';
+                if (imageContainer) imageContainer.style.display = 'none';
+            }
             
             // restore that root's persisted selectedStitchProjectId if it exists
             const rootState = getRestoredState('stitch.projectId', state.stitchWorkspaceRoot);

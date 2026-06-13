@@ -120,3 +120,13 @@ Key risks: (1) Default title may collide with existing files if the user creates
 
 ## Recommendation
 Send to Intern
+
+## Review Findings
+
+All three planned changes verified in code. Additionally fixed 4 swallowed `alert()` calls (2 in `btnNew` handler for missing-folder validation, 2 in `briefCreated`/`briefDeleted` failure handlers) by replacing them with visible `status-briefs` text feedback in `#ff6b6b`, since VS Code webviews silently discard native dialogs.
+
+**Files changed:** `src/webview/design.js` (lines 1350-1367, 2501-2507, 2530-2536)
+
+**Validation:** Manual syntax review passed; no compilation or test execution per session policy.
+
+**Remaining risks:** Default title `untitled-brief` does not update when backend deduplicates filename to `untitled-1.md`, so the markdown H1 may mismatch the actual filename. Minor UX inconsistency; user can rename via Edit.

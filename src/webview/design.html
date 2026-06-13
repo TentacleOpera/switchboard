@@ -119,57 +119,7 @@
             height: calc(100vh - 40px);
         }
 
-        /* Tab Bar - Kanban Dark Theme */
-        .research-tab-bar {
-            display: flex;
-            flex-direction: row;
-            border-bottom: 1px solid var(--border-color);
-            background: var(--panel-bg2);
-            height: 40px;
-            overflow-x: auto;
-        }
 
-        .research-tab-btn {
-            flex-shrink: 0;
-            white-space: nowrap;
-            padding: 0 16px;
-            font-size: 11px;
-            font-family: var(--font-mono);
-            letter-spacing: 0.5px;
-            text-transform: uppercase;
-            background: transparent;
-            color: var(--text-secondary);
-            border: 1px solid transparent;
-            border-bottom: none;
-            border-radius: 3px 3px 0 0;
-            position: relative;
-            top: 1px;
-            cursor: pointer;
-            transition: all 0.15s;
-        }
-
-        .research-tab-btn:hover {
-            color: var(--text-primary);
-            background: color-mix(in srgb, var(--accent-teal) 5%, transparent);
-        }
-
-        .research-tab-btn.active {
-            color: var(--accent-teal);
-            background: var(--panel-bg2);
-            border-color: var(--border-color);
-            border-bottom-color: var(--panel-bg2);
-        }
-
-        /* Tab Content Areas */
-        .research-tab-content {
-            display: none;
-            flex: 1;
-            overflow: hidden;
-        }
-
-        .research-tab-content.active {
-            display: block;
-        }
 
         #local-content,
         #online-content,
@@ -2153,10 +2103,7 @@
         .cyber-theme-enabled .kanban-column-badge[data-column="CODE_REVIEWED"] { box-shadow: 0 0 6px rgba(255, 138, 101, 0.3); }
         .cyber-theme-enabled .kanban-column-badge[data-column="COMPLETED"] { box-shadow: 0 0 6px rgba(102, 187, 106, 0.3); }
 
-        /* Active tab: glow accent */
-        .cyber-theme-enabled .research-tab-btn.active {
-            box-shadow: 0 -2px 8px color-mix(in srgb, var(--accent-teal) 30%, transparent);
-        }
+
 
         /* Controls strip buttons: glow on hover */
         .cyber-theme-enabled .strip-btn:hover:not(:disabled) {
@@ -2175,13 +2122,7 @@
             background-size: 40px 40px, 40px 40px;
         }
 
-        /* Tab bar */
-        .cyber-theme-enabled .research-tab-bar {
-            background: rgba(10, 10, 10, 0.65);
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            border-bottom-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
-        }
+
 
         /* Controls strip */
         .cyber-theme-enabled .controls-strip {
@@ -3483,20 +3424,20 @@
             box-shadow: 0 0 15px color-mix(in srgb, var(--accent-neon) 40%, transparent);
             background: rgba(10, 10, 10, 0.9);
             backdrop-filter: blur(12px);
-        }
     </style>
+    <link rel="stylesheet" href="shared-tabs.css">
 </head>
 <body class="cyber-theme-enabled">
-    <div id="research-tab-bar" class="research-tab-bar">
-        <button class="research-tab-btn active" data-tab="stitch">STITCH</button>
-        <button class="research-tab-btn" data-tab="briefs">BRIEFS</button>
-        <button class="research-tab-btn" data-tab="html-preview">HTML PREVIEWS</button>
-        <button class="research-tab-btn" data-tab="images">IMAGES</button>
-        <button class="research-tab-btn" data-tab="design">DESIGN SYSTEM</button>
+    <div id="research-tab-bar" class="shared-tab-bar">
+        <button class="shared-tab-btn active" data-tab="stitch">STITCH</button>
+        <button class="shared-tab-btn" data-tab="briefs">BRIEFS</button>
+        <button class="shared-tab-btn" data-tab="html-preview">HTML PREVIEWS</button>
+        <button class="shared-tab-btn" data-tab="images">IMAGES</button>
+        <button class="shared-tab-btn" data-tab="design">DESIGN SYSTEM</button>
     </div>
     <div class="container">
         <!-- Briefs Tab -->
-        <div id="briefs-content" class="research-tab-content">
+        <div id="briefs-content" class="shared-tab-content">
             <div class="controls-strip" id="controls-strip-briefs">
                 <select id="briefs-workspace-filter" class="workspace-filter-select">
                     <option value="">All Workspaces</option>
@@ -3532,7 +3473,7 @@
         </div>
 
         <!-- Design System Tab -->
-        <div id="design-content" class="research-tab-content">
+        <div id="design-content" class="shared-tab-content">
             <div class="controls-strip" id="controls-strip-design">
                 <select id="design-workspace-filter" class="workspace-filter-select">
                     <option value="">All Workspaces</option>
@@ -3582,7 +3523,7 @@
         </div>
 
         <!-- HTML Previews Tab -->
-        <div id="html-preview-content" class="research-tab-content">
+        <div id="html-preview-content" class="shared-tab-content">
             <div class="controls-strip" id="controls-strip-html">
                 <select id="html-workspace-filter" class="workspace-filter-select">
                     <option value="">All Workspaces</option>
@@ -3634,7 +3575,7 @@
         </div>
 
         <!-- Images Tab -->
-        <div id="images-content" class="research-tab-content">
+        <div id="images-content" class="shared-tab-content">
             <div class="controls-strip" id="controls-strip-images">
                 <select id="images-workspace-filter" class="workspace-filter-select">
                     <option value="">All Workspaces</option>
@@ -3682,7 +3623,7 @@
         </div>
 
         <!-- Stitch Tab -->
-        <div id="stitch-content" class="research-tab-content active">
+        <div id="stitch-content" class="shared-tab-content active">
             <!-- Configure API key banner if not configured -->
             <div id="stitch-api-banner" class="stitch-setup-banner" style="display: none;">
                 <h3>Configure Stitch API Key</h3>

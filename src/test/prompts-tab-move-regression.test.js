@@ -24,7 +24,7 @@ function run() {
     console.log('Test 1: HTML Structure Verification');
     expectRegex(
         kanbanSource,
-        /<div\s+id="prompts-tab-content"\s+class="kanban-tab-content">/,
+        /<div\s+id="prompts-tab-content"\s+class="shared-tab-content">/,
         'Expected prompts-tab-content div to exist with correct class'
     );
     expectRegex(

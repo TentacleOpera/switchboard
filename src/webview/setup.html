@@ -109,16 +109,10 @@
         }
 
         /* Tab content panels */
-        .tab-content {
-            display: none;
+        .shared-tab-content {
             background: var(--panel-bg);
             border: 1px solid var(--border-color);
             padding: 14px;
-        }
-
-        .tab-content.open {
-            display: flex;
-            flex-direction: column;
             gap: 8px;
         }
 
@@ -402,85 +396,33 @@
             resize: vertical;
         }
 
-        /* Tab Navigation Styles */
-        .tab-nav {
-            display: flex;
-            gap: 4px;
-            padding: 8px 16px;
-            background: var(--panel-bg);
-            border-bottom: 1px solid var(--border-color);
-            overflow-x: auto;
-            scrollbar-width: thin;
-            scrollbar-color: var(--border-color) transparent;
-            position: sticky;
-            top: 0;
-            z-index: 10;
-        }
 
-        .tab-nav::-webkit-scrollbar {
-            height: 4px;
-        }
-
-        .tab-nav::-webkit-scrollbar-thumb {
-            background: var(--border-color);
-            border-radius: 2px;
-        }
-
-        .tab-btn {
-            flex-shrink: 0;
-            padding: 8px 16px;
-            background: transparent;
-            border: none;
-            border-bottom: 2px solid transparent;
-            color: var(--text-secondary);
-            font-family: var(--font-mono);
-            font-size: 10px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            cursor: pointer;
-            transition: all 0.15s ease;
-            white-space: nowrap;
-        }
-
-        .tab-btn:hover {
-            color: var(--text-primary);
-            border-bottom-color: var(--border-bright);
-        }
-
-        .tab-btn.active {
-            color: var(--accent-teal);
-            border-bottom-color: var(--accent-teal);
-        }
-
-        .tab-btn:focus-visible {
-            outline: 1px solid var(--accent-teal);
-            outline-offset: -1px;
-        }
 
         /* Setup shell adjustment for tab layout */
         .setup-shell {
             padding-top: 0;
         }
     </style>
+    <link rel="stylesheet" href="shared-tabs.css">
 </head>
 
 <body>
     <div class="setup-shell">
         <!-- Tab Navigation -->
-        <div class="tab-nav" role="tablist" aria-label="Setup sections">
-            <button class="tab-btn active" data-tab="setup" role="tab" aria-selected="true">Setup</button>
-            <button class="tab-btn" data-tab="kanban" role="tab" aria-selected="false">Kanban</button>
-            <button class="tab-btn" data-tab="database" role="tab" aria-selected="false">Database</button>
-            <button class="tab-btn" data-tab="control-plane" role="tab" aria-selected="false">Control Plane</button>
-            <button class="tab-btn" data-tab="mappings" role="tab" aria-selected="false">Mappings</button>
-            <button class="tab-btn" data-tab="integration" role="tab" aria-selected="false">Integrations</button>
-            <button class="tab-btn" data-tab="artifacts-panel" role="tab" aria-selected="false">Artifacts Panel</button>
-            <button class="tab-btn" data-tab="plan-scanner" role="tab" aria-selected="false">Plan Scanner</button>
-            <button class="tab-btn" data-tab="theme" role="tab" aria-selected="false">Theme</button>
-            <button class="tab-btn" data-tab="status-bar" role="tab" aria-selected="false">Status Bar</button>
+        <div class="shared-tab-bar" role="tablist" aria-label="Setup sections">
+            <button class="shared-tab-btn active" data-tab="setup" role="tab" aria-selected="true">Setup</button>
+            <button class="shared-tab-btn" data-tab="kanban" role="tab" aria-selected="false">Kanban</button>
+            <button class="shared-tab-btn" data-tab="database" role="tab" aria-selected="false">Database</button>
+            <button class="shared-tab-btn" data-tab="control-plane" role="tab" aria-selected="false">Control Plane</button>
+            <button class="shared-tab-btn" data-tab="mappings" role="tab" aria-selected="false">Mappings</button>
+            <button class="shared-tab-btn" data-tab="integration" role="tab" aria-selected="false">Integrations</button>
+            <button class="shared-tab-btn" data-tab="artifacts-panel" role="tab" aria-selected="false">Artifacts Panel</button>
+            <button class="shared-tab-btn" data-tab="plan-scanner" role="tab" aria-selected="false">Plan Scanner</button>
+            <button class="shared-tab-btn" data-tab="theme" role="tab" aria-selected="false">Theme</button>
+            <button class="shared-tab-btn" data-tab="status-bar" role="tab" aria-selected="false">Status Bar</button>
         </div>
 
-        <div class="tab-content open" id="startup-fields" data-tab-content="setup">
+        <div class="shared-tab-content active" id="startup-fields" data-tab-content="setup">
                 <div style="margin-bottom: 16px; border-bottom: 1px solid var(--border-dim); padding-bottom: 12px;">
                     <div class="section-label" style="margin-bottom: 4px;">Switchboard guide</div>
                     <div class="hint-text" style="margin-bottom: 6px;">Copy this prompt to ask an agent for guidance on Switchboard setup options</div>
@@ -557,14 +499,14 @@
                 </div>
             </div>
 
-        <div class="tab-content" id="kanban-fields" data-tab-content="kanban">
+        <div class="shared-tab-content" id="kanban-fields" data-tab-content="kanban">
             <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                 Kanban setup is configured in the kanban panel.
             </div>
             <button id="btn-open-kanban" class="action-btn w-full">OPEN KANBAN VIEW</button>
         </div>
 
-        <div class="tab-content" id="db-sync-fields" data-tab-content="database">
+        <div class="shared-tab-content" id="db-sync-fields" data-tab-content="database">
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     PLAN INGESTION
                 </div>
@@ -586,7 +528,7 @@
                 </div>
             </div>
 
-        <div class="tab-content" id="control-plane-fields" data-tab-content="control-plane">
+        <div class="shared-tab-content" id="control-plane-fields" data-tab-content="control-plane">
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     EXTERNAL SWITCHBOARD CONFIGURATION
                 </div>
@@ -599,7 +541,7 @@
                 <button id="btn-open-control-plane-modal" class="secondary-btn w-full" style="margin-top: 12px;">OPEN CONTROL PLANE SETUP</button>
             </div>
 
-        <div class="tab-content" id="mappings-fields" data-tab-content="mappings">
+        <div class="shared-tab-content" id="mappings-fields" data-tab-content="mappings">
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     WORKSPACE-TO-DATABASE ROUTING
                 </div>
@@ -625,7 +567,7 @@
                 </div>
             </div>
 
-        <div class="tab-content" id="project-mgmt-fields" data-tab-content="integration">
+        <div class="shared-tab-content" id="project-mgmt-fields" data-tab-content="integration">
 
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     Configure ClickUp, Linear, and Notion integrations for plan sync, issue import, and design-doc retrieval.
@@ -920,7 +862,7 @@
                 </div>
             </div>
 
-        <div class="tab-content" id="artifacts-panel-fields" data-tab-content="artifacts-panel">
+        <div class="shared-tab-content" id="artifacts-panel-fields" data-tab-content="artifacts-panel">
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     Select which research sources to show in the Artifacts panel.
                 </div>
@@ -1000,7 +942,7 @@
                 </div>
             </div>
 
-        <div class="tab-content" id="plan-scanner-fields" data-tab-content="plan-scanner">
+        <div class="shared-tab-content" id="plan-scanner-fields" data-tab-content="plan-scanner">
             <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                 File watchers pick up new plans instantly. The Scan Speed below controls how often Switchboard re-scans as a fallback for missed events — both external IDE folders (Antigravity / Cursor / Claude Code / Windsurf-Devin) and the internal <code>.switchboard/plans</code> directory. Runs in the background even when this panel is minimised, unfocused, or closed.
             </div>
@@ -1059,7 +1001,7 @@
             <div id="plan-scanner-status" style="min-height:16px; color: var(--accent-teal); font-size: 10px; margin-top: 6px;"></div>
         </div>
 
-        <div class="tab-content" id="theme-fields" data-tab-content="theme">
+        <div class="shared-tab-content" id="theme-fields" data-tab-content="theme">
             <div style="font-size: 11px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 12px;">
                 Change the visual look of Switchboard. More themes coming soon for people who don't want to look like they're playing video games at work. More animations coming soon for people who do want to look like they're playing video games at work.
             </div>
@@ -1092,7 +1034,7 @@
             </div>
         </div>
 
-        <div class="tab-content" id="status-bar-fields" data-tab-content="status-bar">
+        <div class="shared-tab-content" id="status-bar-fields" data-tab-content="status-bar">
             <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                 STATUS BAR CONTROLS
             </div>
@@ -1490,8 +1432,8 @@
 
         // Initialize tabs
         function initTabs() {
-            const tabButtons = document.querySelectorAll('.tab-btn');
-            const tabContents = document.querySelectorAll('.tab-content');
+            const tabButtons = document.querySelectorAll('.shared-tab-btn');
+            const tabContents = document.querySelectorAll('.shared-tab-content');
 
             // Restore persisted tab if available
             const persistedState = vscode.getState?.() || {};
@@ -1519,8 +1461,8 @@
 
         // Activate specific tab
         function activateTab(tabId, persist = true) {
-            const tabButtons = document.querySelectorAll('.tab-btn');
-            const tabContents = document.querySelectorAll('.tab-content');
+            const tabButtons = document.querySelectorAll('.shared-tab-btn');
+            const tabContents = document.querySelectorAll('.shared-tab-content');
 
             // Update button states
             tabButtons.forEach(btn => {
@@ -1532,7 +1474,7 @@
             // Update content visibility
             tabContents.forEach(content => {
                 const isActive = content.dataset.tabContent === tabId;
-                content.classList.toggle('open', isActive);
+                content.classList.toggle('active', isActive);
             });
 
             // Persist active tab
