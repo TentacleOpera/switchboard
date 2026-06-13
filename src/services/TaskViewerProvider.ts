@@ -1527,7 +1527,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     const planRecord = await db.getPlanBySessionId(this._lastSessionId);
                     if (planRecord) {
                         plan = {
-                            epicId: planRecord.epic_id ?? undefined,
+                            epicId: planRecord.epicId ?? undefined,
                             workingDir: workspaceRoot,
                             absolutePath: planRecord.planFile,
                         };
@@ -1539,7 +1539,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (plan && plan.epicId) {
             const db = await this.getKanbanDbForRoot(plan.workingDir ?? plan.absolutePath);
             if (db) {
-                const linkedWorktree = (await db.getWorktrees()).find(w => w.epic_id === plan.epicId && w.status === 'active');
+                const linkedWorktree = (await db.getWorktrees()).find(w => String(w.epic_id) === String(plan.epicId) && w.status === 'active');
                 if (linkedWorktree) {
                     plan.worktreePath = linkedWorktree.path;
                 }
@@ -1594,17 +1594,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 }
             }
 
-            // Prefer worktree terminal if plan is worktree-routed
+            // Prefer worktree terminal if plan is worktree-routed and terminal role matches
             if (plan && plan.worktreePath) {
                 const wtTerminal = await this.findTerminalNameByWorktreePath(plan.worktreePath);
                 if (wtTerminal) {
+                    const wtRole = enrichedTerminals[wtTerminal]?.role || terminalsMap[wtTerminal]?.role;
                     const wtActive = activeTerminals.find(t => t.name === wtTerminal);
-                    entry = {
-                        state: wtActive ? 'ready' : 'recoverable',
-                        terminalName: wtTerminal,
-                        source: 'worktree-route',
-                        isWorktreeTerminal: true
-                    };
+                    if (this._normalizeAgentKey(wtRole) === role) {
+                        entry = {
+                            state: wtActive ? 'ready' : 'recoverable',
+                            terminalName: wtTerminal,
+                            source: 'worktree-route',
+                            isWorktreeTerminal: true
+                        };
+                    }
                 }
             }
 
@@ -2557,7 +2560,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 let planFile: string | undefined;
                 let topic: string | undefined;
                 let workingDir = '';
-                let epicId: number | undefined;
+                let epicId: string | undefined;
+                let worktreePath: string | undefined;
                 if (db) {
                     const plan = await db.getPlanBySessionId(sid);
                     if (plan) {
@@ -2594,6 +2598,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         topic = plan.topic;
                         workingDir = resolveWorkingDir(workspaceRoot, plan.repoScope || '');
                         epicId = plan.epic_id ?? undefined;
+                        if (epicId) {
+                            const linkedWorktree = (await db.getWorktrees()).find(w => String(w.epic_id) === epicId && w.status === 'active');
+                            if (linkedWorktree) {
+                                worktreePath = linkedWorktree.path;
+                            }
+                        }
                     }
                 }
                 if (!planFile) {
@@ -2610,7 +2620,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     topic: topic || planFile || 'Untitled',
                     absolutePath,
                     workingDir,
-                    epicId
+                    epicId,
+                    worktreePath
                 });
             } catch (err) {
                 console.error(`[TaskViewerProvider] Failed to resolve plan for session ${sid}:`, err);
@@ -14628,6 +14639,8 @@ What would you like to find?`;
         let planFileRelative: string | undefined;
         let sessionTopic: string | undefined;
         let workingDir = '';
+        let epicId: string | undefined;
+        let worktreePath: string | undefined;
 
         const db = await this._getKanbanDb(resolvedWorkspaceRoot);
         let previousColumn: string | undefined;
@@ -14638,6 +14651,13 @@ What would you like to find?`;
                 sessionTopic = plan.topic || plan.planFile || 'Untitled';
                 workingDir = resolveWorkingDir(resolvedWorkspaceRoot, plan.repoScope || '');
                 previousColumn = plan.kanbanColumn;
+                epicId = plan.epic_id ?? undefined;
+                if (epicId) {
+                    const linkedWorktree = (await db.getWorktrees()).find(w => String(w.epic_id) === epicId && w.status === 'active');
+                    if (linkedWorktree) {
+                        worktreePath = linkedWorktree.path;
+                    }
+                }
             }
         }
 
@@ -14745,7 +14765,7 @@ What would you like to find?`;
         const effectiveWorkingDir = options?.workingDirectory ?? workingDir;
 
         // Canonical plan object for shared builder
-        const dispatchPlan: BatchPromptPlan = { topic: sessionTopic, absolutePath: planFileAbsolute, workingDir: effectiveWorkingDir };
+        const dispatchPlan: BatchPromptPlan = { topic: sessionTopic, absolutePath: planFileAbsolute, workingDir: effectiveWorkingDir, epicId, worktreePath };
 
         if (role === 'planner') {
             const plannerInstruction = (baseInstruction === 'improve-plan' || baseInstruction === 'enhance') ? baseInstruction : undefined;

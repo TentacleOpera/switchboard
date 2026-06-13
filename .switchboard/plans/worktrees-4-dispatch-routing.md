@@ -226,8 +226,16 @@ readiness[role] = {
 - **`_computeDispatchReadiness` breakage**: This is the most critical function in the dispatch path. The worktree routing must be strictly additive with a fallback. If the worktree lookup throws (DB not ready, etc.), catch and fall through to default routing — never let a worktree lookup failure block dispatch.
 - **`getKanbanDbForRoot` API**: Check whether this method exists on `KanbanProvider` or needs to be added. If it doesn't exist, the dispatch worktree lookup must happen in `KanbanProvider` before building the `BatchPromptPlan`, not inside `TaskViewerProvider`.
 
-## Recommendation
+## Review Findings
 
-**Complexity: 7 → Send to Lead Coder**
+**Files changed**: `src/services/agentPromptBuilder.ts`, `src/services/TaskViewerProvider.ts`, `src/services/KanbanProvider.ts`
 
-The dispatch path change is the riskiest part — `_computeDispatchReadiness` must not break existing dispatch for the ~4000 existing users. The additive-with-fallback pattern is mandatory. All other changes in this plan are display-only.
+**CRITICAL fix applied**: `BatchPromptPlan.epicId` type was `number` but DB returns `string`; strict equality `w.epic_id === plan.epicId` always failed, making worktree routing dead code. Changed interface type to `string` and updated all assignments.
+
+**MAJOR fix applied**: `_computeDispatchReadiness` blindly assigned the worktree terminal to ALL roles regardless of terminal role. Added role-match check so only the matching role shows the worktree terminal.
+
+**MAJOR fix applied**: `_resolveKanbanDispatchPlans` and `_handleTriggerAgentActionInternal` did not resolve `worktreePath` from the DB, so actual dispatch prompts never received worktree directives. Added worktree lookup in both paths and included `epicId`/`worktreePath` in the `dispatchPlan`.
+
+**Validation**: No compilation step run per session policy. Type alignment verified by grep.
+
+**Remaining risk**: Actual terminal *target* routing (which terminal the VS Code message is sent to) still uses `_getAgentNameForRole`, which has no worktree awareness. The prompt now correctly contains the worktree path, but the message may still be sent to the default role terminal rather than the worktree terminal. Fixing this requires modifying `_getAgentNameForRole` or the dispatch methods themselves.

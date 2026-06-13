@@ -6185,7 +6185,10 @@
             } else if (epics.length === 1 && nonEpics.length > 0) {
                 btn.disabled = false;
                 btn.textContent = `ADD ${nonEpics.length} TO EPIC`;
-            } else if (epics.length === 0 && nonEpics.length > 0) {
+            } else if (epics.length === 0 && nonEpics.length === 1) {
+                btn.disabled = false;
+                btn.textContent = 'PROMOTE TO EPIC';
+            } else if (epics.length === 0 && nonEpics.length > 1) {
                 btn.disabled = false;
                 btn.textContent = `EPIC (${nonEpics.length})`;
             } else {
@@ -6677,7 +6680,19 @@
                 document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
                 updateReassignButtonVisibility();
                 updateEpicActionButton();
-            } else if (epics.length === 0 && nonEpics.length > 0) {
+            } else if (epics.length === 0 && nonEpics.length === 1) {
+                // Single plan — promote in-place, no new file created
+                const entry = Array.from(selectedCards.entries()).find(([, v]) => !v.isEpic);
+                const planId = entry ? entry[0] : '';
+                const card = currentCards.find(c => (c.planId || c.sessionId) === planId);
+                if (planId && card) {
+                    postKanbanMessage({ type: 'promoteToEpic', planId, workspaceRoot: card.workspaceRoot || getActiveWorkspaceRoot() });
+                    selectedCards.clear();
+                    document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
+                    updateReassignButtonVisibility();
+                    updateEpicActionButton();
+                }
+            } else if (epics.length === 0 && nonEpics.length > 1) {
                 openEpicCreateModal();
             }
         });

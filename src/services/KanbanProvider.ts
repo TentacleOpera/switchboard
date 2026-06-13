@@ -2171,11 +2171,11 @@ export class KanbanProvider implements vscode.Disposable {
                 ? resolveWorkingDir(workspaceRoot, repoScope)
                 : '';
 
-            let epicId: number | undefined = undefined;
+            let epicId: string | undefined = undefined;
             if (hasDb) {
                 const planRecord = await db.getPlanBySessionId(cardKey);
-                if (planRecord && planRecord.epic_id) {
-                    epicId = planRecord.epic_id;
+                if (planRecord && planRecord.epicId) {
+                    epicId = planRecord.epicId;
                 }
             }
 
@@ -2217,7 +2217,7 @@ export class KanbanProvider implements vscode.Disposable {
                         worktreePath: stWorktreePath,
                         isSubtask: true,
                         epicTopic: card.topic,
-                        epicId: card.planId ? parseInt(card.planId, 10) : undefined
+                        epicId: card.planId || undefined
                     });
                 }
                 if (subtasks.length > maxSubtasks) {
@@ -6409,6 +6409,20 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     break;
                 }
                 await db.updateEpicStatus(msg.subtaskSessionId, 0, epic.planId);
+                await this._refreshBoard(workspaceRoot);
+                break;
+            }
+            case 'promoteToEpic': {
+                // Single-plan promotion: mark the existing plan as is_epic=1 without creating a new file.
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || !msg.planId) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                if (!db || !(await db.ensureReady())) break;
+                const plan = await db.getPlanBySessionId(String(msg.planId));
+                if (!plan) { vscode.window.showWarningMessage('Plan not found.'); break; }
+                if (plan.isEpic) { vscode.window.showWarningMessage('Plan is already an epic.'); break; }
+                // Clear epic_id (plan is now an epic, not a subtask) and set is_epic=1
+                await db.updateEpicStatus(plan.planId, 1, '');
                 await this._refreshBoard(workspaceRoot);
                 break;
             }

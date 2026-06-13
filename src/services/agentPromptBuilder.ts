@@ -16,7 +16,7 @@ export interface BatchPromptPlan {
     workingDir?: string;
     sessionId?: string;
     worktreePath?: string;
-    epicId?: number;
+    epicId?: string;
     isSubtask?: boolean;
     epicTopic?: string;
 }
