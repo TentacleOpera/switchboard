@@ -15,7 +15,7 @@ This folder contains runtime state for the Switchboard extension. It is created 
 | `sessions/` | Session run sheets and activity logs |
 | `reviews/` | Review workflow outputs |
 | `kanban.db` | SQLite database tracking all active and completed plans |
-| `state.json` | Shared agent state |
+| `kanban.db` (config table) | All extension config and runtime state — there is no state.json |
 
 ## Documentation
 

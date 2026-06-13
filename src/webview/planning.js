@@ -48,6 +48,7 @@
     let _restoredPanelState = { panel: {}, byRoot: {} };
     let _registeredDropdowns = []; // Array of { selectElOrId, tabKey, includeAllOption }
     let _workspaceItems = [];
+    let _integrationWorkspaces = [];
 
     // Helper to register a dropdown for updates
     function registerWorkspaceDropdown(selectElOrId, tabKey, includeAllOption = true) {
@@ -2432,6 +2433,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 });
                 break;
             }
+            case 'integrationWorkspaces': {
+                _integrationWorkspaces = msg.workspaces || [];
+                updateTicketsWorkspacePicker();
+                break;
+            }
             case 'restoredTabState': {
                 _restoredPanelState.panel = msg.panel || {};
                 _restoredPanelState.byRoot = msg.byRoot || {};
@@ -2445,9 +2451,12 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         if (restoredState) {
                             restoreTicketsStateForRoot(restoredState);
                         }
+                        vscode.postMessage({ type: 'ticketsRootChanged', workspaceRoot: ticketsWorkspaceRoot });
                     } else {
                         vscode.postMessage({ type: 'ticketsDefaultRoot' });
                     }
+                } else {
+                    vscode.postMessage({ type: 'ticketsRootChanged', workspaceRoot: ticketsWorkspaceRoot });
                 }
                 if (!researchWorkspaceRoot) {
                     const restoredRoot = _restoredPanelState.panel['research.root'];
@@ -2460,6 +2469,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     if (dropdown) dropdown.value = researchWorkspaceRoot;
                     restoreResearchStateForRoot();
                 }
+                _restoredPanelState.panel['research.root'] = researchWorkspaceRoot;
                 if (!notebookWorkspaceRoot) {
                     const restoredRoot = _restoredPanelState.panel['notebook.root'];
                     if (restoredRoot && _workspaceItems.some(item => item.workspaceRoot === restoredRoot)) {
@@ -2470,6 +2480,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     const dropdown = document.getElementById('notebook-workspace-filter');
                     if (dropdown) dropdown.value = notebookWorkspaceRoot;
                 }
+                _restoredPanelState.panel['notebook.root'] = notebookWorkspaceRoot;
 
                 // Restore Local Docs workspace filter
                 const restoredLocalRoot = _restoredPanelState.panel['localDocs.root'] || '';
@@ -4849,13 +4860,68 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
     // ===== TICKETS TAB IMPLEMENTATION =====
 
+    function updateTicketsWorkspacePicker() {
+        const select = document.getElementById('tickets-workspace-filter');
+        const staticLabel = document.getElementById('tickets-workspace-label');
+        if (!select || !staticLabel) return;
+
+        const count = _integrationWorkspaces.length;
+
+        if (count === 0) {
+            // No integrations — show static "Configure Integration" prompt
+            select.style.display = 'none';
+            staticLabel.style.display = '';
+            staticLabel.textContent = 'Configure ClickUp or Linear in workspace settings to browse tickets.';
+            return;
+        }
+
+        if (count === 1) {
+            // Exactly one integration — hide picker, show workspace name
+            select.style.display = 'none';
+            staticLabel.style.display = '';
+            const single = _integrationWorkspaces[0];
+            const item = _workspaceItems.find(i => i.workspaceRoot === single.workspaceRoot);
+            staticLabel.textContent = item ? item.label : (single.workspaceRoot ? single.workspaceRoot.split('/').pop() : '');
+            // Auto-select the single workspace if not already set
+            if (ticketsWorkspaceRoot !== single.workspaceRoot) {
+                ticketsWorkspaceRoot = single.workspaceRoot;
+                persistTab('tickets.root', ticketsWorkspaceRoot);
+                vscode.postMessage({ type: 'ticketsRootChanged', workspaceRoot: ticketsWorkspaceRoot });
+            }
+            return;
+        }
+
+        // Two or more — show filtered dropdown
+        select.style.display = '';
+        staticLabel.style.display = 'none';
+        const current = ticketsWorkspaceRoot || '';
+        select.innerHTML = '';
+        for (const ws of _integrationWorkspaces) {
+            const item = _workspaceItems.find(i => i.workspaceRoot === ws.workspaceRoot);
+            const option = document.createElement('option');
+            option.value = ws.workspaceRoot;
+            option.textContent = item ? item.label : (ws.workspaceRoot ? ws.workspaceRoot.split('/').pop() : '');
+            select.appendChild(option);
+        }
+        // Preserve current selection if still valid, otherwise select first
+        if (_integrationWorkspaces.some(w => w.workspaceRoot === current)) {
+            select.value = current;
+        } else {
+            select.value = _integrationWorkspaces[0].workspaceRoot;
+            ticketsWorkspaceRoot = select.value;
+            persistTab('tickets.root', ticketsWorkspaceRoot);
+            vscode.postMessage({ type: 'ticketsRootChanged', workspaceRoot: ticketsWorkspaceRoot });
+        }
+    }
+
     function initTicketsTab() {
         const {
             searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, loadMoreButton,
             btnManageTicketFolders, btnImportAllTickets
         } = getTicketsTabElements();
 
-        registerWorkspaceDropdown('tickets-workspace-filter', 'tickets', false);
+        // Custom update call to populate dropdown if integrations already fetched
+        updateTicketsWorkspacePicker();
 
         document.getElementById('tickets-workspace-filter')?.addEventListener('change', (e) => {
             const newRoot = e.target.value;

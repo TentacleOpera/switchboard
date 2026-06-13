@@ -636,7 +636,7 @@
         "switchboard.statusBar.showArtifactsButton": {
           "type": "boolean",
           "default": false,
-          "description": "Controls visibility of the Open Planning Panel button on the status bar.",
+          "description": "Controls visibility of the Open Artifacts Panel button on the status bar.",
           "scope": "window"
         },
         "switchboard.statusBar.showDesignButton": {
@@ -731,7 +731,6 @@
     "@modelcontextprotocol/sdk": "^1.0.3",
     "@types/dompurify": "^3.0.5",
     "@types/jsdom": "^27.0.0",
-    "@types/proper-lockfile": "^4.1.4",
     "@types/uuid": "^10.0.0",
     "@vscode/codicons": "^0.0.44",
     "adm-zip": "^0.5.16",
@@ -740,7 +739,6 @@
     "js-yaml": "^4.2.0",
     "jsdom": "^28.0.0",
     "mermaid": "^11.14.0",
-    "proper-lockfile": "^4.1.2",
     "sql.js": "^1.14.1",
     "uuid": "^9.0.1",
     "zod": "^3.23.8"

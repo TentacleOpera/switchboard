@@ -2,7 +2,8 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
-import * as fs from 'fs';
+import { stateFs as fs } from './stateConfigBridge';
+import { KanbanDatabase } from './KanbanDatabase';
 import * as http from 'http';
 import {
     ResearchImportService,
@@ -94,7 +95,7 @@ export class PlanningPanelProvider {
 
     private _resolvedConfigCache: {
         configPath: string | null;
-        config: { syncMode?: string; browseFilterContainers?: Record<string, string>; selectedContainers?: string[]; uploadLocations?: Record<string, string>; docMappings?: Record<string, { sourceId: string; docId: string; url?: string }> };
+        config: { syncMode: string; browseFilterContainers: Record<string, string>; selectedContainers: string[]; uploadLocations: Record<string, string>; docMappings: Record<string, { sourceId: string; docId: string; url?: string }> };
         sourceRoot: string;
     } | null = null;
 
@@ -195,7 +196,6 @@ export class PlanningPanelProvider {
         // Search all roots for config
         for (const root of allRoots) {
             try {
-                const { KanbanDatabase } = require('./KanbanDatabase');
                 const db = KanbanDatabase.forWorkspace(root);
                 const syncMode = await db.getConfig('planning.syncMode');
                 if (syncMode !== null) {
@@ -819,6 +819,29 @@ export class PlanningPanelProvider {
         return (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
     }
 
+    private async _getIntegrationWorkspaces(): Promise<Array<{ workspaceRoot: string; provider: 'clickup' | 'linear' }>> {
+        const allRoots = this._getWorkspaceRoots();
+        const results: Array<{ workspaceRoot: string; provider: 'clickup' | 'linear' }> = [];
+        for (const root of allRoots) {
+            try {
+                const [clickUpConfig, linearConfig] = await Promise.all([
+                    this._adapterFactories.getClickUpSyncService(root).loadConfig(),
+                    this._adapterFactories.getLinearSyncService(root).loadConfig()
+                ]);
+                const provider = (clickUpConfig?.setupComplete) ? 'clickup'
+                    : (linearConfig?.setupComplete) ? 'linear'
+                    : null;
+                if (provider) {
+                    results.push({ workspaceRoot: root, provider });
+                }
+            } catch {
+                // Config unreadable — skip this root
+            }
+        }
+        return results;
+    }
+
+
     private _getAllowedRoots(): Set<string> {
         const roots = this._getWorkspaceRoots();
         const allowedRoots = new Set<string>(roots);
@@ -945,7 +968,7 @@ export class PlanningPanelProvider {
                 
                 // Send workspaceItems and restoredTabState
                 const items = buildWorkspaceItems(allRoots);
-                const tabKeys = ['local', 'online', 'kanban', 'tickets', 'research', 'notebook', 'localDocs.root', 'onlineDocs.root', 'kanban.root', 'kanban.project'];
+                const tabKeys = ['local', 'online', 'kanban', 'tickets', 'research', 'notebook', 'localDocs.root', 'onlineDocs.root', 'kanban.root', 'kanban.project', 'tickets.root', 'research.root', 'notebook.root'];
                 const statePayload = this._stateStore.getAllStates(tabKeys, allRoots);
                 this._panel?.webview.postMessage({
                     type: 'workspaceItemsUpdated',
@@ -955,6 +978,12 @@ export class PlanningPanelProvider {
                     type: 'restoredTabState',
                     panel: statePayload.panel,
                     byRoot: statePayload.byRoot
+                });
+
+                const integrationWorkspaces = await this._getIntegrationWorkspaces();
+                this._panel?.webview.postMessage({
+                    type: 'integrationWorkspaces',
+                    workspaces: integrationWorkspaces
                 });
 
                 await this._handleFetchRoots(true);
@@ -987,62 +1016,25 @@ export class PlanningPanelProvider {
             }
             case 'ticketsDefaultRoot': {
                 const restoredRoot = this._stateStore.getPanelState<string>('tickets.root');
+                const integrationWorkspaces = await this._getIntegrationWorkspaces();
                 let defaultRoot: string | undefined;
                 let defaultProvider: 'clickup' | 'linear' | null = null;
 
-                if (restoredRoot && allRoots.includes(restoredRoot)) {
-                    try {
-                        const [clickUpConfig, linearConfig] = await Promise.all([
-                            this._adapterFactories.getClickUpSyncService(restoredRoot).loadConfig(),
-                            this._adapterFactories.getLinearSyncService(restoredRoot).loadConfig()
-                        ]);
-                        defaultProvider = (clickUpConfig?.setupComplete) ? 'clickup'
-                            : (linearConfig?.setupComplete) ? 'linear'
-                            : null;
-                    } catch (err) {
-                        console.warn('[PlanningPanel] Failed loading config for restoredRoot:', restoredRoot, err);
-                    }
+                // Prefer restored root if it still has a valid integration
+                if (restoredRoot && integrationWorkspaces.some(w => w.workspaceRoot === restoredRoot)) {
                     defaultRoot = restoredRoot;
+                    defaultProvider = integrationWorkspaces.find(w => w.workspaceRoot === restoredRoot)!.provider;
                 }
 
-                if (!defaultRoot || !defaultProvider) {
-                    for (const root of allRoots) {
-                        if (root === restoredRoot) continue;
-                        try {
-                            const [clickUpConfig, linearConfig] = await Promise.all([
-                                this._adapterFactories.getClickUpSyncService(root).loadConfig(),
-                                this._adapterFactories.getLinearSyncService(root).loadConfig()
-                            ]);
-                            const provider = (clickUpConfig?.setupComplete) ? 'clickup'
-                                : (linearConfig?.setupComplete) ? 'linear'
-                                : null;
-                            if (provider) {
-                                defaultRoot = root;
-                                defaultProvider = provider;
-                                break;
-                            }
-                        } catch (err) {
-                            console.warn('[PlanningPanel] Failed to check integration preference for root:', root, err);
-                        }
-                    }
+                // Fall back to first integration workspace
+                if (!defaultRoot && integrationWorkspaces.length > 0) {
+                    defaultRoot = integrationWorkspaces[0].workspaceRoot;
+                    defaultProvider = integrationWorkspaces[0].provider;
                 }
 
+                // Final fallback: restored root or first root (provider null)
                 if (!defaultRoot) {
                     defaultRoot = (restoredRoot && allRoots.includes(restoredRoot)) ? restoredRoot : allRoots[0];
-                }
-
-                if (!defaultProvider && defaultRoot) {
-                    try {
-                        const [clickUpConfig, linearConfig] = await Promise.all([
-                            this._adapterFactories.getClickUpSyncService(defaultRoot).loadConfig(),
-                            this._adapterFactories.getLinearSyncService(defaultRoot).loadConfig()
-                        ]);
-                        defaultProvider = (clickUpConfig?.setupComplete) ? 'clickup'
-                            : (linearConfig?.setupComplete) ? 'linear'
-                            : null;
-                    } catch (err) {
-                        console.warn('[PlanningPanel] Failed to determine defaultProvider for root:', defaultRoot, err);
-                    }
                 }
 
                 this._panel?.webview.postMessage({
@@ -1153,8 +1145,6 @@ export class PlanningPanelProvider {
                     } else {
                         delete config.browseFilterContainers[sourceId];
                     }
-
-                    const { KanbanDatabase } = require('./KanbanDatabase');
                     const db = KanbanDatabase.forWorkspace(targetRoot);
                     await db.setConfig('planning.syncMode', config.syncMode);
                     await db.setConfigJson('planning.selectedContainers', config.selectedContainers);
@@ -1611,7 +1601,6 @@ export class PlanningPanelProvider {
                                 }
                             }
                             // Fetch projects for this workspace
-                            const { KanbanDatabase } = require('./KanbanDatabase');
                             const db = KanbanDatabase.forWorkspace(root);
                             const workspaceId = await this._getWorkspaceId(root);
                             const projects = await db.getProjects(workspaceId);
@@ -1758,7 +1747,6 @@ export class PlanningPanelProvider {
                     normalizedComplexity = score > 0 ? String(score) : 'Unknown';
                 }
                 try {
-                    const { KanbanDatabase } = require('./KanbanDatabase');
                     const db = KanbanDatabase.forWorkspace(wsRoot);
                     await db.updateComplexityByPlanId(planId, normalizedComplexity);
                     const allPlans = await this._getKanbanPlans(wsRoot);
@@ -1789,7 +1777,6 @@ export class PlanningPanelProvider {
                     }
                 }
                 try {
-                    const { KanbanDatabase } = require('./KanbanDatabase');
                     const db = KanbanDatabase.forWorkspace(wsRoot);
                     await db.deletePlanByPlanId(planId);
                     // Delete the .md file from disk so the watcher doesn't re-import it
@@ -1838,7 +1825,6 @@ export class PlanningPanelProvider {
                     break;
                 }
                 try {
-                    const { KanbanDatabase } = require('./KanbanDatabase');
                     const db = KanbanDatabase.forWorkspace(wsRoot);
                     const epic = await db.getPlanBySessionId(sessionId);
                     const subtasks = epic && epic.isEpic ? await db.getSubtasksByEpicId(epic.planId) : [];
@@ -1854,7 +1840,6 @@ export class PlanningPanelProvider {
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
                 if (!epicSessionId || !subtaskSessionId || !wsRoot) break;
                 try {
-                    const { KanbanDatabase } = require('./KanbanDatabase');
                     const db = KanbanDatabase.forWorkspace(wsRoot);
                     const epic = await db.getPlanBySessionId(epicSessionId);
                     if (!epic || !epic.isEpic) break;
@@ -1888,7 +1873,6 @@ export class PlanningPanelProvider {
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
                 if (!subtaskSessionId || !wsRoot) break;
                 try {
-                    const { KanbanDatabase } = require('./KanbanDatabase');
                     const db = KanbanDatabase.forWorkspace(wsRoot);
                     await db.updateEpicStatus(subtaskSessionId, 0, '');
                     const allPlans = await this._getKanbanPlans(wsRoot);
@@ -1904,7 +1888,6 @@ export class PlanningPanelProvider {
                 const deleteSubtasks = !!msg.deleteSubtasks;
                 if (!sessionId || !wsRoot) break;
                 try {
-                    const { KanbanDatabase } = require('./KanbanDatabase');
                     const db = KanbanDatabase.forWorkspace(wsRoot);
                     const epic = await db.getPlanBySessionId(sessionId);
                     if (!epic || !epic.isEpic) break;
@@ -1928,7 +1911,6 @@ export class PlanningPanelProvider {
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
                 if (!wsRoot) break;
                 try {
-                    const { KanbanDatabase } = require('./KanbanDatabase');
                     const db = KanbanDatabase.forWorkspace(wsRoot);
                     if (msg.epicLockColumns !== undefined) await db.setConfig('epic_lock_columns', String(msg.epicLockColumns));
                     if (msg.epicPromptTemplate !== undefined) await db.setConfig('epic_prompt_template', String(msg.epicPromptTemplate));
@@ -2637,7 +2619,7 @@ export class PlanningPanelProvider {
                             try {
                                 mtime = fs.statSync(filePath).mtimeMs;
                                 const head = fs.readFileSync(filePath, 'utf8').split(/\r?\n/, 30);
-                                const heading = head.find(l => l.startsWith('# '));
+                                const heading = head.find((l: string) => l.startsWith('# '));
                                 if (heading) { title = heading.substring(2).trim(); }
                             } catch { /* keep slug-derived title */ }
                             tickets.push({ provider: match[1], id: match[2], title, fileName, filePath, mtime });
@@ -4155,7 +4137,6 @@ export class PlanningPanelProvider {
     private async _getWorkspaceId(workspaceRoot: string): Promise<string> {
         // Derive from workspace root or use KanbanDatabase.forWorkspace(workspaceRoot).getWorkspaceId()
         try {
-            const { KanbanDatabase } = require('./KanbanDatabase');
             const db = KanbanDatabase.forWorkspace(workspaceRoot);
             const wsId = await db.getWorkspaceId();
             if (wsId) return wsId;
@@ -4874,7 +4855,6 @@ export class PlanningPanelProvider {
         const intervalMs = intervalMinutes * 60 * 1000;
         this._periodicSyncTimer = setInterval(async () => {
             try {
-                const { KanbanDatabase } = require('./KanbanDatabase');
                 const db = KanbanDatabase.forWorkspace(workspaceRoot);
                 const mode = await db.getConfig('planning.syncMode') || 'no-sync';
                 
@@ -4970,7 +4950,6 @@ export class PlanningPanelProvider {
     }
 
     private async _getKanbanPlans(workspaceRoot: string): Promise<KanbanPlanSummary[]> {
-        const { KanbanDatabase } = require('./KanbanDatabase');
         const db = KanbanDatabase.forWorkspace(workspaceRoot);
         const workspaceId = await this._getWorkspaceId(workspaceRoot);
         const records = await db.getBoard(workspaceId);

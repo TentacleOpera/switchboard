@@ -13,7 +13,7 @@ Agents participate by reading/writing JSON files directly to the `.switchboard/`
 
 ```
 .switchboard/
-├── state.json              # Shared agent state (locked via proper-lockfile)
+├── kanban.db               # SQLite database — ALL extension state and config
 ├── bridge.json             # IPC bridge for terminal input routing
 ├── inbox/
 │   └── <agent-name>/       # Incoming messages for each agent
@@ -71,7 +71,11 @@ Written to `.switchboard/outbox/<sender>/`:
 
 ## Agent Registration
 
-The extension registers terminals and chat agents in `state.json`.
+The extension registers terminals and chat agents in `kanban.db` (config table,
+`runtime.terminals` / `runtime.chatAgents` keys). There is no `state.json` file;
+all extension state and configuration live in the database. Agents interact with
+Switchboard exclusively through the `inbox/`/`outbox/` message directories and
+registered tools — never by writing state files.
 
 ### Roles
 Agents can be assigned roles: `lead`, `coder 1`, `coder 2`, `reviewer`, `tester`, `researcher`, `execution`.

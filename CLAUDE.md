@@ -12,6 +12,9 @@ If you find a confirm gate in this codebase, it is a bug — remove it. Multi-ch
 
 - `npm run compile` (webpack) builds to `dist/` — the extension runs from `dist/extension.js` and serves webviews from `dist/webview/`. Always rebuild after editing `src/webview/*`.
 
-## Misc
+## Users & migrations
 
-- Dev-only project, single user: no migrations, no backwards-compat shims — prefer clean breaks.
+- **Published extension, ~4,000 installs**, many on much older versions. The dividing line is whether the state **shipped in a released version**:
+  - State/files/settings that exist in any released version MUST be migrated on change: import before deleting, archive legacy files as `*.migrated.bak` rather than unlinking, preserve unknown/legacy keys instead of dropping them, and never assume a prior migration "already ran" for the install base.
+  - Features that have only ever existed in unreleased dev work can take clean breaks — no migrations, no compat shims.
+- When unsure whether something shipped, assume it did and migrate — a no-op migration costs nothing; a missing one destroys user data.

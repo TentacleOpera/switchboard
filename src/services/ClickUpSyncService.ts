@@ -1999,7 +1999,8 @@ export class ClickUpSyncService {
       return;
     }
     try {
-      await fs.promises.unlink(this.configPath);
+      const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
+      await db.setConfigJson('clickup.config', null);
       this._config = null;
     } catch { /* ignore */ }
   }

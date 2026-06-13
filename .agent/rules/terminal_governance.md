@@ -3,7 +3,7 @@
 To prevent "stalls" and "UI drifts," all agents MUST adhere to the following terminal registration logic.
 
 ## 1. No Manual Bypasses
-Directly editing `.switchboard/state.json` is a FAIL-STATE. 
+Agent/terminal state lives in `kanban.db` — writing state files (there is no `.switchboard/state.json`) or the database directly is a FAIL-STATE.
 - **Rule**: If `register_terminal` is available, you MUST use it.
 
 ## 2. Windows Connectivity (Host PID)

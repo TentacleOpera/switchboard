@@ -4,6 +4,7 @@ import { createRequire } from 'module';
 import * as os from 'os';
 import * as path from 'path';
 import { isAllowedSwitchboardLocation } from '../utils/switchboardLocationGuard';
+import { STATE_KEY_TO_CONFIG } from './stateConfigBridge';
 
 export interface WorkspaceDatabaseMapping {
     id: string;
@@ -2498,6 +2499,11 @@ export class KanbanDatabase {
         return this.setConfig(key, JSON.stringify(value));
     }
 
+    /** True once the underlying SQLite handle is open (ensureReady completed). */
+    public isOpen(): boolean {
+        return !!this._db;
+    }
+
     public getConfigSync(key: string): string | null {
         if (!this._db) return null;
         const stmt = this._db.prepare('SELECT value FROM config WHERE key = ? LIMIT 1', [key]);
@@ -2516,7 +2522,9 @@ export class KanbanDatabase {
     }
 
     /** Reads a legacy .switchboard JSON file, writes selected keys to the config
-     *  table, deletes the file. No-op if the file is absent. */
+     *  table, then archives the file as `<name>.migrated.bak` so upgrading
+     *  users keep a recoverable copy. No-op if the file is absent. A corrupt
+     *  file is left in place untouched. */
     public async migrateJsonFileToConfig(
         filePath: string,
         mapKeys: (parsed: any) => Record<string, unknown>
@@ -2531,7 +2539,7 @@ export class KanbanDatabase {
             for (const [key, val] of Object.entries(mapped)) {
                 await this.setConfigJson(key, val);
             }
-            fs.unlinkSync(filePath);
+            fs.renameSync(filePath, filePath + '.migrated.bak');
             console.log(`[KanbanDatabase] Migrated legacy config file: ${filePath}`);
         } catch (err) {
             console.error(`[KanbanDatabase] Failed to migrate JSON file ${filePath}:`, err);
@@ -2599,58 +2607,233 @@ export class KanbanDatabase {
         return map;
     }
 
-    private async _runConfigMigrations(): Promise<void> {
-        const sbDir = path.join(this._workspaceRoot, '.switchboard');
+    /** Full-replace semantics: rows absent from `map` are deleted. Callers use
+     *  this to drop temp `creating_*` markers; upsert-only would leak them. */
+    public async replaceAllLinearIssueLinks(map: Record<string, string>): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        const now = new Date().toISOString();
+        this._db.run('BEGIN');
+        try {
+            this._db.run('DELETE FROM linear_issue_links');
+            for (const [planPath, issueId] of Object.entries(map)) {
+                this._db.run(
+                    'INSERT INTO linear_issue_links (issue_id, plan_path, synced_at) VALUES (?, ?, ?)',
+                    [issueId, planPath, now]
+                );
+            }
+            this._db.run('COMMIT');
+        } catch (err) {
+            try { this._db.run('ROLLBACK'); } catch {}
+            console.error('[KanbanDatabase] replaceAllLinearIssueLinks failed:', err);
+            return false;
+        }
+        return this._persist();
+    }
+
+    // Migration from legacy JSON registry
+    public async migrateFromJsonRegistry(workspaceRoot: string, workspaceId: string): Promise<{ migrated: number; skipped: number }> {
+        if (!(await this.ensureReady()) || !this._db) return { migrated: 0, skipped: 0 };
+
+        const legacyPath = path.join(workspaceRoot, '.switchboard', 'imported-docs.json');
+        if (!fs.existsSync(legacyPath)) {
+            return { migrated: 0, skipped: 0 };
+        }
         
-        // Delete imported-docs.json and workspace_database_mappings.json if present
-        const legacyDocs = path.join(sbDir, 'imported-docs.json');
-        if (fs.existsSync(legacyDocs)) {
-            try { fs.unlinkSync(legacyDocs); } catch {}
+        // Check if already migrated
+        const alreadyMigrated = await this.getConfig('import_registry_migrated');
+        if (alreadyMigrated === 'true') {
+            return { migrated: 0, skipped: 0 };
         }
-        const legacyDocsMigrated = path.join(sbDir, 'imported-docs.json.migrated');
-        if (fs.existsSync(legacyDocsMigrated)) {
-            try { fs.unlinkSync(legacyDocsMigrated); } catch {}
-        }
-        const legacyMappings = path.join(sbDir, 'workspace_database_mappings.json');
-        if (fs.existsSync(legacyMappings)) {
-            try { fs.unlinkSync(legacyMappings); } catch {}
+        
+        const raw = await fs.promises.readFile(legacyPath, 'utf8');
+        const legacy: Record<string, any> = JSON.parse(raw);
+        const docsDir = path.join(workspaceRoot, '.switchboard', 'docs');
+        
+        let migrated = 0;
+        let skipped = 0;
+        
+        // Prepare migration entries outside transaction to avoid blocking
+        const entriesToMigrate: any[] = [];
+        
+        let filesInDocsDir: string[] = [];
+        try {
+            filesInDocsDir = await fs.promises.readdir(docsDir);
+        } catch (err) {
+            console.warn(`[KanbanDatabase] Failed to read docs directory:`, err);
         }
 
-        // Migrate state.json
+        for (const [slugPrefix, entry] of Object.entries(legacy)) {
+            // Find file starting with slugPrefix (could have _hash suffix)
+            const matches = filesInDocsDir.filter(f => f.startsWith(slugPrefix) && f.endsWith('.md'));
+            
+            // Skip if file doesn't exist (orphaned entry)
+            if (matches.length === 0) {
+                skipped++;
+                continue;
+            }
+            
+            // Use the most recently modified if multiple
+            let latest = matches[0];
+            let latestMtime = 0;
+            for (const match of matches) {
+                try {
+                    const stat = await fs.promises.stat(path.join(docsDir, match));
+                    if (stat.mtimeMs > latestMtime) {
+                        latestMtime = stat.mtimeMs;
+                        latest = match;
+                    }
+                } catch {}
+            }
+            
+            const filePath = path.join(docsDir, latest);
+            
+            try {
+                // Calculate content hash from existing file
+                const content = await fs.promises.readFile(filePath, 'utf8');
+                const contentWithoutFm = content.replace(/^---\n[\s\S]*?\n---\n*/, '');
+                const hash = crypto.createHash('sha256').update(contentWithoutFm).digest('hex');
+                
+                entriesToMigrate.push({
+                    slugPrefix,
+                    sourceId: entry.sourceId,
+                    docId: entry.docId || null,
+                    docName: entry.docName,
+                    parentDocName: entry.parentDocName || entry.docName,
+                    filePath,
+                    importedAt: entry.importedAt,
+                    lastSyncedAt: entry.lastSyncedAt || null,
+                    hash: entry.remoteContentHash || hash
+                });
+            } catch (err) {
+                console.error(`[KanbanDatabase] Failed to read legacy doc ${slugPrefix}:`, err);
+                skipped++;
+            }
+        }
+        
+        this._db.run('BEGIN');
+        try {
+            for (const item of entriesToMigrate) {
+                this._db.run(
+                    `INSERT OR IGNORE INTO imported_docs 
+                     (slug_prefix, source_id, remote_doc_id, doc_name, parent_doc_name, 
+                      file_path, imported_at, last_synced_at, content_hash, workspace_id)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [
+                        item.slugPrefix,
+                        item.sourceId,
+                        item.docId,
+                        item.docName,
+                        item.parentDocName,
+                        item.filePath,
+                        item.importedAt,
+                        item.lastSyncedAt,
+                        item.hash,
+                        workspaceId
+                    ]
+                );
+                migrated++;
+            }
+            this._db.run('COMMIT');
+        } catch {
+            try { this._db.run('ROLLBACK'); } catch {}
+            return { migrated: 0, skipped: Object.keys(legacy).length };
+        }
+        
+        await this._persist();
+        await this.setConfig('import_registry_migrated', 'true');
+        
+        // Rename legacy file to .migrated
+        try {
+            await fs.promises.rename(legacyPath, legacyPath + '.migrated');
+        } catch (err) {
+            console.warn(`[KanbanDatabase] Failed to rename legacy registry ${legacyPath}:`, err);
+        }
+        
+        return { migrated, skipped };
+    }
+
+    private async _runConfigMigrations(): Promise<void> {
+        const sbDir = path.join(this._workspaceRoot, '.switchboard');
+
+        // imported-docs.json: users upgrading from old versions may never have
+        // run the registry→db migration — import before archiving, never delete.
+        let wsId = await this.getConfig('workspace_id');
+        if (!wsId) {
+            wsId = crypto.createHash('sha256').update(this._workspaceRoot).digest('hex').slice(0, 16);
+        }
+        await this.migrateFromJsonRegistry(this._workspaceRoot, wsId);
+
+        // workspace_database_mappings.json: only the file may hold the mappings
+        // on old installs — import if the db has none, then archive the file.
+        const legacyMappings = path.join(sbDir, 'workspace_database_mappings.json');
+        if (fs.existsSync(legacyMappings)) {
+            try {
+                const existing = await this.getConfig('workspace_mappings');
+                if (!existing) {
+                    const parsed = JSON.parse(fs.readFileSync(legacyMappings, 'utf8'));
+                    const mappings = Array.isArray(parsed) ? parsed
+                        : (parsed && parsed.enabled !== false && Array.isArray(parsed.mappings)) ? parsed.mappings
+                        : null;
+                    if (mappings && mappings.length > 0) {
+                        await this.setConfig('workspace_mappings', JSON.stringify(mappings));
+                    }
+                }
+                fs.renameSync(legacyMappings, legacyMappings + '.migrated.bak');
+            } catch (err) {
+                console.error('[KanbanDatabase] Failed to migrate workspace_database_mappings.json:', err);
+            }
+        }
+
+        // Migrate state.json — shared key map plus keys that have dedicated db
+        // homes and therefore aren't part of the live bridge mapping. Keys this
+        // version doesn't recognize (older/newer installs) are preserved under
+        // legacy.state instead of being dropped.
         await this.migrateJsonFileToConfig(path.join(sbDir, 'state.json'), (parsed) => {
             const map: Record<string, unknown> = {};
             const keys: Record<string, string> = {
-                customColumns: 'kanban.customColumns',
-                customAgents: 'agents.customAgents',
-                agentAssignments: 'agents.assignments',
-                startupCommands: 'agents.startupCommands',
-                visibleAgents: 'agents.visibleAgents',
-                promptOverrides: 'agents.promptOverrides',
-                liveSyncConfig: 'planning.liveSyncConfig',
-                julesAutoSyncEnabled: 'agents.julesAutoSyncEnabled',
-                autoCommitOnCodeReview: 'kanban.autoCommitOnCodeReview',
-                planIngestionFolder: 'planning.ingestionFolder',
-                terminals: 'runtime.terminals',
-                chatAgents: 'runtime.chatAgents',
-                session: 'runtime.session',
-                tasks: 'runtime.tasks',
-                context: 'runtime.context',
-                teams: 'runtime.teams',
-                julesSessions: 'runtime.jules',
-                julesPollingInterval: 'runtime.julesPollingInterval',
-                julesPollingActive: 'runtime.julesPollingActive',
+                ...STATE_KEY_TO_CONFIG,
+                lastAccessedClickUpLists: 'clickup.lastAccessedLists',
+                lastAccessedLinearProjects: 'linear.lastAccessedProjects',
             };
-            for (const [k, v] of Object.entries(keys)) {
-                if (parsed && parsed[k] !== undefined) {
-                    map[v] = parsed[k];
+            const unknown: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(parsed || {})) {
+                if (keys[k]) {
+                    map[keys[k]] = v;
+                } else if (v !== undefined) {
+                    unknown[k] = v;
                 }
+            }
+            if (Object.keys(unknown).length > 0) {
+                map['legacy.state'] = unknown;
             }
             return map;
         });
 
-        // Migrate local-folder-config.json
+        // Migrate local-folder-config.json — the legacy file mixed the seven
+        // folder-path arrays (→ folders.paths) with LocalFolderConfig fields (→ folders.config)
         await this.migrateJsonFileToConfig(path.join(sbDir, 'local-folder-config.json'), (parsed) => {
-            return { 'folders.paths': parsed };
+            const {
+                localFolderPaths, htmlFolderPaths, designFolderPaths, ticketsFolderPaths,
+                imagesFolderPaths, stitchFolderPaths, briefsFolderPaths,
+                _migrated, _migratedLocal, _migratedHtml, _migratedDesign,
+                _migratedTickets, _migratedImages, _migratedStitch, _migratedBriefs,
+                ...rest
+            } = parsed || {};
+            const map: Record<string, unknown> = {
+                'folders.paths': {
+                    localFolderPaths: localFolderPaths || [],
+                    htmlFolderPaths: htmlFolderPaths || [],
+                    designFolderPaths: designFolderPaths || [],
+                    ticketsFolderPaths: ticketsFolderPaths || [],
+                    imagesFolderPaths: imagesFolderPaths || [],
+                    stitchFolderPaths: stitchFolderPaths || [],
+                    briefsFolderPaths: briefsFolderPaths || []
+                }
+            };
+            if (Object.keys(rest).length > 0) {
+                map['folders.config'] = rest;
+            }
+            return map;
         });
 
         // Migrate planning-sync-config.json
@@ -2680,7 +2863,7 @@ export class KanbanDatabase {
 
         // Migrate linear-sync.json
         const linearSyncPath = path.join(sbDir, 'linear-sync.json');
-        if (fs.existsSync(linearSyncPath)) {
+        if (this._db && fs.existsSync(linearSyncPath)) {
             try {
                 const content = fs.readFileSync(linearSyncPath, 'utf8');
                 const map = JSON.parse(content) as Record<string, string>;
@@ -2690,7 +2873,7 @@ export class KanbanDatabase {
                         [issueId, planPath, new Date().toISOString()]
                     );
                 }
-                fs.unlinkSync(linearSyncPath);
+                fs.renameSync(linearSyncPath, linearSyncPath + '.migrated.bak');
                 console.log(`[KanbanDatabase] Migrated legacy config file: ${linearSyncPath}`);
             } catch (err) {
                 console.error(`[KanbanDatabase] Failed to migrate linear-sync.json:`, err);

@@ -113,7 +113,7 @@ Add set method:
 ```typescript
 async handleSetStatusShowDesignSetting(enabled: boolean): Promise<void> {
     const config = vscode.workspace.getConfiguration('switchboard');
-    await config.update('statusBar.showDesignButton', enabled, vscode.ConfigurationTarget.Global);
+    await config.update('statusBar.showDesignButton', enabled, vscode.ConfigurationTarget.Workspace);
 }
 ```
 
@@ -162,10 +162,14 @@ artifactsStatusBarItem.tooltip = 'Open Artifacts Panel';
 ### 6. Reorder Status Bar Buttons
 **File**: `src/extension.ts`
 
-Adjust priority numbers (lines 1745-1779) so Kanban/Artifacts/Design appear before Agents/Clear/Reset:
+Adjust priority numbers (lines 1745-1779) so Kanban/Artifacts/Design appear before Agents/Clear/Reset. Also explicitly place the Guard item to avoid collisions:
 
 ```typescript
-// Panel buttons (leftmost, higher priority)
+// Guard toggle (leftmost)
+fileOpeningPreventionStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 102);
+// ... existing text/tooltip/command setup ...
+
+// Panel buttons
 kanbanStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 101);
 kanbanStatusBarItem.text = '$(table) Kanban';
 kanbanStatusBarItem.tooltip = 'Open Kanban Board';
@@ -207,18 +211,10 @@ context.subscriptions.push(terminalResetStatusBarItem);
 ### 7. Fix Checkbox Persistence/Hydration
 **File**: `src/webview/setup.html`
 
-Ensure the setup panel requests initial status values on load. Add to the initialization section (around line 3950+ where other getStatus calls are made):
-
-```javascript
-// Request initial status bar settings
-vscode.postMessage({ type: 'getStatusShowAgentOpenSetting' });
-vscode.postMessage({ type: 'getStatusShowTerminalsSetting' });
-vscode.postMessage({ type: 'getStatusShowKanbanSetting' });
-vscode.postMessage({ type: 'getStatusShowArtifactsSetting' });
-vscode.postMessage({ type: 'getStatusShowDesignSetting' });
-```
-
-Verify that the `runSetupHydration` function properly handles the case where the message arrives before the DOM is ready, and that checkbox elements exist before attempting to set their checked state.
+No new GET requests are needed from the webview — `postSetupPanelState` in `TaskViewerProvider.ts` already pushes all status settings when the panel opens or receives the `ready` message. The real fix is:
+1. Add the Design checkbox to the DOM so its hydration target exists.
+2. Add the `case 'statusShowDesignSetting'` hydration handler so `postSetupPanelState` can set it.
+3. (Optional but recommended) In `src/extension.ts`, update `onDidChangeConfiguration` to call `taskViewerProvider.postSetupPanelState()` after `updateStatusBarVisibility()` when any `switchboard.statusBar.*` setting changes, so the Setup panel stays in sync if the user edits `settings.json` while it is open.
 
 ## Edge Cases
 - User may have manually edited settings.json - ensure migration is smooth
@@ -230,14 +226,86 @@ Verify that the `runSetupHydration` function properly handles the case where the
 - Hydration timing issues if DOM isn't ready when messages arrive
 - User muscle memory for button locations may be disrupted by reordering
 
-## Validation
-1. Open Setup panel → Status Bar tab, verify all 5 checkboxes exist (Agent Open, Terminals, Kanban, Artifacts, Design)
-2. Check/uncheck each checkbox, verify status bar buttons show/hide correctly
-3. Close and reopen VS Code, verify checkbox states persist
-4. Verify button order is: Kanban | Artifacts | Design | Agents | Clear | Reset
-5. Verify button text shows "Artifacts" not "Plans"
-6. Verify tooltips show "Artifacts Panel" not "Planning Panel"
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** `runSetupHydration` in setup.html is synchronous; messages from `postSetupPanelState` arrive after DOM is loaded because the script is at the bottom of the body and `ready` is posted after listener attachment. No race.
+- **Security:** No new secrets, network calls, or file I/O. All changes are local UI/config.
+- **Side Effects:** Renaming the button text from "Plans" to "Artifacts" changes only the user-facing label; the command ID `switchboard.openPlanningPanel` remains unchanged to avoid breaking other webviews (implementation.html, kanban.html) that invoke it.
+- **Dependencies & Conflicts:** `fileOpeningPreventionStatusBarItem` shares the current priority 99 slot with Design in the proposed code. Must be split out.
+
+## Dependencies
+- `sess_status_bar_guard_priority` — Guard item priority must be decided before reordering is applied
+
+## Adversarial Synthesis
+Key risks: priority collision with the Guard item if omitted from reordering; stale setup-panel state when settings.json is edited externally because `onDidChangeConfiguration` lacks a `postSetupPanelState` refresh. Mitigations: explicitly assign Guard a distinct priority (e.g., 102) and add a `postSetupPanelState` call inside the status-bar configuration-change branch in extension.ts.
+
+## Proposed Changes
+
+### `src/webview/setup.html`
+- **Context:** Status Bar tab needs a Design checkbox and label rename.
+- **Logic:** Add Design checkbox after Artifacts checkbox. Add event listener and hydration case. Rename "Planning Panel" to "Artifacts Panel" in label and description.
+- **Implementation:** Insert checkbox HTML, `change` listener, and `case 'statusShowDesignSetting'` hydration handler at the locations specified in the original Implementation Plan steps 1 and 2.
+- **Edge Cases:** Design checkbox hydration arrives via `postSetupPanelState`; no additional GET requests are required from the webview because no handlers exist for them in `SetupPanelProvider.ts`.
+
+### `src/services/SetupPanelProvider.ts`
+- **Context:** Message bridge needs Design get/set cases.
+- **Logic:** Mirror the existing Artifacts get/set pattern for Design.
+- **Implementation:** Insert `case 'getStatusShowDesignSetting'` and `case 'setStatusShowDesignSetting'` after the Artifacts handlers.
+- **Edge Cases:** `setStatusShowDesignSetting` must trigger `switchboard.refreshUI` so `updateStatusBarVisibility` runs.
+
+### `src/services/TaskViewerProvider.ts`
+- **Context:** Config read/write methods for Design.
+- **Logic:** Add `handleGetStatusShowDesignSetting` and `handleSetStatusShowDesignSetting`. Setter must use `ConfigurationTarget.Workspace` to match siblings.
+- **Implementation:** Insert methods after `handleSetStatusShowArtifactsSetting`.
+- **Edge Cases:** `postSetupPanelState` must also push `statusShowDesignSetting` to the setup panel (add the `postMessage` call in `postSetupPanelState`).
+
+### `package.json`
+- **Context:** Description still says "Planning Panel".
+- **Logic:** Update `switchboard.statusBar.showArtifactsButton` description to "Controls visibility of the Open Artifacts Panel button on the status bar."
+- **Implementation:** Single-line JSON edit.
+
+### `src/extension.ts`
+- **Context:** Reorder status bar items and rename labels.
+- **Logic:** Assign distinct priorities so panel buttons (Kanban/Artifacts/Design) appear left of terminal controls (Agents/Clear/Reset) and the Guard item is explicitly placed. Rename artifacts text/title. Update `onDidChangeConfiguration` to refresh setup panel state for status-bar keys.
+- **Implementation:**
+  - Proposed priority layout (left-to-right): Guard 102 → Kanban 101 → Artifacts 100 → Design 99 → Agents 98 → Clear 97 → Reset 96.
+  - Change `artifactsStatusBarItem.text` to `'$(notebook) Artifacts'` and `tooltip` to `'Open Artifacts Panel'`.
+  - In `onDidChangeConfiguration`, after `updateStatusBarVisibility()`, also call `taskViewerProvider.postSetupPanelState()` when any status-bar setting changes, so the Setup panel stays in sync.
+- **Edge Cases:** Guard item is controlled by `showAgentOpenToggle`; keeping it in the same priority neighborhood preserves its relationship while making room for the panel buttons.
+
+## Verification Plan
+
+### Automated Tests
+- N/A — no test files cover status bar setup UI. Manual validation only per checklist below.
+
+### Manual Validation
+1. Open Setup panel → Status Bar tab, verify all 5 checkboxes exist (Agent Open, Terminals, Kanban, Artifacts, Design).
+2. Check/uncheck each checkbox, verify status bar buttons show/hide correctly.
+3. Edit `settings.json` directly while the Setup panel is open; verify checkboxes update within a few seconds.
+4. Close and reopen VS Code, verify checkbox states persist.
+5. Verify button order is: Guard (if enabled) | Kanban | Artifacts | Design | Agents | Clear | Reset.
+6. Verify button text shows "Artifacts" not "Plans".
+7. Verify tooltips show "Artifacts Panel" not "Planning Panel".
+
+## Recommendation
+**Send to Intern** — routine UI/config changes with a single coordination risk (Guard priority).
 
 ## Metadata
-**Complexity:** 3
-**Tags:** ui, ux, refactor
+- **Tags:** ui, ux, refactor
+- **Complexity:** 3
+
+## User Review Required
+- Confirm desired button order: Kanban | Artifacts | Design | Guard | Agents | Clear | Reset
+- Confirm "Artifacts Panel" is the final terminology vs "Planning Panel"
+
+## Complexity Audit
+
+### Routine
+- Adding a single checkbox and event handler to setup.html
+- Adding get/set handlers in SetupPanelProvider.ts and TaskViewerProvider.ts
+- Renaming labels in package.json, setup.html, and extension.ts
+- Adjusting status bar priority numbers
+
+### Complex / Risky
+- Priority reordering affects the Guard item (`fileOpeningPreventionStatusBarItem`) which is currently interleaved at priority 99. It must be explicitly repositioned to avoid layout ambiguity.
+- `onDidChangeConfiguration` in extension.ts does not push updated state to the Setup panel, so external edits (e.g., settings.json) leave checkboxes stale until the panel is reopened.

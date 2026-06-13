@@ -3158,7 +3158,10 @@
 
         <div id="tickets-content" class="research-tab-content">
             <div class="controls-strip" id="controls-strip-tickets">
-                <select id="tickets-workspace-filter" class="workspace-filter-select"></select>
+                <div class="tickets-workspace-picker">
+                    <select id="tickets-workspace-filter" class="workspace-filter-select" style="display:none;"></select>
+                    <span id="tickets-workspace-label" class="workspace-static-label" style="display:none;"></span>
+                </div>
                 <select id="tickets-project-picker" style="display:none"></select>
                 <select id="tickets-state-filter" style="display:none"></select>
                 <select id="tickets-status-filter" style="display:none"></select>

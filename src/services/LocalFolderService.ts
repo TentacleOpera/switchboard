@@ -175,24 +175,6 @@ export class LocalFolderService {
     getFolderPaths(): string[] {
         const cfg = this._getOrLoadCachedConfig();
 
-        // One-time migration from global settings
-        if (!cfg._migratedLocal) {
-            const config = vscode.workspace.getConfiguration('switchboard');
-            const globalPaths = config.get<string[]>('research.localFolderPaths', []);
-            const legacyPath = config.get<string>('research.localFolderPath', '');
-            const merged = [...globalPaths];
-            if (legacyPath && !merged.includes(legacyPath)) {
-                merged.push(legacyPath);
-            }
-            cfg.localFolderPaths = merged;
-            cfg._migratedLocal = true;
-            this._folderPathsCache = cfg;
-            // Persist and clear global settings asynchronously
-            this.saveFolderPathsConfig(cfg).then(() => {
-                config.update('research.localFolderPaths', undefined, vscode.ConfigurationTarget.Global);
-                config.update('research.localFolderPath', undefined, vscode.ConfigurationTarget.Global);
-            }).catch(() => {});
-        }
 
         const seen = new Set<string>();
         return (cfg.localFolderPaths || [])
@@ -358,16 +340,6 @@ export class LocalFolderService {
     getHtmlFolderPaths(): string[] {
         const cfg = this._getOrLoadCachedConfig();
 
-        if (!cfg._migratedHtml) {
-            const config = vscode.workspace.getConfiguration('switchboard');
-            const globalPaths = config.get<string[]>('research.htmlFolderPaths', []);
-            cfg.htmlFolderPaths = globalPaths;
-            cfg._migratedHtml = true;
-            this._folderPathsCache = cfg;
-            this.saveFolderPathsConfig(cfg).then(() => {
-                config.update('research.htmlFolderPaths', undefined, vscode.ConfigurationTarget.Global);
-            }).catch(() => {});
-        }
 
         const seen = new Set<string>();
         return (cfg.htmlFolderPaths || [])
@@ -638,16 +610,6 @@ export class LocalFolderService {
     getDesignFolderPaths(): string[] {
         const cfg = this._getOrLoadCachedConfig();
 
-        if (!cfg._migratedDesign) {
-            const config = vscode.workspace.getConfiguration('switchboard');
-            const globalPaths = config.get<string[]>('research.designFolderPaths', []);
-            cfg.designFolderPaths = globalPaths;
-            cfg._migratedDesign = true;
-            this._folderPathsCache = cfg;
-            this.saveFolderPathsConfig(cfg).then(() => {
-                config.update('research.designFolderPaths', undefined, vscode.ConfigurationTarget.Global);
-            }).catch(() => {});
-        }
 
         const seen = new Set<string>();
         return (cfg.designFolderPaths || [])
@@ -684,16 +646,6 @@ export class LocalFolderService {
     getTicketsFolderPaths(): string[] {
         const cfg = this._getOrLoadCachedConfig();
 
-        if (!cfg._migratedTickets) {
-            const config = vscode.workspace.getConfiguration('switchboard');
-            const globalPaths = config.get<string[]>('research.ticketsFolderPaths', []);
-            cfg.ticketsFolderPaths = globalPaths;
-            cfg._migratedTickets = true;
-            this._folderPathsCache = cfg;
-            this.saveFolderPathsConfig(cfg).then(() => {
-                config.update('research.ticketsFolderPaths', undefined, vscode.ConfigurationTarget.Global);
-            }).catch(() => {});
-        }
 
         const seen = new Set<string>();
         return (cfg.ticketsFolderPaths || [])
@@ -730,16 +682,6 @@ export class LocalFolderService {
     getImagesFolderPaths(): string[] {
         const cfg = this._getOrLoadCachedConfig();
 
-        if (!cfg._migratedImages) {
-            const config = vscode.workspace.getConfiguration('switchboard');
-            const globalPaths = config.get<string[]>('research.imagesFolderPaths', []);
-            cfg.imagesFolderPaths = globalPaths;
-            cfg._migratedImages = true;
-            this._folderPathsCache = cfg;
-            this.saveFolderPathsConfig(cfg).then(() => {
-                config.update('research.imagesFolderPaths', undefined, vscode.ConfigurationTarget.Global);
-            }).catch(() => {});
-        }
 
         const seen = new Set<string>();
         return (cfg.imagesFolderPaths || [])
@@ -776,21 +718,6 @@ export class LocalFolderService {
     getStitchFolderPaths(): string[] {
         const cfg = this._getOrLoadCachedConfig();
 
-        if (!cfg._migratedStitch) {
-            const config = vscode.workspace.getConfiguration('switchboard');
-            const globalPaths = config.get<string[]>('research.stitchFolderPaths', []);
-            const defaultFolder = config.get<string>('switchboard.stitch.defaultOutputFolder') || config.get<string>('stitch.defaultOutputFolder') || '.stitch';
-            const merged = [...globalPaths];
-            if (defaultFolder && !merged.includes(defaultFolder)) {
-                merged.push(defaultFolder);
-            }
-            cfg.stitchFolderPaths = merged;
-            cfg._migratedStitch = true;
-            this._folderPathsCache = cfg;
-            this.saveFolderPathsConfig(cfg).then(() => {
-                config.update('research.stitchFolderPaths', undefined, vscode.ConfigurationTarget.Global);
-            }).catch(() => {});
-        }
 
         const seen = new Set<string>();
         return (cfg.stitchFolderPaths || [])
@@ -827,16 +754,6 @@ export class LocalFolderService {
     getBriefsFolderPaths(): string[] {
         const cfg = this._getOrLoadCachedConfig();
 
-        if (!cfg._migratedBriefs) {
-            const config = vscode.workspace.getConfiguration('switchboard');
-            const globalPaths = config.get<string[]>('research.briefsFolderPaths', []);
-            cfg.briefsFolderPaths = globalPaths;
-            cfg._migratedBriefs = true;
-            this._folderPathsCache = cfg;
-            this.saveFolderPathsConfig(cfg).then(() => {
-                config.update('research.briefsFolderPaths', undefined, vscode.ConfigurationTarget.Global);
-            }).catch(() => {});
-        }
 
         const seen = new Set<string>();
         return (cfg.briefsFolderPaths || [])

@@ -1,179 +1,10 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import * as originalFs from 'fs';
+import { stateFs as fs, stateLockfile as lockfile, getWorkspaceRootFromStatePath } from './stateConfigBridge';
+import type { FSWatcher, Dirent, Stats } from 'fs';
 import * as os from 'os';
 import * as crypto from 'crypto';
-import * as originalLockfile from 'proper-lockfile';
 
-function getWorkspaceRootFromStatePath(filePath: string): string | null {
-    if (typeof filePath !== 'string') return null;
-    const normalized = filePath.replace(/\\/g, '/');
-    if (normalized.endsWith('/.switchboard/state.json')) {
-        return normalized.split('/.switchboard/state.json')[0];
-    }
-    return null;
-}
-
-const fs = {
-    ...originalFs,
-    existsSync(filePath: string): boolean {
-        const root = getWorkspaceRootFromStatePath(filePath);
-        if (root) {
-            return true;
-        }
-        return originalFs.existsSync(filePath);
-    },
-    promises: {
-        ...originalFs.promises,
-        async exists(filePath: string): Promise<boolean> {
-            const root = getWorkspaceRootFromStatePath(filePath);
-            if (root) return true;
-            return originalFs.existsSync(filePath);
-        },
-        async access(filePath: string, mode?: number): Promise<void> {
-            const root = getWorkspaceRootFromStatePath(filePath);
-            if (root) return;
-            return originalFs.promises.access(filePath, mode);
-        },
-        async readFile(filePath: string, options?: any): Promise<any> {
-            const root = getWorkspaceRootFromStatePath(filePath);
-            if (root) {
-                const { KanbanDatabase } = require('./KanbanDatabase');
-                const db = KanbanDatabase.forWorkspace(root);
-                const state = {
-                    customColumns: db.getConfigJsonSync('kanban.customColumns', undefined),
-                    customAgents: db.getConfigJsonSync('agents.customAgents', undefined),
-                    agentAssignments: db.getConfigJsonSync('agents.assignments', undefined),
-                    startupCommands: db.getConfigJsonSync('agents.startupCommands', undefined),
-                    visibleAgents: db.getConfigJsonSync('agents.visibleAgents', undefined),
-                    promptOverrides: db.getConfigJsonSync('agents.promptOverrides', undefined),
-                    liveSyncConfig: db.getConfigJsonSync('planning.liveSyncConfig', undefined),
-                    julesAutoSyncEnabled: db.getConfigJsonSync('agents.julesAutoSyncEnabled', undefined),
-                    autoCommitOnCodeReview: db.getConfigJsonSync('kanban.autoCommitOnCodeReview', undefined),
-                    planIngestionFolder: db.getConfigJsonSync('planning.ingestionFolder', undefined),
-                    terminals: db.getConfigJsonSync('runtime.terminals', {}),
-                    chatAgents: db.getConfigJsonSync('runtime.chatAgents', {}),
-                    session: db.getConfigJsonSync('runtime.session', {}),
-                    tasks: db.getConfigJsonSync('runtime.tasks', {}),
-                    context: db.getConfigJsonSync('runtime.context', {}),
-                    teams: db.getConfigJsonSync('runtime.teams', {}),
-                    julesSessions: db.getConfigJsonSync('runtime.jules', {}),
-                    julesPollingInterval: db.getConfigJsonSync('runtime.julesPollingInterval', undefined),
-                    julesPollingActive: db.getConfigJsonSync('runtime.julesPollingActive', undefined),
-                };
-                return JSON.stringify(state, null, 2);
-            }
-            return originalFs.promises.readFile(filePath, options);
-        },
-        async writeFile(filePath: string, content: string, options?: any): Promise<void> {
-            const root = getWorkspaceRootFromStatePath(filePath);
-            if (root) {
-                const { KanbanDatabase } = require('./KanbanDatabase');
-                const db = KanbanDatabase.forWorkspace(root);
-                const state = JSON.parse(content);
-                const mappings: Record<string, string> = {
-                    customColumns: 'kanban.customColumns',
-                    customAgents: 'agents.customAgents',
-                    agentAssignments: 'agents.assignments',
-                    startupCommands: 'agents.startupCommands',
-                    visibleAgents: 'agents.visibleAgents',
-                    promptOverrides: 'agents.promptOverrides',
-                    liveSyncConfig: 'planning.liveSyncConfig',
-                    julesAutoSyncEnabled: 'agents.julesAutoSyncEnabled',
-                    autoCommitOnCodeReview: 'kanban.autoCommitOnCodeReview',
-                    planIngestionFolder: 'planning.ingestionFolder',
-                    terminals: 'runtime.terminals',
-                    chatAgents: 'runtime.chatAgents',
-                    session: 'runtime.session',
-                    tasks: 'runtime.tasks',
-                    context: 'runtime.context',
-                    teams: 'runtime.teams',
-                    julesSessions: 'runtime.jules',
-                    julesPollingInterval: 'runtime.julesPollingInterval',
-                    julesPollingActive: 'runtime.julesPollingActive',
-                };
-                for (const [stateKey, dbKey] of Object.entries(mappings)) {
-                    if (state[stateKey] !== undefined) {
-                        await db.setConfigJson(dbKey, state[stateKey]);
-                    }
-                }
-                return;
-            }
-            return originalFs.promises.writeFile(filePath, content, options);
-        }
-    },
-    readFileSync(filePath: any, options?: any): any {
-        const root = getWorkspaceRootFromStatePath(filePath);
-        if (root) {
-            const { KanbanDatabase } = require('./KanbanDatabase');
-            const db = KanbanDatabase.forWorkspace(root);
-            const state = {
-                customColumns: db.getConfigJsonSync('kanban.customColumns', undefined),
-                customAgents: db.getConfigJsonSync('agents.customAgents', undefined),
-                agentAssignments: db.getConfigJsonSync('agents.assignments', undefined),
-                startupCommands: db.getConfigJsonSync('agents.startupCommands', undefined),
-                visibleAgents: db.getConfigJsonSync('agents.visibleAgents', undefined),
-                promptOverrides: db.getConfigJsonSync('agents.promptOverrides', undefined),
-                liveSyncConfig: db.getConfigJsonSync('planning.liveSyncConfig', undefined),
-                julesAutoSyncEnabled: db.getConfigJsonSync('agents.julesAutoSyncEnabled', undefined),
-                autoCommitOnCodeReview: db.getConfigJsonSync('kanban.autoCommitOnCodeReview', undefined),
-                planIngestionFolder: db.getConfigJsonSync('planning.ingestionFolder', undefined),
-                terminals: db.getConfigJsonSync('runtime.terminals', {}),
-                chatAgents: db.getConfigJsonSync('runtime.chatAgents', {}),
-                session: db.getConfigJsonSync('runtime.session', {}),
-                tasks: db.getConfigJsonSync('runtime.tasks', {}),
-                context: db.getConfigJsonSync('runtime.context', {}),
-                teams: db.getConfigJsonSync('runtime.teams', {}),
-                julesSessions: db.getConfigJsonSync('runtime.jules', {}),
-                julesPollingInterval: db.getConfigJsonSync('runtime.julesPollingInterval', undefined),
-                julesPollingActive: db.getConfigJsonSync('runtime.julesPollingActive', undefined),
-            };
-            return JSON.stringify(state, null, 2);
-        }
-        return originalFs.readFileSync(filePath, options);
-    },
-    writeFileSync(filePath: any, content: any, options?: any): void {
-        const root = getWorkspaceRootFromStatePath(filePath);
-        if (root) {
-            const { KanbanDatabase } = require('./KanbanDatabase');
-            const db = KanbanDatabase.forWorkspace(root);
-            const state = JSON.parse(content);
-            const mappings: Record<string, string> = {
-                customColumns: 'kanban.customColumns',
-                customAgents: 'agents.customAgents',
-                agentAssignments: 'agents.assignments',
-                startupCommands: 'agents.startupCommands',
-                visibleAgents: 'agents.visibleAgents',
-                promptOverrides: 'agents.promptOverrides',
-                liveSyncConfig: 'planning.liveSyncConfig',
-                julesAutoSyncEnabled: 'agents.julesAutoSyncEnabled',
-                autoCommitOnCodeReview: 'kanban.autoCommitOnCodeReview',
-                planIngestionFolder: 'planning.ingestionFolder',
-                terminals: 'runtime.terminals',
-                chatAgents: 'runtime.chatAgents',
-                session: 'runtime.session',
-                tasks: 'runtime.tasks',
-                context: 'runtime.context',
-                teams: 'runtime.teams',
-                julesSessions: 'runtime.jules',
-                julesPollingInterval: 'runtime.julesPollingInterval',
-                julesPollingActive: 'runtime.julesPollingActive',
-            };
-            for (const [stateKey, dbKey] of Object.entries(mappings)) {
-                if (state[stateKey] !== undefined) {
-                    db.setConfig(dbKey, JSON.stringify(state[stateKey]));
-                }
-            }
-            return;
-        }
-        return originalFs.writeFileSync(filePath, content, options);
-    }
-};
-
-const lockfile = {
-    lock: async () => { return async () => {}; },
-    unlock: async () => {}
-};
 import * as cp from 'child_process';
 import { promisify } from 'util';
 import { JSDOM } from 'jsdom';
@@ -414,13 +245,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _view?: vscode.WebviewView;
     private _stateWatcher?: vscode.FileSystemWatcher;
     private _planWatcher?: vscode.FileSystemWatcher;
-    private _fsStateWatcher?: fs.FSWatcher;
-    private _fsPlansWatchers: fs.FSWatcher[] = [];
+    private _fsStateWatcher?: FSWatcher;
+    private _fsPlansWatchers: FSWatcher[] = [];
     private _brainWatchers: vscode.FileSystemWatcher[] = [];
-    private _brainFsWatchers: fs.FSWatcher[] = [];
+    private _brainFsWatchers: FSWatcher[] = [];
     private _configuredPlanWatcher?: vscode.FileSystemWatcher;
-    private _stagingWatcher?: fs.FSWatcher;
-    private _configuredPlanFsWatcher?: fs.FSWatcher;
+    private _stagingWatcher?: FSWatcher;
+    private _configuredPlanFsWatcher?: FSWatcher;
     // TTL-based sets for reliable loop prevention (boolean flags reset before async watcher callbacks fire)
     private _recentMirrorWrites = new Map<string, NodeJS.Timeout>();  // mirror paths we just wrote
     private _recentBrainWrites = new Map<string, NodeJS.Timeout>();   // brain paths we just wrote
@@ -436,7 +267,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _managedImportMirrorsForActiveFolder = new Set<string>();
     private _recentActionDispatches = new Map<string, NodeJS.Timeout>(); // short TTL dedupe for sidebar actions
     private _julesSyncInFlight = false; // re-entrancy guard for auto-sync-before-Jules
-    private _selfStateWriteUntil = 0; // timestamp until which state watcher events are suppressed (self-write guard)
     private _pendingPlanCreations = new Set<string>(); // suppress watcher for internally created plans
     private _planCreationInFlight = new Set<string>(); // same-file mutex for watcher/direct create races
     private _planFsDebounceTimers = new Map<string, NodeJS.Timeout>(); // debounce native plan watcher events
@@ -445,7 +275,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _recentlyDeletedPaths = new Map<string, NodeJS.Timeout>(); // 10s TTL: prevents reconciliation from reviving just-deleted plans
     private _postRegistrationCleanupTimer: NodeJS.Timeout | undefined;      // deferred duplicate-row cleanup after watcher-triggered registrations
     private _sessionWatcher?: vscode.FileSystemWatcher;
-    private _fsSessionWatcher?: fs.FSWatcher;
+    private _fsSessionWatcher?: FSWatcher;
     private _sessionSyncTimer?: NodeJS.Timeout;
     private _refreshTimeout?: NodeJS.Timeout;
     private _julesStatusPollTimer?: NodeJS.Timeout;
@@ -1579,7 +1409,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     private async _walkForSuffix(dir: string, suffix: string, out: string[]): Promise<void> {
-        let entries: fs.Dirent[];
+        let entries: Dirent[];
         try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
         for (const entry of entries) {
             const full = path.join(dir, entry.name);
@@ -1801,16 +1631,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     await updater(state);
                 }
 
-                // Write only if state actually changed (prevents recursive watcher loops)
+                // Write only if state actually changed
                 const newContent = JSON.stringify(state, null, 2);
                 if (newContent !== content) {
                     await this._writeFileAtomic(statePath, newContent);
-                    // Trigger UI refresh directly
-                    void this._refreshConfiguredPlanWatcher();
-                    if (this._stateSyncHook) {
-                        void this._stateSyncHook().catch(() => {});
-                    }
-                    this.refresh();
+                    this.notifyStateChanged();
                 }
 
             } catch (e) {
@@ -3536,6 +3361,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         await config.update('statusBar.showArtifactsButton', enabled, vscode.ConfigurationTarget.Workspace);
     }
 
+    public handleGetStatusShowDesignSetting(): boolean {
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('statusBar.showDesignButton', false);
+    }
+
+    public async handleSetStatusShowDesignSetting(enabled: boolean): Promise<void> {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        await config.update('statusBar.showDesignButton', enabled, vscode.ConfigurationTarget.Workspace);
+    }
+
     public handleGetCyberAnimationDisabledSetting(): boolean {
         return vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
     }
@@ -3944,6 +3778,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._setupPanelProvider.postMessage({
             type: 'statusShowArtifactsSetting',
             enabled: this.handleGetStatusShowArtifactsSetting()
+        });
+        this._setupPanelProvider.postMessage({
+            type: 'statusShowDesignSetting',
+            enabled: this.handleGetStatusShowDesignSetting()
         });
 
         this._setupPanelProvider.postMessage({
@@ -5288,7 +5126,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (!workspaceRoot) { return; }
 
         try {
-            const { KanbanDatabase } = require('./KanbanDatabase');
             const db = KanbanDatabase.forWorkspace(workspaceRoot);
             await db.setConfigJson('clickup.lastAccessedLists', this._lastAccessedClickUpLists);
             await db.setConfigJson('linear.lastAccessedProjects', this._lastAccessedLinearProjects);
@@ -5305,7 +5142,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (!workspaceRoot) { return; }
 
         try {
-            const { KanbanDatabase } = require('./KanbanDatabase');
             const db = KanbanDatabase.forWorkspace(workspaceRoot);
             const clickUp = await db.getConfigJson<any>('clickup.lastAccessedLists', null);
             if (Array.isArray(clickUp)) {
@@ -9046,7 +8882,30 @@ What would you like to find?`;
     }
 
     private _setupStateWatcher() {
-        // state watcher retired — directly handled via updateState trigger UI refresh
+        // State file watcher retired: runtime state lives in kanban.db and the
+        // extension is its only writer. Writers call notifyStateChanged() instead.
+    }
+
+    private _stateNotifyTimer?: NodeJS.Timeout;
+    private _lastStateSyncAt = 0;
+
+    /**
+     * Replaces the old state.json file watcher. Debounced 200ms so batch
+     * terminal registration coalesces into one refresh; the terminal-registry
+     * sync hook is additionally throttled to 3s because it serializes via a
+     * waiter queue that only resolves at full quiescence — chaining refresh()
+     * onto every write starves the board.
+     */
+    public notifyStateChanged(): void {
+        if (this._stateNotifyTimer) { clearTimeout(this._stateNotifyTimer); }
+        this._stateNotifyTimer = setTimeout(() => {
+            void this._refreshConfiguredPlanWatcher();
+            if (this._stateSyncHook && Date.now() - this._lastStateSyncAt > 3000) {
+                this._lastStateSyncAt = Date.now();
+                void this._stateSyncHook().catch(() => { /* sync errors are non-fatal */ });
+            }
+            this.refresh();
+        }, 200);
     }
 
     private _setupGitCommitWatcher() {
@@ -9250,9 +9109,9 @@ What would you like to find?`;
             }, 250));
         };
 
-        const watchPlanDirectory = (dir: string): fs.FSWatcher | undefined => {
+        const watchPlanDirectory = (dir: string): FSWatcher | undefined => {
             try {
-                return fs.watch(dir, (_eventType, filename) => {
+                return fs.watch(dir, (_eventType: string, filename: string | null) => {
                     if (!filename) return;
                     const candidate = path.join(dir, filename.toString());
                     schedulePlanSync(candidate);
@@ -9265,7 +9124,7 @@ What would you like to find?`;
 
         this._fsPlansWatchers = watchDirs
             .map((dir) => watchPlanDirectory(dir))
-            .filter((watcher): watcher is fs.FSWatcher => !!watcher);
+            .filter((watcher): watcher is FSWatcher => !!watcher);
     }
 
     private _setupSessionWatcher() {
@@ -9365,7 +9224,7 @@ What would you like to find?`;
 
             // Brain → Mirror: native fs.watch fallback on the brain dir.
             try {
-                const brainFsWatcher = fs.watch(antigravityRoot, { recursive: true }, (_eventType, filename) => {
+                const brainFsWatcher = fs.watch(antigravityRoot, { recursive: true }, (_eventType: string, filename: string | null) => {
                     try {
                         if (!filename) return;
                         if (!/\.md(?:$|\.resolved(?:\.\d+)?$)/i.test(filename)) return;
@@ -9422,7 +9281,7 @@ What would you like to find?`;
         // Debounce timers keyed by staging filename
         const mirrorDebounceTimers = new Map<string, NodeJS.Timeout>();
         try {
-            this._stagingWatcher = fs.watch(stagingDir, (_eventType, filename) => {
+            this._stagingWatcher = fs.watch(stagingDir, (_eventType: string, filename: string | null) => {
                 if (!filename) return;
                 const isBrainMirror = /^brain_[0-9a-f]{64}\.md$/.test(filename);
                 const isIngestedMirror = /^ingested_[0-9a-f]{64}\.md$/.test(filename);
@@ -9747,8 +9606,8 @@ What would you like to find?`;
                 // The user edited the mirror directly and that edit (a) hasn't been
                 // written back yet, or (b) is fresher than any subsequent source edit.
                 // This is a durable, TTL-independent guard against delayed overwrites.
-                let sourceStat: fs.Stats;
-                let mirrorStat: fs.Stats;
+                let sourceStat: Stats;
+                let mirrorStat: Stats;
                 try {
                     sourceStat = await fs.promises.stat(filePath);
                     mirrorStat = await fs.promises.stat(mirrorPath);
@@ -9863,7 +9722,7 @@ What would you like to find?`;
         }
 
         try {
-            this._configuredPlanFsWatcher = fs.watch(configuredPlanFolder, { recursive: true }, (_eventType, filename) => {
+            this._configuredPlanFsWatcher = fs.watch(configuredPlanFolder, { recursive: true }, (_eventType: string, filename: string | null) => {
                 if (!filename || !/\.md$/i.test(String(filename))) return;
                 const fullPath = path.join(configuredPlanFolder, String(filename));
                 const stableSource = this._getStablePath(fullPath);
@@ -11339,8 +11198,8 @@ What would you like to find?`;
 
         try {
             return fs.readdirSync(dir)
-                .filter(name => sidecarPattern.test(name))
-                .map(name => path.join(dir, name));
+                .filter((name: string) => sidecarPattern.test(name))
+                .map((name: string) => path.join(dir, name));
         } catch {
             return [];
         }
@@ -11387,7 +11246,7 @@ What would you like to find?`;
             const currentDir = pendingDirs.pop();
             if (!currentDir) continue;
 
-            let entriesInDir: fs.Dirent[];
+            let entriesInDir: Dirent[];
             try {
                 entriesInDir = fs.readdirSync(currentDir, { withFileTypes: true });
             } catch {
@@ -11416,7 +11275,7 @@ What would you like to find?`;
             const currentDir = pendingDirs.pop();
             if (!currentDir) continue;
 
-            let entriesInDir: fs.Dirent[];
+            let entriesInDir: Dirent[];
             try {
                 // Async readdir so the recursive walk never blocks the extension-host
                 // event loop (keeps GlobalPlanWatcher + UI responsive between directories).
@@ -11531,7 +11390,7 @@ What would you like to find?`;
                 await new Promise<void>(resolve => setImmediate(resolve));
             }
 
-            let stats: fs.Stats;
+            let stats: Stats;
             try {
                 stats = await fs.promises.stat(filePath);
             } catch {
@@ -11709,11 +11568,11 @@ What would you like to find?`;
     ): Promise<boolean> {
         const MAX_HEADER_BYTES = 16 * 1024;
         const MAX_HEADER_LINES = 80;
-        let handle: fs.promises.FileHandle | undefined;
+        let handle: import('fs/promises').FileHandle | undefined;
         try {
             handle = await fs.promises.open(filePath, 'r');
             const buffer = Buffer.alloc(MAX_HEADER_BYTES);
-            const { bytesRead } = await handle.read(buffer, 0, MAX_HEADER_BYTES, 0);
+            const { bytesRead } = await handle!.read(buffer, 0, MAX_HEADER_BYTES, 0);
             if (bytesRead <= 0) return false;
             const snippet = buffer.toString('utf8', 0, bytesRead);
             const firstLines = snippet.split(/\r?\n/).slice(0, MAX_HEADER_LINES).join('\n');
@@ -13273,7 +13132,7 @@ What would you like to find?`;
                 const tombstoned = this._tombstones.has(pathHash) || (db ? await db.isTombstoned(pathHash) : false);
 
                 let topic = '';
-                let stat: fs.Stats | null = null;
+                let stat: Stats | null = null;
                 try {
                     const content = await fs.promises.readFile(filePath, 'utf8');
                     const h1 = content.match(/^#\s+(.+)$/m);
@@ -16573,6 +16432,12 @@ What would you like to find?`;
     }
 
     private async _writeFileAtomic(targetPath: string, content: string): Promise<void> {
+        // state.json targets live in the db — tmp-file + rename would bypass
+        // the bridge and resurrect a real file while the db misses the write.
+        if (getWorkspaceRootFromStatePath(targetPath)) {
+            await fs.promises.writeFile(targetPath, content, 'utf8');
+            return;
+        }
         const directory = path.dirname(targetPath);
         const tempPath = path.join(directory, `${path.basename(targetPath)}.tmp-${process.pid}-${Date.now()}`);
         await fs.promises.writeFile(tempPath, content, 'utf8');
@@ -17257,7 +17122,7 @@ What would you like to find?`;
         }
         // Target a file inside the folder so the OS explorer focuses INSIDE the directory
         const files = fs.readdirSync(airlockDir);
-        const firstFile = files.find(f => fs.statSync(path.join(airlockDir, f)).isFile());
+        const firstFile = files.find((f: string) => fs.statSync(path.join(airlockDir, f)).isFile());
         const uri = firstFile ? vscode.Uri.file(path.join(airlockDir, firstFile)) : vscode.Uri.file(airlockDir);
 
         await vscode.commands.executeCommand('revealFileInOS', uri);
@@ -17408,7 +17273,7 @@ What would you like to find?`;
             if (fs.existsSync(dir)) {
                 try {
                     const files = fs.readdirSync(dir);
-                    const matched = files.find(f => f.startsWith(prefix) && f.endsWith('.md'));
+                    const matched = files.find((f: string) => f.startsWith(prefix) && f.endsWith('.md'));
                     if (matched) {
                         return path.join(dir, matched);
                     }

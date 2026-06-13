@@ -2208,6 +2208,8 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
 
     document.getElementById('images-workspace-filter')?.addEventListener('change', (e) => {
         state.imagesWorkspaceRootFilter = e.target.value;
+        _restoredPanelState.panel['images.root'] = e.target.value;
+        persistTab('images.root', state.imagesWorkspaceRootFilter);
         const msg = state._lastImagesDocsMsg || {};
         const filteredNodes = state.imagesWorkspaceRootFilter
             ? (msg.nodes || []).filter(n => n.metadata?.root === state.imagesWorkspaceRootFilter)
@@ -2425,6 +2427,15 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 }
                 const briefsSelect = document.getElementById('briefs-workspace-filter');
                 if (briefsSelect) briefsSelect.value = state.briefsWorkspaceRootFilter;
+
+                const restoredImagesRoot = _restoredPanelState.panel['images.root'] || '';
+                if (_workspaceItems.length === 0 || restoredImagesRoot === '' || _workspaceItems.some(i => i.workspaceRoot === restoredImagesRoot)) {
+                    state.imagesWorkspaceRootFilter = restoredImagesRoot;
+                } else {
+                    state.imagesWorkspaceRootFilter = '';
+                }
+                const imagesSelect = document.getElementById('images-workspace-filter');
+                if (imagesSelect) imagesSelect.value = state.imagesWorkspaceRootFilter;
                 break;
             }
             case 'briefsDocsReady':

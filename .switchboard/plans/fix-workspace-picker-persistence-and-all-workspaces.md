@@ -1,8 +1,8 @@
-# Fix Workspace Picker Persistence and Add "All Workspaces" to Tickets Tab
+# Fix Workspace Picker Persistence and Filter Tickets Dropdown by Integration
 
 ## Goal
 
-Fix five workspace dropdowns across `planning.html` and `design.html` that fail to remember the last selected workspace across panel close/reopen and VS Code restart. Also add the missing "All Workspaces" aggregate view to the Tickets tab.
+Fix five workspace dropdowns across `planning.html` and `design.html` that fail to remember the last selected workspace across panel close/reopen and VS Code restart. Also fix the Tickets tab workspace picker to only show workspaces that actually have ClickUp or Linear configured — and hide the picker entirely when only one workspace has an integration.
 
 ## Metadata
 
@@ -12,21 +12,23 @@ Fix five workspace dropdowns across `planning.html` and `design.html` that fail 
 ## User Review Required
 
 - Confirm behavior when restored workspace has unreachable integration config: show setup prompt (not fallback to next workspace).
-- Confirm "All Workspaces" resolution behavior: when selected, the backend scans all roots and returns the first with a valid ClickUp/Linear config, then the frontend loads tickets for that resolved workspace.
+- Confirm conditional picker visibility: hidden when 0 or 1 integration workspace; visible as filtered dropdown when 2+.
 
 ## Complexity Audit
 
 ### Routine
 - Append `.root` keys to existing `tabKeys` arrays in `PlanningPanelProvider.ts` and `DesignPanelProvider.ts`.
-- Add `<option value="">All Workspaces</option>` to tickets dropdown HTML.
-- Flip `includeAllOption` boolean in `registerWorkspaceDropdown` call.
 - Add `persistTab` to images change handler in `design.js`.
 - Sync `_restoredPanelState.panel` for research, notebook, and images in `restoredTabState` handlers.
+- Add `_getIntegrationWorkspaces` helper and `integrationWorkspaces` message in backend.
+- Add `updateTicketsWorkspacePicker` function and `integrationWorkspaces` message handler in frontend.
+- Wrap tickets `<select>` in container with static label in HTML.
 
 ### Complex / Risky
 - Adjusting `ticketsDefaultRoot` fallback logic to unconditionally prefer the restored root even when its integration config is temporarily unreachable.
 - Coordinating `restoredTabState` → `ticketsRootChanged` → `integrationProviderPreference` flow to resolve the missing-provider auto-load race.
-- Ensuring the "All Workspaces" auto-resolve via `ticketsDefaultRoot` does not conflict with the `ticketsDefaultRoot` guard that prevents overwriting a restored specific workspace.
+- Coordinating `integrationWorkspaces` message arrival with `restoredTabState` and `workspaceItemsUpdated` to avoid flicker or stale dropdown content.
+- Ensuring the conditional hide/show of the tickets picker does not break existing tab layout or event handlers.
 - Cross-file coordination between `PlanningPanelProvider.ts`, `planning.js`, `design.js`, and `design.html`.
 
 ## Problem Analysis
@@ -41,7 +43,7 @@ Working pickers (local, online, kanban in planning; html, design in design) have
 
 | File | Dropdown ID | Persist Key | tabKeys Has Key? | Root Cause |
 |---|---|---|---|---|
-| `planning.html` | `tickets-workspace-filter` | `tickets.root` | No (only `'tickets'`) | Missing `.root` key; also lacks "All Workspaces" option |
+| `planning.html` | `tickets-workspace-filter` | `tickets.root` | No (only `'tickets'`) | Missing `.root` key; also shows all workspaces including those without ClickUp/Linear |
 | `planning.html` | `research-workspace-filter` | `research.root` | No (only `'research'`) | Missing `.root` key |
 | `planning.html` | `notebook-workspace-filter` | `notebook.root` | No (only `'notebook'`) | Missing `.root` key |
 | `design.html` | `stitch-workspace-filter` | `stitch.root` | No (only `'stitch'`) | Missing `.root` key |
@@ -49,25 +51,32 @@ Working pickers (local, online, kanban in planning; html, design in design) have
 
 ### Additional Issues
 
-1. **Tickets tab lacks "All Workspaces"**: `registerWorkspaceDropdown('tickets-workspace-filter', 'tickets', false)` passes `includeAllOption = false`, while every other tab passes `true`. The `<select>` in HTML is also empty, lacking the `<option value="">All Workspaces</option>` hardcoded in the other tabs. The change handler short-circuits on empty values (`if (!newRoot) return`), preventing the auto-resolve flow from functioning.
+1. **Tickets tab shows irrelevant workspaces**: The tickets workspace picker uses the generic `workspaceItems` list, which includes every VS Code workspace folder. Most of those workspaces have no ClickUp/Linear integration, so selecting them shows an empty or broken state. The picker should only show workspaces with a configured integration.
 
-2. **`ticketsDefaultRoot` race/overwrite**: The frontend handler for `ticketsDefaultRoot` blindly assigns `ticketsWorkspaceRoot = msg.workspaceRoot` without checking if a restored value was already set by `restoredTabState`. If `ticketsDefaultRoot` arrives after `restoredTabState`, it clobbers the user's persisted choice.
+2. **Tickets picker is redundant with one integration workspace**: When only one workspace has ClickUp/Linear, the dropdown still renders with a single option. It should be hidden and the workspace shown as static text.
 
-3. **`lastIntegrationProvider` not restored**: When `restoredTabState` does restore `ticketsWorkspaceRoot` directly, it never sets `lastIntegrationProvider`. Later, the auto-load guard `if (lastIntegrationProvider && !ticketsLoadedOnce)` fails, so tickets don't fetch until manual Refresh.
+3. **Tickets change handler short-circuits on empty values**: `if (!newRoot) return` prevents graceful handling when the picker is hidden or when no integration workspaces exist.
 
-4. **Backend `ticketsDefaultRoot` over-eager fallback**: When the restored root's ClickUp/Linear config is temporarily unreachable, the backend falls back to iterating all other roots to find one with a valid integration — potentially returning a *different* workspace than the user had selected.
+4. **`ticketsDefaultRoot` race/overwrite**: The frontend handler for `ticketsDefaultRoot` blindly assigns `ticketsWorkspaceRoot = msg.workspaceRoot` without checking if a restored value was already set by `restoredTabState`. If `ticketsDefaultRoot` arrives after `restoredTabState`, it clobbers the user's persisted choice.
+
+5. **`lastIntegrationProvider` not restored**: When `restoredTabState` does restore `ticketsWorkspaceRoot` directly, it never sets `lastIntegrationProvider`. Later, the auto-load guard `if (lastIntegrationProvider && !ticketsLoadedOnce)` fails, so tickets don't fetch until manual Refresh.
+
+6. **Backend `ticketsDefaultRoot` over-eager fallback**: When the restored root's ClickUp/Linear config is temporarily unreachable, the backend falls back to iterating all other roots to find one with a valid integration — potentially returning a *different* workspace than the user had selected.
 
 ## Edge Cases
 
-- **Stale persisted roots**: If a persisted workspace root is removed from the VS Code workspace, the dropdown should fall back to the tab default ("All Workspaces" or first workspace), leaving the `globalState` entry alone so it works again if the repo returns.
+- **Stale persisted roots**: If a persisted workspace root is removed from the VS Code workspace, the dropdown should fall back to the first available integration workspace, leaving the `globalState` entry alone so it works again if the repo returns.
 - **Race between `restoredTabState` and `ticketsDefaultRoot`**: Both messages may arrive in either order. The frontend must prefer the explicitly restored value over the computed default.
-- **"All Workspaces" + tickets fetch**: If the user selects "All Workspaces", the frontend delegates to `ticketsDefaultRoot`, which scans all roots and returns the first one with a valid ClickUp/Linear config. This is auto-resolution, not aggregation. The resolved workspace is then loaded normally.
+- **Zero integration workspaces**: If no workspace has ClickUp/Linear configured, the frontend should show a "Configure Integration" prompt instead of an empty dropdown.
+- **Single integration workspace**: The picker is hidden; tickets load automatically for that workspace without user interaction.
+- **Multiple integration workspaces**: The dropdown shows only workspaces with integrations. Selecting one loads tickets for that workspace.
 - **Images tab**: Adding `persistTab` to the change handler is new behavior — previously images workspace selection was purely in-memory. This is a bugfix, not a breaking change.
 
 ## Edge-Case & Dependency Audit
 
 ### Race Conditions
-- `restoredTabState` and `ticketsDefaultRoot` may arrive in either order. The frontend guard in `ticketsDefaultRoot` prevents overwrite, but if the restored root is invalid (e.g., repo removed) the fallback workspace may be selected instead of "All Workspaces".
+- `restoredTabState`, `workspaceItemsUpdated`, and `integrationWorkspaces` may arrive in any order. The frontend must handle late arrival of `integrationWorkspaces` by re-rendering the tickets picker without overwriting the user's current selection.
+- If `integrationWorkspaces` arrives after the user has already manually selected a workspace, the dropdown filter should update but the current selection should be preserved if still valid.
 - `ticketsRootChanged` (posted after restore) and `integrationProviderPreference` response may arrive before or after the user switches to the Tickets tab. The frontend's `switchToTab` uses `lastIntegrationProvider && !ticketsLoadedOnce` to trigger fetch, so late arrival is safe.
 
 ### Security
@@ -75,11 +84,12 @@ Working pickers (local, online, kanban in planning; html, design in design) have
 
 ### Side Effects
 - Images tab now persists workspace selection to global state; previously it was session-only. This is a behavior change but aligns with every other tab.
+- Backend `integrationWorkspaces` scans all roots for ClickUp/Linear config at panel init. This is I/O-bound (config file reads) but only happens once per panel lifecycle.
 - Backend `ticketsDefaultRoot` may now return a root with `null` provider, causing the frontend to show a "Configure Integration" prompt instead of auto-loading a different workspace.
 
 ### Dependencies & Conflicts
 - No external dependencies. Internal dependency on `PanelStateStore` key naming convention (`*.root`). If another feature adds new workspace dropdowns, it must follow the same pattern to avoid repeating this bug.
-- Conflicts: any concurrent work touching `tabKeys`, `ticketsDefaultRoot`, or workspace-filter change handlers in `planning.js` / `design.js`.
+- Conflicts: any concurrent work touching `tabKeys`, `ticketsDefaultRoot`, workspace-filter change handlers, or the `workspaceItemsUpdated` message shape in `planning.js` / `design.js`.
 
 ## Proposed Changes
 
@@ -107,52 +117,186 @@ To:
 const tabKeys = ['stitch', 'html-preview', 'images', 'design', 'html.root', 'design.root', 'briefs', 'briefs.root', 'stitch.root', 'images.root'];
 ```
 
-### 2. Frontend: Add "All Workspaces" to Tickets Tab
+### 2. Backend: Expose Integration-Capable Workspaces
 
-#### [MODIFY] `src/webview/planning.html`
+#### [NEW] `src/services/PlanningPanelProvider.ts`
 
-At line ~3161, change:
-```html
-<select id="tickets-workspace-filter" class="workspace-filter-select"></select>
+Add a private helper that scans all roots for ClickUp/Linear config and returns every workspace that has one:
+
+```typescript
+private async _getIntegrationWorkspaces(): Promise<Array<{ workspaceRoot: string; provider: 'clickup' | 'linear' }>> {
+    const allRoots = this._getWorkspaceRoots();
+    const results: Array<{ workspaceRoot: string; provider: 'clickup' | 'linear' }> = [];
+    for (const root of allRoots) {
+        try {
+            const [clickUpConfig, linearConfig] = await Promise.all([
+                this._adapterFactories.getClickUpSyncService(root).loadConfig(),
+                this._adapterFactories.getLinearSyncService(root).loadConfig()
+            ]);
+            const provider = (clickUpConfig?.setupComplete) ? 'clickup'
+                : (linearConfig?.setupComplete) ? 'linear'
+                : null;
+            if (provider) {
+                results.push({ workspaceRoot: root, provider });
+            }
+        } catch {
+            // Config unreadable — skip this root
+        }
+    }
+    return results;
+}
 ```
-To:
-```html
-<select id="tickets-workspace-filter" class="workspace-filter-select">
-    <option value="">All Workspaces</option>
-</select>
+
+In the `ready` / `fetchRoots` handler (around line ~947), after sending `workspaceItemsUpdated` and `restoredTabState`, also send integration workspaces:
+
+```typescript
+const integrationWorkspaces = await this._getIntegrationWorkspaces();
+this._panel?.webview.postMessage({
+    type: 'integrationWorkspaces',
+    workspaces: integrationWorkspaces
+});
 ```
+
+#### [MODIFY] `src/services/PlanningPanelProvider.ts` — Refactor `ticketsDefaultRoot`
+
+Replace the inline scan logic in `ticketsDefaultRoot` (line ~988) with a call to `_getIntegrationWorkspaces()`:
+
+```typescript
+case 'ticketsDefaultRoot': {
+    const restoredRoot = this._stateStore.getPanelState<string>('tickets.root');
+    const integrationWorkspaces = await this._getIntegrationWorkspaces();
+    let defaultRoot: string | undefined;
+    let defaultProvider: 'clickup' | 'linear' | null = null;
+
+    // Prefer restored root if it still has a valid integration
+    if (restoredRoot && integrationWorkspaces.some(w => w.workspaceRoot === restoredRoot)) {
+        defaultRoot = restoredRoot;
+        defaultProvider = integrationWorkspaces.find(w => w.workspaceRoot === restoredRoot)!.provider;
+    }
+
+    // Fall back to first integration workspace
+    if (!defaultRoot && integrationWorkspaces.length > 0) {
+        defaultRoot = integrationWorkspaces[0].workspaceRoot;
+        defaultProvider = integrationWorkspaces[0].provider;
+    }
+
+    // Final fallback: restored root or first root (provider null)
+    if (!defaultRoot) {
+        defaultRoot = (restoredRoot && allRoots.includes(restoredRoot)) ? restoredRoot : allRoots[0];
+    }
+
+    this._panel?.webview.postMessage({
+        type: 'ticketsDefaultRoot',
+        workspaceRoot: defaultRoot,
+        provider: defaultProvider
+    });
+    break;
+}
+```
+
+### 3. Frontend: Filter Tickets Dropdown by Integration + Conditional Hide
 
 #### [MODIFY] `src/webview/planning.js`
 
-At line ~4858, change:
+Add a module-level variable to store integration workspaces:
+
 ```javascript
-registerWorkspaceDropdown('tickets-workspace-filter', 'tickets', false);
-```
-To:
-```javascript
-registerWorkspaceDropdown('tickets-workspace-filter', 'tickets', true);
+let _integrationWorkspaces = []; // Array of { workspaceRoot, provider }
 ```
 
-At line ~4862, the change handler currently has:
-```javascript
-if (!newRoot) return;
-```
-This must be replaced with logic that triggers the auto-resolve flow. When `newRoot === ''` ("All Workspaces"), the frontend posts `ticketsDefaultRoot` and lets the backend scan all roots to find the one with a valid integration.
+In the message handler, add a case for `integrationWorkspaces`:
 
-Update the handler to:
 ```javascript
-ticketsWorkspaceRoot = newRoot;
-persistTab('tickets.root', ticketsWorkspaceRoot);
-if (!newRoot) {
-    // "All Workspaces" selected — let backend resolve the best workspace
-    resetTicketsInMemoryState();
-    vscode.postMessage({ type: 'ticketsDefaultRoot' });
-    return;
+case 'integrationWorkspaces': {
+    _integrationWorkspaces = msg.workspaces || [];
+    updateTicketsWorkspacePicker();
+    break;
 }
-// ... existing root change logic
 ```
 
-### 3. Frontend: Fix `ticketsDefaultRoot` Race
+Replace the `tickets-workspace-filter` registration and change handler (around line ~4858) with a dedicated tickets picker setup:
+
+```javascript
+function updateTicketsWorkspacePicker() {
+    const select = document.getElementById('tickets-workspace-filter');
+    const staticLabel = document.getElementById('tickets-workspace-label');
+    if (!select || !staticLabel) return;
+
+    const count = _integrationWorkspaces.length;
+
+    if (count === 0) {
+        // No integrations — show static "Configure Integration" prompt
+        select.style.display = 'none';
+        staticLabel.style.display = '';
+        staticLabel.textContent = 'Configure ClickUp or Linear in workspace settings to browse tickets.';
+        return;
+    }
+
+    if (count === 1) {
+        // Exactly one integration — hide picker, show workspace name
+        select.style.display = 'none';
+        staticLabel.style.display = '';
+        const single = _integrationWorkspaces[0];
+        const item = _workspaceItems.find(i => i.workspaceRoot === single.workspaceRoot);
+        staticLabel.textContent = item ? item.label : path.basename(single.workspaceRoot);
+        // Auto-select the single workspace if not already set
+        if (ticketsWorkspaceRoot !== single.workspaceRoot) {
+            ticketsWorkspaceRoot = single.workspaceRoot;
+            persistTab('tickets.root', ticketsWorkspaceRoot);
+            vscode.postMessage({ type: 'ticketsRootChanged', workspaceRoot: ticketsWorkspaceRoot });
+        }
+        return;
+    }
+
+    // Two or more — show filtered dropdown
+    select.style.display = '';
+    staticLabel.style.display = 'none';
+    const current = ticketsWorkspaceRoot || '';
+    select.innerHTML = '';
+    for (const ws of _integrationWorkspaces) {
+        const item = _workspaceItems.find(i => i.workspaceRoot === ws.workspaceRoot);
+        const option = document.createElement('option');
+        option.value = ws.workspaceRoot;
+        option.textContent = item ? item.label : path.basename(ws.workspaceRoot);
+        select.appendChild(option);
+    }
+    // Preserve current selection if still valid, otherwise select first
+    if (_integrationWorkspaces.some(w => w.workspaceRoot === current)) {
+        select.value = current;
+    } else {
+        select.value = _integrationWorkspaces[0].workspaceRoot;
+        ticketsWorkspaceRoot = select.value;
+        persistTab('tickets.root', ticketsWorkspaceRoot);
+        vscode.postMessage({ type: 'ticketsRootChanged', workspaceRoot: ticketsWorkspaceRoot });
+    }
+}
+
+// Remove the old registerWorkspaceDropdown call for tickets
+// registerWorkspaceDropdown('tickets-workspace-filter', 'tickets', false);
+
+// Attach change handler for when dropdown IS visible
+document.getElementById('tickets-workspace-filter')?.addEventListener('change', (e) => {
+    const newRoot = e.target.value;
+    if (!newRoot) return; // Should not happen with filtered list, but guard anyway
+    ticketsWorkspaceRoot = newRoot;
+    persistTab('tickets.root', ticketsWorkspaceRoot);
+    vscode.postMessage({ type: 'ticketsRootChanged', workspaceRoot: ticketsWorkspaceRoot });
+    // ... existing root change logic (load tickets, etc.)
+});
+```
+
+#### [MODIFY] `src/webview/planning.html`
+
+At line ~3161, wrap the select in a container that supports both dropdown and static label modes:
+
+```html
+<div class="tickets-workspace-picker">
+    <select id="tickets-workspace-filter" class="workspace-filter-select" style="display:none;"></select>
+    <span id="tickets-workspace-label" class="workspace-static-label" style="display:none;"></span>
+</div>
+```
+
+### 4. Frontend: Fix `ticketsDefaultRoot` Race
 
 #### [MODIFY] `src/webview/planning.js`
 
@@ -167,7 +311,7 @@ case 'ticketsDefaultRoot': {
     // ... rest of existing logic
 ```
 
-### 4. Frontend: Ensure `lastIntegrationProvider` After Restore
+### 5. Frontend: Ensure `lastIntegrationProvider` After Restore
 
 #### [MODIFY] `src/webview/planning.js`
 
@@ -181,7 +325,7 @@ if (!ticketsWorkspaceRoot) {
 }
 ```
 
-### 5. Backend: Prefer Restored Root in `ticketsDefaultRoot`
+### 6. Backend: Prefer Restored Root in `ticketsDefaultRoot`
 
 #### [MODIFY] `src/services/PlanningPanelProvider.ts`
 
@@ -217,7 +361,7 @@ case 'ticketsDefaultRoot': {
 }
 ```
 
-### 6. Frontend: Fix Images Tab Persistence
+### 7. Frontend: Fix Images Tab Persistence
 
 #### [MODIFY] `src/webview/design.js`
 
@@ -239,7 +383,7 @@ document.getElementById('images-workspace-filter')?.addEventListener('change', (
 });
 ```
 
-### 7. Frontend: Ensure Restored State Applies to Images and Research/Notebook
+### 8. Frontend: Ensure Restored State Applies to Images and Research/Notebook
 
 #### [MODIFY] `src/webview/planning.js`
 
@@ -265,9 +409,14 @@ if (imagesSelect) imagesSelect.value = state.imagesWorkspaceRootFilter;
 
 ## All Workspaces Implementation Strategy
 
-The "All Workspaces" option for tickets is a **smart default** that delegates workspace selection to the backend's existing `ticketsDefaultRoot` logic. When the user has multiple VS Code workspaces open but only one has ClickUp/Linear configured, the workspace picker is noise. Selecting "All Workspaces" triggers `ticketsDefaultRoot`, which scans all roots, finds the first one with a valid integration, and returns it. The frontend then loads tickets for that resolved workspace exactly as if the user had picked it directly.
+The Tickets tab workspace picker is unique because not every VS Code workspace has ClickUp/Linear configured. Showing all workspaces in the dropdown creates noise — most options lead to empty or broken states. The fix is to filter the dropdown to only workspaces with a configured integration, and to hide the picker entirely when there's only one such workspace (since there's no meaningful choice to make).
 
-**This is auto-resolution, not aggregation.** True multi-root ticket aggregation would require querying every configured workspace and merging results from two different APIs — that is out of scope and should be a separate plan if needed.
+This approach:
+- Eliminates dead-end workspace options in the tickets dropdown
+- Removes UI clutter when only one workspace has an integration
+- Preserves the existing persistence model (`tickets.root`)
+- Reuses the backend's integration-scanning logic, just exposes the full list instead of only the first match
+- Does NOT implement multi-root ticket aggregation — that remains out of scope
 
 ## Verification Plan
 
@@ -276,7 +425,9 @@ The "All Workspaces" option for tickets is a **smart default** that delegates wo
 3. Open Planning panel → NotebookLM tab. Select a workspace. Close panel. Reopen. Verify same workspace is selected.
 4. Open Design panel → Stitch tab. Select a workspace. Close panel. Reopen. Verify same workspace is selected.
 5. Open Design panel → Images tab. Select a workspace. Close panel. Reopen. Verify same workspace is selected.
-6. Tickets tab: verify "All Workspaces" appears in dropdown. Selecting it triggers `ticketsDefaultRoot`, which resolves to the workspace with a ClickUp/Linear config, and tickets load for that workspace.
+6. Tickets tab with 0 integration workspaces: verify picker shows "Configure ClickUp or Linear..." message and no dropdown.
+7. Tickets tab with 1 integration workspace: verify picker is hidden, workspace name shown as static text, tickets auto-load.
+8. Tickets tab with 2+ integration workspaces: verify dropdown shows only workspaces with integrations, selecting one loads tickets for that workspace.
 7. With a persisted tickets workspace: close VS Code entirely, reopen, open Planning panel → Tickets. Verify the restored workspace is selected and ticket fetching works without manual Refresh.
 8. Regression: verify Local Docs, Online Docs, Kanban Plans, HTML Previews, and Design System tabs still remember their workspaces.
 
@@ -286,11 +437,13 @@ None — all changes are within existing files and use existing `PanelStateStore
 
 ## Remaining Risks
 
-- If `restoredTabState` and `ticketsDefaultRoot` arrive in rapid succession with the restored root invalid (e.g., repo removed), the user will see the fallback workspace rather than "All Workspaces". This is acceptable — the stale root fallback behavior is consistent with other tabs.
+- If `integrationWorkspaces` arrives after the user has already manually selected a workspace, `updateTicketsWorkspacePicker` may briefly show the wrong filtered list before preserving the valid selection. This is mitigated by the selection-preservation logic in `updateTicketsWorkspacePicker`.
+- If the restored root no longer has a valid integration (e.g., config removed), `ticketsDefaultRoot` will fall back to the first available integration workspace. This is acceptable — the user's persisted choice is no longer actionable.
+- If `integrationWorkspaces` is slow to arrive (I/O-bound config scanning), the tickets picker may momentarily show the generic workspace list before filtering. This is mitigated by hiding the select by default (`style="display:none"`) and only showing it after `integrationWorkspaces` is received.
 - The `images-workspace-filter` change handler addition is a net-new `persistTab` call. If the user previously relied on images always defaulting to the first workspace on panel open, this changes behavior to remember their last choice. This is a bugfix, not a regression.
 
 ## Adversarial Synthesis
 
-Key risks: (1) `ticketsDefaultRoot` may still scan every root if the restored root lacks a provider, but the revised logic now pins the returned root to the user's persisted choice, avoiding workspace hijack. (2) "All Workspaces" delegates to `ticketsDefaultRoot` which may resolve to a workspace the user did not intend if multiple roots have integrations; this is acceptable because the user explicitly chose the auto-resolve option. (3) Reusing `ticketsRootChanged` to fetch the provider after restore avoids inventing a new message type, but it assumes the backend handler remains provider-only; any future side effects added to `ticketsRootChanged` would change restore behavior. Mitigations: add a comment in the backend `ticketsRootChanged` case noting that it is also used during restore, and guard `ticketsDefaultRoot` against overwriting restored values.
+Key risks: (1) `ticketsDefaultRoot` may still scan every root if the restored root lacks a provider, but the revised logic now pins the returned root to the user's persisted choice when still valid, avoiding workspace hijack. (2) The conditional hide/show of the tickets picker introduces a new UI state machine; if `integrationWorkspaces` and `restoredTabState` arrive out of order, the picker may flicker or show the wrong mode. This is mitigated by defaulting to hidden and only revealing the appropriate mode once both messages are processed. (3) Reusing `ticketsRootChanged` to fetch the provider after restore avoids inventing a new message type, but it assumes the backend handler remains provider-only; any future side effects added to `ticketsRootChanged` would change restore behavior. Mitigations: add a comment in the backend `ticketsRootChanged` case noting that it is also used during restore, and guard `ticketsDefaultRoot` against overwriting restored values.
 
 **Recommendation:** Send to Coder

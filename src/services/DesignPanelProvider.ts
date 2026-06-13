@@ -840,7 +840,7 @@ export class DesignPanelProvider implements vscode.Disposable {
             case 'ready': {
                 const allRoots = this._getWorkspaceRoots();
                 const items = buildWorkspaceItems(allRoots);
-                const tabKeys = ['stitch', 'html-preview', 'images', 'design', 'html.root', 'design.root', 'briefs', 'briefs.root'];
+                const tabKeys = ['stitch', 'html-preview', 'images', 'design', 'html.root', 'design.root', 'briefs', 'briefs.root', 'stitch.root', 'images.root'];
                 const statePayload = this._stateStore.getAllStates(tabKeys, allRoots);
                 this.postMessage({
                     type: 'workspaceItemsUpdated',

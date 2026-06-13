@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import * as fs from 'fs';
-import * as lockfile from 'proper-lockfile';
+import { stateFs as fs, stateLockfile as lockfile } from '../services/stateConfigBridge';
 
 /** Transient directories that are safe to wipe on activation. */
 const TRANSIENT_DIRS = ['inbox', 'outbox', 'cooldowns', 'MCP', 'handoff'];
@@ -10,8 +9,9 @@ const TRANSIENT_DIRS = ['inbox', 'outbox', 'cooldowns', 'MCP', 'handoff'];
 const TRANSIENT_FILES = ['bridge_debug.log', '.mcp_server.pid', '.mcp_version.json', 'housekeeping.policy.json'];
 
 /**
- * Canonical initial state matching state-manager.js INITIAL_STATE.
- * Resetting to this guarantees no zombie PIDs survive across sessions.
+ * Canonical initial runtime state. Resetting to this guarantees no zombie
+ * PIDs survive across sessions. Persisted via the stateConfigBridge into
+ * kanban.db runtime.* config keys — there is no state.json file on disk.
  */
 const INITIAL_STATE = {
     session: {
@@ -104,18 +104,13 @@ async function readPersistedFields(statePath: string): Promise<Record<string, un
 }
 
 /**
- * Resets state.json to INITIAL_STATE using proper-lockfile for concurrency safety.
+ * Resets runtime state to INITIAL_STATE via the db bridge.
  * Preserves user-configured fields (e.g. startupCommands) across resets.
  */
 export async function resetStateFile(statePath: string): Promise<void> {
     const dir = path.dirname(statePath);
     await fs.promises.mkdir(dir, { recursive: true });
 
-    // Ensure the file exists before locking (proper-lockfile requires it)
-    if (!fs.existsSync(statePath)) {
-        await fs.promises.writeFile(statePath, JSON.stringify(INITIAL_STATE, null, 2));
-        return;
-    }
 
     const persisted = await readPersistedFields(statePath);
 

@@ -2242,7 +2242,6 @@
 
             <!-- Hidden elements (unchanged) -->
             <span id="workspace-filter-badge" class="workspace-filter-badge" hidden></span>
-            <span id="workspace-control-plane-badge" class="workspace-filter-badge" hidden></span>
         </div>
         <div id="db-warning-banner" style="display:none; background:#3a2a00; color:#ffcc00; padding:6px 12px; font-size:12px; text-align:center; border-bottom:1px solid #554400;">
             ⚠️ Database unavailable — card positions may not reflect manual moves
@@ -3403,7 +3402,6 @@
         let activeProjectFilter = null;
         let workspaceItems = [];
         let currentControlPlaneMode = 'none';
-        let currentControlPlaneRoot = '';
         let columnDragDropModes = {};
         const integrationState = {
             clickup: { setupComplete: false, realTimeSyncEnabled: false, autoPullEnabled: false, pullIntervalMinutes: 60, syncError: false, mappingWarning: '', unmappedColumnCount: 0 },
@@ -3774,7 +3772,6 @@
 
         function updateWorkspaceFilterBadge() {
             const badge = document.getElementById('workspace-filter-badge');
-            const controlPlaneBadge = document.getElementById('workspace-control-plane-badge');
             if (!badge) return;
             if (activeWorkspaceFilter) {
                 badge.hidden = false;
@@ -3782,17 +3779,6 @@
             } else {
                 badge.hidden = true;
                 badge.textContent = '';
-            }
-            if (controlPlaneBadge) {
-                if (currentControlPlaneMode && currentControlPlaneMode !== 'none') {
-                    controlPlaneBadge.hidden = false;
-                    controlPlaneBadge.textContent = `CONTROL PLANE: ${String(currentControlPlaneMode).toUpperCase()}`;
-                    controlPlaneBadge.title = currentControlPlaneRoot || '';
-                } else {
-                    controlPlaneBadge.hidden = true;
-                    controlPlaneBadge.textContent = '';
-                    controlPlaneBadge.title = '';
-                }
             }
         }
 
@@ -5536,7 +5522,6 @@
                     activeProjectFilter = msg.projectFilter ?? null;
                     workspaceItems = Array.isArray(msg.workspaces) ? msg.workspaces : [];
                     currentControlPlaneMode = msg.controlPlaneMode || msg.mode || 'none';
-                    currentControlPlaneRoot = msg.controlPlaneRoot || msg.effectiveControlPlaneRoot || '';
 
                     if (msg.allWorkspaceProjects && typeof msg.allWorkspaceProjects === 'object') {
                         allWorkspaceProjects = msg.allWorkspaceProjects;

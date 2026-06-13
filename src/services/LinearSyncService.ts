@@ -232,7 +232,9 @@ export class LinearSyncService {
   async loadConfig(): Promise<LinearConfig | null> {
     try {
       const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
-      const raw = await db.getConfigJson<LinearConfig | null>('linear.config', null);
+      // projectId is a legacy field from shipped versions, migrated to
+      // includeProjectNames below — not part of the current LinearConfig shape.
+      const raw = await db.getConfigJson<(LinearConfig & { projectId?: string }) | null>('linear.config', null);
       if (!raw) return null;
 
       // Migration: legacy projectId → includeProjectNames
@@ -1189,9 +1191,9 @@ export class LinearSyncService {
 
   async saveSyncMap(map: Record<string, string>): Promise<void> {
     const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
-    for (const [planFile, issueId] of Object.entries(map)) {
-      await db.setLinearIssueLink(issueId, planFile);
-    }
+    // Full replace, not upsert: callers delete temp `creating_*` markers from
+    // the map and those deletions must reach the table.
+    await db.replaceAllLinearIssueLinks(map);
   }
 
   async getIssueIdForPlan(planFile: string): Promise<string | null> {
