@@ -1158,7 +1158,11 @@ export class KanbanProvider implements vscode.Disposable {
             });
 
             // THE critical message — sends cards to webview
-            this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig });
+            const allWorktrees = await db.getWorktrees();
+            const epicWorktrees = allWorktrees
+                .filter(w => w.epic_id !== null && w.status === 'active')
+                .reduce((acc, w) => { acc[w.epic_id!] = { branch: w.branch, path: w.path, id: w.id }; return acc; }, {} as Record<string, { branch: string; path: string; id: number }>);
+            this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig, epicWorktrees });
 
             this._panel.webview.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
 

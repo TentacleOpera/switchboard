@@ -5593,7 +5593,9 @@
                 }
                 case 'updateBoard':
                     const nextCards = Array.isArray(msg.cards) ? msg.cards : [];
-                    currentEpicWorktrees = msg.epicWorktrees || {};
+                    const nextEpicWorktrees = msg.epicWorktrees || {};
+                    const epicWorktreesChanged = JSON.stringify(currentEpicWorktrees) !== JSON.stringify(nextEpicWorktrees);
+                    currentEpicWorktrees = nextEpicWorktrees;
                     console.log('[Kanban WV] updateBoard received', nextCards.length, 'cards');
                     const nextBoardSignature = buildBoardSignature(nextCards);
                     const dbWarningBanner = document.getElementById('db-warning-banner');
@@ -5611,6 +5613,10 @@
                         lastBoardSignature = nextBoardSignature;
                         console.log('[Kanban WV] signature changed, calling renderBoard with', nextCards.length, 'cards');
                         renderBoard(nextCards);
+                    } else if (epicWorktreesChanged) {
+                        currentCards = nextCards;
+                        console.log('[Kanban WV] epicWorktrees changed, calling renderBoard with', nextCards.length, 'cards');
+                        renderBoard(currentCards);
                     } else {
                         currentCards = nextCards;
                         if (currentFocusedEpicId) {

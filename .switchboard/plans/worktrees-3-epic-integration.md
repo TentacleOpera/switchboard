@@ -237,3 +237,13 @@ function renderFocusBanner() {
 **Complexity: 6 → Send to Coder**
 
 The epic card UI changes are the most involved part — careful to not break existing card rendering. The focus mode logic is self-contained webview state.
+
+## Review Findings
+
+Review completed in-place. Two CRITICAL issues found and fixed.
+
+**Files changed**: `src/services/KanbanProvider.ts:1160-1165` (added `epicWorktrees` to `refreshWithData`'s `updateBoard` message), `src/webview/kanban.html:5596-5619` (detect `epicWorktrees` changes in `updateBoard` handler and force re-render when they differ, even if card signature is unchanged).
+
+**Validation**: Skipped compilation and tests per session policy. Fixes are minimal and targeted.
+
+**Remaining risks**: `_refreshBoardWithData` (dead code at line 1950) still sends `updateBoard` without `epicWorktrees` — harmless since it has zero call sites, but inconsistent. Board signature (`buildBoardSignature`) does not include `epicWorktrees`; the new `epicWorktreesChanged` guard mitigates this.
