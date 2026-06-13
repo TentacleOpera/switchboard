@@ -2597,7 +2597,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
                         topic = plan.topic;
                         workingDir = resolveWorkingDir(workspaceRoot, plan.repoScope || '');
-                        epicId = plan.epic_id ?? undefined;
+                        epicId = plan.epicId ?? undefined;
                         if (epicId) {
                             const linkedWorktree = (await db.getWorktrees()).find(w => String(w.epic_id) === epicId && w.status === 'active');
                             if (linkedWorktree) {
@@ -14651,7 +14651,7 @@ What would you like to find?`;
                 sessionTopic = plan.topic || plan.planFile || 'Untitled';
                 workingDir = resolveWorkingDir(resolvedWorkspaceRoot, plan.repoScope || '');
                 previousColumn = plan.kanbanColumn;
-                epicId = plan.epic_id ?? undefined;
+                epicId = plan.epicId ?? undefined;
                 if (epicId) {
                     const linkedWorktree = (await db.getWorktrees()).find(w => String(w.epic_id) === epicId && w.status === 'active');
                     if (linkedWorktree) {

@@ -154,6 +154,10 @@ if (!btn && msg.sessionId) {
 ## Alternative Considered
 Remove HTML escaping from `data-plan-id` attributes entirely. However, this could introduce XSS vulnerabilities if plan IDs ever contain user-controlled content. The CSS.escape approach is safer and more robust.
 
+## Review Findings
+
+All 7 planned `CSS.escape()` wrappers verified in `src/webview/kanban.html` at lines 3840, 5144, 5256, 5359, 5434, 5868, 5871. Manual audit confirms syntactically correct JS, no orphaned `escapeAttr()` references, and no caller regressions. Compilation and tests skipped per session directive. Remaining risks: polyfill is non-spec defensive dead code; similar unescaped selectors exist in `src/webview/planning.js` (out of scope, suggest follow-up).
+
 ---
 
 **Recommendation:** Send to Intern
