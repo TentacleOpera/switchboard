@@ -8084,11 +8084,12 @@
             container.style.cssText = 'padding: 12px; display: flex; flex-direction: column; gap: 16px;';
 
             const cpMode = currentControlPlaneMode || 'none';
-            if (cpMode === 'none') {
-                const infoBanner = document.createElement('div');
-                infoBanner.style.cssText = 'padding:8px; background:rgba(0,173,159,0.08); border:1px solid var(--accent-teal,#00ad9f); color:var(--text-secondary,#aaa); border-radius:4px; font-size:11px; line-height:1.4;';
-                infoBanner.textContent = '\u2139\ufe0f No control plane configured. Agents will run in the workspace root unless a worktree directory is selected.';
-                container.appendChild(infoBanner);
+            if (cpMode !== 'explicit') {
+                const msg = document.createElement('div');
+                msg.style.cssText = 'padding:16px; font-size:11px; color:var(--text-secondary); line-height:1.5;';
+                msg.innerHTML = 'A <strong>Control Plane</strong> is required to use worktrees.<br>Set one up in the workspace picker first.';
+                container.appendChild(msg);
+                return container;
             }
 
             // Description / Overview Header
@@ -8111,65 +8112,6 @@
 
             const hasActiveSession = config && config.hasActiveSession;
 
-            // Agent Terminal Behaviour section
-            const behaviourSection = document.createElement('div');
-            behaviourSection.className = 'db-subsection';
-            behaviourSection.style.cssText = 'padding: 12px; display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--border-color); border-radius: 6px;';
-
-            const behaviourTitle = document.createElement('div');
-            behaviourTitle.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-primary);';
-            behaviourTitle.textContent = 'AGENT TERMINAL BEHAVIOUR';
-            behaviourSection.appendChild(behaviourTitle);
-
-            const activeTerminalCount = config?.activeTerminalCount || 0;
-            const selectedBehaviour = config?.agentBehaviour || 'worktreeNew';
-
-            const radioGroup = document.createElement('div');
-            radioGroup.style.cssText = 'display: flex; flex-direction: column; gap: 6px;';
-
-            const behaviours = [
-                { value: 'worktreeNew', label: 'Create new agent terminals in worktree directory' },
-                { value: 'worktreeReset', label: 'Dispose all existing agents and create new ones in worktree' },
-                { value: 'controlPlaneNew', label: 'Create new agent terminals in control plane directory' },
-                { value: 'existing', label: 'Use existing agents (keep current terminals)' }
-            ];
-
-            for (const b of behaviours) {
-                const row = document.createElement('label');
-                row.style.cssText = 'display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); cursor: pointer;';
-                const radio = document.createElement('input');
-                radio.type = 'radio';
-                radio.name = 'worktree-agent-behaviour';
-                radio.value = b.value;
-                radio.checked = selectedBehaviour === b.value;
-                if (b.value === 'existing' && activeTerminalCount === 0) {
-                    radio.disabled = true;
-                }
-                row.appendChild(radio);
-                const span = document.createElement('span');
-                span.textContent = b.label;
-                if (radio.disabled) {
-                    span.style.color = 'var(--text-muted)';
-                    span.title = 'No active agent terminals available';
-                }
-                row.appendChild(span);
-                radioGroup.appendChild(row);
-            }
-            behaviourSection.appendChild(radioGroup);
-
-            const rememberRow = document.createElement('label');
-            rememberRow.style.cssText = 'display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-muted); margin-top: 4px;';
-            const rememberCb = document.createElement('input');
-            rememberCb.type = 'checkbox';
-            rememberCb.checked = !!config?.rememberEnabled;
-            rememberRow.appendChild(rememberCb);
-            const rememberSpan = document.createElement('span');
-            rememberSpan.textContent = 'Remember choice for next startup';
-            rememberRow.appendChild(rememberSpan);
-            behaviourSection.appendChild(rememberRow);
-
-            container.appendChild(behaviourSection);
-
             // Active / Inactive states
             if (!hasActiveSession) {
                 const actionSection = document.createElement('div');
@@ -8187,10 +8129,7 @@
                 createBtn.addEventListener('click', () => {
                     if (createBtn.disabled) return;
                     createBtn.disabled = true;
-                    const selected = radioGroup.querySelector('input[name="worktree-agent-behaviour"]:checked');
-                    const agentBehaviour = selected ? selected.value : 'worktreeNew';
-                    const rememberChoice = rememberCb.checked;
-                    postKanbanMessage({ type: 'createWorktree', workspaceRoot: currentWorkspaceRoot, agentBehaviour, rememberChoice });
+                    postKanbanMessage({ type: 'createWorktree', workspaceRoot: currentWorkspaceRoot });
                     setTimeout(() => { createBtn.disabled = false; }, 5000);
                 });
                 actionSection.appendChild(createBtn);

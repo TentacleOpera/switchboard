@@ -133,3 +133,9 @@ Skipped per session directive. The test suite will be run separately by the user
 - **No regression risk:** The fix only adds state clearing logic; it doesn't modify existing state management flows.
 
 **Recommendation:** Send to Intern
+
+## Review Findings
+
+- `src/webview/design.js`: Added `state.previewRequestId++` to the stitch-workspace-filter change handler (line 3007) to cancel in-flight image preview responses and prevent stale DOM updates after clearing images state. No other files changed.
+- Validation: Code review only; compilation and tests skipped per session directive.
+- Remaining risks: The `images-workspace-filter` change handler (line 2218) has the identical carry-over bug and should be fixed in a follow-up plan. The extra field clears (`activeDocContent`, `activeDocFilePath`, `activeDocSourceFolder`, `activeFileType`) are harmless but unnecessary since `handlePreviewReady` for `images-folder` never sets them.

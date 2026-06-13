@@ -135,17 +135,6 @@
             background: var(--panel-bg);
         }
 
-        #local-content.active,
-        #online-content.active,
-        #kanban-content.active,
-        #design-content.active,
-        #briefs-content.active,
-        #html-preview-content.active,
-        #images-content.active,
-        #tickets-content.active {
-            display: flex;
-        }
-
         .controls-strip {
             display: flex;
             align-items: center;
@@ -430,10 +419,6 @@
             overflow-y: auto;
             height: 100%;
             background: var(--panel-bg);
-        }
-
-        #notebook-content.active {
-            display: flex;
         }
 
         /* Planning Cards */
@@ -1526,10 +1511,6 @@
             overflow-y: auto;
             height: 100%;
             background: var(--panel-bg);
-        }
-
-        #research-content.active {
-            display: flex;
         }
 
         /* Prompt Buttons Container */
@@ -2891,13 +2872,6 @@
     
 
         /* Stitch UI styles */
-        /* The generic .research-tab-content.active is display:block, which never
-           bounds the gallery's height — the Stitch tab needs a flex column so its
-           content-row can shrink (min-height: 0) and the gallery scrolls. */
-        #stitch-content.active {
-            display: flex;
-            flex-direction: column;
-        }
         #stitch-content .content-row {
             min-height: 0;
             overflow-y: auto;

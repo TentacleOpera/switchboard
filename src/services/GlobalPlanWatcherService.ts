@@ -84,6 +84,11 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
         this._outputChannel?.appendLine('[GlobalPlanWatcher] Initializing...');
         await this._refreshWatchers();
         this._startPeriodicScan();
+        // Always run one startup scan regardless of periodicScanEnabled — this seeds the
+        // seen-paths cache and imports files that were created before this session started.
+        // periodicScanEnabled only controls whether the scan *repeats*; the initial pass
+        // must always happen so pre-startup files are not silently dropped.
+        this._runStartupScan();
         
         // Watch for configuration changes
         const configListener = vscode.workspace.onDidChangeConfiguration(async (e) => {
@@ -105,6 +110,22 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             await this._refreshWatchers();
         });
         this._disposables.push(folderListener);
+    }
+
+    private _runStartupScan(): void {
+        void (async () => {
+            if (this._scanInProgress) { return; }
+            this._scanInProgress = true;
+            try {
+                const folders = await this._getAllMappedFolders();
+                for (const folder of folders) {
+                    await this._scanForNewFiles(folder);
+                }
+                this._outputChannel?.appendLine('[GlobalPlanWatcher] Startup scan complete');
+            } finally {
+                this._scanInProgress = false;
+            }
+        })();
     }
 
     private _startPeriodicScan(): void {

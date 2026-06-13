@@ -3004,6 +3004,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 state.activeDocFilePath = null;
                 state.activeDocSourceFolder = null;
                 state.activeFileType = null;
+                state.previewRequestId++;
                 // Clear the preview pane
                 const initialState = document.getElementById('images-initial-state');
                 const loadingState = document.getElementById('images-loading-state');

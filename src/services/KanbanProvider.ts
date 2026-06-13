@@ -6208,61 +6208,49 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 });
                 break;
             }
-            case 'createWorktree':
-            case 'startSafetySession': {
+            case 'createWorktree': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) break;
+
                 const db = this._getKanbanDb(workspaceRoot);
-                if (db && await db.ensureReady()) {
-                    try {
-                        const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot);
-                        await db.setMeta('active_safety_session_branch', branch);
-                        await db.setMeta('active_safety_session_started_at', new Date().toISOString());
-                        await db.setMeta('active_safety_session_path', wtPath);
+                if (!db || !await db.ensureReady()) break;
 
-                        const agentBehaviour = msg.agentBehaviour || 'worktreeNew';
-                        const rememberChoice = msg.rememberChoice || false;
-                        const cpStatus = this.getControlPlaneSelectionStatus(workspaceRoot);
-                        const effectiveCpRoot = cpStatus.effectiveWorkspaceRoot || workspaceRoot;
+                try {
+                    const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, msg.epicTopic);
 
-                        if (agentBehaviour === 'existing') {
-                            const config = await this._getWorktreeConfigData(workspaceRoot);
-                            if (config && config.activeTerminalCount === 0) {
-                                vscode.window.showWarningMessage('No active agent terminals found. Consider creating new agents instead.');
-                            }
-                        } else if (agentBehaviour === 'controlPlaneNew') {
-                            await vscode.commands.executeCommand('switchboard.createAgentGrid', { cwdOverride: effectiveCpRoot });
-                        } else if (agentBehaviour === 'worktreeReset') {
-                            await vscode.commands.executeCommand('switchboard.disposeAllGridTerminals');
-                            await vscode.commands.executeCommand('switchboard.createAgentGrid', { cwdOverride: wtPath });
-                        } else if (agentBehaviour === 'worktreeNew') {
-                            await vscode.commands.executeCommand('switchboard.createAgentGrid', { cwdOverride: wtPath });
-                        }
+                    // Re-set metadata keys temporarily until Part 2 removes them
+                    await db.setMeta('active_safety_session_branch', branch);
+                    await db.setMeta('active_safety_session_started_at', new Date().toISOString());
+                    await db.setMeta('active_safety_session_path', wtPath);
 
-                        if (rememberChoice) {
-                            await db.setMeta('worktree_agent_behaviour', agentBehaviour);
-                            await db.setMeta('worktree_remembered_path', wtPath);
-                            await db.setMeta('worktree_remember_enabled', 'true');
-                        }
-
-                        const config = await this._getWorktreeConfigData(workspaceRoot);
-                        this._panel?.webview.postMessage({
-                            type: 'worktreeConfig',
-                            ...config
-                        });
-                        this._panel?.webview.postMessage({
-                            type: 'safetySession',
-                            session: config?.hasActiveSession ? {
-                                branch: config.branch,
-                                path: config.path,
-                                startedAt: config.startedAt,
-                                pathExists: config.pathExists
-                            } : null
-                        });
-                        vscode.window.showInformationMessage(`Worktree created: ${branch}`);
-                    } catch (e: any) {
-                        vscode.window.showErrorMessage(`Failed to create worktree: ${e.message}`);
+                    // Force-create new terminals in worktree — existing terminals are unaffected
+                    const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+                    const roleToName: Record<string, string> = {
+                        'planner': 'Planner', 'lead': 'Lead Coder', 'coder': 'Coder',
+                        'intern': 'Intern', 'reviewer': 'Reviewer', 'analyst': 'Analyst'
+                    };
+                    for (const [role, enabled] of Object.entries(visibleAgents)) {
+                        if (!enabled) continue;
+                        const agentName = roleToName[role] || role.charAt(0).toUpperCase() + role.slice(1);
+                        await vscode.commands.executeCommand('switchboard.addAutobanTerminalFromKanban', role, agentName, wtPath);
                     }
+
+                    vscode.window.showInformationMessage(`Worktree created: ${branch}`);
+
+                    // Refresh tab — Part 2 replaces this with db.getWorktrees(); for now re-send existing config
+                    const config = await this._getWorktreeConfigData(workspaceRoot);
+                    this._panel?.webview.postMessage({ type: 'worktreeConfig', ...config });
+                    this._panel?.webview.postMessage({
+                        type: 'safetySession',
+                        session: config?.hasActiveSession ? {
+                            branch: config.branch,
+                            path: config.path,
+                            startedAt: config.startedAt,
+                            pathExists: config.pathExists
+                        } : null
+                    });
+                } catch (e: any) {
+                    vscode.window.showErrorMessage(`Failed to create worktree: ${e.message}`);
                 }
                 break;
             }
@@ -6761,22 +6749,38 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         return content;
     }
 
-    private async _createSafetyWorktree(workspaceRoot: string): Promise<{ branch: string; path: string }> {
-        const timestamp = new Date().toISOString().slice(0, 10);
-        let branch = `switchboard-safety-${timestamp}`;
+    private async _createSafetyWorktree(workspaceRoot: string, epicTopic?: string): Promise<{ branch: string; path: string }> {
         const execFileAsync = promisify(cp.execFile);
-        
-        // Handle duplicate branch name by appending -2, -3, etc.
+
+        // Resolve workspace root first — getControlPlaneSelectionStatus returns garbage if this is empty.
+        // Prior implementation failures were caused by skipping this ordering constraint.
+        if (!workspaceRoot) throw new Error('No workspace root resolved.');
+
+        const cpStatus = this.getControlPlaneSelectionStatus(workspaceRoot);
+        if (cpStatus.mode !== 'explicit' || !cpStatus.controlPlaneRoot) {
+            throw new Error('No control plane configured. Set a control plane in the workspace picker before creating worktrees.');
+        }
+
+        // worktrees/ is created by executeFreshSetup for new control planes.
+        // Lazy-create here for existing control planes that predate this change.
+        const worktreesParent = path.join(cpStatus.controlPlaneRoot, 'worktrees');
+        if (!fs.existsSync(worktreesParent)) {
+            fs.mkdirSync(worktreesParent, { recursive: true });
+        }
+
+        const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+        const baseName = epicTopic ? slugify(epicTopic) : `worktree-${new Date().toISOString().slice(0, 10)}`;
+        let branch = baseName;
         let suffix = 2;
         while (true) {
             try {
-                const dirName = branch;
-                const fullPath = path.join(workspaceRoot, dirName);
+                const fullPath = path.join(worktreesParent, branch);
+                // CRITICAL: git worktree add MUST run from workspaceRoot (the git repo), not the control plane root
                 await execFileAsync('git', ['worktree', 'add', '-b', branch, fullPath], { cwd: workspaceRoot });
                 return { branch, path: fullPath };
             } catch (e: any) {
                 if (e.message?.includes('already exists') || e.message?.includes('already used')) {
-                    branch = `switchboard-safety-${timestamp}-${suffix}`;
+                    branch = `${baseName}-${suffix}`;
                     suffix++;
                 } else {
                     throw e;

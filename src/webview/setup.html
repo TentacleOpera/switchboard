@@ -944,7 +944,7 @@
 
         <div class="shared-tab-content" id="plan-scanner-fields" data-tab-content="plan-scanner">
             <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
-                File watchers pick up new plans instantly. The Scan Speed below controls how often Switchboard re-scans as a fallback for missed events — both external IDE folders (Antigravity / Cursor / Claude Code / Windsurf-Devin) and the internal <code>.switchboard/plans</code> directory. Runs in the background even when this panel is minimised, unfocused, or closed.
+                File watchers pick up new plans instantly. Switchboard also scans once at startup to import any plans created while the extension was not running — this startup scan always happens. The Scan Speed below controls how often that scan <em>repeats</em> as a fallback for missed events — both external IDE folders (Antigravity / Cursor / Claude Code / Windsurf-Devin) and the internal <code>.switchboard/plans</code> directory. Set to <strong>Off</strong> to disable the recurring scan while keeping the startup pass.
             </div>
 
             <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:10px;">

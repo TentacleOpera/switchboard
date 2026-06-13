@@ -167,3 +167,7 @@ Different agents independently implemented tab navigation for each webview witho
 - Future tab changes only require editing one file.
 
 **Recommendation:** Send to Intern (complexity 3).
+
+## Review Findings
+
+Implementation is solid and meets all plan requirements. All four webviews link to `shared-tabs.css`, use the new `.shared-tab-*` classes, old inline CSS was removed, JS selectors were updated, webpack config includes the CSS copy pattern, and the regression test regex was updated. During review, redundant `#*-content.active { display: flex; }` CSS overrides were found in `planning.html` and `design.html` — leftovers from the old `.research-tab-content.active { display: block }` era that now defeat the shared CSS single-source-of-truth. These were removed. A stale comment in `design.html` justifying a Stitch tab override was also removed. Files changed: `planning.html`, `design.html`. No functional regressions introduced. Remaining risk: the `#research-tab-bar` and `#research-content` IDs in planning/design retain old naming but are harmless and were explicitly preserved per plan instructions.
