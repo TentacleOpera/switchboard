@@ -447,3 +447,11 @@ None — all changes are within existing files and use existing `PanelStateStore
 Key risks: (1) `ticketsDefaultRoot` may still scan every root if the restored root lacks a provider, but the revised logic now pins the returned root to the user's persisted choice when still valid, avoiding workspace hijack. (2) The conditional hide/show of the tickets picker introduces a new UI state machine; if `integrationWorkspaces` and `restoredTabState` arrive out of order, the picker may flicker or show the wrong mode. This is mitigated by defaulting to hidden and only revealing the appropriate mode once both messages are processed. (3) Reusing `ticketsRootChanged` to fetch the provider after restore avoids inventing a new message type, but it assumes the backend handler remains provider-only; any future side effects added to `ticketsRootChanged` would change restore behavior. Mitigations: add a comment in the backend `ticketsRootChanged` case noting that it is also used during restore, and guard `ticketsDefaultRoot` against overwriting restored values.
 
 **Recommendation:** Send to Coder
+
+## Review Findings
+
+- **CRITICAL fix applied:** The `ticketsDefaultRoot` race condition guard was missing in `planning.js` — added to prevent overwriting an already-restored `ticketsWorkspaceRoot` when `ticketsDefaultRoot` arrives after `restoredTabState`.
+- All other planned changes verified as present: backend `tabKeys` updated in both providers, `_getIntegrationWorkspaces` helper added, frontend `updateTicketsWorkspacePicker` and `integrationWorkspaces` handler implemented, HTML wrapper for conditional picker visibility added, images persistence wired in `design.js`, and restored state synced for research/notebook/images roots.
+- **Files changed:** `src/webview/planning.js` (added 4-line guard in `ticketsDefaultRoot` handler at line 3415).
+- **Validation:** Static analysis confirms the guard checks `ticketsWorkspaceRoot` truthiness and validates against `_workspaceItems` before breaking, matching the plan specification. No compilation or test steps were run per session instructions.
+- **Remaining risks:** None new. The original risks around `integrationWorkspaces` arrival timing and stale persisted roots remain mitigated as documented.

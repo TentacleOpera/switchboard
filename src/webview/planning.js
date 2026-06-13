@@ -3412,6 +3412,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 renderTicketsTab();
                 break;
             case 'ticketsDefaultRoot': {
+                // Don't overwrite a value already restored from persisted state
+                if (ticketsWorkspaceRoot && _workspaceItems.some(item => item.workspaceRoot === ticketsWorkspaceRoot)) {
+                    break;
+                }
                 ticketsWorkspaceRoot = msg.workspaceRoot || '';
                 lastIntegrationProvider = msg.provider || null;
                 const select = document.getElementById('tickets-workspace-filter');
