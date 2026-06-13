@@ -293,3 +293,21 @@ function renderWorktreeList(worktrees) {
 **Complexity: 6 → Send to Coder**
 
 The migration is the highest-risk piece — import-before-delete pattern is mandatory because `active_safety_session_branch` shipped in released versions.
+
+## Review Findings
+
+**Files changed**: `src/services/KanbanDatabase.ts`, `src/services/KanbanProvider.ts`
+
+**CRITICAL fixes applied**:
+- `_cardsToPromptPlans` was reading deleted meta keys (`active_safety_session_branch` / `active_safety_session_path`); replaced with lookup from the new `worktrees` table using epic→path resolution. `@KanbanProvider.ts:2151-2228`
+- V30 migration dropped the existing `worktrees` table without preserving old V24/V25 rows; added backup + restore loop before DROP. `@KanbanDatabase.ts:4335-4368`
+
+**MAJOR fixes applied**:
+- `abandonWorktree` handler executed `git branch -D` (not in plan); removed. `@KanbanProvider.ts:6354-6356`
+- `mergeWorktree` handler used `git worktree remove` without `--force`; added `--force` so successful merges always clean up. `@KanbanProvider.ts:6337`
+
+**Validation**: Grep verification confirms no remaining live callers of deleted meta keys outside migration code and dead private helpers. `_cardsToPromptPlans` now resolves `worktreePath` per-card from active worktrees. No double-trigger or race condition regressions detected.
+
+**Remaining risks**:
+- Dead code (`_getWorktreeConfigData`, `_getSafetySessionData`, `lastSafetySession` in kanban.html) still references old meta keys but is never called. Safe to delete in a future cleanup pass.
+- `worktrees.epic_id INTEGER REFERENCES plans(id)` references a non-existent `plans.id` column (PK is `plan_id TEXT`). Harmless because SQLite foreign key enforcement is off, but should be corrected in a schema refactor.

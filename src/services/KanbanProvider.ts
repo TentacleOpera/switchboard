@@ -2148,11 +2148,14 @@ export class KanbanProvider implements vscode.Disposable {
         const db = this._getKanbanDb(workspaceRoot);
         const hasDb = db && await db.ensureReady();
 
-        let safetySessionPath: string | undefined;
+        // Build epic -> worktree path map from active worktrees (replaces deleted meta keys)
+        const worktreePathMap = new Map<string, string>();
         if (hasDb) {
-            const activeBranch = await db.getMeta('active_safety_session_branch');
-            if (activeBranch && activeBranch !== '') {
-                safetySessionPath = await db.getMeta('active_safety_session_path') || undefined;
+            const wts = await db.getWorktrees();
+            for (const wt of wts) {
+                if (wt.epic_id) {
+                    worktreePathMap.set(wt.epic_id, wt.path);
+                }
             }
         }
 
@@ -2172,13 +2175,25 @@ export class KanbanProvider implements vscode.Disposable {
                 }
             }
 
+            // Resolve worktree path: prefer epic-linked, fall back to sole active worktree
+            let worktreePath: string | undefined;
+            if (card.isEpic && card.planId) {
+                worktreePath = worktreePathMap.get(card.planId);
+            }
+            if (!worktreePath && card.epicId) {
+                worktreePath = worktreePathMap.get(card.epicId);
+            }
+            if (!worktreePath && worktreePathMap.size === 1) {
+                worktreePath = worktreePathMap.values().next().value;
+            }
+
             promptPlans.push({
                 topic: card.topic,
                 absolutePath: this._resolvePlanFilePath(workspaceRoot, card.planFile),
                 complexity: card.complexity,
                 workingDir,
                 sessionId: cardKey,
-                worktreePath: safetySessionPath,
+                worktreePath,
                 epicId
             });
 
@@ -2188,13 +2203,14 @@ export class KanbanProvider implements vscode.Disposable {
                 const subtasks = await db.getSubtasksByEpicId(card.planId);
                 const limited = subtasks.slice(0, maxSubtasks);
                 for (const st of limited) {
+                    const stWorktreePath = st.epicId ? worktreePathMap.get(st.epicId) : worktreePath;
                     promptPlans.push({
                         topic: `[SUBTASK] ${st.topic}`,
                         absolutePath: this._resolvePlanFilePath(workspaceRoot, st.planFile),
                         complexity: st.complexity,
                         workingDir: st.repoScope ? resolveWorkingDir(workspaceRoot, st.repoScope) : '',
                         sessionId: st.sessionId || st.planId,
-                        worktreePath: safetySessionPath,
+                        worktreePath: stWorktreePath,
                         isSubtask: true,
                         epicTopic: card.topic,
                         epicId: card.planId ? parseInt(card.planId, 10) : undefined
@@ -2205,7 +2221,7 @@ export class KanbanProvider implements vscode.Disposable {
                         topic: `[WARNING: ${subtasks.length} subtasks exist but only ${maxSubtasks} included. Remaining subtasks stay in column: ${card.column}]`,
                         absolutePath: '',
                         sessionId: '',
-                        worktreePath: safetySessionPath,
+                        worktreePath,
                         isSubtask: true,
                         epicTopic: card.topic
                     });
@@ -6318,7 +6334,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 try {
                     const execFileAsync = promisify(cp.execFile);
                     await execFileAsync('git', ['-C', workspaceRoot, 'merge', branch], { timeout: 30000 });
-                    await execFileAsync('git', ['worktree', 'remove', wtPath], { cwd: workspaceRoot });
+                    await execFileAsync('git', ['worktree', 'remove', '--force', wtPath], { cwd: workspaceRoot });
                     await db.updateWorktreeStatus(Number(worktreeId), 'merged');
                     vscode.window.showInformationMessage(`Merged and removed worktree: ${branch}`);
                 } catch (e: any) {
@@ -6337,9 +6353,6 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     const execFileAsync = promisify(cp.execFile);
                     if (wtPath && fs.existsSync(wtPath)) {
                         await execFileAsync('git', ['worktree', 'remove', '--force', wtPath], { cwd: workspaceRoot });
-                    }
-                    if (branch) {
-                        await execFileAsync('git', ['branch', '-D', branch], { cwd: workspaceRoot });
                     }
                     await db.updateWorktreeStatus(Number(worktreeId), 'abandoned');
                     vscode.window.showInformationMessage(`Abandoned and removed worktree: ${branch}`);

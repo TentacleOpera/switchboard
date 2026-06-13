@@ -4331,6 +4331,22 @@ export class KanbanDatabase {
         if (v30 < 30) {
             try {
                 this._db.exec('BEGIN');
+
+                // Preserve any existing worktrees from old V24/V25 schema before dropping
+                const oldWorktreeRows: Array<{ id: number; branch: string; created_at: string }> = [];
+                try {
+                    const stmtOld = this._db.prepare(`SELECT id, branch, created_at FROM worktrees`);
+                    while (stmtOld.step()) {
+                        const row = stmtOld.getAsObject();
+                        oldWorktreeRows.push({
+                            id: Number(row.id),
+                            branch: String(row.branch || ''),
+                            created_at: String(row.created_at || '')
+                        });
+                    }
+                    stmtOld.free();
+                } catch { /* table may not exist or have different schema */ }
+
                 this._db.exec(`DROP TABLE IF EXISTS worktrees`);
                 this._db.exec(`
                     CREATE TABLE IF NOT EXISTS worktrees (
@@ -4342,6 +4358,14 @@ export class KanbanDatabase {
                         status      TEXT NOT NULL DEFAULT 'active'
                     );
                 `);
+
+                // Restore old rows with defaults for new columns
+                for (const row of oldWorktreeRows) {
+                    this._db.run(
+                        `INSERT OR IGNORE INTO worktrees (id, branch, path, epic_id, created_at, status) VALUES (?, ?, ?, ?, ?, ?)`,
+                        [row.id, row.branch, '', null, row.created_at, 'active']
+                    );
+                }
 
                 const stmtBranch = this._db.prepare(`SELECT value FROM kanban_meta WHERE key='active_safety_session_branch'`);
                 let legacyBranchVal = '';
