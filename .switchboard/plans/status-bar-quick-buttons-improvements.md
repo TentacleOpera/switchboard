@@ -309,3 +309,7 @@ Key risks: priority collision with the Guard item if omitted from reordering; st
 ### Complex / Risky
 - Priority reordering affects the Guard item (`fileOpeningPreventionStatusBarItem`) which is currently interleaved at priority 99. It must be explicitly repositioned to avoid layout ambiguity.
 - `onDidChangeConfiguration` in extension.ts does not push updated state to the Setup panel, so external edits (e.g., settings.json) leave checkboxes stale until the panel is reopened.
+
+## Review Findings
+
+Source changes are correct: the Design checkbox and hydration handler were added to setup.html; get/set handlers were added to SetupPanelProvider and TaskViewerProvider; `postSetupPanelState` pushes `statusShowDesignSetting`; labels were renamed to "Artifacts"; priorities were reordered with Guard explicitly at 102. `dist/webview/setup.html` was a stale CopyPlugin artifact and has been synced from src. `dist/extension.js` remains stale and requires a webpack build to activate the new handlers, priority changes, label renames, and the `postSetupPanelState` refresh in `onDidChangeConfiguration`. No orphaned references were found and the command ID `switchboard.openPlanningPanel` was correctly preserved.

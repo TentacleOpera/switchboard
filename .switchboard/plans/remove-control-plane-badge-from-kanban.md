@@ -85,4 +85,8 @@ Skipped per session directive.
 
 ---
 
+## Review Findings
+
+Source changes in `src/webview/kanban.html` are correct: the badge element, `controlPlaneBadge` DOM lookup, `currentControlPlaneRoot` variable, and badge render block were all removed while `currentControlPlaneMode` and the `.workspace-filter-badge` CSS class were preserved. `dist/webview/kanban.html` was a stale CopyPlugin artifact and has been synced from src. No regressions detected; the Worktrees tab `cpMode` banner path remains intact.
+
 **Recommendation:** Send to Intern
