@@ -6259,7 +6259,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
 
                 // Block if epic already has an active linked worktree
                 const allWorktrees = await db.getWorktrees();
-                const existing = allWorktrees.find(w => w.epic_id === msg.epicId && w.status === 'active');
+                const existing = allWorktrees.find(w => String(w.epic_id) === msg.epicId && w.status === 'active');
                 if (existing) {
                     vscode.window.showInformationMessage(`Epic already has worktree: ${existing.branch}`);
                     break;

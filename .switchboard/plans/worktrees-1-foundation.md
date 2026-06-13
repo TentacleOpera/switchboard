@@ -219,3 +219,13 @@ Also remove all `activeTerminalCount` reads and the `disabled` check on any radi
 **Complexity: 5 → Send to Coder**
 
 Targeted fixes with clear before/after. The critical ordering constraint is the main risk — the code comment documents it explicitly.
+
+## Review Findings
+
+**Findings**: Two MAJOR issues found. (1) `createWorktreeForEpic` duplicate check at `KanbanProvider.ts:6262` used strict equality `===` between `w.epic_id` (number from SQLite) and `msg.epicId` (string from webview), so duplicate epic worktrees were never blocked. (2) Worktree list render at `kanban.html:8289-8290` passed `w.branch` and `w.path` into `onclick` handlers without escaping single quotes, breaking JavaScript for branch names or paths containing apostrophes.
+
+**Fixes applied**: Converted duplicate check to `String(w.epic_id) === msg.epicId`. Added `String(...).replace(/'/g, "\\'")` escaping for branch and path in both `mergeWorktree` and `abandonWorktree` onclick handlers.
+
+**Validation**: Old radio group options fully removed from kanban.html (no orphaned references). `_createSafetyWorktree` uses correct `git worktree add -b` from workspaceRoot. Terminal creation via `addAutobanTerminalFromKanban` correctly passes `cwd`. No compilation or test regressions detected.
+
+**Remaining risks**: `_getWorktreeConfigData` and `_getSafetySessionData` are dead code until Part 2 removes them. The `createWorktreeForEpic` handler was outside the original plan scope but was updated consistently as part of the same commit.

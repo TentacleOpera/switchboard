@@ -8286,8 +8286,8 @@
                         <span class="wt-status-badge" data-wt-id="${w.id}" style="font-size:10px; color:var(--text-secondary); min-width: 60px;">⋯</span>
                         <span style="flex:1; font-size:11px; font-family:monospace; word-break:break-all;">${w.branch}</span>
                         <span style="font-size:10px; color:var(--text-secondary); white-space:nowrap; margin-right:8px;">${w.createdAt ? w.createdAt.slice(0, 10) : ''}</span>
-                        <button class="btn-secondary" style="padding: 3px 6px; font-size: 10px; font-family: inherit; letter-spacing: normal;" onclick="mergeWorktree(${w.id},'${w.branch}','${w.path}')">Merge</button>
-                        <button class="btn-danger" style="padding: 3px 6px; font-size: 10px; font-family: inherit; letter-spacing: normal;" onclick="abandonWorktree(${w.id},'${w.branch}','${w.path}')">Abandon</button>
+                        <button class="btn-secondary" style="padding: 3px 6px; font-size: 10px; font-family: inherit; letter-spacing: normal;" onclick="mergeWorktree(${w.id},'${String(w.branch).replace(/'/g, "\\'")}','${String(w.path).replace(/'/g, "\\'")}')">Merge</button>
+                        <button class="btn-danger" style="padding: 3px 6px; font-size: 10px; font-family: inherit; letter-spacing: normal;" onclick="abandonWorktree(${w.id},'${String(w.branch).replace(/'/g, "\\'")}','${String(w.path).replace(/'/g, "\\'")}')">Abandon</button>
                     </div>
                 `).join('');
 
