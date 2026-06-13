@@ -116,11 +116,20 @@ export class DesignPanelProvider implements vscode.Disposable {
         this._setupBriefsFolderWatchers();
 
         this._disposables.push(
-            vscode.workspace.onDidChangeWorkspaceFolders(() => {
+            vscode.workspace.onDidChangeWorkspaceFolders(async () => {
                 this.postMessage({
                     type: 'workspaceItemsUpdated',
                     items: buildWorkspaceItems(this._getWorkspaceRoots())
                 });
+                this.disposeWatchers();
+                this._setupHtmlFolderWatchers();
+                this._setupDesignFolderWatchers();
+                this._setupImagesFolderWatchers();
+                this._setupBriefsFolderWatchers();
+                await this._sendHtmlDocsReady();
+                await this._sendDesignDocsReady();
+                await this._sendImagesDocsReady();
+                await this._sendBriefsDocsReady();
             })
         );
 
@@ -265,7 +274,8 @@ export class DesignPanelProvider implements vscode.Disposable {
     }
 
     private _setupHtmlFolderWatchers(): void {
-        this.disposeWatchers();
+        this._htmlFolderWatchers.forEach(w => w.dispose());
+        this._htmlFolderWatchers = [];
         const roots = this._getWorkspaceRoots();
         for (const root of roots) {
             try {
@@ -286,6 +296,8 @@ export class DesignPanelProvider implements vscode.Disposable {
     }
 
     private _setupDesignFolderWatchers(): void {
+        this._designFolderWatchers.forEach(w => w.dispose());
+        this._designFolderWatchers = [];
         const roots = this._getWorkspaceRoots();
         for (const root of roots) {
             try {
@@ -410,6 +422,8 @@ export class DesignPanelProvider implements vscode.Disposable {
     }
 
     private _setupImagesFolderWatchers(): void {
+        this._imagesFolderWatchers.forEach(w => w.dispose());
+        this._imagesFolderWatchers = [];
         const roots = this._getWorkspaceRoots();
         for (const root of roots) {
             try {
