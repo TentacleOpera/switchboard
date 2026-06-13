@@ -243,3 +243,11 @@ Key risks: (1) The `_registeredTerminals` map stores live `vscode.Terminal` obje
 **Complexity: 5 → Send to Coder**
 
 The helper is small, but the fix requires async state lookup (matching `findTerminalNameByWorktreePath`), careful ordering in the batch dispatch path, and precise scoping of `worktreePath` in `_handleTriggerAgentActionInternal`. All risks are contained to a single file and well-defined.
+
+## Review Findings
+
+**Files changed:** `src/services/TaskViewerProvider.ts` — added `_resolveAgentTerminalForPlan` (line 5384) and `_findTerminalNameByWorktreePathAndRole` (line 5396); updated `_handleTriggerAgentActionInternal` dispatch target selection (line 14772); reordered `handleKanbanBatchTrigger` to compute common worktree before terminal selection (lines 3056-3074).
+
+**Validation results:** No compilation or test run per session directives. Advanced regression analysis completed: no race conditions, no signature changes affecting callers, no orphaned references, no double-trigger bugs.
+
+**Remaining risks:** Three dispatch paths (`dispatchToCoderTerminal` at line 6539, `_handleSendAnalystMessage` at line 14950, `_handleAirlockSendToCoder` at line 17140) still call `_getAgentNameForRole` directly. They lack plan/session context so worktree routing is not applicable today, but the Step 1 call-site audit was incomplete. Unit tests for the new helpers (listed in Verification Plan) were not implemented.

@@ -2427,6 +2427,17 @@ export async function activate(context: vscode.ExtensionContext) {
                 taskViewerProvider.refresh();
                 outputChannel?.appendLine(`[Extension] Registrations for ${batchRegistrations.length} terminal(s) were persisted to state.json`);
             }
+
+            const newlyCreatedTerminals = new Set(createdTerminals);
+            if (newlyCreatedTerminals.size === 0) {
+                const firstAgent = agents[0];
+                if (firstAgent) {
+                    await vscode.commands.executeCommand('switchboard.focusTerminalByName', firstAgent.name);
+                    vscode.window.showInformationMessage(`Agent terminals already open. Focused: ${firstAgent.name}`);
+                }
+                return;
+            }
+
             try {
                 // Wait for all created terminals' shells to start before sending commands
                 const awaiting = createdTerminals.filter(t => !shellReadyTerminals.has(t));
@@ -2458,7 +2469,7 @@ export async function activate(context: vscode.ExtensionContext) {
                     let cmd = await taskViewerProvider.getAgentStartupCommand(agent.role, effectiveWorkspaceRoot);
                     if (cmd && cmd.trim()) {
                         const terminal = gridTerminals.get(suffixedName(agent.name));
-                        if (terminal) {
+                        if (terminal && newlyCreatedTerminals.has(terminal)) {
                             terminal.sendText(cmd.trim(), true);
                             outputChannel?.appendLine(`[Extension] Sent startup command for '${agent.name}' (${agent.role}): ${cmd.trim()}`);
 
@@ -2470,6 +2481,8 @@ export async function activate(context: vscode.ExtensionContext) {
                             if (!registeredTerminals.has(suffixedName(agent.name))) {
                                 outputChannel?.appendLine(`[Extension] Startup command sent via local reference (registeredTerminals missing for '${agent.name}')`);
                             }
+                        } else if (terminal) {
+                            outputChannel?.appendLine(`[Extension] Skipping startup command for already running '${agent.name}' (${agent.role})`);
                         } else {
                             outputChannel?.appendLine(`[Extension] WARNING: terminal not found in gridTerminals for '${agent.name}' (key=${suffixedName(agent.name)})`);
                         }

@@ -3,6 +3,12 @@
 ## Goal
 Adjust the status bar "Agents" button behavior so that if agent terminals are already open, it simply locates (focuses) the first terminal instead of resending CLI startup commands to all terminals.
 
+## Metadata
+
+**Tags:** ui, bugfix, cli
+
+**Complexity:** 3
+
 ## Problem Analysis
 
 ### Current Behavior
@@ -18,6 +24,50 @@ Adjust the status bar "Agents" button behavior so that if agent terminals are al
 
 ### Root Cause
 The `createAgentGrid` function unconditionally sends startup commands to all agents in the loop (lines 2457-2479), regardless of whether each terminal was just created or already existed. The `alreadyExisted` flag is set but not used to conditionally skip command sending.
+
+## User Review Required
+None. This is a bugfix aligning the status bar button with existing locate behavior.
+
+## Complexity Audit
+
+### Routine
+- Tracking newly created terminals in a `Set`
+- Adding an early-return guard when all terminals already exist
+- Filtering an existing loop with a `Set` membership check
+- Reusing the existing `switchboard.focusTerminalByName` command
+
+### Complex / Risky
+- None
+
+## Edge-Case & Dependency Audit
+
+### Race Conditions
+- None expected. Terminal creation, registration, and command sending are sequential within `createAgentGrid`.
+
+### Security
+- None. No new external input or authentication changes.
+
+### Side Effects
+- Skipping startup commands for existing terminals prevents duplicate command injection.
+- `taskViewerProvider.setTerminalAgentInfo` is also skipped for existing terminals, leaving cached display names from prior initialization. Acceptable because display names are stable per role; they refresh on terminal reset if the startup command changes.
+
+### Dependencies & Conflicts
+- Depends on the existing `switchboard.focusTerminalByName` command registered earlier in `extension.ts` (lines 2017–2052).
+- No conflicts with other commands or providers.
+
+## Dependencies
+- none
+
+## Adversarial Synthesis
+Key risks: (1) Early return assumes all agents are healthy; a stale terminal that passed `clearGridBlockers` but is unresponsive would be focused instead of recreated. (2) `focusTerminalByName` falls back to scanning VS Code terminals by normalized name, which could focus the wrong terminal if multiple windows have similarly named terminals. (3) If a startup command changes while terminals are open, existing terminals will not get the updated `setTerminalAgentInfo` cache because it is skipped. Mitigations: `clearGridBlockers` already prunes exited terminals; focus command uses the registered map first; display name caching is cosmetic and resolves on reset.
+
+## Proposed Changes
+
+### src/extension.ts
+- **Context:** The `createAgentGrid` function (lines 2237–2492) opens a grid of agent terminals and unconditionally sends startup commands to every agent in the loop at lines 2457–2479. The `alreadyExisted` flag (line 2380) is tracked but never used to skip command sending.
+- **Logic:** After the terminal creation loop, determine whether any terminals were actually created. If none were created, focus the first agent via the existing `switchboard.focusTerminalByName` command and exit. Otherwise, send startup commands only to the terminals that were newly created.
+- **Implementation:** Add a `newlyCreatedTerminals` Set populated from `createdTerminals`. Insert an early-return block after the state-registration refresh (line 2429) that focuses the first agent when the Set is empty. In the command-sending loop (line 2457), wrap `terminal.sendText` with a `newlyCreatedTerminals.has(terminal)` guard. Adjust the final information message to differentiate between initialization and focus scenarios (or retain the existing message for the initialization case).
+- **Edge Cases:** Partial grid state (some terminals missing) creates missing terminals and sends commands only to them. Terminal name matching remains unchanged because focusing relies on the same `focusTerminalByName` logic. Workspace switches are handled by `clearGridBlockers` before terminal creation.
 
 ## Implementation Plan
 
@@ -89,7 +139,10 @@ if (terminal && newlyCreatedTerminals.has(terminal)) {
 - If the user switches workspaces, terminals from the previous workspace might still exist
 - The `clearGridBlockers` function (lines 2314-2364) should handle cleanup of stale terminals before the creation loop
 
-## Testing
+## Verification Plan
+
+### Automated Tests
+- Skipped per session directive. The user will run the test suite separately.
 
 ### Manual Testing Steps
 1. Open agent terminals via the "Agents" status bar button
@@ -109,8 +162,4 @@ if (terminal && newlyCreatedTerminals.has(terminal)) {
 - Verify that locate buttons in implementation.html still work correctly
 - Verify that terminal reset functionality is unaffected
 
-## Metadata
-
-**Complexity:** 3
-
-**Tags:** ui, bugfix, terminal
+**Recommendation:** Send to Intern
