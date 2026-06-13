@@ -589,12 +589,11 @@ export class PlanningPanelProvider {
             // Watch for changes to the specific file
             this._activeDocWatcher = vscode.workspace.createFileSystemWatcher(
                 new vscode.RelativePattern(path.dirname(filePath), path.basename(filePath)),
-                false, // watch create
-                false, // watch change
-                true   // ignore delete (handled via onDidDelete)
+                true,  // ignore create events (file already exists when watcher is set up)
+                false, // watch change events
+                true   // ignore delete events (handled via onDidDelete)
             );
 
-            // TODO: Keep onDidChange and onDidCreate refresh logic in sync
             this._activeDocWatcher.onDidChange(() => {
                 if (gen !== this._watcherGeneration) { return; } // stale watcher
                 if (Date.now() - this._lastPanelWriteTimestamp < 1000) { return; } // panel-initiated write
@@ -613,42 +612,6 @@ export class PlanningPanelProvider {
                     if (!workspaceRoot) return;
 
                     console.log('[PlanningPanel] Auto-refreshing active document:', filePath);
-                    this._isAutoRefreshing = true;
-                    try {
-                        if (this._activePreviewSourceId === 'local-folder' || this._activePreviewSourceId === 'html-folder') {
-                            // Re-fetch local doc or HTML doc
-                            await this._handleFetchPreview(workspaceRoot, this._activePreviewSourceId, this._activePreviewDocId!, -1, this._activePreviewSourceFolder!);
-                        } else if (this._activePreviewSourceId === 'kanban-plan') {
-                            await this._handleFetchKanbanPlanPreview(this._activePreviewDocId!, -1);
-                        } else {
-                            // Re-fetch imported doc via fetchDocsFile
-                            await this._handleFetchDocsFile(workspaceRoot, this._activePreviewDocId!, -1);
-                        }
-                    } finally {
-                        this._isAutoRefreshing = false;
-                    }
-                }, 300);
-            });
-
-            // TODO: Keep onDidCreate and onDidChange refresh logic in sync
-            this._activeDocWatcher.onDidCreate(() => {
-                if (gen !== this._watcherGeneration) { return; } // stale watcher
-                if (Date.now() - this._lastPanelWriteTimestamp < 1000) { return; } // panel-initiated write
-                if (filePath !== this._activePreviewPath) { return; } // stale path
-
-                if (this._activeDocWatchDebounce) {
-                    clearTimeout(this._activeDocWatchDebounce);
-                }
-
-                this._activeDocWatchDebounce = setTimeout(async () => {
-                    if (gen !== this._watcherGeneration || filePath !== this._activePreviewPath) { return; }
-                    
-                    const workspaceRoot = this._activePreviewWorkspaceRoot
-                        || this._getWorkspaceRoot()
-                        || (this._getWorkspaceRoots().length > 0 ? this._getWorkspaceRoots()[0] : undefined);
-                    if (!workspaceRoot) return;
-
-                    console.log('[PlanningPanel] Auto-refreshing active document (create):', filePath);
                     this._isAutoRefreshing = true;
                     try {
                         if (this._activePreviewSourceId === 'local-folder' || this._activePreviewSourceId === 'html-folder') {
@@ -4288,6 +4251,12 @@ export class PlanningPanelProvider {
             this._activePreviewDocId = slugPrefix;
             this._activePreviewPath = filePath;
             this._setupActiveDocWatcher(filePath);
+
+            const cacheKey = this._getPreviewCacheKey('local-folder', slugPrefix, undefined);
+            if (requestId === -1 && this._lastPreviewContentByPath.get(cacheKey) === displayContent) {
+                return;
+            }
+            this._lastPreviewContentByPath.set(cacheKey, displayContent);
 
             this._panel?.webview.postMessage({
                 type: 'previewReady',

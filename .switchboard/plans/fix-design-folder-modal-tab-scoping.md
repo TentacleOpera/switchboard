@@ -78,4 +78,8 @@ Skipped per session directive.
 
 ---
 
+## Review Findings
+
+Implementation matches plan: `folder-modal` moved from inside `#stitch-content` to a sibling position inside `.container` at correct 8-space indent. HTML structure verified — no unclosed tags, no duplicate markup. JavaScript unaffected because all modal selectors are `document.getElementById()` and independent of DOM ancestry. CSS verified: `.container` has no `overflow: hidden`, `transform`, or `filter` that would break `position: fixed`. Files changed: `src/webview/design.html`. Remaining risk: `stitch-prompt-modal` (line 3818) is still nested inside `#stitch-content` with the same visibility bug; requires a separate fix.
+
 **Recommendation:** Send to Intern

@@ -1345,8 +1345,7 @@
         }
         if (btnNew) {
             btnNew.addEventListener('click', () => {
-                const title = prompt('Enter a title for the new design brief:');
-                if (!title) return;
+                const title = 'untitled-brief';
                 const root = state.briefsWorkspaceRootFilter || Object.keys(state.briefsFolderPathsByRoot)[0];
                 if (!root) {
                     alert('Please configure at least one briefs folder first.');
@@ -2478,7 +2477,6 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                     renderFolderListModal();
                 }
                 updateBriefDocControls();
-                updateDestinationDropdowns();
                 break;
             }
 
