@@ -2445,7 +2445,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     public async dispatchCustomPromptToRole(role: string, prompt: string, workspaceRoot: string): Promise<boolean> {
         const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedWorkspaceRoot) { return false; }
-        const targetAgent = await this._getAgentNameForRole(role, resolvedWorkspaceRoot);
+        const targetAgent = await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot);
         if (!targetAgent) {
             vscode.window.showErrorMessage(`No agent assigned to role '${role}'. Please assign a terminal first.`);
             return false;
@@ -3053,19 +3053,23 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (!resolvedWorkspaceRoot || !this._kanbanProvider) { return false; }
         await this._activateWorkspaceContext(resolvedWorkspaceRoot);
 
-        const targetAgent = String(targetTerminalOverride || '').trim() || await this._getAgentNameForRole(role, resolvedWorkspaceRoot);
+        const validPlans = await this._resolveKanbanDispatchPlans(sessionIds, resolvedWorkspaceRoot);
+        if (validPlans.length === 0) {
+            console.warn('[TaskViewerProvider] Batch trigger: no valid plans resolved.');
+            return false;
+        }
+
+        const commonWorktree = validPlans[0].worktreePath;
+        const allSameWorktree = validPlans.every(p => p.worktreePath === commonWorktree);
+        const worktreeForBatch = allSameWorktree ? commonWorktree : undefined;
+        const targetAgent = String(targetTerminalOverride || '').trim()
+            || await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreeForBatch);
         if (!targetAgent) {
             vscode.window.showErrorMessage(`No agent assigned to role '${role}'. Cannot dispatch batch.`);
             return false;
         }
         if (!this._isValidAgentName(targetAgent)) {
             console.error(`[TaskViewerProvider] Rejected invalid agent name for batch dispatch: ${targetAgent}`);
-            return false;
-        }
-
-        const validPlans = await this._resolveKanbanDispatchPlans(sessionIds, resolvedWorkspaceRoot);
-        if (validPlans.length === 0) {
-            console.warn('[TaskViewerProvider] Batch trigger: no valid plans resolved.');
             return false;
         }
 
@@ -5375,6 +5379,44 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         } catch {
             return undefined;
         }
+    }
+
+    private async _resolveAgentTerminalForPlan(
+        role: string,
+        workspaceRoot: string,
+        worktreePath?: string
+    ): Promise<string | undefined> {
+        if (worktreePath) {
+            const wtTerminal = await this._findTerminalNameByWorktreePathAndRole(worktreePath, role);
+            if (wtTerminal) { return wtTerminal; }
+        }
+        return this._getAgentNameForRole(role, workspaceRoot);
+    }
+
+    private async _findTerminalNameByWorktreePathAndRole(
+        worktreePath: string,
+        role: string
+    ): Promise<string | undefined> {
+        const resolvedTarget = path.resolve(worktreePath);
+        return new Promise<string | undefined>((resolve) => {
+            this.updateState(async (state) => {
+                if (state.terminals) {
+                    for (const [name, info] of Object.entries(state.terminals) as [string, any][]) {
+                        if (info.worktreePath && path.resolve(info.worktreePath) === resolvedTarget && info.role === role) {
+                            resolve(name);
+                            return;
+                        }
+                    }
+                    for (const [name, info] of Object.entries(state.terminals) as [string, any][]) {
+                        if (info.worktreePath && path.resolve(info.worktreePath) === resolvedTarget) {
+                            resolve(name);
+                            return;
+                        }
+                    }
+                }
+                resolve(undefined);
+            }).then(() => { /* updateState resolves after persistence */ });
+        });
     }
 
     private async _persistAutobanState(): Promise<void> {
@@ -14727,7 +14769,7 @@ What would you like to find?`;
 
 
         let targetAgent: string | undefined;
-        targetAgent = await this._getAgentNameForRole(role, resolvedWorkspaceRoot);
+        targetAgent = await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath);
 
         if (!targetAgent) {
             clearDispatchLock();

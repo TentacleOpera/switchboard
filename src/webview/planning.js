@@ -3742,7 +3742,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 copyLabel = 'Copy advance prompt';
             } else if (nextDef.role === 'planner' || nextDef.id === 'PLAN REVIEWED') {
                 copyLabel = 'Copy planning prompt';
-            } else if (['lead', 'coder', 'intern'].includes(nextDef.role)) {
+            } else if (['lead', 'coder', 'intern'].includes(nextDef.role) || nextDef.kind === 'coded') {
                 copyLabel = 'Copy coder prompt';
             } else if (nextDef.role === 'reviewer' || nextDef.id === 'CODE REVIEWED') {
                 copyLabel = 'Copy review prompt';

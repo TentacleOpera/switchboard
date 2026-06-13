@@ -115,3 +115,7 @@ The remaining bug is that `_getCopyLabel` relies on `nextDef.role`, which is abs
 > Ensure the button reset logic uses the stored copy label from the data attribute.
 
 **Recommendation:** Send to Intern
+
+## Review Findings
+
+Review completed: the `_getCopyLabel` helper in `planning.js` was missing the `kind === 'coded'` fallback identified in the plan, so coder columns still silently fell through to "Copy advance prompt." Added `|| nextDef.kind === 'coded'` at line 3745 and created the missing `src/test/planning-copy-labels-regression.test.js`. Both the new planning test and the existing kanban test pass. No regressions detected. Remaining risk: the dead `role` checks in `_getCopyLabel` (planner/reviewer) are misleading but harmless since the `id` fallbacks cover them.
