@@ -75,15 +75,7 @@ list_output.txt
 !.switchboard/README.md
 !.switchboard/SWITCHBOARD_PROTOCOL.md
 
-# ClickUp integration config (workspace-specific IDs)
-.switchboard/clickup-config.json
-
-# Linear integration config (workspace-specific IDs and sync map)
-.switchboard/linear-config.json
-.switchboard/linear-sync.json
-
-# Notion integration config and page content cache
-.switchboard/notion-config.json
+# Notion page content cache
 .switchboard/notion-cache.md
 
 # kanban.db is already excluded by .switchboard/* above — explicit entry for documentation clarity.

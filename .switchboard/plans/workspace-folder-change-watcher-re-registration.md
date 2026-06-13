@@ -121,3 +121,7 @@ Edge Cases:
 ## Recommendation
 
 **Send to Intern** — Complexity 3. Single-file change with localized lifecycle logic. All patterns are pre-existing; no architectural invention required.
+
+## Review Findings
+
+Implementation matches plan exactly. One file changed: `src/services/DesignPanelProvider.ts` (committed in `331d2a9`). All four `_setupXFolderWatchers()` methods now self-dispose, the `onDidChangeWorkspaceFolders` handler disposes and re-registers all watchers then triggers refreshes for all four tabs, and isolated message handlers no longer over-kill cross-tab watchers. No CRITICAL or MAJOR issues found; three NIT-level items deferred (outer try/catch, redundant `_updateWebviewRoots` calls, DRY extraction). Compilation and tests skipped per plan directive.

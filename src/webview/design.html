@@ -3814,30 +3814,6 @@
                 </div>
             </div>
 
-            <!-- Folder Management Modal (Copied from planning panel) -->
-            <div class="folder-modal" id="folder-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="folder-modal-title">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h3 id="folder-modal-title">Manage Local Folders</h3>
-                        <button class="modal-close-btn" id="btn-close-folder-modal" aria-label="Close">&times;</button>
-                    </div>
-                    <div class="modal-body">
-                        <div class="modal-section">
-                            <div class="section-header">
-                                <span class="section-title">Configured Folders</span>
-                                <div class="section-actions">
-                                    <button id="btn-refresh-folders-modal" class="strip-btn" title="Refresh folders">&#8635;</button>
-                                    <button id="btn-add-folder-modal" class="strip-btn">Add Folder</button>
-                                </div>
-                            </div>
-                            <div id="folder-list-modal" class="folder-list">
-                                <!-- Folder items rendered by JS -->
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
             <!-- Image to Prompt Modal -->
             <div id="stitch-prompt-modal" class="stitch-prompt-modal" style="display: none;">
                 <div class="modal-content">
@@ -3851,6 +3827,30 @@
                         <input type="file" id="stitch-generator-image-input" accept="image/png,image/jpeg,image/webp" multiple />
                         <div id="stitch-generator-thumbnails" class="stitch-generator-thumbnails"></div>
                         <button id="btn-copy-stitch-prompt" class="strip-btn stitch-btn-primary">Copy Prompt</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Folder Management Modal (Copied from planning panel) -->
+        <div class="folder-modal" id="folder-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="folder-modal-title">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="folder-modal-title">Manage Local Folders</h3>
+                    <button class="modal-close-btn" id="btn-close-folder-modal" aria-label="Close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="modal-section">
+                        <div class="section-header">
+                            <span class="section-title">Configured Folders</span>
+                            <div class="section-actions">
+                                <button id="btn-refresh-folders-modal" class="strip-btn" title="Refresh folders">&#8635;</button>
+                                <button id="btn-add-folder-modal" class="strip-btn">Add Folder</button>
+                            </div>
+                        </div>
+                        <div id="folder-list-modal" class="folder-list">
+                            <!-- Folder items rendered by JS -->
+                        </div>
                     </div>
                 </div>
             </div>

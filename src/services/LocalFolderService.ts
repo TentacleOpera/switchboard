@@ -146,19 +146,36 @@ export class LocalFolderService {
     }
 
     private _getOrLoadCachedConfig(): LocalFolderPathsConfig {
-        let cfg = this._folderPathsCache;
-        if (!cfg) {
-            cfg = {
-                localFolderPaths: [],
-                htmlFolderPaths: [],
-                designFolderPaths: [],
-                ticketsFolderPaths: [],
-                imagesFolderPaths: [],
-                stitchFolderPaths: [],
-                briefsFolderPaths: []
-            };
+        if (this._folderPathsCache) {
+            return this._folderPathsCache;
         }
-        return cfg;
+        // Async constructor init hasn't resolved yet — try sync db read
+        try {
+            const db = KanbanDatabase.forWorkspace(this._effectiveWorkspaceRoot);
+            const parsed = db.getConfigJsonSync<any>('folders.paths', null);
+            if (parsed) {
+                const cfg: LocalFolderPathsConfig = {
+                    localFolderPaths: parsed.localFolderPaths || [],
+                    htmlFolderPaths: parsed.htmlFolderPaths || [],
+                    designFolderPaths: parsed.designFolderPaths || [],
+                    ticketsFolderPaths: parsed.ticketsFolderPaths || [],
+                    imagesFolderPaths: parsed.imagesFolderPaths || [],
+                    stitchFolderPaths: parsed.stitchFolderPaths || [],
+                    briefsFolderPaths: parsed.briefsFolderPaths || []
+                };
+                this._folderPathsCache = cfg;
+                return cfg;
+            }
+        } catch { /* db not ready yet */ }
+        return {
+            localFolderPaths: [],
+            htmlFolderPaths: [],
+            designFolderPaths: [],
+            ticketsFolderPaths: [],
+            imagesFolderPaths: [],
+            stitchFolderPaths: [],
+            briefsFolderPaths: []
+        };
     }
 
     // ── Folder Path Resolution (matches kanban.dbPath pattern) ──
