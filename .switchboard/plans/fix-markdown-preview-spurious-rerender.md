@@ -133,4 +133,6 @@ Skipped per session directive.
 - If the file system watcher still fires spurious events from external tools, the backend dedup guards (`_lastPreviewContentByPath`) are the final line of defense. They should now cover all three auto-refresh paths (`_handleFetchPreview`, `_handleFetchKanbanPlanPreview`, and `_handleFetchDocsFile`).
 - Removing the `onDidCreate` handler assumes the watcher is always recreated after a deletion. If future code adds a "watch directory" fallback, the recreation logic must be revisited.
 
-**Recommendation:** Send to Coder
+## Review Findings
+
+All three plan changes implemented correctly in `@/Users/patrickvuleta/Documents/GitHub/switchboard/src/services/PlanningPanelProvider.ts`: watcher config updated (lines 590-595), `onDidCreate` handler removed, and backend dedup added to `_handleFetchDocsFile` (lines 4255-4259). No code fixes were required. One pre-existing MAJOR latent bug was identified in the execution path: `_handleFetchDocsFile` overwrites `_activePreviewSourceId` without updating `_activePreviewSourceFolder`, which can break subsequent auto-refreshes; this is out of scope for this plan and should be tracked separately. Verification skipped per session directive.

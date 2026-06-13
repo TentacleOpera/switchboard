@@ -103,14 +103,30 @@ Key risks: (1) Multi-worktree migration is a breaking change to the meta key str
 
 **Problem**: Worktrees are created in the wrong location and with no enforcement that a control plane exists. Without a control plane the worktree location is ambiguous and the feature is unreliable.
 
-**Solution**: Require an explicit control plane. Block creation and show a clear message if none is configured. Create worktrees in `.switchboard/worktrees/` under the control plane root. No fallback to workspace root.
+**Solution**: Require an explicit control plane. Block creation and show a clear message if none is configured. Create worktrees in `worktrees/` directly under the control plane root — a clean, unbranded directory that is part of the standard control plane structure. No fallback to workspace root.
+
+**Worktrees directory**:
+- `executeFreshSetup` in `ControlPlaneMigrationService.ts` (line ~665) creates the standard control plane directory structure. Add `worktrees/` there so new control planes get it automatically.
+- For existing control planes that predate this change: lazy-create `worktrees/` on first worktree creation if it doesn't exist.
 
 **Critical ordering**: Always call `_resolveWorkspaceRoot()` and validate it before calling `getControlPlaneSelectionStatus()`. This was the cause of false "no control plane" negatives in prior implementation attempts.
 
+**Change — `ControlPlaneMigrationService.ts`** (add one line to the bootstrap block at line ~665):
+
 ```typescript
-private async _createSafetyWorktree(workspaceRoot: string): Promise<{ branch: string; path: string }> {
-    const timestamp = new Date().toISOString().slice(0, 10);
-    let branch = `switchboard-safety-${timestamp}`;
+await Promise.all([
+    fs.promises.mkdir(path.join(parentDir, '.agent'), { recursive: true }),
+    fs.promises.mkdir(path.join(parentDir, '.switchboard', 'plans'), { recursive: true }),
+    fs.promises.mkdir(path.join(parentDir, '.switchboard', 'inbox'), { recursive: true }),
+    fs.promises.mkdir(path.join(parentDir, '.switchboard', 'archive'), { recursive: true }),
+    fs.promises.mkdir(path.join(parentDir, 'worktrees'), { recursive: true }),  // ← add this
+]);
+```
+
+**Change — `_createSafetyWorktree` in `KanbanProvider.ts`**:
+
+```typescript
+private async _createSafetyWorktree(workspaceRoot: string, epicTopic?: string): Promise<{ branch: string; path: string }> {
     const execFileAsync = promisify(cp.execFile);
 
     // Resolve workspace root first — getControlPlaneSelectionStatus returns garbage if this is empty.
@@ -121,28 +137,27 @@ private async _createSafetyWorktree(workspaceRoot: string): Promise<{ branch: st
     if (cpStatus.mode !== 'explicit' || !cpStatus.controlPlaneRoot) {
         throw new Error('No control plane configured. Set a control plane in the workspace picker before creating worktrees.');
     }
-    const worktreeRoot = cpStatus.controlPlaneRoot;
 
-    // Use .switchboard/worktrees/ as parent to avoid cluttering control plane root.
-    // Worktrees live outside the git repo entirely so no .gitignore changes are needed —
-    // .switchboard/* is already gitignored in any control plane that tracks its plan files.
-    const worktreesParent = path.join(worktreeRoot, '.switchboard', 'worktrees');
+    // worktrees/ is created by executeFreshSetup for new control planes.
+    // Lazy-create here for existing control planes that predate this change.
+    const worktreesParent = path.join(cpStatus.controlPlaneRoot, 'worktrees');
     if (!fs.existsSync(worktreesParent)) {
         fs.mkdirSync(worktreesParent, { recursive: true });
     }
 
-    // Handle duplicate branch name by appending -2, -3, etc.
+    const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+    const baseName = epicTopic ? slugify(epicTopic) : `worktree-${new Date().toISOString().slice(0, 10)}`;
+    let branch = baseName;
     let suffix = 2;
     while (true) {
         try {
-            const dirName = branch;
-            const fullPath = path.join(worktreesParent, dirName);
-            // CRITICAL: git worktree add MUST run from workspaceRoot (the git repo), not worktreeRoot
+            const fullPath = path.join(worktreesParent, branch);
+            // CRITICAL: git worktree add MUST run from workspaceRoot (the git repo), not the control plane root
             await execFileAsync('git', ['worktree', 'add', '-b', branch, fullPath], { cwd: workspaceRoot });
             return { branch, path: fullPath };
         } catch (e: any) {
             if (e.message?.includes('already exists') || e.message?.includes('already used')) {
-                branch = `switchboard-safety-${timestamp}-${suffix}`;
+                branch = `${baseName}-${suffix}`;
                 suffix++;
             } else {
                 throw e;
@@ -152,7 +167,7 @@ private async _createSafetyWorktree(workspaceRoot: string): Promise<{ branch: st
 }
 ```
 
-**Verification**: With no control plane set → open Worktrees tab → verify "No control plane configured" message appears and Create button is absent. With control plane set → create worktree → verify it is created in `.switchboard/worktrees/` under the control plane root. Verify no changes to `.gitignore` in the worktree.
+**Verification**: Fresh control plane setup → verify `worktrees/` directory exists. Existing control plane (no `worktrees/` dir) → create first worktree → verify `worktrees/` is created lazily. With no control plane set → open Worktrees tab → verify blocked with clear message. Epic-linked worktree → verify branch name derived from epic topic with no prefix branding.
 
 ### Phase 2: Simplify Terminal Creation — One Behaviour Only
 
@@ -165,9 +180,9 @@ private async _createSafetyWorktree(workspaceRoot: string): Promise<{ branch: st
 **Solution**: Remove the radio group and "remember choice" checkbox entirely. Remove all four behaviour branches from the handler. Replace with a single flow: create worktree → force-create new terminals in it via `addAutobanTerminalFromKanban`.
 
 **Branch naming**:
-- Epic-linked worktrees: slugify the epic topic, prefix `switchboard-`, truncate to 50 chars (e.g. `switchboard-add-payment-flow`)
-- Manual worktrees (no epic): `switchboard-<date>` as now
-- Suffix collision handling (`-2`, `-3`) already exists and is retained
+- Epic-linked worktrees: slugify the epic topic, no prefix, truncate to 40 chars (e.g. `add-payment-flow`)
+- Manual worktrees (no epic): `worktree-<date>` (e.g. `worktree-2026-06-14`)
+- Suffix collision: append `-2`, `-3` etc — handled in `_createSafetyWorktree`
 
 **Change — `createWorktree` handler in `KanbanProvider.ts`**:
 
@@ -732,11 +747,183 @@ if (wt.epicId) {
 
 **Verification**: Click "Create Worktree" on epic card → verify worktree is created with epicId. Verify epic column status appears in worktree list.
 
+### Phase 8: Epic Focus Mode
+
+**File: `src/webview/kanban.html`**
+
+**Context**: Epic cards exist on the kanban board with subtasks stored in the DB. The board currently shows all cards across all epics simultaneously with no way to focus on one epic's work.
+
+**Problem**: With multiple epics in flight, the board becomes noisy. Users cannot easily see just the plans belonging to one epic, and there is no visual connection between an epic and its linked worktree while working on the board.
+
+**Solution**: Add a focus icon (target/crosshair) to each epic card. Clicking it enters epic focus mode:
+- Board filters to show only the focused epic card and its subtasks
+- Sub-bar worktree indicator switches to show only that epic's linked worktree (if one exists)
+- A "clear focus" chip appears in the sub-bar so the user can exit focus mode
+- Clicking the focus icon again on the same epic exits focus mode
+
+Focus mode is client-side only — no backend changes, no db writes. It is a view filter on the already-loaded card set.
+
+**Change — epic card rendering**: Add focus icon button to each epic card:
+
+```javascript
+if (card.isEpic) {
+    const focusBtn = document.createElement('button');
+    focusBtn.className = 'strip-icon-btn';
+    focusBtn.style.cssText = 'padding:2px; opacity:0.6;';
+    focusBtn.setAttribute('data-tooltip', 'Focus board on this epic');
+    focusBtn.innerHTML = '⊙'; // or a proper SVG crosshair
+    focusBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const currentFocus = window.focusedEpicId;
+        window.focusedEpicId = (currentFocus === card.planId) ? null : card.planId;
+        rerenderBoard();
+        updateWorktreeIndicator(lastWorktrees);
+    });
+}
+```
+
+**Change — board render filter**: When `window.focusedEpicId` is set, filter rendered cards to the epic and its subtasks:
+
+```javascript
+function getVisibleCards(allCards) {
+    if (!window.focusedEpicId) return allCards;
+    return allCards.filter(c =>
+        c.planId === window.focusedEpicId ||   // the epic itself
+        c.epicId === window.focusedEpicId       // its subtasks
+    );
+}
+```
+
+**Change — sub-bar indicator update**: When in focus mode, `updateWorktreeIndicator` filters to show only the worktree linked to `window.focusedEpicId`. Also renders a "FOCUS: <epicTopic>" chip with an ✕ to clear focus:
+
+```javascript
+function updateWorktreeIndicator(worktrees) {
+    // ... existing chip rendering ...
+    if (window.focusedEpicId) {
+        const clearChip = document.createElement('span');
+        clearChip.style.cssText = '... same chip style, amber colour ...';
+        clearChip.textContent = `FOCUS: ${getFocusedEpicTopic()} ✕`;
+        clearChip.addEventListener('click', () => {
+            window.focusedEpicId = null;
+            rerenderBoard();
+            updateWorktreeIndicator(lastWorktrees);
+        });
+        container.appendChild(clearChip);
+    }
+}
+```
+
+**Verification**: Click focus icon on epic → board shows only that epic and its subtasks. Sub-bar shows only that epic's linked worktree chip plus "FOCUS: topic ✕". Click ✕ → board returns to full view. Click same epic's focus icon again → exits focus mode. Epic with no linked worktree → focus mode still works, worktree chip absent.
+
+---
+
+### Phase 9: Epic-to-Worktree Dispatch Routing
+
+**Files: `src/services/KanbanProvider.ts`, `src/services/TaskViewerProvider.ts`**
+
+**Context**: When building `BatchPromptPlan` for dispatch, the code at `KanbanProvider.ts:2154` sets `worktreePath: safetySessionPath` from the old single safety session meta key. `_computeDispatchReadiness` in `TaskViewerProvider.ts` maps roles to terminals purely by role name with no worktree awareness. `findTerminalNameByWorktreePath` already exists (line 6306) but is never called during dispatch.
+
+**Problem**: Dispatching an epic's plans sends them to whichever terminal happens to be registered for that role — regardless of which worktree the epic is linked to. Agents end up working in the wrong directory.
+
+**Solution**:
+1. When building plans for an epic card, look up whether that epic has a linked worktree in the `worktrees` table. If found, set `worktreePath` to that worktree's path on the plan and all its subtasks.
+2. Make `_computeDispatchReadiness` worktree-aware: when the active plan batch has a `worktreePath`, call `findTerminalNameByWorktreePath` to find the terminal registered to that worktree and prefer it over the default role terminal.
+
+**Change — `KanbanProvider.ts` plan building** (around line 2154):
+
+```typescript
+// Look up linked worktree for this epic
+let epicWorktreePath: string | undefined;
+if (card.isEpic && card.planId && hasDb) {
+    const worktrees = await db.getWorktrees();
+    const linked = worktrees.find(w => w.epic_id === card.planId);
+    if (linked && fs.existsSync(linked.path)) {
+        epicWorktreePath = linked.path;
+    }
+}
+
+promptPlans.push({
+    topic: card.topic,
+    absolutePath: this._resolvePlanFilePath(workspaceRoot, card.planFile),
+    complexity: card.complexity,
+    workingDir,
+    sessionId: cardKey,
+    worktreePath: epicWorktreePath ?? safetySessionPath  // epic worktree takes priority
+});
+// subtasks inherit the same epicWorktreePath
+```
+
+**Change — `BatchPromptPlan` interface** (`agentPromptBuilder.ts`): Add `epicId` field so the dispatch readiness layer can look up the worktree without re-querying:
+
+```typescript
+export interface BatchPromptPlan {
+    topic: string;
+    absolutePath: string;
+    complexity?: string;
+    workingDir?: string;
+    sessionId?: string;
+    worktreePath?: string;
+    epicId?: string;       // ← add
+    isSubtask?: boolean;
+    epicTopic?: string;
+}
+```
+
+**Change — `_computeDispatchReadiness` in `TaskViewerProvider.ts`**: Accept an optional `worktreePath` parameter. When provided, call `findTerminalNameByWorktreePath` and if a match is found, return it as the preferred terminal for all roles in this dispatch batch.
+
+**Verification**: Create worktree linked to epic → dispatch epic plans → verify prompt contains worktree path directive AND terminals with matching `worktreePath` are selected for dispatch. Verify non-epic plans still route to default role terminals.
+
+---
+
+### Phase 10: Sub-bar Active Worktree Indicator
+
+**File: `src/webview/kanban.html`**
+
+**Context**: The `kanban-sub-bar` div (line 2250) contains autoban timers, pause/reset buttons, and a status message. The board currently has no indication of which worktrees are active.
+
+**Problem**: Users have no visibility into active worktrees while working on the kanban board. They cannot tell at a glance whether their plans will be dispatched to a worktree or the main repo.
+
+**Solution**: Add a worktree chip/badge to the right side of `kanban-sub-bar`. When no worktrees exist it is hidden. When one or more exist it shows the branch names as compact chips. Clicking any chip switches to the Worktrees tab.
+
+**Data source**: The `worktrees` list is already sent from the backend (Phase 6 adds `type: 'worktrees'` messages). Listen for this in the kanban message handler and update the indicator.
+
+**Change**: Add indicator element to `kanban-sub-bar`:
+
+```html
+<div id="active-worktree-indicator" style="display:none; margin-left:auto; display:flex; gap:4px; align-items:center;"></div>
+```
+
+```javascript
+function updateWorktreeIndicator(worktrees) {
+    const container = document.getElementById('active-worktree-indicator');
+    if (!container) return;
+    container.innerHTML = '';
+    const active = (worktrees || []).filter(w => w.path && fs.existsSync(w.path));
+    if (active.length === 0) { container.style.display = 'none'; return; }
+    container.style.display = 'flex';
+    active.forEach(wt => {
+        const chip = document.createElement('span');
+        chip.style.cssText = 'font-family:var(--font-mono); font-size:9px; padding:2px 6px; border-radius:3px; background:rgba(0,173,159,0.12); border:1px solid var(--accent-teal); color:var(--accent-teal); cursor:pointer; white-space:nowrap;';
+        chip.textContent = wt.branch;
+        chip.title = wt.path;
+        chip.addEventListener('click', () => switchToTab('worktrees'));
+        container.appendChild(chip);
+    });
+}
+```
+
+**Verification**: No active worktrees → indicator hidden. Create worktree → chip appears in sub-bar with branch name. Click chip → Worktrees tab activates. Multiple worktrees → multiple chips shown.
+
+---
+
 ## Files Changed
 
+- `src/services/ControlPlaneMigrationService.ts` — Add `worktrees/` to fresh setup bootstrap
 - `src/services/KanbanDatabase.ts` — Add V30 migration, worktrees table, CRUD methods
-- `src/services/KanbanProvider.ts` — Fix worktree creation path, terminal creation, terminal liveness detection, add git status, add multi-worktree handlers, add epic linkage
-- `src/webview/kanban.html` — Add worktree status display, active indicator, terminal switching, list view, epic button, epic status signal
+- `src/services/KanbanProvider.ts` — Fix worktree creation path, terminal creation, add git status, multi-worktree handlers, epic linkage, epic-to-worktree dispatch lookup
+- `src/services/TaskViewerProvider.ts` — Make `_computeDispatchReadiness` worktree-aware
+- `src/services/agentPromptBuilder.ts` — Add `epicId` field to `BatchPromptPlan`
+- `src/webview/kanban.html` — Worktree status display, list view, epic button, epic status signal, epic focus mode, sub-bar indicator
 - `src/extension.ts` — No changes (uses existing `addAutobanTerminalFromKanban` command)
 
 ## Verification Plan
@@ -750,44 +937,49 @@ if (wt.epicId) {
 
 ### Manual Verification
 
-1. **Worktree creation path**: With control plane configured, create worktree → verify created in control plane root, not workspace root
-2. **.gitignore**: Verify `switchboard-safety-*` added to worktree's .gitignore
-3. **Terminal force-creation**: Create worktree with "Create new agent terminals in worktree directory" → verify new terminals created with worktree cwd
-4. **"Use existing agents" button**: With active terminals, verify radio is enabled (not greyed out)
-5. **Worktree status display**: Make changes in worktree → open tab → verify files changed and commit count shown
-6. **Active worktree indicator**: Verify branch name and path displayed prominently
-7. **Terminal switching**: Click "Switch Terminals to Worktree" → verify terminals cd to worktree path
-8. **Multi-worktree list**: Create multiple worktrees → verify all appear in list with individual controls
-9. **Epic linkage**: Click "Create Worktree" on epic card → verify worktree linked to epic
-10. **Epic status signal**: Move epic to different column → verify status updates in worktree list
+1. **Control plane enforcement**: No control plane set → Worktrees tab shows blocked message, Create button absent
+2. **Fresh setup**: New control plane via setup wizard → verify `worktrees/` directory created
+3. **Worktree creation path**: Create worktree → verify created in `<control-plane>/worktrees/`, not workspace root
+4. **Branch naming**: Manual worktree → `worktree-<date>`. Epic worktree → slugified epic topic.
+5. **Terminal force-creation**: Create worktree → verify new terminals created with worktree `cwd`, existing terminals unaffected
+6. **Worktree status display**: Make changes in worktree → open tab → verify files changed and commit count shown
+7. **Multi-worktree list**: Create multiple worktrees → verify all appear in list with individual merge/abandon controls
+8. **Epic linkage**: Click "Create Worktree" on epic card → verify worktree linked to epic, epic column status shown
+9. **Dispatch routing**: Epic linked to worktree → dispatch plans → verify worktree terminals selected, prompt contains worktree path
+10. **Epic focus mode**: Click focus icon on epic → board filters to epic + subtasks only. Sub-bar shows "FOCUS: topic ✕" chip and that epic's worktree only. Click ✕ → full board restored.
+11. **Sub-bar indicator**: Active worktree → chip visible in kanban sub-bar. Click chip → Worktrees tab opens.
+12. **Implementation.html**: Dispatch readiness panel shows worktree terminal when epic has linked worktree.
 
 ## Risks
 
-- **Migration failure**: Existing single-worktree sessions may not migrate correctly if meta keys are missing or corrupted. Mitigation: Add error handling and fallback to meta keys if migration fails.
-- **Terminal liveness detection**: The fix may not fully resolve the greyed-out issue if the problem is elsewhere (e.g., terminal state sync). Mitigation: Add detailed logging to debug further.
-- **Git command performance**: Running git diff/log on every tab refresh could be slow for large repos. Mitigation: Add caching with 30-second TTL.
-- **Terminal switching fragility**: Sending `cd` + CLI restart may fail if CLI is not in expected state. Mitigation: Check CLI state before restart, show error if unavailable.
-- **Multi-worktree complexity**: Users may create too many worktrees, causing UI clutter. Mitigation: Add pagination or limit to 10 active worktrees.
+- **Migration failure**: Existing single-worktree sessions may not migrate correctly. Mitigation: fallback to meta keys if worktrees table is empty.
+- **Git command performance**: Running git diff/log on tab refresh could be slow. Mitigation: in-memory cache with 30-second TTL.
+- **Dispatch routing conflict**: If a role has terminals in both main repo and a worktree, the worktree terminal takes priority when `worktreePath` is set. Mitigation: this is intentional — epic worktree routing overrides default role routing.
+- **`findTerminalNameByWorktreePath` returns undefined**: If worktree terminals were created but not registered with `worktreePath` (e.g. from an older version), routing falls back to default role terminal gracefully.
 
 ## Implementation Order Recommendation
 
-The phases are ordered by dependency and risk:
-
-1. **Phases 1-3** (Bug fixes): Low risk, high value. Fix the immediate problems first (worktree creation path, terminal creation, "Use existing agents" button).
-2. **Phase 4** (Status display): Medium risk, adds visibility. Depends on Phase 1. Adds git status display.
-3. **Phase 5** (Migration): High risk, breaking change. Do this after bug fixes are stable. Migrates from single meta keys to worktrees table.
-4. **Phases 6-7** (Multi-worktree + Epic): Depends on Phase 5. Complete the multi-worktree feature with list view and epic integration.
+1. **Phases 1-2** (creation path + terminal creation): foundation — everything else depends on worktrees being created correctly
+2. **Phase 3** (terminal behaviour simplification): remove dead options, simplify handler
+3. **Phase 4** (status display): adds visibility, low risk
+4. **Phase 5** (DB migration): breaking change, do after phases 1-3 are stable
+5. **Phases 6-7** (list view + epic linkage): depends on Phase 5
+6. **Phase 8** (epic focus mode): depends on Phase 7 (epicId on worktree records for worktree chip filtering); board filter itself is client-side only
+7. **Phase 9** (dispatch routing): depends on Phase 7 (epicId on worktree records)
+8. **Phase 10** (sub-bar indicator): depends on Phase 6 (worktrees list messages); epic focus mode integration depends on Phase 8
 
 ## Key Technical Decisions
 
-**Base branch for git diff**: The plan uses `git rev-parse --abbrev-ref HEAD` to dynamically determine the base branch. This works for any repo (main, master, develop, etc.) — no hardcoding.
+**Base branch for git diff**: Check for `main` then `master`, fall back to current branch. No hardcoding.
 
-**Git command caching**: Running git diff/log on every tab refresh could be slow for large repos. The plan doesn't implement caching in the code snippets, but consider adding a simple in-memory cache with 30-second TTL during implementation.
+**Git command caching**: In-memory cache with 30-second TTL — implement during Phase 4.
 
-**Migration rollback**: V30 migration moves data from meta keys to the new worktrees table. If this fails, users could lose their worktree state. Consider adding a fallback: if the worktrees table is empty, try reading from the old meta keys as a backup.
+**Migration rollback**: If worktrees table is empty after V30, fall back to reading old meta keys as backup.
+
+**Dispatch priority**: Epic-linked worktree terminal takes priority over default role terminal. Non-epic plans are unaffected.
 
 ## Recommendation
 
-**Complexity: 8 → Send to Lead Coder**
+**Complexity: 9 → Send to Lead Coder**
 
-This plan involves cross-cutting changes across DB schema, backend logic, git integration, terminal management, and UI. Phase 6 (multi-worktree migration) is a breaking change to the data model. Phase 3 (terminal liveness detection) requires debugging existing code. Phase 4 (git status) introduces performance considerations. Lead Coder should implement incrementally, starting with Phases 1-3 (bug fixes) before moving to multi-worktree architecture.
+Cross-cutting changes across DB schema, backend logic, git integration, terminal management, dispatch routing, and UI. Implement incrementally in the order above — phases 1-3 deliver immediate value and unblock everything else.
