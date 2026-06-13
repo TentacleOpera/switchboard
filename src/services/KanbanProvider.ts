@@ -141,6 +141,7 @@ export class KanbanProvider implements vscode.Disposable {
     private _kanbanOrderOverrides: Record<string, number>;
     private _taskViewerProvider?: TaskViewerProvider;
     private _repoScopeFilter: string | null = null;
+    private _focusedWorktreePath: string | null = null;
     private _projectFilter: string | null = KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
     private _allWorkspaceProjectsCache: Record<string, string[]> | null = null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- PlannerPromptWriter type lives in extension.ts; using any avoids a circular import
@@ -1895,7 +1896,18 @@ export class KanbanProvider implements vscode.Disposable {
                 repoScopeFilter: cpStatus2.repoScopeFilter
             });
             this._lastCards = cards;
-            this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig });
+            const allWorktrees = dbReady ? await db.getWorktrees() : [];
+            const epicWorktrees = allWorktrees
+                .filter(w => w.epic_id !== null && w.status === 'active')
+                .reduce((acc, w) => { acc[w.epic_id!] = { branch: w.branch, path: w.path, id: w.id }; return acc; }, {} as Record<string, { branch: string; path: string; id: number }>);
+            this._panel.webview.postMessage({
+                type: 'updateBoard',
+                cards,
+                dbUnavailable,
+                showingBacklog: this._showingBacklog,
+                routingConfig: this._routingMapConfig,
+                epicWorktrees
+            });
             this._panel.webview.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
             this._panel.webview.postMessage({
                 type: 'allowUnknownComplexityAutoMoveState',
@@ -2152,13 +2164,22 @@ export class KanbanProvider implements vscode.Disposable {
                 ? resolveWorkingDir(workspaceRoot, repoScope)
                 : '';
 
+            let epicId: number | undefined = undefined;
+            if (hasDb) {
+                const planRecord = await db.getPlanBySessionId(cardKey);
+                if (planRecord && planRecord.epic_id) {
+                    epicId = planRecord.epic_id;
+                }
+            }
+
             promptPlans.push({
                 topic: card.topic,
                 absolutePath: this._resolvePlanFilePath(workspaceRoot, card.planFile),
                 complexity: card.complexity,
                 workingDir,
                 sessionId: cardKey,
-                worktreePath: safetySessionPath
+                worktreePath: safetySessionPath,
+                epicId
             });
 
             if (card.isEpic && hasDb && card.planId) {
@@ -2175,7 +2196,8 @@ export class KanbanProvider implements vscode.Disposable {
                         sessionId: st.sessionId || st.planId,
                         worktreePath: safetySessionPath,
                         isSubtask: true,
-                        epicTopic: card.topic
+                        epicTopic: card.topic,
+                        epicId: card.planId ? parseInt(card.planId, 10) : undefined
                     });
                 }
                 if (subtasks.length > maxSubtasks) {
@@ -6191,21 +6213,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             case 'getSafetySession': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) break;
-                const config = await this._getWorktreeConfigData(workspaceRoot);
-                this._panel?.webview.postMessage({
-                    type: 'worktreeConfig',
-                    ...config
-                });
-                // Backward compatibility
-                this._panel?.webview.postMessage({
-                    type: 'safetySession',
-                    session: config?.hasActiveSession ? {
-                        branch: config.branch,
-                        path: config.path,
-                        startedAt: config.startedAt,
-                        pathExists: config.pathExists
-                    } : null
-                });
+                await this._sendWorktreeConfig(workspaceRoot);
                 break;
             }
             case 'createWorktree': {
@@ -6218,10 +6226,9 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 try {
                     const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, msg.epicTopic);
 
-                    // Re-set metadata keys temporarily until Part 2 removes them
-                    await db.setMeta('active_safety_session_branch', branch);
-                    await db.setMeta('active_safety_session_started_at', new Date().toISOString());
-                    await db.setMeta('active_safety_session_path', wtPath);
+                    // Add to worktrees database table
+                    const epicId = msg.epicId ? String(msg.epicId) : undefined;
+                    await db.addWorktree(branch, wtPath, epicId);
 
                     // Force-create new terminals in worktree — existing terminals are unaffected
                     const visibleAgents = await this._getVisibleAgents(workspaceRoot);
@@ -6237,20 +6244,56 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
 
                     vscode.window.showInformationMessage(`Worktree created: ${branch}`);
 
-                    // Refresh tab — Part 2 replaces this with db.getWorktrees(); for now re-send existing config
-                    const config = await this._getWorktreeConfigData(workspaceRoot);
-                    this._panel?.webview.postMessage({ type: 'worktreeConfig', ...config });
-                    this._panel?.webview.postMessage({
-                        type: 'safetySession',
-                        session: config?.hasActiveSession ? {
-                            branch: config.branch,
-                            path: config.path,
-                            startedAt: config.startedAt,
-                            pathExists: config.pathExists
-                        } : null
-                    });
+                    // Refresh list
+                    await this._sendWorktreeConfig(workspaceRoot);
                 } catch (e: any) {
                     vscode.window.showErrorMessage(`Failed to create worktree: ${e.message}`);
+                }
+                break;
+            }
+            case 'createWorktreeForEpic': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                if (!db || !await db.ensureReady()) break;
+
+                // Block if epic already has an active linked worktree
+                const allWorktrees = await db.getWorktrees();
+                const existing = allWorktrees.find(w => w.epic_id === msg.epicId && w.status === 'active');
+                if (existing) {
+                    vscode.window.showInformationMessage(`Epic already has worktree: ${existing.branch}`);
+                    break;
+                }
+
+                try {
+                    const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, msg.epicTopic);
+                    await db.addWorktree(branch, wtPath, msg.epicId ? String(msg.epicId) : undefined);
+
+                    // Force-create terminals in worktree
+                    const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+                    const roleToName: Record<string, string> = {
+                        'planner': 'Planner', 'lead': 'Lead Coder', 'coder': 'Coder',
+                        'intern': 'Intern', 'reviewer': 'Reviewer', 'analyst': 'Analyst'
+                    };
+                    for (const [role, enabled] of Object.entries(visibleAgents)) {
+                        if (!enabled) continue;
+                        const agentName = roleToName[role] || role.charAt(0).toUpperCase() + role.slice(1);
+                        await vscode.commands.executeCommand('switchboard.addAutobanTerminalFromKanban', role, agentName, wtPath);
+                    }
+
+                    vscode.window.showInformationMessage(`Worktree created for epic: ${branch}`);
+                    await this._refreshBoard(workspaceRoot);
+                    await this._sendWorktreeConfig(workspaceRoot);
+                } catch (e: any) {
+                    vscode.window.showErrorMessage(`Failed to create worktree: ${e.message}`);
+                }
+                break;
+            }
+            case 'focusWorktree': {
+                const { worktreePath } = msg;
+                this._focusedWorktreePath = worktreePath || null;
+                if (this._taskViewerProvider) {
+                    this._taskViewerProvider.notifyStateChanged();
                 }
                 break;
             }
@@ -6266,115 +6309,60 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 }
                 break;
             }
-            case 'mergeSafetySession': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+            case 'mergeWorktree': {
+                const { worktreeId, branch, wtPath, workspaceRoot: msgRoot } = msg;
+                const workspaceRoot = this._resolveWorkspaceRoot(msgRoot);
                 if (!workspaceRoot) break;
                 const db = this._getKanbanDb(workspaceRoot);
-                if (db && await db.ensureReady()) {
-                    const branch = await db.getMeta('active_safety_session_branch');
-                    const fullPath = await db.getMeta('active_safety_session_path');
-                    if (!branch || !fullPath) {
-                        vscode.window.showErrorMessage('No active safety session found.');
-                        break;
-                    }
-                    if (!fs.existsSync(fullPath)) {
-                        const clearAction = 'Clear Session Record Only';
-                        const result = await vscode.window.showErrorMessage(
-                            `Worktree directory not found: ${fullPath}`,
-                            { modal: false },
-                            clearAction
-                        );
-                        if (result === clearAction) {
-                            await db.setMeta('active_safety_session_branch', '');
-                            await db.setMeta('active_safety_session_started_at', '');
-                            await db.setMeta('active_safety_session_path', '');
-                            await db.setMeta('worktree_agent_behaviour', '');
-                            await db.setMeta('worktree_remembered_path', '');
-                            await db.setMeta('worktree_remember_enabled', '');
-                            this._panel?.webview.postMessage({ type: 'safetySession', session: null });
-                            vscode.window.showInformationMessage('Worktree record cleared.');
-                        }
-                        break;
-                    }
-                    try {
-                        const execFileAsync = promisify(cp.execFile);
-                        await execFileAsync('git', ['merge', '--no-ff', branch], { cwd: workspaceRoot });
-                        await execFileAsync('git', ['worktree', 'remove', '--force', fullPath], { cwd: workspaceRoot });
-                        await execFileAsync('git', ['branch', '-D', branch], { cwd: workspaceRoot });
-                        
-                        await db.setMeta('active_safety_session_branch', '');
-                        await db.setMeta('active_safety_session_started_at', '');
-                        await db.setMeta('active_safety_session_path', '');
-                        await db.setMeta('worktree_agent_behaviour', '');
-                        await db.setMeta('worktree_remembered_path', '');
-                        await db.setMeta('worktree_remember_enabled', '');
-
-                        this._panel?.webview.postMessage({
-                            type: 'safetySession',
-                            session: null
-                        });
-                        vscode.window.showInformationMessage('Worktree merged successfully.');
-                    } catch (e: any) {
-                        vscode.window.showErrorMessage(`Merge failed: ${e.message}`);
-                    }
+                if (!db || !await db.ensureReady()) break;
+                try {
+                    const execFileAsync = promisify(cp.execFile);
+                    await execFileAsync('git', ['-C', workspaceRoot, 'merge', branch], { timeout: 30000 });
+                    await execFileAsync('git', ['worktree', 'remove', wtPath], { cwd: workspaceRoot });
+                    await db.updateWorktreeStatus(Number(worktreeId), 'merged');
+                    vscode.window.showInformationMessage(`Merged and removed worktree: ${branch}`);
+                } catch (e: any) {
+                    vscode.window.showErrorMessage(`Merge failed: ${e.message}`);
                 }
+                await this._sendWorktreeConfig(workspaceRoot);
                 break;
             }
-            case 'abandonSafetySession': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+            case 'abandonWorktree': {
+                const { worktreeId, branch, wtPath, workspaceRoot: msgRoot } = msg;
+                const workspaceRoot = this._resolveWorkspaceRoot(msgRoot);
                 if (!workspaceRoot) break;
                 const db = this._getKanbanDb(workspaceRoot);
-                if (db && await db.ensureReady()) {
-                    const branch = await db.getMeta('active_safety_session_branch');
-                    const fullPath = await db.getMeta('active_safety_session_path');
-                    
+                if (!db || !await db.ensureReady()) break;
+                try {
                     const execFileAsync = promisify(cp.execFile);
-                    if (fullPath && fs.existsSync(fullPath)) {
-                        try {
-                            await execFileAsync('git', ['worktree', 'remove', '--force', fullPath], { cwd: workspaceRoot });
-                        } catch (e: any) {
-                            console.warn(`Failed to remove worktree: ${e.message}`);
-                        }
+                    if (wtPath && fs.existsSync(wtPath)) {
+                        await execFileAsync('git', ['worktree', 'remove', '--force', wtPath], { cwd: workspaceRoot });
                     }
                     if (branch) {
-                        try {
-                            await execFileAsync('git', ['branch', '-D', branch], { cwd: workspaceRoot });
-                        } catch (e: any) {
-                            console.warn(`Failed to delete branch: ${e.message}`);
-                        }
+                        await execFileAsync('git', ['branch', '-D', branch], { cwd: workspaceRoot });
                     }
-                    await db.setMeta('active_safety_session_branch', '');
-                    await db.setMeta('active_safety_session_started_at', '');
-                    await db.setMeta('active_safety_session_path', '');
-                    await db.setMeta('worktree_agent_behaviour', '');
-                    await db.setMeta('worktree_remembered_path', '');
-                    await db.setMeta('worktree_remember_enabled', '');
-
-                    this._panel?.webview.postMessage({
-                        type: 'safetySession',
-                        session: null
-                    });
-                    vscode.window.showInformationMessage('Worktree abandoned.');
+                    await db.updateWorktreeStatus(Number(worktreeId), 'abandoned');
+                    vscode.window.showInformationMessage(`Abandoned and removed worktree: ${branch}`);
+                } catch (e: any) {
+                    await db.updateWorktreeStatus(Number(worktreeId), 'abandoned');
+                    vscode.window.showWarningMessage(`Abandon completed with warnings: ${e.message}`);
                 }
+                await this._sendWorktreeConfig(workspaceRoot);
                 break;
             }
-            case 'clearSafetySessionRecord': {
+            case 'getWorktreeStatuses': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) break;
-                const db = this._getKanbanDb(workspaceRoot);
-                if (db && await db.ensureReady()) {
-                    await db.setMeta('active_safety_session_branch', '');
-                    await db.setMeta('active_safety_session_started_at', '');
-                    await db.setMeta('active_safety_session_path', '');
-                    await db.setMeta('worktree_agent_behaviour', '');
-                    await db.setMeta('worktree_remembered_path', '');
-                    await db.setMeta('worktree_remember_enabled', '');
-                    this._panel?.webview.postMessage({
-                        type: 'safetySession',
-                        session: null
-                    });
-                    vscode.window.showInformationMessage('Worktree record cleared.');
+                const worktrees = msg.worktrees || [];
+                const statuses: Array<{ id: number, status: 'dirty' | 'clean' | 'unknown' }> = [];
+                for (const wt of worktrees) {
+                    const status = await this._getWorktreeStatus(wt.path);
+                    statuses.push({ id: Number(wt.id), status });
                 }
+                this._panel?.webview.postMessage({
+                    type: 'worktreeStatuses',
+                    statuses
+                });
                 break;
             }
             case 'addSubtaskToEpic': {
@@ -6786,6 +6774,35 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     throw e;
                 }
             }
+        }
+    }
+
+    private async _sendWorktreeConfig(workspaceRoot: string): Promise<void> {
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !await db.ensureReady()) return;
+        const worktrees = await db.getWorktrees();
+        const cpStatus = this.getControlPlaneSelectionStatus(workspaceRoot);
+        this._panel?.webview.postMessage({
+            type: 'worktreeConfig',
+            worktrees: worktrees.map(w => ({
+                id: w.id,
+                branch: w.branch,
+                path: w.path,
+                epicId: w.epic_id,
+                createdAt: w.created_at,
+            })),
+            controlPlaneMode: cpStatus.mode,
+        });
+    }
+
+    private async _getWorktreeStatus(wtPath: string): Promise<'dirty' | 'clean' | 'unknown'> {
+        if (!fs.existsSync(wtPath)) return 'unknown';
+        try {
+            const execFileAsync = promisify(cp.execFile);
+            const { stdout } = await execFileAsync('git', ['-C', wtPath, 'status', '--porcelain'], { timeout: 3000 });
+            return stdout.trim().length > 0 ? 'dirty' : 'clean';
+        } catch {
+            return 'unknown';
         }
     }
 

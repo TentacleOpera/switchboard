@@ -2532,7 +2532,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (btn) {
                     btn.textContent = msg.success ? 'Copied!' : 'Failed';
                     setTimeout(() => {
-                        btn.textContent = 'Copy Prompt';
+                        btn.textContent = btn.dataset.copyLabel || 'Copy Prompt';
                     }, 2000);
                 }
                 if (msg.success) {
@@ -3729,6 +3729,30 @@ Return ONLY the drafted prompt with no additional commentary.`;
         return 'very-high';
     }
 
+    function _getCopyLabel(sourceColumn) {
+        let copyLabel = 'Copy Prompt';
+        const cols = _kanbanAvailableColumns.map(c => c.id);
+        const idx = cols.indexOf(sourceColumn);
+        if (idx < 0 || idx >= cols.length - 1) return copyLabel;
+
+        const nextDef = _kanbanAvailableColumns[idx + 1];
+        if (nextDef) {
+            const isCustom = nextDef.kind === 'custom-user' || nextDef.kind === 'custom-agent';
+            if (isCustom) {
+                copyLabel = 'Copy advance prompt';
+            } else if (nextDef.role === 'planner' || nextDef.id === 'PLAN REVIEWED') {
+                copyLabel = 'Copy planning prompt';
+            } else if (['lead', 'coder', 'intern'].includes(nextDef.role)) {
+                copyLabel = 'Copy coder prompt';
+            } else if (nextDef.role === 'reviewer' || nextDef.id === 'CODE REVIEWED') {
+                copyLabel = 'Copy review prompt';
+            } else {
+                copyLabel = 'Copy advance prompt';
+            }
+        }
+        return copyLabel;
+    }
+
     const kanbanFilters = {
         column: '',
         workspaceRoot: '',
@@ -3998,7 +4022,10 @@ Return ONLY the drafted prompt with no additional commentary.`;
                             ${columnOptions}
                         </select>
                         ${plan.planFile ? `<button class="kanban-plan-copy-link" data-plan-file="${escapeHtml(plan.planFile)}" title="Copy plan file path">Copy Link</button>` : ''}
-                        ${plan.sessionId ? `<button class="kanban-plan-copy-prompt" data-session-id="${escapeHtml(plan.sessionId)}" data-column="${escapeHtml(plan.column)}" data-workspace-root="${escapeHtml(plan.workspaceRoot)}" title="Copy prompt and advance">Copy Prompt</button>` : ''}
+                        ${plan.sessionId ? (() => {
+                            const copyLabel = _getCopyLabel(plan.column);
+                            return `<button class="kanban-plan-copy-prompt" data-session-id="${escapeHtml(plan.sessionId)}" data-column="${escapeHtml(plan.column)}" data-workspace-root="${escapeHtml(plan.workspaceRoot)}" data-copy-label="${escapeHtml(copyLabel)}" title="${escapeHtml(copyLabel)}">${escapeHtml(copyLabel)}</button>`;
+                        })() : ''}
                     </div>
                     ${epicAccordion}
                 </div>

@@ -109,3 +109,7 @@ None.
 4. Confirm the plan appears on the kanban board within a few seconds (startup scan picked it up).
 5. Confirm no repeating "Periodic scan" log lines appear in the Switchboard output channel.
 6. With periodic scan enabled, confirm the output channel shows "Startup scan complete" immediately, then subsequent interval ticks log "0 new paths" (steady state).
+
+## Review Findings
+
+Implementation matches plan exactly. `_runStartupScan()` added at `src/services/GlobalPlanWatcherService.ts:115` and called unconditionally from `initialize()` at line 91. `src/webview/setup.html:947` description updated as specified. No CRITICAL or MAJOR findings. Regression analysis confirmed `_scanInProgress` guard prevents overlap with periodic interval, `_scanSeenPaths` seeding improves first-interval behavior, and no callers are broken by the fire-and-forget startup scan. No code fixes applied. Verification skipped per SKIP TESTS / SKIP COMPILATION directives. Remaining risk: NIT-level log message at `_scanForNewFiles:229` says "Periodic scan found new file" even when emitted from startup scan, which is mildly misleading in output channel logs but functionally harmless.

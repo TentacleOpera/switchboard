@@ -90,6 +90,7 @@ type DispatchReadinessEntry = {
     state: DispatchReadinessState;
     terminalName?: string;
     source?: string;
+    isWorktreeTerminal?: boolean;
 };
 
 type KanbanDispatchCard = {
@@ -1508,16 +1509,49 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         });
     }
 
-    private _computeDispatchReadiness(
+    private async _computeDispatchReadiness(
         enrichedTerminals: Record<string, any>,
         terminalsMap: Record<string, any>,
         activeTerminals: readonly vscode.Terminal[],
         roles: string[],
-        roleCandidates: Record<string, string[]>
-    ): Record<string, DispatchReadinessEntry> {
+        roleCandidates: Record<string, string[]>,
+        plan?: any
+    ): Promise<Record<string, DispatchReadinessEntry>> {
         const readiness: Record<string, DispatchReadinessEntry> = {};
 
+        if (!plan && this._lastSessionId) {
+            const workspaceRoot = this._resolveWorkspaceRoot();
+            if (workspaceRoot) {
+                const db = await this.getKanbanDbForRoot(workspaceRoot);
+                if (db) {
+                    const planRecord = await db.getPlanBySessionId(this._lastSessionId);
+                    if (planRecord) {
+                        plan = {
+                            epicId: planRecord.epic_id ?? undefined,
+                            workingDir: workspaceRoot,
+                            absolutePath: planRecord.planFile,
+                        };
+                    }
+                }
+            }
+        }
+
+        if (plan && plan.epicId) {
+            const db = await this.getKanbanDbForRoot(plan.workingDir ?? plan.absolutePath);
+            if (db) {
+                const linkedWorktree = (await db.getWorktrees()).find(w => w.epic_id === plan.epicId && w.status === 'active');
+                if (linkedWorktree) {
+                    plan.worktreePath = linkedWorktree.path;
+                }
+            }
+        }
+
         for (const role of roles) {
+            let entry: DispatchReadinessEntry = {
+                state: 'not_ready',
+                source: 'none'
+            };
+
             const directTerminalEntry = Object.entries(enrichedTerminals).find(([, info]) =>
                 this._normalizeAgentKey(info?.role) === role &&
                 info?.type === 'terminal' &&
@@ -1526,47 +1560,55 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             );
 
             if (directTerminalEntry) {
-                readiness[role] = {
+                entry = {
                     state: 'ready',
                     terminalName: directTerminalEntry[0],
                     source: 'state-direct'
                 };
-                continue;
-            }
+            } else {
+                const roleStateCandidates: string[] = [];
+                for (const [name, info] of Object.entries(terminalsMap)) {
+                    if (this._normalizeAgentKey((info as any)?.role) !== role) continue;
+                    roleStateCandidates.push(name);
+                    if (typeof (info as any)?.friendlyName === 'string') {
+                        roleStateCandidates.push((info as any).friendlyName);
+                    }
+                }
 
-            const roleStateCandidates: string[] = [];
-            for (const [name, info] of Object.entries(terminalsMap)) {
-                if (this._normalizeAgentKey((info as any)?.role) !== role) continue;
-                roleStateCandidates.push(name);
-                if (typeof (info as any)?.friendlyName === 'string') {
-                    roleStateCandidates.push((info as any).friendlyName);
+                const stateRoleMatch = this._findOpenTerminalMatch(activeTerminals, roleStateCandidates);
+                if (stateRoleMatch) {
+                    entry = {
+                        state: 'recoverable',
+                        terminalName: stateRoleMatch.name,
+                        source: 'state-role-match'
+                    };
+                } else {
+                    const roleFallbackMatch = this._findOpenTerminalMatch(activeTerminals, roleCandidates[role] || this._roleNameCandidates(role));
+                    if (roleFallbackMatch) {
+                        entry = {
+                            state: 'recoverable',
+                            terminalName: roleFallbackMatch.name,
+                            source: 'role-name-fallback'
+                        };
+                    }
                 }
             }
 
-            const stateRoleMatch = this._findOpenTerminalMatch(activeTerminals, roleStateCandidates);
-            if (stateRoleMatch) {
-                readiness[role] = {
-                    state: 'recoverable',
-                    terminalName: stateRoleMatch.name,
-                    source: 'state-role-match'
-                };
-                continue;
+            // Prefer worktree terminal if plan is worktree-routed
+            if (plan && plan.worktreePath) {
+                const wtTerminal = await this.findTerminalNameByWorktreePath(plan.worktreePath);
+                if (wtTerminal) {
+                    const wtActive = activeTerminals.find(t => t.name === wtTerminal);
+                    entry = {
+                        state: wtActive ? 'ready' : 'recoverable',
+                        terminalName: wtTerminal,
+                        source: 'worktree-route',
+                        isWorktreeTerminal: true
+                    };
+                }
             }
 
-            const roleFallbackMatch = this._findOpenTerminalMatch(activeTerminals, roleCandidates[role] || this._roleNameCandidates(role));
-            if (roleFallbackMatch) {
-                readiness[role] = {
-                    state: 'recoverable',
-                    terminalName: roleFallbackMatch.name,
-                    source: 'role-name-fallback'
-                };
-                continue;
-            }
-
-            readiness[role] = {
-                state: 'not_ready',
-                source: 'none'
-            };
+            readiness[role] = entry;
         }
 
         return readiness;
@@ -2515,6 +2557,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 let planFile: string | undefined;
                 let topic: string | undefined;
                 let workingDir = '';
+                let epicId: number | undefined;
                 if (db) {
                     const plan = await db.getPlanBySessionId(sid);
                     if (plan) {
@@ -2550,6 +2593,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
                         topic = plan.topic;
                         workingDir = resolveWorkingDir(workspaceRoot, plan.repoScope || '');
+                        epicId = plan.epic_id ?? undefined;
                     }
                 }
                 if (!planFile) {
@@ -2565,7 +2609,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     sessionId: sid,
                     topic: topic || planFile || 'Untitled',
                     absolutePath,
-                    workingDir
+                    workingDir,
+                    epicId
                 });
             } catch (err) {
                 console.error(`[TaskViewerProvider] Failed to resolve plan for session ${sid}:`, err);
@@ -16809,7 +16854,7 @@ What would you like to find?`;
 
                 const roles = ['lead', 'coder', 'reviewer', 'planner', 'analyst', ...customAgents.map(agent => agent.role)];
                 const roleCandidates = Object.fromEntries(customAgents.map(agent => [agent.role, [agent.name, agent.role]]));
-                const dispatchReadiness = this._computeDispatchReadiness(enrichedTerminals, terminalsMap, activeTerminals, roles, roleCandidates);
+                const dispatchReadiness = await this._computeDispatchReadiness(enrichedTerminals, terminalsMap, activeTerminals, roles, roleCandidates);
 
                 this._view.webview.postMessage({ type: 'terminalStatuses', terminals: enrichedTerminals, dispatchReadiness });
                 this._kanbanProvider?.postMessage({ type: 'terminalStatuses', terminals: enrichedTerminals, dispatchReadiness });

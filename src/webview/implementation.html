@@ -2602,13 +2602,24 @@
             const name = document.createElement('div');
             name.className = 'agent-name';
             if (roleId !== 'jules') {
+                let suffix = '';
+                if (dispatchInfo && dispatchInfo.isWorktreeTerminal) {
+                    suffix = ' <span style="font-size:9px; opacity:0.6;">(worktree)</span>';
+                }
+
                 if (lastTerminalAgentNames[roleId]) {
-                    name.innerText = `${label} - ${lastTerminalAgentNames[roleId]}`;
+                    const termNameDisplay = dispatchInfo && dispatchInfo.isWorktreeTerminal && dispatchInfo.terminalName
+                        ? dispatchInfo.terminalName
+                        : lastTerminalAgentNames[roleId];
+                    name.innerHTML = `${label} - ${termNameDisplay}${suffix}`;
                 } else if (lastStartupCommands[roleId]) {
                     const cmd = lastStartupCommands[roleId].trim().split(/\s+/)[0].toUpperCase();
-                    name.innerText = `${label} - ${cmd} CLI`;
+                    const termNameDisplay = dispatchInfo && dispatchInfo.isWorktreeTerminal && dispatchInfo.terminalName
+                        ? dispatchInfo.terminalName
+                        : `${cmd} CLI`;
+                    name.innerHTML = `${label} - ${termNameDisplay}${suffix}`;
                 } else {
-                    name.innerText = label;
+                    name.innerHTML = label + suffix;
                 }
             } else {
                 name.innerText = label;

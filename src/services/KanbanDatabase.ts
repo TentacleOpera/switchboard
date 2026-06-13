@@ -15,6 +15,15 @@ export interface WorkspaceDatabaseMapping {
     mode?: 'create' | 'connect';
 }
 
+export interface WorktreeRow {
+    id: number;
+    branch: string;
+    path: string;
+    epic_id: string | null;
+    created_at: string;
+    status: 'active' | 'merged' | 'abandoned';
+}
+
 export type KanbanPlanStatus = 'active' | 'archived' | 'completed' | 'deleted';
 
 export interface KanbanPlanRecord {
@@ -140,14 +149,13 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 CREATE INDEX IF NOT EXISTS idx_projects_workspace ON projects(workspace_id);
 CREATE TABLE IF NOT EXISTS worktrees (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    branch TEXT NOT NULL,
-    coder_agent_id TEXT,
-    workspace_id TEXT NOT NULL,
-    created_at TEXT DEFAULT (datetime('now')),
-    UNIQUE(branch, workspace_id)
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    branch      TEXT NOT NULL UNIQUE,
+    path        TEXT NOT NULL,
+    epic_id     INTEGER REFERENCES plans(id) ON DELETE SET NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    status      TEXT NOT NULL DEFAULT 'active'
 );
-CREATE INDEX IF NOT EXISTS idx_worktrees_workspace ON worktrees(workspace_id);
 CREATE TABLE IF NOT EXISTS linear_issue_links (
     issue_id   TEXT PRIMARY KEY,
     plan_path  TEXT NOT NULL,
@@ -1991,6 +1999,81 @@ export class KanbanDatabase {
         } catch (e) {
             console.error('[KanbanDatabase] deleteProject failed:', e);
             return false;
+        }
+    }
+
+    public async getWorktrees(): Promise<WorktreeRow[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const stmt = this._db.prepare(
+            `SELECT id, branch, path, epic_id, created_at, status FROM worktrees WHERE status = 'active' ORDER BY created_at DESC`
+        );
+        const rows: any[] = [];
+        try {
+            while (stmt.step()) {
+                rows.push(stmt.getAsObject());
+            }
+        } finally {
+            stmt.free();
+        }
+        return rows.map((r: any) => ({
+            id: Number(r.id),
+            branch: String(r.branch || ''),
+            path: String(r.path || ''),
+            epic_id: r.epic_id !== null && r.epic_id !== undefined && r.epic_id !== '' ? String(r.epic_id) : null,
+            created_at: String(r.created_at || ''),
+            status: r.status as 'active' | 'merged' | 'abandoned',
+        }));
+    }
+
+    public async addWorktree(branch: string, wtPath: string, epicId?: string): Promise<number> {
+        if (!(await this.ensureReady()) || !this._db) return 0;
+        this._db.run(
+            `INSERT INTO worktrees (branch, path, epic_id) VALUES (?, ?, ?)`,
+            [branch, wtPath, epicId !== undefined && epicId !== null ? epicId : null]
+        );
+        await this._persist();
+        
+        const stmt = this._db.prepare(`SELECT last_insert_rowid() as id`);
+        try {
+            if (stmt.step()) {
+                return Number(stmt.getAsObject().id);
+            }
+            return 0;
+        } finally {
+            stmt.free();
+        }
+    }
+
+    public async updateWorktreeStatus(id: number, status: 'merged' | 'abandoned'): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        this._db.run(
+            `UPDATE worktrees SET status = ? WHERE id = ?`,
+            [status, id]
+        );
+        return this._persist();
+    }
+
+    public async getWorktreeByBranch(branch: string): Promise<WorktreeRow | undefined> {
+        if (!(await this.ensureReady()) || !this._db) return undefined;
+        const stmt = this._db.prepare(
+            `SELECT id, branch, path, epic_id, created_at, status FROM worktrees WHERE branch = ? LIMIT 1`,
+            [branch]
+        );
+        try {
+            if (stmt.step()) {
+                const r = stmt.getAsObject();
+                return {
+                    id: Number(r.id),
+                    branch: String(r.branch || ''),
+                    path: String(r.path || ''),
+                    epic_id: r.epic_id !== null && r.epic_id !== undefined && r.epic_id !== '' ? String(r.epic_id) : null,
+                    created_at: String(r.created_at || ''),
+                    status: r.status as 'active' | 'merged' | 'abandoned',
+                };
+            }
+            return undefined;
+        } finally {
+            stmt.free();
         }
     }
 
@@ -4241,6 +4324,65 @@ export class KanbanDatabase {
             }
             await this.setMigrationVersion(29);
             console.log('[KanbanDatabase] V29 migration completed: epic support columns added');
+        }
+
+        // V30: Replace single-worktree meta keys with worktrees table
+        const v30 = await this.getMigrationVersion();
+        if (v30 < 30) {
+            try {
+                this._db.exec('BEGIN');
+                this._db.exec(`DROP TABLE IF EXISTS worktrees`);
+                this._db.exec(`
+                    CREATE TABLE IF NOT EXISTS worktrees (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                        branch      TEXT NOT NULL UNIQUE,
+                        path        TEXT NOT NULL,
+                        epic_id     INTEGER REFERENCES plans(id) ON DELETE SET NULL,
+                        created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+                        status      TEXT NOT NULL DEFAULT 'active'
+                    );
+                `);
+
+                const stmtBranch = this._db.prepare(`SELECT value FROM kanban_meta WHERE key='active_safety_session_branch'`);
+                let legacyBranchVal = '';
+                try {
+                    if (stmtBranch.step()) {
+                        legacyBranchVal = String(stmtBranch.getAsObject().value ?? '');
+                    }
+                } finally {
+                    stmtBranch.free();
+                }
+
+                const stmtPath = this._db.prepare(`SELECT value FROM kanban_meta WHERE key='active_safety_session_path'`);
+                let legacyPathVal = '';
+                try {
+                    if (stmtPath.step()) {
+                        legacyPathVal = String(stmtPath.getAsObject().value ?? '');
+                    }
+                } finally {
+                    stmtPath.free();
+                }
+
+                if (legacyBranchVal) {
+                    this._db.run(
+                        `INSERT OR IGNORE INTO worktrees (branch, path, status) VALUES (?, ?, 'active')`,
+                        [legacyBranchVal, legacyPathVal]
+                    );
+                }
+
+                this._db.run(
+                    `INSERT OR REPLACE INTO kanban_meta (key, value) VALUES ('active_safety_session_branch.migrated.bak', ?)`,
+                    [legacyBranchVal]
+                );
+                this._db.exec(`DELETE FROM kanban_meta WHERE key IN ('active_safety_session_branch', 'active_safety_session_path', 'active_safety_session_started_at')`);
+
+                this._db.exec('COMMIT');
+                await this.setMigrationVersion(30);
+                console.log('[KanbanDatabase] V30 migration completed: worktrees table recreated and legacy keys imported');
+            } catch (e) {
+                try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+                console.error('[KanbanDatabase] V30 migration FAILED — rolled back. DB unchanged. Error:', e);
+            }
         }
 
     }

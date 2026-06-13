@@ -2195,7 +2195,7 @@
             ⚠️ Database unavailable — card positions may not reflect manual moves
         </div>
         <div style="position: relative; display: flex; flex-direction: column; flex: 1; overflow: hidden;">
-            <div class="kanban-sub-bar">
+            <div id="kanban-sub-bar" class="kanban-sub-bar">
                 <div class="autoban-timers-inline is-empty" id="autoban-timers-inline"></div>
                 <button class="strip-icon-btn" id="btn-pause-autoban-timer" data-tooltip="Pause automation timers" style="display:none;">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" width="14" height="14" style="color: var(--accent-teal);">
@@ -2207,7 +2207,12 @@
                     <img src="{{ICON_22}}" alt="Reset Timers" style="width: 17px; height: 17px;">
                 </button>
                 <div id="status-message" role="status" aria-live="polite" class="sub-bar-status" style="display:none;"></div>
+                <div id="wt-indicator" style="display:none; margin-left:auto; align-items:center; gap:4px; font-size:10px; color:var(--text-secondary);">
+                    <span style="opacity:0.6;">⎇</span>
+                    <span id="wt-indicator-branch" style="font-family:monospace;"></span>
+                </div>
             </div>
+            <div id="kanban-focus-banner" style="display:none; align-items:center; padding:4px 8px; background:var(--banner-bg, #222); border-bottom:1px solid var(--border-subtle, #333);"></div>
             <div class="kanban-board" id="kanban-board"></div>
         </div>
     </div>
@@ -2764,6 +2769,16 @@
     <script>
         const vscode = acquireVsCodeApi();
         const kanbanBoard = document.getElementById('kanban-board');
+
+        // CSS.escape polyfill for handling special characters in DOM lookups
+        if (!window.CSS) {
+            window.CSS = {};
+        }
+        if (!window.CSS.escape) {
+            window.CSS.escape = function(value) {
+                return String(value).replace(/([^\w-])/g, '\\$1');
+            };
+        }
 
         // ── PROMPTS TAB ─────────────────────────────────────────────────────────
 
@@ -3322,6 +3337,9 @@
             .filter(col => !col.role || lastVisibleAgents[col.role] !== false)
             .map(col => col.id);
         let currentCards = [];
+        let currentEpicWorktrees = {};
+        let currentFocusedEpicId = null;
+        let currentFocusedEpicWorktreePath = null;
         let lastAgentNames = {};
         let cliTriggersEnabled = true;
         let dynamicComplexityRoutingEnabled = true;
@@ -3819,7 +3837,7 @@
             let actualMovedCount = 0;
 
             sessionIds.forEach(id => {
-                const cardEl = document.querySelector(`.kanban-card[data-plan-id="${id}"]`) || document.querySelector(`.kanban-card[data-session="${id}"]`);
+                const cardEl = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-session="${CSS.escape(id)}"]`);
                 if (!cardEl) return;
 
                 // Resolve actual source column from currentCards (cards have no data-column attribute)
@@ -4528,6 +4546,61 @@
             }
         }
 
+        function updateWorktreeIndicator(worktreePath) {
+            const el = document.getElementById('wt-indicator');
+            const branchEl = document.getElementById('wt-indicator-branch');
+            if (!el || !branchEl) return;
+            if (!worktreePath) {
+                el.style.display = 'none';
+                return;
+            }
+            // Extract branch name from path (last path segment)
+            const branch = worktreePath.split(/[\\/]/).pop() ?? worktreePath;
+            branchEl.textContent = branch;
+            el.style.display = 'flex';
+        }
+
+        function enterEpicFocusMode(epicId) {
+            currentFocusedEpicId = epicId;
+            const linked = currentEpicWorktrees[epicId];
+            currentFocusedEpicWorktreePath = linked ? linked.path : null;
+
+            postKanbanMessage({ type: 'focusWorktree', worktreePath: currentFocusedEpicWorktreePath });
+            updateWorktreeIndicator(currentFocusedEpicWorktreePath);
+
+            renderBoard(currentCards);
+            renderFocusBanner();
+        }
+
+        function clearEpicFocusMode() {
+            currentFocusedEpicId = null;
+            currentFocusedEpicWorktreePath = null;
+            postKanbanMessage({ type: 'focusWorktree', worktreePath: null });
+            updateWorktreeIndicator(null);
+            renderBoard(currentCards);
+            renderFocusBanner();
+        }
+
+        function renderFocusBanner() {
+            const bar = document.getElementById('kanban-focus-banner');
+            if (!bar) return;
+            if (!currentFocusedEpicId) {
+                bar.style.display = 'none';
+                return;
+            }
+            const epic = currentCards.find(p => (p.planId || p.sessionId) === currentFocusedEpicId);
+            const wtInfo = currentEpicWorktrees[currentFocusedEpicId];
+            bar.style.display = 'flex';
+            bar.style.alignItems = 'center';
+            bar.innerHTML = `
+                <span style="font-size:11px; flex:1; color: var(--foreground, #ccc);">
+                    Focus: <strong>${escapeHtml(epic?.topic ?? 'Epic')}</strong>
+                    ${wtInfo ? `&nbsp;·&nbsp;<span style="font-family:monospace; background: var(--badge-bg, #333); padding: 1px 4px; border-radius: 3px;">${escapeHtml(wtInfo.branch)}</span>` : ''}
+                </span>
+                <button class="btn-icon" onclick="clearEpicFocusMode()" title="Clear focus" style="background:none; border:none; color:inherit; font-size:14px; cursor:pointer;">×</button>
+            `;
+        }
+
         function renderBoard(cards) {
             hideTooltip();
             const viewState = captureBoardViewState();
@@ -4570,6 +4643,13 @@
                 displayCards = cards
                     .filter(card => card.column !== 'CREATED')
                     .map(card => card.column === 'BACKLOG' ? { ...card, _effectiveColumn: 'CREATED' } : card);
+            }
+
+            if (currentFocusedEpicId) {
+                displayCards = displayCards.filter(card => {
+                    const cardId = card.planId || card.sessionId;
+                    return cardId === currentFocusedEpicId || card.epicId === currentFocusedEpicId;
+                });
             }
 
             displayCards.forEach(card => {
@@ -4839,6 +4919,19 @@
 
             const epicClass = card.isEpic ? ' epic-card' : '';
             const epicBadge = card.isEpic ? `<span class="epic-badge">EPIC · ${card.subtaskCount || 0} subtask${(card.subtaskCount || 0) !== 1 ? 's' : ''}</span>` : '';
+            
+            let wtButton = '';
+            if (card.isEpic) {
+                const linkedWorktree = currentEpicWorktrees[card.planId];
+                wtButton = linkedWorktree
+                    ? ` <span class="wt-chip" title="Worktree: ${linkedWorktree.branch}" onclick="enterEpicFocusMode('${escapeAttr(card.planId)}')"
+                           style="font-family:monospace; font-size:10px; cursor:pointer; padding:1px 5px; background:var(--badge-bg, #333); border-radius:3px; margin-left:5px;">
+                         ${escapeHtml(linkedWorktree.branch)}
+                       </span>`
+                    : ` <button class="btn-icon" title="Create Worktree for this epic"
+                           onclick="postKanbanMessage({type:'createWorktreeForEpic', epicId:'${escapeAttr(card.planId)}', epicTopic:'${escapeAttr(card.topic)}', workspaceRoot:currentWorkspaceRoot})"
+                           style="opacity:0.6; font-size:10px; cursor:pointer; background:none; border:none; color:inherit; padding: 2px 4px; margin-left: 5px;">⎇</button>`;
+            }
             const completeOrDoneBtn = isCompleted
                 ? `<span class="card-done-badge">✓ Done</span>`
                 : `<button class="card-btn icon-btn complete" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Complete and archive">
@@ -4847,7 +4940,7 @@
             const cardId = escapeAttr(card.planId || card.sessionId || '');
             return `
                 <div class="kanban-card${completedClass}${epicClass}" draggable="true" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}">
-                    <div class="card-topic">${epicBadge}${escapeHtml(shortTopic)}</div>
+                    <div class="card-topic">${epicBadge}${escapeHtml(shortTopic)}${wtButton}</div>
                     <div class="card-meta">Complexity: <span class="complexity-indicator ${complexityClass}">${category}</span> · ${timeAgo}</div>
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">
                         <div style="display: flex; gap: 4px;">
@@ -5048,7 +5141,7 @@
 
             // Add dragging class to all cards being transferred
             idsToTransfer.forEach(id => {
-                const el = document.querySelector(`.kanban-card[data-plan-id="${id}"]`) || document.querySelector(`.kanban-card[data-session="${id}"]`);
+                const el = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-session="${CSS.escape(id)}"]`);
                 if (el) el.classList.add('dragging');
             });
 
@@ -5160,7 +5253,7 @@
                     dispatchGroups.set(groupKey, group);
 
                     // DOM optimistic update
-                    const cardEl = document.querySelector(`.kanban-card[data-plan-id="${id}"]`) || document.querySelector(`.kanban-card[data-session="${id}"]`);
+                    const cardEl = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-session="${CSS.escape(id)}"]`);
                     if (cardEl && targetBody) {
                         // Source DOM column: cards in coder cols are already in CODED_AUTO dom container when collapsed
                         const sourceDomCol = CODED_IDS.includes(card.column) ? 'CODED_AUTO' :
@@ -5263,7 +5356,7 @@
                 }
                 completingIds.forEach(id => {
                     const card = currentCards.find(c => (c.planId || c.sessionId) === id);
-                    const cardEl = document.querySelector(`.kanban-card[data-plan-id="${id}"]`) || document.querySelector(`.kanban-card[data-session="${id}"]`);
+                    const cardEl = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-session="${CSS.escape(id)}"]`);
                     if (cardEl && targetBody) {
                         const emptyState = targetBody.querySelector('.empty-state');
                         if (emptyState) emptyState.remove();
@@ -5338,7 +5431,7 @@
 
             validIds.forEach(id => {
                 const card = currentCards.find(c => (c.planId || c.sessionId) === id);
-                const cardEl = document.querySelector(`.kanban-card[data-plan-id="${id}"]`) || document.querySelector(`.kanban-card[data-session="${id}"]`);
+                const cardEl = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-session="${CSS.escape(id)}"]`);
                 // Source DOM column: BACKLOG cards display in CREATED slot when showingBacklog
                 const sourceDomColumn = (card && card.column === 'BACKLOG' && showingBacklog) ? 'CREATED' : (card?.column || targetColumn);
                 if (cardEl && targetBody) {
@@ -5500,6 +5593,7 @@
                 }
                 case 'updateBoard':
                     const nextCards = Array.isArray(msg.cards) ? msg.cards : [];
+                    currentEpicWorktrees = msg.epicWorktrees || {};
                     console.log('[Kanban WV] updateBoard received', nextCards.length, 'cards');
                     const nextBoardSignature = buildBoardSignature(nextCards);
                     const dbWarningBanner = document.getElementById('db-warning-banner');
@@ -5519,7 +5613,11 @@
                         renderBoard(nextCards);
                     } else {
                         currentCards = nextCards;
+                        if (currentFocusedEpicId) {
+                            renderBoard(currentCards);
+                        }
                     }
+                    renderFocusBanner();
                     break;
                 case 'settingResult': {
                     const { key, value } = msg;
@@ -5546,26 +5644,30 @@
                 case 'worktreeConfig': {
                     lastWorktreeConfig = msg;
                     renderWorktreesTab();
+                    const activeWorktrees = msg.worktrees || [];
+                    if (!currentFocusedEpicId) {
+                        if (activeWorktrees.length === 1) {
+                            updateWorktreeIndicator(activeWorktrees[0].path);
+                        } else {
+                            updateWorktreeIndicator(null);
+                        }
+                    }
                     break;
                 }
-                case 'safetySession': {
-                    lastSafetySession = msg.session;
-                    if (msg.session) {
-                        lastWorktreeConfig = {
-                            branch: msg.session.branch,
-                            path: msg.session.path,
-                            startedAt: msg.session.startedAt,
-                            pathExists: msg.session.pathExists,
-                            hasActiveSession: true,
-                            agentBehaviour: '',
-                            rememberedPath: '',
-                            rememberEnabled: false,
-                            activeTerminalCount: 0
-                        };
-                    } else {
-                        lastWorktreeConfig = null;
-                    }
-                    renderWorktreesTab();
+                case 'worktreeStatuses': {
+                    const statuses = msg.statuses || [];
+                    statuses.forEach(s => {
+                        const badge = document.querySelector(`.wt-status-badge[data-wt-id="${s.id}"]`);
+                        if (badge) {
+                            if (s.status === 'clean') {
+                                badge.innerHTML = '<span style="color:#00ad9f;">●</span> clean';
+                            } else if (s.status === 'dirty') {
+                                badge.innerHTML = '<span style="color:#e5c07b;">●</span> dirty';
+                            } else {
+                                badge.innerHTML = '<span style="color:#808080;">●</span> —';
+                            }
+                        }
+                    });
                     break;
                 }
                 case 'antigravityPrompt': {
@@ -5757,10 +5859,10 @@
                 case 'copyPlanLinkResult': {
                     let btn = null;
                     if (msg.planId) {
-                        btn = document.querySelector(`.card-btn.copy[data-plan-id="${msg.planId}"]`);
+                        btn = document.querySelector(`.card-btn.copy[data-plan-id="${CSS.escape(msg.planId)}"]`);
                     }
                     if (!btn && msg.sessionId) {
-                        btn = document.querySelector(`.card-btn.copy[data-plan-id="${msg.sessionId}"]`) || document.querySelector(`.card-btn.copy[data-session="${msg.sessionId}"]`);
+                        btn = document.querySelector(`.card-btn.copy[data-plan-id="${CSS.escape(msg.sessionId)}"]`) || document.querySelector(`.card-btn.copy[data-session="${CSS.escape(msg.sessionId)}"]`);
                     }
                     if (btn) {
                         if (msg.success) {
@@ -8079,11 +8181,31 @@
             postKanbanMessage({ type: 'getWorktreeConfig', workspaceRoot: currentWorkspaceRoot });
         }
 
+        function mergeWorktree(worktreeId, branch, wtPath) {
+            postKanbanMessage({
+                type: 'mergeWorktree',
+                worktreeId,
+                branch,
+                wtPath,
+                workspaceRoot: currentWorkspaceRoot
+            });
+        }
+
+        function abandonWorktree(worktreeId, branch, wtPath) {
+            postKanbanMessage({
+                type: 'abandonWorktree',
+                worktreeId,
+                branch,
+                wtPath,
+                workspaceRoot: currentWorkspaceRoot
+            });
+        }
+
         function createWorktreesPanel(config) {
             const container = document.createElement('div');
             container.style.cssText = 'padding: 12px; display: flex; flex-direction: column; gap: 16px;';
 
-            const cpMode = currentControlPlaneMode || 'none';
+            const cpMode = (config && config.controlPlaneMode) || currentControlPlaneMode || 'none';
             if (cpMode !== 'explicit') {
                 const msg = document.createElement('div');
                 msg.style.cssText = 'padding:16px; font-size:11px; color:var(--text-secondary); line-height:1.5;';
@@ -8099,135 +8221,83 @@
             const configHeader = document.createElement('div');
             configHeader.className = 'subsection-header';
             const configSpan = document.createElement('span');
-            configSpan.textContent = 'WORKTREE';
+            configSpan.textContent = 'WORKTREES';
             configHeader.appendChild(configSpan);
             configSection.appendChild(configHeader);
 
             const descriptionDiv = document.createElement('div');
             descriptionDiv.style.cssText = 'padding:8px; font-size:10px; color:var(--text-secondary); line-height:1.4;';
-            descriptionDiv.innerHTML = '<strong>When to use:</strong> When you want a single git worktree covering all agent work for a sprint or batch. Coder prompts reference the worktree path so agents edit code inside the worktree instead of the workspace root.<br><br>' +
+            descriptionDiv.innerHTML = '<strong>When to use:</strong> When you want git worktrees covering agent work for a sprint or batch. Coder prompts reference the worktree path so agents edit code inside the worktree instead of the workspace root.<br><br>' +
                 '<strong>Workflow:</strong> Create a worktree, let agents implement changes, then merge the branch back when satisfied.';
             configSection.appendChild(descriptionDiv);
             container.appendChild(configSection);
 
-            const hasActiveSession = config && config.hasActiveSession;
+            // Create worktree form / button
+            const actionSection = document.createElement('div');
+            actionSection.className = 'db-subsection';
+            actionSection.style.cssText = 'padding: 12px; display: flex; flex-direction: column; gap: 8px; border: 1px dashed var(--border-color); border-radius: 6px;';
 
-            // Active / Inactive states
-            if (!hasActiveSession) {
-                const actionSection = document.createElement('div');
-                actionSection.className = 'db-subsection';
-                actionSection.style.cssText = 'padding: 12px; display: flex; flex-direction: column; gap: 8px; border: 1px dashed var(--border-color); border-radius: 6px;';
+            const stateTitle = document.createElement('div');
+            stateTitle.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted);';
+            stateTitle.textContent = 'CREATE NEW WORKTREE';
+            actionSection.appendChild(stateTitle);
 
-                const stateTitle = document.createElement('div');
-                stateTitle.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted);';
-                stateTitle.textContent = 'NO ACTIVE WORKTREE';
-                actionSection.appendChild(stateTitle);
+            const createBtn = document.createElement('button');
+            createBtn.className = 'worktree-primary-btn';
+            createBtn.textContent = 'CREATE WORKTREE';
+            createBtn.addEventListener('click', () => {
+                if (createBtn.disabled) return;
+                createBtn.disabled = true;
+                postKanbanMessage({ type: 'createWorktree', workspaceRoot: currentWorkspaceRoot });
+                setTimeout(() => { createBtn.disabled = false; }, 5000);
+            });
+            actionSection.appendChild(createBtn);
+            container.appendChild(actionSection);
 
-                const createBtn = document.createElement('button');
-                createBtn.className = 'worktree-primary-btn';
-                createBtn.textContent = 'CREATE NEW WORKTREE';
-                createBtn.addEventListener('click', () => {
-                    if (createBtn.disabled) return;
-                    createBtn.disabled = true;
-                    postKanbanMessage({ type: 'createWorktree', workspaceRoot: currentWorkspaceRoot });
-                    setTimeout(() => { createBtn.disabled = false; }, 5000);
-                });
-                actionSection.appendChild(createBtn);
+            // Worktrees list section
+            const listSection = document.createElement('div');
+            listSection.className = 'db-subsection';
+            
+            const listHeader = document.createElement('div');
+            listHeader.className = 'subsection-header';
+            const listHeaderSpan = document.createElement('span');
+            listHeaderSpan.textContent = 'ACTIVE WORKTREES';
+            listHeader.appendChild(listHeaderSpan);
+            listSection.appendChild(listHeader);
 
-                container.appendChild(actionSection);
-            } else {
-                const activeSection = document.createElement('div');
-                activeSection.className = 'db-subsection';
-                activeSection.style.cssText = 'padding: 12px; display: flex; flex-direction: column; gap: 12px; border: 1px solid var(--accent-teal, #00ad9f); border-radius: 6px; background: rgba(0, 173, 159, 0.05);';
+            const listDiv = document.createElement('div');
+            listDiv.id = 'worktree-list';
+            listDiv.style.cssText = 'margin-top:8px; display:flex; flex-direction:column; gap:4px;';
+            listSection.appendChild(listDiv);
+            container.appendChild(listSection);
 
-                const stateTitle = document.createElement('div');
-                stateTitle.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--accent-teal, #00ad9f); display: flex; align-items: center; gap: 6px;';
-                stateTitle.innerHTML = '\u25cf ACTIVE WORKTREE';
-                activeSection.appendChild(stateTitle);
-
-                const detailsList = document.createElement('div');
-                detailsList.style.cssText = 'display: flex; flex-direction: column; gap: 6px; font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary);';
-
-                const branchRow = document.createElement('div');
-                branchRow.innerHTML = `<span style="color:var(--text-muted)">Branch:</span> <span style="color:var(--text-primary); font-weight:bold;">${config.branch}</span>`;
-                detailsList.appendChild(branchRow);
-
-                const pathRow = document.createElement('div');
-                pathRow.style.cssText = 'word-break: break-all;';
-                pathRow.innerHTML = `<span style="color:var(--text-muted)">Path:</span> <span style="color:var(--text-primary)">${config.path}</span>`;
-                detailsList.appendChild(pathRow);
-
-                const startedRow = document.createElement('div');
-                const timeStr = config.startedAt ? new Date(config.startedAt).toLocaleString() : 'Unknown';
-                startedRow.innerHTML = `<span style="color:var(--text-muted)">Started:</span> <span style="color:var(--text-primary)">${timeStr}</span>`;
-                detailsList.appendChild(startedRow);
-
-                activeSection.appendChild(detailsList);
-
-                if (!config.pathExists) {
-                    const warningBanner = document.createElement('div');
-                    warningBanner.style.cssText = 'padding: 8px; margin-top: 8px; background: rgba(229,85,85,0.1); border: 1px solid var(--accent-red, #e55); color: var(--accent-red, #e55); border-radius: 4px; font-size: 10px; line-height: 1.4;';
-                    warningBanner.textContent = '\u26a0\ufe0f Worktree directory not found on disk. It may have been deleted manually.';
-                    activeSection.appendChild(warningBanner);
-
-                    const clearBtn = document.createElement('button');
-                    clearBtn.className = 'worktree-primary-btn danger';
-                    clearBtn.style.cssText = 'margin-top: 8px;';
-                    clearBtn.textContent = 'CLEAR WORKTREE RECORD';
-                    clearBtn.addEventListener('click', () => {
-                        if (clearBtn.disabled) return;
-                        clearBtn.disabled = true;
-                        postKanbanMessage({ type: 'clearSafetySessionRecord', workspaceRoot: currentWorkspaceRoot });
-                        setTimeout(() => { clearBtn.disabled = false; }, 5000);
-                    });
-                    activeSection.appendChild(clearBtn);
-                } else {
-                    const btnGroup = document.createElement('div');
-                    btnGroup.style.cssText = 'display: flex; flex-direction: column; gap: 8px; margin-top: 8px;';
-
-                    const mergeBtn = document.createElement('button');
-                    mergeBtn.className = 'worktree-primary-btn';
-                    mergeBtn.textContent = 'MERGE BACK';
-                    mergeBtn.addEventListener('click', () => {
-                        if (mergeBtn.disabled) return;
-                        mergeBtn.disabled = true;
-                        postKanbanMessage({ type: 'mergeSafetySession', workspaceRoot: currentWorkspaceRoot });
-                        setTimeout(() => { mergeBtn.disabled = false; }, 5000);
-                    });
-                    btnGroup.appendChild(mergeBtn);
-
-                    const askAgentBtn = document.createElement('button');
-                    askAgentBtn.className = 'worktree-primary-btn';
-                    askAgentBtn.textContent = 'ASK AGENT TO MERGE';
-                    askAgentBtn.addEventListener('click', () => {
-                        const promptText = `Please merge the worktree back to main.\nSteps:\n1. From the workspace directory, run: git merge --no-ff ${config.branch}\n2. If there are conflicts, resolve them, then git add . && git commit\n3. Run: git worktree remove --force ${config.path}\n4. Run: git branch -D ${config.branch}\n5. Confirm that main now contains the merged changes.`;
-                        navigator.clipboard.writeText(promptText).then(() => {
-                            askAgentBtn.textContent = 'PROMPT COPIED!';
-                            setTimeout(() => {
-                                askAgentBtn.textContent = 'ASK AGENT TO MERGE';
-                            }, 2000);
-                        }).catch(err => {
-                            console.error('Failed to copy prompt:', err);
-                        });
-                    });
-                    btnGroup.appendChild(askAgentBtn);
-
-                    const abandonBtn = document.createElement('button');
-                    abandonBtn.className = 'worktree-primary-btn danger';
-                    abandonBtn.textContent = 'ABANDON WORKTREE';
-                    abandonBtn.addEventListener('click', () => {
-                        if (abandonBtn.disabled) return;
-                        abandonBtn.disabled = true;
-                        postKanbanMessage({ type: 'abandonSafetySession', workspaceRoot: currentWorkspaceRoot });
-                        setTimeout(() => { abandonBtn.disabled = false; }, 5000);
-                    });
-                    btnGroup.appendChild(abandonBtn);
-
-                    activeSection.appendChild(btnGroup);
+            const worktrees = (config && config.worktrees) || [];
+            
+            // Render list (using micro-timeout to wait for mounting)
+            setTimeout(() => {
+                const list = document.getElementById('worktree-list');
+                if (!list) return;
+                if (!worktrees.length) {
+                    list.innerHTML = '<div style="font-size:11px; color:var(--text-secondary); padding:4px 0;">No active worktrees.</div>';
+                    return;
                 }
+                list.innerHTML = worktrees.map(w => `
+                    <div class="worktree-row" data-id="${w.id}" style="display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border-subtle);">
+                        <span class="wt-status-badge" data-wt-id="${w.id}" style="font-size:10px; color:var(--text-secondary); min-width: 60px;">⋯</span>
+                        <span style="flex:1; font-size:11px; font-family:monospace; word-break:break-all;">${w.branch}</span>
+                        <span style="font-size:10px; color:var(--text-secondary); white-space:nowrap; margin-right:8px;">${w.createdAt ? w.createdAt.slice(0, 10) : ''}</span>
+                        <button class="btn-secondary" style="padding: 3px 6px; font-size: 10px; font-family: inherit; letter-spacing: normal;" onclick="mergeWorktree(${w.id},'${w.branch}','${w.path}')">Merge</button>
+                        <button class="btn-danger" style="padding: 3px 6px; font-size: 10px; font-family: inherit; letter-spacing: normal;" onclick="abandonWorktree(${w.id},'${w.branch}','${w.path}')">Abandon</button>
+                    </div>
+                `).join('');
 
-                container.appendChild(activeSection);
-            }
+                // Send request for statuses
+                postKanbanMessage({
+                    type: 'getWorktreeStatuses',
+                    workspaceRoot: currentWorkspaceRoot,
+                    worktrees: worktrees.map(w => ({ id: w.id, path: w.path }))
+                });
+            }, 0);
 
             return container;
         }
