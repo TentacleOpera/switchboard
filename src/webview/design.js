@@ -56,9 +56,8 @@
         stitchThumbnailStripCollapsed: persistedState.stitchThumbnailStripCollapsed || false,
         stitchGeneratorOpen: false,
         stitchGeneratorImages: [],
-        stitchReloadPending: false,  // true while waiting for a reload response
-        stitchReloadRetries: 0,    // count of retries so far
-        stitchReloadTimer: null,     // holds setTimeout id
+        stitchScreenPolls: new Map(),
+        stitchProjectRefreshAttempted: false,
     };
 
     function populateWorkspaceDropdown(selectElOrId, workspaceItems, selectedValue, includeAllOption = true) {
@@ -1676,13 +1675,110 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
         return imageUrl;
     }
 
-    function clearStitchReloadTimer() {
-        if (state.stitchReloadTimer) {
-            clearTimeout(state.stitchReloadTimer);
-            state.stitchReloadTimer = null;
+    function getStitchScreenPollKey(projectId, screenId, workspaceRoot) {
+        return `${workspaceRoot || ''}::${projectId || ''}::${screenId || ''}`;
+    }
+
+    function clearStitchScreenPoll(projectId, screenId, workspaceRoot) {
+        const key = getStitchScreenPollKey(projectId, screenId, workspaceRoot);
+        if (state.stitchScreenPolls && state.stitchScreenPolls.has(key)) {
+            const pollInfo = state.stitchScreenPolls.get(key);
+            if (pollInfo.timerId) {
+                clearTimeout(pollInfo.timerId);
+            }
+            state.stitchScreenPolls.delete(key);
         }
-        state.stitchReloadPending = false;
-        state.stitchReloadRetries = 0;
+    }
+
+    function clearAllStitchScreenPolls() {
+        if (state.stitchScreenPolls) {
+            for (const [key, pollInfo] of state.stitchScreenPolls.entries()) {
+                if (pollInfo.timerId) {
+                    clearTimeout(pollInfo.timerId);
+                }
+            }
+            state.stitchScreenPolls.clear();
+        }
+    }
+
+    function hasUsableStitchImage(screen) {
+        return !!screen.imageUrl && screen.status !== 'FAILED';
+    }
+
+    function isScreenPollable(screen) {
+        return !!screen.id &&
+               screen.projectId === state.selectedStitchProjectId &&
+               !screen.imageUrl &&
+               screen.status !== 'FAILED';
+    }
+
+    function startMissingStitchScreenPolling(screens, reason) {
+        const missing = screens.filter(isScreenPollable);
+        missing.forEach(screen => {
+            scheduleStitchScreenPoll(screen, { reason });
+        });
+    }
+
+    function scheduleStitchScreenPoll(screen, options) {
+        if (!screen || !screen.id || screen.status === 'FAILED') return;
+        const projectId = screen.projectId || (stitchProjectSelect ? stitchProjectSelect.value : '');
+        const workspaceRoot = state.stitchWorkspaceRoot;
+        const key = getStitchScreenPollKey(projectId, screen.id, workspaceRoot);
+
+        let pollInfo = state.stitchScreenPolls.get(key);
+        if (pollInfo) {
+            if (options && options.manual) {
+                if (pollInfo.timerId) {
+                    clearTimeout(pollInfo.timerId);
+                }
+                pollInfo.attempts = 0;
+            } else {
+                return;
+            }
+        } else {
+            pollInfo = { attempts: 0, timerId: null };
+            state.stitchScreenPolls.set(key, pollInfo);
+        }
+
+        if (pollInfo.attempts >= 6) {
+            clearStitchScreenPoll(projectId, screen.id, workspaceRoot);
+            if (!state.stitchProjectRefreshAttempted && state.selectedStitchProjectId === projectId && workspaceRoot) {
+                state.stitchProjectRefreshAttempted = true;
+                vscode.postMessage({
+                    type: 'stitchGetProjectScreens',
+                    projectId: state.selectedStitchProjectId,
+                    workspaceRoot: workspaceRoot
+                });
+            }
+            return;
+        }
+
+        const delay = Math.min(4 * Math.pow(2, pollInfo.attempts), 32);
+        const delayMs = (options && options.immediate) ? 50 : delay * 1000;
+        
+        pollInfo.attempts += 1;
+
+        pollInfo.timerId = setTimeout(() => {
+            if (document.hidden) {
+                pollInfo.attempts = Math.max(0, pollInfo.attempts - 1);
+                const nextOptions = { ...options };
+                if (nextOptions.immediate) delete nextOptions.immediate;
+                scheduleStitchScreenPoll(screen, nextOptions);
+                return;
+            }
+
+            if (state.selectedStitchProjectId !== projectId || state.stitchWorkspaceRoot !== workspaceRoot) {
+                clearStitchScreenPoll(projectId, screen.id, workspaceRoot);
+                return;
+            }
+
+            vscode.postMessage({
+                type: 'stitchRefreshScreen',
+                projectId: projectId,
+                screenId: screen.id,
+                workspaceRoot: workspaceRoot
+            });
+        }, delayMs);
     }
 
     function openStitchPreview(screen) {
@@ -1728,16 +1824,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                         if (label) label.textContent = 'Preview failed to load';
                     }
                     // Trigger an automatic reload attempt
-                    if (!state.stitchReloadPending) {
-                        state.stitchReloadPending = true;
-                        state.stitchReloadRetries = 0;
-                        vscode.postMessage({
-                            type: 'stitchRefreshScreen',
-                            projectId: screen.projectId || stitchProjectSelect.value,
-                            screenId: screen.id,
-                            workspaceRoot: state.stitchWorkspaceRoot
-                        });
-                    }
+                    scheduleStitchScreenPoll(screen, { reason: 'image-error', immediate: true });
                 };
             }
             if (previewImagePlaceholder) previewImagePlaceholder.style.display = 'none';
@@ -1762,17 +1849,8 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                     reloadBtn.parentNode.replaceChild(newReloadBtn, reloadBtn);
                     newReloadBtn.addEventListener('click', () => {
                         if (state.stitchBusy) return;
-                        clearStitchReloadTimer();
-                        state.stitchReloadPending = true;
-                        state.stitchReloadRetries = 0;
-                        setStitchStatus('Reloading screen…', 'busy');
-                        setStitchBusy(true);
-                        vscode.postMessage({
-                            type: 'stitchRefreshScreen',
-                            projectId: screen.projectId || stitchProjectSelect.value,
-                            screenId: screen.id,
-                            workspaceRoot: state.stitchWorkspaceRoot
-                        });
+                        clearStitchScreenPoll(screen.projectId || (stitchProjectSelect ? stitchProjectSelect.value : ''), screen.id, state.stitchWorkspaceRoot);
+                        scheduleStitchScreenPoll(screen, { immediate: true, manual: true });
                     });
                 }
             }
@@ -1819,7 +1897,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 if (state.stitchBusy) return;
                 const prompt = previewRefineInput ? previewRefineInput.value.trim() : '';
                 if (!prompt) { setStitchStatus('Type a change in the box above, then Apply Edit.', 'error'); return; }
-                clearStitchReloadTimer();
+                clearAllStitchScreenPolls();
                 setStitchStatus('Editing screen…', 'busy');
                 setStitchBusy(true);
                 vscode.postMessage({
@@ -1838,7 +1916,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
             previewBtnVariants.addEventListener('click', () => {
                 if (state.stitchBusy) return;
                 const prompt = previewRefineInput ? previewRefineInput.value.trim() : '';
-                clearStitchReloadTimer();
+                clearAllStitchScreenPolls();
                 setStitchStatus('Generating 3 variants of this screen…', 'busy');
                 setStitchBusy(true);
 
@@ -1871,7 +1949,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
     }
 
     function closeStitchPreview() {
-        clearStitchReloadTimer();
+        clearAllStitchScreenPolls();
         state.activePreviewScreenId = null;
 
         const generationStrip = document.getElementById('stitch-prompt-input')?.closest('.controls-strip');
@@ -2024,7 +2102,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
             if (!prompt) { setStitchStatus('Enter a prompt describing the screen first.', 'error'); return; }
             if (state.stitchBusy) return;
 
-            clearStitchReloadTimer();
+            clearAllStitchScreenPolls();
             setStitchStatus('Generating screen…', 'busy');
             setStitchBusy(true);
 
@@ -2046,7 +2124,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
             if (state.stitchWorkspaceRoot) {
                 persistTab('stitch.projectId', projectId, state.stitchWorkspaceRoot);
             }
-            clearStitchReloadTimer();
+            clearAllStitchScreenPolls();
             if (state.activePreviewScreenId) {
                 closeStitchPreview();
             }
@@ -2101,7 +2179,10 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
         if (state.activePreviewScreenId) {
             const activeScreen = screens.find(s => s.id === state.activePreviewScreenId);
             if (activeScreen) {
-                openStitchPreview(activeScreen);
+                const isPreviewPaneVisible = stitchPreviewPane && (stitchPreviewPane.style.display === 'flex' || stitchPreviewPane.style.display === 'block');
+                if (isPreviewPaneVisible) {
+                    openStitchPreview(activeScreen);
+                }
             } else {
                 closeStitchPreview();
             }
@@ -2150,17 +2231,8 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 btnReload.title = 'Re-fetch this screen from Stitch (picks up the rendered preview and fresh download links)';
                 btnReload.addEventListener('click', () => {
                     if (state.stitchBusy) return;
-                    clearStitchReloadTimer();
-                    state.stitchReloadPending = true;
-                    state.stitchReloadRetries = 0;
-                    setStitchStatus('Reloading screen…', 'busy');
-                    setStitchBusy(true);
-                    vscode.postMessage({
-                        type: 'stitchRefreshScreen',
-                        projectId: screen.projectId || stitchProjectSelect.value,
-                        screenId: screen.id,
-                        workspaceRoot: state.stitchWorkspaceRoot
-                    });
+                    clearStitchScreenPoll(screen.projectId || (stitchProjectSelect ? stitchProjectSelect.value : ''), screen.id, state.stitchWorkspaceRoot);
+                    scheduleStitchScreenPoll(screen, { immediate: true, manual: true });
                 });
                 ph.appendChild(btnReload);
                 return ph;
@@ -2175,6 +2247,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 img.addEventListener('click', () => openStitchPreview(screen));
                 img.addEventListener('error', () => {
                     img.replaceWith(makeThumbPlaceholder());
+                    scheduleStitchScreenPoll(screen, { reason: 'image-error', immediate: true });
                 }, { once: true });
                 card.appendChild(img);
             } else {
@@ -2855,9 +2928,18 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
 
             case 'stitchScreensReady': {
                 setStitchBusy(false);
+                state.stitchProjectRefreshAttempted = false;
                 const screens = msg.screens || [];
                 renderStitchScreens(screens);
-                setStitchStatus(`${screens.length} screen${screens.length === 1 ? '' : 's'} loaded`, 'success');
+                
+                const missing = screens.filter(isScreenPollable);
+                startMissingStitchScreenPolling(screens, 'project-load');
+                
+                if (missing.length > 0) {
+                    setStitchStatus(`${screens.length} screen${screens.length === 1 ? '' : 's'} loaded — waiting for ${missing.length} preview(s)`, 'busy');
+                } else {
+                    setStitchStatus(`${screens.length} screen${screens.length === 1 ? '' : 's'} loaded`, 'success');
+                }
                 break;
             }
 
@@ -2873,40 +2955,20 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
 
                 const hasImage = !!msg.screen.imageUrl;
                 const isFailed = msg.screen.status === 'FAILED';
+                const projectId = msg.screen.projectId || (stitchProjectSelect ? stitchProjectSelect.value : '');
+                const key = getStitchScreenPollKey(projectId, msg.screen.id, state.stitchWorkspaceRoot);
+                const isPolling = state.stitchScreenPolls && state.stitchScreenPolls.has(key);
 
                 if (hasImage) {
-                    // Success — image loaded
-                    clearStitchReloadTimer();
-                    setStitchBusy(false);
+                    clearStitchScreenPoll(projectId, msg.screen.id, state.stitchWorkspaceRoot);
                     setStitchStatus('Screen ready', 'success');
                 } else if (isFailed) {
-                    // Terminal failure
-                    clearStitchReloadTimer();
-                    setStitchBusy(false);
+                    clearStitchScreenPoll(projectId, msg.screen.id, state.stitchWorkspaceRoot);
                     setStitchStatus(msg.screen.statusMessage || 'Rendering failed', 'error');
-                } else if (state.stitchReloadPending) {
-                    // Still in progress — schedule retry
-                    const delay = Math.min(4 * Math.pow(2, state.stitchReloadRetries), 32); // 4, 8, 16, 32...
-                    if (state.stitchReloadRetries < 6) {
-                        state.stitchReloadRetries += 1;
-                        setStitchStatus(`Still rendering… retry ${state.stitchReloadRetries}/6 in ${delay}s`, 'busy');
-                        state.stitchReloadTimer = setTimeout(() => {
-                            vscode.postMessage({
-                                type: 'stitchRefreshScreen',
-                                projectId: msg.screen.projectId || stitchProjectSelect.value,
-                                screenId: msg.screen.id,
-                                workspaceRoot: state.stitchWorkspaceRoot
-                            });
-                        }, delay * 1000);
-                    } else {
-                        // Max retries exhausted
-                        clearStitchReloadTimer();
-                        setStitchBusy(false);
-                        setStitchStatus('Rendering is taking longer than expected. Click Reload Screen to try again.', 'error');
-                    }
+                } else if (isPolling) {
+                    setStitchStatus(`Still rendering… waiting for preview(s)`, 'busy');
+                    scheduleStitchScreenPoll(msg.screen);
                 } else {
-                    // Not a reload context — just a normal update with no image yet
-                    setStitchBusy(false);
                     setStitchStatus('Screen created — rendering in progress', 'info');
                 }
                 break;
@@ -2923,7 +2985,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 break;
 
             case 'stitchError':
-                clearStitchReloadTimer();
+                clearAllStitchScreenPolls();
                 setStitchBusy(false);
                 setStitchStatus('Error: ' + msg.error, 'error');
                 break;

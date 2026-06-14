@@ -8293,7 +8293,7 @@
             if (cpMode !== 'explicit') {
                 const msg = document.createElement('div');
                 msg.style.cssText = 'padding:16px; font-size:11px; color:var(--text-secondary); line-height:1.5;';
-                msg.innerHTML = 'A <strong>Control Plane</strong> is required to use worktrees.<br>Set one up in the workspace picker first.';
+                msg.innerHTML = 'Worktrees requires Switchboard to be running on Control Plane mode. Please visit the setup menu to enable worktrees.';
                 container.appendChild(msg);
                 return container;
             }

@@ -5011,27 +5011,25 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     private _getNotionService(workspaceRoot: string): NotionFetchService {
         const resolvedRoot = path.resolve(workspaceRoot);
-        let service = this._notionServices.get(resolvedRoot);
-        if (!service) {
-            if (!NotionFetchServiceClass) {
-                NotionFetchServiceClass = require('./NotionFetchService').NotionFetchService;
-            }
-            service = new NotionFetchServiceClass(resolvedRoot, this._context.secrets);
-            this._notionServices.set(resolvedRoot, service);
+        const existing = this._notionServices.get(resolvedRoot);
+        if (existing) { return existing; }
+        if (!NotionFetchServiceClass) {
+            NotionFetchServiceClass = require('./NotionFetchService').NotionFetchService;
         }
+        const service = new NotionFetchServiceClass(resolvedRoot, this._context.secrets);
+        this._notionServices.set(resolvedRoot, service);
         return service;
     }
 
     private _getNotionBackupService(workspaceRoot: string): NotionBackupService {
         const resolvedRoot = path.resolve(workspaceRoot);
-        let service = this._notionBackupServices.get(resolvedRoot);
-        if (!service) {
-            if (!NotionBackupServiceClass) {
-                NotionBackupServiceClass = require('./NotionBackupService').NotionBackupService;
-            }
-            service = new NotionBackupServiceClass(resolvedRoot, this._context.secrets);
-            this._notionBackupServices.set(resolvedRoot, service);
+        const existing = this._notionBackupServices.get(resolvedRoot);
+        if (existing) { return existing; }
+        if (!NotionBackupServiceClass) {
+            NotionBackupServiceClass = require('./NotionBackupService').NotionBackupService;
         }
+        const service = new NotionBackupServiceClass(resolvedRoot, this._context.secrets);
+        this._notionBackupServices.set(resolvedRoot, service);
         return service;
     }
 
