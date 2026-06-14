@@ -222,25 +222,6 @@ export class DesignPanelProvider implements vscode.Disposable {
         );
         htmlContent = htmlContent.replace(/\{\{SHARED_UTILS_URI\}\}/g, sharedUtilsUri.toString());
 
-        // Inject shared tab styles inline to prevent FOUC
-        let sharedTabsCss = '';
-        const cssPaths = [
-            path.join(this._extensionUri.fsPath, 'dist', 'webview', 'shared-tabs.css'),
-            path.join(this._extensionUri.fsPath, 'webview', 'shared-tabs.css'),
-            path.join(this._extensionUri.fsPath, 'src', 'webview', 'shared-tabs.css')
-        ];
-        for (const cssPath of cssPaths) {
-            try {
-                if (fs.existsSync(cssPath)) {
-                    sharedTabsCss = fs.readFileSync(cssPath, 'utf8');
-                    break;
-                }
-            } catch {
-                // Continue to next path
-            }
-        }
-        htmlContent = htmlContent.replace(/<!-- SHARED_TABS_CSS -->|\{\{SHARED_TABS_CSS_URI\}\}/g, sharedTabsCss ? `<style>\n${sharedTabsCss}\n</style>` : '');
-
         const geistPixelFontUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this._extensionUri, 'designs', 'GeistPixel-Square.woff2')
         );
@@ -1174,7 +1155,11 @@ export class DesignPanelProvider implements vscode.Disposable {
                     }
                     const stitch = await loadStitch();
                     const list = await stitch.projects();
-                    const projects = list.map((p: any) => ({ id: p.id, name: p.data?.title || p.data?.name || p.id }));
+                    const projects = list.map((p: any) => ({
+                        id: p.id,
+                        name: p.data?.title || p.data?.name || p.id,
+                        updateTime: p.data?.updateTime || p.data?.createTime || ''
+                    }));
                     const config = vscode.workspace.getConfiguration('switchboard');
                     const defaultProjectId = config.get<string>('stitch.defaultProjectId') || '';
                     const defaultModelId = config.get<string>('stitch.defaultModelId') || 'GEMINI_3_FLASH';
@@ -1219,7 +1204,11 @@ export class DesignPanelProvider implements vscode.Disposable {
                     const stitch = await loadStitch();
                     const project = await stitch.createProject(title);
                     const list = await stitch.projects();
-                    const projects = list.map((p: any) => ({ id: p.id, name: p.data?.title || p.data?.name || p.id }));
+                    const projects = list.map((p: any) => ({
+                        id: p.id,
+                        name: p.data?.title || p.data?.name || p.id,
+                        updateTime: p.data?.updateTime || p.data?.createTime || ''
+                    }));
                     // Pass the new project as the default so the webview auto-selects it.
                     this.postMessage({ type: 'stitchProjectsReady', projects, defaultProjectId: project.id, selectProjectId: project.id, workspaceRoot });
                 } catch (err: any) {
@@ -1546,8 +1535,16 @@ export class DesignPanelProvider implements vscode.Disposable {
                     await fs.promises.mkdir(path.dirname(finalPath), { recursive: true });
                     await fs.promises.writeFile(finalPath, content, 'utf8');
                     
+                    const folderPaths = service.getBriefsFolderPaths();
+                    const folderIndex = folderPaths.findIndex(p => path.resolve(p) === resolvedSource);
+                    
                     await this._sendBriefsDocsReady();
-                    this.postMessage({ type: 'briefCreated', success: true });
+                    this.postMessage({ 
+                        type: 'briefCreated', 
+                        success: true,
+                        docId: folderIndex >= 0 ? `${folderIndex}:${path.relative(sourceFolder, finalPath)}` : undefined,
+                        sourceFolder: sourceFolder
+                    });
                 } catch (err: any) {
                     this.postMessage({ type: 'briefCreated', success: false, error: String(err) });
                 }

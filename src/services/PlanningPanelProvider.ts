@@ -731,25 +731,6 @@ export class PlanningPanelProvider {
         );
         htmlContent = htmlContent.replace(/\{\{SHARED_UTILS_URI\}\}/g, sharedUtilsUri.toString());
 
-        // Inject shared tab styles inline to prevent FOUC
-        let sharedTabsCss = '';
-        const cssPaths = [
-            path.join(this._extensionUri.fsPath, 'dist', 'webview', 'shared-tabs.css'),
-            path.join(this._extensionUri.fsPath, 'webview', 'shared-tabs.css'),
-            path.join(this._extensionUri.fsPath, 'src', 'webview', 'shared-tabs.css')
-        ];
-        for (const cssPath of cssPaths) {
-            try {
-                if (fs.existsSync(cssPath)) {
-                    sharedTabsCss = fs.readFileSync(cssPath, 'utf8');
-                    break;
-                }
-            } catch {
-                // Continue to next path
-            }
-        }
-        htmlContent = htmlContent.replace(/<!-- SHARED_TABS_CSS -->|\{\{SHARED_TABS_CSS_URI\}\}/g, sharedTabsCss ? `<style>\n${sharedTabsCss}\n</style>` : '');
-
         const geistPixelFontUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this._extensionUri, 'designs', 'GeistPixel-Square.woff2')
         );

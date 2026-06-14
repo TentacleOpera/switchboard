@@ -2056,10 +2056,17 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
 
     function populateStitchProjects(projects, defaultProjectId) {
         if (!stitchProjectSelect) return;
-        // Prioritize in-memory selectedStitchProjectId, then dropdown value, then configured default
-        const current = state.selectedStitchProjectId || stitchProjectSelect.value || defaultProjectId || '';
+
+        const sortedProjects = [...projects].sort((a, b) => {
+            const ta = a.updateTime ? new Date(a.updateTime).getTime() : 0;
+            const tb = b.updateTime ? new Date(b.updateTime).getTime() : 0;
+            return tb - ta;
+        });
+
+        // Prioritize in-memory selectedStitchProjectId, then configured default, then most recently updated project
+        const current = state.selectedStitchProjectId || defaultProjectId || sortedProjects[0]?.id || '';
         stitchProjectSelect.innerHTML = '<option value="">Select Project...</option>';
-        projects.forEach(p => {
+        sortedProjects.forEach(p => {
             const opt = document.createElement('option');
             opt.value = p.id;
             opt.textContent = p.name || p.id;
@@ -2463,6 +2470,18 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                     nodes: filteredBriefsNodes,
                     folderPaths: getCurrentFolderPaths(state.briefsFolderPathsByRoot, state.briefsWorkspaceRootFilter)
                 });
+                if (state._pendingAutoOpenBrief) {
+                    const pending = state._pendingAutoOpenBrief;
+                    const age = Date.now() - pending.createdAt;
+                    if (age < 5000) {
+                        const nodes = msg.nodes || [];
+                        const found = nodes.find(n => n.id === pending.docId);
+                        if (found) {
+                            loadDocumentPreview('briefs-folder', found.id, found.name);
+                        }
+                    }
+                    state._pendingAutoOpenBrief = null;
+                }
                 break;
 
             case 'briefContentForInjectionReady': {
@@ -2501,6 +2520,13 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                         statusBriefs.textContent = 'Brief created';
                         statusBriefs.style.color = 'var(--accent-teal)';
                         setTimeout(() => { statusBriefs.textContent = ''; }, 2000);
+                    }
+                    if (msg.docId && msg.sourceFolder) {
+                        state._pendingAutoOpenBrief = {
+                            docId: msg.docId,
+                            sourceFolder: msg.sourceFolder,
+                            createdAt: Date.now()
+                        };
                     }
                 } else {
                     const statusBriefs = document.getElementById('status-briefs');
@@ -2799,9 +2825,6 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 const screens = msg.screens || [];
                 renderStitchScreens(screens);
                 setStitchStatus(`${screens.length} screen${screens.length === 1 ? '' : 's'} loaded`, 'success');
-                if (screens.length > 0 && !state.activePreviewScreenId) {
-                    openStitchPreview(screens[0]);
-                }
                 break;
             }
 
@@ -3279,13 +3302,6 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
 
     // Notify backend ready
     vscode.postMessage({ type: 'ready' });
-
-    // Stitch is the default tab, so the project list must load up front —
-    // switchTab() only fires on a click, which never happens for the initial tab.
-    vscode.postMessage({
-        type: 'stitchListProjects',
-        workspaceRoot: state.stitchWorkspaceRoot
-    });
 
     applySidebarState();
     updateDesignDocControls();

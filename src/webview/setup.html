@@ -403,7 +403,64 @@
             padding-top: 0;
         }
     </style>
-    <!-- SHARED_TABS_CSS -->
+    <style>
+.shared-tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 16px 0;
+  background: var(--panel-bg);
+  border-bottom: 1px solid var(--border-color);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.shared-tab-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 8px 16px;
+  cursor: pointer;
+  border-radius: 3px 3px 0 0;
+  transition: all 0.15s;
+  position: relative;
+  top: 1px;
+}
+.shared-tab-btn:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent-teal) 5%, transparent);
+}
+.shared-tab-btn.active {
+  color: var(--accent-teal);
+  background: var(--panel-bg2);
+  border-color: var(--border-color);
+  border-bottom-color: var(--panel-bg2);
+}
+.shared-tab-content {
+  display: none;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+.shared-tab-content.active {
+  display: flex;
+  overflow-y: auto;
+}
+.cyber-theme-enabled .shared-tab-btn.active {
+  box-shadow: 0 -2px 8px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+}
+.cyber-theme-enabled .shared-tab-bar {
+  background: rgba(10, 10, 10, 0.65);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+    </style>
 </head>
 
 <body>

@@ -168,3 +168,9 @@ Skip per session directive. The test suite will be run separately by the user.
 
 ## Recommendation
 **Send to Intern**
+
+## Review Findings
+
+- **Files changed:** `design.js` — removed redundant `stitchListProjects` postMessage block (lines 3283-3288) that duplicated the message now sent by `switchTab(initialTab)`; `planning.js` — removed extra blank lines after init call.
+- **Validation:** Verified no stale comments remain, no duplicate init paths exist across all three files, and all init calls are positioned strictly after listener attachment.
+- **Remaining risks:** Low. The only material fix was removing a now-redundant workaround in `design.js` that would have caused a double `stitchListProjects` message on page load.

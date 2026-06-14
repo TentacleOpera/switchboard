@@ -2411,12 +2411,10 @@ export async function activate(context: vscode.ExtensionContext) {
                 gridTerminals.set(suffixedName(agent.name), terminal);
                 registeredTerminals.set(suffixedName(agent.name), terminal);
                 terminal.show();
-                if (!alreadyExisted) {
-                    try {
-                        await vscode.commands.executeCommand('workbench.action.terminal.moveToTerminalPanel');
-                    } catch (e) {
-                        outputChannel?.appendLine(`[Extension] Could not move terminal to panel: ${e}`);
-                    }
+                try {
+                    await vscode.commands.executeCommand('workbench.action.terminal.moveToTerminalPanel');
+                } catch (e) {
+                    outputChannel?.appendLine(`[Extension] Could not move terminal to panel: ${e}`);
                 }
             }
             if (batchRegistrations.length > 0) {

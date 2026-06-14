@@ -118,6 +118,9 @@
 
     let researchStatusTimeout = null;
 
+    // Kanban tab state (declared early to avoid TDZ when switchToTab is called during init)
+    let _pendingKanbanSelection = null;
+
     // Tickets tab state
     let ticketsInitialized = false;
     let ticketsLoadedOnce = false;
@@ -486,8 +489,6 @@
     // Initialize the initially active tab
     const initialTab = document.querySelector('.shared-tab-btn.active')?.dataset.tab || 'local';
     switchToTab(initialTab);
-
-
 
     // Clipboard Import logic
 
@@ -3690,7 +3691,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
     let _kanbanSelectedPlan = null;
     let _kanbanPreviewRequestId = 0;
     let _kanbanAvailableColumns = [];  // { id, label, kind }[] — merged across workspaces
-    let _pendingKanbanSelection = null;
 
     function findPendingKanbanMatch(cache) {
         if (!_pendingKanbanSelection || !cache || !cache.length) return null;
