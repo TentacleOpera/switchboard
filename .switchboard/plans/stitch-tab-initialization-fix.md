@@ -279,4 +279,8 @@ if (tabName === 'stitch') {
 
 ---
 
-**Recommendation:** Send to Intern
+## Review Findings
+
+- **Files changed:** `src/webview/design.js` — removed the persisted-project restoration block (`getRestoredState('stitch.projectId', ...)`) inside the `stitch-workspace-filter` change listener. This leak had re-injected a previously saved project ID after the handler explicitly reset the selection to empty, violating the "no state persistence" requirement on workspace root switches.
+- **Validation:** Grep verification confirms `getRestoredState('stitch.projectId')` no longer appears in any active code path; the HTML double-`display` conflict is resolved; `populateStitchProjects` no longer auto-selects via `defaultProjectId` or `sortedProjects[0]` fallbacks; `renderStitchScreens` and `switchTab` both guard the no-project UI state.
+- **Remaining risks:** (1) Newly created projects are not auto-selected after creation — the user must manually pick them from the dropdown. This was flagged in the plan's "User Review Required" section and remains a product decision. (2) The `defaultProjectId` parameter in `populateStitchProjects` is now unused; removing it is a safe deferred cleanup.

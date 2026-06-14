@@ -639,6 +639,10 @@ export async function activate(context: vscode.ExtensionContext) {
             outputChannel?.appendLine('[Startup] Auto-reset agent terminals completed.');
         }).catch((e) => {
             outputChannel?.appendLine(`[Startup] Auto-reset agent terminals failed: ${e}`);
+        }).finally(() => {
+            // Fire-and-forget terminal reclaim after deregistration completes/fails
+            const runtimeStateRoot = kanbanProvider!.resolveEffectiveWorkspaceRoot(workspaceRoot) || workspaceRoot;
+            void syncTerminalRegistryWithState(runtimeStateRoot);
         });
     }
     context.subscriptions.push(
@@ -1523,8 +1527,7 @@ export async function activate(context: vscode.ExtensionContext) {
     if (workspaceRoot) {
         const runtimeStateRoot = resolveEffectiveStateRoot(workspaceRoot) || workspaceRoot;
         try {
-            // 1. PERSISTENCE SYNC: Re-claim terminals from state.json
-            await syncTerminalRegistryWithState(runtimeStateRoot);
+            // 1. PERSISTENCE SYNC: Re-claim terminals from state.json (moved to deregisterAllTerminals chain to run async/non-blocking)
 
             // 2. REACTIVITY: Listen for new terminals in real-time
             context.subscriptions.push(vscode.window.onDidOpenTerminal(() => {
@@ -1624,25 +1627,13 @@ export async function activate(context: vscode.ExtensionContext) {
     async function _syncTerminalRegistryWithStateImpl(workspaceRoot: string) {
         outputChannel?.appendLine(`[Extension] syncTerminalRegistryWithState called for ${workspaceRoot}`);
         // NOTE: PID resolution retained for backward compatibility — name + ideName matching is preferred
-        const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
-        if (!fs.existsSync(statePath)) return;
 
         try {
-            // Retry JSON parse up to 3 times with 50ms delay — state.json may be
-            // mid-write (truncated) when the file watcher triggers a re-sync.
-            let state: any;
-            let parseAttempts = 0;
-            while (parseAttempts < 3) {
-                try {
-                    state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
-                    break;
-                } catch (parseErr) {
-                    parseAttempts++;
-                    if (parseAttempts >= 3) throw parseErr;
-                    await new Promise(r => setTimeout(r, 50));
-                }
-            }
-            const stateTerminals = state.terminals || {};
+            const db = KanbanDatabase.forWorkspace(workspaceRoot);
+            await db.ensureReady();
+            const stateTerminals = await db.getConfigJson('runtime.terminals', {}) as Record<string, any>;
+            if (Object.keys(stateTerminals).length === 0) return;
+
             const openTerminals = vscode.window.terminals;
             const currentIdeName = (vscode.env.appName || '').toLowerCase();
 
@@ -1662,10 +1653,10 @@ export async function activate(context: vscode.ExtensionContext) {
             // New shape: resolve every open terminal's PID once, in parallel,
             // before scanning state.json. Match lookups become synchronous map
             // hits. Total PID-resolution wall time is bounded by the single
-            // longest timeout (~5s), not O(M*N*5s).
+            // longest timeout (~1s), not O(M*N*1s).
             const openTerminalPids = await Promise.all(
                 openTerminals.map(t =>
-                    waitWithTimeout(t.processId, 5000, undefined).catch(() => undefined)
+                    waitWithTimeout(t.processId, 1000, undefined).catch(() => undefined)
                 )
             );
             const openTerminalsByPid = new Map<number, vscode.Terminal>();

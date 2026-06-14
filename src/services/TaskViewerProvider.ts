@@ -7,7 +7,8 @@ import * as crypto from 'crypto';
 
 import * as cp from 'child_process';
 import { promisify } from 'util';
-import { JSDOM } from 'jsdom';
+import type { JSDOM } from 'jsdom';
+let JSDOMClass: any;
 import { SessionActionLog, ArchiveSpec, ArchiveResult } from './SessionActionLog';
 import { KanbanProvider } from './KanbanProvider';
 import type { SetupPanelProvider } from './SetupPanelProvider';
@@ -33,21 +34,26 @@ import {
     columnToPromptRole,
     resolveWorkingDir
 } from './agentPromptBuilder';
-import { NotionFetchService } from './NotionFetchService';
-import { NotionBackupService } from './NotionBackupService';
+import type { NotionFetchService } from './NotionFetchService';
+let NotionFetchServiceClass: any;
+import type { NotionBackupService } from './NotionBackupService';
+let NotionBackupServiceClass: any;
 import { PLAN_SCANNER_PRESETS, expandFlatGlob, type ResolvedFlatTarget } from './PlanScannerPresets';
-import { NotionBrowseService } from './NotionBrowseService';
-import { ClickUpSyncService, type ClickUpApplyOptions, type ClickUpList, type ClickUpMappingSelection, type ClickUpTask } from './ClickUpSyncService';
-import { ClickUpDocsAdapter } from './ClickUpDocsAdapter';
+import type { ClickUpSyncService, ClickUpApplyOptions, ClickUpList, ClickUpMappingSelection, ClickUpTask } from './ClickUpSyncService';
+let ClickUpSyncServiceClass: any;
+import type { ClickUpDocsAdapter } from './ClickUpDocsAdapter';
+let ClickUpDocsAdapterClass: any;
 import { PlanningPanelCacheService } from './PlanningPanelCacheService';
-import {
+import type {
     LinearSyncService,
-    type LinearApplyOptions,
-    type LinearAttachment,
-    type LinearComment,
-    type LinearIssue
+    LinearApplyOptions,
+    LinearAttachment,
+    LinearComment,
+    LinearIssue
 } from './LinearSyncService';
-import { LinearDocsAdapter } from './LinearDocsAdapter';
+let LinearSyncServiceClass: any;
+import type { LinearDocsAdapter } from './LinearDocsAdapter';
+let LinearDocsAdapterClass: any;
 import { LocalFolderService } from './LocalFolderService';
 import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 import { LocalApiServer } from './LocalApiServer';
@@ -5007,7 +5013,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const resolvedRoot = path.resolve(workspaceRoot);
         let service = this._notionServices.get(resolvedRoot);
         if (!service) {
-            service = new NotionFetchService(resolvedRoot, this._context.secrets);
+            if (!NotionFetchServiceClass) {
+                NotionFetchServiceClass = require('./NotionFetchService').NotionFetchService;
+            }
+            service = new NotionFetchServiceClass(resolvedRoot, this._context.secrets);
             this._notionServices.set(resolvedRoot, service);
         }
         return service;
@@ -5017,7 +5026,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const resolvedRoot = path.resolve(workspaceRoot);
         let service = this._notionBackupServices.get(resolvedRoot);
         if (!service) {
-            service = new NotionBackupService(resolvedRoot, this._context.secrets);
+            if (!NotionBackupServiceClass) {
+                NotionBackupServiceClass = require('./NotionBackupService').NotionBackupService;
+            }
+            service = new NotionBackupServiceClass(resolvedRoot, this._context.secrets);
             this._notionBackupServices.set(resolvedRoot, service);
         }
         return service;
@@ -5032,7 +5044,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             existing.setCacheService(cacheService);
             return existing;
         }
-        const service = new ClickUpSyncService(resolvedRoot, this._context.secrets);
+        if (!ClickUpSyncServiceClass) {
+            ClickUpSyncServiceClass = require('./ClickUpSyncService').ClickUpSyncService;
+        }
+        const service = new ClickUpSyncServiceClass(resolvedRoot, this._context.secrets);
         const cacheService = this._getCacheService(resolvedRoot);
         service.setCacheService(cacheService);
         this._clickUpServices.set(resolvedRoot, service);
@@ -5065,7 +5080,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             existing.setCacheService(cacheService);
             return existing;
         }
-        const service = new LinearSyncService(resolvedRoot, this._context.secrets);
+        if (!LinearSyncServiceClass) {
+            LinearSyncServiceClass = require('./LinearSyncService').LinearSyncService;
+        }
+        const service = new LinearSyncServiceClass(resolvedRoot, this._context.secrets);
         const cacheService = this._getCacheService(resolvedRoot);
         service.setCacheService(cacheService);
         this._linearServices.set(resolvedRoot, service);
@@ -5335,13 +5353,19 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     public getClickUpDocsAdapter(workspaceRoot: string): ClickUpDocsAdapter {
+        if (!ClickUpDocsAdapterClass) {
+            ClickUpDocsAdapterClass = require('./ClickUpDocsAdapter').ClickUpDocsAdapter;
+        }
         const clickUpService = this._getClickUpService(workspaceRoot);
-        return new ClickUpDocsAdapter(workspaceRoot, clickUpService, this._getCacheService(workspaceRoot));
+        return new ClickUpDocsAdapterClass(workspaceRoot, clickUpService, this._getCacheService(workspaceRoot));
     }
 
     public getLinearDocsAdapter(workspaceRoot: string): LinearDocsAdapter {
+        if (!LinearDocsAdapterClass) {
+            LinearDocsAdapterClass = require('./LinearDocsAdapter').LinearDocsAdapter;
+        }
         const linearService = this._getLinearService(workspaceRoot);
-        return new LinearDocsAdapter(workspaceRoot, linearService);
+        return new LinearDocsAdapterClass(workspaceRoot, linearService);
     }
 
     public getLocalFolderService(workspaceRoot: string): LocalFolderService {
@@ -15222,7 +15246,10 @@ What would you like to find?`;
     }
 
     private _convertHtmlToMarkdown(html: string): string {
-        const dom = new JSDOM(html);
+        if (!JSDOMClass) {
+            JSDOMClass = require('jsdom').JSDOM;
+        }
+        const dom = new JSDOMClass(html);
         const doc = dom.window.document;
 
         function cleanText(text: string): string {

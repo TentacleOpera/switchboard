@@ -3064,12 +3064,6 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 if (imageContainer) imageContainer.style.display = 'none';
             }
             
-            // restore that root's persisted selectedStitchProjectId if it exists
-            const rootState = getRestoredState('stitch.projectId', state.stitchWorkspaceRoot);
-            if (rootState) {
-                state.selectedStitchProjectId = rootState;
-            }
-            
             // re-request the project list for the new root
             vscode.postMessage({
                 type: 'stitchListProjects',

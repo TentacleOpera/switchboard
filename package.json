@@ -23,7 +23,9 @@
     "AI"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onView:switchboard-view",
+    "onCommand:switchboard.openKanban",
+    "onCommand:switchboard.setup"
   ],
   "contributes": {
     "viewsContainers": {
