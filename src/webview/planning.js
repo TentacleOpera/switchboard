@@ -2621,7 +2621,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     const itemDiv = kanbanListPane && kanbanListPane.querySelector(`.kanban-plan-item[data-plan-id="${immediateMatch.planId}"]`);
                     if (itemDiv) {
                         itemDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        itemDiv.click();
+                        // Update selected class
+                        document.querySelectorAll('.kanban-plan-item').forEach(el => el.classList.remove('selected'));
+                        itemDiv.classList.add('selected');
+                        // Load preview directly
+                        loadKanbanPlanPreview(immediateMatch);
                         _pendingKanbanSelection = null;
                     }
                 }
@@ -3723,6 +3727,32 @@ Return ONLY the drafted prompt with no additional commentary.`;
         return null;
     }
 
+    function loadKanbanPlanPreview(plan) {
+        // Update selection state
+        _kanbanSelectedPlan = plan;
+        renderKanbanMetaBar(plan);
+        if (plan.sessionId) {
+            vscode.postMessage({ type: 'planShown', sessionId: plan.sessionId });
+        }
+
+        // Fetch preview content
+        if (plan.planFile) {
+            if (kanbanPreviewContent) {
+                kanbanPreviewContent.innerHTML = '<div class="kanban-empty-state">Loading preview...</div>';
+            }
+            _kanbanPreviewRequestId++;
+            vscode.postMessage({
+                type: 'fetchKanbanPlanPreview',
+                filePath: plan.planFile,
+                requestId: _kanbanPreviewRequestId
+            });
+        } else {
+            if (kanbanPreviewContent) {
+                kanbanPreviewContent.innerHTML = '<div class="kanban-empty-state">No plan file linked</div>';
+            }
+        }
+    }
+
     function _complexityToCssClass(complexity) {
         const score = parseInt(complexity, 10);
         if (isNaN(score) || score <= 0) return 'unknown';
@@ -4044,29 +4074,12 @@ Return ONLY the drafted prompt with no additional commentary.`;
                     exitReviewMode('kanban', true);
                 }
 
+                // Update selected class
                 document.querySelectorAll('.kanban-plan-item').forEach(el => el.classList.remove('selected'));
                 itemDiv.classList.add('selected');
-                _kanbanSelectedPlan = plan;
-                renderKanbanMetaBar(plan);
-                if (plan.sessionId) {
-                    vscode.postMessage({ type: 'planShown', sessionId: plan.sessionId });
-                }
 
-                if (plan.planFile) {
-                    if (kanbanPreviewContent) {
-                        kanbanPreviewContent.innerHTML = '<div class="kanban-empty-state">Loading preview...</div>';
-                    }
-                    _kanbanPreviewRequestId++;
-                    vscode.postMessage({
-                        type: 'fetchKanbanPlanPreview',
-                        filePath: plan.planFile,
-                        requestId: _kanbanPreviewRequestId
-                    });
-                } else {
-                    if (kanbanPreviewContent) {
-                        kanbanPreviewContent.innerHTML = '<div class="kanban-empty-state">No plan file linked</div>';
-                    }
-                }
+                // Load preview
+                loadKanbanPlanPreview(plan);
             });
 
             const copyLinkBtn = itemDiv.querySelector('.kanban-plan-copy-link');
@@ -4451,7 +4464,11 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 const itemDiv = kanbanListPane && kanbanListPane.querySelector(`.kanban-plan-item[data-plan-id="${match.planId}"]`);
                 if (itemDiv) {
                     itemDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    itemDiv.click();
+                    // Update selected class
+                    document.querySelectorAll('.kanban-plan-item').forEach(el => el.classList.remove('selected'));
+                    itemDiv.classList.add('selected');
+                    // Load preview directly (no click simulation, no race condition)
+                    loadKanbanPlanPreview(match);
                 }
                 _pendingKanbanSelection = null;  // Option B: only clear on successful match
             }

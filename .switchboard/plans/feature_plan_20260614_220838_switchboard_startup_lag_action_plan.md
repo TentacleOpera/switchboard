@@ -165,3 +165,13 @@ more testing) → P4 folded in.
 
 ## Recommendation
 Send to Coder.
+
+## Review Findings
+
+P1 (mtime short-circuit) and P2 (fire-and-forget terminal sync, DB read, 1000 ms timeout) are correctly implemented and low-risk. P4 (deferred imports via lazy `require`) is correctly implemented. P3 (lazy activationEvents) was reverted from `onView`/`onCommand` back to `onStartupFinished` because the exhaustive command audit required for lazy activation was incomplete, and `startPlanScanner()` must run even when the sidebar is never opened (per the existing code comment at `extension.ts:655`). The plan itself noted this fallback in the P3 edge-case section.
+
+**Files changed:** `package.json` — reverted `activationEvents` to `onStartupFinished`; removed dead commands (`reviewPlan`, `archiveCurrentPlan`, `queryArchive`, `exportAllToArchive`); renamed `openResearchPanel` to `openPlanningPanel` to match the actual registration in `extension.ts`.
+
+**Validation:** No compilation or test steps run per session instructions. Code review confirms P1/P2/P4 logic matches plan requirements; P3 rollback eliminates the command-discoverability regression.
+
+**Remaining risks:** (1) `focusTerminal` at `extension.ts:1971` still reads legacy `state.json` directly for child-PID fallback — this was outside the plan's scope but is the last startup-time `state.json` read on the critical path. (2) `Object.values(stateTerminals).find(...)` in `_syncTerminalRegistryWithStateImpl` does a linear scan; with hundreds of terminals this is fine, but it scales linearly. (3) No regression test was added for the mtime gate or the terminal sync early-exit — these should be covered when the test suite is run separately.

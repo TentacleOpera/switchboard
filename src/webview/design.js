@@ -2827,8 +2827,18 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 }
                 setStitchBusy(false); // recompute Generate/Sync disabled state for the new selection
                 if (msg.selectProjectId) {
+                    state.selectedStitchProjectId = msg.selectProjectId;
+                    if (stitchProjectSelect) stitchProjectSelect.value = msg.selectProjectId;
+                    if (state.stitchWorkspaceRoot) {
+                        persistTab('stitch.projectId', msg.selectProjectId, state.stitchWorkspaceRoot);
+                    }
                     setStitchStatus('Project created — describe a screen and press Generate', 'success');
-                    renderStitchScreens([]);
+                    setStitchBusy(true);
+                    vscode.postMessage({
+                        type: 'stitchGetProjectScreens',
+                        projectId: msg.selectProjectId,
+                        workspaceRoot: state.stitchWorkspaceRoot
+                    });
                 } else if (state.selectedStitchProjectId) {
                     // Automatically load screens for the selected project
                     setStitchStatus('Loading project screens…', 'busy');

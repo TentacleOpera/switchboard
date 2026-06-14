@@ -23,9 +23,7 @@
     "AI"
   ],
   "activationEvents": [
-    "onView:switchboard-view",
-    "onCommand:switchboard.openKanban",
-    "onCommand:switchboard.setup"
+    "onStartupFinished"
   ],
   "contributes": {
     "viewsContainers": {
@@ -90,28 +88,12 @@
         "title": "Switchboard: Clear Control Plane Cache"
       },
       {
-        "command": "switchboard.reviewPlan",
-        "title": "Switchboard: Review Plan"
-      },
-      {
         "command": "switchboard.resetKanbanDb",
         "title": "Switchboard: Reset Kanban Database"
       },
       {
         "command": "switchboard.reconcileKanbanDbs",
         "title": "Switchboard: Reconcile Kanban Databases"
-      },
-      {
-        "command": "switchboard.archiveCurrentPlan",
-        "title": "Switchboard: Archive Current Plan"
-      },
-      {
-        "command": "switchboard.queryArchive",
-        "title": "Switchboard: Query Plan Archive"
-      },
-      {
-        "command": "switchboard.exportAllToArchive",
-        "title": "Switchboard: Export All Completed Plans to Archive"
       },
       {
         "command": "switchboard.setClickUpToken",
@@ -144,8 +126,8 @@
         "category": "Switchboard"
       },
       {
-        "command": "switchboard.openResearchPanel",
-        "title": "Switchboard: Open Research Panel",
+        "command": "switchboard.openPlanningPanel",
+        "title": "Switchboard: Open Planning Panel",
         "category": "Switchboard"
       },
       {
