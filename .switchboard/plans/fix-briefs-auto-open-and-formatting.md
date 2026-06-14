@@ -204,5 +204,9 @@ Key risks: The 300ms debounce in `_sendBriefsDocsReady` creates a race where `br
 - [ ] Verify `grep -n '#markdown-preview-briefs' src/webview/design.html` returns 25+ matches
 - [ ] Verify no compilation errors in `src/webview/design.html` or `src/webview/design.js`
 
+## Review Findings
+
+CSS verified with 32 `#markdown-preview-briefs` selectors in `design.html` (exceeds 25+ target). Backend `briefCreated` returns `docId` and `sourceFolder` correctly. Frontend `_pendingAutoOpenBrief` flag bridges the 300ms debounce race and auto-opens the new brief after `renderBriefsDocs()`. No code fixes required. Minor edge case: if workspace filter excludes the new brief's root, `loadDocumentPreview` will lack a DOM wrapper and `sourceFolder` will be undefined, but the 5-second staleness guard and normal creation flow make this extremely unlikely.
+
 ## Recommendation
 Send to Intern

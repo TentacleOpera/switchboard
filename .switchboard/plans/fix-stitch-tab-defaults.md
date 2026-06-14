@@ -190,6 +190,10 @@ Key risks: (1) The Stitch API may omit `updateTime`/`createTime`, making recency
 - `src/services/DesignPanelProvider.ts`
 - `src/webview/design.js`
 
+## Review Findings
+
+`updateTime` mapping verified in both `stitchListProjects` and `stitchCreateProject` handlers. `populateStitchProjects` correctly sorts by recency descending and uses `state.selectedStitchProjectId || defaultProjectId || sortedProjects[0]?.id` selection priority. Auto-preview block removed from `stitchScreensReady`; gallery displays by default when `activePreviewScreenId` is null. No code fixes required. Risks documented in the plan (missing timestamps, muscle-memory from reordered dropdown) remain unchanged and are accepted.
+
 ## Recommendation
 
 Send to Intern

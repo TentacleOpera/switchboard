@@ -149,6 +149,17 @@
 
         // Trigger updates if needed
         if (tabName === 'stitch') {
+            // Defensive: ensure clean UI when no project is selected
+            if (!state.selectedStitchProjectId) {
+                const pane = document.getElementById('stitch-preview-pane');
+                const strip = document.getElementById('stitch-thumbnail-strip');
+                const gallery = document.getElementById('stitch-gallery');
+                const empty = document.getElementById('stitch-gallery-empty');
+                if (pane) pane.style.display = 'none';
+                if (strip) strip.style.display = 'none';
+                if (gallery) gallery.style.display = 'none';
+                if (empty) empty.style.display = 'flex';
+            }
             vscode.postMessage({
                 type: 'stitchListProjects',
                 workspaceRoot: state.stitchWorkspaceRoot
@@ -2063,8 +2074,9 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
             return tb - ta;
         });
 
-        // Prioritize in-memory selectedStitchProjectId, then configured default, then most recently updated project
-        const current = state.selectedStitchProjectId || defaultProjectId || sortedProjects[0]?.id || '';
+        // Only select if there's an explicit in-memory selection
+        // Do NOT auto-select defaultProjectId or first project
+        const current = state.selectedStitchProjectId || '';
         stitchProjectSelect.innerHTML = '<option value="">Select Project...</option>';
         sortedProjects.forEach(p => {
             const opt = document.createElement('option');
@@ -2073,12 +2085,12 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
             if (p.id === current) opt.selected = true;
             stitchProjectSelect.appendChild(opt);
         });
+
+        // Explicitly set value to prevent stale browser state
+        stitchProjectSelect.value = current;
         
         // Update selectedStitchProjectId to whatever was selected
         state.selectedStitchProjectId = stitchProjectSelect.value;
-        if (state.stitchWorkspaceRoot && state.selectedStitchProjectId) {
-            persistTab('stitch.projectId', state.selectedStitchProjectId, state.stitchWorkspaceRoot);
-        }
     }
 
     function renderStitchScreens(screens) {
@@ -2093,6 +2105,15 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
             } else {
                 closeStitchPreview();
             }
+        }
+
+        // Hide preview pane if no project selected
+        if (!state.selectedStitchProjectId) {
+            if (stitchPreviewPane) stitchPreviewPane.style.display = 'none';
+            if (stitchThumbnailStrip) stitchThumbnailStrip.style.display = 'none';
+            stitchGallery.style.display = 'none';
+            stitchGalleryEmpty.style.display = 'flex';
+            return;
         }
 
         if (screens.length === 0) {
@@ -2361,9 +2382,10 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                             filterSelect.value = state.stitchWorkspaceRoot;
                         }
                         
-                        // Restore project selection for this root
-                        const rootState = getRestoredState('stitch.projectId', state.stitchWorkspaceRoot);
-                        state.selectedStitchProjectId = rootState || '';
+                        // Restore project selection for this root — DISABLED per initialization requirements
+                        // const rootState = getRestoredState('stitch.projectId', state.stitchWorkspaceRoot);
+                        // state.selectedStitchProjectId = rootState || '';
+                        state.selectedStitchProjectId = '';
                         
                         vscode.postMessage({
                             type: 'stitchListProjects',
@@ -2410,8 +2432,9 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                         if (filterSelect) {
                             filterSelect.value = state.stitchWorkspaceRoot;
                         }
-                        const rootState = getRestoredState('stitch.projectId', state.stitchWorkspaceRoot);
-                        state.selectedStitchProjectId = rootState || '';
+                        // const rootState = getRestoredState('stitch.projectId', state.stitchWorkspaceRoot);
+                        // state.selectedStitchProjectId = rootState || '';
+                        state.selectedStitchProjectId = '';
                         
                         vscode.postMessage({
                             type: 'stitchListProjects',

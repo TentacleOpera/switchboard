@@ -456,8 +456,24 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             }
 
             let plan = await db.getPlanByPlanFile(relativePath, workspaceId);
-            const content = await fs.promises.readFile(uri.fsPath, 'utf8');
-            const metadata = await parsePlanMetadata(content, relativePath);
+
+            let fileMtime = new Date().toISOString();
+            let fileBirthtime = fileMtime;
+            try {
+                const stats = await fs.promises.stat(uri.fsPath);
+                fileMtime = stats.mtime.toISOString();
+                fileBirthtime = stats.birthtime && stats.birthtime.getTime() > 0
+                    ? stats.birthtime.toISOString()
+                    : fileMtime;
+            } catch (statErr) {
+                // Fallback to current time if stat fails (e.g., file deleted mid-process)
+                this._outputChannel?.appendLine(`[GlobalPlanWatcher] stat() failed for ${uri.fsPath}: ${statErr}`);
+            }
+
+            if (plan && new Date(fileMtime).getTime() <= new Date(plan.updatedAt).getTime()) {
+                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Plan unchanged, skipping: ${relativePath}`);
+                return;
+            }
 
             if (!plan) {
                 // Fallback: try absolute path lookup for legacy DB entries
@@ -472,18 +488,8 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 }
             }
 
-            let fileMtime = new Date().toISOString();
-            let fileBirthtime = fileMtime;
-            try {
-                const stats = await fs.promises.stat(uri.fsPath);
-                fileMtime = stats.mtime.toISOString();
-                fileBirthtime = stats.birthtime && stats.birthtime.getTime() > 0
-                    ? stats.birthtime.toISOString()
-                    : fileMtime;
-            } catch (statErr) {
-                // Fallback to current time if stat fails (e.g., file deleted mid-process)
-                this._outputChannel?.appendLine(`[GlobalPlanWatcher] stat() failed for ${uri.fsPath}: ${statErr}`);
-            }
+            const content = await fs.promises.readFile(uri.fsPath, 'utf8');
+            const metadata = await parsePlanMetadata(content, relativePath);
 
             if (!plan) {
                 const project = metadata.project || this._currentProjects.get(workspaceRoot) || '';
