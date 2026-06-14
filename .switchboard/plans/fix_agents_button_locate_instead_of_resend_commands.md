@@ -163,3 +163,9 @@ if (terminal && newlyCreatedTerminals.has(terminal)) {
 - Verify that terminal reset functionality is unaffected
 
 **Recommendation:** Send to Intern
+
+## Review Findings
+
+- `src/extension.ts` modified: `createAgentGrid` correctly implements early-exit focus (line 2441) and filters startup commands to newly created terminals (line 2482). Fixed `focusTerminalByName` (lines 2029-2042) to resolve suffixed terminal keys, matching the existing `TaskViewerProvider._focusTerminalByName` pattern.
+- Validation: static analysis confirms no orphaned references, no signature changes affecting callers, and `finally` block still disposes resources on early return.
+- Remaining risks: VS Code terminal scan fallback in `focusTerminalByName` could match the wrong terminal if duplicate names exist across windows (pre-existing, low probability); log message at line 2477 overstates the number of agents receiving commands (cosmetic).

@@ -1159,8 +1159,8 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(resetAutobanPoolsDisposable);
 
-    const dispatchToCoderTerminalDisposable = vscode.commands.registerCommand('switchboard.dispatchToCoderTerminal', async (prompt: string) => {
-        await taskViewerProvider.dispatchToCoderTerminal(prompt);
+    const dispatchToCoderTerminalDisposable = vscode.commands.registerCommand('switchboard.dispatchToCoderTerminal', async (prompt: string, worktreePath?: string) => {
+        await taskViewerProvider.dispatchToCoderTerminal(prompt, worktreePath);
     });
     context.subscriptions.push(dispatchToCoderTerminalDisposable);
 
@@ -2026,10 +2026,20 @@ export async function activate(context: vscode.ExtensionContext) {
             return;
         }
 
+        // 1a. Try suffixed name (keys are stored suffixed)
+        const suffixed = suffixedName(terminalName);
+        if (suffixed !== terminalName) {
+            const bySuffix = registeredTerminals.get(suffixed);
+            if (bySuffix && bySuffix.exitStatus === undefined) {
+                bySuffix.show();
+                return;
+            }
+        }
+
         // 1b. Case-insensitive lookup in registered map for renamed or normalized keys.
         for (const [name, terminal] of registeredTerminals.entries()) {
             if (terminal.exitStatus !== undefined) continue;
-            if (normalizeName(name) !== target) continue;
+            if (normalizeName(stripIdeSuffix(name)) !== target) continue;
             terminal.show();
             return;
         }

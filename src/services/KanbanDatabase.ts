@@ -152,7 +152,7 @@ CREATE TABLE IF NOT EXISTS worktrees (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     branch      TEXT NOT NULL UNIQUE,
     path        TEXT NOT NULL,
-    epic_id     INTEGER REFERENCES plans(id) ON DELETE SET NULL,
+    epic_id     TEXT,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     status      TEXT NOT NULL DEFAULT 'active'
 );
@@ -4406,6 +4406,59 @@ export class KanbanDatabase {
             } catch (e) {
                 try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
                 console.error('[KanbanDatabase] V30 migration FAILED — rolled back. DB unchanged. Error:', e);
+            }
+        }
+
+        // V31: Fix worktrees.epic_id column type — was INTEGER (coerces non-numeric plan_id to 0),
+        // must be TEXT to store plans.plan_id values correctly.
+        const v31 = await this.getMigrationVersion();
+        if (v31 < 31) {
+            try {
+                this._db.exec('BEGIN');
+
+                // Preserve existing rows — epic_id values are all NULL or 0 (unusable),
+                // restore as NULL since the original plan_id values were never stored correctly.
+                const oldRows: Array<{ id: number; branch: string; path: string; created_at: string; status: string }> = [];
+                try {
+                    const stmt = this._db.prepare(`SELECT id, branch, path, created_at, status FROM worktrees`);
+                    while (stmt.step()) {
+                        const row = stmt.getAsObject();
+                        oldRows.push({
+                            id: Number(row.id),
+                            branch: String(row.branch || ''),
+                            path: String(row.path || ''),
+                            created_at: String(row.created_at || ''),
+                            status: String(row.status || 'active'),
+                        });
+                    }
+                    stmt.free();
+                } catch { /* table may not exist */ }
+
+                this._db.exec(`DROP TABLE IF EXISTS worktrees`);
+                this._db.exec(`
+                    CREATE TABLE IF NOT EXISTS worktrees (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                        branch      TEXT NOT NULL UNIQUE,
+                        path        TEXT NOT NULL,
+                        epic_id     TEXT,
+                        created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+                        status      TEXT NOT NULL DEFAULT 'active'
+                    );
+                `);
+
+                for (const row of oldRows) {
+                    this._db.run(
+                        `INSERT OR IGNORE INTO worktrees (id, branch, path, epic_id, created_at, status) VALUES (?, ?, ?, ?, ?, ?)`,
+                        [row.id, row.branch, row.path, null, row.created_at, row.status]
+                    );
+                }
+
+                this._db.exec('COMMIT');
+                await this.setMigrationVersion(31);
+                console.log('[KanbanDatabase] V31 migration completed: worktrees.epic_id changed to TEXT');
+            } catch (e) {
+                try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+                console.error('[KanbanDatabase] V31 migration failed:', e);
             }
         }
 

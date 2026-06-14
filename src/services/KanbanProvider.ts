@@ -2158,7 +2158,7 @@ export class KanbanProvider implements vscode.Disposable {
             const wts = await db.getWorktrees();
             for (const wt of wts) {
                 if (wt.epic_id) {
-                    worktreePathMap.set(wt.epic_id, wt.path);
+                    worktreePathMap.set(String(wt.epic_id), wt.path);
                 }
             }
         }
@@ -2185,7 +2185,7 @@ export class KanbanProvider implements vscode.Disposable {
                 worktreePath = worktreePathMap.get(card.planId);
             }
             if (!worktreePath && card.epicId) {
-                worktreePath = worktreePathMap.get(card.epicId);
+                worktreePath = worktreePathMap.get(String(card.epicId));
             }
             if (!worktreePath && worktreePathMap.size === 1) {
                 worktreePath = worktreePathMap.values().next().value;
@@ -2207,7 +2207,7 @@ export class KanbanProvider implements vscode.Disposable {
                 const subtasks = await db.getSubtasksByEpicId(card.planId);
                 const limited = subtasks.slice(0, maxSubtasks);
                 for (const st of limited) {
-                    const stWorktreePath = st.epicId ? worktreePathMap.get(st.epicId) : worktreePath;
+                    const stWorktreePath = st.epicId ? worktreePathMap.get(String(st.epicId)) : worktreePath;
                     promptPlans.push({
                         topic: `[SUBTASK] ${st.topic}`,
                         absolutePath: this._resolvePlanFilePath(workspaceRoot, st.planFile),
@@ -3011,7 +3011,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 vscode.window.showInformationMessage('Coder prompt copied to clipboard.');
             }
         } else {
-            await vscode.commands.executeCommand('switchboard.dispatchToCoderTerminal', coderPrompt);
+            const commonWorktree = plans[0]?.worktreePath;
+            const allSameWorktree = plans.every(p => p.worktreePath === commonWorktree);
+            const worktreePath = allSameWorktree ? commonWorktree : undefined;
+            await vscode.commands.executeCommand('switchboard.dispatchToCoderTerminal', coderPrompt, worktreePath);
         }
     }
 
@@ -5661,7 +5664,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     // CLI Coder: Lead prompt to clipboard, Coder prompt to terminal
                     await vscode.env.clipboard.writeText(leadPrompt);
                     vscode.window.showInformationMessage('Complex prompt copied to clipboard. Dispatching Routine tasks to Coder terminal...');
-                    await vscode.commands.executeCommand('switchboard.dispatchToCoderTerminal', coderPrompt);
+                    const worktreePath = plans[0]?.worktreePath;
+                    await vscode.commands.executeCommand('switchboard.dispatchToCoderTerminal', coderPrompt, worktreePath);
 
                     // Advance the card to LEAD CODED
                     await vscode.commands.executeCommand('switchboard.kanbanForwardMove', [msg.sessionId], 'LEAD CODED', this._currentWorkspaceRoot);

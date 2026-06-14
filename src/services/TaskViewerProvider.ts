@@ -3139,7 +3139,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         await vscode.env.clipboard.writeText(coderPrompt);
                     }
                 } else {
-                    await this.dispatchToCoderTerminal(coderPrompt);
+                    await this.dispatchToCoderTerminal(coderPrompt, worktreeForBatch);
                 }
             }
 
@@ -6530,13 +6530,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
 
     /** Dispatch a prompt to the Coder terminal for Routine pair programming. */
-    public async dispatchToCoderTerminal(prompt: string): Promise<void> {
+    public async dispatchToCoderTerminal(prompt: string, worktreePath?: string): Promise<void> {
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) {
             vscode.window.showWarningMessage('Pair Program: no workspace root found.');
             return;
         }
-        const coderAgent = await this._getAgentNameForRole('coder', workspaceRoot);
+        const coderAgent = await this._resolveAgentTerminalForPlan('coder', workspaceRoot, worktreePath);
         if (!coderAgent) {
             vscode.window.showWarningMessage('Pair Program: no Coder terminal found. Please register a Coder terminal first.');
             return;

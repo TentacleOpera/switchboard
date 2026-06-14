@@ -92,7 +92,8 @@ async function simulatePairButtonFlow(params: {
         vscode.window.showInformationMessage(
             'Complex prompt copied to clipboard. Dispatching Routine tasks to Coder terminal...'
         );
-        await vscode.commands.executeCommand('switchboard.dispatchToCoderTerminal', coderPrompt);
+        const worktreePath = plans[0]?.worktreePath;
+        await vscode.commands.executeCommand('switchboard.dispatchToCoderTerminal', coderPrompt, worktreePath);
 
         // Advance card
         await vscode.commands.executeCommand(
@@ -144,7 +145,10 @@ async function simulateDragDropFlow(params: {
                 await vscode.env.clipboard.writeText(coderPrompt);
             }
         } else {
-            await vscode.commands.executeCommand('switchboard.dispatchToCoderTerminal', coderPrompt);
+            const commonWorktree = plans[0]?.worktreePath;
+            const allSameWorktree = plans.every(p => p.worktreePath === commonWorktree);
+            const worktreePath = allSameWorktree ? commonWorktree : undefined;
+            await vscode.commands.executeCommand('switchboard.dispatchToCoderTerminal', coderPrompt, worktreePath);
         }
     }
 }
