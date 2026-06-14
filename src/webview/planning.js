@@ -483,6 +483,10 @@
         });
     });
 
+    // Initialize the initially active tab
+    const initialTab = document.querySelector('.shared-tab-btn.active')?.dataset.tab || 'local';
+    switchToTab(initialTab);
+
 
 
     // Clipboard Import logic

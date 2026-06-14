@@ -6726,6 +6726,24 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         const sharedDefaultsUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'sharedDefaults.js')).toString();
         content = content.replace('<!-- SHARED_DEFAULTS_SCRIPT -->', `<script src="${sharedDefaultsUri}" nonce="${nonce}"></script>`);
 
+        // Inject shared tab styles inline to prevent FOUC
+        let sharedTabsCss = '';
+        const cssPaths = [
+            vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'shared-tabs.css'),
+            vscode.Uri.joinPath(this._extensionUri, 'webview', 'shared-tabs.css'),
+            vscode.Uri.joinPath(this._extensionUri, 'src', 'webview', 'shared-tabs.css')
+        ];
+        for (const cssCandidate of cssPaths) {
+            try {
+                const cssBuffer = await vscode.workspace.fs.readFile(cssCandidate);
+                sharedTabsCss = Buffer.from(cssBuffer).toString('utf8');
+                break;
+            } catch {
+                // Continue to next candidate
+            }
+        }
+        content = content.replace(/<!-- SHARED_TABS_CSS -->|\{\{SHARED_TABS_CSS_URI\}\}/g, sharedTabsCss ? `<style>\n${sharedTabsCss}\n</style>` : '');
+
         // Inject initial workspace root as a data attribute on <body>
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (workspaceRoot) {

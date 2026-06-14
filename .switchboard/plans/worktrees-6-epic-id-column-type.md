@@ -185,6 +185,10 @@ const stWorktreePath = st.epicId ? worktreePathMap.get(String(st.epicId)) : work
 - **SCHEMA_SQL and V31 must both change**: Missing either half leaves one install class broken. Change both in the same commit.
 - **Row preservation SELECT must not include `epic_id`**: The old column type coerced values to integers; selecting and reinserting them would propagate bad data. The migration intentionally drops `epic_id` from the SELECT and restores all rows with `epic_id = NULL`.
 
+## Review Findings
+
+Reviewer-executor pass completed. Zero CRITICAL/MAJOR findings. SCHEMA_SQL updated to `epic_id TEXT` at line 155; V31 migration added at lines 4412–4463 with correct row preservation (epic_id omitted from SELECT, restored as NULL); `String()` normalization applied in `KanbanProvider.ts` at lines 2161, 2188, and 2210. All `getWorktrees()` consumers verified — no regressions. No code fixes applied. Plan validated as implemented correctly.
+
 ---
 
 **Recommendation:** Send to Intern

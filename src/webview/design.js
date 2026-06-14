@@ -162,6 +162,10 @@
         });
     });
 
+    // Initialize the initially active tab
+    const initialTab = document.querySelector('.shared-tab-btn.active')?.dataset.tab || 'stitch';
+    switchTab(initialTab);
+
     // ── Zoom/Pan Engine ──
     const zoomState = {
         html:     { scale: 1, panX: 0, panY: 0, isPanning: false, startX: 0, startY: 0, panSource: null },

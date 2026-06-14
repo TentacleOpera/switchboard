@@ -49,6 +49,7 @@
 
 .shared-tab-content.active {
   display: flex;
+  overflow-y: auto;
 }
 
 .cyber-theme-enabled .shared-tab-btn.active {
