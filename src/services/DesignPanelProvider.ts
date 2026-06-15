@@ -164,6 +164,7 @@ export class DesignPanelProvider implements vscode.Disposable {
         this._panel?.dispose();
         this.disposeWatchers();
         this._activeScreens.clear();
+        this._imageCachePromises.clear();
         for (const [, entry] of this._htmlServers) {
             clearTimeout(entry.timeoutId);
             try { entry.server.close(); } catch {}
@@ -628,6 +629,7 @@ export class DesignPanelProvider implements vscode.Disposable {
 
     private async _evictImageCache(screenId: string, workspaceRoot: string): Promise<void> {
         if (!workspaceRoot) return;
+        this._imageCachePromises.delete(screenId);
         const cacheDir = this._getImageCacheDir(workspaceRoot);
         const safeId = path.basename(screenId);
         const cachePath = path.join(cacheDir, `${safeId}.png`);
@@ -686,24 +688,31 @@ export class DesignPanelProvider implements vscode.Disposable {
             return existingPromise;
         }
 
+        const promise = this._resolveImageCache(screen, cachePath, workspaceRoot);
+        this._imageCachePromises.set(screen.id, promise);
+
+        try {
+            return await promise;
+        } finally {
+            this._imageCachePromises.delete(screen.id);
+        }
+    }
+
+    private async _resolveImageCache(screen: any, cachePath: string, workspaceRoot: string): Promise<string> {
         try {
             await vscode.workspace.fs.stat(vscode.Uri.file(cachePath));
             if (this._panel) {
                 return this._panel.webview.asWebviewUri(vscode.Uri.file(cachePath)).toString();
             }
+            try {
+                return await screen.getImage() || '';
+            } catch {
+                return '';
+            }
         } catch {
             // Not cached — start download
         }
-
-        const downloadPromise = this._downloadImageToCache(screen, cachePath, workspaceRoot);
-        this._imageCachePromises.set(screen.id, downloadPromise);
-
-        try {
-            const uri = await downloadPromise;
-            return uri;
-        } finally {
-            this._imageCachePromises.delete(screen.id);
-        }
+        return this._downloadImageToCache(screen, cachePath, workspaceRoot);
     }
 
     private async _formatScreen(screen: any, workspaceRoot: string): Promise<any> {

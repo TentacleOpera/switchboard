@@ -713,7 +713,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     const markdownPreview = document.getElementById('markdown-preview');
     const markdownPreviewOnline = document.getElementById('markdown-preview-online');
     const btnSetActiveContextLocal = document.getElementById('btn-set-active-context-local');
-    const btnExportToSource = document.getElementById('btn-export-to-source');
     const statusEl = document.getElementById('status');
     const statusElOnline = document.getElementById('status-online');
 
@@ -924,7 +923,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         } else {
             let actions = [];
             if (sourceId === 'local-folder') {
-                actions = ['Import', 'Link Doc', 'Delete'];
+                actions = ['Link Doc', 'Delete'];
             } else {
                 actions = ['Import', 'Link Doc'];
             }
@@ -985,25 +984,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         state.activeDocName = docName;
         state.previewRequestId++;
         updateLocalActiveContextButtonState();
-
-        if (sourceId === 'local-folder' && btnExportToSource) {
-            const importedInfo = state.importedDocs.get(docName);
-            if (importedInfo && importedInfo.canSync) {
-                const sourceDisplay = SOURCE_DISPLAY_NAMES[importedInfo.sourceId] || importedInfo.sourceId;
-                btnExportToSource.textContent = `Export to ${sourceDisplay}`;
-                btnExportToSource.style.display = '';
-                btnExportToSource.disabled = false;
-                btnExportToSource.dataset.slugPrefix = importedInfo.slugPrefix;
-            } else {
-                btnExportToSource.style.display = 'none';
-                btnExportToSource.disabled = true;
-            }
-        } else if (btnExportToSource) {
-            btnExportToSource.style.display = 'none';
-            btnExportToSource.disabled = true;
-        }
-        
-        statusEl.textContent = 'Loading...';
         markdownPreview.innerHTML = '<div class="empty-state">Loading preview...</div>';
 
         if (String(docId).startsWith('page:')) {
@@ -1245,9 +1225,17 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     const folderName = sourceFolder.split(/[\\/]/).filter(Boolean).pop() || sourceFolder;
                     sourceHeader.title = sourceFolder; // full path as tooltip for disambiguation
 
+                    const labelWrapper = document.createElement('div');
+                    labelWrapper.style.cssText = 'display: flex; flex-direction: column; gap: 2px;';
                     const labelSpan = document.createElement('span');
                     labelSpan.textContent = folderName;
-                    sourceHeader.appendChild(labelSpan);
+                    labelWrapper.appendChild(labelSpan);
+                    const pathSpan = document.createElement('span');
+                    pathSpan.className = 'source-folder-path';
+                    pathSpan.style.cssText = 'font-size: 10px; color: var(--text-secondary); font-weight: 400; text-transform: none; letter-spacing: 0;';
+                    pathSpan.textContent = sourceFolder;
+                    labelWrapper.appendChild(pathSpan);
+                    sourceHeader.appendChild(labelWrapper);
 
                     const linkBtn = document.createElement('button');
                     linkBtn.className = 'folder-link-btn';
@@ -1359,6 +1347,28 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                             });
                         });
                         subheader.appendChild(subCreateBtn);
+
+                        const subImportBtn = document.createElement('button');
+                        subImportBtn.className = 'folder-import-btn';
+                        subImportBtn.textContent = 'Import';
+                        subImportBtn.title = `Import document from clipboard into ${folder.name}`;
+                        subImportBtn.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            document.querySelectorAll('.folder-import-btn').forEach(btn => {
+                                btn.disabled = true;
+                                btn.textContent = '...';
+                            });
+                            const statusEl = document.getElementById('status');
+                            if (statusEl) {
+                                statusEl.style.color = '';
+                                statusEl.textContent = 'Importing from clipboard...';
+                            }
+                            vscode.postMessage({
+                                type: 'importResearchDoc',
+                                folderPath: folder.id
+                            });
+                        });
+                        subheader.appendChild(subImportBtn);
 
                         docList.appendChild(subheader);
 
@@ -2373,10 +2383,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             syncBtn.textContent = '↑ Sync';
         }
 
-        if (btnExportToSource && btnExportToSource.dataset.slugPrefix === slugPrefix) {
-            btnExportToSource.disabled = false;
-        }
-
         if (success) {
             if (lastSynced) {
                 lastSynced.textContent = `Last synced: ${new Date().toLocaleString()}`;
@@ -2933,7 +2939,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         statusText += ' Failed: ' + msg.errors.map(e => e.id).join(', ');
                     }
                     showTicketsStatus(statusText, msg.failCount > 0);
-                    requestLocalTickets();
+                    if (msg.importMode === 'document') {
+                        requestLocalTickets();
+                    }
                 } else {
                     showTicketsStatus(msg.error || 'Bulk import failed', true);
                 }
@@ -3629,21 +3637,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 sourceId: state.activeSource,
                 docId: docId,
                 docName: state.activeDocName || docId
-            });
-        });
-    }
-
-    if (btnExportToSource) {
-        btnExportToSource.addEventListener('click', () => {
-            const slugPrefix = btnExportToSource.dataset.slugPrefix;
-            if (!slugPrefix) return;
-
-            btnExportToSource.disabled = true;
-            statusEl.textContent = 'Exporting to source...';
-
-            vscode.postMessage({
-                type: 'syncToSource',
-                slugPrefix: slugPrefix
             });
         });
     }

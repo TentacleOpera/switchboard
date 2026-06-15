@@ -2526,6 +2526,7 @@ export class PlanningPanelProvider {
                         successCount: result.successCount,
                         failCount: result.failCount,
                         errors: result.errors,
+                        importMode,
                         workspaceRoot
                     });
                 } catch (error) {
@@ -2533,6 +2534,7 @@ export class PlanningPanelProvider {
                         type: 'importAllTicketsComplete',
                         success: false,
                         error: error instanceof Error ? error.message : String(error),
+                        importMode,
                         workspaceRoot
                     });
                 }

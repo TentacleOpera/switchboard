@@ -628,11 +628,34 @@
             letter-spacing: 0.5px;
             padding: 12px 8px 4px 8px;
             margin-top: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
 
         .folder-subheader:first-of-type {
             margin-top: 0;
             padding-top: 8px;
+        }
+
+        .folder-subheader .folder-link-btn,
+        .folder-subheader .folder-create-btn,
+        .folder-subheader .folder-import-btn {
+            color: var(--text-secondary);
+            border-color: var(--border-color);
+        }
+        .folder-subheader .folder-link-btn:hover,
+        .folder-subheader .folder-create-btn:hover,
+        .folder-subheader .folder-import-btn:hover {
+            background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+            border-color: var(--text-secondary);
+        }
+
+        .source-folder-path {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 200px;
         }
 
         .type-subheader {
@@ -2919,13 +2942,12 @@
                 </select>
                 <button id="btn-set-active-context-local" class="strip-btn" disabled>Set as Active Planning Context</button>
                 <button id="btn-import-full-doc" class="strip-btn" disabled style="display: none;">Import</button>
-                <button id="btn-export-to-source" class="strip-btn" disabled style="display: none;">Export to Source</button>
                 <button id="btn-edit-local" class="strip-btn" disabled>Edit</button>
                 <button id="btn-save-local" class="strip-btn" style="display:none;">Save</button>
                 <button id="btn-cancel-local" class="strip-btn" style="display:none;">Cancel</button>
                 <button id="btn-sync-to-online" class="strip-btn" disabled>Sync to Online</button>
                 <input type="text" id="local-docs-search" class="sidebar-search-input" placeholder="Search docs..." />
-                <span id="status" style="margin-left: 0;"></span>
+                <span id="status" style="margin-left: 0; display: none;"></span>
 
             </div>
             <div class="content-row">

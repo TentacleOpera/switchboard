@@ -245,3 +245,20 @@ The webview already renders `<img src="screen.imageUrl">`. If `imageUrl` is a `v
 ## Recommendation
 
 Send to Coder. This is a self-contained backend change with clear boundaries. The caching logic is straightforward; the main risk is cache invalidation ordering on edit/refresh, which is easily verified manually.
+
+## Review Findings
+
+**Files changed:** `src/services/DesignPanelProvider.ts` only.
+
+**Issues found and fixed:**
+1. **CRITICAL — Concurrent download race:** `_getCachedImageUri` registered the download promise AFTER `await stat`, allowing two simultaneous calls to start separate downloads. Fixed by extracting the async work into `_resolveImageCache` and registering the promise in the map before any `await`.
+2. **MAJOR — `_imageCachePromises` leak on dispose:** The map was never cleared when the panel closed. Fixed by adding `this._imageCachePromises.clear()` in `dispose()`.
+3. **MAJOR — Stale in-flight promise after eviction:** `_evictImageCache` deleted the file but left a live download promise in the map, causing the next caller to receive a URI for a deleted file. Fixed by adding `this._imageCachePromises.delete(screenId)` before the file delete.
+4. **MAJOR — Null panel cached-hit fell through to re-download:** When the cached file existed but `this._panel` was null, the function fell through and started an unnecessary download instead of returning the presigned URL. Fixed in `_resolveImageCache` by returning `screen.getImage()` directly in that branch.
+
+**Validation results:** Verified by static analysis. All `_formatScreen` call sites pass `workspaceRoot`. `stitchOpenManifest` correctly retains direct `getImage()` calls for markdown presigned URLs. `_evictImageCache` is called in `stitchEdit` and `stitchRefreshScreen`; `stitchVariants` correctly skips eviction.
+
+**Remaining risks:**
+- No LRU or disk cap on cache growth (plan already deferred).
+- `path.basename(screen.id)` sanitization is weak if Stitch ever returns path-like IDs; mitigated by Stitch using UUIDs.
+- No eviction on workspace switch; low risk because screen IDs are UUIDs and collisions across workspaces are unlikely.

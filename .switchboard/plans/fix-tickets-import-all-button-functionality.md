@@ -195,3 +195,46 @@ requestLocalTickets();
 - **Must verify:** Local view correctly reflects imported tickets after bulk document import completes
 
 **Recommendation:** Send to Intern
+
+## Review Findings
+
+### Stage 1 — Grumpy
+
+- **[FIXED]** `requestLocalTickets()` unconditional in `importAllTicketsComplete` handler. Wastes a round-trip when `importMode` is `'plan'`. Fixed: backend now echoes `importMode` in completion message; webview gates refresh to `'document'` mode only.
+- **[NIT]** Status text `"Imported X tickets, Y failed"` identical for both modes — user can't distinguish document vs plan bulk import from the message alone.
+- **[NIT]** `resetTicketsInMemoryState()` clobbers `isImportingAll = false`; workspace switch mid-import leaves buttons disabled until stale completion arrives. Pre-existing wort, unchanged by this PR.
+
+### Stage 2 — Balanced
+
+- Implementation matches plan exactly. Both buttons present, modes correct, shared `isImportingAll` guard, symmetrical disable/enable logic.
+- No CRITICAL or MAJOR issues. All six steps verified in source.
+- `requestLocalTickets()` now gated by `importMode === 'document'` — eliminates wasted round-trip on plan imports.
+- Status message ambiguity is a UX papercut; defer.
+
+### Fixes Applied
+
+- Added `importMode` to `importAllTicketsComplete` response in `PlanningPanelProvider.ts` (success + error paths).
+- Gated `requestLocalTickets()` behind `msg.importMode === 'document'` in `planning.js`.
+
+### Files Changed (verified)
+
+- `src/webview/planning.html:3160` — "Import All as Plans" button added
+- `src/webview/planning.html:2721` — CSS hiding rule for local mode added
+- `src/webview/planning.js:279` — `btnImportAllPlans` DOM reference added
+- `src/webview/planning.js:4976` — Destructuring in `initTicketsTab()` updated
+- `src/webview/planning.js:5034` — `importMode` changed to `'document'`
+- `src/webview/planning.js:5038-5063` — New "Import All as Plans" click handler added
+- `src/webview/planning.js:2926-2929` — Completion handler re-enables both buttons
+- `src/webview/planning.js:2936` — `requestLocalTickets()` refresh added
+- `src/services/PlanningPanelProvider.ts:2529,2537` — `importMode` echoed in completion message (success + error)
+- `src/webview/planning.js:2936-2938` — `requestLocalTickets()` gated to `'document'` mode only
+
+### Validation Results
+
+- Compilation skipped per session instructions.
+- Tests skipped per session instructions.
+- Manual source audit: all plan requirements implemented correctly.
+
+### Remaining Risks
+
+- Status text does not distinguish document vs plan import mode (UX ambiguity).
