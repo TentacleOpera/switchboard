@@ -192,13 +192,76 @@
     let pendingClickUpDetailIssueId = '';
 
     // Local (imported) tickets state
-    let ticketsViewMode = 'online'; // 'online' | 'local'
+    let ticketsViewMode = 'local'; // 'online' | 'local' (forced local)
     let localTickets = [];
     let selectedLocalTicket = null; // { provider, id, title, fileName, filePath, mtime }
     let localTicketContent = '';
     let localTicketEditMode = false;
     let localTicketsSearchValue = '';
     let pendingLocalTicketSelection = ''; // filePath to auto-select after list refresh
+
+    // Conflict detection and push state
+    const ticketsWithUnpushedEdits = new Set();
+    let inFlightPushes = 0;
+    let pushErrors = [];
+    let proceedSyncOnPushComplete = false;
+    let currentSyncPage = 1;
+
+    function onLocalTicketEdited(ticketId) {
+        if (ticketId) {
+            ticketsWithUnpushedEdits.add(ticketId);
+        }
+    }
+
+    function onLocalTicketPushed(ticketId) {
+        if (ticketId) {
+            ticketsWithUnpushedEdits.delete(ticketId);
+        }
+    }
+
+    function checkConflictsBeforeSync() {
+        if (ticketsWithUnpushedEdits.size > 0) {
+            const modal = document.getElementById('tickets-conflict-modal');
+            if (modal) modal.style.display = 'flex';
+            return true; // Conflict detected
+        }
+        return false; // No conflicts
+    }
+
+    function pushAllUnpushedTickets() {
+        if (ticketsWithUnpushedEdits.size === 0) {
+            proceedWithSync();
+            return;
+        }
+        
+        inFlightPushes = ticketsWithUnpushedEdits.size;
+        pushErrors = [];
+        proceedSyncOnPushComplete = true;
+        setTicketsLoadingState(true);
+        showTicketsStatus('Pushing unpushed changes...', false);
+        
+        const ticketsToPush = localTickets.filter(t => ticketsWithUnpushedEdits.has(t.id));
+        if (ticketsToPush.length === 0) {
+            for (const ticketId of ticketsWithUnpushedEdits) {
+                vscode.postMessage({
+                    type: 'pushTicket',
+                    provider: lastIntegrationProvider,
+                    id: ticketId,
+                    workspaceRoot: ticketsWorkspaceRoot
+                });
+            }
+            return;
+        }
+        
+        for (const ticket of ticketsToPush) {
+            vscode.postMessage({
+                type: 'pushTicket',
+                provider: ticket.provider,
+                id: ticket.id,
+                workspaceRoot: ticketsWorkspaceRoot
+            });
+        }
+    }
 
     // Cached HTML strings for DOM guard comparisons
     let _lastTicketsStateFilterHtml = '';
@@ -355,18 +418,8 @@
 
 
     wireSidebarSearch('tickets-search', (value) => {
-        if (ticketsViewMode === 'local') {
-            localTicketsSearchValue = value;
-            renderLocalTicketsList();
-        } else if (lastIntegrationProvider === 'linear') {
-            linearProjectSearchValue = value;
-            renderTicketsLinearList();
-            saveTicketsState();
-        } else if (lastIntegrationProvider === 'clickup') {
-            clickUpProjectSearchValue = value;
-            renderTicketsClickUpList();
-            saveTicketsState();
-        }
+        localTicketsSearchValue = value;
+        renderLocalTicketsList();
     });
 
     function getActiveTabName() {
@@ -460,20 +513,22 @@
             vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
         }
         if (tabName === 'tickets') {
-            // Restore persisted state only once — re-running it on every tab entry
-            // re-kicked the ClickUp restore chain and refetched everything each visit.
-            // After the initial load, fetching is manual via the Refresh button.
+            // Restore persisted state only once
             if (!ticketsInitialized) {
                 initTicketsTab();
                 restoreTicketsState();
                 ticketsInitialized = true;
             }
-            if (lastIntegrationProvider && !ticketsLoadedOnce) {
-                if (lastIntegrationProvider === 'clickup') loadClickUpSpaces();
-                else loadLinearProject();
-            }
-            if (ticketsViewMode === 'local') {
-                requestLocalTickets();
+            requestLocalTickets();
+            
+            // Auto-load last used list
+            const hasClickUpList = clickUpSelectedListId;
+            const hasLinearProject = linearProjectPickerValue;
+            if (hasClickUpList || hasLinearProject) {
+                showTicketsStatus('Loading last list...', false);
+                proceedWithSync();
+            } else {
+                showTicketsStatus('Select a ClickUp/Linear list to sync', false);
             }
         } else {
             if (ticketsInitialized) { saveTicketsState(); }
@@ -2937,7 +2992,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 state.ticketsFolderPathsByRoot[msg.workspaceRoot || ''] = msg.paths || [];
                 renderFolderListModal();
                 break;
-            case 'importAllTicketsComplete':
+            case 'importAllTicketsComplete': {
                 setTicketsLoadingState(false);
                 isImportingAll = false;
                 const importAllBtn = document.getElementById('btn-import-all-tickets');
@@ -2945,18 +3000,20 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (importAllBtn) importAllBtn.disabled = false;
                 if (importAllPlansBtn) importAllPlansBtn.disabled = false;
                 if (msg.success) {
-                    let statusText = `Imported ${msg.successCount} tickets, ${msg.failCount} failed.`;
-                    if (msg.errors && msg.errors.length > 0) {
-                        statusText += ' Failed: ' + msg.errors.map(e => e.id).join(', ');
+                    currentSyncPage = msg.page || 1;
+                    let statusText = `Synced ${msg.successCount} tickets.`;
+                    if (msg.failCount > 0) {
+                        statusText += ` ${msg.failCount} failed.`;
                     }
                     showTicketsStatus(statusText, msg.failCount > 0);
                     if (msg.importMode === 'document') {
                         requestLocalTickets();
                     }
                 } else {
-                    showTicketsStatus(msg.error || 'Bulk import failed', true);
+                    showTicketsStatus(msg.error || 'Sync failed', true);
                 }
                 break;
+            }
             case 'editTicketResult':
                 setTicketsLoadingState(false);
                 if (!msg.success) {
@@ -2968,18 +3025,32 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 }
                 break;
             case 'pushTicketResult':
-                setTicketsLoadingState(false);
-                if (msg.success) {
-                    showTicketsStatus('Pushed ✓', false);
-                    if (ticketsViewMode === 'online') {
-                        if (lastIntegrationProvider === 'linear') {
-                            loadLinearTaskDetails(msg.id);
+                if (proceedSyncOnPushComplete) {
+                    inFlightPushes--;
+                    if (!msg.success) {
+                        pushErrors.push(msg.error || `Failed to push ticket ${msg.id}`);
+                    } else {
+                        onLocalTicketPushed(msg.id);
+                    }
+                    
+                    if (inFlightPushes <= 0) {
+                        proceedSyncOnPushComplete = false;
+                        setTicketsLoadingState(false);
+                        if (pushErrors.length > 0) {
+                            showTicketsStatus(`Pushed with errors: ${pushErrors.join(', ')}`, true);
                         } else {
-                            loadClickUpTaskDetails(msg.id);
+                            showTicketsStatus('All pushed successfully ✓', false);
+                            proceedWithSync();
                         }
                     }
                 } else {
-                    showTicketsStatus(msg.error || 'Failed to push edits', true);
+                    setTicketsLoadingState(false);
+                    if (msg.success) {
+                        showTicketsStatus('Pushed ✓', false);
+                        onLocalTicketPushed(msg.id);
+                    } else {
+                        showTicketsStatus(msg.error || 'Failed to push edits', true);
+                    }
                 }
                 break;
             case 'localTicketsListed':
@@ -5007,58 +5078,38 @@ Return ONLY the drafted prompt with no additional commentary.`;
             }
         });
 
-        // Import All button (imports as local documents for editing)
+        // Sync button (imports as local documents for editing with conflict check)
         btnImportAllTickets?.addEventListener('click', () => {
-            if (isImportingAll) return;
-            const provider = lastIntegrationProvider;
-            let ids = [];
-            if (provider === 'linear') {
-                ids = getFilteredLinearIssues().map(issue => issue.id);
-            } else if (provider === 'clickup') {
-                ids = getFilteredClickUpTasks().map(task => task.id);
-            }
-            if (ids.length === 0) {
-                showTicketsStatus('No tickets to import', true);
-                return;
-            }
-            isImportingAll = true;
-            btnImportAllTickets.disabled = true;
-            if (btnImportAllPlans) btnImportAllPlans.disabled = true;
-            setTicketsLoadingState(true);
-            vscode.postMessage({
-                type: 'importAllTickets',
-                workspaceRoot: ticketsWorkspaceRoot,
-                provider,
-                ids,
-                importMode: 'document'
-            });
+            if (checkConflictsBeforeSync()) return;
+            proceedWithSync();
         });
 
         // Import All as Plans button (imports as kanban plans)
         btnImportAllPlans?.addEventListener('click', () => {
             if (isImportingAll) return;
             const provider = lastIntegrationProvider;
-            let ids = [];
-            if (provider === 'linear') {
-                ids = getFilteredLinearIssues().map(issue => issue.id);
-            } else if (provider === 'clickup') {
-                ids = getFilteredClickUpTasks().map(task => task.id);
-            }
-            if (ids.length === 0) {
-                showTicketsStatus('No tickets to import', true);
+            if (!provider) {
+                showTicketsStatus('Select a list to import as plans', true);
                 return;
             }
             isImportingAll = true;
             btnImportAllTickets.disabled = true;
             if (btnImportAllPlans) btnImportAllPlans.disabled = true;
             setTicketsLoadingState(true);
-            vscode.postMessage({
+            
+            const payload = {
                 type: 'importAllTickets',
                 workspaceRoot: ticketsWorkspaceRoot,
                 provider,
-                ids,
                 importMode: 'plan'
-            });
+            };
+            if (provider === 'clickup') {
+                payload.listId = clickUpSelectedListId;
+                payload.workspaceId = clickUpSelectedSpaceId;
+            } else {
+                payload.projectId = linearProjectPickerValue;
+            }
+            vscode.postMessage(payload);
         });
 
         // Action bar: Edit — imports the ticket to a local markdown copy and
@@ -5074,9 +5125,20 @@ Return ONLY the drafted prompt with no additional commentary.`;
             vscode.postMessage({ type: 'editTicket', provider, id, workspaceRoot: ticketsWorkspaceRoot });
         });
 
-        // Local/Online mode switch
-        document.getElementById('tickets-mode-online')?.addEventListener('click', () => setTicketsViewMode('online'));
-        document.getElementById('tickets-mode-local')?.addEventListener('click', () => setTicketsViewMode('local'));
+        // Conflict Modal handlers
+        document.getElementById('conflict-modal-cancel')?.addEventListener('click', () => {
+            document.getElementById('tickets-conflict-modal').style.display = 'none';
+        });
+
+        document.getElementById('conflict-modal-push')?.addEventListener('click', () => {
+            document.getElementById('tickets-conflict-modal').style.display = 'none';
+            pushAllUnpushedTickets();
+        });
+
+        document.getElementById('conflict-modal-overwrite')?.addEventListener('click', () => {
+            document.getElementById('tickets-conflict-modal').style.display = 'none';
+            proceedWithSync();
+        });
 
         // Local list selection
         document.getElementById('tickets-local-container')?.addEventListener('click', (e) => {
@@ -5101,6 +5163,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             const editor = document.getElementById('tickets-local-editor');
             if (!editor) return;
             localTicketContent = editor.value;
+            onLocalTicketEdited(selectedLocalTicket.id);
             vscode.postMessage({ type: 'saveLocalTicket', filePath: selectedLocalTicket.filePath, content: editor.value });
         });
 
@@ -5230,8 +5293,31 @@ Return ONLY the drafted prompt with no additional commentary.`;
             }
         });
 
-        // Load more button (ClickUp pagination)
-        loadMoreButton?.addEventListener('click', loadMoreClickUpTasks);
+        // Load more button (repurposed for paginated sync fetch)
+        loadMoreButton?.addEventListener('click', () => {
+            if (!lastIntegrationProvider) return;
+            
+            showTicketsStatus('Loading more tickets...', false);
+            setTicketsLoadingState(true);
+            
+            const payload = {
+                type: 'importAllTickets',
+                workspaceRoot: ticketsWorkspaceRoot,
+                provider: lastIntegrationProvider,
+                importMode: 'document',
+                page: currentSyncPage + 1,
+                append: true
+            };
+            
+            if (lastIntegrationProvider === 'clickup') {
+                payload.listId = clickUpSelectedListId;
+                payload.workspaceId = clickUpSelectedSpaceId;
+            } else {
+                payload.projectId = linearProjectPickerValue;
+            }
+            
+            vscode.postMessage(payload);
+        });
 
         // Detail action buttons (delegated)
         document.getElementById('preview-pane-tickets')?.addEventListener('click', (e) => {
@@ -5497,61 +5583,80 @@ Return ONLY the drafted prompt with no additional commentary.`;
         });
     }
 
-    function setTicketsViewMode(mode) {
-        ticketsViewMode = mode === 'local' ? 'local' : 'online';
-        const isLocal = ticketsViewMode === 'local';
+    function proceedWithSync() {
+        if (!lastIntegrationProvider) {
+            showTicketsStatus('Select a list to sync', true);
+            return;
+        }
+        
+        const syncBtn = document.getElementById('btn-import-all-tickets');
+        const syncPlansBtn = document.getElementById('btn-import-all-plans');
+        if (syncBtn) syncBtn.disabled = true;
+        if (syncPlansBtn) syncPlansBtn.disabled = true;
+        
+        showTicketsStatus('Syncing...', false);
+        setTicketsLoadingState(true);
+        isImportingAll = true;
+        
+        const payload = {
+            type: 'importAllTickets',
+            workspaceRoot: ticketsWorkspaceRoot,
+            provider: lastIntegrationProvider,
+            importMode: 'document',
+            page: 1,
+            append: false
+        };
+        
+        if (lastIntegrationProvider === 'clickup') {
+            payload.listId = clickUpSelectedListId;
+            payload.workspaceId = clickUpSelectedSpaceId;
+        } else {
+            payload.projectId = linearProjectPickerValue;
+        }
+        
+        vscode.postMessage(payload);
+    }
 
-        document.getElementById('tickets-mode-online')?.classList.toggle('active', !isLocal);
-        document.getElementById('tickets-mode-local')?.classList.toggle('active', isLocal);
-        document.getElementById('controls-strip-tickets')?.classList.toggle('tickets-local-mode', isLocal);
+    function setTicketsViewMode(mode) {
+        ticketsViewMode = 'local';
+        const isLocal = true;
+
+        document.getElementById('tickets-mode-online')?.classList.toggle('active', false);
+        document.getElementById('tickets-mode-local')?.classList.toggle('active', true);
+        document.getElementById('controls-strip-tickets')?.classList.toggle('tickets-local-mode', true);
 
         const sidebarActions = document.getElementById('tickets-sidebar-actions');
         if (sidebarActions) {
-            sidebarActions.style.display = isLocal ? 'none' : 'flex';
+            sidebarActions.style.display = 'flex';
         }
 
         // Sidebar lists
         const onlineEls = ['tickets-empty-state', 'tickets-issues-container'];
         for (const id of onlineEls) {
             const el = document.getElementById(id);
-            if (el) el.style.display = isLocal ? 'none' : '';
+            if (el) el.style.display = 'none';
         }
-        // Hidden either way; the online render functions re-show it when there are more pages
         const loadMoreBtn = document.getElementById('tickets-load-more');
-        if (loadMoreBtn) loadMoreBtn.style.display = 'none';
+        if (loadMoreBtn) loadMoreBtn.style.display = 'block';
         const localContainer = document.getElementById('tickets-local-container');
-        if (localContainer) localContainer.style.display = isLocal ? '' : 'none';
+        if (localContainer) localContainer.style.display = '';
         const localEmpty = document.getElementById('tickets-local-empty-state');
         if (localEmpty) localEmpty.style.display = 'none';
 
         // Preview panes + meta bars
         const onlinePreview = document.getElementById('markdown-preview-tickets');
-        if (onlinePreview) onlinePreview.style.display = isLocal ? 'none' : '';
+        if (onlinePreview) onlinePreview.style.display = 'none';
         const localView = document.getElementById('tickets-local-view');
-        if (localView) localView.style.display = isLocal ? 'flex' : 'none';
+        if (localView) localView.style.display = 'flex';
         const onlineMetaBar = document.getElementById('tickets-preview-meta-bar');
         const commentArea = document.getElementById('tickets-comment-input-area');
-        if (isLocal) {
-            if (onlineMetaBar) onlineMetaBar.style.display = 'none';
-            if (commentArea) commentArea.style.display = 'none';
-        }
+        if (onlineMetaBar) onlineMetaBar.style.display = 'none';
+        if (commentArea) commentArea.style.display = 'none';
 
-        if (isLocal) {
-            renderLocalTicketsList();
-            renderLocalTicketDetail();
-            requestLocalTickets();
-        } else {
-            const localMetaBar = document.getElementById('tickets-local-meta-bar');
-            if (localMetaBar) localMetaBar.style.display = 'none';
-            // Re-render online state (restores the empty-state text and meta bar)
-            if (lastIntegrationProvider === 'clickup') {
-                renderTicketsClickUpList();
-                renderTicketsClickUpTaskDetail();
-            } else {
-                renderTicketsLinearList();
-                renderTicketsLinearTaskDetail();
-            }
-        }
+        renderLocalTicketsList();
+        renderLocalTicketDetail();
+        requestLocalTickets();
+        
         if (ticketsInitialized) { saveTicketsState(); }
     }
 

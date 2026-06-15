@@ -168,3 +168,13 @@ None required — this is a UI state transition bug best covered by manual verif
 ## Recommendation
 
 - Complexity 2 → **Send to Intern**
+
+## Review Findings
+
+Implementation at `src/webview/planning.js:2621-2653` matches plan exactly. No code changes required.
+
+**Files changed:** None (implementation already correct).
+
+**Validation:** Per session directives, compilation and automated tests skipped. Manual verification plan covers cross-workspace, same-workspace, all-workspaces, empty workspaceRoot, and invalid workspaceRoot cases.
+
+**Remaining risks:** NIT-level only — brief stale DOM between filter set and fetch return (masked by tab switch), and redundant `updateKanbanProjectFilter()` call (harmless). No CRITICAL or MAJOR issues found.

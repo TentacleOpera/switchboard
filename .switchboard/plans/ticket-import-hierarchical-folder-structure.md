@@ -323,4 +323,14 @@ Skipped per session directive.
 
 3. **Sidebar surprises**: Users accustomed to seeing all imported tickets in the Local view will now see only tickets matching the current dropdown. This is intentional but may require brief adjustment.
 
+## Review Findings
+
+**Files changed**:
+- `src/services/PlanningPanelProvider.ts` — added `browseTicketsFolder` and `saveTicketsFolder` backend handlers; removed old `/documents` fallback paths from `_getTicketDocumentDirs`.
+- `src/services/TaskViewerProvider.ts` — `_findTicketDocument` now calls the ClickUp/Linear APIs to get the actual space/list/team/project names for the ticket, then builds the exact deterministic import path. No filesystem recursion. No dependency on current dropdown selection. Removed old `/documents` fallback paths.
+
+**Validation**: No compilation or test steps run per session directive.
+
+**Remaining risk**: `ticketsFolderPathResult` handler in `setup.html` is unreachable dead code (backend only sends `ticketsFoldersListed`); harmless but should be cleaned up in a future pass.
+
 **Recommendation:** Send to Coder

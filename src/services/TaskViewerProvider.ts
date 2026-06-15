@@ -17390,7 +17390,7 @@ What would you like to find?`;
                 }
             } else {
                 const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
-                targetDir = path.join(resolvedRoot, '.switchboard', 'plans', providerDir);
+                targetDir = path.join(resolvedRoot, '.switchboard', 'tickets', providerDir);
             }
 
             fs.mkdirSync(targetDir, { recursive: true });
@@ -17418,45 +17418,53 @@ What would you like to find?`;
     private async _findTicketDocument(resolvedRoot: string, provider: string, id: string): Promise<string | null> {
         const localFolderService = new LocalFolderService(resolvedRoot);
         const ticketsFolders = localFolderService.getTicketsFolderPaths();
-        const searchDirs = [];
+        let targetDir: string;
+
         if (ticketsFolders.length > 0 && ticketsFolders[0]) {
             if (provider === 'clickup') {
                 const clickUp = this._getClickUpService(resolvedRoot);
-                const h = clickUp.getSelectedHierarchy();
-                const parts = [ticketsFolders[0], 'clickup', this._slugify(h.spaceName).slice(0, 60)];
-                if (h.folderName) {
-                    parts.push(this._slugify(h.folderName).slice(0, 60));
+                const result = await clickUp.httpRequest('GET', `/task/${id}`);
+                if (result.status !== 200 || !result.data) {
+                    return null;
                 }
-                parts.push(this._slugify(h.listName).slice(0, 60));
-                searchDirs.push(path.join(...parts));
+                const spaceName = result.data.space?.name || '_unknown';
+                const folderName = result.data.folder?.name || '';
+                const listName = result.data.list?.name || '_unknown';
+                const parts = [ticketsFolders[0], 'clickup', this._slugify(spaceName).slice(0, 60)];
+                if (folderName) {
+                    parts.push(this._slugify(folderName).slice(0, 60));
+                }
+                parts.push(this._slugify(listName).slice(0, 60));
+                targetDir = path.join(...parts);
             } else {
                 const linear = this._getLinearService(resolvedRoot);
+                const issue = await linear.getIssue(id);
+                if (!issue) {
+                    return null;
+                }
                 const teamName = linear.getTeamName();
-                const projectName = linear.getSelectedProjectName() || '_no-project';
-                searchDirs.push(path.join(
+                const projectName = issue.project?.name || '_no-project';
+                targetDir = path.join(
                     ticketsFolders[0],
                     'linear',
                     this._slugify(teamName).slice(0, 60),
                     this._slugify(projectName).slice(0, 60)
-                ));
+                );
             }
-            searchDirs.push(path.join(ticketsFolders[0], 'documents'));
+        } else {
+            const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
+            targetDir = path.join(resolvedRoot, '.switchboard', 'tickets', providerDir);
         }
-        const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
-        searchDirs.push(path.join(resolvedRoot, '.switchboard', 'plans', providerDir));
-        searchDirs.push(path.join(resolvedRoot, '.switchboard', 'plans', 'documents'));
 
         const prefix = `${provider}_${id}_`;
-        for (const dir of searchDirs) {
-            if (fs.existsSync(dir)) {
-                try {
-                    const files = fs.readdirSync(dir);
-                    const matched = files.find((f: string) => f.startsWith(prefix) && f.endsWith('.md'));
-                    if (matched) {
-                        return path.join(dir, matched);
-                    }
-                } catch { /* ignore */ }
-            }
+        if (fs.existsSync(targetDir)) {
+            try {
+                const files = fs.readdirSync(targetDir);
+                const matched = files.find((f: string) => f.startsWith(prefix) && f.endsWith('.md'));
+                if (matched) {
+                    return path.join(targetDir, matched);
+                }
+            } catch { /* ignore */ }
         }
         return null;
     }
@@ -17539,19 +17547,50 @@ What would you like to find?`;
 
     public async importAllTasks(
         workspaceRoot: string,
-        data: { provider: 'linear' | 'clickup'; ids: string[]; importMode: 'plan' | 'document' }
+        data: {
+            provider: 'linear' | 'clickup';
+            ids?: string[];
+            listId?: string;
+            projectId?: string;
+            workspaceId?: string;
+            page?: number;
+            append?: boolean;
+            importMode: 'plan' | 'document';
+        }
     ): Promise<{ success: boolean; successCount: number; failCount: number; errors: { id: string; error: string }[] }> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedRoot) {
             return { success: false, successCount: 0, failCount: 0, errors: [{ id: 'all', error: 'No workspace open.' }] };
         }
-        const { provider, ids, importMode } = data;
+        const { provider, ids, listId, projectId, page = 1, append = false, importMode } = data;
+        let finalIds: string[] = [];
+        
+        if (ids && ids.length > 0) {
+            finalIds = ids;
+        } else {
+            if (provider === 'clickup' && listId) {
+                const clickup = this._getClickUpService(resolvedRoot);
+                const tasks = await clickup.getListTasks(listId);
+                const pageSize = 100;
+                const startIndex = (page - 1) * pageSize;
+                const pageTasks = tasks.slice(startIndex, startIndex + pageSize);
+                finalIds = pageTasks.map(t => t.id);
+            } else if (provider === 'linear' && projectId) {
+                const linear = this._getLinearService(resolvedRoot);
+                const issues = await linear.queryIssues({ projectId });
+                const pageSize = 50;
+                const startIndex = (page - 1) * pageSize;
+                const pageIssues = issues.slice(startIndex, startIndex + pageSize);
+                finalIds = pageIssues.map(i => i.id);
+            }
+        }
+
         let successCount = 0;
         let failCount = 0;
         const errors: { id: string; error: string }[] = [];
 
         const pool: Promise<void>[] = [];
-        for (const id of ids) {
+        for (const id of finalIds) {
             if (pool.length >= 3) {
                 await Promise.race(pool);
             }

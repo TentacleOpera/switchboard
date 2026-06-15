@@ -784,8 +784,12 @@ export class PlanningPanelProvider {
 
     private async _getIntegrationWorkspaces(): Promise<Array<{ workspaceRoot: string; provider: 'clickup' | 'linear' }>> {
         const allRoots = this._getWorkspaceRoots();
+        const allowedRoots = new Set(buildWorkspaceItems(allRoots).map(item => item.workspaceRoot));
         const results: Array<{ workspaceRoot: string; provider: 'clickup' | 'linear' }> = [];
         for (const root of allRoots) {
+            if (!allowedRoots.has(root)) {
+                continue;
+            }
             try {
                 const [clickUpConfig, linearConfig] = await Promise.all([
                     this._adapterFactories.getClickUpSyncService(root).loadConfig(),
@@ -881,20 +885,13 @@ export class PlanningPanelProvider {
                         this._slugify(teamName).slice(0, 60),
                         this._slugify(projectName).slice(0, 60)
                     ));
-                } else {
-                    dirs.push(path.join(ticketsFolders[0], 'documents'));
                 }
             }
         } catch { /* fall through to default */ }
         
-        if (!provider) {
-            const fallback = path.join(resolvedRoot, '.switchboard', 'plans', 'documents');
-            if (!dirs.includes(fallback)) { dirs.push(fallback); }
-        } else {
-            if (dirs.length === 0) {
-                const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
-                dirs.push(path.join(resolvedRoot, '.switchboard', 'plans', providerDir));
-            }
+        if (dirs.length === 0) {
+            const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
+            dirs.push(path.join(resolvedRoot, '.switchboard', 'tickets', providerDir));
         }
         return dirs;
     }
@@ -1289,6 +1286,34 @@ export class PlanningPanelProvider {
                 const service = this._getLocalFolderService(root);
                 const config = await service.loadFolderPathsConfig();
                 config.ticketsFolderPaths = msg.paths || [];
+                await service.saveFolderPathsConfig(config);
+                await this._sendLocalDocsReady(true);
+                this._panel?.webview.postMessage({ type: 'ticketsFoldersListed', paths: service.getTicketsFolderPaths(), workspaceRoot: root });
+                break;
+            }
+            case 'browseTicketsFolder': {
+                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
+                const result = await vscode.window.showOpenDialog({
+                    canSelectFolders: true,
+                    canSelectFiles: false,
+                    canSelectMany: false,
+                    openLabel: 'Select Tickets Folder'
+                });
+                if (result && result.length > 0) {
+                    this._panel?.webview.postMessage({ type: 'browseTicketsFolderResult', path: result[0].fsPath, workspaceRoot: root });
+                }
+                break;
+            }
+            case 'saveTicketsFolder': {
+                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
+                const service = this._getLocalFolderService(root);
+                const config = await service.loadFolderPathsConfig();
+                const folderPath = String(msg.folderPath || '').trim();
+                if (folderPath) {
+                    config.ticketsFolderPaths = [folderPath];
+                } else {
+                    config.ticketsFolderPaths = [];
+                }
                 await service.saveFolderPathsConfig(config);
                 await this._sendLocalDocsReady(true);
                 this._panel?.webview.postMessage({ type: 'ticketsFoldersListed', paths: service.getTicketsFolderPaths(), workspaceRoot: root });
@@ -2558,11 +2583,11 @@ export class PlanningPanelProvider {
             }
             case 'importAllTickets': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                const { provider, ids, importMode } = msg;
+                const { provider, ids, listId, projectId, workspaceId, page, append, importMode } = msg;
                 try {
                     const result: any = await vscode.commands.executeCommand(
                         'switchboard.importAllTasks',
-                        { workspaceRoot, provider, ids, importMode }
+                        { workspaceRoot, provider, ids, listId, projectId, workspaceId, page, append, importMode }
                     );
                     this._panel?.webview.postMessage({
                         type: 'importAllTicketsComplete',
@@ -2571,7 +2596,11 @@ export class PlanningPanelProvider {
                         failCount: result.failCount,
                         errors: result.errors,
                         importMode,
-                        workspaceRoot
+                        workspaceRoot,
+                        provider,
+                        listId,
+                        projectId,
+                        page
                     });
                 } catch (error) {
                     this._panel?.webview.postMessage({
@@ -2579,7 +2608,11 @@ export class PlanningPanelProvider {
                         success: false,
                         error: error instanceof Error ? error.message : String(error),
                         importMode,
-                        workspaceRoot
+                        workspaceRoot,
+                        provider,
+                        listId,
+                        projectId,
+                        page
                     });
                 }
                 break;

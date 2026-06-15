@@ -1093,6 +1093,51 @@ export class SetupPanelProvider implements vscode.Disposable {
                     }
                     break;
                 }
+                case 'browseTicketsFolder': {
+                    const folderUri = await vscode.window.showOpenDialog({
+                        canSelectFolders: true,
+                        canSelectFiles: false,
+                        canSelectMany: false,
+                        openLabel: 'Select Tickets Folder'
+                    });
+                    if (folderUri?.[0]) {
+                        this._panel?.webview.postMessage({
+                            type: 'browseTicketsFolderResult',
+                            path: folderUri[0].fsPath
+                        });
+                    }
+                    break;
+                }
+                case 'saveTicketsFolder': {
+                    const workspaceRoot = this._getCurrentWorkspaceRoot();
+                    if (workspaceRoot && this._taskViewerProvider) {
+                        const localService = this._taskViewerProvider.getLocalFolderService(workspaceRoot);
+                        const config = await localService.loadFolderPathsConfig();
+                        const folderPath = String(message.folderPath || '').trim();
+                        if (folderPath) {
+                            config.ticketsFolderPaths = [folderPath];
+                        } else {
+                            config.ticketsFolderPaths = [];
+                        }
+                        await localService.saveFolderPathsConfig(config);
+                        this._panel?.webview.postMessage({
+                            type: 'ticketsFoldersListed',
+                            paths: localService.getTicketsFolderPaths()
+                        });
+                    }
+                    break;
+                }
+                case 'listTicketsFolders': {
+                    const workspaceRoot = this._getCurrentWorkspaceRoot();
+                    if (workspaceRoot && this._taskViewerProvider) {
+                        const localService = this._taskViewerProvider.getLocalFolderService(workspaceRoot);
+                        this._panel?.webview.postMessage({
+                            type: 'ticketsFoldersListed',
+                            paths: localService.getTicketsFolderPaths()
+                        });
+                    }
+                    break;
+                }
                 default:
                     break;
             }
