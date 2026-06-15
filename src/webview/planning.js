@@ -4438,7 +4438,11 @@ Return ONLY the drafted prompt with no additional commentary.`;
             if (ws.workspaceRoot === currentWS) opt.selected = true;
             kanbanWorkspaceFilter.appendChild(opt);
         });
-
+ 
+        // CRITICAL FIX: Explicitly set dropdown value to match filter state
+        // This ensures the .value property is synchronized after rebuilding the HTML
+        kanbanWorkspaceFilter.value = currentWS;
+ 
         // --- Project dropdown ---
         updateKanbanProjectFilter();
     }
@@ -4479,6 +4483,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             if (proj === currentProj) opt.selected = true;
             kanbanProjectFilter.appendChild(opt);
         });
+        kanbanProjectFilter.value = currentProj;
     }
 
     function updateKanbanColumnFilter() {
@@ -4494,6 +4499,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             if (col.id === currentColumn) opt.selected = true;
             kanbanColumnFilter.appendChild(opt);
         });
+        kanbanColumnFilter.value = currentColumn;
     }
 
     function handleKanbanPlansReady(msg) {

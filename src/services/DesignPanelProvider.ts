@@ -60,7 +60,6 @@ export class DesignPanelProvider implements vscode.Disposable {
     ];
     private _lastWebviewRootsSignature?: string;
     private _themeListenersRegistered = false;
-    private _imageCachePromises = new Map<string, Promise<string>>();
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
@@ -164,7 +163,6 @@ export class DesignPanelProvider implements vscode.Disposable {
         this._panel?.dispose();
         this.disposeWatchers();
         this._activeScreens.clear();
-        this._imageCachePromises.clear();
         for (const [, entry] of this._htmlServers) {
             clearTimeout(entry.timeoutId);
             try { entry.server.close(); } catch {}
@@ -596,6 +594,11 @@ export class DesignPanelProvider implements vscode.Disposable {
                 for (const p of service.getBriefsFolderPaths()) {
                     folderUris.push(vscode.Uri.file(p));
                 }
+                // Include the Stitch image cache directory in resource roots
+                const stitchCacheDir = path.join(r, '.switchboard', 'stitch');
+                try {
+                    folderUris.push(vscode.Uri.file(stitchCacheDir));
+                } catch {}
             } catch {}
         }
 
@@ -624,50 +627,22 @@ export class DesignPanelProvider implements vscode.Disposable {
     }
 
     private _getImageCacheDir(workspaceRoot: string): string {
-        return path.join(this._getStitchOutputDir(workspaceRoot), 'screens');
+        return path.join(workspaceRoot, '.switchboard', 'stitch');
     }
 
-    private async _evictImageCache(screenId: string, workspaceRoot: string): Promise<void> {
-        if (!workspaceRoot) return;
-        this._imageCachePromises.delete(screenId);
-        const cacheDir = this._getImageCacheDir(workspaceRoot);
-        const safeId = path.basename(screenId);
-        const cachePath = path.join(cacheDir, `${safeId}.png`);
+    private async _fetchWithTimeout(url: string, timeoutMs: number = 30000): Promise<Response> {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
         try {
-            await vscode.workspace.fs.delete(vscode.Uri.file(cachePath));
-        } catch {
-            // File may not exist — ignore
-        }
-    }
-
-    private async _downloadImageToCache(screen: any, cachePath: string, workspaceRoot: string): Promise<string> {
-        let url = '';
-        try {
-            url = await screen.getImage();
-            if (!url) {
-                return '';
+            const response = await fetch(url, { signal: controller.signal });
+            clearTimeout(timeout);
+            return response;
+        } catch (err: any) {
+            clearTimeout(timeout);
+            if (err.name === 'AbortError') {
+                throw new Error(`Request timed out after ${timeoutMs}ms`);
             }
-            const cacheDir = this._getImageCacheDir(workspaceRoot);
-            await vscode.workspace.fs.createDirectory(vscode.Uri.file(cacheDir));
-
-            const res = await fetch(url);
-            if (!res.ok) {
-                throw new Error(`Failed to fetch image: ${res.statusText}`);
-            }
-            const buffer = Buffer.from(await res.arrayBuffer());
-            await vscode.workspace.fs.writeFile(vscode.Uri.file(cachePath), buffer);
-
-            if (this._panel) {
-                return this._panel.webview.asWebviewUri(vscode.Uri.file(cachePath)).toString();
-            }
-            return url;
-        } catch (err) {
-            console.error('Failed to download image to cache:', err);
-            try {
-                return url || await screen.getImage() || '';
-            } catch {
-                return '';
-            }
+            throw err;
         }
     }
 
@@ -679,40 +654,42 @@ export class DesignPanelProvider implements vscode.Disposable {
                 return '';
             }
         }
+        
         const cacheDir = this._getImageCacheDir(workspaceRoot);
         const safeId = path.basename(screen.id);
         const cachePath = path.join(cacheDir, `${safeId}.png`);
-
-        const existingPromise = this._imageCachePromises.get(screen.id);
-        if (existingPromise) {
-            return existingPromise;
-        }
-
-        const promise = this._resolveImageCache(screen, cachePath, workspaceRoot);
-        this._imageCachePromises.set(screen.id, promise);
-
-        try {
-            return await promise;
-        } finally {
-            this._imageCachePromises.delete(screen.id);
-        }
-    }
-
-    private async _resolveImageCache(screen: any, cachePath: string, workspaceRoot: string): Promise<string> {
+        
+        // Check if file exists on disk
         try {
             await vscode.workspace.fs.stat(vscode.Uri.file(cachePath));
-            if (this._panel) {
-                return this._panel.webview.asWebviewUri(vscode.Uri.file(cachePath)).toString();
-            }
-            try {
-                return await screen.getImage() || '';
-            } catch {
+            // Return file:// URI - works across panel recreations
+            return vscode.Uri.file(cachePath).toString();
+        } catch {
+            // File doesn't exist - download it
+        }
+        
+        // Download from API
+        try {
+            const url = await screen.getImage();
+            if (!url) {
                 return '';
             }
-        } catch {
-            // Not cached — start download
+            
+            await vscode.workspace.fs.createDirectory(vscode.Uri.file(cacheDir));
+            
+            const res = await this._fetchWithTimeout(url, 60000);
+            if (!res.ok) {
+                throw new Error(`Failed to fetch image: ${res.statusText}`);
+            }
+            const buffer = Buffer.from(await res.arrayBuffer());
+            await vscode.workspace.fs.writeFile(vscode.Uri.file(cachePath), buffer);
+            
+            // Return file:// URI
+            return vscode.Uri.file(cachePath).toString();
+        } catch (err) {
+            console.error('Failed to download image to cache:', err);
+            return '';
         }
-        return this._downloadImageToCache(screen, cachePath, workspaceRoot);
     }
 
     private async _formatScreen(screen: any, workspaceRoot: string): Promise<any> {
@@ -1320,7 +1297,6 @@ export class DesignPanelProvider implements vscode.Disposable {
                     // unlike the cached instance, whose data may predate render completion.
                     const fresh = await stitch.project(message.projectId).getScreen(message.screenId);
                     this._activeScreens.set(fresh.id, fresh);
-                    await this._evictImageCache(fresh.id, workspaceRoot);
                     this.postMessage({ type: 'stitchScreenReady', screen: await this._formatScreen(fresh, workspaceRoot), workspaceRoot });
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
@@ -1736,7 +1712,6 @@ export class DesignPanelProvider implements vscode.Disposable {
                     const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
                     const screen = this._activeScreens.get(message.screenId);
                     if (!screen) throw new Error('Screen instance not found in memory cache.');
-                    await this._evictImageCache(message.screenId, workspaceRoot);
                     const updated = await screen.edit(message.prompt, undefined, message.modelId);
                     this._activeScreens.set(updated.id, updated);
                     this.postMessage({ type: 'stitchScreenReady', screen: await this._formatScreen(updated, workspaceRoot), workspaceRoot });
