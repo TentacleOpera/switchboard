@@ -1444,7 +1444,7 @@
     const previewRefineInput = document.getElementById('preview-refine-input');
     let previewBtnEdit = document.getElementById('preview-btn-edit');
     let previewBtnVariants = document.getElementById('preview-btn-variants');
-    const previewBtnReload = document.getElementById('preview-btn-reload');
+    let previewBtnReload = document.getElementById('preview-btn-reload');
     const stitchThumbnailStrip = document.getElementById('stitch-thumbnail-strip');
 
     if (stitchThumbnailStrip) {
@@ -1707,7 +1707,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
 
     function isScreenPollable(screen) {
         return !!screen.id &&
-               screen.projectId === state.selectedStitchProjectId &&
+               (screen.projectId === state.selectedStitchProjectId || !screen.projectId) &&
                !screen.imageUrl &&
                screen.status !== 'FAILED';
     }
@@ -1732,7 +1732,12 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                     clearTimeout(pollInfo.timerId);
                 }
                 pollInfo.attempts = 0;
-            } else {
+            } else if (options && options.hiddenRetry) {
+                if (pollInfo.timerId) {
+                    clearTimeout(pollInfo.timerId);
+                }
+            } else if (pollInfo.timerId) {
+                // Active timer already scheduled; don't duplicate
                 return;
             }
         } else {
@@ -1755,15 +1760,19 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
 
         const delay = Math.min(4 * Math.pow(2, pollInfo.attempts), 32);
         const delayMs = (options && options.immediate) ? 50 : delay * 1000;
-        
+
         pollInfo.attempts += 1;
 
         pollInfo.timerId = setTimeout(() => {
+            pollInfo.timerId = null;
+
             if (document.hidden) {
+                // Defer until tab is visible without consuming an attempt
                 pollInfo.attempts = Math.max(0, pollInfo.attempts - 1);
-                const nextOptions = { ...options };
-                if (nextOptions.immediate) delete nextOptions.immediate;
-                scheduleStitchScreenPoll(screen, nextOptions);
+                pollInfo.timerId = setTimeout(() => {
+                    pollInfo.timerId = null;
+                    scheduleStitchScreenPoll(screen, options);
+                }, 3000);
                 return;
             }
 
@@ -1847,6 +1856,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 if (reloadBtn) {
                     const newReloadBtn = reloadBtn.cloneNode(true);
                     reloadBtn.parentNode.replaceChild(newReloadBtn, reloadBtn);
+                    previewBtnReload = newReloadBtn;
                     newReloadBtn.addEventListener('click', () => {
                         if (state.stitchBusy) return;
                         clearStitchScreenPoll(screen.projectId || (stitchProjectSelect ? stitchProjectSelect.value : ''), screen.id, state.stitchWorkspaceRoot);
@@ -2961,7 +2971,11 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
 
                 if (hasImage) {
                     clearStitchScreenPoll(projectId, msg.screen.id, state.stitchWorkspaceRoot);
-                    setStitchStatus('Screen ready', 'success');
+                    if (state.stitchScreenPolls.size > 0) {
+                        setStitchStatus(`Preview ready — ${state.stitchScreenPolls.size} still waiting`, 'busy');
+                    } else {
+                        setStitchStatus('Screen ready', 'success');
+                    }
                 } else if (isFailed) {
                     clearStitchScreenPoll(projectId, msg.screen.id, state.stitchWorkspaceRoot);
                     setStitchStatus(msg.screen.statusMessage || 'Rendering failed', 'error');

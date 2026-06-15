@@ -288,3 +288,11 @@ Possible but not preferred unless verification requires it:
 ## Recommendation
 
 Send to Coder with reviewer pass afterward. This is not a one-line fix; it changes the Stitch tab's async state machine and should be reviewed specifically for stale-timer and project-switch races.
+
+## Review Findings
+
+- **CRITICAL fixed:** `scheduleStitchScreenPoll` had `else { return; }` at line 1739 that killed ALL subsequent re-polls. When `stitchScreenReady` called `scheduleStitchScreenPoll(msg.screen)` with no options, the existing `pollInfo` matched, neither `manual` nor `hiddenRetry` was set, so it returned without scheduling the next attempt. Every screen got exactly one poll and then got stuck forever. Fixed by replacing `else { return; }` with `else if (pollInfo.timerId) { return; }` and adding `pollInfo.timerId = null` when the timer fires, so re-scheduling proceeds when the timer has fired but is blocked when an active timer already exists.
+- **MAJOR fixed:** `document.hidden` path decremented `attempts` and re-called `scheduleStitchScreenPoll` every 1 second, creating an infinite loop while the tab was hidden (`attempts` oscillated 0→1→0→1… never reaching the max). Fixed by deferring via a 3-second timer that refunds the attempt and clears `timerId` before re-entering `scheduleStitchScreenPoll`.
+- **MAJOR fixed:** `isScreenPollable` had a strict `screen.projectId === state.selectedStitchProjectId` check. If the Stitch SDK omitted `projectId` from screen objects (observed on `getScreen` responses), `isScreenPollable` returned `false` and polling never started for that screen. Fixed by accepting `!screen.projectId` as a valid match.
+- **Validation:** No remaining references to removed globals (`stitchReloadPending`, `stitchReloadRetries`, `stitchReloadTimer`). `stitchProjectRefreshAttempted` resets only in `stitchScreensReady`. Timer callbacks validate active project/workspace before posting. All cleanup paths call `clearAllStitchScreenPolls()`.
+- **Remaining risks:** Large projects with many missing screens may still burst the API at the first poll window. Consider adding a small stagger (e.g., `index * 500ms`) if load testing shows issues. Image URLs that fail after all retries leave cards in the manual-reload state, which is the intended UX.

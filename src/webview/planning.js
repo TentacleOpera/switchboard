@@ -276,6 +276,7 @@
             createButton: document.getElementById('tickets-create'),
             btnManageTicketFolders: document.getElementById('btn-manage-ticket-folders'),
             btnImportAllTickets: document.getElementById('btn-import-all-tickets'),
+            btnImportAllPlans: document.getElementById('btn-import-all-plans'),
             previewMetaBar: document.getElementById('tickets-preview-meta-bar'),
             btnEditTicket: document.getElementById('btn-edit-ticket'),
             btnPushTicket: document.getElementById('btn-push-ticket'),
@@ -2923,13 +2924,16 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 setTicketsLoadingState(false);
                 isImportingAll = false;
                 const importAllBtn = document.getElementById('btn-import-all-tickets');
+                const importAllPlansBtn = document.getElementById('btn-import-all-plans');
                 if (importAllBtn) importAllBtn.disabled = false;
+                if (importAllPlansBtn) importAllPlansBtn.disabled = false;
                 if (msg.success) {
                     let statusText = `Imported ${msg.successCount} tickets, ${msg.failCount} failed.`;
                     if (msg.errors && msg.errors.length > 0) {
                         statusText += ' Failed: ' + msg.errors.map(e => e.id).join(', ');
                     }
                     showTicketsStatus(statusText, msg.failCount > 0);
+                    requestLocalTickets();
                 } else {
                     showTicketsStatus(msg.error || 'Bulk import failed', true);
                 }
@@ -4969,7 +4973,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function initTicketsTab() {
         const {
             searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, loadMoreButton,
-            btnManageTicketFolders, btnImportAllTickets
+            btnManageTicketFolders, btnImportAllTickets, btnImportAllPlans
         } = getTicketsTabElements();
 
         // Custom update call to populate dropdown if integrations already fetched
@@ -5004,7 +5008,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             openFoldersModal('tickets');
         });
 
-        // Import All button
+        // Import All button (imports as local documents for editing)
         btnImportAllTickets?.addEventListener('click', () => {
             if (isImportingAll) return;
             const provider = lastIntegrationProvider;
@@ -5020,6 +5024,34 @@ Return ONLY the drafted prompt with no additional commentary.`;
             }
             isImportingAll = true;
             btnImportAllTickets.disabled = true;
+            if (btnImportAllPlans) btnImportAllPlans.disabled = true;
+            setTicketsLoadingState(true);
+            vscode.postMessage({
+                type: 'importAllTickets',
+                workspaceRoot: ticketsWorkspaceRoot,
+                provider,
+                ids,
+                importMode: 'document'
+            });
+        });
+
+        // Import All as Plans button (imports as kanban plans)
+        btnImportAllPlans?.addEventListener('click', () => {
+            if (isImportingAll) return;
+            const provider = lastIntegrationProvider;
+            let ids = [];
+            if (provider === 'linear') {
+                ids = getFilteredLinearIssues().map(issue => issue.id);
+            } else if (provider === 'clickup') {
+                ids = getFilteredClickUpTasks().map(task => task.id);
+            }
+            if (ids.length === 0) {
+                showTicketsStatus('No tickets to import', true);
+                return;
+            }
+            isImportingAll = true;
+            btnImportAllTickets.disabled = true;
+            if (btnImportAllPlans) btnImportAllPlans.disabled = true;
             setTicketsLoadingState(true);
             vscode.postMessage({
                 type: 'importAllTickets',

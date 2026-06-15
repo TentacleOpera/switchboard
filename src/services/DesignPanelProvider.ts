@@ -60,6 +60,7 @@ export class DesignPanelProvider implements vscode.Disposable {
     ];
     private _lastWebviewRootsSignature?: string;
     private _themeListenersRegistered = false;
+    private _imageCachePromises = new Map<string, Promise<string>>();
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
@@ -621,13 +622,98 @@ export class DesignPanelProvider implements vscode.Disposable {
         return path.resolve(workspaceRoot, configured);
     }
 
-    private async _formatScreen(screen: any): Promise<any> {
+    private _getImageCacheDir(workspaceRoot: string): string {
+        return path.join(this._getStitchOutputDir(workspaceRoot), 'screens');
+    }
+
+    private async _evictImageCache(screenId: string, workspaceRoot: string): Promise<void> {
+        if (!workspaceRoot) return;
+        const cacheDir = this._getImageCacheDir(workspaceRoot);
+        const safeId = path.basename(screenId);
+        const cachePath = path.join(cacheDir, `${safeId}.png`);
+        try {
+            await vscode.workspace.fs.delete(vscode.Uri.file(cachePath));
+        } catch {
+            // File may not exist — ignore
+        }
+    }
+
+    private async _downloadImageToCache(screen: any, cachePath: string, workspaceRoot: string): Promise<string> {
+        let url = '';
+        try {
+            url = await screen.getImage();
+            if (!url) {
+                return '';
+            }
+            const cacheDir = this._getImageCacheDir(workspaceRoot);
+            await vscode.workspace.fs.createDirectory(vscode.Uri.file(cacheDir));
+
+            const res = await fetch(url);
+            if (!res.ok) {
+                throw new Error(`Failed to fetch image: ${res.statusText}`);
+            }
+            const buffer = Buffer.from(await res.arrayBuffer());
+            await vscode.workspace.fs.writeFile(vscode.Uri.file(cachePath), buffer);
+
+            if (this._panel) {
+                return this._panel.webview.asWebviewUri(vscode.Uri.file(cachePath)).toString();
+            }
+            return url;
+        } catch (err) {
+            console.error('Failed to download image to cache:', err);
+            try {
+                return url || await screen.getImage() || '';
+            } catch {
+                return '';
+            }
+        }
+    }
+
+    private async _getCachedImageUri(screen: any, workspaceRoot: string): Promise<string> {
+        if (!workspaceRoot) {
+            try {
+                return await screen.getImage() || '';
+            } catch {
+                return '';
+            }
+        }
+        const cacheDir = this._getImageCacheDir(workspaceRoot);
+        const safeId = path.basename(screen.id);
+        const cachePath = path.join(cacheDir, `${safeId}.png`);
+
+        const existingPromise = this._imageCachePromises.get(screen.id);
+        if (existingPromise) {
+            return existingPromise;
+        }
+
+        try {
+            await vscode.workspace.fs.stat(vscode.Uri.file(cachePath));
+            if (this._panel) {
+                return this._panel.webview.asWebviewUri(vscode.Uri.file(cachePath)).toString();
+            }
+        } catch {
+            // Not cached — start download
+        }
+
+        const downloadPromise = this._downloadImageToCache(screen, cachePath, workspaceRoot);
+        this._imageCachePromises.set(screen.id, downloadPromise);
+
+        try {
+            const uri = await downloadPromise;
+            return uri;
+        } finally {
+            this._imageCachePromises.delete(screen.id);
+        }
+    }
+
+    private async _formatScreen(screen: any, workspaceRoot: string): Promise<any> {
+        const imageUrl = await this._getCachedImageUri(screen, workspaceRoot);
         return {
             id: screen.id,
             projectId: screen.projectId,
             name: screen.data?.title || screen.data?.displayName || screen.id,
             deviceType: screen.data?.deviceType,
-            imageUrl: await screen.getImage(),
+            imageUrl,
             htmlUrl: await screen.getHtml(),
             status: screen.data?.screenMetadata?.status || null,
             statusMessage: screen.data?.screenMetadata?.statusMessage || null
@@ -1185,7 +1271,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                     const list = await projectInstance.screens();
                     const formatted = await Promise.all(list.map(async (screen: any) => {
                         this._activeScreens.set(screen.id, screen);
-                        return this._formatScreen(screen);
+                        return this._formatScreen(screen, workspaceRoot);
                     }));
                     this.postMessage({ type: 'stitchScreensReady', screens: formatted, workspaceRoot });
                 } catch (err: any) {
@@ -1225,7 +1311,8 @@ export class DesignPanelProvider implements vscode.Disposable {
                     // unlike the cached instance, whose data may predate render completion.
                     const fresh = await stitch.project(message.projectId).getScreen(message.screenId);
                     this._activeScreens.set(fresh.id, fresh);
-                    this.postMessage({ type: 'stitchScreenReady', screen: await this._formatScreen(fresh), workspaceRoot });
+                    await this._evictImageCache(fresh.id, workspaceRoot);
+                    this.postMessage({ type: 'stitchScreenReady', screen: await this._formatScreen(fresh, workspaceRoot), workspaceRoot });
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
                 }
@@ -1629,7 +1716,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                     const projectInstance = stitch.project(message.projectId);
                     const screen = await projectInstance.generate(message.prompt, message.deviceType, message.modelId);
                     this._activeScreens.set(screen.id, screen);
-                    this.postMessage({ type: 'stitchScreenReady', screen: await this._formatScreen(screen), workspaceRoot });
+                    this.postMessage({ type: 'stitchScreenReady', screen: await this._formatScreen(screen, workspaceRoot), workspaceRoot });
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
                 }
@@ -1640,9 +1727,10 @@ export class DesignPanelProvider implements vscode.Disposable {
                     const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
                     const screen = this._activeScreens.get(message.screenId);
                     if (!screen) throw new Error('Screen instance not found in memory cache.');
+                    await this._evictImageCache(message.screenId, workspaceRoot);
                     const updated = await screen.edit(message.prompt, undefined, message.modelId);
                     this._activeScreens.set(updated.id, updated);
-                    this.postMessage({ type: 'stitchScreenReady', screen: await this._formatScreen(updated), workspaceRoot });
+                    this.postMessage({ type: 'stitchScreenReady', screen: await this._formatScreen(updated, workspaceRoot), workspaceRoot });
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
                 }
@@ -1662,7 +1750,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                     const list = await screen.variants(message.prompt, variantOptions, undefined, message.modelId);
                     const formatted = await Promise.all(list.map(async (v: any) => {
                         this._activeScreens.set(v.id, v);
-                        return this._formatScreen(v);
+                        return this._formatScreen(v, workspaceRoot);
                     }));
                     this.postMessage({ type: 'stitchScreensReady', screens: formatted, workspaceRoot });
                 } catch (err: any) {
