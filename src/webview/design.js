@@ -3334,7 +3334,6 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
     document.getElementById('btn-manage-folders-design')?.addEventListener('click', () => openFoldersModal('design'));
     document.getElementById('btn-manage-folders-html')?.addEventListener('click', () => openFoldersModal('html'));
     document.getElementById('btn-manage-folders-images')?.addEventListener('click', () => openFoldersModal('images'));
-    document.getElementById('btn-manage-folders-stitch')?.addEventListener('click', () => openFoldersModal('stitch'));
     document.getElementById('btn-manage-folders-briefs')?.addEventListener('click', () => openFoldersModal('briefs'));
 
     document.getElementById('btn-close-folder-modal')?.addEventListener('click', () => {
