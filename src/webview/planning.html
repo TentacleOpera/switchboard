@@ -2515,6 +2515,18 @@
             font-size: 11px;
         }
 
+        #controls-strip-tickets {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 6px;
+        }
+        .controls-strip-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+        }
+
         .ticket-node {
             position: relative;
             display: flex;
@@ -3168,20 +3180,21 @@
 
         <div id="tickets-content" class="shared-tab-content">
             <div class="controls-strip" id="controls-strip-tickets">
-                <div class="tickets-workspace-picker">
-                    <select id="tickets-workspace-filter" class="workspace-filter-select" style="display:none;"></select>
-                    <span id="tickets-workspace-label" class="workspace-static-label" style="display:none;"></span>
+                <div class="controls-strip-row">
+                    <div class="tickets-workspace-picker">
+                        <select id="tickets-workspace-filter" class="workspace-filter-select" style="display:none;"></select>
+                        <span id="tickets-workspace-label" class="workspace-static-label" style="display:none;"></span>
+                    </div>
+                    <select id="tickets-project-picker" style="display:none"></select>
+                    <select id="tickets-state-filter" style="display:none"></select>
+                    <select id="tickets-status-filter" style="display:none"></select>
+                    <button id="tickets-create" class="strip-btn" disabled title="Configure an integration in Setup first">+ New Ticket</button>
+                    <button id="tickets-refresh" class="strip-btn">Refresh</button>
                 </div>
-                <select id="tickets-project-picker" style="display:none"></select>
-                <select id="tickets-state-filter" style="display:none"></select>
-                <select id="tickets-status-filter" style="display:none"></select>
-                <button id="tickets-create" class="strip-btn" disabled title="Configure an integration in Setup first">+ New Ticket</button>
-                <button id="tickets-refresh" class="strip-btn">Refresh</button>
-                <button id="btn-manage-ticket-folders" class="strip-btn">Manage Folders</button>
-                <button id="btn-import-all-tickets" class="strip-btn">Import All</button>
-                <button id="btn-import-all-plans" class="strip-btn">Import All as Plans</button>
-                <div id="tickets-hierarchy-nav" style="display:none; flex-wrap: wrap;"></div>
-                <input id="tickets-search" type="text" class="sidebar-search-input" placeholder="Search tickets..." />
+                <div class="controls-strip-row">
+                    <div id="tickets-hierarchy-nav" style="display:none; flex-wrap: wrap; gap: 8px; align-items: center;"></div>
+                    <input id="tickets-search" type="text" class="sidebar-search-input" placeholder="Search tickets..." />
+                </div>
             </div>
             <div class="content-row">
                 <div id="tree-pane-tickets">
@@ -3191,6 +3204,10 @@
                             <button id="tickets-mode-local" class="tickets-mode-btn" title="Imported local copies — edit as markdown, push back when done">Local</button>
                         </div>
                         <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                    </div>
+                    <div id="tickets-sidebar-actions" style="display:none; padding: 8px; border-bottom: 1px solid var(--border-color); flex-direction: column; gap: 6px;">
+                        <button id="btn-import-all-tickets" class="planning-button" style="width: 100%; box-sizing: border-box; text-align: center; margin: 0;">Import All</button>
+                        <button id="btn-import-all-plans" class="planning-button secondary" style="width: 100%; box-sizing: border-box; text-align: center; margin: 0;">Import All as Plans</button>
                     </div>
                     <div id="tickets-empty-state" class="empty-state">No tickets loaded.</div>
                     <div id="tickets-issues-container"></div>

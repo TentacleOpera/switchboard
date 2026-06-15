@@ -846,17 +846,56 @@ export class PlanningPanelProvider {
         return firstAllowed;
     }
 
+    private _slugify(text: string): string {
+        return text.toString().toLowerCase()
+            .replace(/\s+/g, '-')
+            .replace(/[^\w\-]+/g, '')
+            .replace(/\-\-+/g, '-')
+            .replace(/^-+/, '')
+            .replace(/-+$/, '');
+    }
+
     // Same locations importTaskAsDocument writes to (TaskViewerProvider).
-    private _getTicketDocumentDirs(resolvedRoot: string): string[] {
+    private _getTicketDocumentDirs(resolvedRoot: string, provider?: 'clickup' | 'linear'): string[] {
         const dirs: string[] = [];
         try {
-            const ticketsFolders = new LocalFolderService(resolvedRoot).getTicketsFolderPaths();
+            const localFolderService = new LocalFolderService(resolvedRoot);
+            const ticketsFolders = localFolderService.getTicketsFolderPaths();
             if (ticketsFolders.length > 0 && ticketsFolders[0]) {
-                dirs.push(path.join(ticketsFolders[0], 'documents'));
+                if (provider === 'clickup') {
+                    const clickUp = this._adapterFactories.getClickUpSyncService(resolvedRoot);
+                    const h = clickUp.getSelectedHierarchy();
+                    const parts = [ticketsFolders[0], 'clickup', this._slugify(h.spaceName).slice(0, 60)];
+                    if (h.folderName) {
+                        parts.push(this._slugify(h.folderName).slice(0, 60));
+                    }
+                    parts.push(this._slugify(h.listName).slice(0, 60));
+                    dirs.push(path.join(...parts));
+                } else if (provider === 'linear') {
+                    const linear = this._adapterFactories.getLinearSyncService(resolvedRoot);
+                    const teamName = linear.getTeamName();
+                    const projectName = linear.getSelectedProjectName() || '_no-project';
+                    dirs.push(path.join(
+                        ticketsFolders[0],
+                        'linear',
+                        this._slugify(teamName).slice(0, 60),
+                        this._slugify(projectName).slice(0, 60)
+                    ));
+                } else {
+                    dirs.push(path.join(ticketsFolders[0], 'documents'));
+                }
             }
         } catch { /* fall through to default */ }
-        const fallback = path.join(resolvedRoot, '.switchboard', 'plans', 'documents');
-        if (!dirs.includes(fallback)) { dirs.push(fallback); }
+        
+        if (!provider) {
+            const fallback = path.join(resolvedRoot, '.switchboard', 'plans', 'documents');
+            if (!dirs.includes(fallback)) { dirs.push(fallback); }
+        } else {
+            if (dirs.length === 0) {
+                const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
+                dirs.push(path.join(resolvedRoot, '.switchboard', 'plans', providerDir));
+            }
+        }
         return dirs;
     }
 
@@ -2372,7 +2411,9 @@ export class PlanningPanelProvider {
                     const config = await clickUp.loadConfig();
                     if (config) {
                         config.selectedSpaceId = String(msg.spaceId || '').trim();
+                        config.selectedSpaceName = String(msg.spaceName || '').trim();
                         config.selectedFolderId = '';
+                        config.selectedFolderName = '';
                         config.selectedListId = '';
                         config.selectedListName = '';
                         await clickUp.saveConfig(config);
@@ -2393,6 +2434,7 @@ export class PlanningPanelProvider {
                     const config = await clickUp.loadConfig();
                     if (config) {
                         config.selectedFolderId = String(msg.folderId || '').trim();
+                        config.selectedFolderName = String(msg.folderName || '').trim();
                         config.selectedListId = '';
                         config.selectedListName = '';
                         await clickUp.saveConfig(config);
@@ -2415,7 +2457,9 @@ export class PlanningPanelProvider {
                         config.selectedListId = String(msg.listId || '').trim();
                         config.selectedListName = String(msg.listName || '').trim();
                         config.selectedSpaceId = String(msg.spaceId || '').trim();
+                        config.selectedSpaceName = String(msg.spaceName || '').trim();
                         config.selectedFolderId = String(msg.folderId || '').trim();
+                        config.selectedFolderName = String(msg.folderName || '').trim();
                         await clickUp.saveConfig(config);
                     }
                 } catch (error) {
@@ -2569,9 +2613,10 @@ export class PlanningPanelProvider {
             }
             case 'listLocalTickets': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const provider = msg.provider;
                 const tickets: any[] = [];
                 if (workspaceRoot) {
-                    for (const dir of this._getTicketDocumentDirs(workspaceRoot)) {
+                    for (const dir of this._getTicketDocumentDirs(workspaceRoot, provider)) {
                         if (!fs.existsSync(dir)) { continue; }
                         let files: string[] = [];
                         try { files = fs.readdirSync(dir); } catch { continue; }

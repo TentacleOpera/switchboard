@@ -274,7 +274,6 @@
             detailContent: document.getElementById('tickets-detail-content'),
             hierarchyNav: document.getElementById('tickets-hierarchy-nav'),
             createButton: document.getElementById('tickets-create'),
-            btnManageTicketFolders: document.getElementById('btn-manage-ticket-folders'),
             btnImportAllTickets: document.getElementById('btn-import-all-tickets'),
             btnImportAllPlans: document.getElementById('btn-import-all-plans'),
             previewMetaBar: document.getElementById('tickets-preview-meta-bar'),
@@ -2621,6 +2620,18 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             }
             case 'activateKanbanTabAndSelectPlan': {
                 _pendingKanbanSelection = { planId: msg.planId || '', sessionId: msg.sessionId || '', planFile: msg.planFile || '', workspaceRoot: msg.workspaceRoot || '' };
+                
+                // Set workspace filter to target plan's workspace so the plan is visible
+                if (kanbanWorkspaceFilter) {
+                    kanbanFilters.workspaceRoot = msg.workspaceRoot || '';
+                    kanbanWorkspaceFilter.value = msg.workspaceRoot || '';
+                    persistTab('kanban.root', kanbanFilters.workspaceRoot);
+                    // Reset project filter when workspace changes
+                    kanbanFilters.project = '';
+                    if (kanbanProjectFilter) kanbanProjectFilter.value = '';
+                    updateKanbanProjectFilter();
+                }
+
                 switchToTab('kanban');
                 // Check already-loaded cache for immediate selection
                 const immediateMatch = findPendingKanbanMatch(_kanbanPlansCache);
@@ -4966,7 +4977,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function initTicketsTab() {
         const {
             searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, loadMoreButton,
-            btnManageTicketFolders, btnImportAllTickets, btnImportAllPlans
+            btnImportAllTickets, btnImportAllPlans
         } = getTicketsTabElements();
 
         // Custom update call to populate dropdown if integrations already fetched
@@ -4994,11 +5005,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
             } else {
                 ticketsLoadedOnce = false;
             }
-        });
-
-        // Manage Folders button
-        btnManageTicketFolders?.addEventListener('click', () => {
-            openFoldersModal('tickets');
         });
 
         // Import All button (imports as local documents for editing)
@@ -5401,7 +5407,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function renderTicketsLinearPanel() {
         if (lastIntegrationProvider !== 'linear' || !isTicketsTabActive()) return;
 
-        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, emptyPreview, createButton } = getTicketsTabElements();
+        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, emptyPreview, createButton, hierarchyNav } = getTicketsTabElements();
 
         // Show Linear toolbar elements
         if (searchInput) searchInput.style.display = '';
@@ -5409,6 +5415,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         if (stateFilter) stateFilter.style.display = '';
         if (clickUpStatusFilter) clickUpStatusFilter.style.display = 'none';
         if (refreshButton) refreshButton.style.display = '';
+        if (hierarchyNav) hierarchyNav.style.display = 'none';
 
         if (createButton) {
             createButton.disabled = false;
@@ -5483,7 +5490,11 @@ Return ONLY the drafted prompt with no additional commentary.`;
     // ===== LOCAL (IMPORTED) TICKETS VIEW =====
 
     function requestLocalTickets() {
-        vscode.postMessage({ type: 'listLocalTickets', workspaceRoot: ticketsWorkspaceRoot });
+        vscode.postMessage({
+            type: 'listLocalTickets',
+            workspaceRoot: ticketsWorkspaceRoot,
+            provider: lastIntegrationProvider
+        });
     }
 
     function setTicketsViewMode(mode) {
@@ -5493,6 +5504,11 @@ Return ONLY the drafted prompt with no additional commentary.`;
         document.getElementById('tickets-mode-online')?.classList.toggle('active', !isLocal);
         document.getElementById('tickets-mode-local')?.classList.toggle('active', isLocal);
         document.getElementById('controls-strip-tickets')?.classList.toggle('tickets-local-mode', isLocal);
+
+        const sidebarActions = document.getElementById('tickets-sidebar-actions');
+        if (sidebarActions) {
+            sidebarActions.style.display = isLocal ? 'none' : 'flex';
+        }
 
         // Sidebar lists
         const onlineEls = ['tickets-empty-state', 'tickets-issues-container'];
@@ -5893,67 +5909,43 @@ Return ONLY the drafted prompt with no additional commentary.`;
     }
 
     function buildTicketsHierarchyHtml() {
-        const parts = [];
+        const spaceOptions = clickUpAvailableSpaces.map(s => 
+            `<option value="${escapeAttr(s.id)}" ${s.id === clickUpSelectedSpaceId ? 'selected' : ''}>${escapeHtml(s.name)}</option>`
+        ).join('');
 
-        if (!clickUpSelectedSpaceId) {
-            parts.push(`
-                <select id="tickets-space-select" class="planning-select">
+        const folderOptions = clickUpAvailableFolders.map(f => 
+            `<option value="${escapeAttr(f.id)}" ${f.id === clickUpSelectedFolderId ? 'selected' : ''}>${escapeHtml(f.name)}</option>`
+        ).join('');
+
+        const availableLists = clickUpSelectedFolderId
+            ? clickUpAvailableListsInFolder
+            : clickUpAvailableDirectLists;
+
+        const listOptions = availableLists.map(l => 
+            `<option value="${escapeAttr(l.id)}" ${l.id === clickUpSelectedListId ? 'selected' : ''}>${escapeHtml(l.name)} ${l.taskCount ? `(${l.taskCount})` : ''}</option>`
+        ).join('');
+
+        const spaceDisabled = clickUpHierarchyLoading ? 'disabled' : '';
+        const folderDisabled = (!clickUpSelectedSpaceId || clickUpHierarchyLoading) ? 'disabled' : '';
+        const listDisabled = (!clickUpSelectedSpaceId || clickUpHierarchyLoading) ? 'disabled' : '';
+
+        return `
+            <div class="tickets-hierarchy-nav" style="display:flex; gap:8px; align-items:center; width:100%;">
+                <select id="tickets-space-select" class="planning-select" ${spaceDisabled} style="flex: 1; max-width: 200px;">
                     <option value="">Select Space...</option>
-                    ${clickUpAvailableSpaces.map(s => `<option value="${escapeAttr(s.id)}">${escapeHtml(s.name)}</option>`).join('')}
+                    ${spaceOptions}
                 </select>
-            `);
-        } else {
-            const space = clickUpAvailableSpaces.find(s => s.id === clickUpSelectedSpaceId);
-            parts.push(`
-                <div style="display:flex; align-items:center; gap:4px;">
-                    <span style="font-size:11px; color:var(--text-secondary);">${escapeHtml(space?.name || 'Unknown')}</span>
-                    <button class="planning-button secondary" data-level="space" style="padding:2px 6px; font-size:9px;">Change</button>
-                </div>
-            `);
-
-            if (clickUpAvailableFolders.length > 0 || clickUpSelectedFolderId) {
-                if (!clickUpSelectedFolderId) {
-                    parts.push(`
-                        <select id="tickets-folder-select" class="planning-select">
-                            <option value="">Select Folder...</option>
-                            <option value="_root_">(Root - Lists not in any Folder)</option>
-                            ${clickUpAvailableFolders.map(f => `<option value="${escapeAttr(f.id)}">${escapeHtml(f.name)}</option>`).join('')}
-                        </select>
-                    `);
-                } else {
-                    const folder = clickUpAvailableFolders.find(f => f.id === clickUpSelectedFolderId);
-                    parts.push(`
-                        <div style="display:flex; align-items:center; gap:4px;">
-                            <span style="font-size:11px; color:var(--text-secondary);">${escapeHtml(folder?.name || 'Unknown')}</span>
-                            <button class="planning-button secondary" data-level="folder" style="padding:2px 6px; font-size:9px;">Change</button>
-                        </div>
-                    `);
-                }
-            }
-
-            const availableLists = clickUpSelectedFolderId
-                ? clickUpAvailableListsInFolder
-                : clickUpAvailableDirectLists;
-
-            if (!clickUpSelectedListId) {
-                parts.push(`
-                    <select id="tickets-list-select" class="planning-select">
-                        <option value="">Select List (Sprint)...</option>
-                        ${availableLists.map(l => `<option value="${escapeAttr(l.id)}">${escapeHtml(l.name)} ${l.taskCount ? `(${l.taskCount})` : ''}</option>`).join('')}
-                    </select>
-                `);
-            } else {
-                const list = availableLists.find(l => l.id === clickUpSelectedListId);
-                parts.push(`
-                    <div style="display:flex; align-items:center; gap:4px;">
-                        <span style="font-size:11px; color:var(--text-secondary);">${escapeHtml(list?.name || 'Unknown')}</span>
-                        <button class="planning-button secondary" data-level="list" style="padding:2px 6px; font-size:9px;">Change</button>
-                    </div>
-                `);
-            }
-        }
-
-        return `<div class="tickets-hierarchy-nav">${parts.join('')}</div>`;
+                <select id="tickets-folder-select" class="planning-select" ${folderDisabled} style="flex: 1; max-width: 200px;">
+                    <option value="">Select Folder...</option>
+                    <option value="_root_" ${clickUpSelectedFolderId === '' && clickUpSelectedSpaceId ? 'selected' : ''}>(Root - Lists not in any Folder)</option>
+                    ${folderOptions}
+                </select>
+                <select id="tickets-list-select" class="planning-select" ${listDisabled} style="flex: 1; max-width: 200px;">
+                    <option value="">Select List...</option>
+                    ${listOptions}
+                </select>
+            </div>
+        `;
     }
 
     function attachTicketsHierarchyListeners() {
@@ -5961,24 +5953,37 @@ Return ONLY the drafted prompt with no additional commentary.`;
         spaceSelect?.addEventListener('change', (e) => {
             _restoringClickUpHierarchy = false;
             const spaceId = e.target.value;
+            clickUpSelectedSpaceId = spaceId;
+            clickUpSelectedFolderId = '';
+            clickUpSelectedListId = '';
+            clickUpAvailableFolders = [];
+            clickUpAvailableListsInFolder = [];
+            clickUpAvailableDirectLists = [];
+            clickUpProjectIssues = [];
             if (spaceId) {
-                clickUpSelectedSpaceId = spaceId;
-                clickUpSelectedFolderId = '';
-                clickUpSelectedListId = '';
-                clickUpAvailableFolders = [];
-                clickUpAvailableListsInFolder = [];
-                clickUpAvailableDirectLists = [];
                 clickUpHierarchyLoading = true;
                 renderTicketsClickUpPanel();
                 saveTicketsState();
+                const spaceName = clickUpAvailableSpaces.find(s => s.id === spaceId)?.name || '';
                 vscode.postMessage({
                     type: 'clickupSaveSpaceSelection',
                     spaceId,
+                    spaceName,
                     workspaceRoot: ticketsWorkspaceRoot || undefined
                 });
                 vscode.postMessage({
                     type: 'clickupLoadFolders',
                     spaceId,
+                    workspaceRoot: ticketsWorkspaceRoot || undefined
+                });
+            } else {
+                clickUpHierarchyLoading = false;
+                renderTicketsClickUpPanel();
+                saveTicketsState();
+                vscode.postMessage({
+                    type: 'clickupSaveSpaceSelection',
+                    spaceId: '',
+                    spaceName: '',
                     workspaceRoot: ticketsWorkspaceRoot || undefined
                 });
             }
@@ -5988,21 +5993,28 @@ Return ONLY the drafted prompt with no additional commentary.`;
         folderSelect?.addEventListener('change', (e) => {
             _restoringClickUpHierarchy = false;
             const folderId = e.target.value;
+            clickUpSelectedListId = '';
+            clickUpAvailableListsInFolder = [];
+            clickUpProjectIssues = [];
             if (folderId) {
                 clickUpSelectedFolderId = folderId === '_root_' ? '' : folderId;
-                clickUpSelectedListId = '';
-                clickUpAvailableListsInFolder = [];
                 clickUpHierarchyLoading = true;
                 renderTicketsClickUpPanel();
                 saveTicketsState();
+                const folderName = folderId === '_root_' ? '' : (clickUpAvailableFolders.find(f => f.id === folderId)?.name || '');
                 vscode.postMessage({
                     type: 'clickupSaveFolderSelection',
                     folderId: clickUpSelectedFolderId,
+                    folderName,
                     workspaceRoot: ticketsWorkspaceRoot || undefined
                 });
                 if (folderId === '_root_') {
-                    clickUpHierarchyLoading = false;
-                    renderTicketsClickUpPanel();
+                    vscode.postMessage({
+                        type: 'clickupLoadLists',
+                        spaceId: clickUpSelectedSpaceId,
+                        folderId: '',
+                        workspaceRoot: ticketsWorkspaceRoot || undefined
+                    });
                 } else {
                     vscode.postMessage({
                         type: 'clickupLoadLists',
@@ -6011,6 +6023,17 @@ Return ONLY the drafted prompt with no additional commentary.`;
                         workspaceRoot: ticketsWorkspaceRoot || undefined
                     });
                 }
+            } else {
+                clickUpSelectedFolderId = '';
+                clickUpHierarchyLoading = false;
+                renderTicketsClickUpPanel();
+                saveTicketsState();
+                vscode.postMessage({
+                    type: 'clickupSaveFolderSelection',
+                    folderId: '',
+                    folderName: '',
+                    workspaceRoot: ticketsWorkspaceRoot || undefined
+                });
             }
         });
 
@@ -6018,43 +6041,29 @@ Return ONLY the drafted prompt with no additional commentary.`;
         listSelect?.addEventListener('change', (e) => {
             _restoringClickUpHierarchy = false;
             const listId = e.target.value;
+            clickUpSelectedListId = listId;
+            clickUpProjectLoading = false;
+            clickUpProjectIssues = [];
+            saveTicketsState();
             if (listId) {
-                clickUpSelectedListId = listId;
-                clickUpProjectLoading = false;
-                clickUpProjectIssues = [];
-                saveTicketsState();
+                const spaceName = clickUpAvailableSpaces.find(s => s.id === clickUpSelectedSpaceId)?.name || '';
+                const folderName = clickUpAvailableFolders.find(f => f.id === clickUpSelectedFolderId)?.name || '';
+                const availableLists = clickUpSelectedFolderId ? clickUpAvailableListsInFolder : clickUpAvailableDirectLists;
+                const listName = availableLists.find(l => l.id === listId)?.name || '';
                 vscode.postMessage({
                     type: 'clickupSaveListSelection',
                     spaceId: clickUpSelectedSpaceId,
+                    spaceName,
                     folderId: clickUpSelectedFolderId,
+                    folderName,
                     listId,
+                    listName,
                     workspaceRoot: ticketsWorkspaceRoot || undefined
                 });
                 loadClickUpProject(false, listId);
-            }
-        });
-
-        document.querySelectorAll('[data-level]').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                _restoringClickUpHierarchy = false;
-                const level = e.target.dataset.level;
-                if (level === 'space') {
-                    clickUpSelectedSpaceId = '';
-                    clickUpSelectedFolderId = '';
-                    clickUpSelectedListId = '';
-                    clickUpProjectIssues = [];
-                    loadClickUpSpaces();
-                } else if (level === 'folder') {
-                    clickUpSelectedFolderId = '';
-                    clickUpSelectedListId = '';
-                    clickUpProjectIssues = [];
-                } else if (level === 'list') {
-                    clickUpSelectedListId = '';
-                    clickUpProjectIssues = [];
-                }
-                saveTicketsState();
+            } else {
                 renderTicketsClickUpPanel();
-            });
+            }
         });
     }
 

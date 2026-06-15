@@ -206,3 +206,16 @@ Key risks: source-header flex layout may break when adding a block-level path el
 
 ## Recommendation
 Send to Coder
+
+## Review Findings
+
+All 7 planned changes were verified in source:
+- `planning.js:926` local doc actions reduced to `['Link Doc', 'Delete']`
+- `planning.js:1228-1238` labelWrapper with pathSpan added to source-folder headers
+- `planning.html:631` flex layout added to `.folder-subheader` for right-justified buttons
+- `planning.js:1351-1371` subImportBtn added to subfolder headers with correct message posting
+- `planning.html:2944-2950` Export to Source button removed, status span hidden with `display: none`
+- Zero `btnExportToSource`/`btn-export-to-source` references remain in `src/` (clean removal)
+- `planning.html:641-652` subfolder button grey styles scoped correctly
+
+**Validation**: No compilation or tests run per session skip directives. Advanced regression analysis completed: no orphaned references, no double-trigger bugs, no race conditions, no caller breakage. `statusEl` remains written to by legacy sync handlers but is now hidden, which is harmless. No code fixes required.

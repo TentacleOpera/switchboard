@@ -645,6 +645,21 @@
                     </div>
                 </div>
 
+                <div style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
+                    <label class="startup-row" style="display:block; margin-bottom:6px;">
+                        <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">
+                            Ticket Import Location
+                        </span>
+                        <div style="display:flex; gap:8px; margin-top:4px;">
+                            <input id="ticket-import-folder-input" type="text" placeholder="e.g. /Users/me/Tickets" style="flex:1; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; border-radius:4px;">
+                            <button id="btn-browse-ticket-folder" class="secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
+                        </div>
+                    </label>
+                    <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
+                        Where imported tickets are saved. Defaults to <code>.switchboard/plans</code> if left empty.
+                    </div>
+                </div>
+
                 <div id="clickup-config-section" class="hidden">
                 <div class="db-subsection">
                     <div class="subsection-header">
@@ -2188,6 +2203,7 @@
 
         function requestIntegrationSetupStates() {
             vscode.postMessage({ type: 'getIntegrationSetupStates' });
+            vscode.postMessage({ type: 'listTicketsFolders' });
         }
 
         function setIntegrationStatus(kind, state, errorText = '') {
@@ -3155,6 +3171,14 @@
         document.getElementById('linear-browse-exclude-projects')?.addEventListener('click', () => {
             vscode.postMessage({ type: 'linearBrowseProjects', target: 'exclude' });
         });
+        document.getElementById('btn-browse-ticket-folder')?.addEventListener('click', () => {
+            vscode.postMessage({ type: 'browseTicketsFolder' });
+        });
+        document.getElementById('ticket-import-folder-input')?.addEventListener('blur', () => {
+            const input = document.getElementById('ticket-import-folder-input');
+            const val = input ? input.value.trim() : '';
+            vscode.postMessage({ type: 'saveTicketsFolder', folderPath: val });
+        });
         document.getElementById('btn-apply-notion-config')?.addEventListener('click', () => {
             let token = document.getElementById('notion-token-input')?.value.trim() || '';
             if (token === '**********') {
@@ -3724,6 +3748,28 @@
         window.addEventListener('message', (event) => {
             const message = event.data;
             switch (message.type) {
+                case 'ticketsFoldersListed': {
+                    const input = document.getElementById('ticket-import-folder-input');
+                    if (input) {
+                        input.value = message.paths && message.paths.length > 0 ? message.paths[0] : '';
+                    }
+                    break;
+                }
+                case 'ticketsFolderPathResult': {
+                    const input = document.getElementById('ticket-import-folder-input');
+                    if (input) {
+                        input.value = message.path || '';
+                    }
+                    break;
+                }
+                case 'browseTicketsFolderResult': {
+                    const input = document.getElementById('ticket-import-folder-input');
+                    if (input) {
+                        input.value = message.path || '';
+                    }
+                    vscode.postMessage({ type: 'saveTicketsFolder', folderPath: message.path || '' });
+                    break;
+                }
                 case 'switchboardThemeNameSetting':
                 case 'switchboardThemeChanged': {
                     const theme = message.theme || 'afterburner';

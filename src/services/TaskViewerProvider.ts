@@ -17327,9 +17327,10 @@ What would you like to find?`;
         try {
             let title = '';
             let content = '';
+            let issue: any = null;
             if (provider === 'linear') {
                 const linear = this._getLinearService(resolvedRoot);
-                const issue = await linear.getIssue(id);
+                issue = await linear.getIssue(id);
                 if (!issue) {
                     return { success: false, error: `Linear issue ${id} not found.` };
                 }
@@ -17365,9 +17366,32 @@ What would you like to find?`;
 
             const localFolderService = new LocalFolderService(resolvedRoot);
             const ticketsFolders = localFolderService.getTicketsFolderPaths();
-            const targetDir = ticketsFolders.length > 0 && ticketsFolders[0]
-                ? path.join(ticketsFolders[0], 'documents')
-                : path.join(resolvedRoot, '.switchboard', 'plans', 'documents');
+            let targetDir: string;
+            if (ticketsFolders.length > 0 && ticketsFolders[0]) {
+                if (provider === 'clickup') {
+                    const clickUp = this._getClickUpService(resolvedRoot);
+                    const h = clickUp.getSelectedHierarchy();
+                    const parts = [ticketsFolders[0], 'clickup', this._slugify(h.spaceName).slice(0, 60)];
+                    if (h.folderName) {
+                        parts.push(this._slugify(h.folderName).slice(0, 60));
+                    }
+                    parts.push(this._slugify(h.listName).slice(0, 60));
+                    targetDir = path.join(...parts);
+                } else {
+                    const linear = this._getLinearService(resolvedRoot);
+                    const teamName = linear.getTeamName();
+                    const projectName = issue?.project?.name || '_no-project';
+                    targetDir = path.join(
+                        ticketsFolders[0],
+                        'linear',
+                        this._slugify(teamName).slice(0, 60),
+                        this._slugify(projectName).slice(0, 60)
+                    );
+                }
+            } else {
+                const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
+                targetDir = path.join(resolvedRoot, '.switchboard', 'plans', providerDir);
+            }
 
             fs.mkdirSync(targetDir, { recursive: true });
             const slug = this._slugify(title);
@@ -17391,13 +17415,35 @@ What would you like to find?`;
             .replace(/-+$/, '');
     }
 
-    private _findTicketDocument(resolvedRoot: string, provider: string, id: string): string | null {
+    private async _findTicketDocument(resolvedRoot: string, provider: string, id: string): Promise<string | null> {
         const localFolderService = new LocalFolderService(resolvedRoot);
         const ticketsFolders = localFolderService.getTicketsFolderPaths();
         const searchDirs = [];
         if (ticketsFolders.length > 0 && ticketsFolders[0]) {
+            if (provider === 'clickup') {
+                const clickUp = this._getClickUpService(resolvedRoot);
+                const h = clickUp.getSelectedHierarchy();
+                const parts = [ticketsFolders[0], 'clickup', this._slugify(h.spaceName).slice(0, 60)];
+                if (h.folderName) {
+                    parts.push(this._slugify(h.folderName).slice(0, 60));
+                }
+                parts.push(this._slugify(h.listName).slice(0, 60));
+                searchDirs.push(path.join(...parts));
+            } else {
+                const linear = this._getLinearService(resolvedRoot);
+                const teamName = linear.getTeamName();
+                const projectName = linear.getSelectedProjectName() || '_no-project';
+                searchDirs.push(path.join(
+                    ticketsFolders[0],
+                    'linear',
+                    this._slugify(teamName).slice(0, 60),
+                    this._slugify(projectName).slice(0, 60)
+                ));
+            }
             searchDirs.push(path.join(ticketsFolders[0], 'documents'));
         }
+        const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
+        searchDirs.push(path.join(resolvedRoot, '.switchboard', 'plans', providerDir));
         searchDirs.push(path.join(resolvedRoot, '.switchboard', 'plans', 'documents'));
 
         const prefix = `${provider}_${id}_`;
@@ -17424,7 +17470,7 @@ What would you like to find?`;
             return { success: false, error: 'No workspace open.' };
         }
         const { provider, id } = data;
-        const filePath = this._findTicketDocument(resolvedRoot, provider, id);
+        const filePath = await this._findTicketDocument(resolvedRoot, provider, id);
         if (!filePath || !fs.existsSync(filePath)) {
             return { success: false, error: `Document file not found for ticket ${id}. Re-open with Edit.` };
         }

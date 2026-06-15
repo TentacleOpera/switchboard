@@ -29,7 +29,9 @@ export interface ClickUpConfig {
   selectedListId: string;
   selectedListName: string;
   selectedSpaceId: string;
+  selectedSpaceName: string;
   selectedFolderId: string;
+  selectedFolderName: string;
   deleteSyncEnabled?: boolean;   // default: false — delete ClickUp task when plan is deleted
   completeSyncEnabled?: boolean; // default: false — sync completed status to ClickUp
   excludeBacklog?: boolean;      // default: false — exclude tasks with 'backlog' status from sync
@@ -250,7 +252,9 @@ export class ClickUpSyncService {
       selectedListId: '',
       selectedListName: '',
       selectedSpaceId: '',
+      selectedSpaceName: '',
       selectedFolderId: '',
+      selectedFolderName: '',
       deleteSyncEnabled: false,
       completeSyncEnabled: false,
       excludeBacklog: false,
@@ -288,7 +292,9 @@ export class ClickUpSyncService {
       selectedListId: raw.selectedListId || '',
       selectedListName: raw.selectedListName || '',
       selectedSpaceId: raw.selectedSpaceId || '',
+      selectedSpaceName: raw.selectedSpaceName || '',
       selectedFolderId: raw.selectedFolderId || '',
+      selectedFolderName: raw.selectedFolderName || '',
       deleteSyncEnabled: raw.deleteSyncEnabled === undefined
         ? false   // Default false — require explicit opt-in
         : raw.deleteSyncEnabled === true,
@@ -512,6 +518,15 @@ export class ClickUpSyncService {
     } catch {
       return null;
     }
+  }
+
+  public getSelectedHierarchy(): { spaceName: string; folderName: string; listName: string } {
+    const config = this._config || this._createEmptyConfig();
+    return {
+      spaceName: config.selectedSpaceName || '_unknown',
+      folderName: config.selectedFolderName || '',
+      listName: config.selectedListName || '_unknown'
+    };
   }
 
   async saveConfig(config: ClickUpConfig): Promise<void> {

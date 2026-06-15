@@ -261,6 +261,14 @@ export class LinearSyncService {
     } catch { return null; }
   }
 
+  public getTeamName(): string {
+    return this._config?.teamName || '_unknown';
+  }
+
+  public getSelectedProjectName(): string {
+    return this._config?.selectedProjectName || '';
+  }
+
   async saveConfig(config: LinearConfig): Promise<void> {
     const normalized = this._normalizeConfig(config);
     if (!normalized) {
