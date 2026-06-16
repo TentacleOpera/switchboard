@@ -617,7 +617,7 @@
 
     const manageResearchFoldersBtn = document.getElementById('btn-manage-research-folders');
     if (manageResearchFoldersBtn) {
-        manageResearchFoldersBtn.addEventListener('click', openFoldersModal);
+        manageResearchFoldersBtn.addEventListener('click', () => openFoldersModal('research'));
     }
 
     const researchFolderSelect = document.getElementById('research-destination-folder');
@@ -1095,6 +1095,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         let folderPaths = [];
         if (folderModalScope === 'tickets') {
             folderPaths = getCurrentFolderPaths(state.ticketsFolderPathsByRoot || {}, state.localWorkspaceRootFilter);
+        } else if (folderModalScope === 'research') {
+            folderPaths = getCurrentFolderPaths(state.localFolderPathsByRoot, researchWorkspaceRoot);
         } else {
             folderPaths = getCurrentFolderPaths(state.localFolderPathsByRoot, state.localWorkspaceRootFilter);
         }
@@ -1121,10 +1123,16 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             removeBtn.textContent = 'Remove';
             removeBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
+                let workspaceRoot;
                 if (folderModalScope === 'tickets') {
-                    vscode.postMessage({ type: 'removeTicketsFolder', folderPath: path, workspaceRoot: state.localWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '' });
+                    workspaceRoot = state.localWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '';
+                    vscode.postMessage({ type: 'removeTicketsFolder', folderPath: path, workspaceRoot });
+                } else if (folderModalScope === 'research') {
+                    workspaceRoot = researchWorkspaceRoot || _workspaceItems[0]?.workspaceRoot || '';
+                    vscode.postMessage({ type: 'removeLocalFolder', folderPath: path, workspaceRoot });
                 } else {
-                    vscode.postMessage({ type: 'removeLocalFolder', folderPath: path, workspaceRoot: state.localWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '' });
+                    workspaceRoot = state.localWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '';
+                    vscode.postMessage({ type: 'removeLocalFolder', folderPath: path, workspaceRoot });
                 }
             });
 
@@ -4905,7 +4913,13 @@ Return ONLY the drafted prompt with no additional commentary.`;
         const modal = document.getElementById('folder-modal');
         const modalTitle = document.getElementById('folder-modal-title');
         if (modalTitle) {
-            modalTitle.textContent = scope === 'tickets' ? 'Manage Tickets Folders' : 'Manage Local Docs Folders';
+            if (scope === 'tickets') {
+                modalTitle.textContent = 'Manage Tickets Folders';
+            } else if (scope === 'research') {
+                modalTitle.textContent = 'Manage Research Folders';
+            } else {
+                modalTitle.textContent = 'Manage Local Docs Folders';
+            }
         }
         modal.style.display = 'flex';
         // Sync antigravity toggle state from JS state
@@ -4963,10 +4977,16 @@ Return ONLY the drafted prompt with no additional commentary.`;
     });
 
     document.getElementById('btn-add-folder-modal').addEventListener('click', () => {
+        let workspaceRoot;
         if (folderModalScope === 'tickets') {
-            vscode.postMessage({ type: 'addTicketsFolder', workspaceRoot: state.localWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '' });
+            workspaceRoot = state.localWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '';
+            vscode.postMessage({ type: 'addTicketsFolder', workspaceRoot });
+        } else if (folderModalScope === 'research') {
+            workspaceRoot = researchWorkspaceRoot || _workspaceItems[0]?.workspaceRoot || '';
+            vscode.postMessage({ type: 'addLocalFolder', workspaceRoot });
         } else {
-            vscode.postMessage({ type: 'addLocalFolder', workspaceRoot: state.localWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '' });
+            workspaceRoot = state.localWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '';
+            vscode.postMessage({ type: 'addLocalFolder', workspaceRoot });
         }
     });
 
