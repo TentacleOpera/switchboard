@@ -311,3 +311,196 @@ If issues arise after deployment:
 - **Bridge removal and cleanup:** 30 minutes
 - **Testing:** 2-3 hours
 - **Total:** 8-12 hours
+
+## User Review Required
+
+- Confirm whether orphan `state.json` should be renamed to `.migrated.bak` (preserving downgrade path) or deleted outright.
+- Confirm if any external scripts, CI pipelines, or onboarding docs read `.switchboard/state.json` directly (bypassing the bridge). If so, they need migration too.
+
+## Complexity Audit
+
+### Routine
+- Replacing `fs.readFile/writeFile` with `db.getConfigJson/setConfigJson` in methods with known key mappings.
+- Swapping `import { stateFs as fs }` back to `import * as fs from 'fs'` where no state paths remain.
+- Deleting `stateConfigBridge.ts` and `stateLockfile` references.
+- Updating comments and log strings that mention `state.json`.
+
+### Complex / Risky
+- Refactoring `TaskViewerProvider.updateState()` generic batched updater into explicit per-key db operations (or a db transaction batch helper) without losing atomicity.
+- `cleanWorkspace.ts` `resetStateFile()` and `pruneZombieTerminalEntries()` are on the activation hot path; errors here prevent extension startup.
+- `KanbanDatabase.ts` still imports `STATE_KEY_TO_CONFIG` from the bridge; inlining this mapping is a prerequisite for bridge deletion.
+- Six regression tests regex-match source code for `state.json` strings; any change to method internals will break assertions even if behavior is correct.
+- `PlanningPanelProvider.ts` and `extension.ts` use the `stateFs` alias for general filesystem operations; must audit every call site to ensure no hidden state.json dependency remains.
+- Terminal recovery in `extension.ts` (line 566–582) reads `runtime.terminals` before `cleanWorkspace` resets state; timing-sensitive and startup-critical.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** `updateState()` currently batches multiple updaters under a single lockfile write. Decomposing into per-key db writes without a transaction wrapper could leave the runtime state partially updated if the process crashes mid-batch.
+- **Security:** No new attack surface introduced. Legacy `state.json` may contain sensitive tokens; orphan cleanup should rename to `.migrated.bak` rather than unlink, preserving auditability and downgrade compatibility.
+- **Side Effects:** Removing the bridge changes `fs.existsSync('...state.json')` from always-true to filesystem-reality. Any code that relied on the intercept (e.g., early-return guards) will now follow the false branch.
+- **Dependencies & Conflicts:** `KanbanDatabase._runConfigMigrations` depends on `STATE_KEY_TO_CONFIG` from `stateConfigBridge.ts`. Bridge deletion must happen *after* the mapping is inlined into `KanbanDatabase.ts`.
+
+## Dependencies
+
+- No external session dependencies.
+- Internal dependency: Step 0 (inline `STATE_KEY_TO_CONFIG` into `KanbanDatabase.ts`) must complete before Step 7 (bridge deletion).
+
+## Adversarial Synthesis
+
+Key risks: (1) Generic `updateState` batch-updater atomicity loss without a db transaction wrapper; (2) `STATE_KEY_TO_CONFIG` import chain making bridge deletion order-sensitive; (3) brittle regex-based regression tests failing on source code changes. Mitigations: decompose `updateState` into explicit per-key db calls with a `setConfigBatch` helper; inline the key map into `KanbanDatabase` first; schedule a dedicated test-assertion audit as a blocking sub-task.
+
+## Proposed Changes
+
+### `src/services/KanbanProvider.ts`
+- **Context:** Lines 191–206 (`_getLiveSyncConfig`), 429–441 (`_getCustomKanbanColumns`), 2241–2278 (`_getDefaultPromptOverrides` / `_saveDefaultPromptOverrides`), 2373–2390 (`_getStartupCommands`), 2394–2412 (`_saveStartupCommands`), 3285–3299 (`_getCustomAgents`), 3401–3415 (`_getAgentNames`), 3469–3483 (`_getVisibleAgents`), 3487–3495 (`_hasAssignedAgent`).
+- **Logic:** Each method currently constructs `statePath = .../state.json`, checks `fs.existsSync(statePath)`, reads/writes via `fs.promises.readFile/writeFile`, then parses or builds a JSON blob. Replace with direct `KanbanDatabase` config calls using the mapping already established by the bridge.
+- **Implementation:**
+  - `_getLiveSyncConfig`: `db.getConfigJson('planning.liveSyncConfig', { enabled: false, syncIntervalMs: 30000, conflictCheckEnabled: false })`
+  - `_getCustomKanbanColumns`: `db.getConfigJson('kanban.customColumns', [])` then `parseCustomKanbanColumns(...)`
+  - `_getDefaultPromptOverrides`: `db.getConfigJson('agents.promptOverrides', {})`
+  - `_saveDefaultPromptOverrides`: `db.setConfigJson('agents.promptOverrides', overrides)`
+  - `_getStartupCommands`: read `agents.startupCommands`, `agents.visibleAgents`, `agents.julesAutoSyncEnabled`, `kanban.autoCommitOnCodeReview` individually via `getConfigJson`
+  - `_saveStartupCommands`: write the same keys individually via `setConfigJson`
+  - `_getCustomAgents`: `db.getConfigJson('agents.customAgents', [])` then `parseCustomAgents(...)`
+  - `_getAgentNames`: read `agents.startupCommands` and `agents.customAgents` via `getConfigJson`
+  - `_getVisibleAgents`: read `agents.customAgents` and `agents.visibleAgents` via `getConfigJson`
+  - `_hasAssignedAgent`: read `agents.customAgents` via `getConfigJson`
+  - Remove `import { stateFs as fs }` and switch to `import * as fs from 'fs'` if any non-state fs calls remain.
+- **Edge Cases:** `existsSync` no longer returns true for state.json; ensure methods handle missing config gracefully (default values cover this).
+
+### `src/services/PlanningPanelProvider.ts`
+- **Context:** Line 5125 (`_getKanbanColumnDefinitions`) constructs `statePath` and reads `customAgents`, `customKanbanColumns`, `visibleAgents`. Also lines 235, 244, 255, 586, 659, 709 use `fs.existsSync/readFileSync` for general file operations (docs, HTML, preview paths).
+- **Logic:** Only `_getKanbanColumnDefinitions` hits state.json. General fs ops pass through the bridge anyway and can use normal `fs`.
+- **Implementation:**
+  - In `_getKanbanColumnDefinitions`, replace state.json read with:
+    - `db.getConfigJson('agents.customAgents', [])`
+    - `db.getConfigJson('kanban.customColumns', [])`
+    - `db.getConfigJson('agents.visibleAgents', [])`
+  - Swap `import { stateFs as fs }` to `import * as fs from 'fs'`.
+- **Edge Cases:** None; normal fs calls unchanged.
+
+### `src/services/TaskViewerProvider.ts`
+- **Context:** Lines 1630–1699 (`updateState` / `_processUpdateQueue`), 16566–16577 (`_writeFileAtomic` state.json branch), 1009–1013 (`_resolveStateFilePath`), 14307 (`updateState` callers for terminals), 5206–5207 (`_persistLastAccessedDebounced`), 5216–5229 (`loadLastAccessedFromState`).
+- **Logic:** `updateState` is the heart of the problem. It queues batched closures, acquires a lock, reads synthetic state, applies all closures, writes back. Callers mutate `state.terminals`, `state.chatAgents`, `state.session`, etc. Instead of preserving the generic updater, decompose each caller to use direct db operations.
+- **Implementation:**
+  - Add a private helper `_updateRuntimeConfig(key: string, updater: (val: any) => any)` that reads, mutates, and writes a single config key via `getConfigJson/setConfigJson`.
+  - For batched multi-key updates, add `_batchRuntimeUpdate(updates: Record<string, any>)` that applies all `setConfigJson` calls sequentially (SQLite serialized writes are safe; add a lightweight in-memory mutex if needed).
+  - Replace `updateState` callers with explicit key-targeted updates:
+    - Terminal registry sync → `runtime.terminals`
+    - Chat agent state → `runtime.chatAgents`
+    - Session state → `runtime.session`
+    - Context → `runtime.context`
+    - Tasks → `runtime.tasks`
+    - Teams → `runtime.teams`
+    - Jules sessions → `runtime.jules`
+  - `_writeFileAtomic`: remove the `getWorkspaceRootFromStatePath` branch; it becomes dead code after bridge removal.
+  - `_persistLastAccessedDebounced` already uses db directly; update comments from "state.json" to "db config".
+  - `loadLastAccessedFromState` already uses db directly; update comments.
+  - Remove `import { stateFs as fs, stateLockfile as lockfile, getWorkspaceRootFromStatePath }` and switch to normal `fs` plus remove lockfile.
+- **Edge Cases:** If two `updateState` batches fire concurrently, the old lockfile serialized them. SQLite writes through a single `KanbanDatabase` instance are already serialized, but cross-key consistency may need a simple `Promise` chain or mutex.
+
+### `src/lifecycle/cleanWorkspace.ts`
+- **Context:** Lines 110–130 (`resetStateFile`), 146–191 (`pruneZombieTerminalEntries`), 229–235 (`cleanWorkspace`), 53–104 (`readPersistedFields`).
+- **Logic:** Both functions treat `state.json` as the source of truth. After bridge removal, they must speak db.
+- **Implementation:**
+  - `resetStateFile(statePath)`:
+    - Remove `statePath` parameter; accept `workspaceRoot: string`.
+    - Reset `runtime.session`, `runtime.context`, `runtime.tasks`, `runtime.terminals`, `runtime.chatAgents`, `runtime.teams` to their `INITIAL_STATE` defaults via `db.setConfigJson`.
+    - Preserve user-configured keys by reading them from db first: `agents.startupCommands`, `agents.visibleAgents`, `agents.customAgents`, `runtime.autoban`, `planning.ingestionFolder`, `runtime.jules`, `runtime.julesPollingDegraded`, `runtime.julesPollingLastCheckedAt`, `runtime.julesPollingDegradedAt`. Then re-write them after the reset.
+    - Remove lockfile usage entirely.
+  - `pruneZombieTerminalEntries(statePath)`:
+    - Remove `statePath` parameter; accept `workspaceRoot: string`.
+    - Read `runtime.terminals` via `db.getConfigJson('runtime.terminals', {})`.
+    - Prune dead PIDs in memory.
+    - Write back via `db.setConfigJson('runtime.terminals', terminals)`.
+    - Return pruned count.
+  - `cleanWorkspace`:
+    - Update call sites to pass `workspaceRoot` instead of `statePath`.
+    - Remove comment references to "state.json".
+  - Swap `import { stateFs as fs, stateLockfile as lockfile }` to `import * as fs from 'fs'`.
+- **Edge Cases:** If db is not yet ready during activation, `KanbanDatabase.forWorkspace(...).ensureReady()` must be awaited first. `extension.ts` already warms the db before calling `cleanWorkspace` (line 561), so this is safe.
+
+### `src/extension.ts`
+- **Context:** Lines 571–582 (terminal recovery pre-cleanWorkspace), 726 (`getStateFilePath` helper), 1546/1557/1562 (comments referencing state.json), 1957 (background pruner comment), 2164/2167 (state parse error message), 2443 (log string).
+- **Logic:** Terminal recovery reads old terminal names before `cleanWorkspace` resets them. `getStateFilePath` still returns a state.json path; callers may use it.
+- **Implementation:**
+  - Terminal recovery block (lines 569–582): replace with direct db read:
+    ```ts
+    const db = KanbanDatabase.forWorkspace(effectiveStateRoot);
+    const oldTerminals = await db.getConfigJson<Record<string, any>>('runtime.terminals', {});
+    for (const name of Object.keys(oldTerminals)) { oldTerminalNames.add(name); }
+    ```
+  - `getStateFilePath` helper: deprecate or remove; no remaining callers after refactor. If kept for external API compatibility, return `null` and log a deprecation warning.
+  - Comment sweep: replace all "state.json" references with "runtime config" or "db config".
+  - Log string at line 2443: change "persisted to state.json" to "persisted to db config".
+  - Swap `import { stateFs as fs }` to `import * as fs from 'fs'`.
+- **Edge Cases:** If db is not warmed, `getConfigJson` returns default `{}`; terminal recovery gracefully skips.
+
+### `src/services/KanbanDatabase.ts`
+- **Context:** Line 7 imports `STATE_KEY_TO_CONFIG` from bridge. Line 2863+ `_runConfigMigrations` uses it.
+- **Logic:** The migration must survive bridge deletion.
+- **Implementation:**
+  - Inline a private `static _STATE_KEY_TO_CONFIG` mapping (or copy the object literal) directly into `KanbanDatabase.ts`.
+  - Update `_runConfigMigrations` to use the local copy.
+  - Remove `import { STATE_KEY_TO_CONFIG } from './stateConfigBridge'`.
+  - Add orphan cleanup at end of `_runConfigMigrations` (after all migrations):
+    ```ts
+    const stateJsonPath = path.join(sbDir, 'state.json');
+    if (fs.existsSync(stateJsonPath)) {
+        try {
+            fs.renameSync(stateJsonPath, stateJsonPath + '.migrated.bak');
+        } catch (err) {
+            console.warn('[KanbanDatabase] Failed to archive state.json:', err);
+        }
+    }
+    ```
+  - Add a `setConfigBatch` helper if desired for TaskViewerProvider atomicity:
+    ```ts
+    public async setConfigBatch(entries: Record<string, unknown>): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        for (const [key, value] of Object.entries(entries)) {
+            this._db.run('INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', [key, JSON.stringify(value)]);
+        }
+        return this._persist();
+    }
+    ```
+- **Edge Cases:** Renaming to `.migrated.bak` instead of `unlink` preserves downgrade path. `setConfigBatch` uses a single `_persist()` at the end; if full atomicity is required, wrap in `this._db.exec('BEGIN') ... exec('COMMIT')`.
+
+### Test Files
+- **Context:** See Affected Files list.
+- **Logic:** Tests grep source strings; updating implementation changes the strings.
+- **Implementation:** For each test:
+  - `kanban-custom-column-management-regression.test.js`: update regex to expect `db.getConfigJson('kanban.customColumns', ...)` instead of `state.json` read.
+  - `plan-ingestion-config-regression.test.js`: update assertion to expect `db.setConfigJson('planning.ingestionFolder', ...)` instead of `state.planIngestionFolder = ...`.
+  - `plan-ingestion-target-regression.test.js`: same as above.
+  - `custom-lane-roundtrip-regression.test.js`: update test setup to seed db config directly rather than writing `state.json`.
+  - `plan-creation-status-regression.test.js`: update comment/assertion message from "state.json collides" to "db plan file collision".
+  - `kanban-auto-export.test.ts`: no change needed.
+- **Edge Cases:** None.
+
+### `src/services/stateConfigBridge.ts`
+- **Context:** Entire file.
+- **Logic:** Delete after all call sites and KanbanDatabase mapping are migrated.
+- **Implementation:** Delete file. Remove all imports across codebase (already listed in Affected Files).
+- **Edge Cases:** Ensure no dynamic `require('./stateConfigBridge')` exists anywhere (grep for it).
+
+## Verification Plan
+
+### Automated Tests
+- Run the existing regression test suite. Because tests are skipped in this session per directive, the verification plan documents the expected test updates:
+  1. `kanban-custom-column-management-regression.test.js` — regex match updated.
+  2. `plan-ingestion-config-regression.test.js` — string assertions updated.
+  3. `plan-ingestion-target-regression.test.js` — string assertions updated.
+  4. `custom-lane-roundtrip-regression.test.js` — db seeding instead of file writing.
+  5. `plan-creation-status-regression.test.js` — assertion message updated.
+  6. `kanban-auto-export.test.ts` — no change.
+- Manual verification steps (to be performed by user):
+  1. Custom kanban columns persist across reload.
+  2. Custom agents persist across reload.
+  3. Startup commands persist across reload.
+  4. Terminal registry correctly prunes zombies after process kill.
+  5. `cleanWorkspace` completes without error on activation.
+  6. Orphaned `state.json` is renamed to `.migrated.bak` on first activation after upgrade.
+  7. No duplicate `state.json` recreated after cleanup.
+
+**Recommendation:** Complexity is 7 → **Send to Lead Coder**.
