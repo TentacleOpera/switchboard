@@ -2986,6 +2986,55 @@ export class PlanningPanelProvider {
                 }
                 break;
             }
+            case 'listLocalTicketFiles': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const provider = (msg.provider as 'clickup' | 'linear') || 'clickup';
+                if (!workspaceRoot) {
+                    this._panel?.webview.postMessage({ type: 'localTicketFilesListed', provider, tickets: [] });
+                    break;
+                }
+                let baseDir = path.join(workspaceRoot, '.switchboard', 'tickets');
+                try {
+                    const lfs = new LocalFolderService(workspaceRoot);
+                    const folders = lfs.getTicketsFolderPaths();
+                    if (folders.length > 0 && folders[0]) { baseDir = folders[0]; }
+                } catch { }
+                const providerDir = path.join(baseDir, provider);
+                const tickets: any[] = [];
+                this._scanLocalTicketFiles(providerDir, provider, tickets);
+                this._panel?.webview.postMessage({ type: 'localTicketFilesListed', provider, tickets });
+                break;
+            }
+            case 'readLocalTicketFile': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const provider = msg.provider as 'clickup' | 'linear';
+                const id = msg.id;
+                if (!workspaceRoot || !provider || !id) {
+                    this._panel?.webview.postMessage({ type: 'localTicketFileRead', provider, id, success: false });
+                    break;
+                }
+                let baseDir = path.join(workspaceRoot, '.switchboard', 'tickets');
+                try {
+                    const lfs = new LocalFolderService(workspaceRoot);
+                    const folders = lfs.getTicketsFolderPaths();
+                    if (folders.length > 0 && folders[0]) { baseDir = folders[0]; }
+                } catch { }
+                const filePath = this._findLocalTicketFile(path.join(baseDir, provider), provider, id);
+                if (!filePath) {
+                    this._panel?.webview.postMessage({ type: 'localTicketFileRead', provider, id, success: false });
+                    break;
+                }
+                try {
+                    const raw = fs.readFileSync(filePath, 'utf8');
+                    const content = raw.replace(/^---\n[\s\S]*?\n---\n?/, '').trim();
+                    const h1 = content.match(/^#\s+(.+)$/m);
+                    const title = h1 ? h1[1].trim() : id;
+                    this._panel?.webview.postMessage({ type: 'localTicketFileRead', provider, id, success: true, title, content });
+                } catch {
+                    this._panel?.webview.postMessage({ type: 'localTicketFileRead', provider, id, success: false });
+                }
+                break;
+            }
             case 'syncAllTickets': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const provider = msg.provider;
@@ -5344,6 +5393,50 @@ export class PlanningPanelProvider {
     }
 
 
+
+    private _scanLocalTicketFiles(dir: string, provider: string, out: any[]): void {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const nfs = require('fs') as typeof import('fs');
+        let entries: import('fs').Dirent[];
+        try { entries = nfs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+        for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                this._scanLocalTicketFiles(fullPath, provider, out);
+            } else if (entry.isFile() && entry.name.endsWith('.md')) {
+                const match = entry.name.match(/^(?:clickup|linear)_([^_]+)_(.+)\.md$/);
+                if (!match) { continue; }
+                const id = match[1];
+                let title = match[2].replace(/-/g, ' ');
+                let kanbanColumn = '';
+                try {
+                    const content = nfs.readFileSync(fullPath, 'utf8');
+                    const fm = content.match(/^---\n([\s\S]*?)\n---/);
+                    if (fm) { const km = fm[1].match(/kanbanColumn:\s*(.+)/); if (km) { kanbanColumn = km[1].trim(); } }
+                    const h1 = content.match(/^#\s+(.+)$/m);
+                    if (h1) { title = h1[1].trim(); }
+                } catch { }
+                out.push({ id, title, status: kanbanColumn || '', filePath: fullPath });
+            }
+        }
+    }
+
+    private _findLocalTicketFile(dir: string, provider: string, id: string): string | null {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const nfs = require('fs') as typeof import('fs');
+        let entries: import('fs').Dirent[];
+        try { entries = nfs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
+        for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                const found = this._findLocalTicketFile(fullPath, provider, id);
+                if (found) { return found; }
+            } else if (entry.isFile() && entry.name.startsWith(`${provider}_${id}_`) && entry.name.endsWith('.md')) {
+                return fullPath;
+            }
+        }
+        return null;
+    }
 
     private _updateTicketsAutoSyncWatcher(workspaceRoot: string, enabled: boolean): void {
         const existing = this._ticketsAutoSyncWatchers.get(workspaceRoot);

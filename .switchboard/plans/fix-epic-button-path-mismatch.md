@@ -205,3 +205,7 @@ See the **Testing → Manual Testing** steps (open kanban board, select 2+ plans
 
 ## Dependencies
 None - this is a self-contained bug fix within the database layer.
+
+## Review Findings
+
+Implementation reviewed and verified. The single-line fix in `updateEpicStatus` correctly applies `_ensureRelativePlanFile` before the UPDATE WHERE clause, matching all sibling methods. Regression test `KanbanDatabase.epicStatus.test.ts` is consistent with existing test patterns. No CRITICAL or MAJOR issues found. No code changes required; remaining risk is minimal.

@@ -127,6 +127,7 @@
     let lastIntegrationProvider = null;
     let ticketsWorkspaceRoot = '';
     let ticketsAutoSync = false;
+    let ticketsLocalCacheMode = false;
     let _pendingRefreshImport = false;
     let researchWorkspaceRoot = '';
     let folderModalScope = 'local';
@@ -223,21 +224,7 @@
         return String(value || '').replace(/"/g, '&quot;');
     }
 
-    function showTicketsStatus(text, isError) {
-        const toolbar = document.getElementById('controls-strip-tickets');
-        if (toolbar) {
-            let statusSpan = toolbar.querySelector('.tickets-action-status');
-            if (!statusSpan) {
-                statusSpan = document.createElement('span');
-                statusSpan.className = 'tickets-action-status';
-                statusSpan.style.cssText = 'font-size:11px; margin-left:8px;';
-                toolbar.appendChild(statusSpan);
-            }
-            statusSpan.style.color = isError ? 'var(--vscode-errorForeground, #ff6b6b)' : 'var(--vscode-editorInfo-foreground, #3794ff)';
-            statusSpan.textContent = text;
-            setTimeout(() => { statusSpan.textContent = ''; }, 2000);
-        }
-    }
+    function showTicketsStatus(_text, _isError) { /* intentionally silent */ }
 
     function setTicketsLoadingState(isLoading) {
         const loadingState = document.getElementById('tickets-loading-state');
@@ -471,10 +458,13 @@
                 ticketsInitialized = true;
             }
             if (lastIntegrationProvider && !ticketsLoadedOnce) {
-                if (lastIntegrationProvider === 'clickup') loadClickUpSpaces();
-                else loadLinearProject();
+                if (ticketsAutoSync) {
+                    if (lastIntegrationProvider === 'clickup') loadClickUpSpaces();
+                    else loadLinearProject();
+                } else {
+                    loadLocalTicketFiles();
+                }
             } else {
-                // Spaces/project already loaded in background — just render what we have
                 renderTicketsTab();
             }
         } else {
@@ -2982,6 +2972,52 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     showTicketsStatus(`Synced ${msg.succeeded} succeeded, ${msg.failed} failed.`, true);
                 }
                 break;
+            case 'localTicketFilesListed': {
+                const localProvider = msg.provider || lastIntegrationProvider;
+                const tickets = msg.tickets || [];
+                ticketsLocalCacheMode = true;
+                ticketsLoadedOnce = true;
+                if (localProvider === 'clickup') {
+                    clickUpProjectIssues = tickets.map(t => ({
+                        id: t.id, title: t.title, identifier: t.id,
+                        status: t.status || '', assignees: [], filePath: t.filePath
+                    }));
+                    clickUpProjectStatus = 'loaded';
+                    clickUpProjectMessage = '';
+                    clickUpProjectLoading = false;
+                } else {
+                    linearProjectIssues = tickets.map(t => ({
+                        id: t.id, title: t.title, identifier: t.id,
+                        state: { name: t.status || '' }, assignee: null, description: '', filePath: t.filePath
+                    }));
+                    linearProjectStatus = 'loaded';
+                    linearProjectMessage = '';
+                    linearProjectLoading = false;
+                }
+                renderTicketsTab();
+                break;
+            }
+            case 'localTicketFileRead': {
+                if (!msg.success) { break; }
+                const rendered = renderMarkdown(msg.content || '');
+                if (msg.provider === 'clickup') {
+                    selectedClickUpIssue = {
+                        task: { id: msg.id, title: msg.title, name: msg.title, status: '', assignees: [] },
+                        subtasks: [], comments: [], attachments: [],
+                        renderedDescriptionHtml: rendered
+                    };
+                    clickUpTaskDetailCache.set(msg.id, selectedClickUpIssue);
+                } else {
+                    selectedLinearIssue = {
+                        issue: { id: msg.id, title: msg.title, state: { name: '' }, assignee: null },
+                        subtasks: [], comments: [], attachments: [],
+                        renderedDescriptionHtml: rendered
+                    };
+                    linearIssueDetailCache.set(msg.id, selectedLinearIssue);
+                }
+                renderTicketsTab();
+                break;
+            }
             case 'editTicketResult':
                 setTicketsLoadingState(false);
                 if (!msg.success) {
@@ -3525,11 +3561,12 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (msg.workspaceRoot === ticketsWorkspaceRoot) {
                     lastIntegrationProvider = msg.provider || null;
                     ticketsAutoSync = msg.ticketsAutoSync === true;
-                    if (isTicketsTabActive()) {
-                        if (lastIntegrationProvider === 'clickup') {
-                            loadClickUpSpaces();
-                        } else if (lastIntegrationProvider === 'linear') {
-                            loadLinearProject();
+                    if (isTicketsTabActive() && lastIntegrationProvider) {
+                        if (ticketsAutoSync) {
+                            if (lastIntegrationProvider === 'clickup') loadClickUpSpaces();
+                            else loadLinearProject();
+                        } else if (!ticketsLoadedOnce) {
+                            loadLocalTicketFiles();
                         }
                     }
                 }
@@ -5268,6 +5305,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         // Refresh button — re-fetches online view
         refreshButton?.addEventListener('click', () => {
+            ticketsLocalCacheMode = false;
             linearIssueDetailCache.clear();
             clickUpTaskDetailCache.clear();
             _pendingRefreshImport = true;
@@ -5361,6 +5399,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
                     if (linearIssueDetailCache.has(linearId)) {
                         selectedLinearIssue = linearIssueDetailCache.get(linearId);
                         renderTicketsLinearPanel();
+                    } else if (ticketsLocalCacheMode) {
+                        vscode.postMessage({ type: 'readLocalTicketFile', provider: 'linear', id: linearId, workspaceRoot: ticketsWorkspaceRoot });
                     } else {
                         loadLinearTaskDetails(linearId);
                     }
@@ -5368,6 +5408,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
                     if (clickUpTaskDetailCache.has(clickUpId)) {
                         selectedClickUpIssue = clickUpTaskDetailCache.get(clickUpId);
                         renderTicketsClickUpPanel();
+                    } else if (ticketsLocalCacheMode) {
+                        vscode.postMessage({ type: 'readLocalTicketFile', provider: 'clickup', id: clickUpId, workspaceRoot: ticketsWorkspaceRoot });
                     } else {
                         loadClickUpTaskDetails(clickUpId);
                     }
@@ -5857,8 +5899,23 @@ Return ONLY the drafted prompt with no additional commentary.`;
         const importAsPlansBtn = document.getElementById('tickets-import-all-kanban');
         if (importAsPlansBtn) importAsPlansBtn.style.display = clickUpSelectedListId ? '' : 'none';
 
+        // Local cache banner
+        let localCacheBanner = document.getElementById('tickets-local-cache-banner');
+        if (ticketsLocalCacheMode) {
+            if (!localCacheBanner) {
+                localCacheBanner = document.createElement('div');
+                localCacheBanner.id = 'tickets-local-cache-banner';
+                localCacheBanner.style.cssText = 'font-size:10px;color:var(--text-secondary);padding:4px 8px;border-bottom:1px solid var(--border-color);background:var(--panel-bg2,#1a1a2e);';
+                localCacheBanner.textContent = 'Showing local cache — click Refresh to fetch live data';
+                const treePane = document.getElementById('tree-pane-tickets');
+                if (treePane) treePane.insertBefore(localCacheBanner, treePane.firstChild);
+            }
+        } else if (localCacheBanner) {
+            localCacheBanner.remove();
+        }
+
         if (emptyState) {
-            if (!clickUpSelectedListId) {
+            if (!ticketsLocalCacheMode && !clickUpSelectedListId) {
                 emptyState.textContent = 'No list selected. Please select a Space, Folder, and List to view tasks.';
                 emptyState.style.display = '';
             } else if (clickUpProjectStatus !== 'loaded') {
@@ -5873,7 +5930,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             renderTicketsClickUpHierarchyNav();
         }
 
-        if (clickUpSelectedListId) {
+        if (ticketsLocalCacheMode || clickUpSelectedListId) {
             renderTicketsClickUpStatusFilterOptions();
             renderTicketsClickUpList();
         } else {
@@ -6392,9 +6449,15 @@ Return ONLY the drafted prompt with no additional commentary.`;
         showTicketsStatus('Sending ticket to agent...');
     }
 
+    function loadLocalTicketFiles() {
+        if (!lastIntegrationProvider || !ticketsWorkspaceRoot) return;
+        vscode.postMessage({ type: 'listLocalTicketFiles', provider: lastIntegrationProvider, workspaceRoot: ticketsWorkspaceRoot });
+    }
+
     // ===== STATE PERSISTENCE =====
 
     function resetTicketsInMemoryState() {
+        ticketsLocalCacheMode = false;
         linearIssueDetailCache.clear();
         clickUpTaskDetailCache.clear();
         linearProjectIssues = [];
