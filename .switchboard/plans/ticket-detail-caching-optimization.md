@@ -245,6 +245,14 @@ No automated test changes required for this frontend-only optimization. Manual v
 
 1. `src/webview/planning.js` - Add cache structures, modify click handler, update message handlers
 
+## Review Findings
+
+**Files changed:** `src/webview/planning.js` — added cache checks to subtask navigation handler at lines 5332-5346.
+
+**Validation:** Implementation matches plan Steps 1-7. All cache declarations, click-handler checks, message-handler population, and invalidation paths are correctly placed. One fix applied: subtask navigation was calling `loadLinearTaskDetails`/`loadClickUpTaskDetails` directly without cache checks, contradicting the plan's stated edge-case behavior. Added cache-lookup branches so subtask clicks now reuse cached details when available.
+
+**Remaining risks:** None material. Reference-mutation risk and stale-data trade-offs noted in plan edge-case analysis remain acceptable and unchanged.
+
 ---
 
 **Recommendation:** Send to Intern

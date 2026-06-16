@@ -3072,8 +3072,6 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 const hasImage = !!msg.screen.imageUrl;
                 const isFailed = msg.screen.status === 'FAILED';
                 const projectId = msg.screen.projectId || (stitchProjectSelect ? stitchProjectSelect.value : '');
-                const key = getStitchScreenPollKey(projectId, msg.screen.id, state.stitchWorkspaceRoot);
-                const isPolling = state.stitchScreenPolls && state.stitchScreenPolls.has(key);
 
                 if (hasScreenStateChanged(msg.screen, existingScreen)) {
                     if (hasImage) {

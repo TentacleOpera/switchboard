@@ -214,4 +214,11 @@ Skipped per session directive. No compilation or automated test execution requir
 - **Missed status updates**: If we're too conservative, users might not see important state changes. Mitigation: thorough testing of all screen operations.
 - **Edge cases**: Screens with partial data (image but no status, or vice versa). Mitigation: comparison handles both fields independently.
 
+## Review Findings
+
+- **Files changed:** `src/webview/design.js` — removed 2 lines of dead code (`key` and `isPolling` variables at former line 3075-3076) that were orphaned by the branch restructuring.
+- **Validation:** Code review only; no compilation or tests run per session directive.
+- **Remaining risks:** `statusMessage` comparison in `hasScreenStateChanged` may trigger status updates on trivial backend message changes (e.g., progress text deltas), but this matches the plan specification.
+- **Out-of-scope note:** Same commit also added an unrelated `btnForceReloadScreens` event listener; not reviewed as part of this plan.
+
 **Recommendation:** Send to Intern

@@ -5330,9 +5330,19 @@ Return ONLY the drafted prompt with no additional commentary.`;
             nav?.querySelectorAll('.subtask-nav-item').forEach(i => i.classList.remove('selected'));
             item.classList.add('selected');
             if (provider === 'linear') {
-                loadLinearTaskDetails(subtaskId);
+                if (linearIssueDetailCache.has(subtaskId)) {
+                    selectedLinearIssue = linearIssueDetailCache.get(subtaskId);
+                    renderTicketsLinearPanel();
+                } else {
+                    loadLinearTaskDetails(subtaskId);
+                }
             } else if (provider === 'clickup') {
-                loadClickUpTaskDetails(subtaskId);
+                if (clickUpTaskDetailCache.has(subtaskId)) {
+                    selectedClickUpIssue = clickUpTaskDetailCache.get(subtaskId);
+                    renderTicketsClickUpPanel();
+                } else {
+                    loadClickUpTaskDetails(subtaskId);
+                }
             }
         });
 
