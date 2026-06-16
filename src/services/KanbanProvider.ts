@@ -2511,6 +2511,9 @@ export class KanbanProvider implements vscode.Disposable {
             resolvedOptions.designDocContent = designDocContent;
             const { designSystemDocLink } = await this._resolveDesignSystemDoc(workspaceRoot);
             resolvedOptions.designSystemDocLink = designSystemDocLink;
+            const { constitutionLink, constitutionContent } = await this._resolveConstitution(workspaceRoot);
+            resolvedOptions.constitutionLink = constitutionLink;
+            resolvedOptions.constitutionContent = constitutionContent;
         } else if (role === 'lead' || role === 'coder' || role === 'intern') {
             resolvedOptions.instruction = (role === 'coder' || role === 'intern') ? 'low-complexity' : undefined;
             resolvedOptions.pairProgrammingEnabled = (this._autobanState?.pairProgrammingMode ?? 'off') !== 'off';

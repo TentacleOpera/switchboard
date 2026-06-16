@@ -259,6 +259,10 @@ Tuning tab (adversarial review extraction and CONSTITUTION.md improvement from p
 
 ---
 
+## Review Findings
+
+Reviewer pass found Phase 5 was half-wired: `_resolveConstitution` existed in [KanbanProvider.ts](../../src/services/KanbanProvider.ts) but was never called, so `constitutionContent` never reached `buildKanbanBatchPrompt` and the injection at [agentPromptBuilder.ts:528](../../src/services/agentPromptBuilder.ts#L528) was dead — fixed by invoking it in the planner branch (KanbanProvider.ts:2514). Also narrowed `invokeConstitutionBuilder` ([PlanningPanelProvider.ts:2186](../../src/services/PlanningPanelProvider.ts#L2186)) to stop dispatching the builder prompt into an arbitrary `activeTerminal`. Verified solid: shared-provider Option A, all kanban/epic/constitution handlers route to `_projectPanel`, `_sendActiveDesignDocState` posts to both panels, file-watcher dual-dispatches with correct `isProject` flag, constitution read/write path-scoped to workspace roots, and the Kanban tab fully removed from planning.html. Files changed: KanbanProvider.ts, PlanningPanelProvider.ts. Validation: compilation/tests skipped per session directives — static wiring verified; remaining minor risk is unbounded constitution size in the prompt (mirrors existing designDoc behavior, deferred).
+
 ## Recommendation
 
 **Send to Lead Coder.** (Complexity 7 — multi-file coordination across two services, a provider-ownership decision affecting a 5,286-line class, and a net-new feature with an undefined invocation mechanism. Resolve the three User Review items before starting.)

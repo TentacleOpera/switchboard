@@ -38,3 +38,7 @@ No other changes needed — `findPendingKanbanMatch` already searches the full u
 
 **Complexity:** 1  
 **Tags:** frontend, bugfix
+
+## Review Findings
+
+Implemented exactly as specified in [planning.js](../../src/webview/planning.js#L2646-L2649) — `kanbanFilters.column = ''`, dropdown reset, and `persistTab('kanban.column', '')` added before `switchToTab('kanban')`. Traced both selection paths: the immediate-match path skips silently if the DOM is still stale, but `_pendingKanbanSelection` survives and `handleKanbanPlansReady` re-resolves it after the async fetch re-renders with the cleared filter (`updateKanbanColumnFilter` reads the now-empty `kanbanFilters.column`, `renderKanbanPlans` filter at L4030 passes the target). No double-trigger (single fetch via `switchToTab`), no orphaned refs, no race. Files changed: `src/webview/planning.js`. Validation: static trace only (compile/tests skipped per session directive). No remaining risks.

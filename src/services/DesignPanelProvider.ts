@@ -1506,7 +1506,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                     const updatedScreens = await ds.apply(selectedScreenInstances);
 
                     const formatted = await Promise.all(updatedScreens.map(async (s: any) => {
-                        return this._formatScreen(s, projectId, workspaceRoot || '');
+                        return this._formatScreen(s, workspaceRoot || '');
                     }));
 
                     const db = KanbanDatabase.forWorkspace(workspaceRoot || '');
@@ -1514,9 +1514,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                         id: f.id,
                         projectId,
                         name: f.name,
-                        displayName: f.displayName,
-                        imageUrl: f.imageUrl,
-                        htmlUrl: f.htmlUrl,
+                        deviceType: f.deviceType ?? null,
                         status: f.status,
                         statusMessage: f.statusMessage
                     })));

@@ -2184,7 +2184,6 @@ export class PlanningPanelProvider {
                     break;
                 }
                 const terminal = vscode.window.terminals.find(t => t.name.toLowerCase().includes('planner') || t.name.toLowerCase().includes('lead'))
-                    || vscode.window.activeTerminal
                     || vscode.window.createTerminal({ name: 'Constitution Builder', cwd: wsRoot });
                 terminal.show();
                 const promptText = `Follow instructions in .agent/skills/constitution_builder.md to build or improve CONSTITUTION.md in this project.`;

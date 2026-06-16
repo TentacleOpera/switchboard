@@ -180,3 +180,7 @@ The lazy `fs.existsSync` / `fs.mkdirSync(worktreesParent, { recursive: true })` 
 ## Recommendation
 
 **Complexity: 3 → Send to Intern.** Two deletions plus one small mode-aware path expression; the sibling requirement is the load-bearing constraint and is directly enforced by the corrected `worktreesParent` computation. Crux behavior verified against the actual call path.
+
+## Review Findings
+
+Frontend gate removed from [kanban.html](../../src/webview/kanban.html#L8288) (no orphaned `cpMode`/error-string refs; `config` still consumed at L8349). Backend gate replaced with minimal `if (!cpStatus.controlPlaneRoot)` guard and mode-aware `worktreesParent` in [KanbanProvider.ts](../../src/services/KanbanProvider.ts#L6794-L6804). Verified the crux: `getControlPlaneSelectionStatus` (L3734) returns only `'explicit'` or `'auto'` — auto collapses `controlPlaneRoot` to `workspaceRoot`, so the else-branch correctly derives `path.dirname(workspaceRoot)/worktrees` sibling; both callers (L6255, L6290) pre-resolve a non-empty root and wrap in try/catch → `showErrorMessage`, so write-denied/unresolvable cases surface cleanly rather than nesting. Files changed: `src/webview/kanban.html`, `src/services/KanbanProvider.ts`. Validation: static trace only (compile/tests skipped per directive). Remaining risk: cross-repo branch-name collision in a shared `worktrees/` parent — accepted, auto-suffixed by the retry loop.
