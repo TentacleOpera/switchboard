@@ -5390,50 +5390,6 @@ FROM plans
         return deleted;
     }
 
-    /**
-     * Clear all cached Stitch data (projects and screens) globally for this DB file.
-     * Note: In workspaceDatabaseMappings configurations where multiple roots share a single DB,
-     * this deletes data for all mapped workspaces.
-     */
-    public async clearStitchCache(): Promise<{ deletedScreens: number; deletedProjects: number }> {
-        if (!(await this.ensureReady()) || !this._db) return { deletedScreens: 0, deletedProjects: 0 };
-        
-        let deletedScreens = 0;
-        let deletedProjects = 0;
-        
-        const countScreens = this._db.prepare('SELECT COUNT(*) as cnt FROM stitch_screens');
-        try {
-            if (countScreens.step()) {
-                deletedScreens = (countScreens.getAsObject() as any).cnt as number;
-            }
-        } finally {
-            countScreens.free();
-        }
-
-        const countProjects = this._db.prepare('SELECT COUNT(*) as cnt FROM stitch_projects');
-        try {
-            if (countProjects.step()) {
-                deletedProjects = (countProjects.getAsObject() as any).cnt as number;
-            }
-        } finally {
-            countProjects.free();
-        }
-
-        try {
-            this._db.exec('BEGIN TRANSACTION');
-            this._db.run('DELETE FROM stitch_screens');
-            this._db.run('DELETE FROM stitch_projects');
-            this._db.exec('COMMIT');
-        } catch (error) {
-            try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
-            console.error('[KanbanDatabase] Failed to clear Stitch cache:', error);
-            return { deletedScreens: 0, deletedProjects: 0 };
-        }
-
-        await this._persist();
-        return { deletedScreens, deletedProjects };
-    }
-
     private static async _loadSqlJs(): Promise<SqlJsStatic> {
 
         if (!KanbanDatabase._sqlJsPromise) {

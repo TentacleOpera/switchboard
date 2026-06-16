@@ -46,6 +46,7 @@ export class DesignPanelProvider implements vscode.Disposable {
     private _imagesDocsDebounce?: NodeJS.Timeout;
     private _briefsDocsDebounce?: NodeJS.Timeout;
     private _activeScreens = new Map<string, any>(); // Key: screen.id, Value: SDK Screen instance
+    private _stitchOperationLock = false;
     private _activeDesignSystemDocSourceId: string | null = null;
     private _activeDesignSystemDocId: string | null = null;
     private _htmlServers = new Map<string, { server: http.Server; port: number; timeoutId: NodeJS.Timeout }>();
@@ -166,6 +167,7 @@ export class DesignPanelProvider implements vscode.Disposable {
         this._panel?.dispose();
         this.disposeWatchers();
         this._activeScreens.clear();
+        this._stitchOperationLock = false;
         for (const [, entry] of this._htmlServers) {
             clearTimeout(entry.timeoutId);
             try { entry.server.close(); } catch {}
@@ -945,24 +947,6 @@ export class DesignPanelProvider implements vscode.Disposable {
         return processedHtml;
     }
 
-    public async rebuildStitchCache(workspaceRoot: string): Promise<void> {
-        await vscode.window.withProgress({
-            location: vscode.ProgressLocation.Notification,
-            title: 'Rebuilding Stitch cache...',
-            cancellable: false
-        }, async () => {
-            const db = KanbanDatabase.forWorkspace(workspaceRoot);
-            await db.ensureReady();
-            await db.clearStitchCache();
-            this._activeScreens.clear();
-            await this._handleMessage({
-                type: 'stitchListProjects',
-                workspaceRoot,
-                forceRefresh: true
-            });
-        });
-    }
-
     private async _handleMessage(message: any): Promise<void> {
         const hasKey = this._setupStitchApiKey();
 
@@ -1372,36 +1356,45 @@ export class DesignPanelProvider implements vscode.Disposable {
             case 'stitchRebuildImageCache':
                 try {
                     const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
-                    const projectId: string = message.projectId;
-                    if (!projectId) throw new Error('No project selected to rebuild cache');
-
-                    const db = KanbanDatabase.forWorkspace(workspaceRoot);
-                    await db.ensureReady();
-                    const cached = await db.getStitchScreensForProject(projectId);
-
-                    const cacheDir = this._getImageCacheDir(workspaceRoot);
-                    for (const s of cached) {
-                        const fileUri = vscode.Uri.file(
-                            path.join(cacheDir, `${path.basename(s.id)}.png`)
-                        );
-                        try {
-                            await vscode.workspace.fs.delete(fileUri);
-                        } catch {
-                            // ignore if not exist
-                        }
+                    if (this._stitchOperationLock) {
+                        this.postMessage({ type: 'stitchError', error: 'Another Stitch operation is in progress. Please wait.', workspaceRoot });
+                        return;
                     }
+                    this._stitchOperationLock = true;
+                    try {
+                        const projectId: string = message.projectId;
+                        if (!projectId) throw new Error('No project selected to rebuild cache');
 
-                    const stitch = await loadStitch();
-                    const formatted = await Promise.all(cached.map(async (s) => {
-                        let screen = this._activeScreens.get(s.id);
-                        if (!screen) {
-                            screen = await stitch.project(projectId).getScreen(s.id);
-                            this._activeScreens.set(s.id, screen);
+                        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                        await db.ensureReady();
+                        const cached = await db.getStitchScreensForProject(projectId);
+
+                        const cacheDir = this._getImageCacheDir(workspaceRoot);
+                        for (const s of cached) {
+                            const fileUri = vscode.Uri.file(
+                                path.join(cacheDir, `${path.basename(s.id)}.png`)
+                            );
+                            try {
+                                await vscode.workspace.fs.delete(fileUri);
+                            } catch {
+                                // ignore if not exist
+                            }
                         }
-                        return this._formatScreen(screen, workspaceRoot);
-                    }));
 
-                    this.postMessage({ type: 'stitchScreensReady', screens: formatted, workspaceRoot });
+                        const stitch = await loadStitch();
+                        const formatted = await Promise.all(cached.map(async (s) => {
+                            let screen = this._activeScreens.get(s.id);
+                            if (!screen) {
+                                screen = await stitch.project(projectId).getScreen(s.id);
+                                this._activeScreens.set(s.id, screen);
+                            }
+                            return this._formatScreen(screen, workspaceRoot);
+                        }));
+
+                        this.postMessage({ type: 'stitchScreensReady', screens: formatted, workspaceRoot });
+                    } finally {
+                        this._stitchOperationLock = false;
+                    }
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
                 }
@@ -1410,42 +1403,54 @@ export class DesignPanelProvider implements vscode.Disposable {
             case 'stitchForceReloadScreens':
                 try {
                     const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
-                    const projectId: string = message.projectId;
-                    if (!workspaceRoot) throw new Error('No workspace root available');
-                    if (!projectId) throw new Error('No project selected to force reload');
+                    if (this._stitchOperationLock) {
+                        this.postMessage({ type: 'stitchError', error: 'Another Stitch operation is in progress. Please wait.', workspaceRoot });
+                        return;
+                    }
+                    this._stitchOperationLock = true;
+                    try {
+                        const projectId: string = message.projectId;
+                        if (!workspaceRoot) throw new Error('No workspace root available');
+                        if (!projectId) throw new Error('No project selected to force reload');
 
-                    const db = KanbanDatabase.forWorkspace(workspaceRoot);
-                    await db.ensureReady();
+                        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                        await db.ensureReady();
 
-                    await db.deleteStitchScreensForProject(projectId);
-
-                    for (const [screenId, screen] of this._activeScreens.entries()) {
-                        if (screen && (screen.projectId === projectId || screen.project_id === projectId)) {
-                            this._activeScreens.delete(screenId);
+                        const cached = await db.getStitchScreensForProject(projectId);
+                        const cacheDir = this._getImageCacheDir(workspaceRoot);
+                        for (const s of cached) {
+                            const fileUri = vscode.Uri.file(path.join(cacheDir, `${path.basename(s.id)}.png`));
+                            try { await vscode.workspace.fs.delete(fileUri); } catch { /* ignore if not exist */ }
                         }
-                    }
 
-                    const stitch = await loadStitch();
-                    const allAssets = await stitch.project(projectId).screens();
-                    const list = allAssets.filter((s: any) => !!s.data?.deviceType && s.data?.screenMetadata !== undefined && s.data?.screenMetadata !== null);
-                    for (const screen of list) {
-                        this._activeScreens.set(screen.id, screen);
-                    }
+                        await db.deleteStitchScreensForProject(projectId);
 
-                    if (workspaceRoot) {
-                        const screensToUpsert = list.map((s: any) => ({
-                            id: s.id,
-                            projectId: s.projectId || projectId,
-                            name: s.data?.title || s.data?.displayName || s.id,
-                            deviceType: s.data?.deviceType || null,
-                            status: s.data?.screenMetadata?.status || null,
-                            statusMessage: s.data?.screenMetadata?.statusMessage || null
-                        }));
-                        await db.bulkUpsertStitchScreens(screensToUpsert);
-                    }
+                        this._activeScreens.clear();
 
-                    const formatted = await Promise.all(list.map((s: any) => this._formatScreen(s, workspaceRoot)));
-                    this.postMessage({ type: 'stitchScreensReady', screens: formatted, workspaceRoot });
+                        const stitch = await loadStitch();
+                        const allAssets = await stitch.project(projectId).screens();
+                        const list = allAssets.filter((s: any) => !!s.data?.deviceType && s.data?.screenMetadata !== undefined && s.data?.screenMetadata !== null);
+                        for (const screen of list) {
+                            this._activeScreens.set(screen.id, screen);
+                        }
+
+                        if (workspaceRoot) {
+                            const screensToUpsert = list.map((s: any) => ({
+                                id: s.id,
+                                projectId: s.projectId || projectId,
+                                name: s.data?.title || s.data?.displayName || s.id,
+                                deviceType: s.data?.deviceType || null,
+                                status: s.data?.screenMetadata?.status || null,
+                                statusMessage: s.data?.screenMetadata?.statusMessage || null
+                            }));
+                            await db.bulkUpsertStitchScreens(screensToUpsert);
+                        }
+
+                        const formatted = await Promise.all(list.map((s: any) => this._formatScreen(s, workspaceRoot)));
+                        this.postMessage({ type: 'stitchScreensReady', screens: formatted, workspaceRoot });
+                    } finally {
+                        this._stitchOperationLock = false;
+                    }
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
                 }
@@ -1454,29 +1459,38 @@ export class DesignPanelProvider implements vscode.Disposable {
             case 'stitchCreateProject':
                 try {
                     const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
-                    const title = await vscode.window.showInputBox({
-                        prompt: 'Title for the new Stitch project',
-                        placeHolder: 'e.g. Onboarding Redesign'
-                    });
-                    if (!title) return; // user dismissed the input — nothing to do
-                    const stitch = await loadStitch();
-                    const project = await stitch.createProject(title);
-                    const list = await stitch.projects();
-                    const projects = list.map((p: any) => ({
-                        id: p.id,
-                        name: p.data?.title || p.data?.name || p.id,
-                        updateTime: p.data?.updateTime || p.data?.createTime || ''
-                    }));
-                    // Persist the freshly created project (and any others) so the cache-gated
-                    // stitchListProjects path serves it on next panel open without a forceRefresh.
-                    if (workspaceRoot) {
-                        const db = KanbanDatabase.forWorkspace(workspaceRoot);
-                        for (const p of projects) {
-                            await db.upsertStitchProject(p.id, p.name, p.updateTime);
-                        }
+                    if (this._stitchOperationLock) {
+                        this.postMessage({ type: 'stitchError', error: 'Another Stitch operation is in progress. Please wait.', workspaceRoot });
+                        return;
                     }
-                    // Pass the new project as the default so the webview auto-selects it.
-                    this.postMessage({ type: 'stitchProjectsReady', projects, defaultProjectId: project.id, selectProjectId: project.id, workspaceRoot });
+                    this._stitchOperationLock = true;
+                    try {
+                        const title = await vscode.window.showInputBox({
+                            prompt: 'Title for the new Stitch project',
+                            placeHolder: 'e.g. Onboarding Redesign'
+                        });
+                        if (!title) return; // user dismissed the input — nothing to do
+                        const stitch = await loadStitch();
+                        const project = await stitch.createProject(title);
+                        const list = await stitch.projects();
+                        const projects = list.map((p: any) => ({
+                            id: p.id,
+                            name: p.data?.title || p.data?.name || p.id,
+                            updateTime: p.data?.updateTime || p.data?.createTime || ''
+                        }));
+                        // Persist the freshly created project (and any others) so the cache-gated
+                        // stitchListProjects path serves it on next panel open without a forceRefresh.
+                        if (workspaceRoot) {
+                            const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                            for (const p of projects) {
+                                await db.upsertStitchProject(p.id, p.name, p.updateTime);
+                            }
+                        }
+                        // Pass the new project as the default so the webview auto-selects it.
+                        this.postMessage({ type: 'stitchProjectsReady', projects, defaultProjectId: project.id, selectProjectId: project.id, workspaceRoot });
+                    } finally {
+                        this._stitchOperationLock = false;
+                    }
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
                 }
@@ -1884,16 +1898,25 @@ export class DesignPanelProvider implements vscode.Disposable {
             case 'stitchGenerate':
                 try {
                     const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
-                    // The SDK has no root-level generate — a project is required.
-                    if (!message.projectId) {
-                        this.postMessage({ type: 'stitchError', error: 'Select a Stitch project before generating a screen.', workspaceRoot });
+                    if (this._stitchOperationLock) {
+                        this.postMessage({ type: 'stitchError', error: 'Another Stitch operation is in progress. Please wait.', workspaceRoot });
                         return;
                     }
-                    const stitch = await loadStitch();
-                    const projectInstance = stitch.project(message.projectId);
-                    const screen = await projectInstance.generate(message.prompt, message.deviceType, message.modelId);
-                    this._activeScreens.set(screen.id, screen);
-                    this.postMessage({ type: 'stitchScreenReady', screen: await this._formatScreen(screen, workspaceRoot), workspaceRoot });
+                    this._stitchOperationLock = true;
+                    try {
+                        // The SDK has no root-level generate — a project is required.
+                        if (!message.projectId) {
+                            this.postMessage({ type: 'stitchError', error: 'Select a Stitch project before generating a screen.', workspaceRoot });
+                            return;
+                        }
+                        const stitch = await loadStitch();
+                        const projectInstance = stitch.project(message.projectId);
+                        const screen = await projectInstance.generate(message.prompt, message.deviceType, message.modelId);
+                        this._activeScreens.set(screen.id, screen);
+                        this.postMessage({ type: 'stitchScreenReady', screen: await this._formatScreen(screen, workspaceRoot), workspaceRoot });
+                    } finally {
+                        this._stitchOperationLock = false;
+                    }
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
                 }
@@ -1902,11 +1925,20 @@ export class DesignPanelProvider implements vscode.Disposable {
             case 'stitchEdit':
                 try {
                     const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
-                    const screen = this._activeScreens.get(message.screenId);
-                    if (!screen) throw new Error('Screen instance not found in memory cache.');
-                    const updated = await screen.edit(message.prompt, undefined, message.modelId);
-                    this._activeScreens.set(updated.id, updated);
-                    this.postMessage({ type: 'stitchScreenReady', screen: await this._formatScreen(updated, workspaceRoot), workspaceRoot });
+                    if (this._stitchOperationLock) {
+                        this.postMessage({ type: 'stitchError', error: 'Another Stitch operation is in progress. Please wait.', workspaceRoot });
+                        return;
+                    }
+                    this._stitchOperationLock = true;
+                    try {
+                        const screen = this._activeScreens.get(message.screenId);
+                        if (!screen) throw new Error('Screen instance not found in memory cache.');
+                        const updated = await screen.edit(message.prompt, undefined, message.modelId);
+                        this._activeScreens.set(updated.id, updated);
+                        this.postMessage({ type: 'stitchScreenReady', screen: await this._formatScreen(updated, workspaceRoot), workspaceRoot });
+                    } finally {
+                        this._stitchOperationLock = false;
+                    }
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
                 }
@@ -1915,20 +1947,29 @@ export class DesignPanelProvider implements vscode.Disposable {
             case 'stitchVariants':
                 try {
                     const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
-                    const screen = this._activeScreens.get(message.screenId);
-                    if (!screen) throw new Error('Screen instance not found in memory cache.');
-                    const aspects = message.aspects?.length ? message.aspects : undefined;
-                    const variantOptions = {
-                        variantCount: message.count || 3,
-                        creativeRange: message.creativeRange,
-                        aspects
-                    };
-                    const list = await screen.variants(message.prompt, variantOptions, undefined, message.modelId);
-                    const formatted = await Promise.all(list.map(async (v: any) => {
-                        this._activeScreens.set(v.id, v);
-                        return this._formatScreen(v, workspaceRoot);
-                    }));
-                    this.postMessage({ type: 'stitchScreensReady', screens: formatted, workspaceRoot });
+                    if (this._stitchOperationLock) {
+                        this.postMessage({ type: 'stitchError', error: 'Another Stitch operation is in progress. Please wait.', workspaceRoot });
+                        return;
+                    }
+                    this._stitchOperationLock = true;
+                    try {
+                        const screen = this._activeScreens.get(message.screenId);
+                        if (!screen) throw new Error('Screen instance not found in memory cache.');
+                        const aspects = message.aspects?.length ? message.aspects : undefined;
+                        const variantOptions = {
+                            variantCount: message.count || 3,
+                            creativeRange: message.creativeRange,
+                            aspects
+                        };
+                        const list = await screen.variants(message.prompt, variantOptions, undefined, message.modelId);
+                        const formatted = await Promise.all(list.map(async (v: any) => {
+                            this._activeScreens.set(v.id, v);
+                            return this._formatScreen(v, workspaceRoot);
+                        }));
+                        this.postMessage({ type: 'stitchScreensReady', screens: formatted, workspaceRoot });
+                    } finally {
+                        this._stitchOperationLock = false;
+                    }
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
                 }

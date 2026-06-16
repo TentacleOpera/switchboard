@@ -198,21 +198,6 @@ DesignPanelProvider → evict project entries from _activeScreens Map
 DesignPanelProvider → stitchGetProjectScreens(projectId, workspaceRoot)
 ```
 
-### Feature 2: Rebuild All Stitch Cache (Workspace-Level)
-
-Add a VS Code command `switchboard.rebuildStitchCache` that:
-1. Clears all entries from `stitch_projects` and `stitch_screens` for the workspace DB
-2. Triggers `stitchListProjects` with `forceRefresh: true` to re-fetch everything
-3. Shows progress indicator during rebuild via `vscode.window.withProgress`
-
-**Location**: Command palette (not UI button - this is destructive)
-
-**Message flow**:
-```
-command → DesignPanelProvider.rebuildStitchCache(workspaceRoot)
-DesignPanelProvider → db.clearStitchCache()
-DesignPanelProvider → stitchListProjects(forceRefresh: true)
-```
 
 ## Implementation Plan
 
@@ -225,13 +210,6 @@ DesignPanelProvider → stitchListProjects(forceRefresh: true)
    - Returns number of deleted rows
    - Guard with `ensureReady()`; return `0` if DB unavailable
 
-2. Add `clearStitchCache()` method
-   - SQL: `DELETE FROM stitch_screens` then `DELETE FROM stitch_projects`
-   - Wrap in transaction (`BEGIN`/`COMMIT`/`ROLLBACK`)
-   - Returns counts of deleted screens and projects
-   - Call `this._persist()` to flush to disk
-   - **Clarification:** This deletes ALL rows globally for the DB file. Shared mappings limitation documented in JSDoc.
-
 ### Phase 2: Backend Handler
 
 **File**: `src/services/DesignPanelProvider.ts` (add cases in `_handleMessage`, ~line 1391)
@@ -243,11 +221,6 @@ DesignPanelProvider → stitchListProjects(forceRefresh: true)
    - Re-run existing fetch/format/upsert logic (same as `stitchGetProjectScreens`)
    - Send `stitchScreensReady` on success (reuse existing message type; do not add `stitchForceReloadComplete`)
    - Send `stitchError` on failure
-
-2. Add `rebuildStitchCache(workspaceRoot: string)` public method
-   - Call `db.clearStitchCache()`
-   - Trigger `stitchListProjects` handler with `forceRefresh: true`
-   - Wrap in `vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Rebuilding Stitch cache...' })`
 
 ### Phase 3: Webview UI
 
@@ -270,48 +243,32 @@ DesignPanelProvider → stitchListProjects(forceRefresh: true)
    - Use `class="strip-btn"` plus optional `danger` styling for visual distinction
    - Tooltip: "Delete the local screen list for this project and re-fetch from Stitch API"
 
-### Phase 4: Command Registration
-
-**File**: `src/extension.ts` (after `openDesignPanelDisposable`, ~line 817)
-
-1. Register `switchboard.rebuildStitchCache` command
-   - Get current workspace root from `kanbanProvider.getCurrentWorkspaceRoot()`
-   - If undefined, show warning toast and return early
-   - Show modal warning: "This will delete ALL cached Stitch projects and screens for the current workspace database and re-fetch from the API. Continue?" with "Rebuild" action
-   - Call `designPanelProvider.rebuildStitchCache(workspaceRoot)`
-
-### Phase 5: Testing
+### Phase 4: Testing
 
 1. **Manual test**: Delete screens from DB, verify "Force Reload Screens" restores them
-2. **Manual test**: Corrupt both tables, verify command rebuilds all
-3. **Edge case**: Test with project that has no screens on API (should handle gracefully)
-4. **Edge case**: Test with multiple workspaces sharing a DB via mappings (document global deletion behavior)
-5. **Edge case**: Rapid double-click Force Reload — verify `stitchBusy` prevents duplicate fetch
-6. **Edge case**: Variants/Edit after force reload — verify no stale `_activeScreens` references
+2. **Edge case**: Test with project that has no screens on API (should handle gracefully)
+3. **Edge case**: Rapid double-click Force Reload — verify `stitchBusy` prevents duplicate fetch
+4. **Edge case**: Variants/Edit after force reload — verify no stale `_activeScreens` references
 
 ## Files Changed
 
-- `src/services/KanbanDatabase.ts` - Add `deleteStitchScreensForProject` and `clearStitchCache` methods
-- `src/services/DesignPanelProvider.ts` - Add `stitchForceReloadScreens` message handler, `rebuildStitchCache` public method, and `_activeScreens` eviction logic
+- `src/services/KanbanDatabase.ts` - Add `deleteStitchScreensForProject` method
+- `src/services/DesignPanelProvider.ts` - Add `stitchForceReloadScreens` message handler and `_activeScreens` eviction logic
 - `src/webview/design.js` - Add `btn-force-reload-screens` reference, disable logic, and click handler
 - `src/webview/design.html` - Add "Force Reload Screens" button to controls strip
-- `src/extension.ts` - Register `switchboard.rebuildStitchCache` command with modal confirmation
 
 ## Validation
 
 - [ ] "Force Reload Screens" button appears in Stitch tab with distinct visual treatment
 - [ ] Button deletes screens from DB, evicts `_activeScreens`, and re-fetches from API
-- [ ] Command clears both tables and rebuilds from scratch with progress notification
 - [ ] Error handling for API failures after cache deletion (error toast + retry possible)
-- [ ] Workspace scoping: documented that `clearStitchCache()` affects the entire DB file (shared mappings limitation)
-- [ ] Undefined workspace guard on command registration
+- [ ] `workspaceRoot` validation in `stitchForceReloadScreens` handler
 
 ## Remaining Risks
 
-- **Data loss**: Both features are destructive. Mitigation: confirmation dialogs and clear warnings
+- **Data loss**: Force Reload Screens is destructive. Mitigation: confirmation dialog and clear warning
 - **API rate limits**: Force reloading many projects could hit Stitch API limits. Mitigation: add rate limiting or batch delays if needed
 - **Partial failure**: If API fetch fails after cache deletion, user is left with empty cache. Mitigation: show clear error message with retry option
-- **Shared DB mappings**: `clearStitchCache()` deletes ALL stitch data for the entire DB file. Workspaces sharing a DB via `workspaceDatabaseMappings` will all lose their stitch cache. Mitigation: document as known limitation; future work could add `workspace_id` columns to stitch tables with a migration
 - **Stale SDK references**: If `_activeScreens` eviction is missed during implementation, subsequent Variants/Edit calls may reference stale screen objects. Mitigation: code review checklist item
 
 ## Recommendation
@@ -320,8 +277,9 @@ Complexity 6 → **Send to Coder**
 
 ## Review Findings
 
-- All five files changed as planned. Core logic functional: `deleteStitchScreensForProject` and `clearStitchCache` present in `KanbanDatabase.ts`; `stitchForceReloadScreens` handler and `rebuildStitchCache` method present in `DesignPanelProvider.ts`; button, ref, disable logic, and click handler present in `design.html`/`design.js`; `switchboard.rebuildStitchCache` command registered in `extension.ts`.
+- Four files changed: `deleteStitchScreensForProject` present in `KanbanDatabase.ts`; `stitchForceReloadScreens` handler present in `DesignPanelProvider.ts`; button, ref, disable logic, and click handler present in `design.html`/`design.js`.
 - One MAJOR finding fixed: `stitchForceReloadScreens` handler was missing `workspaceRoot` validation (plan explicitly required both `projectId` and `workspaceRoot` validation). Added early guard `if (!workspaceRoot) throw new Error('No workspace root available');` at `src/services/DesignPanelProvider.ts:1414`.
-- NITs deferred: `deleteStitchScreensForProject` uses SELECT-then-DELETE instead of `getRowsModified()` (functionally equivalent); `rebuildStitchCache` lacks try/catch but VS Code surfaces command palette errors acceptably; `kanbanProvider!` non-null assertion is pre-existing pattern.
+- Feature 2 (command palette `switchboard.rebuildStitchCache` and `clearStitchCache`) removed during review — it introduced webview state divergence risk without adding meaningful recovery value beyond the per-project "Force Reload Screens" button. Removed from `extension.ts`, `DesignPanelProvider.ts`, and `KanbanDatabase.ts`.
+- NITs deferred: `deleteStitchScreensForProject` uses SELECT-then-DELETE instead of `getRowsModified()` (functionally equivalent).
 - No orphaned references, no double-trigger bugs, no stale `_activeScreens` references after eviction. Webview `stitchBusy` lock prevents duplicate clicks. `stitchScreensReady` reused correctly for force reload completion.
-- Remaining risk: provider-level concurrent-operation guard absent (pre-existing); shared-DB global deletion limitation documented in JSDoc.
+- Remaining risk: provider-level concurrent-operation guard absent (pre-existing).

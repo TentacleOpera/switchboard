@@ -135,11 +135,7 @@
         "title": "Switchboard: Open Design Panel",
         "category": "Switchboard"
       },
-      {
-        "command": "switchboard.rebuildStitchCache",
-        "title": "Switchboard: Rebuild Stitch Cache",
-        "category": "Switchboard"
-      },
+
       {
         "command": "switchboard.forceOpenFile",
         "title": "Override Open"
