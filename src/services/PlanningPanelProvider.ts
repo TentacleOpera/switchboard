@@ -2094,11 +2094,12 @@ export class PlanningPanelProvider {
                 break;
             }
             case 'loadConstitutionFiles': {
-                const workspaces = allRoots.map(root => {
-                    const constitutionPath = path.join(root, 'CONSTITUTION.md');
+                const workspaceItems = buildWorkspaceItems(allRoots);
+                const workspaces = workspaceItems.map(ws => {
+                    const constitutionPath = path.join(ws.workspaceRoot, 'CONSTITUTION.md');
                     return {
-                        label: path.basename(root),
-                        workspaceRoot: root,
+                        label: ws.label,
+                        workspaceRoot: ws.workspaceRoot,
                         hasConstitution: fs.existsSync(constitutionPath)
                     };
                 });

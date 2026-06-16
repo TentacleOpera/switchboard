@@ -65,6 +65,9 @@ Update any CSS selectors in the copied markdown preview section to target the co
 - None - this is purely additive CSS styling
 - No functional changes to JavaScript or TypeScript code
 
+## Review Findings
+Two missing cyber-theme CSS overrides from `planning.html` were found and fixed in `project.html`: `.cyber-theme-enabled .kanban-controls-strip` (should be transparent, was getting glassmorphism) and `.cyber-theme-enabled .markdown-editor` (should be transparent, was solid black). All plan requirements are now met: cyber theme grid, CRT scanlines, glassmorphism, unified markdown preview styling, and scanline divs in all three preview panels. No compilation or tests required (HTML/CSS only). Remaining risk: `::-webkit-scrollbar` base styles are absent from `project.html` (not in plan scope), so scrollbar cyber coloring cannot apply without them.
+
 ## Metadata
 **Complexity:** 2
 **Tags:** ui, frontend, css

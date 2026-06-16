@@ -6405,7 +6405,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (!workspaceRoot || !msg.epicSessionId || !msg.subtaskSessionId) break;
                 const db = this._getKanbanDb(workspaceRoot);
                 if (!db || !(await db.ensureReady())) break;
-                const epic = await db.getPlanBySessionId(msg.epicSessionId);
+                const epic = await db.getPlanByPlanId(msg.epicSessionId);
                 if (!epic || !epic.isEpic) {
                     vscode.window.showWarningMessage('Target is not a valid epic.');
                     break;
@@ -6416,7 +6416,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     vscode.window.showWarningMessage('Cannot modify subtasks of an epic in a locked column.');
                     break;
                 }
-                const subtask = await db.getPlanBySessionId(msg.subtaskSessionId);
+                const subtask = await db.getPlanByPlanId(msg.subtaskSessionId);
                 if (!subtask) break;
                 if (subtask.isEpic) {
                     vscode.window.showWarningMessage('Cannot add an epic as a subtask.');
@@ -6426,7 +6426,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     vscode.window.showWarningMessage('Subtask already belongs to another epic.');
                     break;
                 }
-                await db.updateEpicStatus(msg.subtaskSessionId, 0, epic.planId);
+                await db.updateEpicStatus(subtask.planId, 0, epic.planId);
                 await this._refreshBoard(workspaceRoot);
                 break;
             }
@@ -6436,7 +6436,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (!workspaceRoot || !msg.planId) break;
                 const db = this._getKanbanDb(workspaceRoot);
                 if (!db || !(await db.ensureReady())) break;
-                const plan = await db.getPlanBySessionId(String(msg.planId));
+                const plan = await db.getPlanByPlanId(String(msg.planId));
                 if (!plan) { vscode.window.showWarningMessage('Plan not found.'); break; }
                 if (plan.isEpic) { vscode.window.showWarningMessage('Plan is already an epic.'); break; }
                 // Clear epic_id (plan is now an epic, not a subtask) and set is_epic=1
@@ -6457,7 +6457,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (!db || !(await db.ensureReady())) break;
                 const subtasks: any[] = [];
                 for (const pid of subtaskPlanIds) {
-                    const plan = await db.getPlanBySessionId(pid);
+                    const plan = await db.getPlanByPlanId(pid);
                     if (plan) subtasks.push(plan);
                 }
                 if (subtasks.length === 0) {
@@ -6469,9 +6469,9 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 const ordinalMap = new Map<string, number>();
                 columnDefs.forEach((def, idx) => ordinalMap.set(def.id, idx));
                 const resolvedColumn = subtasks
-                    .map((st: any) => st.kanbanColumn)
-                    .filter((col: string | null): col is string => !!col)
-                    .sort((a: string, b: string) => (ordinalMap.get(a) ?? Infinity) - (ordinalMap.get(b) ?? Infinity))[0] || subtasks[0].kanbanColumn || 'CREATED';
+                     .map((st: any) => st.kanbanColumn)
+                     .filter((col: string | null): col is string => !!col)
+                     .sort((a: string, b: string) => (ordinalMap.get(a) ?? Infinity) - (ordinalMap.get(b) ?? Infinity))[0] || subtasks[0].kanbanColumn || 'CREATED';
                 const planId = crypto.randomUUID();
                 const sessionId = crypto.randomUUID();
                 const workspaceId = await db.getWorkspaceId();
@@ -6528,7 +6528,9 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (!workspaceRoot || !msg.subtaskSessionId) break;
                 const db = this._getKanbanDb(workspaceRoot);
                 if (!db || !(await db.ensureReady())) break;
-                await db.updateEpicStatus(msg.subtaskSessionId, 0, '');
+                const subtask = await db.getPlanByPlanId(msg.subtaskSessionId);
+                if (!subtask) break;
+                await db.updateEpicStatus(subtask.planId, 0, '');
                 await this._refreshBoard(workspaceRoot);
                 break;
             }
@@ -6537,7 +6539,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (!workspaceRoot || !msg.sessionId) break;
                 const db = this._getKanbanDb(workspaceRoot);
                 if (!db || !(await db.ensureReady())) break;
-                const epic = await db.getPlanBySessionId(msg.sessionId);
+                const epic = await db.getPlanByPlanId(msg.sessionId);
                 if (!epic || !epic.isEpic) break;
                 if (msg.deleteSubtasks) {
                     const subtasks = await db.getSubtasksByEpicId(epic.planId);
@@ -6556,7 +6558,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (!workspaceRoot || !msg.sessionId) break;
                 const db = this._getKanbanDb(workspaceRoot);
                 if (!db || !(await db.ensureReady())) break;
-                const epic = await db.getPlanBySessionId(msg.sessionId);
+                const epic = await db.getPlanByPlanId(msg.sessionId);
                 if (!epic || !epic.isEpic) {
                     this._panel?.webview.postMessage({ type: 'epicDetails', epic: null, subtasks: [] });
                     break;
