@@ -16,9 +16,22 @@ import { buildWorkspaceItems } from './workspaceUtils';
 let _stitchSdkPromise: Promise<any> | undefined;
 function loadStitch(): Promise<any> {
     if (!_stitchSdkPromise) {
-        _stitchSdkPromise = import(/* webpackMode: "eager" */ '@google/stitch-sdk').then(m => m.stitch);
+        const config = vscode.workspace.getConfiguration('switchboard');
+        const authMode = config.get<string>('stitch.authMode') || 'apiKey';
+        const accessToken = config.get<string>('stitch.accessToken') || '';
+        _stitchSdkPromise = import(/* webpackMode: "eager" */ '@google/stitch-sdk').then(m => {
+            if (authMode === 'oauth') {
+                return new m.Stitch(new m.StitchToolClient({ accessToken }));
+            } else {
+                return m.stitch;
+            }
+        });
     }
     return _stitchSdkPromise;
+}
+
+export function invalidateStitchSdkCache(): void {
+    _stitchSdkPromise = undefined;
 }
 
 interface TreeNode {
@@ -734,14 +747,24 @@ export class DesignPanelProvider implements vscode.Disposable {
         };
     }
 
-    private _setupStitchApiKey(): boolean {
+    private _setupStitchAuth(): { mode: 'apiKey' | 'oauth'; valid: boolean } {
         const config = vscode.workspace.getConfiguration('switchboard');
-        const apiKey = config.get<string>('stitch.apiKey') || process.env.STITCH_API_KEY;
-        if (apiKey) {
-            process.env.STITCH_API_KEY = apiKey;
-            return true;
+        const mode = config.get<'apiKey' | 'oauth'>('stitch.authMode') || 'apiKey';
+        if (mode === 'oauth') {
+            const accessToken = config.get<string>('stitch.accessToken');
+            if (accessToken) {
+                delete process.env.STITCH_API_KEY;
+                return { mode, valid: true };
+            }
+            return { mode, valid: false };
+        } else {
+            const apiKey = config.get<string>('stitch.apiKey') || process.env.STITCH_API_KEY;
+            if (apiKey) {
+                process.env.STITCH_API_KEY = apiKey;
+                return { mode, valid: true };
+            }
+            return { mode, valid: false };
         }
-        return false;
     }
 
     // The kanban "Design Doc Reference" planner add-on (roleConfig_planner.addons.designSystemDoc)
@@ -948,7 +971,8 @@ export class DesignPanelProvider implements vscode.Disposable {
     }
 
     private async _handleMessage(message: any): Promise<void> {
-        const hasKey = this._setupStitchApiKey();
+        const authInfo = this._setupStitchAuth();
+        const hasKey = authInfo.valid;
 
         switch (message.type) {
             case 'ready': {
@@ -967,6 +991,12 @@ export class DesignPanelProvider implements vscode.Disposable {
                 });
 
                 this.postMessage({ type: 'stitchApiKeyStatus', configured: hasKey });
+                this.postMessage({
+                    type: 'stitchAuthStatus',
+                    mode: authInfo.mode,
+                    configured: hasKey,
+                    valid: hasKey
+                });
                 const themeConfig = vscode.workspace.getConfiguration('switchboard');
                 this.postMessage({ type: 'switchboardThemeChanged', theme: themeConfig.get<string>('theme.name', 'afterburner') });
                 this.postMessage({ type: 'cyberAnimationSetting', disabled: themeConfig.get<boolean>('theme.disableCyberAnimation', false) });

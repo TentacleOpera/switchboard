@@ -1699,6 +1699,23 @@
             opacity: 0.5;
             cursor: not-allowed;
         }
+        @keyframes copyFlash {
+            0%   { background-color: var(--vscode-testing-iconPassed, #73c991); color: #ffffff; }
+            70%  { background-color: var(--vscode-testing-iconPassed, #73c991); color: #ffffff; }
+            100% { background-color: transparent; color: var(--text-secondary); }
+        }
+        .copied {
+            animation: copyFlash 1.5s ease-out forwards;
+            pointer-events: none;
+        }
+        @keyframes iconFlash {
+            0%   { transform: scale(1); }
+            50%  { transform: scale(1.2); opacity: 0.7; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .flash {
+            animation: iconFlash 0.3s ease-out forwards;
+        }
         /* HTML-specific icon+text hybrid buttons — override fixed width */
         .card-icon-btn.html-serve-btn,
         .card-icon-btn.html-link-btn {
@@ -2747,16 +2764,6 @@
             border-color: var(--accent-teal); color: var(--accent-teal);
             background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
         }
-        /* Online-only controls hidden while the Local view is active */
-        #controls-strip-tickets.tickets-local-mode #tickets-project-picker,
-        #controls-strip-tickets.tickets-local-mode #tickets-state-filter,
-        #controls-strip-tickets.tickets-local-mode #tickets-status-filter,
-        #controls-strip-tickets.tickets-local-mode #tickets-create,
-        #controls-strip-tickets.tickets-local-mode #btn-import-all-tickets,
-        #tree-pane-tickets.tickets-local-mode #tickets-import-all-kanban,
-        #controls-strip-tickets.tickets-local-mode #tickets-hierarchy-nav {
-            display: none !important;
-        }
 
         /* Kanban preview meta bar */
         #kanban-preview-meta-bar, #tickets-preview-meta-bar, #tickets-local-meta-bar {
@@ -2933,7 +2940,6 @@
     <div id="research-tab-bar" class="shared-tab-bar">
         <button class="shared-tab-btn active" data-tab="local">LOCAL DOCS</button>
         <button class="shared-tab-btn" data-tab="online">ONLINE DOCS</button>
-        <button class="shared-tab-btn" data-tab="kanban">KANBAN PLANS</button>
         <button class="shared-tab-btn" data-tab="tickets">TICKETS</button>
         <button class="shared-tab-btn" data-tab="research">RESEARCH</button>
         <button class="shared-tab-btn" data-tab="notebook">NotebookLM</button>
@@ -3136,47 +3142,7 @@
                 <div id="research-import-status" class="planning-status"></div>
             </div>
         </div>
-        <!-- Kanban Plans Content -->
-        <div id="kanban-content" class="shared-tab-content">
 
-            <!-- Controls strip -->
-            <div class="kanban-controls-strip">
-                <select id="kanban-workspace-filter">
-                    <option value="">All Workspaces</option>
-                </select>
-                <select id="kanban-project-filter">
-                    <option value="">All Projects</option>
-                </select>
-                <select id="kanban-column-filter">
-                    <option value="">All Columns</option>
-                </select>
-                <button id="btn-import-kanban-plans" class="strip-btn" title="Scan configured AI IDE folders and pick unclaimed plans to add (any age, bypasses the auto-claim window)">Import</button>
-                <button id="btn-edit-kanban" class="strip-btn" disabled>Edit</button>
-                <button id="btn-save-kanban" class="strip-btn" style="display:none;">Save</button>
-                <button id="btn-cancel-kanban" class="strip-btn" style="display:none;">Cancel</button>
-                <input type="text" id="kanban-search" class="sidebar-search-input" placeholder="Search plans..." />
-            </div>
-            <!-- Split pane: list + preview -->
-            <div class="content-row" id="kanban-content-row">
-                <div id="kanban-list-pane">
-                    <div class="sidebar-toggle-row">
-                        <button id="kanban-view-epics-toggle" class="sidebar-folders-btn">Plans</button>
-                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
-                    </div>
-                    <!-- Plan rows rendered by JS -->
-                </div>
-                <div class="preview-panel-wrapper">
-                    <div id="kanban-preview-pane" class="kanban-preview-pane" style="flex: 1; height: 100%; width: 100%; box-sizing: border-box;">
-                        <div id="kanban-preview-meta-bar" style="display:none;"></div>
-                        <div id="kanban-preview-content">
-                            <!-- Markdown preview rendered by JS -->
-                        </div>
-                        <textarea id="kanban-editor" class="markdown-editor" style="display:none;"></textarea>
-                    </div>
-                    <div class="cyber-scanlines"></div>
-                </div>
-            </div>
-        </div>
 
         <div id="tickets-content" class="shared-tab-content">
             <div class="controls-strip" id="controls-strip-tickets">
@@ -3207,8 +3173,7 @@
                     <div id="tickets-empty-state" class="empty-state">No tickets loaded.</div>
                     <div id="tickets-issues-container"></div>
                     <button id="tickets-load-more" class="planning-button" style="display:none">Load More</button>
-                    <div id="tickets-local-empty-state" class="empty-state" style="display:none">No imported tickets yet. Switch to Online and click Edit on a ticket to import it here.</div>
-                    <div id="tickets-local-container" style="display:none"></div>
+
                 </div>
                 <div class="preview-panel-wrapper">
                     <div id="preview-pane-tickets" style="flex: 1; width: 100%; box-sizing: border-box; display: flex; flex-direction: column;">
@@ -3223,14 +3188,7 @@
                             <button id="btn-comment-ticket" class="strip-btn">Comment</button>
                             <button id="btn-view-attachments" class="strip-btn" style="display:none;">Attachments</button>
                         </div>
-                        <div id="tickets-local-meta-bar" style="display:none;">
-                            <button id="btn-edit-local-ticket" class="strip-btn">Edit</button>
-                            <button id="btn-save-local-ticket" class="strip-btn" style="display:none;">Save</button>
-                            <button id="btn-cancel-local-ticket" class="strip-btn" style="display:none;">Cancel</button>
-                            <button id="btn-push-local-ticket" class="strip-btn" title="Push this markdown back to the remote ticket">Push to Remote</button>
-                            <button id="btn-delete-local-ticket" class="strip-btn" title="Delete the local copy (remote ticket is untouched)">Delete Local</button>
-                            <span id="tickets-local-file-label" style="font-size:10px; margin-left:auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
-                        </div>
+
                         <div id="tickets-comment-input-area" style="display:none; padding: 10px; border-bottom: 1px solid var(--border-color); background: var(--panel-bg2); margin: 10px;">
                             <textarea id="tickets-comment-textarea" placeholder="Type a comment..." style="width: 100%; height: 60px; background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-primary); font-family: inherit; font-size: 12px; padding: 4px; box-sizing: border-box; resize: vertical;"></textarea>
                             <div style="margin-top: 6px; display: flex; justify-content: flex-end; gap: 8px;">
@@ -3251,12 +3209,6 @@
                                 <!-- Ticket detail content (description + comments + attachments) -->
                                 <div id="tickets-detail-content"></div>
                             </div>
-                            <!-- Local mode: imported ticket markdown preview + editor -->
-                            <div id="tickets-local-view" style="display:none; flex-direction: column; min-height: 100%;">
-                                <div id="tickets-local-empty-preview" class="empty-state">Select an imported ticket to preview</div>
-                                <div id="tickets-local-preview"></div>
-                                <textarea id="tickets-local-editor" class="markdown-editor" style="display:none; flex: 1; min-height: 400px;"></textarea>
-                        </div>
                         <div id="tickets-status-footer" style="display:none; padding: 8px 16px; font-size: 10px; color: var(--text-secondary); border-top: 1px solid var(--border-color); background: var(--panel-bg2, #1a1a2e);"></div>
                     </div>
                     <div class="cyber-scanlines"></div>

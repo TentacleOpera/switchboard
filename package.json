@@ -131,6 +131,11 @@
         "category": "Switchboard"
       },
       {
+        "command": "switchboard.openProjectPanel",
+        "title": "Switchboard: Open Project Panel",
+        "category": "Switchboard"
+      },
+      {
         "command": "switchboard.openDesignPanel",
         "title": "Switchboard: Open Design Panel",
         "category": "Switchboard"
@@ -165,7 +170,23 @@
         "switchboard.stitch.apiKey": {
           "type": "string",
           "default": "",
-          "description": "Google Stitch API key. Falls back to STITCH_API_KEY environment variable if empty.",
+          "description": "Google Stitch API key. Used only in apiKey mode. Falls back to STITCH_API_KEY environment variable if empty.",
+          "scope": "application"
+        },
+        "switchboard.stitch.authMode": {
+          "type": "string",
+          "enum": [
+            "apiKey",
+            "oauth"
+          ],
+          "default": "apiKey",
+          "description": "Stitch authentication mode. Use API key or OAuth.",
+          "scope": "application"
+        },
+        "switchboard.stitch.accessToken": {
+          "type": "string",
+          "default": "",
+          "description": "Stitch OAuth Access Token. Used only in oauth mode.",
           "scope": "application"
         },
         "switchboard.stitch.defaultProjectId": {

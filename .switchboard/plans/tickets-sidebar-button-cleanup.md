@@ -387,3 +387,13 @@ This should already handle the layout. If adjustments are needed, modify the gap
 - Verify sidebar header buttons ("Link all", "Import all to kanban", collapse) are on same row.
 
 **Recommendation:** Send to Coder
+
+## Review Findings
+
+Files changed: `src/services/PlanningPanelProvider.ts` (1 fix applied).
+
+Validation: No orphaned references to removed buttons (`btn-import-all-plans`, `data-refine`, `data-import-doc`) found across the `src` tree. All renamed element references (`importAllKanbanButton`, `linkAllButton`, `syncAllButton`) are wired in `initTicketsTab` and returned by `getTicketsTabElements`. CSS selector updated to `#tree-pane-tickets.tickets-local-mode #tickets-import-all-kanban`. Backend handlers for `openLocalTicket`, `syncAllTickets`, and `copyToClipboard` are present and match the plan.
+
+Fix applied: Added `syncAllTicketsResult` fallback in `PlanningPanelProvider.ts` when `workspaceRoot` is unresolved, preventing the webview loading state and sync button from getting stuck disabled.
+
+Remaining risks: `syncAllTickets` reads every ticket file's `content` into memory but never uses it (harmless waste). `openLocalTicket` uses `startsWith` file matching which can return ambiguous matches if ticket IDs share prefixes.

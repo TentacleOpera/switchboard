@@ -3561,37 +3561,74 @@
                 <input type="text" id="design-docs-search" class="sidebar-search-input" placeholder="Search design..." />
                 <span id="status-design"></span>
             </div>
-            <div class="content-row">
-                <div id="tree-pane-design">
-                    <div class="sidebar-toggle-row">
-                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+            
+            <!-- Sub-tab switcher bar -->
+            <div class="sub-tab-switcher" style="display: flex; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border-color, #333); background: var(--panel-bg2, #1a1a1a);">
+                <button class="strip-btn active" id="btn-design-subtab-local" style="font-weight: bold; padding: 4px 12px;">Local Docs</button>
+                <button class="strip-btn" id="btn-design-subtab-stitch" style="font-weight: bold; padding: 4px 12px;">Stitch Design Systems</button>
+            </div>
+
+            <!-- Wrap existing local content in local panel -->
+            <div id="design-local-panel" style="display: flex; flex-direction: column; flex: 1; overflow: hidden; height: calc(100% - 75px);">
+                <div class="content-row">
+                    <div id="tree-pane-design">
+                        <div class="sidebar-toggle-row">
+                            <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                        </div>
+                        <div class="empty-state">Loading design docs...</div>
                     </div>
-                    <div class="empty-state">Loading design docs...</div>
-                </div>
-                <div class="preview-panel-wrapper">
-                    <div id="preview-pane-design" style="flex: 1; width: 100%; box-sizing: border-box; overflow: auto; height: 100%;">
-                        <div class="preview-content-wrapper" style="height: 100%; display: flex; flex-direction: column;">
-                            <div id="markdown-preview-design">
-                                <div class="empty-state">Select a design document, image, JSON, or YAML file from the sidebar to preview</div>
-                            </div>
-                            <textarea id="markdown-editor-design" class="markdown-editor" style="display:none; width: 100%; height: 100%; box-sizing: border-box; resize: none;"></textarea>
-                            <div id="image-preview-container-design" class="zoomable-container" style="display: none; padding: 0;">
-                                <div class="zoomable-viewport">
-                                    <img id="image-preview-img-design" alt="Image preview" style="display: block;" />
+                    <div class="preview-panel-wrapper">
+                        <div id="preview-pane-design" style="flex: 1; width: 100%; box-sizing: border-box; overflow: auto; height: 100%;">
+                            <div class="preview-content-wrapper" style="height: 100%; display: flex; flex-direction: column;">
+                                <div id="markdown-preview-design">
+                                    <div class="empty-state">Select a design document, image, JSON, or YAML file from the sidebar to preview</div>
                                 </div>
-                                <div class="zoom-toolbar">
-                                    <button class="zoom-btn" data-action="zoom-in" title="Zoom In (Scroll)">+</button>
-                                    <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (Scroll)">−</button>
-                                    <button class="zoom-btn" data-action="reset" title="Reset Zoom (100%)">⟲</button>
-                                    <button class="zoom-btn" data-action="fit" title="Fit to View (Double-click)">⤢</button>
+                                <textarea id="markdown-editor-design" class="markdown-editor" style="display:none; width: 100%; height: 100%; box-sizing: border-box; resize: none;"></textarea>
+                                <div id="image-preview-container-design" class="zoomable-container" style="display: none; padding: 0;">
+                                    <div class="zoomable-viewport">
+                                        <img id="image-preview-img-design" alt="Image preview" style="display: block;" />
+                                    </div>
+                                    <div class="zoom-toolbar">
+                                        <button class="zoom-btn" data-action="zoom-in" title="Zoom In (Scroll)">+</button>
+                                        <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (Scroll)">−</button>
+                                        <button class="zoom-btn" data-action="reset" title="Reset Zoom (100%)">⟲</button>
+                                        <button class="zoom-btn" data-action="fit" title="Fit to View (Double-click)">⤢</button>
+                                    </div>
                                 </div>
-                            </div>
-                            <div id="json-preview-container-design"
-                                 style="display: none; flex: 1; overflow: auto; padding: 16px; font-family: var(--font-mono);">
+                                <div id="json-preview-container-design"
+                                     style="display: none; flex: 1; overflow: auto; padding: 16px; font-family: var(--font-mono);">
+                                </div>
                             </div>
                         </div>
+                        <div class="cyber-scanlines"></div>
                     </div>
-                    <div class="cyber-scanlines"></div>
+                </div>
+            </div>
+
+            <!-- Stitch Design Systems Panel -->
+            <div id="design-systems-panel" style="display: none; flex-direction: column; flex: 1; overflow: hidden; height: calc(100% - 75px); padding: 12px; box-sizing: border-box; gap: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 8px;">
+                    <div>
+                        <span style="font-size: 11px; color: var(--text-secondary);">STITCH PROJECT:</span>
+                        <strong id="design-system-project-name" style="font-size: 12px; margin-left: 6px;">None Selected</strong>
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        <button id="btn-create-design-system" class="strip-btn stitch-btn-primary" style="font-size: 11px; padding: 4px 8px; display: none;">+ Create Design System</button>
+                        <button id="btn-refresh-design-systems" class="strip-btn" style="font-size: 11px; padding: 4px 8px; display: none;">Refresh List</button>
+                    </div>
+                </div>
+                
+                <!-- If no project is selected -->
+                <div id="design-system-no-project" style="display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; gap: 8px; color: var(--text-secondary);">
+                    <p style="margin: 0; font-size: 12px;">No Stitch project selected.</p>
+                    <button id="btn-goto-stitch-tab" class="strip-btn" style="padding: 4px 12px;">Go to Stitch Tab</button>
+                </div>
+
+                <!-- List container -->
+                <div id="stitch-design-systems-list-wrapper" style="display: none; flex: 1; overflow-y: auto;">
+                    <div id="stitch-design-systems-list" style="display: flex; flex-direction: column; gap: 12px;">
+                        <!-- Design System cards rendered here -->
+                    </div>
                 </div>
             </div>
         </div>
@@ -3698,14 +3735,35 @@
 
         <!-- Stitch Tab -->
         <div id="stitch-content" class="shared-tab-content active">
-            <!-- Configure API key banner if not configured -->
-            <div id="stitch-api-banner" class="stitch-setup-banner" style="display: none;">
-                <h3>Configure Stitch API Key</h3>
-                <p>To use AI-generated UI screens from Stitch, please configure your Stitch API key. This will be stored locally in your VS Code settings.</p>
-                <div style="display: flex; gap: 8px; align-items: center;">
-                    <input type="password" id="stitch-api-key-input" class="stitch-input" style="max-width: 300px;" placeholder="AIzaSy..." />
-                    <button id="btn-save-stitch-api-key" class="strip-btn stitch-btn-primary">Save Key</button>
+            <!-- Persistent Auth Configuration Panel -->
+            <div id="stitch-auth-panel" class="stitch-setup-banner" style="display: none; flex-direction: column; gap: 12px; padding: 12px; border: 1px solid var(--border-color); border-radius: 4px; margin-bottom: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h3 style="margin: 0; font-size: 13px;">Stitch Authentication Configuration</h3>
+                    <span id="stitch-auth-status-indicator" style="font-size: 10px; padding: 2px 6px; border-radius: 3px; font-weight: bold; background: #333; color: #ccc;">Checking...</span>
                 </div>
+                <p style="margin: 0; font-size: 11px; color: var(--text-secondary);">Choose authentication mode. Saved locally in settings.</p>
+                <div style="display: flex; gap: 16px; align-items: center; font-size: 11px;">
+                    <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                        <input type="radio" name="stitch-auth-mode" value="apiKey" checked /> API Key
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                        <input type="radio" name="stitch-auth-mode" value="oauth" /> OAuth Token
+                    </label>
+                </div>
+                <div id="stitch-api-key-group" style="display: flex; flex-direction: column; gap: 4px;">
+                    <label for="stitch-api-key-input" style="font-size: 10px; color: var(--text-secondary);">API Key</label>
+                    <input type="password" id="stitch-api-key-input" class="stitch-input" style="max-width: 100%;" placeholder="AIzaSy..." />
+                </div>
+                <div id="stitch-access-token-group" style="display: none; flex-direction: column; gap: 4px;">
+                    <label for="stitch-access-token-input" style="font-size: 10px; color: var(--text-secondary);">OAuth Access Token</label>
+                    <input type="password" id="stitch-access-token-input" class="stitch-input" style="max-width: 100%;" placeholder="ya29.a0..." />
+                </div>
+                <div style="display: flex; gap: 8px;">
+                    <button id="btn-save-stitch-auth" class="strip-btn stitch-btn-primary">Save Settings</button>
+                    <button id="btn-validate-stitch-auth" class="strip-btn">Validate Connection</button>
+                    <button id="btn-close-stitch-auth" class="strip-btn">Close</button>
+                </div>
+                <div id="stitch-auth-error-msg" style="font-size: 10px; color: #ff6b6b; display: none;"></div>
             </div>
 
             <div class="controls-strip" id="controls-strip-stitch">
@@ -3719,6 +3777,7 @@
                     <button id="btn-force-reload-screens" class="strip-btn" disabled title="Delete the local screen list for this project and re-fetch from Stitch API" style="color: var(--vscode-errorForeground, #ff6b6b);">Force Reload Screens</button>
                     <button id="btn-download-palette" class="strip-btn" disabled title="Download just the color palette / design tokens from the selected project">Download Design Tokens</button>
                     <button id="btn-open-design-md" class="strip-btn" disabled title="Open the DESIGN.md handoff file (generated on-demand if it does not exist)">Open DESIGN.md</button>
+                    <button id="btn-configure-auth" class="strip-btn" title="Configure Stitch Authentication">⚙️ Auth</button>
                 </div>
                 <div style="flex: 1;"></div>
                 <div style="display: flex; align-items: center; gap: 6px;">
@@ -3868,6 +3927,62 @@
                         <div id="folder-list-modal" class="folder-list">
                             <!-- Folder items rendered by JS -->
                         </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Design System Create/Edit Modal -->
+        <div id="design-system-crud-modal" class="stitch-prompt-modal" style="display: none;">
+            <div class="modal-content" style="max-width: 600px; width: 90%;">
+                <div class="modal-header">
+                    <h3 id="design-system-modal-title">Create Design System</h3>
+                    <button class="modal-close-btn" id="btn-close-design-system-modal">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="design-system-modal-asset-id" />
+                    <div style="display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px;">
+                        <label for="design-system-name" style="font-size: 11px; color: var(--text-secondary);">Display Name</label>
+                        <input type="text" id="design-system-name" class="stitch-input" style="max-width: 100%;" placeholder="e.g. Acme Light Mode" />
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px;">
+                        <label for="design-system-guidelines" style="font-size: 11px; color: var(--text-secondary);">Style Guidelines</label>
+                        <textarea id="design-system-guidelines" rows="3" placeholder="Describe layout, font, density guidelines..."></textarea>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px;">
+                        <label for="design-system-tokens" style="font-size: 11px; color: var(--text-secondary);">Design Tokens (JSON String)</label>
+                        <textarea id="design-system-tokens" rows="8" style="font-family: var(--font-mono);" placeholder='{ "colors": { "primary": "#000000" } }'></textarea>
+                    </div>
+                    <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px;">
+                        <button id="btn-cancel-design-system" class="strip-btn">Cancel</button>
+                        <button id="btn-save-design-system" class="strip-btn stitch-btn-primary">Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Design System Apply Modal -->
+        <div id="design-system-apply-modal" class="stitch-prompt-modal" style="display: none;">
+            <div class="modal-content" style="max-width: 500px; width: 90%;">
+                <div class="modal-header">
+                    <h3>Apply Design System to Screens</h3>
+                    <button class="modal-close-btn" id="btn-close-apply-modal">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="apply-design-system-asset-id" />
+                    <p style="font-size: 11px; color: var(--text-secondary); margin: 0 0 8px 0;">Select screens in this project to apply the design system: <span id="apply-design-system-name-display" style="font-weight: bold; color: var(--text-primary);"></span></p>
+                    
+                    <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+                        <button id="btn-apply-select-all" class="strip-btn" style="padding: 2px 6px; font-size: 10px;">Select All</button>
+                        <button id="btn-apply-select-none" class="strip-btn" style="padding: 2px 6px; font-size: 10px;">Select None</button>
+                    </div>
+
+                    <div id="apply-screens-list" style="max-height: 250px; overflow-y: auto; border: 1px solid var(--border-color); padding: 8px; display: flex; flex-direction: column; gap: 6px; background: var(--panel-bg2, #1a1a1a);">
+                        <!-- Checklist of screens will be rendered here -->
+                    </div>
+                    <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px;">
+                        <button id="btn-cancel-apply" class="strip-btn">Cancel</button>
+                        <button id="btn-execute-apply" class="strip-btn stitch-btn-primary">Apply Design System</button>
                     </div>
                 </div>
             </div>

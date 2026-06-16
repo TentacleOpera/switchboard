@@ -194,14 +194,6 @@
     let _restoringClickUpHierarchy = false;
     let pendingClickUpDetailIssueId = '';
 
-    // Local (imported) tickets state
-    let ticketsViewMode = 'online'; // 'online' | 'local'
-    let localTickets = [];
-    let selectedLocalTicket = null; // { provider, id, title, fileName, filePath, mtime }
-    let localTicketContent = '';
-    let localTicketEditMode = false;
-    let localTicketsSearchValue = '';
-    let pendingLocalTicketSelection = ''; // filePath to auto-select after list refresh
 
     // Cached HTML strings for DOM guard comparisons
     let _lastTicketsStateFilterHtml = '';
@@ -368,10 +360,7 @@
 
 
     wireSidebarSearch('tickets-search', (value) => {
-        if (ticketsViewMode === 'local') {
-            localTicketsSearchValue = value;
-            renderLocalTicketsList();
-        } else if (lastIntegrationProvider === 'linear') {
+        if (lastIntegrationProvider === 'linear') {
             linearProjectSearchValue = value;
             renderTicketsLinearList();
             saveTicketsState();
@@ -481,15 +470,12 @@
                 restoreTicketsState();
                 ticketsInitialized = true;
             }
-            if (lastIntegrationProvider && !ticketsLoadedOnce) {
+            if (ticketsAutoSync && lastIntegrationProvider && !ticketsLoadedOnce) {
                 if (lastIntegrationProvider === 'clickup') loadClickUpSpaces();
                 else loadLinearProject();
             } else {
-                // Spaces/project already loaded in background — just render what we have
+                // Auto-sync off (or already loaded) — render cached state; user fetches manually.
                 renderTicketsTab();
-            }
-            if (ticketsViewMode === 'local') {
-                requestLocalTickets();
             }
         } else {
             if (ticketsInitialized) { saveTicketsState(); }
@@ -2657,6 +2643,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     updateKanbanProjectFilter();
                 }
 
+                // Clear column filter so the target plan is guaranteed to be in the DOM
+                kanbanFilters.column = '';
+                if (kanbanColumnFilter) kanbanColumnFilter.value = '';
+                persistTab('kanban.column', '');
+
                 switchToTab('kanban');
                 // Check already-loaded cache for immediate selection
                 const immediateMatch = findPendingKanbanMatch(_kanbanPlansCache);
@@ -2976,7 +2967,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     }
                     showTicketsStatus(statusText, msg.failCount > 0);
                     if (msg.importMode === 'document') {
-                        requestLocalTickets();
+                        // local mode removed — nothing to do here
                     }
                 } else {
                     showTicketsStatus(msg.error || 'Bulk import failed', true);
@@ -2998,72 +2989,19 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     showTicketsStatus(msg.error || 'Failed to import ticket', true);
                 } else {
                     showTicketsStatus('Imported ✓', false);
-                    pendingLocalTicketSelection = msg.filePath || '';
-                    setTicketsViewMode('local');
                 }
                 break;
             case 'pushTicketResult':
                 setTicketsLoadingState(false);
                 if (msg.success) {
                     showTicketsStatus('Pushed ✓', false);
-                    if (ticketsViewMode === 'online') {
-                        if (lastIntegrationProvider === 'linear') {
-                            loadLinearTaskDetails(msg.id);
-                        } else {
-                            loadClickUpTaskDetails(msg.id);
-                        }
+                    if (lastIntegrationProvider === 'linear') {
+                        loadLinearTaskDetails(msg.id);
+                    } else {
+                        loadClickUpTaskDetails(msg.id);
                     }
                 } else {
                     showTicketsStatus(msg.error || 'Failed to push edits', true);
-                }
-                break;
-            case 'localTicketsListed':
-                localTickets = msg.tickets || [];
-                if (selectedLocalTicket && !localTickets.some(t => t.filePath === selectedLocalTicket.filePath)) {
-                    selectedLocalTicket = null;
-                    localTicketContent = '';
-                    localTicketEditMode = false;
-                }
-                renderLocalTicketsList();
-                renderLocalTicketDetail();
-                if (pendingLocalTicketSelection) {
-                    const pending = pendingLocalTicketSelection;
-                    pendingLocalTicketSelection = '';
-                    selectLocalTicket(pending);
-                }
-                break;
-            case 'localTicketLoaded':
-                if (!msg.success) {
-                    showTicketsStatus(msg.error || 'Failed to load local ticket', true);
-                    break;
-                }
-                if (selectedLocalTicket && selectedLocalTicket.filePath === msg.filePath) {
-                    localTicketContent = msg.content || '';
-                    renderLocalTicketDetail();
-                }
-                break;
-            case 'localTicketSaved':
-                if (msg.success) {
-                    showTicketsStatus('Saved ✓', false);
-                    localTicketEditMode = false;
-                    renderLocalTicketDetail();
-                } else {
-                    showTicketsStatus(msg.error || 'Failed to save', true);
-                }
-                break;
-            case 'localTicketDeleted':
-                if (msg.success) {
-                    showTicketsStatus('Deleted ✓', false);
-                    localTickets = localTickets.filter(t => t.filePath !== msg.filePath);
-                    if (selectedLocalTicket && selectedLocalTicket.filePath === msg.filePath) {
-                        selectedLocalTicket = null;
-                        localTicketContent = '';
-                        localTicketEditMode = false;
-                    }
-                    renderLocalTicketsList();
-                    renderLocalTicketDetail();
-                } else {
-                    showTicketsStatus(msg.error || 'Failed to delete local copy', true);
                 }
                 break;
             case 'ticketDeleted':
@@ -3150,7 +3088,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         }
                     }
                     const provider = lastIntegrationProvider;
-                    const ticketId = provider === 'linear' ? selectedLinearIssue?.id : selectedClickUpIssue?.id;
+                    const ticketId = provider === 'linear' ? selectedLinearIssue?.issue?.id : selectedClickUpIssue?.task?.id;
                     const attachments = provider === 'linear' ? selectedLinearIssue?.attachments : selectedClickUpIssue?.attachments;
                     if (ticketId && attachments) {
                         vscode.postMessage({
@@ -3588,7 +3526,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (msg.workspaceRoot === ticketsWorkspaceRoot) {
                     lastIntegrationProvider = msg.provider || null;
                     ticketsAutoSync = msg.ticketsAutoSync === true;
-                    if (isTicketsTabActive()) {
+                    if (isTicketsTabActive() && ticketsAutoSync) {
                         if (lastIntegrationProvider === 'clickup') {
                             loadClickUpSpaces();
                         } else if (lastIntegrationProvider === 'linear') {
@@ -5222,6 +5160,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 provider: lastIntegrationProvider,
                 workspaceRoot: ticketsWorkspaceRoot
             });
+            flashCopyBtn(linkAllButton);
         });
 
         syncAllButton?.addEventListener('click', () => {
@@ -5245,58 +5184,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
             setTicketsLoadingState(true);
             showTicketsStatus('Importing to local…', false);
             vscode.postMessage({ type: 'editTicket', provider, id, workspaceRoot: ticketsWorkspaceRoot });
-        });
-
-        // Local/Online mode switch
-
-        // Local list selection
-        document.getElementById('tickets-local-container')?.addEventListener('click', (e) => {
-            const node = e.target.closest('[data-local-ticket-path]');
-            if (!node) return;
-            selectLocalTicket(node.dataset.localTicketPath);
-        });
-
-        // Local meta bar: Edit (inline markdown editor)
-        document.getElementById('btn-edit-local-ticket')?.addEventListener('click', () => {
-            if (!selectedLocalTicket) return;
-            localTicketEditMode = true;
-            const editor = document.getElementById('tickets-local-editor');
-            if (editor) editor.value = localTicketContent;
-            renderLocalTicketDetail();
-            editor?.focus();
-        });
-
-        // Local meta bar: Save
-        document.getElementById('btn-save-local-ticket')?.addEventListener('click', () => {
-            if (!selectedLocalTicket) return;
-            const editor = document.getElementById('tickets-local-editor');
-            if (!editor) return;
-            localTicketContent = editor.value;
-            vscode.postMessage({ type: 'saveLocalTicket', filePath: selectedLocalTicket.filePath, content: editor.value });
-        });
-
-        // Local meta bar: Cancel edit
-        document.getElementById('btn-cancel-local-ticket')?.addEventListener('click', () => {
-            localTicketEditMode = false;
-            renderLocalTicketDetail();
-        });
-
-        // Local meta bar: Push to remote
-        document.getElementById('btn-push-local-ticket')?.addEventListener('click', () => {
-            if (!selectedLocalTicket) return;
-            setTicketsLoadingState(true);
-            vscode.postMessage({
-                type: 'pushTicket',
-                provider: selectedLocalTicket.provider,
-                id: selectedLocalTicket.id,
-                workspaceRoot: ticketsWorkspaceRoot
-            });
-        });
-
-        // Local meta bar: Delete local copy (immediate — remote is untouched)
-        document.getElementById('btn-delete-local-ticket')?.addEventListener('click', () => {
-            if (!selectedLocalTicket) return;
-            vscode.postMessage({ type: 'deleteLocalTicket', filePath: selectedLocalTicket.filePath });
         });
 
         // Action bar: Push
@@ -5360,7 +5247,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
                     attachmentsList.innerHTML = '<div style="font-size: 11px; color: var(--text-secondary);">Loading status...</div>';
                 }
                 const provider = lastIntegrationProvider;
-                const ticketId = provider === 'linear' ? selectedLinearIssue?.id : selectedClickUpIssue?.id;
+                const ticketId = provider === 'linear' ? selectedLinearIssue?.issue?.id : selectedClickUpIssue?.task?.id;
                 const attachments = provider === 'linear' ? selectedLinearIssue?.attachments : selectedClickUpIssue?.attachments;
                 if (ticketId && attachments) {
                     vscode.postMessage({
@@ -5414,12 +5301,11 @@ Return ONLY the drafted prompt with no additional commentary.`;
             saveTicketsState();
         });
 
-        // Refresh button — re-fetches online view and pulls local copies
+        // Refresh button — re-fetches online view
         refreshButton?.addEventListener('click', () => {
             linearIssueDetailCache.clear();
             clickUpTaskDetailCache.clear();
             _pendingRefreshImport = true;
-            requestLocalTickets();
             if (lastIntegrationProvider === 'linear') {
                 loadLinearProject(true);
             } else if (lastIntegrationProvider === 'clickup') {
@@ -5492,13 +5378,14 @@ Return ONLY the drafted prompt with no additional commentary.`;
             const linkTicketBtn = e.target.closest('[data-link-ticket-id]');
             if (importPlanBtn) {
                 const id = importPlanBtn.dataset.importPlanId;
+                flashIconBtn(importPlanBtn);
                 handleTicketsImport(lastIntegrationProvider, id, true, 'plan');
                 return;
             }
             if (linkTicketBtn) {
                 const id = linkTicketBtn.dataset.linkTicketId;
                 const provider = linkTicketBtn.dataset.provider;
-                handleLinkToTicket(provider, id);
+                handleLinkToTicket(provider, id, linkTicketBtn);
                 return;
             }
             const card = e.target.closest('[data-linear-issue-id], [data-clickup-task-id]');
@@ -5747,7 +5634,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 const url = btn.dataset.url;
                 const filename = btn.dataset.filename;
                 const provider = lastIntegrationProvider;
-                const ticketId = provider === 'linear' ? selectedLinearIssue?.id : selectedClickUpIssue?.id;
+                const ticketId = provider === 'linear' ? selectedLinearIssue?.issue?.id : selectedClickUpIssue?.task?.id;
                 const ticketTitle = provider === 'linear' ? selectedLinearIssue?.issue?.title : selectedClickUpIssue?.task?.title;
                 vscode.postMessage({
                     type: 'downloadAttachment',
@@ -5785,157 +5672,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
         linearProjectPickerValue = projectPicker.value;
     }
 
-    // ===== LOCAL (IMPORTED) TICKETS VIEW =====
-
-    function requestLocalTickets() {
-        vscode.postMessage({
-            type: 'listLocalTickets',
-            workspaceRoot: ticketsWorkspaceRoot,
-            provider: lastIntegrationProvider
-        });
-    }
-
-    function setTicketsViewMode(mode) {
-        ticketsViewMode = mode === 'local' ? 'local' : 'online';
-        const isLocal = ticketsViewMode === 'local';
-
-        document.getElementById('controls-strip-tickets')?.classList.toggle('tickets-local-mode', isLocal);
-        document.getElementById('tree-pane-tickets')?.classList.toggle('tickets-local-mode', isLocal);
-
-        // Sidebar lists
-        const onlineEls = ['tickets-empty-state', 'tickets-issues-container'];
-        for (const id of onlineEls) {
-            const el = document.getElementById(id);
-            if (el) el.style.display = isLocal ? 'none' : '';
-        }
-        // Hidden either way; the online render functions re-show it when there are more pages
-        const loadMoreBtn = document.getElementById('tickets-load-more');
-        if (loadMoreBtn) loadMoreBtn.style.display = 'none';
-        const localContainer = document.getElementById('tickets-local-container');
-        if (localContainer) localContainer.style.display = isLocal ? '' : 'none';
-        const localEmpty = document.getElementById('tickets-local-empty-state');
-        if (localEmpty) localEmpty.style.display = 'none';
-
-        // Preview panes + meta bars
-        const onlinePreview = document.getElementById('markdown-preview-tickets');
-        if (onlinePreview) onlinePreview.style.display = isLocal ? 'none' : '';
-        const localView = document.getElementById('tickets-local-view');
-        if (localView) localView.style.display = isLocal ? 'flex' : 'none';
-        const onlineMetaBar = document.getElementById('tickets-preview-meta-bar');
-        const commentArea = document.getElementById('tickets-comment-input-area');
-        if (isLocal) {
-            if (onlineMetaBar) onlineMetaBar.style.display = 'none';
-            if (commentArea) commentArea.style.display = 'none';
-        }
-
-        if (isLocal) {
-            renderLocalTicketsList();
-            renderLocalTicketDetail();
-            requestLocalTickets();
-        } else {
-            const localMetaBar = document.getElementById('tickets-local-meta-bar');
-            if (localMetaBar) localMetaBar.style.display = 'none';
-            // Re-render online state (restores the empty-state text and meta bar)
-            if (lastIntegrationProvider === 'clickup') {
-                renderTicketsClickUpList();
-                renderTicketsClickUpTaskDetail();
-            } else {
-                renderTicketsLinearList();
-                renderTicketsLinearTaskDetail();
-            }
-        }
-        if (ticketsInitialized) { saveTicketsState(); }
-    }
-
-    function getFilteredLocalTickets() {
-        const search = String(localTicketsSearchValue || '').trim().toLowerCase();
-        if (!search) return localTickets;
-        return localTickets.filter(t =>
-            [t.title, t.fileName, t.provider, t.id].join('\n').toLowerCase().includes(search));
-    }
-
-    function renderLocalTicketsList() {
-        const container = document.getElementById('tickets-local-container');
-        const emptyState = document.getElementById('tickets-local-empty-state');
-        if (!container || ticketsViewMode !== 'local') return;
-
-        const filtered = getFilteredLocalTickets();
-        if (filtered.length === 0) {
-            container.innerHTML = '';
-            if (emptyState) {
-                emptyState.textContent = localTickets.length === 0
-                    ? 'No imported tickets yet. Switch to Online and click Edit on a ticket to import it here.'
-                    : 'No imported tickets matched the search.';
-                emptyState.style.display = '';
-            }
-            return;
-        }
-        if (emptyState) emptyState.style.display = 'none';
-
-        container.innerHTML = filtered.map((t) => {
-            const isSelected = selectedLocalTicket && selectedLocalTicket.filePath === t.filePath;
-            return `
-            <div class="ticket-node${isSelected ? ' selected' : ''}" data-local-ticket-path="${escapeAttr(t.filePath)}">
-                <div class="tickets-issue-title">${escapeHtml(t.title || t.fileName)}</div>
-                <div class="tickets-issue-meta">${escapeHtml(t.provider === 'linear' ? 'Linear' : 'ClickUp')} · ${escapeHtml(t.id)}</div>
-                <div class="tickets-issue-meta">${escapeHtml(t.fileName)}</div>
-            </div>
-            `;
-        }).join('');
-    }
-
-    function selectLocalTicket(filePath) {
-        const ticket = localTickets.find(t => t.filePath === filePath);
-        if (!ticket) return;
-        selectedLocalTicket = ticket;
-        localTicketContent = '';
-        localTicketEditMode = false;
-        renderLocalTicketsList();
-        renderLocalTicketDetail();
-        vscode.postMessage({ type: 'loadLocalTicket', filePath: ticket.filePath });
-    }
-
-    function renderLocalTicketDetail() {
-        const metaBar = document.getElementById('tickets-local-meta-bar');
-        const emptyPreview = document.getElementById('tickets-local-empty-preview');
-        const preview = document.getElementById('tickets-local-preview');
-        const editor = document.getElementById('tickets-local-editor');
-        const fileLabel = document.getElementById('tickets-local-file-label');
-        if (!preview || !editor) return;
-
-        if (ticketsViewMode !== 'local' || !selectedLocalTicket) {
-            if (metaBar) metaBar.style.display = 'none';
-            if (emptyPreview) emptyPreview.style.display = ticketsViewMode === 'local' ? '' : 'none';
-            preview.innerHTML = '';
-            editor.style.display = 'none';
-            return;
-        }
-
-        if (metaBar) metaBar.style.display = 'flex';
-        if (emptyPreview) emptyPreview.style.display = 'none';
-        if (fileLabel) {
-            fileLabel.textContent = selectedLocalTicket.fileName;
-            fileLabel.title = selectedLocalTicket.filePath;
-        }
-
-        const editBtn = document.getElementById('btn-edit-local-ticket');
-        const saveBtn = document.getElementById('btn-save-local-ticket');
-        const cancelBtn = document.getElementById('btn-cancel-local-ticket');
-        if (editBtn) editBtn.style.display = localTicketEditMode ? 'none' : '';
-        if (saveBtn) saveBtn.style.display = localTicketEditMode ? '' : 'none';
-        if (cancelBtn) cancelBtn.style.display = localTicketEditMode ? '' : 'none';
-
-        if (localTicketEditMode) {
-            preview.style.display = 'none';
-            editor.style.display = '';
-        } else {
-            editor.style.display = 'none';
-            preview.style.display = '';
-            // Hide YAML frontmatter in the rendered preview (still editable in Edit mode)
-            const body = localTicketContent.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '');
-            preview.innerHTML = renderMarkdown(body);
-        }
-    }
 
     function getFilteredLinearIssues() {
         const search = String(linearProjectSearchValue || '').trim().toLowerCase();
@@ -5959,7 +5695,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
     function renderTicketsLinearList() {
         if (!isTicketsTabActive()) return;
-        if (ticketsViewMode === 'local') return;
 
         const { emptyState, issuesContainer, searchInput } = getTicketsTabElements();
         if (!emptyState || !issuesContainer) return;
@@ -6031,7 +5766,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
     function renderTicketsLinearTaskDetail() {
         if (!isTicketsTabActive()) return;
-        if (ticketsViewMode === 'local') return;
 
         const { subtasksNav, detailContent, previewMetaBar, deleteConfirmBanner, commentInputArea } = getTicketsTabElements();
         if (!detailContent) return;
@@ -6414,7 +6148,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
     function renderTicketsClickUpList() {
         if (!isTicketsTabActive()) return;
-        if (ticketsViewMode === 'local') return;
 
         const { issuesContainer, emptyState, loadMoreButton, searchInput } = getTicketsTabElements();
         if (!issuesContainer) return;
@@ -6465,7 +6198,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
     function renderTicketsClickUpTaskDetail() {
         if (!isTicketsTabActive()) return;
-        if (ticketsViewMode === 'local') return;
 
         const { subtasksNav, detailContent, previewMetaBar, deleteConfirmBanner, commentInputArea } = getTicketsTabElements();
         if (!detailContent) return;
@@ -6637,13 +6369,34 @@ Return ONLY the drafted prompt with no additional commentary.`;
         });
     }
 
-    function handleLinkToTicket(provider, id) {
-        vscode.postMessage({
-            type: 'openLocalTicket',
-            provider,
-            id,
-            workspaceRoot: ticketsWorkspaceRoot
-        });
+    function flashCopyBtn(btn) {
+        const originalText = btn.textContent;
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        btn.disabled = true;
+        let fallbackTimer = null;
+        const reset = () => {
+            btn.textContent = originalText;
+            btn.classList.remove('copied');
+            btn.disabled = false;
+            btn.removeEventListener('animationend', onEnd);
+            if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
+        };
+        const onEnd = () => { fallbackTimer = null; reset(); };
+        btn.addEventListener('animationend', onEnd);
+        fallbackTimer = setTimeout(reset, 2000);
+    }
+
+    function flashIconBtn(btn) {
+        btn.classList.remove('flash');
+        void btn.offsetWidth;
+        btn.classList.add('flash');
+        btn.addEventListener('animationend', () => btn.classList.remove('flash'), { once: true });
+    }
+
+    function handleLinkToTicket(provider, id, btn) {
+        vscode.postMessage({ type: 'openLocalTicket', provider, id, workspaceRoot: ticketsWorkspaceRoot });
+        if (btn) { flashCopyBtn(btn); }
     }
 
     function handleTicketsAskAgent(provider, id) {
@@ -6718,14 +6471,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
         _restoringClickUpHierarchy = false;
         pendingClickUpDetailIssueId = '';
 
-        ticketsViewMode = 'online';
-        localTickets = [];
-        selectedLocalTicket = null;
-        localTicketContent = '';
-        localTicketEditMode = false;
-        localTicketsSearchValue = '';
-        pendingLocalTicketSelection = '';
-
         _lastTicketsStateFilterHtml = '';
         _lastTicketsProjectPickerHtml = '';
         _lastTicketsIssuesContainerHtml = '';
@@ -6743,21 +6488,12 @@ Return ONLY the drafted prompt with no additional commentary.`;
         if (elements.deleteConfirmBanner) elements.deleteConfirmBanner.style.display = 'none';
         if (elements.commentInputArea) elements.commentInputArea.style.display = 'none';
         
-        const localContainer = document.getElementById('tickets-local-container');
-        if (localContainer) localContainer.innerHTML = '';
-        const localPreview = document.getElementById('tickets-local-preview');
-        if (localPreview) localPreview.innerHTML = '';
-        const localEditor = document.getElementById('tickets-local-editor');
-        if (localEditor) { localEditor.value = ''; localEditor.style.display = 'none'; }
-        const localMetaBar = document.getElementById('tickets-local-meta-bar');
-        if (localMetaBar) localMetaBar.style.display = 'none';
     }
 
     function saveTicketsState() {
         if (!ticketsWorkspaceRoot) return;
         const state = {
             lastIntegrationProvider,
-            ticketsViewMode,
             linearProjectSearchValue,
             linearProjectStateFilterValue,
             linearProjectPickerValue,
@@ -6774,7 +6510,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function restoreTicketsStateForRoot(state) {
         if (!state) return;
         lastIntegrationProvider = state.lastIntegrationProvider || null;
-        ticketsViewMode = state.ticketsViewMode || 'online';
         linearProjectSearchValue = state.linearProjectSearchValue || '';
         linearProjectStateFilterValue = state.linearProjectStateFilterValue || '';
         linearProjectPickerValue = state.linearProjectPickerValue || '';
@@ -6794,7 +6529,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
         if (state.linearProjectPickerValue) {
             _restoredLinearProjectPickerValue = state.linearProjectPickerValue;
         }
-        setTicketsViewMode(ticketsViewMode);
     }
 
     function restoreTicketsState() {

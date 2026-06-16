@@ -23,7 +23,7 @@ import { ControlPlaneMigrationService } from './services/ControlPlaneMigrationSe
 import { WorkspaceExcludeService } from './services/WorkspaceExcludeService';
 import { cleanWorkspace, pruneZombieTerminalEntries } from './lifecycle/cleanWorkspace';
 import { PlanningPanelProvider } from './services/PlanningPanelProvider';
-import { DesignPanelProvider } from './services/DesignPanelProvider';
+import { DesignPanelProvider, invalidateStitchSdkCache } from './services/DesignPanelProvider';
 import { PanelStateStore } from './services/PanelStateStore';
 import { PlannerPromptWriter } from './services/PlannerPromptWriter';
 import { PlanningPanelCacheService } from './services/PlanningPanelCacheService';
@@ -39,6 +39,7 @@ let terminalClearStatusBarItem: vscode.StatusBarItem;
 let terminalResetStatusBarItem: vscode.StatusBarItem;
 let kanbanStatusBarItem: vscode.StatusBarItem;
 let artifactsStatusBarItem: vscode.StatusBarItem;
+let projectStatusBarItem: vscode.StatusBarItem;
 let designStatusBarItem: vscode.StatusBarItem;
 
 // Global references
@@ -809,6 +810,12 @@ export async function activate(context: vscode.ExtensionContext) {
         async () => { await planningPanelProvider.open(); }
     );
     context.subscriptions.push(openPlanningPanelDisposable);
+
+    const openProjectPanelDisposable = vscode.commands.registerCommand(
+        'switchboard.openProjectPanel',
+        async () => { await planningPanelProvider.openProject(); }
+    );
+    context.subscriptions.push(openProjectPanelDisposable);
 
     const openDesignPanelDisposable = vscode.commands.registerCommand(
         'switchboard.openDesignPanel',
@@ -1778,7 +1785,13 @@ export async function activate(context: vscode.ExtensionContext) {
     artifactsStatusBarItem.command = 'switchboard.openPlanningPanel';
     context.subscriptions.push(artifactsStatusBarItem);
 
-    designStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
+    projectStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
+    projectStatusBarItem.text = '$(project) Project';
+    projectStatusBarItem.tooltip = 'Open Project Management Panel';
+    projectStatusBarItem.command = 'switchboard.openProjectPanel';
+    context.subscriptions.push(projectStatusBarItem);
+
+    designStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 98);
     designStatusBarItem.text = '$(paintcan) Design';
     designStatusBarItem.tooltip = 'Open Design Panel';
     designStatusBarItem.command = 'switchboard.openDesignPanel';
@@ -1810,8 +1823,10 @@ export async function activate(context: vscode.ExtensionContext) {
 
         if (showKanbanButton) {
             kanbanStatusBarItem.show();
+            projectStatusBarItem.show();
         } else {
             kanbanStatusBarItem.hide();
+            projectStatusBarItem.hide();
         }
 
         if (showArtifactsButton) {
@@ -1853,10 +1868,26 @@ export async function activate(context: vscode.ExtensionContext) {
             updateStatusBarVisibility();
             void taskViewerProvider.postSetupPanelState();
         }
-        if (e.affectsConfiguration('switchboard.stitch.apiKey')) {
-            const apiKey = vscode.workspace.getConfiguration('switchboard').get<string>('stitch.apiKey') || process.env.STITCH_API_KEY;
-            if (designPanelProvider.isOpen) {
-                designPanelProvider.postMessage({ type: 'stitchApiKeyStatus', configured: !!apiKey });
+        if (
+            e.affectsConfiguration('switchboard.stitch.apiKey') ||
+            e.affectsConfiguration('switchboard.stitch.authMode') ||
+            e.affectsConfiguration('switchboard.stitch.accessToken')
+        ) {
+            invalidateStitchSdkCache();
+            if (designPanelProvider && designPanelProvider.isOpen) {
+                const config = vscode.workspace.getConfiguration('switchboard');
+                const mode = config.get<string>('stitch.authMode') || 'apiKey';
+                const apiKey = config.get<string>('stitch.apiKey') || '';
+                const hasKey = mode === 'oauth'
+                    ? !!config.get<string>('stitch.accessToken')
+                    : !!(apiKey || process.env.STITCH_API_KEY);
+                designPanelProvider.postMessage({ type: 'stitchApiKeyStatus', configured: hasKey });
+                designPanelProvider.postMessage({
+                    type: 'stitchAuthStatus',
+                    mode,
+                    configured: hasKey,
+                    valid: hasKey
+                });
             }
         }
     }));

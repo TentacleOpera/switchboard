@@ -272,3 +272,13 @@ Key risks: (1) Extracting a unified hierarchy path helper is complicated by the 
 11. Test on Windows, macOS, and Linux.
 
 **Recommendation:** Send to Coder
+
+## Review Findings
+
+Reviewer-executor pass completed. Two fixes applied:
+
+1. **`src/webview/planning.js`** — `selectedLinearIssue?.id` and `selectedClickUpIssue?.id` were used in three places (`:3153`, `:5363`, `:5750`) but the actual `id` lives under `.issue.id` / `.task.id`. This caused `ticketId` to be `undefined` for Linear, breaking `getAttachmentList` refresh. Corrected to `.issue?.id` / `.task?.id`.
+
+2. **`src/services/TaskViewerProvider.ts`** — `downloadAttachment` and `getAttachmentList` were returning an error / empty array when no tickets folder was configured, contrary to user instruction that the default `.switchboard/tickets/provider/` path should be used. Fixed both methods to fallback to `path.join(resolvedRoot, '.switchboard', 'tickets', provider)` when `_buildTicketDir` returns null, matching the existing behavior of `_findTicketDocument` and `importTaskAsDocument`. Compilation passes.
+
+Remaining risk: `importAllTasks` (`TaskViewerProvider.ts:~17614`) still builds paths inline instead of using `_buildTicketDir`.

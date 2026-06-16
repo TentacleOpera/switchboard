@@ -8289,15 +8289,6 @@
             const container = document.createElement('div');
             container.style.cssText = 'padding: 12px; display: flex; flex-direction: column; gap: 16px;';
 
-            const cpMode = (config && config.controlPlaneMode) || currentControlPlaneMode || 'none';
-            if (cpMode !== 'explicit') {
-                const msg = document.createElement('div');
-                msg.style.cssText = 'padding:16px; font-size:11px; color:var(--text-secondary); line-height:1.5;';
-                msg.innerHTML = 'Worktrees requires Switchboard to be running on Control Plane mode. Please visit the setup menu to enable worktrees.';
-                container.appendChild(msg);
-                return container;
-            }
-
             // Description / Overview Header
             const configSection = document.createElement('div');
             configSection.className = 'db-subsection';

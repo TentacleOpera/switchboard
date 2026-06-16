@@ -98,6 +98,10 @@ export interface PromptBuilderOptions {
     designDocLink?: string;
     /** When present, the full pre-fetched Notion page content to embed verbatim. Takes precedence over designDocLink. */
     designDocContent?: string;
+    /** Path/link to the project constitution. */
+    constitutionLink?: string;
+    /** Full content of the project constitution. */
+    constitutionContent?: string;
     /** When present, appends a Design System Doc link to planner prompts. */
     designSystemDocLink?: string;
     /** When present, the full pre-fetched content of the design system doc. */
@@ -519,6 +523,11 @@ export function buildKanbanBatchPrompt(
         const designDocContent = options?.designDocContent?.trim();
         if (designDocContent) {
             plannerPrompt += `\n\nPLANNING EPIC REFERENCE (pre-fetched from Notion):\nThe following is the full content of the project's design document / PRD. Use it as foundational context for all planning decisions:\n\n${designDocContent}`;
+        }
+
+        const constitutionContent = options?.constitutionContent?.trim();
+        if (constitutionContent) {
+            plannerPrompt += `\n\nPROJECT CONSTITUTION:\nThe following are inviolate rules and invariants for this project:\n\n${constitutionContent}`;
         }
 
         const designSystemDocLink = options?.designSystemDocLink?.trim();

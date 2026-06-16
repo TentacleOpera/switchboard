@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'nonce-{{NONCE}}' 'unsafe-inline' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'unsafe-inline'; img-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: data:; font-src {{WEBVIEW_CSP_SOURCE}} https:; connect-src https:; frame-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: http: about:srcdoc blob: data:;">
+    <title>Switchboard Project Management</title>
+    <link rel="stylesheet" href="{{SHARED_TABS_CSS_URI}}">
+    <style>
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        @keyframes skeleton-shimmer {
+            0% { background-position: -200px 0; }
+            100% { background-position: calc(200px + 100%) 0; }
+        }
+        @font-face {
+            font-family: 'GeistPixel';
+            src: url('{{GEIST_PIXEL_FONT_URI}}') format('woff2');
+            font-weight: normal;
+            font-style: normal;
+        }
+        @font-face {
+            font-family: 'Hanken Grotesk';
+            src: url('{{HANKEN_FONT_URI}}') format('woff2');
+            font-weight: 100 900;
+            font-display: swap;
+        }
+        @font-face {
+            font-family: 'Poppins';
+            src: url('{{POPPINS_SEMIBOLD_FONT_URI}}') format('woff2');
+            font-weight: 600;
+            font-display: swap;
+        }
+        @font-face {
+            font-family: 'Poppins';
+            src: url('{{POPPINS_BOLD_FONT_URI}}') format('woff2');
+            font-weight: 700;
+            font-display: swap;
+        }
+        :root {
+            --kanban-bg: #000000;
+            --panel-bg: #000000;
+            --panel-bg2: #0a0a0a;
+            --border-color: #333333;
+            --border-bright: #444444;
+            --accent-primary: #00e5ff;
+            --accent-teal: var(--accent-primary);
+            --accent-teal-dim: color-mix(in srgb, var(--accent-teal) 40%, transparent);
+            --accent-teal-bright: #5ce8e6;
+            --accent-orange: #d18616;
+            --accent-neon: var(--accent-teal);
+            --glow-teal: 0 0 10px color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            --display-font: 'GeistPixel';
+            --display-letter-spacing: -0.05em;
+            --display-font-stretch: 90%;
+            --card-bg: #0d0d0d;
+            --card-bg-hover: #1a1a1a;
+            --card-border: 1px solid #333333;
+            --text-primary: #e0e0e0;
+            --text-secondary: #888888;
+            --font-family: 'Hanken Grotesk', var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+            --font-mono: var(--vscode-editor-font-family, 'SF Mono', Monaco, 'Cascadia Code', monospace);
+            --spacing-unit: 8px;
+            --spacing-xs: calc(var(--spacing-unit) / 2);
+            --spacing-sm: var(--spacing-unit);
+            --spacing-md: calc(var(--spacing-unit) * 1.5);
+            --spacing-lg: calc(var(--spacing-unit) * 2);
+            --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.2);
+            --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25);
+        }
+        body.theme-claudify {
+            --accent-primary: #D97757;
+            --display-font: 'Poppins';
+            --display-letter-spacing: normal;
+            --display-font-stretch: 100%;
+        }
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: var(--font-family);
+            font-size: 13px;
+            color: var(--text-primary);
+            background: var(--panel-bg);
+            height: 100vh;
+            overflow: hidden;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 40px);
+        }
+        .controls-strip, .kanban-controls-strip {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            background: var(--panel-bg2);
+            border-bottom: 1px solid var(--border-color);
+            flex-shrink: 0;
+        }
+        .kanban-controls-strip select, .controls-strip select, .controls-strip input {
+            background: #111;
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-family: var(--font-mono);
+        }
+        .sidebar-search-input {
+            margin-left: auto;
+            width: 150px;
+            background: #111;
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+        }
+        .strip-btn, .planning-button {
+            background: #111;
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .strip-btn:hover:not(:disabled), .planning-button:hover:not(:disabled) {
+            background: var(--card-bg-hover);
+            border-color: var(--accent-teal);
+        }
+        .strip-btn:disabled, .planning-button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        .content-row {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+            height: 100%;
+        }
+        #kanban-list-pane, #epics-list-pane, #constitution-list-pane {
+            width: 320px;
+            flex-shrink: 0;
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+            background: var(--panel-bg);
+        }
+        .preview-panel-wrapper {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            position: relative;
+        }
+        .kanban-preview-pane, .epics-preview-pane, .constitution-preview-pane {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+            background: var(--panel-bg);
+        }
+        .markdown-editor {
+            width: 100%;
+            height: 100%;
+            background: #000;
+            color: #ccc;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            border: none;
+            padding: 12px;
+            resize: none;
+            outline: none;
+            display: none;
+        }
+        .edit-mode .markdown-editor {
+            display: block;
+        }
+        .edit-mode #kanban-preview-content, 
+        .edit-mode #epics-preview-content, 
+        .edit-mode #constitution-preview-content {
+            display: none;
+        }
+        /* Active Doc Banner */
+        .active-doc-banner {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 16px;
+            background: color-mix(in srgb, var(--accent-orange) 15%, #000);
+            border-bottom: 1px solid color-mix(in srgb, var(--accent-orange) 30%, transparent);
+            color: #d18616;
+            font-size: 11px;
+            font-family: var(--font-mono);
+        }
+        .active-doc-banner.inactive {
+            display: none;
+        }
+        .btn-disable-doc {
+            background: transparent;
+            border: 1px solid #d18616;
+            color: #d18616;
+            padding: 2px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .btn-disable-doc:hover {
+            background: rgba(209, 134, 22, 0.1);
+        }
+        /* Empty State */
+        .kanban-empty-state, .empty-state {
+            padding: 32px;
+            text-align: center;
+            color: var(--text-secondary);
+            font-style: italic;
+        }
+        /* Kanban specific plan items */
+        .kanban-plan-item, .epic-plan-item, .constitution-file-item {
+            padding: 12px;
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .kanban-plan-item:hover, .epic-plan-item:hover, .constitution-file-item:hover {
+            background: var(--card-bg-hover);
+        }
+        .kanban-plan-item.selected, .epic-plan-item.selected, .constitution-file-item.selected {
+            background: color-mix(in srgb, var(--accent-teal) 8%, #0f0f0f);
+            border-left: 3px solid var(--accent-teal);
+        }
+        .kanban-plan-meta {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+        .kanban-plan-actions {
+            display: flex;
+            gap: 6px;
+            margin-top: 8px;
+        }
+        .kanban-column-badge {
+            font-size: 10px;
+            background: #222;
+            color: #aaa;
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+        .kanban-column-badge.clickable {
+            cursor: pointer;
+        }
+        .kanban-column-badge.clickable:hover {
+            background: #333;
+            color: #fff;
+        }
+        .kanban-plan-copy-link, .kanban-plan-copy-prompt {
+            font-size: 10px;
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 2px 6px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .kanban-plan-copy-link:hover, .kanban-plan-copy-prompt:hover {
+            border-color: var(--accent-teal);
+            color: var(--text-primary);
+        }
+        .complexity-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .complexity-dot.very-low { background: #4caf50; }
+        .complexity-dot.low { background: #8bc34a; }
+        .complexity-dot.medium { background: #ffeb3b; }
+        .complexity-dot.high { background: #ff9800; }
+        .complexity-dot.very-high { background: #f44336; }
+        .complexity-dot.unknown { background: #9e9e9e; }
+        /* Metadata preview bar */
+        #kanban-preview-meta-bar, #epic-preview-meta-bar {
+            display: flex;
+            gap: 16px;
+            padding: 8px 16px;
+            background: var(--panel-bg2);
+            border-bottom: 1px solid var(--border-color);
+            font-size: 11px;
+        }
+        .kanban-meta-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .kanban-meta-label {
+            color: var(--text-secondary);
+        }
+        .kanban-meta-value {
+            color: var(--text-primary);
+            cursor: pointer;
+        }
+        .sidebar-toggle-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 12px;
+            background: var(--panel-bg2);
+            border-bottom: 1px solid var(--border-color);
+        }
+        .sidebar-folders-btn, .sidebar-toggle-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 11px;
+            cursor: pointer;
+        }
+        .sidebar-folders-btn:hover, .sidebar-toggle-btn:hover {
+            color: var(--text-primary);
+        }
+        /* Overlay and modals for logs */
+        .kanban-log-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .kanban-log-modal {
+            background: #111;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            width: 500px;
+            max-width: 90vw;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .kanban-log-entries {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+        }
+        .kanban-log-entry {
+            margin-bottom: 12px;
+            font-size: 11px;
+            line-height: 1.4;
+        }
+        .kanban-log-timestamp { color: var(--text-secondary); }
+        .kanban-log-workflow { color: var(--accent-orange); font-weight: bold; }
+        .kanban-log-close {
+            padding: 8px;
+            text-align: right;
+            border-top: 1px solid var(--border-color);
+        }
+        /* Accordion for Epics */
+        .epic-accordion {
+            margin-top: 6px;
+        }
+        .epic-subtasks-list {
+            padding-left: 12px;
+            margin-top: 4px;
+        }
+        .epic-subtask-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 11px;
+            color: var(--text-secondary);
+            padding: 2px 0;
+        }
+        .epic-remove-subtask-btn {
+            background: transparent;
+            border: none;
+            color: #ff6b6b;
+            cursor: pointer;
+            font-size: 11px;
+        }
+    </style>
+</head>
+<body class="cyber-theme-enabled">
+    <div class="shared-tab-bar">
+        <button class="shared-tab-btn active" data-tab="kanban">KANBAN PLANS</button>
+        <button class="shared-tab-btn" data-tab="epics">EPICS</button>
+        <button class="shared-tab-btn" data-tab="constitution">CONSTITUTION</button>
+    </div>
+    <div class="container">
+        <!-- Kanban tab -->
+        <div id="kanban-content" class="shared-tab-content active">
+            <div class="kanban-controls-strip">
+                <select id="kanban-workspace-filter">
+                    <option value="">All Workspaces</option>
+                </select>
+                <select id="kanban-project-filter">
+                    <option value="">All Projects</option>
+                </select>
+                <select id="kanban-column-filter">
+                    <option value="">All Columns</option>
+                </select>
+                <button id="btn-import-kanban-plans" class="strip-btn" title="Scan configured AI IDE folders and pick unclaimed plans to add">Import</button>
+                <button id="btn-edit-kanban" class="strip-btn" disabled>Edit</button>
+                <button id="btn-save-kanban" class="strip-btn" style="display:none;">Save</button>
+                <button id="btn-cancel-kanban" class="strip-btn" style="display:none;">Cancel</button>
+                <input type="text" id="kanban-search" class="sidebar-search-input" placeholder="Search plans..." />
+            </div>
+            <div class="content-row">
+                <div id="kanban-list-pane">
+                    <div class="sidebar-toggle-row">
+                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                    </div>
+                </div>
+                <div class="preview-panel-wrapper">
+                    <div id="kanban-preview-pane" class="kanban-preview-pane">
+                        <div id="kanban-preview-meta-bar" style="display:none;"></div>
+                        <div id="kanban-preview-content"></div>
+                        <textarea id="kanban-editor" class="markdown-editor"></textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Epics tab -->
+        <div id="epics-content" class="shared-tab-content">
+            <div class="active-doc-banner inactive" id="active-epic-banner">
+                <div class="active-doc-info">
+                    <span class="active-doc-label">Active Planning Epic:</span>
+                    <span class="active-doc-name" id="active-epic-name">None</span>
+                </div>
+                <button class="btn-disable-doc" id="btn-disable-epic">Turn off</button>
+            </div>
+            <div class="controls-strip">
+                <select id="epics-workspace-filter">
+                    <option value="">All Workspaces</option>
+                </select>
+                <button id="btn-set-active-epic" class="strip-btn" disabled>Set as Active Planning Context</button>
+            </div>
+            <div class="content-row">
+                <div id="epics-list-pane">
+                    <div class="empty-state">Loading epics...</div>
+                </div>
+                <div class="preview-panel-wrapper">
+                    <div id="epics-preview-pane" class="epics-preview-pane">
+                        <div id="epic-preview-meta-bar" style="display:none;"></div>
+                        <div id="epics-preview-content">
+                            <div class="kanban-empty-state">Select an epic to preview</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Constitution tab -->
+        <div id="constitution-content" class="shared-tab-content">
+            <div class="controls-strip">
+                <button id="btn-build-constitution" class="strip-btn">Build Constitution</button>
+                <button id="btn-edit-constitution" class="strip-btn" disabled>Edit</button>
+                <button id="btn-save-constitution" class="strip-btn" style="display:none;">Save</button>
+                <button id="btn-cancel-constitution" class="strip-btn" style="display:none;">Cancel</button>
+            </div>
+            <div class="content-row">
+                <div id="constitution-list-pane">
+                    <div class="empty-state">Loading workspaces...</div>
+                </div>
+                <div class="preview-panel-wrapper">
+                    <div id="constitution-preview-pane" class="constitution-preview-pane">
+                        <div id="constitution-preview-content">
+                            <div class="empty-state">Select a workspace to view its Constitution</div>
+                        </div>
+                        <textarea id="constitution-editor" class="markdown-editor"></textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script nonce="{{NONCE}}" src="{{SHARED_UTILS_URI}}"></script>
+    <script nonce="{{NONCE}}" src="{{PROJECT_JS_URI}}"></script>
+</body>
+</html>

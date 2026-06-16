@@ -17383,7 +17383,7 @@ What would you like to find?`;
             let targetDir = this._buildTicketDir(resolvedRoot, provider, segments);
             if (!targetDir) {
                 const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
-                targetDir = path.join(resolvedRoot, '.switchboard', 'tickets', providerDir);
+                targetDir = path.join(resolvedRoot, '.switchboard', 'tickets', providerDir, ...segments.map(s => this._slugify(s).slice(0, 60)));
             }
 
             fs.mkdirSync(targetDir, { recursive: true });
@@ -17448,7 +17448,7 @@ What would you like to find?`;
         let targetDir = this._buildTicketDir(resolvedRoot, provider, segments);
         if (!targetDir) {
             const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
-            targetDir = path.join(resolvedRoot, '.switchboard', 'tickets', providerDir);
+            targetDir = path.join(resolvedRoot, '.switchboard', 'tickets', providerDir, ...segments.map(s => this._slugify(s).slice(0, 60)));
         }
 
         const prefix = `${provider}_${id}_`;
@@ -17603,6 +17603,7 @@ What would you like to find?`;
         if (importMode === 'document' && !ids) {
             let items: any[] = [];
             let targetDir: string | undefined;
+            let segments: string[] = [];
 
             if (provider === 'clickup' && listId) {
                 const clickup = this._getClickUpService(resolvedRoot);
@@ -17611,10 +17612,16 @@ What would you like to find?`;
                 const startIndex = (page - 1) * pageSize;
                 items = tasks.slice(startIndex, startIndex + pageSize);
 
+                const h = clickup.getSelectedHierarchy();
+                segments.push(h.spaceName);
+                if (h.folderName) {
+                    segments.push(h.folderName);
+                }
+                segments.push(h.listName);
+
                 const localFolderService = new LocalFolderService(resolvedRoot);
                 const ticketsFolders = localFolderService.getTicketsFolderPaths();
                 if (ticketsFolders.length > 0 && ticketsFolders[0]) {
-                    const h = clickup.getSelectedHierarchy();
                     const parts = [ticketsFolders[0], 'clickup', this._slugify(h.spaceName).slice(0, 60)];
                     if (h.folderName) {
                         parts.push(this._slugify(h.folderName).slice(0, 60));
@@ -17629,11 +17636,13 @@ What would you like to find?`;
                 const startIndex = (page - 1) * pageSize;
                 items = issues.slice(startIndex, startIndex + pageSize);
 
+                const teamName = linear.getTeamName();
+                const projectName = items[0]?.project?.name || '_no-project';
+                segments.push(teamName, projectName);
+
                 const localFolderService = new LocalFolderService(resolvedRoot);
                 const ticketsFolders = localFolderService.getTicketsFolderPaths();
                 if (ticketsFolders.length > 0 && ticketsFolders[0]) {
-                    const teamName = linear.getTeamName();
-                    const projectName = items[0]?.project?.name || '_no-project';
                     targetDir = path.join(
                         ticketsFolders[0],
                         'linear',
@@ -17645,7 +17654,7 @@ What would you like to find?`;
 
             if (!targetDir) {
                 const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
-                targetDir = path.join(resolvedRoot, '.switchboard', 'tickets', providerDir);
+                targetDir = path.join(resolvedRoot, '.switchboard', 'tickets', providerDir, ...segments.map(s => this._slugify(s).slice(0, 60)));
             }
 
             for (const item of items) {
@@ -17842,9 +17851,10 @@ What would you like to find?`;
                 segments.push(teamName, projectName);
             }
 
-            const baseDir = this._buildTicketDir(resolvedRoot, provider, segments);
+            let baseDir = this._buildTicketDir(resolvedRoot, provider, segments);
             if (!baseDir) {
-                return { success: false, error: 'No tickets folder configured. Please set a tickets folder in Switchboard settings.' };
+                const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
+                baseDir = path.join(resolvedRoot, '.switchboard', 'tickets', providerDir, ...segments.map(s => this._slugify(s).slice(0, 60)));
             }
 
             const targetDir = path.join(baseDir, 'attachments');
@@ -17955,9 +17965,10 @@ What would you like to find?`;
                 segments.push(teamName, projectName);
             }
 
-            const baseDir = this._buildTicketDir(resolvedRoot, provider, segments);
+            let baseDir = this._buildTicketDir(resolvedRoot, provider, segments);
             if (!baseDir) {
-                return [];
+                const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
+                baseDir = path.join(resolvedRoot, '.switchboard', 'tickets', providerDir, ...segments.map(s => this._slugify(s).slice(0, 60)));
             }
             const targetDir = path.join(baseDir, 'attachments');
 

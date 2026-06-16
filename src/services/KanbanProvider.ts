@@ -6780,13 +6780,17 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         if (!workspaceRoot) throw new Error('No workspace root resolved.');
 
         const cpStatus = this.getControlPlaneSelectionStatus(workspaceRoot);
-        if (cpStatus.mode !== 'explicit' || !cpStatus.controlPlaneRoot) {
-            throw new Error('No control plane configured. Set a control plane in the workspace picker before creating worktrees.');
+        if (!cpStatus.controlPlaneRoot) {
+            throw new Error('Could not resolve a workspace root for worktree creation.');
         }
 
-        // worktrees/ is created by executeFreshSetup for new control planes.
-        // Lazy-create here for existing control planes that predate this change.
-        const worktreesParent = path.join(cpStatus.controlPlaneRoot, 'worktrees');
+        // Worktrees must live BESIDE the repo, never inside it, to keep `git status` clean.
+        // Explicit mode: under the control-plane org folder (already a sibling of the repo).
+        // Auto mode: cpStatus.controlPlaneRoot collapses to workspaceRoot, so derive an
+        // explicit sibling from the repo's parent directory instead of nesting inside it.
+        const worktreesParent = cpStatus.mode === 'explicit'
+            ? path.join(cpStatus.controlPlaneRoot, 'worktrees')
+            : path.join(path.dirname(workspaceRoot), 'worktrees');
         if (!fs.existsSync(worktreesParent)) {
             fs.mkdirSync(worktreesParent, { recursive: true });
         }
