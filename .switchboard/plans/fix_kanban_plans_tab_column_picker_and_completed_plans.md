@@ -194,6 +194,8 @@ No changes needed. The existing column filter logic in `renderKanbanPlans()` (li
 - `src/services/agentConfig.ts` — **NO CHANGE** (original plan's edit here is rejected to avoid breaking main kanban board)
 - `src/webview/planning.js` — **NO CHANGE**
 
-## Recommendation
+## Review Findings
 
-Send to Intern
+**Files changed:** `src/services/PlanningPanelProvider.ts` (committed in `87043caa`).
+**Validation:** Implementation matches plan exactly; no type or runtime defects found.
+**Remaining risks:** `r: any` in the `.map()` is pre-existing debt; `completedLimit` clamping duplicates KanbanProvider logic but is harmless.

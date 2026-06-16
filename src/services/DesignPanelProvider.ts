@@ -1411,6 +1411,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                 try {
                     const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
                     const projectId: string = message.projectId;
+                    if (!workspaceRoot) throw new Error('No workspace root available');
                     if (!projectId) throw new Error('No project selected to force reload');
 
                     const db = KanbanDatabase.forWorkspace(workspaceRoot);

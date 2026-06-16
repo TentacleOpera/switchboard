@@ -317,3 +317,11 @@ DesignPanelProvider → stitchListProjects(forceRefresh: true)
 ## Recommendation
 
 Complexity 6 → **Send to Coder**
+
+## Review Findings
+
+- All five files changed as planned. Core logic functional: `deleteStitchScreensForProject` and `clearStitchCache` present in `KanbanDatabase.ts`; `stitchForceReloadScreens` handler and `rebuildStitchCache` method present in `DesignPanelProvider.ts`; button, ref, disable logic, and click handler present in `design.html`/`design.js`; `switchboard.rebuildStitchCache` command registered in `extension.ts`.
+- One MAJOR finding fixed: `stitchForceReloadScreens` handler was missing `workspaceRoot` validation (plan explicitly required both `projectId` and `workspaceRoot` validation). Added early guard `if (!workspaceRoot) throw new Error('No workspace root available');` at `src/services/DesignPanelProvider.ts:1414`.
+- NITs deferred: `deleteStitchScreensForProject` uses SELECT-then-DELETE instead of `getRowsModified()` (functionally equivalent); `rebuildStitchCache` lacks try/catch but VS Code surfaces command palette errors acceptably; `kanbanProvider!` non-null assertion is pre-existing pattern.
+- No orphaned references, no double-trigger bugs, no stale `_activeScreens` references after eviction. Webview `stitchBusy` lock prevents duplicate clicks. `stitchScreensReady` reused correctly for force reload completion.
+- Remaining risk: provider-level concurrent-operation guard absent (pre-existing); shared-DB global deletion limitation documented in JSDoc.
