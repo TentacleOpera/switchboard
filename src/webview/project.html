@@ -441,6 +441,408 @@
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
         }
+
+        /* --- Cyber Theme Styles --- */
+        .cyber-scanlines {
+            display: none;
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0, 0, 0, 0.07) 2px,
+                rgba(0, 0, 0, 0.07) 4px
+            );
+            z-index: 5;
+        }
+        .cyber-theme-enabled .cyber-scanlines { display: block; }
+
+        .cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
+            content: " ";
+            display: block;
+            position: absolute;
+            background: linear-gradient(
+                to bottom,
+                rgba(255, 255, 255, 0) 0%,
+                color-mix(in srgb, var(--accent-primary) 3%, transparent) 10%,
+                color-mix(in srgb, var(--accent-primary) 7%, transparent) 50%,
+                color-mix(in srgb, var(--accent-primary) 3%, transparent) 90%,
+                rgba(255, 255, 255, 0) 100%
+            );
+            width: 100%;
+            height: 80px;
+            pointer-events: none;
+            z-index: 6;
+            animation: scanline-sweep 8s linear infinite;
+        }
+
+        @keyframes scanline-sweep {
+            0% { transform: translateY(-80px); }
+            100% { transform: translateY(100vh); }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
+                animation: none;
+                display: none;
+            }
+        }
+
+        .preview-panel-wrapper.scanlines-suppressed > .cyber-scanlines {
+            display: none !important;
+        }
+
+        body.cyber-theme-enabled {
+            background-color: #101414;
+            background-image:
+                linear-gradient(color-mix(in srgb, var(--accent-primary) 4%, transparent) 1px, transparent 1px),
+                linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 4%, transparent) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+        }
+
+        .cyber-theme-enabled .controls-strip,
+        .cyber-theme-enabled .kanban-controls-strip {
+            background: rgba(10, 10, 10, 0.65);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-bottom-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+        }
+
+        .cyber-theme-enabled #kanban-list-pane,
+        .cyber-theme-enabled #epics-list-pane,
+        .cyber-theme-enabled #constitution-list-pane {
+            background: rgba(10, 10, 10, 0.70);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border-right-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+        }
+
+        .cyber-theme-enabled .preview-panel-wrapper {
+            background: transparent;
+            box-shadow: inset 0 0 30px color-mix(in srgb, var(--accent-teal) 6%, transparent);
+        }
+
+        .cyber-theme-enabled #kanban-preview-pane,
+        .cyber-theme-enabled #epics-preview-pane,
+        .cyber-theme-enabled #constitution-preview-pane {
+            background-color: rgba(255, 255, 255, 0.015);
+            background-image:
+                linear-gradient(color-mix(in srgb, var(--accent-primary) 8%, transparent) 1px, transparent 1px),
+                linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 8%, transparent) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+        }
+
+        /* ── Cyber Panel Theme: Neon Glow Effects ── */
+        .cyber-theme-enabled .preview-panel-wrapper h1 {
+            text-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 60%, transparent),
+                         0 0 20px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+        .cyber-theme-enabled .preview-panel-wrapper h2 {
+            text-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 50%, transparent),
+                         0 0 16px color-mix(in srgb, var(--accent-teal) 25%, transparent);
+        }
+        .cyber-theme-enabled .preview-panel-wrapper h3 {
+            text-shadow: 0 0 6px color-mix(in srgb, var(--accent-teal) 40%, transparent);
+        }
+
+        /* Inline code: neon glow */
+        .cyber-theme-enabled #kanban-preview-content code,
+        .cyber-theme-enabled #epics-preview-content code,
+        .cyber-theme-enabled #constitution-preview-content code {
+            box-shadow: 0 0 6px color-mix(in srgb, var(--accent-teal) 25%, transparent);
+        }
+
+        /* Code blocks: subtle glow border */
+        .cyber-theme-enabled #kanban-preview-content pre,
+        .cyber-theme-enabled #epics-preview-content pre,
+        .cyber-theme-enabled #constitution-preview-content pre {
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent),
+                         inset 0 0 12px rgba(0, 0, 0, 0.3);
+        }
+
+        /* Blockquotes: glowing left border */
+        .cyber-theme-enabled #kanban-preview-content blockquote,
+        .cyber-theme-enabled #epics-preview-content blockquote,
+        .cyber-theme-enabled #constitution-preview-content blockquote {
+            border-left-color: var(--accent-teal);
+            box-shadow: -4px 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent);
+        }
+
+        /* Controls strip buttons: glow on hover */
+        .cyber-theme-enabled .strip-btn:hover:not(:disabled) {
+            box-shadow: var(--glow-teal);
+        }
+
+        /* Unified Markdown Preview Styling (Kanban, Epics & Constitution) */
+        #kanban-preview-content,
+        #epics-preview-content,
+        #constitution-preview-content {
+            flex: 1;
+            width: 100%;
+            box-sizing: border-box;
+            margin: 0;
+            font-family: var(--font-family);
+            font-size: 13px;
+            line-height: 1.5;
+            word-wrap: break-word;
+            color: var(--vscode-editor-foreground, #cccccc);
+        }
+
+        #kanban-preview-content h1, #kanban-preview-content h2, #kanban-preview-content h3, #kanban-preview-content h4, #kanban-preview-content h5, #kanban-preview-content h6,
+        #epics-preview-content h1, #epics-preview-content h2, #epics-preview-content h3, #epics-preview-content h4, #epics-preview-content h5, #epics-preview-content h6,
+        #constitution-preview-content h1, #constitution-preview-content h2, #constitution-preview-content h3, #constitution-preview-content h4, #constitution-preview-content h5, #constitution-preview-content h6 {
+            margin-top: 24px;
+            margin-bottom: 12px;
+            font-weight: 600;
+            line-height: 1.25;
+            color: #ffffff;
+        }
+
+        /* Cyber theme — display heading typography */
+        body.cyber-theme-enabled #kanban-preview-content h1, body.cyber-theme-enabled #kanban-preview-content h2, body.cyber-theme-enabled #kanban-preview-content h3, body.cyber-theme-enabled #kanban-preview-content h4, body.cyber-theme-enabled #kanban-preview-content h5, body.cyber-theme-enabled #kanban-preview-content h6,
+        body.cyber-theme-enabled #epics-preview-content h1, body.cyber-theme-enabled #epics-preview-content h2, body.cyber-theme-enabled #epics-preview-content h3, body.cyber-theme-enabled #epics-preview-content h4, body.cyber-theme-enabled #epics-preview-content h5, body.cyber-theme-enabled #epics-preview-content h6,
+        body.cyber-theme-enabled #constitution-preview-content h1, body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6 {
+            font-family: var(--display-font), var(--font-family);
+            letter-spacing: var(--display-letter-spacing);
+            font-stretch: var(--display-font-stretch);
+            line-height: 1.1;
+        }
+        /* Cyber theme — doc preview h2-h6 use accent color */
+        body.cyber-theme-enabled #kanban-preview-content h2, body.cyber-theme-enabled #kanban-preview-content h3, body.cyber-theme-enabled #kanban-preview-content h4, body.cyber-theme-enabled #kanban-preview-content h5, body.cyber-theme-enabled #kanban-preview-content h6,
+        body.cyber-theme-enabled #epics-preview-content h2, body.cyber-theme-enabled #epics-preview-content h3, body.cyber-theme-enabled #epics-preview-content h4, body.cyber-theme-enabled #epics-preview-content h5, body.cyber-theme-enabled #epics-preview-content h6,
+        body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6 {
+            color: var(--accent-primary);
+        }
+
+        #kanban-preview-content h1,
+        #epics-preview-content h1,
+        #constitution-preview-content h1 {
+            font-size: 2em; /* 2em relative to 13px base = 26px */
+            margin-top: 0;
+            padding-bottom: 0.3em;
+            border-bottom: 1px solid var(--accent-teal-dim);
+            border-left: 3px solid var(--accent-teal-dim);
+            padding-left: 8px;
+            text-transform: uppercase;
+        }
+
+        #kanban-preview-content h2,
+        #epics-preview-content h2,
+        #constitution-preview-content h2 {
+            font-size: 1.5em; /* 1.5em relative to 13px base = 19.5px */
+            padding-bottom: 0.3em;
+            border-bottom: 1px solid var(--accent-teal-dim);
+            border-left: 2px solid var(--accent-teal-dim);
+            padding-left: 6px;
+            text-transform: uppercase;
+            color: var(--accent-teal);
+        }
+
+        #kanban-preview-content h3,
+        #epics-preview-content h3,
+        #constitution-preview-content h3,
+        #kanban-preview-content h4,
+        #epics-preview-content h4,
+        #constitution-preview-content h4,
+        #kanban-preview-content h5,
+        #epics-preview-content h5,
+        #constitution-preview-content h5,
+        #kanban-preview-content h6,
+        #epics-preview-content h6,
+        #constitution-preview-content h6 {
+            text-transform: uppercase;
+            color: var(--accent-teal);
+        }
+
+        #kanban-preview-content h3,
+        #epics-preview-content h3,
+        #constitution-preview-content h3 {
+            font-size: 1.25em; /* 1.25em relative to 13px base = 16.25px */
+        }
+
+        #kanban-preview-content h4,
+        #epics-preview-content h4,
+        #constitution-preview-content h4 {
+            font-size: 1em;
+        }
+
+        #kanban-preview-content h5,
+        #epics-preview-content h5,
+        #constitution-preview-content h5 {
+            font-size: 0.875em;
+        }
+
+        #kanban-preview-content h6,
+        #epics-preview-content h6,
+        #constitution-preview-content h6 {
+            font-size: 0.85em;
+        }
+
+        #kanban-preview-content p,
+        #epics-preview-content p,
+        #constitution-preview-content p {
+            margin-bottom: 16px;
+            line-height: inherit; /* Inherits from container's 1.5 */
+            color: var(--text-primary, #e0e0e0);
+            font-size: inherit; /* Inherits from container's 13px */
+        }
+
+        #kanban-preview-content li,
+        #epics-preview-content li,
+        #constitution-preview-content li {
+            margin-bottom: 6px; /* Tighter list item spacing */
+            line-height: inherit;
+            color: var(--vscode-editor-foreground, #cccccc);
+            font-size: inherit;
+        }
+
+        #kanban-preview-content li p,
+        #epics-preview-content li p,
+        #constitution-preview-content li p {
+            margin-bottom: 0; /* Paragraphs inside list items: zero extra margin (li already spaced) */
+        }
+
+        #kanban-preview-content pre,
+        #epics-preview-content pre,
+        #constitution-preview-content pre {
+            background-color: var(--vscode-textCodeBlock-background, rgba(255,255,255,0.04));
+            border: 1px solid var(--vscode-widget-border, rgba(127, 127, 127, 0.35));
+            border-radius: 3px;
+            overflow-x: auto;
+            padding: 16px; /* VS Code default */
+            margin: 16px 0;
+        }
+
+        #kanban-preview-content pre code,
+        #epics-preview-content pre code,
+        #constitution-preview-content pre code {
+            background: none;
+            padding: 0;
+            border: none;
+            display: inline-block;
+            color: var(--vscode-editor-foreground, #cccccc);
+            tab-size: 4;
+        }
+
+        #kanban-preview-content code,
+        #epics-preview-content code,
+        #constitution-preview-content code {
+            font-family: var(--vscode-editor-font-family, 'SF Mono', Monaco, Menlo, Consolas, monospace);
+            font-size: 1em; /* Match VS Code: inline code is same size as surrounding text */
+            line-height: 1.357em;
+            color: var(--accent-teal);
+            background-color: color-mix(in srgb, var(--accent-teal) 12%, transparent);
+            border: 1px solid var(--accent-teal-dim);
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+
+        #kanban-preview-content blockquote,
+        #epics-preview-content blockquote,
+        #constitution-preview-content blockquote {
+            margin: 0;
+            padding: 0 16px 0 10px; /* Match VS Code's markdown.css */
+            border-left: 5px solid var(--vscode-textBlockQuote-border, var(--border-color));
+            border-radius: 2px;
+            color: var(--vscode-editor-foreground, var(--text-secondary));
+            background: transparent;
+        }
+
+        #kanban-preview-content ul, #kanban-preview-content ol,
+        #epics-preview-content ul, #epics-preview-content ol,
+        #constitution-preview-content ul, #constitution-preview-content ol {
+            margin-bottom: 16px; /* Match VS Code's tighter list spacing */
+            padding-left: 2em;
+        }
+
+        /* Table Styling */
+        #kanban-preview-content table,
+        #epics-preview-content table,
+        #constitution-preview-content table {
+            border-collapse: collapse;
+            margin-bottom: 0.7em;
+            font-size: inherit; /* Inherits from container */
+        }
+
+        #kanban-preview-content th,
+        #epics-preview-content th,
+        #constitution-preview-content th {
+            text-align: left;
+            border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.69));
+            font-weight: 600;
+            padding: 5px 10px;
+        }
+
+        #kanban-preview-content td,
+        #epics-preview-content td,
+        #constitution-preview-content td {
+            padding: 5px 10px;
+            border-top: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
+            color: var(--vscode-editor-foreground, var(--text-primary));
+        }
+
+        #kanban-preview-content tr:hover td,
+        #epics-preview-content tr:hover td,
+        #constitution-preview-content tr:hover td {
+            background: var(--vscode-list-hoverBackground, var(--card-bg-hover));
+        }
+
+        #kanban-preview-content .table-wrapper,
+        #epics-preview-content .table-wrapper,
+        #constitution-preview-content .table-wrapper {
+            overflow-x: auto;
+            max-width: 100%;
+            margin-bottom: 16px;
+        }
+
+        /* Subtle, Interactive Links */
+        #kanban-preview-content a,
+        #epics-preview-content a,
+        #constitution-preview-content a {
+            color: var(--vscode-textLink-foreground, var(--accent-teal));
+            text-decoration: none;
+        }
+
+        #kanban-preview-content a:hover,
+        #epics-preview-content a:hover,
+        #constitution-preview-content a:hover {
+            color: var(--vscode-textLink-activeForeground, var(--accent-teal-bright));
+            text-decoration: underline;
+        }
+
+        #kanban-preview-content hr,
+        #epics-preview-content hr,
+        #constitution-preview-content hr {
+            border: 0;
+            height: 1px;
+            border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
+        }
+
+        #kanban-preview-content img,
+        #epics-preview-content img,
+        #constitution-preview-content img {
+            max-width: 100%;
+            max-height: 100%;
+            position: relative;
+            z-index: 7; /* Above .cyber-scanlines (z-index: 5) and sweep animation to prevent overlay distortion */
+            box-shadow: 0 0 6px rgba(0, 0, 0, 0.4); /* Intentional elevation so the pop-out above scanlines looks designed */
+        }
+
+        #kanban-preview-content .empty-state,
+        #epics-preview-content .empty-state,
+        #constitution-preview-content .empty-state {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--vscode-editor-foreground, var(--text-secondary));
+            font-size: inherit; /* Inherits from container's 14px */
+            opacity: 0.5;
+        }
     </style>
 </head>
 <body class="cyber-theme-enabled">
@@ -475,6 +877,7 @@
                     </div>
                 </div>
                 <div class="preview-panel-wrapper">
+                    <div class="cyber-scanlines"></div>
                     <div id="kanban-preview-pane" class="kanban-preview-pane">
                         <div id="kanban-preview-meta-bar" style="display:none;"></div>
                         <div id="kanban-preview-content"></div>
@@ -504,6 +907,7 @@
                     <div class="empty-state">Loading epics...</div>
                 </div>
                 <div class="preview-panel-wrapper">
+                    <div class="cyber-scanlines"></div>
                     <div id="epics-preview-pane" class="epics-preview-pane">
                         <div id="epic-preview-meta-bar" style="display:none;"></div>
                         <div id="epics-preview-content">
@@ -527,6 +931,7 @@
                     <div class="empty-state">Loading workspaces...</div>
                 </div>
                 <div class="preview-panel-wrapper">
+                    <div class="cyber-scanlines"></div>
                     <div id="constitution-preview-pane" class="constitution-preview-pane">
                         <div id="constitution-preview-content">
                             <div class="empty-state">Select a workspace to view its Constitution</div>
