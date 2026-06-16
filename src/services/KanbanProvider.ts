@@ -5529,14 +5529,16 @@ This step is what moves the plan forward in the Switchboard pipeline.
             case 'reviewPlan': {
                 const reviewId = this._resolveSessionId(msg.planId, msg.sessionId);
                 if (reviewId && this._planningPanelProvider) {
+                    // The Kanban tab now lives in the Project panel (project.html), so
+                    // "Review Plan" must open/target the project panel, not planning.html.
                     // Only open a new panel if none exists. If it exists in another window,
                     // just message it — do NOT forcibly reveal (which steals it back).
-                    if (!this._planningPanelProvider.hasPanel()) {
-                        await this._planningPanelProvider.open();
-                    } else if (this._planningPanelProvider.isInCurrentWindow()) {
-                        this._planningPanelProvider.reveal();
+                    if (!this._planningPanelProvider.hasProjectPanel()) {
+                        await this._planningPanelProvider.openProject();
+                    } else if (this._planningPanelProvider.isProjectInCurrentWindow()) {
+                        this._planningPanelProvider.revealProject();
                     }
-                    this._planningPanelProvider.postMessageToWebview({
+                    this._planningPanelProvider.postMessageToProjectWebview({
                         type: 'activateKanbanTabAndSelectPlan',
                         planId: msg.planId || '',
                         sessionId: reviewId,

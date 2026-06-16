@@ -6720,111 +6720,6 @@
                 `).join('');
             }
         }
-        document.getElementById('btn-epic-action')?.addEventListener('click', () => {
-            const selected = Array.from(selectedCards.values());
-            const epics = selected.filter(s => s.isEpic);
-            const nonEpics = selected.filter(s => !s.isEpic);
-            if (epics.length === 1 && nonEpics.length === 0) {
-                openEpicManageModal();
-            } else if (epics.length === 1 && nonEpics.length > 0) {
-                const epicEntry = Array.from(selectedCards.entries()).find(([, v]) => v.isEpic);
-                const epicId = epicEntry ? epicEntry[0] : '';
-                const epicCard = currentCards.find(c => (c.planId || c.sessionId) === epicId);
-                const epicSessionId = epicCard ? (epicCard.planId || epicCard.sessionId) : '';
-                nonEpics.forEach(sub => {
-                    const subEntry = Array.from(selectedCards.entries()).find(([, v]) => v === sub);
-                    const subId = subEntry ? subEntry[0] : '';
-                    const subCard = currentCards.find(c => (c.planId || c.sessionId) === subId);
-                    if (subCard) {
-                        postKanbanMessage({ type: 'addSubtaskToEpic', epicSessionId, subtaskSessionId: subCard.planId || subCard.sessionId, workspaceRoot: epicCard.workspaceRoot });
-                    }
-                });
-                selectedCards.clear();
-                document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
-                updateReassignButtonVisibility();
-                updateEpicActionButton();
-            } else if (epics.length === 0 && nonEpics.length === 1) {
-                // Single plan — promote in-place, no new file created
-                const entry = Array.from(selectedCards.entries()).find(([, v]) => !v.isEpic);
-                const planId = entry ? entry[0] : '';
-                const card = currentCards.find(c => (c.planId || c.sessionId) === planId);
-                if (planId && card) {
-                    postKanbanMessage({ type: 'promoteToEpic', planId, workspaceRoot: card.workspaceRoot || getActiveWorkspaceRoot() });
-                    selectedCards.clear();
-                    document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
-                    updateReassignButtonVisibility();
-                    updateEpicActionButton();
-                }
-            } else if (epics.length === 0 && nonEpics.length > 1) {
-                openEpicCreateModal();
-            }
-        });
-        document.getElementById('epic-create-close')?.addEventListener('click', closeEpicCreateModal);
-        document.getElementById('epic-create-cancel')?.addEventListener('click', closeEpicCreateModal);
-        document.getElementById('epic-create-submit')?.addEventListener('click', () => {
-            const nameInput = document.getElementById('epic-create-name');
-            const descInput = document.getElementById('epic-create-description');
-            const name = nameInput ? nameInput.value.trim() : '';
-            if (!name) {
-                alert('Epic name is required.');
-                return;
-            }
-            const subtaskPlanIds = Array.from(selectedCards.keys());
-            const workspaceRoot = getActiveWorkspaceRoot();
-            postKanbanMessage({ type: 'createEpic', name, description: descInput ? descInput.value.trim() : '', subtaskPlanIds, workspaceRoot });
-            closeEpicCreateModal();
-            selectedCards.clear();
-            document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
-            updateReassignButtonVisibility();
-            updateEpicActionButton();
-        });
-        document.getElementById('epic-manage-close')?.addEventListener('click', closeEpicManageModal);
-        document.getElementById('epic-manage-close-btn')?.addEventListener('click', closeEpicManageModal);
-        document.getElementById('epic-manage-add-btn')?.addEventListener('click', () => {
-            const select = document.getElementById('epic-manage-add-select');
-            const subtaskSessionId = select ? select.value : '';
-            if (!subtaskSessionId) return;
-            const epicEntry = Array.from(selectedCards.entries()).find(([, v]) => v.isEpic);
-            const epicId = epicEntry ? epicEntry[0] : '';
-            const epicCard = currentCards.find(c => (c.planId || c.sessionId) === epicId);
-            if (!epicCard) return;
-            postKanbanMessage({ type: 'addSubtaskToEpic', epicSessionId: epicCard.planId || epicCard.sessionId, subtaskSessionId, workspaceRoot: epicCard.workspaceRoot });
-            if (select) select.value = '';
-        });
-        document.getElementById('epic-manage-delete')?.addEventListener('click', () => {
-            const epicEntry = Array.from(selectedCards.entries()).find(([, v]) => v.isEpic);
-            const epicId = epicEntry ? epicEntry[0] : '';
-            const epicCard = currentCards.find(c => (c.planId || c.sessionId) === epicId);
-            if (!epicCard) return;
-            postKanbanMessage({ type: 'deleteEpic', sessionId: epicCard.planId || epicCard.sessionId, workspaceRoot: epicCard.workspaceRoot, deleteSubtasks: true });
-            closeEpicManageModal();
-            selectedCards.clear();
-            document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
-            updateReassignButtonVisibility();
-            updateEpicActionButton();
-        });
-        document.getElementById('epic-manage-save-config')?.addEventListener('click', () => {
-            const lockCols = document.getElementById('epic-manage-lock-columns');
-            const promptTpl = document.getElementById('epic-manage-prompt-template');
-            const maxSub = document.getElementById('epic-manage-max-subtasks');
-            const lockVal = lockCols ? lockCols.value : undefined;
-            const tplVal = promptTpl ? promptTpl.value : undefined;
-            const maxVal = maxSub ? maxSub.value : undefined;
-            postKanbanMessage({
-                type: 'updateEpicConfig',
-                workspaceRoot: getActiveWorkspaceRoot(),
-                epicLockColumns: lockVal,
-                epicPromptTemplate: tplVal,
-                epicMaxSubtasks: maxVal
-            });
-        });
-        document.getElementById('epic-manage-subtask-list')?.addEventListener('click', (e) => {
-            const btn = e.target.closest('.epic-remove-subtask-btn');
-            if (!btn) return;
-            const subtaskSessionId = btn.dataset.subtaskSession;
-            if (!subtaskSessionId) return;
-            postKanbanMessage({ type: 'removeSubtaskFromEpic', subtaskSessionId, workspaceRoot: getActiveWorkspaceRoot() });
-        });
 
         // Close buttons (both × header and Cancel footer)
         document.querySelectorAll('[data-action="closeRoutingMap"]').forEach(btn => {
@@ -8404,6 +8299,113 @@
                 if (btn && !btn.disabled && !btn.classList.contains('disabled')) {
                     flashIconBtn(btn);
                 }
+            });
+
+            // Epic button event listeners
+            document.getElementById('btn-epic-action')?.addEventListener('click', () => {
+                const selected = Array.from(selectedCards.values());
+                const epics = selected.filter(s => s.isEpic);
+                const nonEpics = selected.filter(s => !s.isEpic);
+                if (epics.length === 1 && nonEpics.length === 0) {
+                    openEpicManageModal();
+                } else if (epics.length === 1 && nonEpics.length > 0) {
+                    const epicEntry = Array.from(selectedCards.entries()).find(([, v]) => v.isEpic);
+                    const epicId = epicEntry ? epicEntry[0] : '';
+                    const epicCard = currentCards.find(c => (c.planId || c.sessionId) === epicId);
+                    const epicSessionId = epicCard ? (epicCard.planId || epicCard.sessionId) : '';
+                    nonEpics.forEach(sub => {
+                        const subEntry = Array.from(selectedCards.entries()).find(([, v]) => v === sub);
+                        const subId = subEntry ? subEntry[0] : '';
+                        const subCard = currentCards.find(c => (c.planId || c.sessionId) === subId);
+                        if (subCard) {
+                            postKanbanMessage({ type: 'addSubtaskToEpic', epicSessionId, subtaskSessionId: subCard.planId || subCard.sessionId, workspaceRoot: epicCard.workspaceRoot });
+                        }
+                    });
+                    selectedCards.clear();
+                    document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
+                    updateReassignButtonVisibility();
+                    updateEpicActionButton();
+                } else if (epics.length === 0 && nonEpics.length === 1) {
+                    // Single plan — promote in-place, no new file created
+                    const entry = Array.from(selectedCards.entries()).find(([, v]) => !v.isEpic);
+                    const planId = entry ? entry[0] : '';
+                    const card = currentCards.find(c => (c.planId || c.sessionId) === planId);
+                    if (planId && card) {
+                        postKanbanMessage({ type: 'promoteToEpic', planId, workspaceRoot: card.workspaceRoot || getActiveWorkspaceRoot() });
+                        selectedCards.clear();
+                        document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
+                        updateReassignButtonVisibility();
+                        updateEpicActionButton();
+                    }
+                } else if (epics.length === 0 && nonEpics.length > 1) {
+                    openEpicCreateModal();
+                }
+            });
+            document.getElementById('epic-create-close')?.addEventListener('click', closeEpicCreateModal);
+            document.getElementById('epic-create-cancel')?.addEventListener('click', closeEpicCreateModal);
+            document.getElementById('epic-create-submit')?.addEventListener('click', () => {
+                const nameInput = document.getElementById('epic-create-name');
+                const descInput = document.getElementById('epic-create-description');
+                const name = nameInput ? nameInput.value.trim() : '';
+                if (!name) {
+                    alert('Epic name is required.');
+                    return;
+                }
+                const subtaskPlanIds = Array.from(selectedCards.keys());
+                const workspaceRoot = getActiveWorkspaceRoot();
+                postKanbanMessage({ type: 'createEpic', name, description: descInput ? descInput.value.trim() : '', subtaskPlanIds, workspaceRoot });
+                closeEpicCreateModal();
+                selectedCards.clear();
+                document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
+                updateReassignButtonVisibility();
+                updateEpicActionButton();
+            });
+            document.getElementById('epic-manage-close')?.addEventListener('click', closeEpicManageModal);
+            document.getElementById('epic-manage-close-btn')?.addEventListener('click', closeEpicManageModal);
+            document.getElementById('epic-manage-add-btn')?.addEventListener('click', () => {
+                const select = document.getElementById('epic-manage-add-select');
+                const subtaskSessionId = select ? select.value : '';
+                if (!subtaskSessionId) return;
+                const epicEntry = Array.from(selectedCards.entries()).find(([, v]) => v.isEpic);
+                const epicId = epicEntry ? epicEntry[0] : '';
+                const epicCard = currentCards.find(c => (c.planId || c.sessionId) === epicId);
+                if (!epicCard) return;
+                postKanbanMessage({ type: 'addSubtaskToEpic', epicSessionId: epicCard.planId || epicCard.sessionId, subtaskSessionId, workspaceRoot: epicCard.workspaceRoot });
+                if (select) select.value = '';
+            });
+            document.getElementById('epic-manage-delete')?.addEventListener('click', () => {
+                const epicEntry = Array.from(selectedCards.entries()).find(([, v]) => v.isEpic);
+                const epicId = epicEntry ? epicEntry[0] : '';
+                const epicCard = currentCards.find(c => (c.planId || c.sessionId) === epicId);
+                if (!epicCard) return;
+                postKanbanMessage({ type: 'deleteEpic', sessionId: epicCard.planId || epicCard.sessionId, workspaceRoot: epicCard.workspaceRoot, deleteSubtasks: true });
+                closeEpicManageModal();
+                selectedCards.clear();
+                document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
+                updateReassignButtonVisibility();
+                updateEpicActionButton();
+            });
+            document.getElementById('epic-manage-save-config')?.addEventListener('click', () => {
+                const lockCols = document.getElementById('epic-manage-lock-columns');
+                const promptTpl = document.getElementById('epic-manage-prompt-template');
+                const maxSub = document.getElementById('epic-manage-max-subtasks');
+                const lockVal = lockCols ? lockCols.value : undefined;
+                const tplVal = promptTpl ? promptTpl.value : undefined;
+                const maxVal = maxSub ? maxSub.value : undefined;
+                postKanbanMessage({
+                    type: 'updateEpicConfig',
+                    workspaceRoot: getActiveWorkspaceRoot(),
+                    epicLockColumns: lockVal,
+                    epicPromptTemplate: tplVal,
+                    epicMaxSubtasks: maxVal
+                });
+            });
+            document.getElementById('epic-manage-subtask-list')?.addEventListener('click', (e) => {
+                const btn = e.target.closest('.epic-remove-subtask-btn');
+                if (!btn) return;
+                const subtaskSessionId = btn.dataset.subtaskSession;
+                if (!subtaskSessionId) return;
+                postKanbanMessage({ type: 'removeSubtaskFromEpic', subtaskSessionId, workspaceRoot: getActiveWorkspaceRoot() });
             });
         });
 

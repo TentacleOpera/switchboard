@@ -17,6 +17,15 @@
             if (targetContent) targetContent.classList.add('active');
             activeTab = targetTab;
 
+            // Apply sidebar state for the active tab
+            if (targetTab === 'kanban') {
+                applySidebarState('kanban', state.kanbanListCollapsed);
+            } else if (targetTab === 'epics') {
+                applySidebarState('epics', state.epicsListCollapsed);
+            } else if (targetTab === 'constitution') {
+                applySidebarState('constitution', state.constitutionListCollapsed);
+            }
+
             if (activeTab === 'kanban') {
                 vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
             } else if (activeTab === 'epics') {
@@ -34,8 +43,52 @@
         editOriginalContent: { kanban: null, constitution: null },
         dirtyFlags: { kanban: false, constitution: false },
         externalChangePending: { kanban: false, constitution: false },
-        reviewMode: { kanban: false }
+        reviewMode: { kanban: false },
+        kanbanListCollapsed: false,
+        epicsListCollapsed: false,
+        constitutionListCollapsed: false
     };
+
+    // Initialize from persisted state
+    const persistedState = vscode.getState() || {};
+    state.kanbanListCollapsed = persistedState.kanbanListCollapsed || false;
+    state.epicsListCollapsed = persistedState.epicsListCollapsed || false;
+    state.constitutionListCollapsed = persistedState.constitutionListCollapsed || false;
+
+    function applySidebarState(tabName, collapsed) {
+        const tabContent = document.getElementById(`${tabName}-content`);
+        if (!tabContent) return;
+        const contentRow = tabContent.querySelector('.content-row');
+        const toggleBtn = tabContent.querySelector('.sidebar-toggle-btn');
+        if (contentRow) {
+            contentRow.classList.toggle('collapsed', collapsed);
+        }
+        if (toggleBtn) {
+            toggleBtn.textContent = collapsed ? '»' : '«';
+        }
+    }
+
+    function toggleSidebarCollapsed() {
+        if (activeTab === 'kanban') {
+            state.kanbanListCollapsed = !state.kanbanListCollapsed;
+            applySidebarState('kanban', state.kanbanListCollapsed);
+        } else if (activeTab === 'epics') {
+            state.epicsListCollapsed = !state.epicsListCollapsed;
+            applySidebarState('epics', state.epicsListCollapsed);
+        } else if (activeTab === 'constitution') {
+            state.constitutionListCollapsed = !state.constitutionListCollapsed;
+            applySidebarState('constitution', state.constitutionListCollapsed);
+        }
+
+        // Persist state
+        const currentPersisted = vscode.getState() || {};
+        vscode.setState({
+            ...currentPersisted,
+            kanbanListCollapsed: state.kanbanListCollapsed,
+            epicsListCollapsed: state.epicsListCollapsed,
+            constitutionListCollapsed: state.constitutionListCollapsed
+        });
+    }
 
     let _kanbanPlansCache = [];
     let _kanbanAllWorkspaceProjects = {};
@@ -45,6 +98,7 @@
     let _kanbanPreviewRequestId = 0;
 
     let _epicSelectedPlan = null;
+    let _pendingKanbanSelection = null;
     let _activeEpicName = 'None';
     let _activeEpicFilePath = '';
 
@@ -107,6 +161,7 @@
                 populateKanbanFilters();
                 renderKanbanPlans();
                 renderEpicsList();
+                tryResolvePendingKanbanSelection();
                 break;
             case 'kanbanPlanPreviewReady':
                 if (kanbanPreviewContent && _kanbanSelectedPlan && _kanbanSelectedPlan.planFile === msg.filePath) {
@@ -122,6 +177,28 @@
                     epicsPreviewContent.innerHTML = msg.content || '';
                 }
                 break;
+            case 'activateKanbanTabAndSelectPlan': {
+                _pendingKanbanSelection = {
+                    planId: msg.planId || '',
+                    sessionId: msg.sessionId || '',
+                    planFile: msg.planFile || '',
+                    workspaceRoot: msg.workspaceRoot || ''
+                };
+                // Point the filters at the target plan's workspace and clear the column/
+                // project filters so the plan is guaranteed to be in the rendered list.
+                kanbanFilters.workspaceRoot = msg.workspaceRoot || '';
+                if (kanbanWorkspaceFilter) kanbanWorkspaceFilter.value = msg.workspaceRoot || '';
+                kanbanFilters.column = '';
+                if (kanbanColumnFilter) kanbanColumnFilter.value = '';
+                kanbanFilters.project = '';
+                if (kanbanProjectFilter) kanbanProjectFilter.value = '';
+                // Activate the Kanban tab — its click handler fires fetchKanbanPlans.
+                const kanbanTabBtn = document.querySelector('.shared-tab-btn[data-tab="kanban"]');
+                if (kanbanTabBtn) kanbanTabBtn.click();
+                // Resolve immediately if the plan is already in the cache.
+                tryResolvePendingKanbanSelection();
+                break;
+            }
             case 'epicDetails':
                 renderEpicSubtasks(msg.epic, msg.subtasks);
                 break;
@@ -303,7 +380,8 @@
         const toggleBtn = document.createElement('button');
         toggleBtn.className = 'sidebar-toggle-btn';
         toggleBtn.title = 'Toggle sidebar';
-        toggleBtn.textContent = '«';
+        toggleBtn.textContent = state.kanbanListCollapsed ? '»' : '«';
+        toggleBtn.addEventListener('click', toggleSidebarCollapsed);
         toggleRow.appendChild(toggleBtn);
         kanbanListPane.appendChild(toggleRow);
 
@@ -408,6 +486,24 @@
 
             kanbanListPane.appendChild(itemDiv);
         });
+    }
+
+    function tryResolvePendingKanbanSelection() {
+        if (!_pendingKanbanSelection) return;
+        const sel = _pendingKanbanSelection;
+        const match = _kanbanPlansCache.find(p =>
+            (sel.planFile && p.planFile === sel.planFile) ||
+            (sel.planId && p.planId === sel.planId) ||
+            (sel.sessionId && p.sessionId === sel.sessionId)
+        );
+        if (!match) return;
+        const itemDiv = kanbanListPane && kanbanListPane.querySelector(`.kanban-plan-item[data-plan-id="${match.planId}"]`);
+        if (!itemDiv) return;
+        itemDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        document.querySelectorAll('.kanban-plan-item').forEach(el => el.classList.remove('selected'));
+        itemDiv.classList.add('selected');
+        loadKanbanPlanPreview(match);
+        _pendingKanbanSelection = null;
     }
 
     function loadKanbanPlanPreview(plan) {
@@ -555,8 +651,23 @@
         }
 
         epicsListPane.innerHTML = '';
+
+        // NEW: Create toggle button (present even when empty)
+        const toggleRow = document.createElement('div');
+        toggleRow.className = 'sidebar-toggle-row';
+        const toggleBtn = document.createElement('button');
+        toggleBtn.className = 'sidebar-toggle-btn';
+        toggleBtn.title = 'Toggle sidebar';
+        toggleBtn.textContent = state.epicsListCollapsed ? '»' : '«';
+        toggleBtn.addEventListener('click', toggleSidebarCollapsed);
+        toggleRow.appendChild(toggleBtn);
+        epicsListPane.appendChild(toggleRow);
+
         if (filtered.length === 0) {
-            epicsListPane.innerHTML = '<div class="empty-state">No epics found. Create a plan and toggle its Epic status on the board.</div>';
+            const emptyState = document.createElement('div');
+            emptyState.className = 'empty-state';
+            emptyState.textContent = 'No epics found. Create a plan and toggle its Epic status on the board.';
+            epicsListPane.appendChild(emptyState);
             return;
         }
 
@@ -702,8 +813,22 @@
         if (!constitutionListPane) return;
         constitutionListPane.innerHTML = '';
 
+        // NEW: Create toggle button (present even when empty)
+        const toggleRow = document.createElement('div');
+        toggleRow.className = 'sidebar-toggle-row';
+        const toggleBtn = document.createElement('button');
+        toggleBtn.className = 'sidebar-toggle-btn';
+        toggleBtn.title = 'Toggle sidebar';
+        toggleBtn.textContent = state.constitutionListCollapsed ? '»' : '«';
+        toggleBtn.addEventListener('click', toggleSidebarCollapsed);
+        toggleRow.appendChild(toggleBtn);
+        constitutionListPane.appendChild(toggleRow);
+
         if (_constitutionWorkspaces.length === 0) {
-            constitutionListPane.innerHTML = '<div class="empty-state">No workspaces open</div>';
+            const emptyState = document.createElement('div');
+            emptyState.className = 'empty-state';
+            emptyState.textContent = 'No workspaces open';
+            constitutionListPane.appendChild(emptyState);
             return;
         }
 
@@ -898,4 +1023,15 @@
         if (score <= 8) return 'high';
         return 'very-high';
     }
+
+    // Initialize sidebar state on load
+    applySidebarState('kanban', state.kanbanListCollapsed);
+    applySidebarState('epics', state.epicsListCollapsed);
+    applySidebarState('constitution', state.constitutionListCollapsed);
+
+    // Bind global event listeners for any static toggle buttons
+    // (Dynamic buttons created by render functions get their own listeners)
+    document.querySelectorAll('.sidebar-toggle-btn').forEach(btn => {
+        btn.addEventListener('click', toggleSidebarCollapsed);
+    });
 })();

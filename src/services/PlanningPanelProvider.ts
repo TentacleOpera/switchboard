@@ -507,6 +507,26 @@ export class PlanningPanelProvider {
         this._panel?.webview.postMessage(message);
     }
 
+    public revealProject(): void {
+        if (this._projectPanel) {
+            this._projectPanel.reveal(vscode.ViewColumn.One);
+        } else {
+            void this.openProject();
+        }
+    }
+
+    public hasProjectPanel(): boolean {
+        return !!this._projectPanel;
+    }
+
+    public isProjectInCurrentWindow(): boolean {
+        return !!this._projectPanel && this._projectPanel.viewColumn !== undefined;
+    }
+
+    public postMessageToProjectWebview(message: any): void {
+        this._projectPanel?.webview.postMessage(message);
+    }
+
     private _setupDocsFolderWatcher(workspaceRoot: string | undefined): void {
         if (!workspaceRoot) return;
 

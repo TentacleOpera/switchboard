@@ -323,6 +323,32 @@
         .sidebar-folders-btn:hover, .sidebar-toggle-btn:hover {
             color: var(--text-primary);
         }
+        .content-row.collapsed > :first-child {
+            flex: 0 0 40px !important;
+        }
+        .content-row.collapsed > :last-child {
+            flex: 1 !important;
+        }
+
+        .content-row.collapsed #kanban-list-pane,
+        .content-row.collapsed #epics-list-pane,
+        .content-row.collapsed #constitution-list-pane {
+            padding: 4px;
+            overflow: hidden;
+        }
+
+        .content-row.collapsed #kanban-list-pane > *:not(.sidebar-toggle-row),
+        .content-row.collapsed #epics-list-pane > *:not(.sidebar-toggle-row),
+        .content-row.collapsed #constitution-list-pane > *:not(.sidebar-toggle-row) {
+            display: none !important;
+        }
+
+        .content-row.collapsed .sidebar-toggle-row {
+            position: static;
+            display: flex;
+            justify-content: center;
+            margin-bottom: 8px;
+        }
         /* Overlay and modals for logs */
         .kanban-log-overlay {
             position: fixed;
