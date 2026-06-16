@@ -166,4 +166,22 @@ Key risks: the boolean lock can deadlock if an operation hangs; `_activeScreens.
 
 ---
 
+## Review Findings
+
+Implementation reviewed against plan requirements. All 4 fixes are correctly applied:
+- `_stitchOperationLock` added and reset in `dispose()`
+- Lock guards wrap the 6 specified case blocks with `try/finally` release
+- `stitchForceReloadScreens` deletes orphaned PNGs before DB deletion using `path.basename(s.id)` sanitization
+- `_activeScreens.clear()` replaces the fragile dual-key eviction loop
+- `switchboard.rebuildStitchCache` command removed from `package.json`
+
+**Files changed:** `src/services/DesignPanelProvider.ts`, `package.json`
+
+**Validation:** Not run per session directive (compilation and tests skipped; user will run separately).
+
+**Remaining risks:**
+- `_stitchOperationLock` is a boolean without timeout; a hung SDK call blocks all Stitch operations until `dispose()` or restart.
+- `_activeScreens.clear()` evicts screens for ALL projects; cross-project switch before re-fetch causes transient `Screen instance not found` errors.
+- Two cache-writing paths (`stitchGetProjectScreens`, `stitchRefreshScreen`) do not check the lock; analysis found no corruption path but coverage is incomplete.
+
 **Recommendation:** Send to Coder

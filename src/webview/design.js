@@ -1392,7 +1392,6 @@
         if (btnDelete) {
             btnDelete.addEventListener('click', () => {
                 if (!state.activeBriefSourceId || !state.activeBriefDocId) return;
-                if (!confirm('Are you sure you want to delete this brief? This action cannot be undone.')) return;
                 const wrapper = findTreeNode(state.activeBriefSourceId, state.activeBriefDocId);
                 const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : state.activeDocSourceFolder;
                 vscode.postMessage({
@@ -2109,8 +2108,6 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
         btnForceReloadScreens.addEventListener('click', () => {
             const projectId = stitchProjectSelect ? stitchProjectSelect.value : '';
             if (!projectId || state.stitchBusy) return;
-            const confirmed = confirm('This will delete the cached screen list for this project and re-fetch from the Stitch API. Continue?');
-            if (!confirmed) return;
             setStitchBusy(true);
             vscode.postMessage({
                 type: 'stitchForceReloadScreens',

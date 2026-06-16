@@ -129,6 +129,7 @@
     let ticketsAutoSync = false;
     let _pendingRefreshImport = false;
     let researchWorkspaceRoot = '';
+    let folderModalScope = 'local';
     let notebookWorkspaceRoot = '';
     let lastResearchFolderByRoot = {};
 
@@ -281,13 +282,19 @@
             hierarchyNav: document.getElementById('tickets-hierarchy-nav'),
             createButton: document.getElementById('tickets-create'),
             btnImportAllTickets: document.getElementById('btn-import-all-tickets'),
-            btnImportAllPlans: document.getElementById('btn-import-all-plans'),
+            importAllKanbanButton: document.getElementById('tickets-import-all-kanban'),
+            linkAllButton: document.getElementById('tickets-link-all'),
+            syncAllButton: document.getElementById('tickets-sync-all'),
             previewMetaBar: document.getElementById('tickets-preview-meta-bar'),
             btnEditTicket: document.getElementById('btn-edit-ticket'),
             btnPushTicket: document.getElementById('btn-push-ticket'),
             btnDeleteTicket: document.getElementById('btn-delete-ticket'),
             selectStatusTicket: document.getElementById('select-status-ticket'),
             btnCommentTicket: document.getElementById('btn-comment-ticket'),
+            btnViewAttachments: document.getElementById('btn-view-attachments'),
+            attachmentsModal: document.getElementById('attachments-modal'),
+            attachmentsList: document.getElementById('attachments-list'),
+            ticketsStatusFooter: document.getElementById('tickets-status-footer'),
             deleteConfirmBanner: document.getElementById('tickets-delete-confirm-banner'),
             deleteConfirmInput: document.getElementById('delete-confirm-input'),
             confirmDeleteTicket: document.getElementById('confirm-delete-ticket'),
@@ -2438,6 +2445,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             'ticketCommentPosted', 'ticketStatusChanged', 'ticketAttachmentDownloaded',
             'ticketDeleted', 'ticketEditsSaved', 'changeTicketStatusResult',
             'postTicketCommentResult', 'attachmentDownloaded', 'clickupTaskImported',
+            'attachmentsListResult', 'attachmentOpened', 'attachmentRevealed',
             'linearTaskImported', 'editTicketResult', 'pushTicketResult',
             'importAllTicketsComplete', 'ticketsAskAgentResult', 'linearError', 'clickupError'
         ];
@@ -2958,7 +2966,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 setTicketsLoadingState(false);
                 isImportingAll = false;
                 const importAllBtn = document.getElementById('btn-import-all-tickets');
-                const importAllPlansBtn = document.getElementById('btn-import-all-plans');
+                const importAllPlansBtn = document.getElementById('tickets-import-all-kanban');
                 if (importAllBtn) importAllBtn.disabled = false;
                 if (importAllPlansBtn) importAllPlansBtn.disabled = false;
                 if (msg.success) {
@@ -2972,6 +2980,16 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     }
                 } else {
                     showTicketsStatus(msg.error || 'Bulk import failed', true);
+                }
+                break;
+            case 'syncAllTicketsResult':
+                setTicketsLoadingState(false);
+                const syncAllBtn = document.getElementById('tickets-sync-all');
+                if (syncAllBtn) syncAllBtn.disabled = false;
+                if (msg.success) {
+                    showTicketsStatus(`Synced ${msg.succeeded} tickets successfully.`, false);
+                } else {
+                    showTicketsStatus(`Synced ${msg.succeeded} succeeded, ${msg.failed} failed.`, true);
                 }
                 break;
             case 'editTicketResult':
@@ -3118,8 +3136,57 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             case 'attachmentDownloaded':
                 if (msg.success) {
                     showTicketsStatus('Attachment downloaded ✓', false);
+                    if (msg.filePath) {
+                        const { ticketsStatusFooter } = getTicketsTabElements();
+                        if (ticketsStatusFooter) {
+                            ticketsStatusFooter.textContent = `Downloaded to: ${msg.filePath}`;
+                            ticketsStatusFooter.style.display = '';
+                            if (window._ticketsFooterTimeout) {
+                                clearTimeout(window._ticketsFooterTimeout);
+                            }
+                            window._ticketsFooterTimeout = setTimeout(() => {
+                                ticketsStatusFooter.style.display = 'none';
+                            }, 5000);
+                        }
+                    }
+                    const provider = lastIntegrationProvider;
+                    const ticketId = provider === 'linear' ? selectedLinearIssue?.id : selectedClickUpIssue?.id;
+                    const attachments = provider === 'linear' ? selectedLinearIssue?.attachments : selectedClickUpIssue?.attachments;
+                    if (ticketId && attachments) {
+                        vscode.postMessage({
+                            type: 'viewAttachments',
+                            workspaceRoot: ticketsWorkspaceRoot,
+                            provider,
+                            ticketId,
+                            attachments
+                        });
+                    }
                 } else {
                     showTicketsStatus(msg.error || 'Failed to download attachment', true);
+                }
+                break;
+
+            case 'attachmentsListResult':
+                if (msg.success) {
+                    renderAttachmentsList(msg.attachments);
+                } else {
+                    showTicketsStatus(msg.error || 'Failed to load attachments list', true);
+                }
+                break;
+
+            case 'attachmentOpened':
+                if (msg.success) {
+                    showTicketsStatus('Attachment opened ✓', false);
+                } else {
+                    showTicketsStatus(msg.error || 'Failed to open attachment', true);
+                }
+                break;
+
+            case 'attachmentRevealed':
+                if (msg.success) {
+                    showTicketsStatus('Attachment revealed ✓', false);
+                } else {
+                    showTicketsStatus(msg.error || 'Failed to reveal attachment', true);
                 }
                 break;
 
@@ -4945,6 +5012,18 @@ Return ONLY the drafted prompt with no additional commentary.`;
         }
     });
 
+    // Attachments modal close (X button)
+    document.getElementById('btn-close-attachments-modal')?.addEventListener('click', () => {
+        document.getElementById('attachments-modal').style.display = 'none';
+    });
+
+    // Attachments modal close (backdrop click)
+    document.getElementById('attachments-modal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'attachments-modal') {
+            e.target.style.display = 'none';
+        }
+    });
+
     // Folder modal close (Escape key)
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
@@ -4962,6 +5041,10 @@ Return ONLY the drafted prompt with no additional commentary.`;
             const modalDesign = document.getElementById('folder-modal-design');
             if (modalDesign && modalDesign.style.display !== 'none') {
                 modalDesign.style.display = 'none';
+            }
+            const modalAttachments = document.getElementById('attachments-modal');
+            if (modalAttachments && modalAttachments.style.display !== 'none') {
+                modalAttachments.style.display = 'none';
             }
         }
     });
@@ -5049,7 +5132,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function initTicketsTab() {
         const {
             searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, loadMoreButton,
-            btnImportAllTickets, btnImportAllPlans
+            btnImportAllTickets, importAllKanbanButton, linkAllButton, syncAllButton
         } = getTicketsTabElements();
 
         // Custom update call to populate dropdown if integrations already fetched
@@ -5095,7 +5178,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             }
             isImportingAll = true;
             btnImportAllTickets.disabled = true;
-            if (btnImportAllPlans) btnImportAllPlans.disabled = true;
+            if (importAllKanbanButton) importAllKanbanButton.disabled = true;
             setTicketsLoadingState(true);
             vscode.postMessage({
                 type: 'importAllTickets',
@@ -5107,7 +5190,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         });
 
         // Import All as Plans button (imports as kanban plans)
-        btnImportAllPlans?.addEventListener('click', () => {
+        importAllKanbanButton?.addEventListener('click', () => {
             if (isImportingAll) return;
             const provider = lastIntegrationProvider;
             let ids = [];
@@ -5122,7 +5205,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             }
             isImportingAll = true;
             btnImportAllTickets.disabled = true;
-            if (btnImportAllPlans) btnImportAllPlans.disabled = true;
+            if (importAllKanbanButton) importAllKanbanButton.disabled = true;
             setTicketsLoadingState(true);
             vscode.postMessage({
                 type: 'importAllTickets',
@@ -5130,6 +5213,24 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 provider,
                 ids,
                 importMode: 'plan'
+            });
+        });
+
+        linkAllButton?.addEventListener('click', () => {
+            vscode.postMessage({
+                type: 'copyToClipboard',
+                provider: lastIntegrationProvider,
+                workspaceRoot: ticketsWorkspaceRoot
+            });
+        });
+
+        syncAllButton?.addEventListener('click', () => {
+            setTicketsLoadingState(true);
+            if (syncAllButton) syncAllButton.disabled = true;
+            vscode.postMessage({
+                type: 'syncAllTickets',
+                provider: lastIntegrationProvider,
+                workspaceRoot: ticketsWorkspaceRoot
             });
         });
 
@@ -5245,6 +5346,34 @@ Return ONLY the drafted prompt with no additional commentary.`;
             }
         });
 
+        // Action bar: View Attachments button toggle
+        document.getElementById('btn-view-attachments')?.addEventListener('click', () => {
+            const modal = document.getElementById('attachments-modal');
+            if (!modal) return;
+            const isVisible = modal.style.display !== 'none';
+            if (isVisible) {
+                modal.style.display = 'none';
+            } else {
+                modal.style.display = 'flex';
+                const { attachmentsList } = getTicketsTabElements();
+                if (attachmentsList) {
+                    attachmentsList.innerHTML = '<div style="font-size: 11px; color: var(--text-secondary);">Loading status...</div>';
+                }
+                const provider = lastIntegrationProvider;
+                const ticketId = provider === 'linear' ? selectedLinearIssue?.id : selectedClickUpIssue?.id;
+                const attachments = provider === 'linear' ? selectedLinearIssue?.attachments : selectedClickUpIssue?.attachments;
+                if (ticketId && attachments) {
+                    vscode.postMessage({
+                        type: 'viewAttachments',
+                        workspaceRoot: ticketsWorkspaceRoot,
+                        provider,
+                        ticketId,
+                        attachments
+                    });
+                }
+            }
+        });
+
         // Comment post cancel
         document.getElementById('btn-post-comment-cancel')?.addEventListener('click', () => {
             const commentArea = document.getElementById('tickets-comment-input-area');
@@ -5307,16 +5436,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         // Detail action buttons (delegated)
         document.getElementById('preview-pane-tickets')?.addEventListener('click', (e) => {
-            const refineBtn = e.target.closest('[data-refine-issue-id], [data-refine-task-id]');
             const attachmentBtn = e.target.closest('.tickets-attachment-item');
-
-            if (refineBtn) {
-                const id = refineBtn.dataset.refineIssueId || refineBtn.dataset.refineTaskId;
-                const title = refineBtn.dataset.issueTitle || '';
-                const description = refineBtn.dataset.issueDescription || '';
-                const provider = lastIntegrationProvider;
-                handleTicketsRefine(provider, id, title, description);
-            }
 
             if (attachmentBtn) {
                 const provider = lastIntegrationProvider;
@@ -5368,24 +5488,17 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         // Issue card clicks (delegated)
         document.getElementById('tickets-issues-container')?.addEventListener('click', (e) => {
-            const refineBtn = e.target.closest('[data-refine-issue-id], [data-refine-task-id]');
             const importPlanBtn = e.target.closest('[data-import-plan-id]');
-            const importDocBtn = e.target.closest('[data-import-doc-id]');
-            if (refineBtn) {
-                const id = refineBtn.dataset.refineIssueId || refineBtn.dataset.refineTaskId;
-                const title = refineBtn.dataset.issueTitle || '';
-                const description = refineBtn.dataset.issueDescription || '';
-                handleTicketsRefine(lastIntegrationProvider, id, title, description);
-                return;
-            }
+            const linkTicketBtn = e.target.closest('[data-link-ticket-id]');
             if (importPlanBtn) {
                 const id = importPlanBtn.dataset.importPlanId;
                 handleTicketsImport(lastIntegrationProvider, id, true, 'plan');
                 return;
             }
-            if (importDocBtn) {
-                const id = importDocBtn.dataset.importDocId;
-                handleTicketsImport(lastIntegrationProvider, id, true, 'document');
+            if (linkTicketBtn) {
+                const id = linkTicketBtn.dataset.linkTicketId;
+                const provider = linkTicketBtn.dataset.provider;
+                handleLinkToTicket(provider, id);
                 return;
             }
             const card = e.target.closest('[data-linear-issue-id], [data-clickup-task-id]');
@@ -5556,6 +5669,99 @@ Return ONLY the drafted prompt with no additional commentary.`;
         linearProjectStateFilterValue = stateFilter.value;
     }
 
+    function renderAttachmentsList(attachments) {
+        const { attachmentsList } = getTicketsTabElements();
+        if (!attachmentsList) return;
+
+        if (!attachments || attachments.length === 0) {
+            attachmentsList.innerHTML = '<div class="empty-state">No attachments found.</div>';
+            return;
+        }
+
+        let html = '';
+        attachments.forEach(att => {
+            const { filename, url, localPath, isDownloaded } = att;
+            html += `
+                <div class="attachment-row" style="display: flex; flex-direction: column; gap: 4px; padding: 8px; border-bottom: 1px solid var(--border-color); background: var(--panel-bg2, #1e1e1e); border-radius: 4px; margin-bottom: 6px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                        <span style="font-weight: 500; font-size: 12px; word-break: break-all; color: var(--text-primary);">${escapeHtml(filename)}</span>
+                        <div style="display: flex; gap: 6px; flex-shrink: 0;">
+            `;
+
+            if (isDownloaded) {
+                html += `
+                            <button class="strip-btn open-attachment-btn" data-local-path="${escapeAttr(localPath)}" style="font-size: 11px; padding: 2px 6px;">Open</button>
+                            <button class="strip-btn reveal-attachment-btn" data-local-path="${escapeAttr(localPath)}" style="font-size: 11px; padding: 2px 6px;">Reveal</button>
+                `;
+            } else {
+                html += `
+                            <button class="strip-btn download-attachment-modal-btn" data-url="${escapeAttr(url)}" data-filename="${escapeAttr(filename)}" style="font-size: 11px; padding: 2px 6px; background: var(--accent-teal, #00ffcc); color: black;">Download</button>
+                `;
+            }
+
+            html += `
+                        </div>
+                    </div>
+            `;
+
+            if (isDownloaded) {
+                html += `
+                    <div style="font-size: 10px; color: var(--text-secondary); word-break: break-all; margin-top: 2px;">
+                        Path: ${escapeHtml(localPath)}
+                    </div>
+                `;
+            }
+
+            html += `
+                </div>
+            `;
+        });
+
+        attachmentsList.innerHTML = html;
+
+        // Add event listeners to the newly rendered buttons
+        attachmentsList.querySelectorAll('.open-attachment-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const localPath = btn.dataset.localPath;
+                vscode.postMessage({
+                    type: 'openAttachment',
+                    workspaceRoot: ticketsWorkspaceRoot,
+                    localPath
+                });
+            });
+        });
+
+        attachmentsList.querySelectorAll('.reveal-attachment-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const localPath = btn.dataset.localPath;
+                vscode.postMessage({
+                    type: 'revealAttachment',
+                    workspaceRoot: ticketsWorkspaceRoot,
+                    localPath
+                });
+            });
+        });
+
+        attachmentsList.querySelectorAll('.download-attachment-modal-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const url = btn.dataset.url;
+                const filename = btn.dataset.filename;
+                const provider = lastIntegrationProvider;
+                const ticketId = provider === 'linear' ? selectedLinearIssue?.id : selectedClickUpIssue?.id;
+                const ticketTitle = provider === 'linear' ? selectedLinearIssue?.issue?.title : selectedClickUpIssue?.task?.title;
+                vscode.postMessage({
+                    type: 'downloadAttachment',
+                    workspaceRoot: ticketsWorkspaceRoot,
+                    provider,
+                    url,
+                    filename,
+                    ticketId,
+                    ticketTitle
+                });
+            });
+        });
+    }
+
     function renderTicketsLinearProjectPickerOptions() {
         const { projectPicker } = getTicketsTabElements();
         if (!projectPicker) return;
@@ -5594,6 +5800,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         const isLocal = ticketsViewMode === 'local';
 
         document.getElementById('controls-strip-tickets')?.classList.toggle('tickets-local-mode', isLocal);
+        document.getElementById('tree-pane-tickets')?.classList.toggle('tickets-local-mode', isLocal);
 
         // Sidebar lists
         const onlineEls = ['tickets-empty-state', 'tickets-issues-container'];
@@ -5757,6 +5964,9 @@ Return ONLY the drafted prompt with no additional commentary.`;
         const { emptyState, issuesContainer, searchInput } = getTicketsTabElements();
         if (!emptyState || !issuesContainer) return;
 
+        const importAllKanbanButton = document.getElementById('tickets-import-all-kanban');
+        if (importAllKanbanButton) importAllKanbanButton.style.display = linearProjectStatus === 'loaded' ? '' : 'none';
+
         if (searchInput && searchInput.value !== linearProjectSearchValue) {
             searchInput.value = linearProjectSearchValue;
         }
@@ -5806,9 +6016,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 <div class="tickets-issue-meta">${escapeHtml(issue.assignee?.name || issue.assignee?.email || 'Unassigned')}</div>
                 <div class="tickets-issue-meta">${escapeHtml((issue.description || '').trim().slice(0, 180) || 'No description provided.')}</div>
                 <div class="card-actions">
-                    <button type="button" class="card-icon-btn" data-refine-issue-id="${escapeAttr(issue.id)}" data-issue-title="${escapeAttr(issue.title || '')}" data-issue-description="${escapeAttr(issue.description || '')}">REFINE</button>
-                    <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(issue.id)}" data-provider="linear">Import Plan</button>
-                    <button type="button" class="card-icon-btn" data-import-doc-id="${escapeAttr(issue.id)}" data-provider="linear">Import Doc</button>
+                    <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(issue.id)}" data-provider="linear">Add to kanban</button>
+                    <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(issue.id)}" data-provider="linear">Link to ticket</button>
                 </div>
             </div>
             `;
@@ -5840,6 +6049,11 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         if (previewMetaBar) {
             previewMetaBar.style.display = 'flex';
+            const { btnViewAttachments } = getTicketsTabElements();
+            if (btnViewAttachments) {
+                const hasAttachments = selectedLinearIssue.attachments && selectedLinearIssue.attachments.length > 0;
+                btnViewAttachments.style.display = hasAttachments ? '' : 'none';
+            }
             const statusSelect = document.getElementById('select-status-ticket');
             if (statusSelect) {
                 const stateMap = new Map();
@@ -5941,7 +6155,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             }
         }
 
-        const importAsPlansBtn = document.getElementById('btn-import-all-plans');
+        const importAsPlansBtn = document.getElementById('tickets-import-all-kanban');
         if (importAsPlansBtn) importAsPlansBtn.style.display = clickUpSelectedListId ? '' : 'none';
 
         if (emptyState) {
@@ -6232,9 +6446,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
                     <div class="tickets-issue-meta">${escapeHtml(task.status || 'Unknown')}</div>
                     <div class="tickets-issue-meta">${task.assignees?.length ? escapeHtml(task.assignees.map(a => a.username || a.email).join(', ')) : 'Unassigned'}</div>
                     <div class="card-actions">
-                        <button type="button" class="card-icon-btn" data-refine-task-id="${escapeAttr(task.id)}" data-issue-title="${escapeAttr(task.title || '')}" data-issue-description="${escapeAttr(task.markdownDescription || task.description || '')}">REFINE</button>
-                        <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(task.id)}" data-provider="clickup">Import Plan</button>
-                        <button type="button" class="card-icon-btn" data-import-doc-id="${escapeAttr(task.id)}" data-provider="clickup">Import Doc</button>
+                        <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(task.id)}" data-provider="clickup">Add to kanban</button>
+                        <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(task.id)}" data-provider="clickup">Link to ticket</button>
                     </div>
                 </div>
                 `;
@@ -6270,6 +6483,11 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         if (previewMetaBar) {
             previewMetaBar.style.display = 'flex';
+            const { btnViewAttachments } = getTicketsTabElements();
+            if (btnViewAttachments) {
+                const hasAttachments = selectedClickUpIssue.attachments && selectedClickUpIssue.attachments.length > 0;
+                btnViewAttachments.style.display = hasAttachments ? '' : 'none';
+            }
             const statusSelect = document.getElementById('select-status-ticket');
             if (statusSelect) {
                 const statuses = Array.from(new Set(
@@ -6419,13 +6637,12 @@ Return ONLY the drafted prompt with no additional commentary.`;
         });
     }
 
-    function handleTicketsRefine(provider, id, title, description) {
+    function handleLinkToTicket(provider, id) {
         vscode.postMessage({
-            type: provider === 'clickup' ? 'clickupRefineTask' : 'linearRefineTask',
-            workspaceRoot: ticketsWorkspaceRoot,
-            [provider === 'clickup' ? 'taskId' : 'issueId']: id,
-            title,
-            description
+            type: 'openLocalTicket',
+            provider,
+            id,
+            workspaceRoot: ticketsWorkspaceRoot
         });
     }
 

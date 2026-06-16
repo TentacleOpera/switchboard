@@ -2753,7 +2753,7 @@
         #controls-strip-tickets.tickets-local-mode #tickets-status-filter,
         #controls-strip-tickets.tickets-local-mode #tickets-create,
         #controls-strip-tickets.tickets-local-mode #btn-import-all-tickets,
-        #controls-strip-tickets.tickets-local-mode #btn-import-all-plans,
+        #tree-pane-tickets.tickets-local-mode #tickets-import-all-kanban,
         #controls-strip-tickets.tickets-local-mode #tickets-hierarchy-nav {
             display: none !important;
         }
@@ -3189,8 +3189,8 @@
                     <select id="tickets-state-filter" style="display:none"></select>
                     <select id="tickets-status-filter" style="display:none"></select>
                     <button id="tickets-create" class="strip-btn" disabled title="Configure an integration in Setup first">+ New Ticket</button>
-                    <button id="tickets-refresh" class="strip-btn" title="Re-fetch from source and save local copies">Refresh</button>
-                    <button id="btn-import-all-plans" class="strip-btn" style="display:none" title="Import all tickets as Switchboard plans">Import as Plans</button>
+                    <button id="tickets-refresh" class="strip-btn" title="Re-fetch from source and save local copies">Refetch</button>
+                    <button id="tickets-sync-all" class="strip-btn" title="Push all local ticket changes back to the integration">Sync changes</button>
                 </div>
                 <div class="controls-strip-row">
                     <div id="tickets-hierarchy-nav" style="display:none; flex-wrap: wrap; gap: 8px; align-items: center;"></div>
@@ -3200,6 +3200,8 @@
             <div class="content-row">
                 <div id="tree-pane-tickets">
                     <div class="sidebar-toggle-row">
+                        <button id="tickets-link-all" class="strip-btn" title="Copy all ticket file paths to clipboard">Link all</button>
+                        <button id="tickets-import-all-kanban" class="strip-btn" title="Import all tickets as Switchboard plans" style="display:none">Import all to kanban</button>
                         <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
                     </div>
                     <div id="tickets-empty-state" class="empty-state">No tickets loaded.</div>
@@ -3219,6 +3221,7 @@
                                 <select id="select-status-ticket" class="kanban-meta-dropdown" style="display:inline-block; background: var(--panel-bg2, #1a1a2e); border: 1px solid var(--border-color); color: var(--text-secondary); font-size: 11px;"></select>
                             </div>
                             <button id="btn-comment-ticket" class="strip-btn">Comment</button>
+                            <button id="btn-view-attachments" class="strip-btn" style="display:none;">Attachments</button>
                         </div>
                         <div id="tickets-local-meta-bar" style="display:none;">
                             <button id="btn-edit-local-ticket" class="strip-btn">Edit</button>
@@ -3253,8 +3256,8 @@
                                 <div id="tickets-local-empty-preview" class="empty-state">Select an imported ticket to preview</div>
                                 <div id="tickets-local-preview"></div>
                                 <textarea id="tickets-local-editor" class="markdown-editor" style="display:none; flex: 1; min-height: 400px;"></textarea>
-                            </div>
                         </div>
+                        <div id="tickets-status-footer" style="display:none; padding: 8px 16px; font-size: 10px; color: var(--text-secondary); border-top: 1px solid var(--border-color); background: var(--panel-bg2, #1a1a2e);"></div>
                     </div>
                     <div class="cyber-scanlines"></div>
                 </div>
@@ -3379,6 +3382,15 @@
                     <button id="btn-cancel-create-ticket" class="strip-btn">Cancel</button>
                     <button id="btn-submit-create-ticket" class="planning-button" style="margin: 0; padding: 4px 12px;">Create</button>
                 </div>
+            </div>
+    <div class="folder-modal" id="attachments-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="attachments-modal-title">
+        <div class="modal-content" style="max-width: 600px;">
+            <div class="modal-header">
+                <h3 id="attachments-modal-title">Attachments</h3>
+                <button class="modal-close-btn" id="btn-close-attachments-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" style="margin-top: 10px;">
+                <div id="attachments-list" style="display: flex; flex-direction: column; gap: 8px; max-height: 400px; overflow-y: auto; text-align: left;"></div>
             </div>
         </div>
     </div>

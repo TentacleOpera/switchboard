@@ -298,3 +298,7 @@ if (manageResearchFoldersBtn) {
 ## Recommendation
 
 Send to Intern
+
+## Review Findings
+
+**Reviewer-executor pass completed.** All 5 planned changes verified in `src/webview/planning.js`: button handler passes `'research'` scope, modal title resolves correctly, `renderFolderListModal` uses `researchWorkspaceRoot`, and add/remove handlers post the correct workspace root. One additional fix applied: `folderModalScope` was an implicit global (assigned without declaration); added `let folderModalScope = 'local';` at line 132. No regressions in local docs or tickets tab paths. Validation: not applicable (SKIP TESTS / SKIP COMPILATION per session directive). Remaining risk: `folderModalScope` close-over in dynamically created remove-button listeners is correct but worth noting for future refactors.

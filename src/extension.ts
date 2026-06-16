@@ -1477,6 +1477,11 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(downloadAttachmentDisposable);
 
+    const getAttachmentListDisposable = vscode.commands.registerCommand('switchboard.getAttachmentList', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; ticketId: string; attachmentsArray: any[] }) => {
+        return taskViewerProvider.getAttachmentList(data.workspaceRoot, data.provider, data.ticketId, data.attachmentsArray);
+    });
+    context.subscriptions.push(getAttachmentListDisposable);
+
     const refineTaskDisposable = vscode.commands.registerCommand('switchboard.refineTask', async (data: { workspaceRoot: string; id: string; title: string; description: string; provider: 'linear' | 'clickup' }) => {
         return taskViewerProvider.refineTask(data.workspaceRoot, { id: data.id, title: data.title, description: data.description, provider: data.provider });
     });

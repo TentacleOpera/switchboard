@@ -916,7 +916,7 @@ export class PlanningPanelProvider {
     private _mapClickUpComment(comment: any): any {
         return {
             id: comment.id,
-            comment_text: comment.comment_text,
+            body: comment.comment_text,
             user: comment.user,
             date: comment.date
         };
@@ -2780,7 +2780,97 @@ export class PlanningPanelProvider {
                         error: error instanceof Error ? error.message : String(error),
                         workspaceRoot
                     });
+            }
+            case 'openLocalTicket': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const provider = msg.provider;
+                const id = msg.id;
+
+                if (workspaceRoot) {
+                    for (const dir of this._getTicketDocumentDirs(workspaceRoot, provider)) {
+                        if (!fs.existsSync(dir)) { continue; }
+                        let files: string[] = [];
+                        try { files = fs.readdirSync(dir); } catch { continue; }
+                        const match = files.find(f => f.startsWith(`${provider}_${id}_`));
+                        if (match) {
+                            const filePath = path.join(dir, match);
+                            vscode.workspace.openTextDocument(filePath).then(doc => vscode.window.showTextDocument(doc));
+                            break;
+                        }
+                    }
                 }
+                break;
+            }
+            case 'syncAllTickets': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const provider = msg.provider;
+                const results = { succeeded: 0, failed: 0, errors: [] as string[] };
+                
+                if (workspaceRoot) {
+                    const tickets: any[] = [];
+                    for (const dir of this._getTicketDocumentDirs(workspaceRoot, provider)) {
+                        if (!fs.existsSync(dir)) { continue; }
+                        let files: string[] = [];
+                        try { files = fs.readdirSync(dir); } catch { continue; }
+                        for (const fileName of files) {
+                            const match = fileName.match(/^(linear|clickup)_([^_]+)_(.*)\.md$/);
+                            if (!match || match[1] !== provider) { continue; }
+                            const filePath = path.join(dir, fileName);
+                            try {
+                                const content = fs.readFileSync(filePath, 'utf8');
+                                tickets.push({ id: match[2], content, filePath });
+                            } catch {
+                                // ignore read errors
+                            }
+                        }
+                    }
+                    
+                    for (const ticket of tickets) {
+                        try {
+                            const result: any = await vscode.commands.executeCommand(
+                                'switchboard.pushTicketEdits',
+                                { workspaceRoot, provider, id: ticket.id }
+                            );
+                            if (result?.success) {
+                                results.succeeded++;
+                            } else {
+                                results.failed++;
+                                results.errors.push(`${ticket.id}: ${result?.error || 'Unknown error'}`);
+                            }
+                        } catch (err) {
+                            results.failed++;
+                            results.errors.push(`${ticket.id}: ${err instanceof Error ? err.message : String(err)}`);
+                        }
+                    }
+                    
+                    this._panel?.webview.postMessage({
+                        type: 'syncAllTicketsResult',
+                        success: results.failed === 0,
+                        count: tickets.length,
+                        succeeded: results.succeeded,
+                        failed: results.failed,
+                        errors: results.errors
+                    });
+                }
+                break;
+            }
+            case 'copyToClipboard': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const provider = msg.provider;
+                const paths: string[] = [];
+                if (workspaceRoot) {
+                    for (const dir of this._getTicketDocumentDirs(workspaceRoot, provider)) {
+                        if (!fs.existsSync(dir)) { continue; }
+                        let files: string[] = [];
+                        try { files = fs.readdirSync(dir); } catch { continue; }
+                        for (const fileName of files) {
+                            if (fileName.match(/^(linear|clickup)_([^_]+)_(.*)\.md$/)) {
+                                paths.push(path.join(dir, fileName));
+                            }
+                        }
+                    }
+                }
+                await vscode.env.clipboard.writeText(paths.join('\n'));
                 break;
             }
             case 'changeTicketStatus': {
@@ -2851,6 +2941,7 @@ export class PlanningPanelProvider {
                         type: 'attachmentDownloaded',
                         success: result.success,
                         url,
+                        filePath: result.filePath,
                         error: result.error,
                         workspaceRoot
                     });
@@ -2859,6 +2950,85 @@ export class PlanningPanelProvider {
                         type: 'attachmentDownloaded',
                         success: false,
                         url,
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
+                    });
+                }
+                break;
+            }
+            case 'viewAttachments': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const { provider, ticketId, attachments } = msg;
+                try {
+                    const result: any = await vscode.commands.executeCommand(
+                        'switchboard.getAttachmentList',
+                        { workspaceRoot, provider, ticketId, attachmentsArray: attachments }
+                    );
+                    this._panel?.webview.postMessage({
+                        type: 'attachmentsListResult',
+                        success: true,
+                        ticketId,
+                        attachments: result,
+                        workspaceRoot
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'attachmentsListResult',
+                        success: false,
+                        ticketId,
+                        attachments: [],
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
+                    });
+                }
+                break;
+            }
+            case 'openAttachment': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const { localPath } = msg;
+                try {
+                    if (!localPath) {
+                        throw new Error('No local path provided');
+                    }
+                    const uri = vscode.Uri.file(localPath);
+                    await vscode.env.openExternal(uri);
+                    this._panel?.webview.postMessage({
+                        type: 'attachmentOpened',
+                        success: true,
+                        localPath,
+                        workspaceRoot
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'attachmentOpened',
+                        success: false,
+                        localPath,
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
+                    });
+                }
+                break;
+            }
+            case 'revealAttachment': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const { localPath } = msg;
+                try {
+                    if (!localPath) {
+                        throw new Error('No local path provided');
+                    }
+                    const uri = vscode.Uri.file(localPath);
+                    await vscode.commands.executeCommand('revealInExplorer', uri);
+                    this._panel?.webview.postMessage({
+                        type: 'attachmentRevealed',
+                        success: true,
+                        localPath,
+                        workspaceRoot
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'attachmentRevealed',
+                        success: false,
+                        localPath,
                         error: error instanceof Error ? error.message : String(error),
                         workspaceRoot
                     });

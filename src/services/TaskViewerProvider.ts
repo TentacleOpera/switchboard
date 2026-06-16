@@ -17364,31 +17364,24 @@ What would you like to find?`;
                 }
             }
 
-            const localFolderService = new LocalFolderService(resolvedRoot);
-            const ticketsFolders = localFolderService.getTicketsFolderPaths();
-            let targetDir: string;
-            if (ticketsFolders.length > 0 && ticketsFolders[0]) {
-                if (provider === 'clickup') {
-                    const clickUp = this._getClickUpService(resolvedRoot);
-                    const h = clickUp.getSelectedHierarchy();
-                    const parts = [ticketsFolders[0], 'clickup', this._slugify(h.spaceName).slice(0, 60)];
-                    if (h.folderName) {
-                        parts.push(this._slugify(h.folderName).slice(0, 60));
-                    }
-                    parts.push(this._slugify(h.listName).slice(0, 60));
-                    targetDir = path.join(...parts);
-                } else {
-                    const linear = this._getLinearService(resolvedRoot);
-                    const teamName = linear.getTeamName();
-                    const projectName = issue?.project?.name || '_no-project';
-                    targetDir = path.join(
-                        ticketsFolders[0],
-                        'linear',
-                        this._slugify(teamName).slice(0, 60),
-                        this._slugify(projectName).slice(0, 60)
-                    );
+            let segments: string[] = [];
+            if (provider === 'clickup') {
+                const clickUp = this._getClickUpService(resolvedRoot);
+                const h = clickUp.getSelectedHierarchy();
+                segments.push(h.spaceName);
+                if (h.folderName) {
+                    segments.push(h.folderName);
                 }
+                segments.push(h.listName);
             } else {
+                const linear = this._getLinearService(resolvedRoot);
+                const teamName = linear.getTeamName();
+                const projectName = issue?.project?.name || '_no-project';
+                segments.push(teamName, projectName);
+            }
+
+            let targetDir = this._buildTicketDir(resolvedRoot, provider, segments);
+            if (!targetDir) {
                 const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
                 targetDir = path.join(resolvedRoot, '.switchboard', 'tickets', providerDir);
             }
@@ -17415,43 +17408,45 @@ What would you like to find?`;
             .replace(/-+$/, '');
     }
 
-    private async _findTicketDocument(resolvedRoot: string, provider: string, id: string): Promise<string | null> {
+    private _buildTicketDir(resolvedRoot: string, provider: string, segments: string[]): string | null {
         const localFolderService = new LocalFolderService(resolvedRoot);
         const ticketsFolders = localFolderService.getTicketsFolderPaths();
-        let targetDir: string;
-
         if (ticketsFolders.length > 0 && ticketsFolders[0]) {
-            if (provider === 'clickup') {
-                const clickUp = this._getClickUpService(resolvedRoot);
-                const result = await clickUp.httpRequest('GET', `/task/${id}`);
-                if (result.status !== 200 || !result.data) {
-                    return null;
-                }
-                const spaceName = result.data.space?.name || '_unknown';
-                const folderName = result.data.folder?.name || '';
-                const listName = result.data.list?.name || '_unknown';
-                const parts = [ticketsFolders[0], 'clickup', this._slugify(spaceName).slice(0, 60)];
-                if (folderName) {
-                    parts.push(this._slugify(folderName).slice(0, 60));
-                }
-                parts.push(this._slugify(listName).slice(0, 60));
-                targetDir = path.join(...parts);
-            } else {
-                const linear = this._getLinearService(resolvedRoot);
-                const issue = await linear.getIssue(id);
-                if (!issue) {
-                    return null;
-                }
-                const teamName = linear.getTeamName();
-                const projectName = issue.project?.name || '_no-project';
-                targetDir = path.join(
-                    ticketsFolders[0],
-                    'linear',
-                    this._slugify(teamName).slice(0, 60),
-                    this._slugify(projectName).slice(0, 60)
-                );
+            return path.join(ticketsFolders[0], provider, ...segments.map(s => this._slugify(s).slice(0, 60)));
+        }
+        return null;
+    }
+
+
+    private async _findTicketDocument(resolvedRoot: string, provider: string, id: string): Promise<string | null> {
+        let segments: string[] = [];
+        if (provider === 'clickup') {
+            const clickUp = this._getClickUpService(resolvedRoot);
+            const result = await clickUp.httpRequest('GET', `/task/${id}`);
+            if (result.status !== 200 || !result.data) {
+                return null;
             }
+            const spaceName = result.data.space?.name || '_unknown';
+            const folderName = result.data.folder?.name || '';
+            const listName = result.data.list?.name || '_unknown';
+            segments.push(spaceName);
+            if (folderName) {
+                segments.push(folderName);
+            }
+            segments.push(listName);
         } else {
+            const linear = this._getLinearService(resolvedRoot);
+            const issue = await linear.getIssue(id);
+            if (!issue) {
+                return null;
+            }
+            const teamName = linear.getTeamName();
+            const projectName = issue.project?.name || '_no-project';
+            segments.push(teamName, projectName);
+        }
+
+        let targetDir = this._buildTicketDir(resolvedRoot, provider, segments);
+        if (!targetDir) {
             const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
             targetDir = path.join(resolvedRoot, '.switchboard', 'tickets', providerDir);
         }
@@ -17830,16 +17825,32 @@ What would you like to find?`;
         const { provider, url, filename, ticketId, ticketTitle } = data;
 
         try {
-            const localFolderService = new LocalFolderService(resolvedRoot);
-            const ticketsFolders = localFolderService.getTicketsFolderPaths();
-            const baseFolder = ticketsFolders.length > 0 && ticketsFolders[0]
-                ? ticketsFolders[0]
-                : path.join(resolvedRoot, '.switchboard', 'plans');
-            
-            const targetDir = path.join(baseFolder, 'attachments');
+            let segments: string[] = [];
+            if (provider === 'clickup') {
+                const clickUp = this._getClickUpService(resolvedRoot);
+                const h = clickUp.getSelectedHierarchy();
+                segments.push(h.spaceName);
+                if (h.folderName) {
+                    segments.push(h.folderName);
+                }
+                segments.push(h.listName);
+            } else {
+                const linear = this._getLinearService(resolvedRoot);
+                const teamName = linear.getTeamName();
+                const issue = await linear.getIssue(ticketId);
+                const projectName = issue?.project?.name || '_no-project';
+                segments.push(teamName, projectName);
+            }
+
+            const baseDir = this._buildTicketDir(resolvedRoot, provider, segments);
+            if (!baseDir) {
+                return { success: false, error: 'No tickets folder configured. Please set a tickets folder in Switchboard settings.' };
+            }
+
+            const targetDir = path.join(baseDir, 'attachments');
             
             const resolvedTargetDir = path.resolve(targetDir);
-            const resolvedBaseFolder = path.resolve(baseFolder);
+            const resolvedBaseFolder = path.resolve(baseDir);
             if (!resolvedTargetDir.startsWith(resolvedBaseFolder + path.sep) && resolvedTargetDir !== resolvedBaseFolder) {
                 return { success: false, error: 'Path traversal detected.' };
             }
@@ -17855,8 +17866,14 @@ What would you like to find?`;
                     finalFilename = `attachment-${ticketId}-${Date.now()}`;
                 }
             }
+            finalFilename = finalFilename.replace(/[\/\\]/g, '_');
 
-            const targetFilePath = path.join(resolvedTargetDir, finalFilename);
+            let targetFilePath = path.join(resolvedTargetDir, finalFilename);
+            if (fs.existsSync(targetFilePath)) {
+                const parsed = path.parse(finalFilename);
+                finalFilename = `${parsed.name}-${Date.now()}${parsed.ext}`;
+                targetFilePath = path.join(resolvedTargetDir, finalFilename);
+            }
 
             const headers: Record<string, string> = {};
             const isLinearAsset = url.includes('.linear.app') || url.includes('linear-asset');
@@ -17903,10 +17920,70 @@ What would you like to find?`;
                 }).on('error', (err: any) => reject(err));
             });
 
-            vscode.window.showInformationMessage(`Downloaded ${finalFilename} to ${targetFilePath}`);
             return { success: true, filePath: targetFilePath };
         } catch (error) {
             return { success: false, error: error instanceof Error ? error.message : String(error) };
+        }
+    }
+
+    public async getAttachmentList(
+        workspaceRoot: string,
+        provider: 'linear' | 'clickup',
+        ticketId: string,
+        attachmentsArray: any[]
+    ): Promise<{ filename: string; url: string; localPath: string; isDownloaded: boolean }[]> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot || !attachmentsArray) {
+            return [];
+        }
+
+        try {
+            let segments: string[] = [];
+            if (provider === 'clickup') {
+                const clickUp = this._getClickUpService(resolvedRoot);
+                const h = clickUp.getSelectedHierarchy();
+                segments.push(h.spaceName);
+                if (h.folderName) {
+                    segments.push(h.folderName);
+                }
+                segments.push(h.listName);
+            } else {
+                const linear = this._getLinearService(resolvedRoot);
+                const teamName = linear.getTeamName();
+                const issue = await linear.getIssue(ticketId);
+                const projectName = issue?.project?.name || '_no-project';
+                segments.push(teamName, projectName);
+            }
+
+            const baseDir = this._buildTicketDir(resolvedRoot, provider, segments);
+            if (!baseDir) {
+                return [];
+            }
+            const targetDir = path.join(baseDir, 'attachments');
+
+            return attachmentsArray.map(attachment => {
+                const url = attachment.url || '';
+                let filename = attachment.filename || attachment.title || attachment.name || '';
+                if (!filename && url) {
+                    try {
+                        const parsedUrl = new URL(url);
+                        filename = path.basename(parsedUrl.pathname);
+                    } catch {
+                        filename = `attachment-${ticketId}-${Date.now()}`;
+                    }
+                }
+                filename = filename.replace(/[\/\\]/g, '_');
+                const localPath = path.join(targetDir, filename);
+                const isDownloaded = fs.existsSync(localPath);
+                return {
+                    filename,
+                    url,
+                    localPath,
+                    isDownloaded
+                };
+            });
+        } catch {
+            return [];
         }
     }
 }
