@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'nonce-{{NONCE}}' 'unsafe-inline' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'unsafe-inline'; img-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: data:; font-src {{WEBVIEW_CSP_SOURCE}} https:; connect-src https:; frame-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: http: about:srcdoc blob: data:;">
     <title>Switchboard Project Management</title>
-    <link rel="stylesheet" href="{{SHARED_TABS_CSS_URI}}">
     <style>
         @keyframes spin {
             from { transform: rotate(0deg); }
@@ -383,6 +382,64 @@
             color: #ff6b6b;
             cursor: pointer;
             font-size: 11px;
+        }
+        /* Shared tab bar + tab visibility (inlined to match planning.html/design.html;
+           these are not shipped as a standalone stylesheet). */
+        .shared-tab-bar {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            padding: 8px 16px 0;
+            background: var(--panel-bg);
+            border-bottom: 1px solid var(--border-color);
+            overflow-x: auto;
+            overflow-y: hidden;
+        }
+        .shared-tab-btn {
+            flex-shrink: 0;
+            white-space: nowrap;
+            background: transparent;
+            border: 1px solid transparent;
+            border-bottom: none;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-size: 10px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            padding: 8px 16px;
+            cursor: pointer;
+            border-radius: 3px 3px 0 0;
+            transition: all 0.15s;
+            position: relative;
+            top: 1px;
+        }
+        .shared-tab-btn:hover {
+            color: var(--text-primary);
+            background: color-mix(in srgb, var(--accent-teal) 5%, transparent);
+        }
+        .shared-tab-btn.active {
+            color: var(--accent-teal);
+            background: var(--panel-bg2);
+            border-color: var(--border-color);
+            border-bottom-color: var(--panel-bg2);
+        }
+        .shared-tab-content {
+            display: none;
+            flex: 1;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .shared-tab-content.active {
+            display: flex;
+            overflow-y: auto;
+        }
+        .cyber-theme-enabled .shared-tab-btn.active {
+            box-shadow: 0 -2px 8px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+        .cyber-theme-enabled .shared-tab-bar {
+            background: rgba(10, 10, 10, 0.65);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
         }
     </style>
 </head>

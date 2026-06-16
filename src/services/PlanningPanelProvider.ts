@@ -786,7 +786,7 @@ export class PlanningPanelProvider {
         const targetPanel = this._projectPanel || this._panel;
         if (!filePath || !isAllowed || !fs.existsSync(resolved)) {
             targetPanel?.webview.postMessage({
-                type: 'kanbanPlanPreviewReady', requestId,
+                type: 'kanbanPlanPreviewReady', requestId, filePath,
                 content: '', error: 'File not found or not in workspace'
             });
             return;
@@ -814,13 +814,14 @@ export class PlanningPanelProvider {
             targetPanel?.webview.postMessage({
                 type: 'kanbanPlanPreviewReady',
                 requestId,
+                filePath,
                 content: renderedHtml,
                 rawContent: content,
                 isAutoRefreshed: this._isAutoRefreshing
             });
         } catch (err) {
             targetPanel?.webview.postMessage({
-                type: 'kanbanPlanPreviewReady', requestId, content: '', error: String(err)
+                type: 'kanbanPlanPreviewReady', requestId, filePath, content: '', error: String(err)
             });
         }
     }
