@@ -1999,7 +1999,7 @@ export class PlanningPanelProvider {
                 }
                 try {
                     const db = KanbanDatabase.forWorkspace(wsRoot);
-                    const epic = await db.getPlanBySessionId(sessionId);
+                    const epic = await db.getPlanByPlanId(sessionId);
                     const subtasks = epic && epic.isEpic ? await db.getSubtasksByEpicId(epic.planId) : [];
                     this._projectPanel?.webview.postMessage({ type: 'epicDetails', epic, subtasks });
                 } catch (err) {
@@ -2014,7 +2014,7 @@ export class PlanningPanelProvider {
                 if (!epicSessionId || !subtaskSessionId || !wsRoot) break;
                 try {
                     const db = KanbanDatabase.forWorkspace(wsRoot);
-                    const epic = await db.getPlanBySessionId(epicSessionId);
+                    const epic = await db.getPlanByPlanId(epicSessionId);
                     if (!epic || !epic.isEpic) break;
                     // Lock-column validation
                     const lockColumnsRaw = await db.getConfig('epic_lock_columns');
@@ -2023,7 +2023,7 @@ export class PlanningPanelProvider {
                         this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Cannot modify subtasks of an epic in a locked column.' });
                         break;
                     }
-                    const subtask = await db.getPlanBySessionId(subtaskSessionId);
+                    const subtask = await db.getPlanByPlanId(subtaskSessionId);
                     if (!subtask) break;
                     if (subtask.isEpic) {
                         this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Cannot add an epic as a subtask.' });
@@ -2033,7 +2033,7 @@ export class PlanningPanelProvider {
                         this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Subtask already belongs to another epic.' });
                         break;
                     }
-                    await db.updateEpicStatus(subtaskSessionId, 0, epic.planId);
+                    await db.updateEpicStatus(subtask.planId, 0, epic.planId);
                     const allPlans = await this._getKanbanPlans(wsRoot);
                     this._projectPanel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, requestId: Date.now() });
                 } catch (err) {
@@ -2047,7 +2047,9 @@ export class PlanningPanelProvider {
                 if (!subtaskSessionId || !wsRoot) break;
                 try {
                     const db = KanbanDatabase.forWorkspace(wsRoot);
-                    await db.updateEpicStatus(subtaskSessionId, 0, '');
+                    const subtask = await db.getPlanByPlanId(subtaskSessionId);
+                    if (!subtask) break;
+                    await db.updateEpicStatus(subtask.planId, 0, '');
                     const allPlans = await this._getKanbanPlans(wsRoot);
                     this._projectPanel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, requestId: Date.now() });
                 } catch (err) {
@@ -2062,7 +2064,7 @@ export class PlanningPanelProvider {
                 if (!sessionId || !wsRoot) break;
                 try {
                     const db = KanbanDatabase.forWorkspace(wsRoot);
-                    const epic = await db.getPlanBySessionId(sessionId);
+                    const epic = await db.getPlanByPlanId(sessionId);
                     if (!epic || !epic.isEpic) break;
                     if (deleteSubtasks) {
                         const subtasks = await db.getSubtasksByEpicId(epic.planId);

@@ -9971,11 +9971,7 @@ What would you like to find?`;
         planId: string,
         sourceType: PlanRegistryEntry['sourceType'] | KanbanPlanRecord['sourceType']
     ): Promise<KanbanPlanRecord | null> {
-        for (const sessionId of this._getRegistrySessionIdCandidates(planId, sourceType)) {
-            const existing = await db.getPlanBySessionId(sessionId);
-            if (existing) return existing;
-        }
-        return null;
+        return db.getPlanByPlanId(planId);
     }
 
     private _getBrainMirrorHash(fileName: string): string | undefined {
@@ -10264,7 +10260,7 @@ What would you like to find?`;
             }
             for (const candidateSessionId of this._getRegistrySessionIdCandidates(entry.planId, entry.sourceType)) {
                 if (candidateSessionId === sessionId) continue;
-                const duplicate = await db.getPlanBySessionId(candidateSessionId);
+                const duplicate = await db.getPlanByPlanId(candidateSessionId);
                 if (duplicate) {
                     await db.deletePlan(candidateSessionId);
                 }
@@ -10431,8 +10427,7 @@ What would you like to find?`;
 
                 // Try DB for topic when file-based lookup returned nothing useful
                 if (this._isGenericTopic(topic) && db) {
-                    const sessionId = `antigravity_${entry.planId}`;
-                    const plan = await db.getPlanBySessionId(sessionId);
+                    const plan = await db.getPlanByPlanId(entry.planId);
                     if (plan && plan.topic && !this._isGenericTopic(plan.topic)) {
                         topic = plan.topic;
                     }
@@ -10445,15 +10440,10 @@ What would you like to find?`;
                 // Get the best available date from DB (fixes migration-corrupted dates)
                 let updatedAt = entry.updatedAt;
                 if (db) {
-                    const sessionIds = entry.sourceType === 'brain'
-                        ? [`antigravity_${entry.planId}`]
-                        : [entry.planId, `antigravity_${entry.planId}`];
-                    for (const sid of sessionIds) {
-                        const plan = await db.getPlanBySessionId(sid);
-                        if (plan) {
-                            const planDate = plan.updatedAt || plan.createdAt;
-                            if (planDate) { updatedAt = planDate; break; }
-                        }
+                    const plan = await db.getPlanByPlanId(entry.planId);
+                    if (plan) {
+                        const planDate = plan.updatedAt || plan.createdAt;
+                        if (planDate) { updatedAt = planDate; }
                     }
                 }
 
@@ -10471,17 +10461,8 @@ What would you like to find?`;
             // Cross-system recovery: detect plans stuck as 'active' in registry
             // but actually 'completed' in kanban DB (sync gap from planId mismatch)
             if (entry.status === 'active' && db) {
-                const sessionIds = entry.sourceType === 'brain'
-                    ? [`antigravity_${entry.planId}`]
-                    : [entry.planId, `antigravity_${entry.planId}`];
-                let isCompletedInDb = false;
-                for (const sid of sessionIds) {
-                    const plan = await db.getPlanBySessionId(sid);
-                    if (plan && plan.status === 'completed') {
-                        isCompletedInDb = true;
-                        break;
-                    }
-                }
+                const plan = await db.getPlanByPlanId(entry.planId);
+                const isCompletedInDb = plan && plan.status === 'completed';
                 if (isCompletedInDb) {
                     let topic = entry.topic;
                     if (this._isGenericTopic(topic)) {
@@ -10518,17 +10499,11 @@ What would you like to find?`;
             // For 'active' plans, check if kanban DB shows 'completed' (sync gap recovery)
             if (entry.status === 'active') {
                 const db = await this._getKanbanDb(workspaceRoot);
-                const sessionIds = entry.sourceType === 'brain'
-                    ? [`antigravity_${entry.planId}`]
-                    : [planId, `antigravity_${entry.planId}`];
                 let isCompletedInDb = false;
                 if (db) {
-                    for (const sid of sessionIds) {
-                        const plan = await db.getPlanBySessionId(sid);
-                        if (plan && plan.status === 'completed') {
-                            isCompletedInDb = true;
-                            break;
-                        }
+                    const plan = await db.getPlanByPlanId(entry.planId);
+                    if (plan && plan.status === 'completed') {
+                        isCompletedInDb = true;
                     }
                 }
                 if (!isCompletedInDb) {
@@ -10570,7 +10545,7 @@ What would you like to find?`;
                 // Remove tombstone from DB
                 const db = await this._getKanbanDb(workspaceRoot);
                 if (db) {
-                    const plan = await db.getPlanBySessionId(pathHash);
+                    const plan = await db.getPlanByPlanId(pathHash);
                     if (plan) {
                         await db.updateStatus(pathHash, 'active');
                     }
@@ -11201,7 +11176,7 @@ What would you like to find?`;
             for (const hash of hashes) {
                 if (!this._tombstones.has(hash)) {
                     // Ensure a plan row exists for this tombstone so it persists
-                    const existing = await db.getPlanBySessionId(hash);
+                    const existing = await db.getPlanByPlanId(hash);
                     if (!existing) {
                         await db.upsertPlans([{
                             planId: hash,

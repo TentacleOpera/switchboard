@@ -140,3 +140,7 @@ Complexity 2 → **Send to Intern** (localized single-file changes, well-underst
 - Removing `session_id` column from the database (larger migration)
 - Changing the `getPlanBySessionId` method itself (used elsewhere in the codebase)
 - Refactoring `updateEpicStatus` and other deprecated `sessionId`-based methods in `KanbanDatabase.ts`
+
+## Review Findings
+
+All epic handlers in `KanbanProvider.ts` correctly use `getPlanByPlanId` per the plan. Reviewer also fixed `PlanningPanelProvider.ts` epic handlers (`getEpicDetails`, `addSubtaskToEpic`, `removeSubtaskFromEpic`, `deleteEpic`) which shared the identical bug but were missed in the original implementation. `KanbanProvider.ts:6507` was corrected to pass `planId` instead of `sessionId` to `updateEpicStatus`. Grep verification confirms zero remaining `getPlanBySessionId` calls in epic handler code paths across both files. Remaining risk: non-epic code paths and `KanbanDatabase.ts` deprecated methods still rely on `sessionId`-based lookups (out of scope).

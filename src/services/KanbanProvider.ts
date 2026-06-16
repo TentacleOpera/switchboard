@@ -4190,7 +4190,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     // Query from SOURCE database (where the plan actually lives).
                     // Note: getPlanBySessionId has no workspace_id filter — validate the returned
                     // record belongs to this workspace to guard against ghost records in mixed DBs.
-                    const plan = await sourceDb.getPlanBySessionId(sessionId);
+                    const plan = await sourceDb.getPlanByPlanId(sessionId);
                     if (!plan) {
                         console.warn(`[KanbanProvider] reassignPlansWorkspace: plan ${sessionId} not found in source workspace`);
                         continue;
@@ -6504,7 +6504,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     isEpic: 1,
                     epicId: ''
                 });
-                await db.updateEpicStatus(sessionId, 1, '');
+                await db.updateEpicStatus(planId, 1, '');
                 const epicPath = path.join(workspaceRoot, epicPlanFile);
                 // Quote YAML values to prevent frontmatter breakage from names containing ---, :, etc.
                 const yamlSafeName = name.replace(/'/g, "''");

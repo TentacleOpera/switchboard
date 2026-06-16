@@ -1321,8 +1321,9 @@ export class KanbanDatabase {
         return this.updateColumnByPlanFile(plan.planFile, plan.workspaceId, newColumn);
     }
 
-    public async updateEpicStatus(sessionId: string, isEpic: number, epicId: string): Promise<boolean> {
-        const plan = await this.getPlanBySessionId(sessionId);
+    /** @deprecated session_id lookup risk; callers should migrate to plan_id-based updates */
+    public async updateEpicStatus(planId: string, isEpic: number, epicId: string): Promise<boolean> {
+        const plan = await this.getPlanByPlanId(planId);
         if (!plan) return false;
         return this._persistedUpdate(
             'UPDATE plans SET is_epic = ?, epic_id = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',

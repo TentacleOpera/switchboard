@@ -40,20 +40,23 @@ Yes — this plan spans multiple files and phases. Reviewer should validate the 
 
 ### Side Effects
 - Changing lookups from `session_id`-first to `plan_id`-only may alter behavior for legacy plans that somehow have a non-empty `session_id` conflicting with another plan's `plan_id`. The collision risk exists today with `getPlanBySessionId`; switching to `getPlanByPlanId` eliminates it.
+- `_cardId(card)` in KanbanProvider.ts falls back to `card.sessionId` if `planId` is missing. Any un-backfilled legacy card will silently skip `getPlanByPlanId` lookups until its `plan_id` is populated.
+- `reassignPlansWorkspace` (line 4193) passes `sessionId` to `getPlanBySessionId` with no `workspace_id` filter in the query. Cross-DB ghost record risk exists if the same `sessionId` value appears in multiple workspace databases.
+- `updateEpicStatus` wrapper (KanbanDatabase.ts:1324) still calls `getPlanBySessionId` internally. Even after all epic handler lookups are migrated, epic status updates will continue to use the deprecated path until this wrapper is replaced.
 - PlanningPanelProvider.ts epic handlers must be kept in sync with KanbanProvider.ts epic handlers to avoid divergent behavior between the kanban board and the planning panel.
 
 ### Dependencies & Conflicts
-- Depends on the epic handler fix plan (`fix-kanban-epic-button-uses-deprecated-session-id.md`) being completed first, or executed in the same changeset, to avoid divergent epic logic.
-- `KanbanDatabase.ts` deprecated wrapper methods must remain during the migration; they can only be removed after all callers are migrated.
-- `TaskViewerProvider.ts` registry logic may depend on `getPlanBySessionId`'s multi-candidate behavior for antigravity brain plans. This must be validated before migration.
+- KanbanProvider.ts epic handlers already use `getPlanByPlanId`; the remaining epic dependency is replacing the `updateEpicStatus` wrapper (KanbanDatabase.ts:1324) and migrating PlanningPanelProvider.ts epic handlers.
+- `KanbanDatabase.ts` deprecated wrapper methods must remain during the migration; they can only be removed after all callers are migrated. Notably, `reviveDeletedPlans` (line 1545) internally loops with `getPlanBySessionId` and must be fixed before its wrapper can be removed.
+- `TaskViewerProvider.ts` registry logic uses `_getRegistrySessionIdCandidates` to probe `antigravity_${planId}` and `planId`. Since modern backfill guarantees `plan_id` is populated, the candidate loop can be collapsed to a single `getPlanByPlanId` query.
 
 ## Dependencies
 
-- `fix-kanban-epic-button-uses-deprecated-session-id.md` — epic handler fixes should precede or accompany this work
+- `fix-kanban-epic-button-uses-deprecated-session-id.md` — already completed for KanbanProvider.ts; PlanningPanelProvider.ts epic handlers remain
 
 ## Adversarial Synthesis
 
-Key risks: (1) TaskViewerProvider.ts registry/reconcile logic iterates over multiple candidate IDs per plan; naively replacing `getPlanBySessionId` with `getPlanByPlanId` may break brain-plan discovery if the candidate being tried is not the canonical `planId`. (2) Some batch operations in KanbanProvider.ts may pass legacy `sessionId` values from `_cardId(card)` for plans that predate `plan_id` backfill; `getPlanByPlanId` with a legacy `sessionId` would fail. Mitigations: audit each call site to determine whether the parameter is guaranteed to be a `planId` or may still be a legacy `sessionId`; for ambiguous cases, add a `getPlanByAnyId` helper that queries `plan_id` first and falls back to `session_id` with a deprecation warning, or explicitly backfill `plan_id` for any remaining legacy records.
+Key risks: (1) `updateEpicStatus` wrapper in KanbanDatabase.ts still uses `getPlanBySessionId`, so epic mutations remain on the deprecated path even though lookups were migrated. (2) `reassignPlansWorkspace` and other Category B callers pass parameters named `sessionId` that may be legacy values; `getPlanByPlanId` will miss them. (3) TaskViewerProvider.ts registry loops probe multiple candidates; collapsing them requires confirming `plan_id` backfill is complete for all brain plans. Mitigations: add `updateEpicStatusByPlanId` and migrate the two KanbanProvider call sites; trace Category B parameters upstream to verify they are canonical `planId` values; replace registry candidate loops with direct `getPlanByPlanId` after backfill validation.
 
 ## Proposed Changes
 
@@ -87,7 +90,7 @@ Key risks: (1) TaskViewerProvider.ts registry/reconcile logic iterates over mult
 | `getPlanEvents` | `@deprecated` | `getPlanEventsByPlanId` | Caller audit needed |
 
 **Action:** Produce a spreadsheet or markdown table in this plan file documenting every call site across:
-- `src/services/KanbanProvider.ts` (20 matches)
+- `src/services/KanbanProvider.ts` (14 matches — 12 active call sites + 2 in comments)
 - `src/services/TaskViewerProvider.ts` (28 matches)
 - `src/services/PlanningPanelProvider.ts` (4 matches)
 - `src/services/ContinuousSyncService.ts` (1 match)
@@ -102,55 +105,82 @@ For each call site, classify:
 
 ### Phase 2 — Fix Epic Handlers & PlanningPanelProvider (High Priority)
 
-**Files:**
-- `src/services/KanbanProvider.ts` — lines 6408, 6419, 6429, 6439, 6460, 6531, 6540, 6559
-- `src/services/PlanningPanelProvider.ts` — epic handler equivalents
+**Status:** `KanbanProvider.ts` epic handler lookups already migrated to `getPlanByPlanId` (verified at lines 6408, 6419, 6429, 6439, 6460, 6531, 6540, 6559). The remaining epic work is:
 
-**Action:** Apply the same `getPlanByPlanId` migrations and verified-`planId` passes to `updateEpicStatus` that are specified in `fix-kanban-epic-button-uses-deprecated-session-id.md`. Ensure `PlanningPanelProvider.ts` epic handlers (`getEpicDetails`, `addSubtaskToEpic`, `deleteEpic`) are updated identically to avoid divergent behavior.
+**Files:**
+- `src/services/KanbanProvider.ts` — lines 6507, 6521: `updateEpicStatus` still receives `sessionId` / `st.planId || st.sessionId`. The `updateEpicStatus` wrapper (KanbanDatabase.ts:1324) internally calls `getPlanBySessionId`. Must add `updateEpicStatusByPlanId(planId, isEpic, epicId)` and migrate these two call sites.
+- `src/services/PlanningPanelProvider.ts` — lines 2002 (`getEpicDetails`), 2017 (`addSubtaskToEpic` epic lookup), 2026 (`addSubtaskToEpic` subtask lookup), 2065 (`deleteEpic`): still use `getPlanBySessionId`. Migrate to `getPlanByPlanId`.
+
+**Action:** Add `updateEpicStatusByPlanId` in KanbanDatabase.ts. Migrate KanbanProvider.ts lines 6507 and 6521 to pass `planId` explicitly. Migrate PlanningPanelProvider.ts epic handlers to `getPlanByPlanId`.
 
 ### Phase 3 — Fix Remaining KanbanProvider.ts Active Paths
 
 **File:** `src/services/KanbanProvider.ts`
 
-Remaining usages after epic fix (lines approximate, verify against current HEAD):
-- **Line ~2176** (`_buildKanbanColumns` epicId resolution): classify as A or B
-- **Lines ~2293, 3003, 3192** (repoScope batch resolution): `cardKey = _cardId(card)`; classify as A (planId-first) or C (needs verification)
-- **Line ~3838** (`queueIntegrationSyncForSession`): passes `sessionId`; classify as B
-- **Line ~3894** (topic resolution for column move): passes `sessionId`; classify as B
-- **Line ~3912** (column move epic check): passes `sessionId`; classify as B
-- **Line ~3976** (planFile resolution): passes `sessionId`; classify as B
-- **Line ~4193** (`reassignPlansWorkspace`): passes `sessionId` from source DB; classify as B
-- **Line ~4722** (archive plans): passes `sid` from sessionIds list; classify as B
-- **Line ~5500** (planId resolution): passes `sessionId`; classify as B
-- **Line ~5637** (sidebar repoScope): `cardKey = _cardId(card)`; classify as A
+Verified exact call sites and classifications:
+- **Line 2176** (`_buildKanbanColumns` epicId resolution): passes `cardKey` (`_cardId(card)` = `planId || sessionId`). **Category A** — `planId` is populated for all modern plans. Migrate to `getPlanByPlanId(cardKey)` with defensive fallback logging if no record found.
+- **Lines 2293, 3003, 3192** (repoScope batch resolution): `cardKey = _cardId(card)`. **Category A** — same as above. All three locations are identical repoScope resolution loops. Migrate to `getPlanByPlanId(cardKey)`.
+- **Line 3838** (`queueIntegrationSyncForSession`): parameter is named `sessionId` but is passed from `msg.sessionId` which is the card's primary ID. **Category B** — trace upstream to confirm it is `planId`; if confirmed, reclassify to A and migrate.
+- **Line 3894** (topic resolution for column move): passes `sessionId` from `msg.sessionId`. **Category B** — trace upstream to confirm it is `planId`.
+- **Line 3912** (column move epic check): passes `sessionId` from `msg.sessionId`. **Category B** — trace upstream to confirm it is `planId`.
+- **Line 3976** (planFile resolution): passes `sessionId` from `msg.sessionId`. **Category B** — trace upstream to confirm it is `planId`.
+- **Line 4193** (`reassignPlansWorkspace`): passes `sessionId` from the `sessionIds` array sourced from the source DB. The comment at line 4191 explicitly warns `getPlanBySessionId` has no `workspace_id` filter. **Category B / High Risk** — must use `getPlanByPlanId` AND validate the returned record's `workspaceId` matches the expected workspace.
+- **Line 4722** (archive plans): passes `sid` from `sessionIds` list. **Category B** — trace upstream; if the list is derived from `_cardId` values, reclassify to A.
+- **Line 5500** (planId resolution inside integration sync): passes `sessionId`. **Category B** — trace upstream to confirm it is `planId`.
+- **Line 5637** (sidebar repoScope): `cardKey = _cardId(card)`. **Category A** — same pattern as lines 2293/3003/3192. Migrate to `getPlanByPlanId(cardKey)`.
 
-**Action:** For Category A call sites, replace with `getPlanByPlanId`. For Category B call sites, either (a) trace the parameter upstream to confirm it is already a `planId` and reclassify, or (b) add a transitional helper `getPlanByAnyId` that queries `plan_id` first and `session_id` second with a deprecation warning, then update the caller to pass `planId` explicitly.
+**Action:** For Category A call sites, replace with `getPlanByPlanId`. For Category B call sites, trace the parameter upstream. If confirmed as `planId`, reclassify to A. For `reassignPlansWorkspace`, add workspace validation after the lookup. Do not add a transitional `getPlanByAnyId` helper unless an un-backfilled legacy caller is found.
 
 ### Phase 4 — Fix TaskViewerProvider.ts
 
 **File:** `src/services/TaskViewerProvider.ts` (28 matches)
 
-**Action:** Audit each usage with the Phase 1 classification. Registry/reconcile logic (lines ~9975, ~10267, ~10435, ~10452, ~10479, ~10527, ~10573, ~10615, ~11054, ~11204, ~11985, ~12055, ~12113) that iterates candidate IDs should be redesigned to use the canonical `planId` from the registry entry instead of probing multiple IDs. Direct lookups (lines ~1038, ~1533, ~2572, ~2687, ~2719, ~2754, ~2884) should use `getPlanByPlanId` if the parameter is confirmed to be a `planId`.
+Verified exact call sites:
+
+**Registry / reconcile loops (Category C):**
+- **Line 9975** (`_getRegistryDbRecord`): iterates `_getRegistrySessionIdCandidates(planId, sourceType)` which returns `[antigravity_${planId}, planId]` for brain plans and `[planId]` for others. **Redesign:** query `getPlanByPlanId(planId)` directly since `plan_id` backfill is complete. The `antigravity_` prefix is a legacy `session_id` artifact; the canonical key is `planId`.
+- **Line 10267** (registry reconcile duplicate check): iterates candidates to delete duplicates. Replace with `getPlanByPlanId(candidate)` or remove the candidate loop and use direct `planId`.
+- **Lines 10435, 10452, 10479, 10527** (registry hydrate loops): iterate `sessionIds` derived from `planId` and `antigravity_${planId}` to fetch topic, updatedAt, and completed status. **Redesign:** use a single `getPlanByPlanId(entry.planId)` call and read the fields from the result.
+- **Line 10573** (tombstone revive): passes `pathHash` (which IS the `planId` for brain plans). **Category A** — migrate to `getPlanByPlanId(pathHash)`.
+- **Line 11204** (tombstone hash ensure exists): passes `hash` (brain plan hash = `planId`). **Category A** — migrate to `getPlanByPlanId(hash)`.
+
+**Direct lookups (Category A or B):**
+- **Line 1038** (workspace resolution for session): parameter is `sessionId` passed from `_findWorkspaceRootForSession`. If this is the canonical `planId`, **Category A** — migrate to `getPlanByPlanId`.
+- **Line 1533** (`_lastSessionId` lookup): `this._lastSessionId` is stored from prior registry entries. Verify if it stores `planId` or legacy `sessionId`. If `planId`, **Category A**.
+- **Line 2572** (epicId/worktreePath from `sid`): `sid` comes from `sessionIds` array. Trace upstream to confirm it is `planId`.
+- **Line 2687** (planner improve-plan planRecord): passes `plan.sessionId`. If `plan` object has `planId`, use it instead. **Category A** — `plan.sessionId` may be empty for file-based plans.
+- **Line 2719** (analyst map single): passes `sessionId`. Trace upstream.
+- **Line 2754** (analyst map batch): passes `sessionId` from `sessionIds` array. Trace upstream.
+- **Line 2884** (normalizedCurrentColumn): passes `sessionId`. Trace upstream.
+
+**Other lookups:**
+- **Line 10615** (plan data from DB): passes `sessionId`. Trace upstream.
+- **Line 11054** (revived deleted local plan): passes `deletedEntry.sessionId`. If `deletedEntry` has `planId`, use it. **Category A** with fallback.
+- **Line 11985** (reconcile mirror name): passes `completedSessionId`. If this is derived from `planId`, **Category A**.
+- **Line 12055** (brainSourcePath): passes `sessionId`. Trace upstream.
+- **Line 12113** (completed status check): passes `sessionId`. Trace upstream.
+
+**Action:** Collapse registry candidate loops to direct `getPlanByPlanId(planId)` calls. For direct lookups, prefer `planId` if available on the calling object; otherwise trace the parameter upstream to confirm it is canonical before migrating.
 
 ### Phase 5 — Fix Remaining Services
 
 **Files:**
-- `src/services/ContinuousSyncService.ts` (line ~1046): `_getPlanRecord` should use `getPlanByPlanId`
-- `src/services/SessionActionLog.ts` (1 match): classify and migrate
+- `src/services/ContinuousSyncService.ts` (line 1046): `_getPlanRecord` receives `sessionId` from its caller. Trace upstream to confirm it is `planId`, then migrate to `getPlanByPlanId`.
+- `src/services/SessionActionLog.ts` (line 76): `_resolvePlan` tries `getPlanByPlanFile` first, then falls back to `getPlanBySessionId`. This is an intentional backward-compatibility shim. **Do not migrate** until legacy sessionId support is dropped entirely.
 - `src/services/ClickUpSyncService.ts`: verify — grep showed 0 matches in source; may be in compiled output only
 
 ### Phase 6 — Update Tests
 
 **File:** `src/services/__tests__/KanbanProvider.test.ts` (2 matches)
 
-**Action:** Replace `getPlanBySessionId` references in tests with `getPlanByPlanId` or `getPlanByPlanFile` as appropriate. Add test cases for file-based plans with empty `session_id` to ensure lookups succeed via `plan_id`.
+**Action:** Replace `getPlanBySessionId` references in tests with `getPlanByPlanId` or `getPlanByPlanFile` as appropriate. The mock DB objects must also expose `getPlanByPlanId` returning `undefined` (lines 59, 81) or the tests will fail with `TypeError: db.getPlanByPlanId is not a function`. Add test cases for file-based plans with empty `session_id` to ensure lookups succeed via `plan_id`.
 
 ### Phase 7 — Final Cleanup (Future)
 
 **File:** `src/services/KanbanDatabase.ts`
 
 **Action:** After all callers in Phases 2–6 are migrated and verified:
-1. Add `@deprecated` to `updateEpicStatus` and create `updateEpicStatusByPlanId`
+1. Add `@deprecated` to `updateEpicStatus` and create `updateEpicStatusByPlanId` (do this in Phase 2)
 2. Remove all `@deprecated` wrapper methods listed in Phase 1
 3. Optionally remove the `session_id` column from the database schema (requires migration)
 
@@ -180,7 +210,7 @@ Complexity 6 → **Send to Coder** (multi-file coordination, moderate logic, req
 
 ### In Scope
 - Phase 1: Audit and classify all `getPlanBySessionId` usages across the codebase
-- Phase 2: Fix epic handlers in KanbanProvider.ts and PlanningPanelProvider.ts
+- Phase 2: Fix `updateEpicStatus` wrapper (KanbanDatabase.ts) and epic handlers in PlanningPanelProvider.ts (KanbanProvider.ts epic lookups already migrated)
 - Phase 3: Fix remaining KanbanProvider.ts active paths
 - Phase 4: Fix TaskViewerProvider.ts usages
 - Phase 5: Fix ContinuousSyncService.ts, SessionActionLog.ts, and test references
