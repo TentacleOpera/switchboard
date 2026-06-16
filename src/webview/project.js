@@ -665,14 +665,16 @@
 
     if (btnSetActiveEpic) {
         btnSetActiveEpic.addEventListener('click', () => {
-            if (_epicSelectedPlan) {
+            if (_epicSelectedPlan && _epicSelectedPlan.planFile) {
+                // Reuse the proven kanban-plan context handler, which sets
+                // planner.designDocLink to the plan file path so the epic flows
+                // into planner prompts via the design-doc resolution path.
                 vscode.postMessage({
-                    type: 'setActivePlanningContext',
-                    sourceId: 'kanban-plans',
-                    docId: _epicSelectedPlan.planId,
-                    docName: _epicSelectedPlan.topic,
-                    sourceFolder: _epicSelectedPlan.workspaceRoot
+                    type: 'setKanbanPlanContext',
+                    filePath: _epicSelectedPlan.planFile
                 });
+            } else {
+                alert('This epic has no plan file on disk to set as planning context.');
             }
         });
     }

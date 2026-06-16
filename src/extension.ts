@@ -1804,6 +1804,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const showKanbanButton = config.get<boolean>('statusBar.showKanbanButton', false);
         const showArtifactsButton = config.get<boolean>('statusBar.showArtifactsButton', false);
         const showDesignButton = config.get<boolean>('statusBar.showDesignButton', false);
+        const showProjectButton = config.get<boolean>('statusBar.showProjectButton', false);
 
         if (showAgentOpenToggle) {
             fileOpeningPreventionStatusBarItem.show();
@@ -1823,9 +1824,13 @@ export async function activate(context: vscode.ExtensionContext) {
 
         if (showKanbanButton) {
             kanbanStatusBarItem.show();
-            projectStatusBarItem.show();
         } else {
             kanbanStatusBarItem.hide();
+        }
+
+        if (showProjectButton) {
+            projectStatusBarItem.show();
+        } else {
             projectStatusBarItem.hide();
         }
 
@@ -1863,7 +1868,8 @@ export async function activate(context: vscode.ExtensionContext) {
             e.affectsConfiguration('switchboard.statusBar.showTerminalControls') ||
             e.affectsConfiguration('switchboard.statusBar.showKanbanButton') ||
             e.affectsConfiguration('switchboard.statusBar.showArtifactsButton') ||
-            e.affectsConfiguration('switchboard.statusBar.showDesignButton')
+            e.affectsConfiguration('switchboard.statusBar.showDesignButton') ||
+            e.affectsConfiguration('switchboard.statusBar.showProjectButton')
         ) {
             updateStatusBarVisibility();
             void taskViewerProvider.postSetupPanelState();

@@ -3436,6 +3436,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         await config.update('statusBar.showDesignButton', enabled, vscode.ConfigurationTarget.Workspace);
     }
 
+    public handleGetStatusShowProjectSetting(): boolean {
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('statusBar.showProjectButton', false);
+    }
+
+    public async handleSetStatusShowProjectSetting(enabled: boolean): Promise<void> {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        await config.update('statusBar.showProjectButton', enabled, vscode.ConfigurationTarget.Workspace);
+    }
+
     public handleGetCyberAnimationDisabledSetting(): boolean {
         return vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
     }
@@ -3848,6 +3857,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._setupPanelProvider.postMessage({
             type: 'statusShowDesignSetting',
             enabled: this.handleGetStatusShowDesignSetting()
+        });
+        this._setupPanelProvider.postMessage({
+            type: 'statusShowProjectSetting',
+            enabled: this.handleGetStatusShowProjectSetting()
         });
 
         this._setupPanelProvider.postMessage({

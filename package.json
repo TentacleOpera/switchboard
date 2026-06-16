@@ -651,6 +651,12 @@
           "description": "Controls visibility of the Open Design Panel button on the status bar.",
           "scope": "window"
         },
+        "switchboard.statusBar.showProjectButton": {
+          "type": "boolean",
+          "default": false,
+          "description": "Controls visibility of the Open Project Panel button on the status bar.",
+          "scope": "window"
+        },
         "switchboard.theme.cyberPanel": {
           "type": "boolean",
           "default": false,

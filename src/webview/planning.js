@@ -713,7 +713,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     const treePaneOnline = document.getElementById('tree-pane-online');
     const markdownPreview = document.getElementById('markdown-preview');
     const markdownPreviewOnline = document.getElementById('markdown-preview-online');
-    const btnSetActiveContextLocal = document.getElementById('btn-set-active-context-local');
     const statusEl = document.getElementById('status');
     const statusElOnline = document.getElementById('status-online');
 
@@ -3609,23 +3608,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     const btnDisableDocOnline = document.getElementById('btn-disable-doc-online');
 
     function updateLocalActiveContextButtonState() {
-        if (!btnSetActiveContextLocal) return;
-        const hasSelection = state.activeSource && state.activeDocId;
-        const isLocalSelection = state.activeSource === 'local-folder';
-        const isThisDocActive = state.activeDesignDocEnabled &&
-            state.activeDesignDocSourceId === state.activeSource &&
-            state.activeDesignDocId === state.activeDocId;
-
-        if (!hasSelection || !isLocalSelection) {
-            btnSetActiveContextLocal.disabled = true;
-            btnSetActiveContextLocal.textContent = 'Set as Active Planning Context';
-        } else if (isThisDocActive) {
-            btnSetActiveContextLocal.disabled = false;
-            btnSetActiveContextLocal.textContent = 'Turn off';
-        } else {
-            btnSetActiveContextLocal.disabled = false;
-            btnSetActiveContextLocal.textContent = 'Set as Active Planning Context';
-        }
+        // Planning-context setting moved to the Project panel's Epics tab; the
+        // set-context button no longer exists here. Keep the Sync-to-Online button
+        // state in sync, which this function is still relied upon to refresh.
         updateSyncToOnlineButtonState();
     }
 
@@ -4889,28 +4874,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
         setupTextareaTabInterceptor(markdownEditorDesign);
     }
 
-    if (btnSetActiveContextLocal) {
-        btnSetActiveContextLocal.addEventListener('click', () => {
-            if (!state.activeSource || !state.activeDocId) return;
-            const isThisDocActive = state.activeDesignDocEnabled &&
-                state.activeDesignDocSourceId === state.activeSource &&
-                state.activeDesignDocId === state.activeDocId;
-
-            if (isThisDocActive) {
-                vscode.postMessage({ type: 'disableDesignDoc', docType: 'planning-epic' });
-            } else {
-                const wrapper = findTreeNode(state.activeSource, state.activeDocId);
-                const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : undefined;
-                vscode.postMessage({
-                    type: 'setActivePlanningContext',
-                    sourceId: state.activeSource,
-                    docId: state.activeDocId,
-                    docName: state.activeDocName || state.activeDocId,
-                    sourceFolder
-                });
-            }
-        });
-    }
+    // Planning-context setting has moved to the Project panel's Epics tab.
+    // (The former "Set as Active Planning Context" button has been removed from this panel.)
 
     // Folder modal open logic
     function openFoldersModal(scope = 'local') {

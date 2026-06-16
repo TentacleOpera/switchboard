@@ -613,6 +613,16 @@ export class SetupPanelProvider implements vscode.Disposable {
                     await this._taskViewerProvider.handleSetStatusShowDesignSetting(message.enabled);
                     await vscode.commands.executeCommand('switchboard.refreshUI');
                     break;
+                case 'getStatusShowProjectSetting':
+                    this._panel.webview.postMessage({
+                        type: 'statusShowProjectSetting',
+                        enabled: this._taskViewerProvider.handleGetStatusShowProjectSetting()
+                    });
+                    break;
+                case 'setStatusShowProjectSetting':
+                    await this._taskViewerProvider.handleSetStatusShowProjectSetting(message.enabled);
+                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    break;
                 case 'getCyberAnimationDisabledSetting':
                     this._panel.webview.postMessage({
                         type: 'cyberAnimationDisabledSetting',

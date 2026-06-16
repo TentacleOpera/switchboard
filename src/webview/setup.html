@@ -1162,6 +1162,14 @@
                     <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Show the design button on the status bar to open the Design Panel.</span>
                 </div>
             </label>
+
+            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
+                <input id="status-show-project-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Show Project Panel Open Button</span>
+                    <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Show the project button on the status bar to open the Project Management Panel.</span>
+                </div>
+            </label>
         </div>
     </div>
 
@@ -3495,6 +3503,10 @@
             vscode.postMessage({ type: 'setStatusShowDesignSetting', enabled: e.target.checked });
         });
 
+        document.getElementById('status-show-project-toggle')?.addEventListener('change', (e) => {
+            vscode.postMessage({ type: 'setStatusShowProjectSetting', enabled: e.target.checked });
+        });
+
         document.getElementById('cyber-animation-toggle')?.addEventListener('change', (e) => {
             const isDisabled = !e.target.checked;
             vscode.postMessage({ type: 'setCyberAnimationDisabledSetting', enabled: isDisabled });
@@ -4098,6 +4110,13 @@
                 case 'statusShowDesignSetting': {
                     runSetupHydration(() => {
                         const toggle = document.getElementById('status-show-design-toggle');
+                        if (toggle) toggle.checked = message.enabled === true;
+                    });
+                    break;
+                }
+                case 'statusShowProjectSetting': {
+                    runSetupHydration(() => {
+                        const toggle = document.getElementById('status-show-project-toggle');
                         if (toggle) toggle.checked = message.enabled === true;
                     });
                     break;
