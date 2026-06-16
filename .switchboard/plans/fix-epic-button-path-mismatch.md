@@ -63,6 +63,19 @@ The issue is in `KanbanDatabase.ts` in the `updateEpicStatus` method:
 - The epic workflow is completely broken despite the UI appearing functional
 - All epic-related operations (promote to epic, add to epic, manage epic) fail silently
 
+## Adversarial Synthesis
+**Key risks:** (1) the original "improve `_persistedUpdate`" snippet used `info.changes`, which is invalid here — the sql.js wrapper does not expose row counts (`KanbanDatabase.ts:3144`); (2) the audit was vague. **Mitigations:** demote the row-count enhancement to an explicitly out-of-scope note; state the concrete audit result (every other `WHERE plan_file = ?` UPDATE already normalizes — `updateEpicStatus` is the sole offender); cover all six epic call sites in the test/manual matrix. The core one-line fix is correct, minimal, and symmetric with INSERT-time normalization.
+
+## Proposed Changes
+
+### src/services/KanbanDatabase.ts
+- **Context:** `updateEpicStatus` (lines 1325-1332) fetches a plan via `getPlanByPlanId`, whose `planFile` is hydrated to an **absolute** path by `_readRows` → `_resolveAbsolutePlanFile` (line 5225). It then passes that absolute path into a `WHERE plan_file = ?` clause against a column storing **relative** paths → zero rows matched, but `_persistedUpdate` returns `true` (silent no-op).
+- **Logic:** Normalize `plan.planFile` to relative via `_ensureRelativePlanFile` before the UPDATE, matching every sibling method.
+- **Implementation:** See the single-line fix in the **Solution → Implementation** block below.
+- **Edge Cases:** Relative-stored paths round-trip cleanly; absolute-outside-workspace paths are returned unchanged by both INSERT and the new WHERE, preserving symmetry.
+
+**Audit result (concrete):** All other `WHERE plan_file = ?` UPDATEs already call `_ensureRelativePlanFile` — `reassignWorkspaceByPlanFile` (1280), `updateColumnByPlanFile` (1293), `movePlanByPlanFile` (1350/1359), `updateComplexityByPlanFile` (1429), `updateTagsByPlanFile` (1457), and the `hasPlanByPlanFile` read (1247). `updateEpicStatus` is the **only** method that omitted normalization.
+
 ## Solution
 
 ### Fix Location
@@ -98,18 +111,12 @@ Check if other methods in `KanbanDatabase.ts` have the same pattern of using abs
 - `updateColumn` - deprecated, delegates to `updateColumnByPlanFile`
 - Other UPDATE methods should be reviewed for similar issues
 
-#### Improve `_persistedUpdate`
-Consider enhancing `_persistedUpdate` to return the number of rows affected, allowing callers to detect no-op updates:
-
-```typescript
-private _persistedUpdate(sql: string, params: unknown[]): { success: boolean; rowsAffected: number } {
-    // ... existing code ...
-    const info = this._db.run(sql, params);
-    return { success: true, rowsAffected: info.changes };
-}
-```
-
-This would allow `updateEpicStatus` to return `false` when zero rows are affected, providing better error feedback to the UI.
+#### (OUT OF SCOPE) Improve `_persistedUpdate` no-op detection
+> **Note:** This was previously proposed as an optional enhancement but is **out of scope** for this fix and must NOT be implemented as originally written.
+>
+> The original snippet relied on `this._db.run(sql, params).changes`. This is **invalid** for the sql.js wrapper used in this codebase: `_persistedUpdate` (line 4860) calls `this._db.run(sql, params)` which does not return a `changes`/`rowsAffected` value. This is confirmed by the existing workaround at `src/services/KanbanDatabase.ts:3144` ("Count matching rows first since the local type doesn't expose getRowsModified"), which performs a manual `SELECT COUNT(*)` precisely because row-change counts are unavailable.
+>
+> If no-op detection is desired in a future change, it must follow the line-3144 pattern (issue a `SELECT COUNT(*)` against the same WHERE clause) rather than reading a nonexistent `changes` field. Tracked as future work, not part of this bug fix.
 
 ## Implementation Steps
 
@@ -128,10 +135,9 @@ This would allow `updateEpicStatus` to return `false` when zero rows are affecte
      - Verifies the database row was actually updated
      - Verifies `getPlanByPlanId` returns the updated epic status
 
-4. **Optional enhancement:**
-   - Modify `_persistedUpdate` to return rows affected
-   - Update callers to check for zero-row updates
-   - Add error logging when updates affect zero rows unexpectedly
+4. **(OUT OF SCOPE) No-op detection:**
+   - Do NOT modify `_persistedUpdate` to read `.changes`/`rowsAffected` — the sql.js wrapper does not expose it (see `KanbanDatabase.ts:3144`).
+   - If pursued later, follow the line-3144 `SELECT COUNT(*)` pattern. Tracked as future work.
 
 ## Testing
 
@@ -172,11 +178,30 @@ test('updateEpicStatus updates database with relative path', async () => {
 });
 ```
 
+## Verification Plan
+
+> **Session directive:** No project compilation and no automated test execution this session. Tests below are authored/specified; the user runs them separately.
+
+### Automated Tests
+- **Primary regression** (`KanbanDatabase.test.ts`): insert a plan with a relative `planFile`, call `updateEpicStatus(planId, 1, 'epic-123')`, assert it returns `true`, then assert `getPlanByPlanId(planId)` returns `isEpic === 1` and `epicId === 'epic-123'`. This fails before the fix (zero rows updated) and passes after. See the snippet in **Testing → Automated Testing**.
+- **Caller coverage matrix** — exercise each distinct epic operation that routes through `updateEpicStatus`:
+  - Promote-to-epic: `updateEpicStatus(planId, 1, '')` (KanbanProvider.ts:6445)
+  - Create-epic-with-subtasks: epic set via `updateEpicStatus(planId, 1, '')` then each subtask `updateEpicStatus(st.planId, 0, planId)` (KanbanProvider.ts:6509/6523)
+  - Add-subtask-to-epic: `updateEpicStatus(subtask.planId, 0, epic.planId)` (KanbanProvider.ts:6431, PlanningPanelProvider.ts:2056)
+  - Remove-subtask-from-epic: `updateEpicStatus(subtask.planId, 0, '')` (KanbanProvider.ts:6535, PlanningPanelProvider.ts:2072)
+- **Negative guard:** confirm `_ensureRelativePlanFile` rejection paths (malformed/traversal segments) still return empty and do not corrupt the WHERE clause.
+
+### Manual Verification
+See the **Testing → Manual Testing** steps (open kanban board, select 2+ plans, click EPIC, verify epic card, subtasks, and manage operations persist after refresh).
+
 ## Risks
 
 - **Low risk:** The fix is a single-line change that aligns with existing patterns in the codebase
 - **No breaking changes:** This only affects the internal database layer, not the API or UI
 - **Edge cases:** `_ensureRelativePlanFile` already handles paths outside workspace and malformed paths, so no new edge cases are introduced
+
+## Recommendation
+**Complexity: 3 → Send to Intern.** Single-line, well-scoped fix reusing an established helper, with a clear regression test and a concrete audit confirming no sibling methods are affected.
 
 ## Dependencies
 None - this is a self-contained bug fix within the database layer.

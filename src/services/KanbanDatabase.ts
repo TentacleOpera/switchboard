@@ -1325,9 +1325,10 @@ export class KanbanDatabase {
     public async updateEpicStatus(planId: string, isEpic: number, epicId: string): Promise<boolean> {
         const plan = await this.getPlanByPlanId(planId);
         if (!plan) return false;
+        const relativePlanFile = this._ensureRelativePlanFile(plan.planFile);
         return this._persistedUpdate(
             'UPDATE plans SET is_epic = ?, epic_id = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
-            [isEpic, epicId, new Date().toISOString(), plan.planFile, plan.workspaceId]
+            [isEpic, epicId, new Date().toISOString(), relativePlanFile, plan.workspaceId]
         );
     }
 

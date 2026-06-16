@@ -470,11 +470,11 @@
                 restoreTicketsState();
                 ticketsInitialized = true;
             }
-            if (ticketsAutoSync && lastIntegrationProvider && !ticketsLoadedOnce) {
+            if (lastIntegrationProvider && !ticketsLoadedOnce) {
                 if (lastIntegrationProvider === 'clickup') loadClickUpSpaces();
                 else loadLinearProject();
             } else {
-                // Auto-sync off (or already loaded) — render cached state; user fetches manually.
+                // Spaces/project already loaded in background — just render what we have
                 renderTicketsTab();
             }
         } else {
@@ -3525,7 +3525,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (msg.workspaceRoot === ticketsWorkspaceRoot) {
                     lastIntegrationProvider = msg.provider || null;
                     ticketsAutoSync = msg.ticketsAutoSync === true;
-                    if (isTicketsTabActive() && ticketsAutoSync) {
+                    if (isTicketsTabActive()) {
                         if (lastIntegrationProvider === 'clickup') {
                             loadClickUpSpaces();
                         } else if (lastIntegrationProvider === 'linear') {

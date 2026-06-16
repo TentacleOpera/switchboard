@@ -1762,7 +1762,7 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(terminalOpenStatusBarItem);
 
     terminalClearStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 97);
-    terminalClearStatusBarItem.text = '$(paintcan) Clear';
+    terminalClearStatusBarItem.text = '$(eraser) Clear';
     terminalClearStatusBarItem.tooltip = 'Clear Agent Terminals';
     terminalClearStatusBarItem.command = 'switchboard.clearAllTerminals';
     context.subscriptions.push(terminalClearStatusBarItem);
@@ -1792,7 +1792,7 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(projectStatusBarItem);
 
     designStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 98);
-    designStatusBarItem.text = '$(paintcan) Design';
+    designStatusBarItem.text = '$(symbol-color) Design';
     designStatusBarItem.tooltip = 'Open Design Panel';
     designStatusBarItem.command = 'switchboard.openDesignPanel';
     context.subscriptions.push(designStatusBarItem);

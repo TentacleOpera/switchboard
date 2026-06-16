@@ -338,5 +338,15 @@ document.querySelectorAll('.sidebar-toggle-btn').forEach(btn => {
 - **No state collision**: `project.js` currently makes no `vscode.getState()` / `vscode.setState()` calls, so the new keys cannot conflict with existing persisted data
 - **Tab switching**: State is explicitly re-applied in the tab click handler; render functions also set the correct button glyph on rebuild
 
+## Review Findings
+
+**Files changed:** `src/webview/project.html` (added `.content-row.collapsed` CSS rules; added static `.sidebar-toggle-btn` elements to Epics and Constitution tab HTML); `src/webview/project.js` (added `state` collapse properties with `vscode.getState()` hydration, `applySidebarState` and `toggleSidebarCollapsed` helpers, dynamic toggle-button creation in `renderKanbanPlans()` / `renderEpicsList()` / `renderConstitutionWorkspaceList()`, tab-switch sidebar-state application, and init-time state application + global listener binding).
+
+**Fix applied during review:** Added static toggle buttons to Epics and Constitution HTML (`#epics-list-pane` and `#constitution-list-pane`) to prevent a race where a previously-collapsed tab could render as an empty 40px pane with no visible toggle button before `renderEpicsList()` / `renderConstitutionWorkspaceList()` runs.
+
+**Validation:** Per session directive, compilation and tests were skipped. Manual code-path audit confirms all three tabs have toggle buttons in both static HTML and dynamic render paths, `activeTab` is used without shadow redeclaration, `vscode.getState()` / `vscode.setState()` are collision-free, and `applySidebarState` safely no-ops when DOM elements are absent.
+
+**Remaining risks:** None material. The implementation is a direct, verified port of the working `planning.js` pattern.
+
 ## Recommendation
 **Send to Intern** — Complexity 2. Straightforward port of a working pattern from `planning.js` to `project.js` with no architectural changes.
