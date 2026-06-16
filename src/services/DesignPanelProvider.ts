@@ -747,23 +747,24 @@ export class DesignPanelProvider implements vscode.Disposable {
         };
     }
 
-    private _setupStitchAuth(): { mode: 'apiKey' | 'oauth'; valid: boolean } {
+    private _setupStitchAuth(): { mode: 'apiKey' | 'oauth'; valid: boolean; apiKey?: string; accessToken?: string } {
         const config = vscode.workspace.getConfiguration('switchboard');
         const mode = config.get<'apiKey' | 'oauth'>('stitch.authMode') || 'apiKey';
+        const apiKey = config.get<string>('stitch.apiKey') || '';
+        const accessToken = config.get<string>('stitch.accessToken') || '';
         if (mode === 'oauth') {
-            const accessToken = config.get<string>('stitch.accessToken');
             if (accessToken) {
                 delete process.env.STITCH_API_KEY;
-                return { mode, valid: true };
+                return { mode, valid: true, apiKey, accessToken };
             }
-            return { mode, valid: false };
+            return { mode, valid: false, apiKey, accessToken };
         } else {
-            const apiKey = config.get<string>('stitch.apiKey') || process.env.STITCH_API_KEY;
-            if (apiKey) {
-                process.env.STITCH_API_KEY = apiKey;
-                return { mode, valid: true };
+            const finalKey = apiKey || process.env.STITCH_API_KEY || '';
+            if (finalKey) {
+                process.env.STITCH_API_KEY = finalKey;
+                return { mode, valid: true, apiKey: finalKey, accessToken };
             }
-            return { mode, valid: false };
+            return { mode, valid: false, apiKey: finalKey, accessToken };
         }
     }
 
@@ -995,7 +996,9 @@ export class DesignPanelProvider implements vscode.Disposable {
                     type: 'stitchAuthStatus',
                     mode: authInfo.mode,
                     configured: hasKey,
-                    valid: hasKey
+                    valid: hasKey,
+                    apiKey: authInfo.apiKey,
+                    accessToken: authInfo.accessToken
                 });
                 const themeConfig = vscode.workspace.getConfiguration('switchboard');
                 this.postMessage({ type: 'switchboardThemeChanged', theme: themeConfig.get<string>('theme.name', 'afterburner') });
@@ -1269,10 +1272,261 @@ export class DesignPanelProvider implements vscode.Disposable {
                     const config = vscode.workspace.getConfiguration('switchboard');
                     await config.update('stitch.apiKey', message.apiKey, vscode.ConfigurationTarget.Global);
                     process.env.STITCH_API_KEY = message.apiKey;
+                    invalidateStitchSdkCache();
+                    const auth = this._setupStitchAuth();
                     this.postMessage({ type: 'stitchApiKeyStatus', configured: true });
+                    this.postMessage({ type: 'stitchAuthStatus', mode: auth.mode, configured: true, valid: true });
                     vscode.window.showInformationMessage('Stitch API Key saved successfully.');
                 } catch (err: any) {
                     vscode.window.showErrorMessage('Failed to save API key: ' + err.message);
+                }
+                break;
+
+            case 'stitchSaveAuthConfig':
+                try {
+                    const config = vscode.workspace.getConfiguration('switchboard');
+                    await config.update('stitch.authMode', message.mode, vscode.ConfigurationTarget.Global);
+                    await config.update('stitch.apiKey', message.apiKey || '', vscode.ConfigurationTarget.Global);
+                    await config.update('stitch.accessToken', message.accessToken || '', vscode.ConfigurationTarget.Global);
+                    
+                    invalidateStitchSdkCache();
+                    const auth = this._setupStitchAuth();
+                    
+                    this.postMessage({ type: 'stitchApiKeyStatus', configured: auth.valid });
+                    this.postMessage({ 
+                        type: 'stitchAuthStatus', 
+                        mode: auth.mode, 
+                        configured: auth.valid, 
+                        valid: auth.valid,
+                        apiKey: auth.apiKey,
+                        accessToken: auth.accessToken
+                    });
+                    vscode.window.showInformationMessage('Stitch Authentication settings saved successfully.');
+                } catch (err: any) {
+                    vscode.window.showErrorMessage('Failed to save settings: ' + err.message);
+                }
+                break;
+
+            case 'stitchValidateAuth':
+                try {
+                    const auth = this._setupStitchAuth();
+                    if (!auth.valid) {
+                        this.postMessage({ 
+                            type: 'stitchAuthStatus', 
+                            mode: auth.mode, 
+                            configured: false, 
+                            valid: false,
+                            error: 'Credentials not configured',
+                            apiKey: auth.apiKey,
+                            accessToken: auth.accessToken
+                        });
+                        return;
+                    }
+                    invalidateStitchSdkCache();
+                    const stitch = await loadStitch();
+                    await stitch.projects();
+                    this.postMessage({ 
+                        type: 'stitchAuthStatus', 
+                        mode: auth.mode, 
+                        configured: true, 
+                        valid: true,
+                        apiKey: auth.apiKey,
+                        accessToken: auth.accessToken
+                    });
+                } catch (err: any) {
+                    const auth = this._setupStitchAuth();
+                    this.postMessage({ 
+                        type: 'stitchAuthStatus', 
+                        mode: auth.mode, 
+                        configured: true, 
+                        valid: false,
+                        error: err.message || String(err),
+                        apiKey: auth.apiKey,
+                        accessToken: auth.accessToken
+                    });
+                }
+                break;
+
+            case 'stitchListDesignSystems':
+                try {
+                    const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
+                    const auth = this._setupStitchAuth();
+                    if (!auth.valid) {
+                        this.postMessage({ type: 'stitchError', error: 'Authentication not configured.', workspaceRoot });
+                        return;
+                    }
+                    const projectId = message.projectId;
+                    if (!projectId) {
+                        this.postMessage({ type: 'stitchError', error: 'No project selected.', workspaceRoot });
+                        return;
+                    }
+                    const stitch = await loadStitch();
+                    const project = stitch.project(projectId);
+                    const list = await project.listDesignSystems();
+                    const designSystems = list.map((ds: any) => ({
+                        id: ds.id,
+                        displayName: ds.data?.displayName || ds.id,
+                        styleGuidelines: ds.data?.styleGuidelines || '',
+                        designTokens: typeof ds.data?.designTokens === 'string'
+                            ? ds.data.designTokens
+                            : JSON.stringify(ds.data?.designTokens || {})
+                    }));
+                    this.postMessage({ type: 'stitchDesignSystemsReady', designSystems, workspaceRoot });
+                } catch (err: any) {
+                    this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
+                }
+                break;
+
+            case 'stitchCreateDesignSystem':
+                if (this._stitchOperationLock) {
+                    this.postMessage({ type: 'stitchError', error: 'An operation is already in progress.', workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
+                    break;
+                }
+                this._stitchOperationLock = true;
+                try {
+                    const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
+                    const auth = this._setupStitchAuth();
+                    if (!auth.valid) {
+                        throw new Error('Authentication not configured.');
+                    }
+                    const projectId = message.projectId;
+                    if (!projectId) {
+                        throw new Error('No project selected.');
+                    }
+                    const stitch = await loadStitch();
+                    const project = stitch.project(projectId);
+                    
+                    const input = {
+                        displayName: message.displayName,
+                        styleGuidelines: message.styleGuidelines,
+                        designTokens: message.designTokens
+                    };
+                    
+                    await project.createDesignSystem(input);
+                    this.postMessage({ type: 'stitchDesignSystemCreated', workspaceRoot });
+                } catch (err: any) {
+                    this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
+                } finally {
+                    this._stitchOperationLock = false;
+                }
+                break;
+
+            case 'stitchUpdateDesignSystem':
+                if (this._stitchOperationLock) {
+                    this.postMessage({ type: 'stitchError', error: 'An operation is already in progress.', workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
+                    break;
+                }
+                this._stitchOperationLock = true;
+                try {
+                    const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
+                    const auth = this._setupStitchAuth();
+                    if (!auth.valid) {
+                        throw new Error('Authentication not configured.');
+                    }
+                    const projectId = message.projectId;
+                    const assetId = message.assetId;
+                    if (!projectId || !assetId) {
+                        throw new Error('Project or design system asset ID is missing.');
+                    }
+                    const stitch = await loadStitch();
+                    const project = stitch.project(projectId);
+                    const ds = project.designSystem(assetId);
+                    
+                    const input = {
+                        displayName: message.displayName,
+                        styleGuidelines: message.styleGuidelines,
+                        designTokens: message.designTokens
+                    };
+                    
+                    await ds.update(input);
+                    this.postMessage({ type: 'stitchDesignSystemUpdated', workspaceRoot });
+                } catch (err: any) {
+                    this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
+                } finally {
+                    this._stitchOperationLock = false;
+                }
+                break;
+
+            case 'stitchApplyDesignSystem':
+                if (this._stitchOperationLock) {
+                    this.postMessage({ type: 'stitchError', error: 'An operation is already in progress.', workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
+                    break;
+                }
+                this._stitchOperationLock = true;
+                try {
+                    const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
+                    const auth = this._setupStitchAuth();
+                    if (!auth.valid) {
+                        throw new Error('Authentication not configured.');
+                    }
+                    const projectId = message.projectId;
+                    const assetId = message.assetId;
+                    const screenIds = message.screenIds || [];
+                    if (!projectId || !assetId) {
+                        throw new Error('Project or design system ID is missing.');
+                    }
+                    if (screenIds.length === 0) {
+                        throw new Error('No screens selected.');
+                    }
+
+                    const { StitchToolClient } = await import('@google/stitch-sdk');
+                    const config = vscode.workspace.getConfiguration('switchboard');
+                    const mode = config.get<string>('stitch.authMode') || 'apiKey';
+                    const accessToken = config.get<string>('stitch.accessToken') || '';
+                    
+                    let dedicatedClient;
+                    if (mode === 'oauth') {
+                        dedicatedClient = new StitchToolClient({ accessToken });
+                    } else {
+                        dedicatedClient = new StitchToolClient();
+                    }
+
+                    const projectData: any = await dedicatedClient.callTool("get_project", { name: "projects/" + projectId });
+                    const rawInstances = projectData.screenInstances || [];
+                    
+                    const selectedScreenInstances = rawInstances
+                        .filter((instance: any) => {
+                            if (!instance.id) return false;
+                            if (instance.type && instance.type !== 'SCREEN_INSTANCE') return false;
+                            return screenIds.includes(instance.id);
+                        })
+                        .map((instance: any) => ({
+                            id: instance.id,
+                            sourceScreen: instance.sourceScreen || instance.id
+                        }));
+
+                    if (selectedScreenInstances.length === 0) {
+                        throw new Error('No applicable screens found in the project.');
+                    }
+
+                    const stitch = await loadStitch();
+                    const project = stitch.project(projectId);
+                    const ds = project.designSystem(assetId);
+                    
+                    const updatedScreens = await ds.apply(selectedScreenInstances);
+
+                    const formatted = await Promise.all(updatedScreens.map(async (s: any) => {
+                        return this._formatScreen(s, projectId, workspaceRoot || '');
+                    }));
+
+                    const db = KanbanDatabase.forWorkspace(workspaceRoot || '');
+                    await db.bulkUpsertStitchScreens(formatted.map((f: any) => ({
+                        id: f.id,
+                        projectId,
+                        name: f.name,
+                        displayName: f.displayName,
+                        imageUrl: f.imageUrl,
+                        htmlUrl: f.htmlUrl,
+                        status: f.status,
+                        statusMessage: f.statusMessage
+                    })));
+
+                    this.postMessage({ type: 'stitchDesignSystemApplied', workspaceRoot });
+                    this.postMessage({ type: 'stitchScreensReady', screens: formatted, workspaceRoot });
+                } catch (err: any) {
+                    this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
+                } finally {
+                    this._stitchOperationLock = false;
                 }
                 break;
 

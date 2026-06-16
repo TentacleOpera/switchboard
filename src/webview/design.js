@@ -2945,6 +2945,48 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 }
                 break;
 
+            case 'stitchAuthStatus':
+                state.stitchAuthMode = msg.mode;
+                state.stitchApiKeyConfigured = msg.configured;
+                state.stitchAuthValid = msg.valid;
+                if (stitchApiBanner) {
+                    stitchApiBanner.style.display = msg.configured ? 'none' : 'flex';
+                }
+                updateStitchAuthUI(msg);
+                break;
+
+            case 'stitchDesignSystemsReady':
+                state.stitchDesignSystems = msg.designSystems || [];
+                renderStitchDesignSystems();
+                break;
+
+            case 'stitchDesignSystemCreated':
+                setStitchStatus('Design system created successfully', 'success');
+                vscode.postMessage({
+                    type: 'stitchListDesignSystems',
+                    projectId: state.selectedStitchProjectId,
+                    workspaceRoot: state.stitchWorkspaceRoot
+                });
+                break;
+
+            case 'stitchDesignSystemUpdated':
+                setStitchStatus('Design system updated successfully', 'success');
+                vscode.postMessage({
+                    type: 'stitchListDesignSystems',
+                    projectId: state.selectedStitchProjectId,
+                    workspaceRoot: state.stitchWorkspaceRoot
+                });
+                break;
+
+            case 'stitchDesignSystemApplied':
+                setStitchStatus('Design system applied to selected screens', 'success');
+                vscode.postMessage({
+                    type: 'stitchListDesignSystems',
+                    projectId: state.selectedStitchProjectId,
+                    workspaceRoot: state.stitchWorkspaceRoot
+                });
+                break;
+
             case 'stitchProjectsReady':
                 state.stitchProjects = msg.projects || [];
                 populateStitchProjects(state.stitchProjects, msg.defaultProjectId);
@@ -3494,6 +3536,443 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
     registerWorkspaceDropdown('briefs-workspace-filter', 'briefs.root');
 
     initStitchControls();
+    initStitchDesignSystemControls();
+
+    function initStitchDesignSystemControls() {
+        // Toggle btn configure auth
+        document.getElementById('btn-configure-auth')?.addEventListener('click', () => {
+            const panel = document.getElementById('stitch-auth-panel');
+            if (panel) {
+                panel.style.display = panel.style.display === 'none' ? 'flex' : 'none';
+            }
+        });
+
+        document.getElementById('btn-close-stitch-auth')?.addEventListener('click', () => {
+            const panel = document.getElementById('stitch-auth-panel');
+            if (panel) panel.style.display = 'none';
+        });
+
+        // Wire auth mode radios
+        document.getElementsByName('stitch-auth-mode').forEach(radio => {
+            radio.addEventListener('change', (e) => {
+                const mode = e.target.value;
+                const keyGroup = document.getElementById('stitch-api-key-group');
+                const tokenGroup = document.getElementById('stitch-access-token-group');
+                if (mode === 'oauth') {
+                    if (keyGroup) keyGroup.style.display = 'none';
+                    if (tokenGroup) tokenGroup.style.display = 'flex';
+                } else {
+                    if (keyGroup) keyGroup.style.display = 'flex';
+                    if (tokenGroup) tokenGroup.style.display = 'none';
+                }
+            });
+        });
+
+        // Save auth config
+        document.getElementById('btn-save-stitch-auth')?.addEventListener('click', () => {
+            const mode = document.querySelector('input[name="stitch-auth-mode"]:checked')?.value || 'apiKey';
+            const apiKey = document.getElementById('stitch-api-key-input')?.value.trim() || '';
+            const accessToken = document.getElementById('stitch-access-token-input')?.value.trim() || '';
+            
+            vscode.postMessage({
+                type: 'stitchSaveAuthConfig',
+                mode,
+                apiKey,
+                accessToken
+            });
+        });
+
+        // Validate auth
+        document.getElementById('btn-validate-stitch-auth')?.addEventListener('click', () => {
+            const indicator = document.getElementById('stitch-auth-status-indicator');
+            if (indicator) {
+                indicator.textContent = 'Validating...';
+                indicator.style.background = '#444';
+                indicator.style.color = '#fff';
+            }
+            const errMsg = document.getElementById('stitch-auth-error-msg');
+            if (errMsg) errMsg.style.display = 'none';
+
+            vscode.postMessage({
+                type: 'stitchValidateAuth'
+            });
+        });
+
+        // Sub-tabs switcher buttons
+        const btnLocal = document.getElementById('btn-design-subtab-local');
+        const btnStitch = document.getElementById('btn-design-subtab-stitch');
+        const localPanel = document.getElementById('design-local-panel');
+        const stitchPanel = document.getElementById('design-systems-panel');
+
+        btnLocal?.addEventListener('click', () => {
+            btnLocal.classList.add('active');
+            btnStitch?.classList.remove('active');
+            if (localPanel) localPanel.style.display = 'flex';
+            if (stitchPanel) stitchPanel.style.display = 'none';
+            state.designSystemSubTab = 'local';
+        });
+
+        btnStitch?.addEventListener('click', () => {
+            btnStitch.classList.add('active');
+            btnLocal?.classList.remove('active');
+            if (localPanel) localPanel.style.display = 'none';
+            if (stitchPanel) stitchPanel.style.display = 'flex';
+            state.designSystemSubTab = 'stitch';
+            
+            // Refresh list
+            refreshStitchDesignSystems();
+        });
+
+        document.getElementById('btn-goto-stitch-tab')?.addEventListener('click', () => {
+            const stitchTabBtn = document.querySelector('.shared-tab-btn[data-tab="stitch"]');
+            if (stitchTabBtn) {
+                stitchTabBtn.click();
+            }
+        });
+
+        document.getElementById('btn-refresh-design-systems')?.addEventListener('click', () => {
+            refreshStitchDesignSystems();
+        });
+
+        document.getElementById('btn-create-design-system')?.addEventListener('click', () => {
+            openDesignSystemModal();
+        });
+
+        // Create/Edit Design System modal closing
+        document.getElementById('btn-close-design-system-modal')?.addEventListener('click', () => {
+            document.getElementById('design-system-crud-modal').style.display = 'none';
+        });
+        document.getElementById('btn-cancel-design-system')?.addEventListener('click', () => {
+            document.getElementById('design-system-crud-modal').style.display = 'none';
+        });
+
+        // Create/Edit Save
+        document.getElementById('btn-save-design-system')?.addEventListener('click', () => {
+            const assetId = document.getElementById('design-system-modal-asset-id').value;
+            const displayName = document.getElementById('design-system-name').value.trim();
+            const styleGuidelines = document.getElementById('design-system-guidelines').value.trim();
+            const designTokens = document.getElementById('design-system-tokens').value.trim();
+
+            if (!displayName) {
+                alert('Please enter a display name.');
+                return;
+            }
+
+            if (assetId) {
+                vscode.postMessage({
+                    type: 'stitchUpdateDesignSystem',
+                    projectId: state.selectedStitchProjectId,
+                    assetId,
+                    displayName,
+                    styleGuidelines,
+                    designTokens,
+                    workspaceRoot: state.stitchWorkspaceRoot
+                });
+            } else {
+                vscode.postMessage({
+                    type: 'stitchCreateDesignSystem',
+                    projectId: state.selectedStitchProjectId,
+                    displayName,
+                    styleGuidelines,
+                    designTokens,
+                    workspaceRoot: state.stitchWorkspaceRoot
+                });
+            }
+            document.getElementById('design-system-crud-modal').style.display = 'none';
+        });
+
+        // Apply Design System modal closing
+        document.getElementById('btn-close-apply-modal')?.addEventListener('click', () => {
+            document.getElementById('design-system-apply-modal').style.display = 'none';
+        });
+        document.getElementById('btn-cancel-apply')?.addEventListener('click', () => {
+            document.getElementById('design-system-apply-modal').style.display = 'none';
+        });
+
+        // Apply Select All/None
+        document.getElementById('btn-apply-select-all')?.addEventListener('click', () => {
+            document.querySelectorAll('.apply-screen-checkbox').forEach(cb => cb.checked = true);
+        });
+        document.getElementById('btn-apply-select-none')?.addEventListener('click', () => {
+            document.querySelectorAll('.apply-screen-checkbox').forEach(cb => cb.checked = false);
+        });
+
+        // Execute Apply
+        document.getElementById('btn-execute-apply')?.addEventListener('click', () => {
+            const assetId = document.getElementById('apply-design-system-asset-id').value;
+            const selectedCbs = document.querySelectorAll('.apply-screen-checkbox:checked');
+            const screenIds = Array.from(selectedCbs).map(cb => cb.value);
+
+            if (screenIds.length === 0) {
+                alert('Please select at least one screen to apply the design system to.');
+                return;
+            }
+
+            vscode.postMessage({
+                type: 'stitchApplyDesignSystem',
+                projectId: state.selectedStitchProjectId,
+                assetId,
+                screenIds,
+                workspaceRoot: state.stitchWorkspaceRoot
+            });
+            document.getElementById('design-system-apply-modal').style.display = 'none';
+        });
+    }
+
+    function updateStitchAuthUI(msg) {
+        const mode = msg.mode || 'apiKey';
+        const apiKey = msg.apiKey || '';
+        const accessToken = msg.accessToken || '';
+        
+        // Update radios
+        const radio = document.querySelector(`input[name="stitch-auth-mode"][value="${mode}"]`);
+        if (radio) {
+            radio.checked = true;
+            const keyGroup = document.getElementById('stitch-api-key-group');
+            const tokenGroup = document.getElementById('stitch-access-token-group');
+            if (mode === 'oauth') {
+                if (keyGroup) keyGroup.style.display = 'none';
+                if (tokenGroup) tokenGroup.style.display = 'flex';
+            } else {
+                if (keyGroup) keyGroup.style.display = 'flex';
+                if (tokenGroup) tokenGroup.style.display = 'none';
+            }
+        }
+
+        // Update inputs
+        const keyInput = document.getElementById('stitch-api-key-input');
+        if (keyInput) keyInput.value = apiKey;
+
+        const tokenInput = document.getElementById('stitch-access-token-input');
+        if (tokenInput) tokenInput.value = accessToken;
+
+        // Update status indicator
+        const indicator = document.getElementById('stitch-auth-status-indicator');
+        const errMsg = document.getElementById('stitch-auth-error-msg');
+        
+        if (indicator) {
+            if (msg.configured) {
+                if (msg.valid) {
+                    indicator.textContent = 'VALID';
+                    indicator.style.background = '#1b4d3e';
+                    indicator.style.color = '#76e4b8';
+                    if (errMsg) errMsg.style.display = 'none';
+                } else {
+                    indicator.textContent = 'INVALID';
+                    indicator.style.background = '#661c1c';
+                    indicator.style.color = '#ff8f8f';
+                    if (errMsg) {
+                        errMsg.textContent = msg.error || 'Connection failed';
+                        errMsg.style.display = 'block';
+                    }
+                }
+            } else {
+                indicator.textContent = 'NOT CONFIGURED';
+                indicator.style.background = '#333';
+                indicator.style.color = '#aaa';
+                if (errMsg) errMsg.style.display = 'none';
+            }
+        }
+    }
+
+    function refreshStitchDesignSystems() {
+        const noProj = document.getElementById('design-system-no-project');
+        const wrapper = document.getElementById('stitch-design-systems-list-wrapper');
+        const projName = document.getElementById('design-system-project-name');
+        const btnCreate = document.getElementById('btn-create-design-system');
+        const btnRefresh = document.getElementById('btn-refresh-design-systems');
+
+        if (!state.selectedStitchProjectId) {
+            if (noProj) noProj.style.display = 'flex';
+            if (wrapper) wrapper.style.display = 'none';
+            if (projName) projName.textContent = 'None Selected';
+            if (btnCreate) btnCreate.style.display = 'none';
+            if (btnRefresh) btnRefresh.style.display = 'none';
+            return;
+        }
+
+        const option = stitchProjectSelect?.querySelector(`option[value="${state.selectedStitchProjectId}"]`);
+        if (projName) projName.textContent = option ? option.textContent : state.selectedStitchProjectId;
+
+        if (noProj) noProj.style.display = 'none';
+        if (wrapper) wrapper.style.display = 'block';
+        if (btnCreate) btnCreate.style.display = 'inline-block';
+        if (btnRefresh) btnRefresh.style.display = 'inline-block';
+
+        const listContainer = document.getElementById('stitch-design-systems-list');
+        if (listContainer) {
+            listContainer.innerHTML = '<div style="font-size: 12px; color: var(--text-secondary); padding: 12px;">Loading design systems...</div>';
+        }
+
+        vscode.postMessage({
+            type: 'stitchListDesignSystems',
+            projectId: state.selectedStitchProjectId,
+            workspaceRoot: state.stitchWorkspaceRoot
+        });
+    }
+
+    function renderStitchDesignSystems() {
+        const listContainer = document.getElementById('stitch-design-systems-list');
+        if (!listContainer) return;
+
+        if (!state.stitchDesignSystems || state.stitchDesignSystems.length === 0) {
+            listContainer.innerHTML = '<div style="font-size: 12px; color: var(--text-secondary); padding: 16px; text-align: center; border: 1px dashed var(--border-color); border-radius: 4px;">No design systems found for this project.</div>';
+            return;
+        }
+
+        listContainer.innerHTML = '';
+        state.stitchDesignSystems.forEach(ds => {
+            const card = document.createElement('div');
+            card.className = 'cyber-card';
+            card.style.display = 'flex';
+            card.style.flexDirection = 'column';
+            card.style.gap = '8px';
+            card.style.padding = '12px';
+            card.style.border = '1px solid var(--border-color)';
+            card.style.borderRadius = '4px';
+            card.style.background = 'var(--panel-bg)';
+
+            // Header row
+            const headerRow = document.createElement('div');
+            headerRow.style.display = 'flex';
+            headerRow.style.justifyContent = 'space-between';
+            headerRow.style.alignItems = 'center';
+            headerRow.style.borderBottom = '1px solid var(--border-color)';
+            headerRow.style.paddingBottom = '6px';
+
+            const title = document.createElement('strong');
+            title.style.fontSize = '13px';
+            title.style.color = 'var(--text-primary)';
+            title.textContent = ds.displayName;
+
+            const idLabel = document.createElement('span');
+            idLabel.style.fontSize = '10px';
+            idLabel.style.color = 'var(--text-secondary)';
+            idLabel.style.fontFamily = 'var(--font-mono)';
+            idLabel.textContent = ds.id;
+
+            headerRow.appendChild(title);
+            headerRow.appendChild(idLabel);
+
+            // Guidelines
+            const guidelines = document.createElement('div');
+            guidelines.style.fontSize = '11px';
+            guidelines.style.color = 'var(--text-secondary)';
+            guidelines.style.margin = '4px 0';
+            guidelines.textContent = ds.styleGuidelines || 'No style guidelines provided.';
+
+            // Actions row
+            const actionsRow = document.createElement('div');
+            actionsRow.style.display = 'flex';
+            actionsRow.style.gap = '8px';
+            actionsRow.style.marginTop = '6px';
+
+            const btnEdit = document.createElement('button');
+            btnEdit.className = 'strip-btn';
+            btnEdit.style.fontSize = '11px';
+            btnEdit.style.padding = '2px 8px';
+            btnEdit.textContent = 'Edit';
+            btnEdit.addEventListener('click', () => {
+                openDesignSystemModal(ds);
+            });
+
+            const btnApply = document.createElement('button');
+            btnApply.className = 'strip-btn stitch-btn-primary';
+            btnApply.style.fontSize = '11px';
+            btnApply.style.padding = '2px 8px';
+            btnApply.textContent = 'Apply to Screens';
+            btnApply.addEventListener('click', () => {
+                openApplyModal(ds);
+            });
+
+            actionsRow.appendChild(btnEdit);
+            actionsRow.appendChild(btnApply);
+
+            card.appendChild(headerRow);
+            card.appendChild(guidelines);
+            card.appendChild(actionsRow);
+
+            listContainer.appendChild(card);
+        });
+    }
+
+    function openDesignSystemModal(ds = null) {
+        const modal = document.getElementById('design-system-crud-modal');
+        const title = document.getElementById('design-system-modal-title');
+        const assetIdInput = document.getElementById('design-system-modal-asset-id');
+        const nameInput = document.getElementById('design-system-name');
+        const guidelinesInput = document.getElementById('design-system-guidelines');
+        const tokensInput = document.getElementById('design-system-tokens');
+
+        if (!modal) return;
+
+        if (ds) {
+            title.textContent = 'Edit Design System';
+            assetIdInput.value = ds.id;
+            nameInput.value = ds.displayName;
+            guidelinesInput.value = ds.styleGuidelines;
+            tokensInput.value = ds.designTokens;
+        } else {
+            title.textContent = 'Create Design System';
+            assetIdInput.value = '';
+            nameInput.value = '';
+            guidelinesInput.value = '';
+            tokensInput.value = JSON.stringify({
+                colors: {
+                    primary: '#007acc',
+                    background: '#1e1e1e',
+                    text: '#ffffff'
+                },
+                typography: {
+                    fontFamily: 'Inter, sans-serif'
+                }
+            }, null, 2);
+        }
+
+        modal.style.display = 'flex';
+    }
+
+    function openApplyModal(ds) {
+        const modal = document.getElementById('design-system-apply-modal');
+        const assetIdInput = document.getElementById('apply-design-system-asset-id');
+        const nameDisplay = document.getElementById('apply-design-system-name-display');
+        const screensList = document.getElementById('apply-screens-list');
+
+        if (!modal || !screensList) return;
+
+        assetIdInput.value = ds.id;
+        nameDisplay.textContent = ds.displayName;
+        screensList.innerHTML = '';
+
+        if (!state.stitchScreens || state.stitchScreens.length === 0) {
+            screensList.innerHTML = '<div style="font-size: 11px; color: var(--text-secondary); padding: 8px;">No screens found in this project. Load screens in Stitch tab first.</div>';
+        } else {
+            state.stitchScreens.forEach(s => {
+                const label = document.createElement('label');
+                label.style.display = 'flex';
+                label.style.alignItems = 'center';
+                label.style.gap = '8px';
+                label.style.fontSize = '12px';
+                label.style.cursor = 'pointer';
+                label.style.padding = '4px 0';
+
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.className = 'apply-screen-checkbox';
+                cb.value = s.id;
+                cb.checked = true;
+
+                const textSpan = document.createElement('span');
+                textSpan.textContent = s.displayName || s.name || s.id;
+
+                label.appendChild(cb);
+                label.appendChild(textSpan);
+                screensList.appendChild(label);
+            });
+        }
+
+        modal.style.display = 'flex';
+    }
 
     function applySidebarState() {
         const designRow = document.getElementById('tree-pane-design')?.closest('.content-row');

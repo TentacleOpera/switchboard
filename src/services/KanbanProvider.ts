@@ -2424,6 +2424,17 @@ export class KanbanProvider implements vscode.Disposable {
         return { designDocLink, designDocContent };
     }
 
+    private async _resolveConstitution(workspaceRoot: string): Promise<{ constitutionLink?: string; constitutionContent?: string }> {
+        const filePath = path.join(workspaceRoot, 'CONSTITUTION.md');
+        if (fs.existsSync(filePath)) {
+            try {
+                const constitutionContent = await fs.promises.readFile(filePath, 'utf8');
+                return { constitutionLink: filePath, constitutionContent };
+            } catch { /* non-fatal */ }
+        }
+        return {};
+    }
+
     private async _resolveDesignSystemDoc(workspaceRoot: string): Promise<{ designSystemDocLink?: string; designSystemDocContent?: string }> {
         const config = vscode.workspace.getConfiguration('switchboard');
         const designSystemDocEnabled = config.get<boolean>('planner.designSystemDocEnabled', false);
