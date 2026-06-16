@@ -150,3 +150,7 @@ Complexity 5 → **Send to Coder** (focused multi-file fix, moderate logic, exac
 - All other `getPlanBySessionId` call sites (repoScope batch lookups, column move topic checks, archive, integration sync, ContinuousSyncService, SessionActionLog, tests) — deferred to the parent audit plan
 - Removal of deprecated wrapper methods
 - Database schema changes (removing `session_id` column)
+
+## Review Findings
+
+All four fixes verified applied and correct against live code. Fix 1: `KanbanDatabase.ts:1326` wrapper now uses `getPlanByPlanId` (param renamed, `@deprecated` kept) — the chosen one-line upstream fix covering all 7 callers. Fix 2 already applied (PlanningPanelProvider epic handlers). Fix 3: `KanbanProvider.ts:4193` swapped with the rejected `targetWorkspaceId` guard correctly absent and the existing `sourceWorkspaceId` validation at 4198 intact. Fix 4: all 8 `TaskViewerProvider.ts` registry sites migrated; the reconcile loop at 10261 keeps the candidate loop instead of collapsing but is behaviorally equivalent (delete-then-reinsert churn only). **Files changed:** `src/services/KanbanProvider.ts` (stale comment at 4191 corrected). **Validation:** static review only (compile/tests skipped per directive); no leftover `getPlanBySessionId` in any in-scope file. **Remaining risks:** un-backfilled legacy brain rows (empty `plan_id`) silently vanish — run the Fix 4 pre-deploy DB check; `updateEpicStatus(st.planId || st.sessionId, ...)` at `KanbanProvider.ts:6521` fails for subtasks lacking `planId` (low risk, intended).

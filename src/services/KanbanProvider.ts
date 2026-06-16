@@ -4188,7 +4188,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
                 for (const sessionId of sessionIds) {
                     // Query from SOURCE database (where the plan actually lives).
-                    // Note: getPlanBySessionId has no workspace_id filter — validate the returned
+                    // Note: getPlanByPlanId has no workspace_id filter — validate the returned
                     // record belongs to this workspace to guard against ghost records in mixed DBs.
                     const plan = await sourceDb.getPlanByPlanId(sessionId);
                     if (!plan) {
