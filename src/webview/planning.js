@@ -192,7 +192,6 @@
     let pendingClickUpDetailIssueId = '';
 
     // Local (imported) tickets state
-    let ticketsViewMode = 'local'; // 'online' | 'local' (forced local)
     let localTickets = [];
     let selectedLocalTicket = null; // { provider, id, title, fileName, filePath, mtime }
     let localTicketContent = '';
@@ -305,10 +304,16 @@
 
     function setTicketsLoadingState(isLoading) {
         const loadingState = document.getElementById('tickets-loading-state');
-        const previewContent = document.getElementById('markdown-preview-tickets');
-        if (loadingState && previewContent) {
+        if (loadingState) {
             loadingState.style.display = isLoading ? 'flex' : 'none';
+        }
+        const previewContent = document.getElementById('markdown-preview-tickets');
+        if (previewContent) {
             previewContent.style.opacity = isLoading ? '0.4' : '1';
+        }
+        const localPreview = document.getElementById('tickets-local-preview');
+        if (localPreview) {
+            localPreview.style.opacity = isLoading ? '0.4' : '1';
         }
         for (const barId of ['tickets-preview-meta-bar', 'tickets-local-meta-bar']) {
             const metaBar = document.getElementById(barId);
@@ -3021,7 +3026,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 } else {
                     showTicketsStatus('Imported ✓', false);
                     pendingLocalTicketSelection = msg.filePath || '';
-                    setTicketsViewMode('local');
+                    ensureLocalViewVisible();
                 }
                 break;
             case 'pushTicketResult':
@@ -5231,8 +5236,21 @@ Return ONLY the drafted prompt with no additional commentary.`;
             vscode.postMessage({ type: 'changeTicketStatus', provider, id, statusId, workspaceRoot: ticketsWorkspaceRoot });
         });
 
-        // Action bar: Comment button toggle
+        // Action bar: Comment button toggle (online preview — hidden in local-only mode)
         document.getElementById('btn-comment-ticket')?.addEventListener('click', () => {
+            const commentArea = document.getElementById('tickets-comment-input-area');
+            if (commentArea) {
+                commentArea.style.display = commentArea.style.display === 'none' ? 'block' : 'none';
+                const textarea = document.getElementById('tickets-comment-textarea');
+                if (textarea) {
+                    textarea.value = '';
+                    textarea.focus();
+                }
+            }
+        });
+
+        // Local meta bar: Comment button toggle
+        document.getElementById('btn-comment-local-ticket')?.addEventListener('click', () => {
             const commentArea = document.getElementById('tickets-comment-input-area');
             if (commentArea) {
                 commentArea.style.display = commentArea.style.display === 'none' ? 'block' : 'none';
@@ -5252,10 +5270,14 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         // Comment post submit
         document.getElementById('btn-post-comment-submit')?.addEventListener('click', () => {
-            const provider = lastIntegrationProvider;
-            const id = provider === 'linear'
+            let provider = lastIntegrationProvider;
+            let id = provider === 'linear'
                 ? selectedLinearIssue?.issue.id
                 : selectedClickUpIssue?.task.id;
+            if (!id && selectedLocalTicket) {
+                provider = selectedLocalTicket.provider;
+                id = selectedLocalTicket.id;
+            }
             const textarea = document.getElementById('tickets-comment-textarea');
             const comment = textarea?.value?.trim();
             if (!id || !comment) return;
@@ -5268,6 +5290,16 @@ Return ONLY the drafted prompt with no additional commentary.`;
             linearProjectPickerValue = e.target.value;
             renderTicketsLinearList();
             saveTicketsState();
+            vscode.postMessage({
+                type: 'linearSaveProjectSelection',
+                projectName: linearProjectPickerValue,
+                workspaceRoot: ticketsWorkspaceRoot || undefined
+            });
+            localTickets = [];
+            selectedLocalTicket = null;
+            requestLocalTickets();
+            renderLocalTicketsList();
+            renderLocalTicketDetail();
         });
 
         // State filter (Linear)
@@ -5286,9 +5318,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         // Refresh button
         refreshButton?.addEventListener('click', () => {
-            if (ticketsViewMode === 'local') {
-                requestLocalTickets();
-            } else if (lastIntegrationProvider === 'linear') {
+            requestLocalTickets();
+            if (lastIntegrationProvider === 'linear') {
                 loadLinearProject(true);
             } else if (lastIntegrationProvider === 'clickup') {
                 if (clickUpSelectedListId) {
@@ -5380,7 +5411,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
         document.getElementById('tickets-issues-container')?.addEventListener('click', (e) => {
             const refineBtn = e.target.closest('[data-refine-issue-id], [data-refine-task-id]');
             const importPlanBtn = e.target.closest('[data-import-plan-id]');
-            const importDocBtn = e.target.closest('[data-import-doc-id]');
             if (refineBtn) {
                 const id = refineBtn.dataset.refineIssueId || refineBtn.dataset.refineTaskId;
                 const title = refineBtn.dataset.issueTitle || '';
@@ -5391,11 +5421,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
             if (importPlanBtn) {
                 const id = importPlanBtn.dataset.importPlanId;
                 handleTicketsImport(lastIntegrationProvider, id, true, 'plan');
-                return;
-            }
-            if (importDocBtn) {
-                const id = importDocBtn.dataset.importDocId;
-                handleTicketsImport(lastIntegrationProvider, id, true, 'document');
                 return;
             }
             const card = e.target.closest('[data-linear-issue-id], [data-clickup-task-id]');
@@ -5517,18 +5542,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
         renderTicketsLinearStateFilterOptions();
         renderTicketsLinearProjectPickerOptions();
 
-        const loadingState = document.getElementById('tickets-loading-state');
-        const markdownPreview = document.getElementById('markdown-preview-tickets');
-        if (linearProjectStatus === 'loading') {
-            if (loadingState) loadingState.style.display = 'flex';
-            if (markdownPreview) markdownPreview.style.display = 'none';
-        } else {
-            if (loadingState) loadingState.style.display = 'none';
-            if (markdownPreview) markdownPreview.style.display = '';
-            const hasSelected = !!selectedLinearIssue;
-            if (emptyPreview) emptyPreview.style.display = hasSelected ? 'none' : '';
-        }
-
         renderTicketsLinearList();
         renderTicketsLinearTaskDetail();
     }
@@ -5623,33 +5636,17 @@ Return ONLY the drafted prompt with no additional commentary.`;
         vscode.postMessage(payload);
     }
 
-    function setTicketsViewMode(mode) {
-        ticketsViewMode = 'local';
-        const isLocal = true;
-
-        document.getElementById('tickets-mode-online')?.classList.toggle('active', false);
-        document.getElementById('tickets-mode-local')?.classList.toggle('active', true);
-        document.getElementById('controls-strip-tickets')?.classList.toggle('tickets-local-mode', true);
-
-        const sidebarActions = document.getElementById('tickets-sidebar-actions');
-        if (sidebarActions) {
-            sidebarActions.style.display = 'flex';
-        }
-
-        // Sidebar lists
+    function ensureLocalViewVisible() {
         const onlineEls = ['tickets-empty-state', 'tickets-issues-container'];
         for (const id of onlineEls) {
             const el = document.getElementById(id);
             if (el) el.style.display = 'none';
         }
-        const loadMoreBtn = document.getElementById('tickets-load-more');
-        if (loadMoreBtn) loadMoreBtn.style.display = 'block';
         const localContainer = document.getElementById('tickets-local-container');
         if (localContainer) localContainer.style.display = '';
         const localEmpty = document.getElementById('tickets-local-empty-state');
         if (localEmpty) localEmpty.style.display = 'none';
 
-        // Preview panes + meta bars
         const onlinePreview = document.getElementById('markdown-preview-tickets');
         if (onlinePreview) onlinePreview.style.display = 'none';
         const localView = document.getElementById('tickets-local-view');
@@ -5662,8 +5659,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
         renderLocalTicketsList();
         renderLocalTicketDetail();
         requestLocalTickets();
-        
-        if (ticketsInitialized) { saveTicketsState(); }
     }
 
     function getFilteredLocalTickets() {
@@ -5676,14 +5671,14 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function renderLocalTicketsList() {
         const container = document.getElementById('tickets-local-container');
         const emptyState = document.getElementById('tickets-local-empty-state');
-        if (!container || ticketsViewMode !== 'local') return;
+        if (!container) return;
 
         const filtered = getFilteredLocalTickets();
         if (filtered.length === 0) {
             container.innerHTML = '';
             if (emptyState) {
                 emptyState.textContent = localTickets.length === 0
-                    ? 'No imported tickets yet. Switch to Online and click Edit on a ticket to import it here.'
+                    ? 'No imported tickets yet. Select a list and click Sync to pull tickets.'
                     : 'No imported tickets matched the search.';
                 emptyState.style.display = '';
             }
@@ -5693,11 +5688,14 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         container.innerHTML = filtered.map((t) => {
             const isSelected = selectedLocalTicket && selectedLocalTicket.filePath === t.filePath;
+            const hasUnpushed = ticketsWithUnpushedEdits.has(t.id);
             return `
-            <div class="ticket-node${isSelected ? ' selected' : ''}" data-local-ticket-path="${escapeAttr(t.filePath)}">
+            <div class="ticket-node${isSelected ? ' selected' : ''}${hasUnpushed ? ' unpushed' : ''}" data-local-ticket-path="${escapeAttr(t.filePath)}">
                 <div class="tickets-issue-title">${escapeHtml(t.title || t.fileName)}</div>
-                <div class="tickets-issue-meta">${escapeHtml(t.provider === 'linear' ? 'Linear' : 'ClickUp')} · ${escapeHtml(t.id)}</div>
-                <div class="tickets-issue-meta">${escapeHtml(t.fileName)}</div>
+                ${t.status ? `<div class="tickets-issue-meta">${escapeHtml(t.status)}</div>` : ''}
+                ${t.assignee ? `<div class="tickets-issue-meta">${escapeHtml(t.assignee)}</div>` : ''}
+                ${t.descriptionPreview ? `<div class="tickets-issue-meta">${escapeHtml(t.descriptionPreview)}</div>` : ''}
+                ${hasUnpushed ? '<div class="tickets-issue-meta" style="color:var(--accent-orange)">Unpushed edits</div>' : ''}
             </div>
             `;
         }).join('');
@@ -5719,12 +5717,11 @@ Return ONLY the drafted prompt with no additional commentary.`;
         const emptyPreview = document.getElementById('tickets-local-empty-preview');
         const preview = document.getElementById('tickets-local-preview');
         const editor = document.getElementById('tickets-local-editor');
-        const fileLabel = document.getElementById('tickets-local-file-label');
         if (!preview || !editor) return;
 
-        if (ticketsViewMode !== 'local' || !selectedLocalTicket) {
+        if (!selectedLocalTicket) {
             if (metaBar) metaBar.style.display = 'none';
-            if (emptyPreview) emptyPreview.style.display = ticketsViewMode === 'local' ? '' : 'none';
+            if (emptyPreview) emptyPreview.style.display = '';
             preview.innerHTML = '';
             editor.style.display = 'none';
             return;
@@ -5732,10 +5729,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         if (metaBar) metaBar.style.display = 'flex';
         if (emptyPreview) emptyPreview.style.display = 'none';
-        if (fileLabel) {
-            fileLabel.textContent = selectedLocalTicket.fileName;
-            fileLabel.title = selectedLocalTicket.filePath;
-        }
 
         const editBtn = document.getElementById('btn-edit-local-ticket');
         const saveBtn = document.getElementById('btn-save-local-ticket');
@@ -5750,8 +5743,18 @@ Return ONLY the drafted prompt with no additional commentary.`;
         } else {
             editor.style.display = 'none';
             preview.style.display = '';
-            // Hide YAML frontmatter in the rendered preview (still editable in Edit mode)
-            const body = localTicketContent.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '');
+            // Hide YAML frontmatter and import metadata blockquotes in the rendered preview
+            const lines = localTicketContent.split(/\r?\n/);
+            let i = 0;
+            if (lines[0] === '---') {
+                i++;
+                while (i < lines.length && lines[i] !== '---') i++;
+                i++;
+            }
+            while (i < lines.length && lines[i].trim() === '') i++;
+            while (i < lines.length && lines[i].trim().startsWith('>')) i++;
+            while (i < lines.length && lines[i].trim() === '') i++;
+            const body = lines.slice(i).join('\n');
             preview.innerHTML = renderMarkdown(body);
         }
     }
@@ -5778,10 +5781,9 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
     function renderTicketsLinearList() {
         if (!isTicketsTabActive()) return;
-        if (ticketsViewMode === 'local') return;
-
-        const { emptyState, issuesContainer, searchInput } = getTicketsTabElements();
+        const { emptyState, issuesContainer, searchInput, loadMoreButton } = getTicketsTabElements();
         if (!emptyState || !issuesContainer) return;
+        if (loadMoreButton) loadMoreButton.style.display = 'none';
 
         if (searchInput && searchInput.value !== linearProjectSearchValue) {
             searchInput.value = linearProjectSearchValue;
@@ -5834,7 +5836,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 <div class="card-actions">
                     <button type="button" class="card-icon-btn" data-refine-issue-id="${escapeAttr(issue.id)}" data-issue-title="${escapeAttr(issue.title || '')}" data-issue-description="${escapeAttr(issue.description || '')}">REFINE</button>
                     <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(issue.id)}" data-provider="linear">Import Plan</button>
-                    <button type="button" class="card-icon-btn" data-import-doc-id="${escapeAttr(issue.id)}" data-provider="linear">Import Doc</button>
                 </div>
             </div>
             `;
@@ -5848,7 +5849,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
     function renderTicketsLinearTaskDetail() {
         if (!isTicketsTabActive()) return;
-        if (ticketsViewMode === 'local') return;
 
         const { subtasksNav, detailContent, previewMetaBar, deleteConfirmBanner, commentInputArea } = getTicketsTabElements();
         if (!detailContent) return;
@@ -5993,18 +5993,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
         }
 
         renderTicketsClickUpTaskDetail();
-
-        const loadingState = document.getElementById('tickets-loading-state');
-        const markdownPreview = document.getElementById('markdown-preview-tickets');
-        if (clickUpProjectStatus === 'loading') {
-            if (loadingState) loadingState.style.display = 'flex';
-            if (markdownPreview) markdownPreview.style.display = 'none';
-        } else {
-            if (loadingState) loadingState.style.display = 'none';
-            if (markdownPreview) markdownPreview.style.display = '';
-            const hasSelected = !!selectedClickUpIssue;
-            if (emptyPreview) emptyPreview.style.display = hasSelected ? 'none' : '';
-        }
     }
 
     function renderTicketsClickUpHierarchyNav() {
@@ -6071,6 +6059,10 @@ Return ONLY the drafted prompt with no additional commentary.`;
             clickUpAvailableListsInFolder = [];
             clickUpAvailableDirectLists = [];
             clickUpProjectIssues = [];
+            localTickets = [];
+            selectedLocalTicket = null;
+            renderLocalTicketsList();
+            renderLocalTicketDetail();
             if (spaceId) {
                 clickUpHierarchyLoading = true;
                 renderTicketsClickUpPanel();
@@ -6107,6 +6099,10 @@ Return ONLY the drafted prompt with no additional commentary.`;
             clickUpSelectedListId = '';
             clickUpAvailableListsInFolder = [];
             clickUpProjectIssues = [];
+            localTickets = [];
+            selectedLocalTicket = null;
+            renderLocalTicketsList();
+            renderLocalTicketDetail();
             if (folderId) {
                 clickUpSelectedFolderId = folderId === '_root_' ? '' : folderId;
                 clickUpHierarchyLoading = true;
@@ -6156,6 +6152,11 @@ Return ONLY the drafted prompt with no additional commentary.`;
             clickUpProjectLoading = false;
             clickUpProjectIssues = [];
             saveTicketsState();
+            localTickets = [];
+            selectedLocalTicket = null;
+            requestLocalTickets();
+            renderLocalTicketsList();
+            renderLocalTicketDetail();
             if (listId) {
                 const spaceName = clickUpAvailableSpaces.find(s => s.id === clickUpSelectedSpaceId)?.name || '';
                 const folderName = clickUpAvailableFolders.find(f => f.id === clickUpSelectedFolderId)?.name || '';
@@ -6223,8 +6224,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
     function renderTicketsClickUpList() {
         if (!isTicketsTabActive()) return;
-        if (ticketsViewMode === 'local') return;
-
         const { issuesContainer, emptyState, loadMoreButton, searchInput } = getTicketsTabElements();
         if (!issuesContainer) return;
 
@@ -6257,7 +6256,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
                     <div class="card-actions">
                         <button type="button" class="card-icon-btn" data-refine-task-id="${escapeAttr(task.id)}" data-issue-title="${escapeAttr(task.title || '')}" data-issue-description="${escapeAttr(task.markdownDescription || task.description || '')}">REFINE</button>
                         <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(task.id)}" data-provider="clickup">Import Plan</button>
-                        <button type="button" class="card-icon-btn" data-import-doc-id="${escapeAttr(task.id)}" data-provider="clickup">Import Doc</button>
                     </div>
                 </div>
                 `;
@@ -6275,7 +6273,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
     function renderTicketsClickUpTaskDetail() {
         if (!isTicketsTabActive()) return;
-        if (ticketsViewMode === 'local') return;
 
         const { subtasksNav, detailContent, previewMetaBar, deleteConfirmBanner, commentInputArea } = getTicketsTabElements();
         if (!detailContent) return;
@@ -6522,7 +6519,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
         _restoringClickUpHierarchy = false;
         pendingClickUpDetailIssueId = '';
 
-        ticketsViewMode = 'online';
         localTickets = [];
         selectedLocalTicket = null;
         localTicketContent = '';
@@ -6561,7 +6557,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
         if (!ticketsWorkspaceRoot) return;
         const state = {
             lastIntegrationProvider,
-            ticketsViewMode,
             linearProjectSearchValue,
             linearProjectStateFilterValue,
             linearProjectPickerValue,
@@ -6578,7 +6573,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function restoreTicketsStateForRoot(state) {
         if (!state) return;
         lastIntegrationProvider = state.lastIntegrationProvider || null;
-        ticketsViewMode = state.ticketsViewMode || 'online';
         linearProjectSearchValue = state.linearProjectSearchValue || '';
         linearProjectStateFilterValue = state.linearProjectStateFilterValue || '';
         linearProjectPickerValue = state.linearProjectPickerValue || '';
@@ -6598,7 +6592,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         if (state.linearProjectPickerValue) {
             _restoredLinearProjectPickerValue = state.linearProjectPickerValue;
         }
-        setTicketsViewMode(ticketsViewMode);
+        ensureLocalViewVisible();
     }
 
     function restoreTicketsState() {

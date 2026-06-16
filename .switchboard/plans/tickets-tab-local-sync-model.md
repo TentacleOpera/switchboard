@@ -575,5 +575,9 @@ case 'importAllTickets': {
 - `switchboard.importAllTasks` with `ids` array still functions for other callers (e.g., kanban bulk import)
 - `btn-edit-ticket` online meta bar actions are either removed or correctly hidden when online mode is eliminated
 
+## Review Findings
+
+Reviewer-executor pass completed. **Files changed**: `src/webview/planning.js`, `src/webview/planning.html`, `src/extension.ts`. **Fixes applied**: Removed orphaned `ticketsViewMode` variable and `setTicketsViewMode` function (replaced with `ensureLocalViewVisible`); stripped "Import Doc" buttons from ticket cards; fixed `tickets-local-empty-state` text to remove online-mode references; removed orphaned `.tickets-mode-switch`/`.tickets-mode-btn` CSS block; cleaned `saveTicketsState`/`restoreTicketsStateForRoot` to stop persisting view mode; fixed `resetTicketsInMemoryState` to not reset to `'online'`; updated `extension.ts` command registration type to include new optional fields. **Validation**: No remaining references to `ticketsViewMode`, mode-switch DOM IDs, or `data-import-doc-id` in `planning.js`. **Remaining risks**: `append` parameter in backend `importAllTasks` is accepted but unused (no folder cleanup exists to skip); `pushAllUnpushedTickets` fallback uses `lastIntegrationProvider` for all tickets if `localTickets` cache is stale, which breaks multi-provider pushes.
+
 ## Recommendation
 Send to Lead Coder

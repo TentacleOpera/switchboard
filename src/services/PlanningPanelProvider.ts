@@ -2659,13 +2659,25 @@ export class PlanningPanelProvider {
                             const filePath = path.join(dir, fileName);
                             let mtime = 0;
                             let title = match[3].replace(/-/g, ' ');
+                            let status = '';
+                            let assignee = '';
+                            let descriptionPreview = '';
                             try {
                                 mtime = fs.statSync(filePath).mtimeMs;
-                                const head = fs.readFileSync(filePath, 'utf8').split(/\r?\n/, 30);
-                                const heading = head.find((l: string) => l.startsWith('# '));
+                                const content = fs.readFileSync(filePath, 'utf8');
+                                const lines = content.split(/\r?\n/);
+                                const heading = lines.find((l: string) => l.startsWith('# '));
                                 if (heading) { title = heading.substring(2).trim(); }
-                            } catch { /* keep slug-derived title */ }
-                            tickets.push({ provider: match[1], id: match[2], title, fileName, filePath, mtime });
+                                const stateLine = lines.find((l: string) => l.match(/^> \*\*State:\*\*/));
+                                if (stateLine) { status = stateLine.replace(/^> \*\*State:\*\*\s*/, '').trim(); }
+                                const assigneeLine = lines.find((l: string) => l.match(/^> \*\*Assignee:\*\*/));
+                                if (assigneeLine) { assignee = assigneeLine.replace(/^> \*\*Assignee:\*\*\s*/, '').trim(); }
+                                const assigneesLine = lines.find((l: string) => l.match(/^> \*\*Assignees:\*\*/));
+                                if (assigneesLine) { assignee = assigneesLine.replace(/^> \*\*Assignees:\*\*\s*/, '').trim(); }
+                                const descLine = lines.find((l: string) => l.match(/^[A-Za-z].{10,}/) && !l.startsWith('#') && !l.startsWith('>') && !l.startsWith('---') && !l.startsWith('- [ ]'));
+                                if (descLine) { descriptionPreview = descLine.trim().slice(0, 180); }
+                            } catch { /* keep defaults */ }
+                            tickets.push({ provider: match[1], id: match[2], title, status, assignee, descriptionPreview, fileName, filePath, mtime });
                         }
                     }
                 }

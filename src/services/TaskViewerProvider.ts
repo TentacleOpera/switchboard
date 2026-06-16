@@ -17545,6 +17545,42 @@ What would you like to find?`;
         return content.trim();
     }
 
+    private async _writeTaskDocument(
+        resolvedRoot: string,
+        provider: 'linear' | 'clickup',
+        task: any,
+        targetDir: string
+    ): Promise<{ success: boolean; filePath?: string; error?: string }> {
+        try {
+            let content = '';
+            let title = '';
+            let id = '';
+
+            if (provider === 'linear') {
+                const issue = task as LinearIssue;
+                id = issue.id;
+                title = issue.title || issue.id;
+                const node: any = { issue, subtasks: [] };
+                content = this._buildLinearImportPlanContent(node, undefined, new Date().toISOString());
+            } else {
+                const clickUpTask = task as ClickUpTask;
+                id = clickUpTask.id;
+                title = clickUpTask.name || clickUpTask.id;
+                content = this._buildClickUpImportPlanContent(clickUpTask, new Date().toISOString());
+            }
+
+            fs.mkdirSync(targetDir, { recursive: true });
+            const slug = this._slugify(title);
+            const filename = `${provider}_${id}_${slug}.md`;
+            const filePath = path.join(targetDir, filename);
+            fs.writeFileSync(filePath, content, 'utf8');
+
+            return { success: true, filePath };
+        } catch (error) {
+            return { success: false, error: error instanceof Error ? error.message : String(error) };
+        }
+    }
+
     public async importAllTasks(
         workspaceRoot: string,
         data: {
@@ -17563,8 +17599,75 @@ What would you like to find?`;
             return { success: false, successCount: 0, failCount: 0, errors: [{ id: 'all', error: 'No workspace open.' }] };
         }
         const { provider, ids, listId, projectId, page = 1, append = false, importMode } = data;
+
+        let successCount = 0;
+        let failCount = 0;
+        const errors: { id: string; error: string }[] = [];
+
+        // Fast path: bulk document import from already-fetched list data (no N+1 API calls)
+        if (importMode === 'document' && !ids) {
+            let items: any[] = [];
+            let targetDir: string | undefined;
+
+            if (provider === 'clickup' && listId) {
+                const clickup = this._getClickUpService(resolvedRoot);
+                const tasks = await clickup.getListTasks(listId);
+                const pageSize = 100;
+                const startIndex = (page - 1) * pageSize;
+                items = tasks.slice(startIndex, startIndex + pageSize);
+
+                const localFolderService = new LocalFolderService(resolvedRoot);
+                const ticketsFolders = localFolderService.getTicketsFolderPaths();
+                if (ticketsFolders.length > 0 && ticketsFolders[0]) {
+                    const h = clickup.getSelectedHierarchy();
+                    const parts = [ticketsFolders[0], 'clickup', this._slugify(h.spaceName).slice(0, 60)];
+                    if (h.folderName) {
+                        parts.push(this._slugify(h.folderName).slice(0, 60));
+                    }
+                    parts.push(this._slugify(h.listName).slice(0, 60));
+                    targetDir = path.join(...parts);
+                }
+            } else if (provider === 'linear' && projectId) {
+                const linear = this._getLinearService(resolvedRoot);
+                const issues = await linear.queryIssues({ projectId });
+                const pageSize = 50;
+                const startIndex = (page - 1) * pageSize;
+                items = issues.slice(startIndex, startIndex + pageSize);
+
+                const localFolderService = new LocalFolderService(resolvedRoot);
+                const ticketsFolders = localFolderService.getTicketsFolderPaths();
+                if (ticketsFolders.length > 0 && ticketsFolders[0]) {
+                    const teamName = linear.getTeamName();
+                    const projectName = items[0]?.project?.name || '_no-project';
+                    targetDir = path.join(
+                        ticketsFolders[0],
+                        'linear',
+                        this._slugify(teamName).slice(0, 60),
+                        this._slugify(projectName).slice(0, 60)
+                    );
+                }
+            }
+
+            if (!targetDir) {
+                const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
+                targetDir = path.join(resolvedRoot, '.switchboard', 'tickets', providerDir);
+            }
+
+            for (const item of items) {
+                const res = await this._writeTaskDocument(resolvedRoot, provider, item, targetDir);
+                if (res.success) {
+                    successCount++;
+                } else {
+                    failCount++;
+                    errors.push({ id: item.id || 'unknown', error: res.error || 'Failed to write document' });
+                }
+            }
+
+            return { success: true, successCount, failCount, errors };
+        }
+
+        // Slow path: explicit IDs or plan mode (per-item API calls)
         let finalIds: string[] = [];
-        
         if (ids && ids.length > 0) {
             finalIds = ids;
         } else {
@@ -17573,28 +17676,22 @@ What would you like to find?`;
                 const tasks = await clickup.getListTasks(listId);
                 const pageSize = 100;
                 const startIndex = (page - 1) * pageSize;
-                const pageTasks = tasks.slice(startIndex, startIndex + pageSize);
-                finalIds = pageTasks.map(t => t.id);
+                finalIds = tasks.slice(startIndex, startIndex + pageSize).map(t => t.id);
             } else if (provider === 'linear' && projectId) {
                 const linear = this._getLinearService(resolvedRoot);
                 const issues = await linear.queryIssues({ projectId });
                 const pageSize = 50;
                 const startIndex = (page - 1) * pageSize;
-                const pageIssues = issues.slice(startIndex, startIndex + pageSize);
-                finalIds = pageIssues.map(i => i.id);
+                finalIds = issues.slice(startIndex, startIndex + pageSize).map(i => i.id);
             }
         }
-
-        let successCount = 0;
-        let failCount = 0;
-        const errors: { id: string; error: string }[] = [];
 
         const pool: Promise<void>[] = [];
         for (const id of finalIds) {
             if (pool.length >= 3) {
                 await Promise.race(pool);
             }
-            
+
             const promise = (async () => {
                 try {
                     if (importMode === 'document') {
@@ -17639,7 +17736,7 @@ What would you like to find?`;
                 }
             });
         }
-        
+
         await Promise.all(pool);
 
         if (importMode === 'plan') {

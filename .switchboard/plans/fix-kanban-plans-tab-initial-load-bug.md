@@ -134,3 +134,7 @@ Skipped per session directive. The user will run the test suite separately.
   - line ~4369: add `kanbanWorkspaceFilter.value = currentWS;`
   - line ~4411: add `kanbanProjectFilter.value = currentProj;`
   - line ~4426: add `kanbanColumnFilter.value = currentColumn;`
+
+## Review Findings
+
+All three `.value` synchronizations are correctly implemented in `src/webview/planning.js` at lines 4444, 4486, and 4502. No code changes were required. Syntax validation passed (`node --check` / `new Function()` both OK). Remaining risks are low: column filter state is not persisted across reloads (pre-existing), and workspace invalidation in `handleKanbanPlansReady` does not reset the project filter (pre-existing). Neither issue was introduced by this fix.

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'nonce-{{NONCE}}' 'unsafe-inline' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'unsafe-inline'; img-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: data:; font-src {{WEBVIEW_CSP_SOURCE}} https:; connect-src https:; frame-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: http: about:srcdoc blob: data:;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'nonce-{{NONCE}}' 'unsafe-inline' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'unsafe-inline'; img-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: data: file:; font-src {{WEBVIEW_CSP_SOURCE}} https:; connect-src https:; frame-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: http: about:srcdoc blob: data:;">
     <title>Switchboard Design Panel</title>
     <style>
 
@@ -3714,6 +3714,8 @@
                         <option value="">Select Project...</option>
                     </select>
                     <button id="btn-new-stitch-project" class="strip-btn" title="Create a new Stitch project">+ New Project</button>
+                    <button id="btn-refresh-stitch-projects" class="strip-btn" title="Re-fetch the project list from the Stitch API (e.g. after creating a project outside Switchboard)">Refresh Projects</button>
+                    <button id="btn-rebuild-stitch-cache" class="strip-btn" disabled title="Delete and re-download all cached preview images for the selected project">Rebuild Cache</button>
                     <button id="btn-download-palette" class="strip-btn" disabled title="Download just the color palette / design tokens from the selected project">Download Design Tokens</button>
                     <button id="btn-open-design-md" class="strip-btn" disabled title="Open the DESIGN.md handoff file (generated on-demand if it does not exist)">Open DESIGN.md</button>
                 </div>

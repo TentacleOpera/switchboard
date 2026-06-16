@@ -1420,6 +1420,8 @@
     const btnSaveStitchApiKey = document.getElementById('btn-save-stitch-api-key');
     const statusStitch = document.getElementById('status-stitch');
     const btnNewStitchProject = document.getElementById('btn-new-stitch-project');
+    const btnRefreshStitchProjects = document.getElementById('btn-refresh-stitch-projects');
+    const btnRebuildStitchCache = document.getElementById('btn-rebuild-stitch-cache');
     const btnOpenDesignMd = document.getElementById('btn-open-design-md');
 
     function saveState() {
@@ -1500,6 +1502,8 @@
                 : 'Select a project first';
         }
         if (btnNewStitchProject) btnNewStitchProject.disabled = busy;
+        if (btnRefreshStitchProjects) btnRefreshStitchProjects.disabled = busy;
+        if (btnRebuildStitchCache) btnRebuildStitchCache.disabled = busy || !hasProject;
         if (stitchGallery) {
             stitchGallery.querySelectorAll('button').forEach(b => { b.disabled = busy; });
         }
@@ -2064,6 +2068,29 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
             // Title is collected via a native VS Code input box on the host side.
             vscode.postMessage({ 
                 type: 'stitchCreateProject',
+                workspaceRoot: state.stitchWorkspaceRoot
+            });
+        });
+    }
+
+    if (btnRefreshStitchProjects) {
+        btnRefreshStitchProjects.addEventListener('click', () => {
+            if (state.stitchBusy) return;
+            vscode.postMessage({
+                type: 'stitchListProjects',
+                forceRefresh: true,
+                workspaceRoot: state.stitchWorkspaceRoot
+            });
+        });
+    }
+
+    if (btnRebuildStitchCache) {
+        btnRebuildStitchCache.addEventListener('click', () => {
+            const projectId = stitchProjectSelect ? stitchProjectSelect.value : '';
+            if (!projectId || state.stitchBusy) return;
+            vscode.postMessage({
+                type: 'stitchRebuildImageCache',
+                projectId,
                 workspaceRoot: state.stitchWorkspaceRoot
             });
         });
@@ -2954,6 +2981,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
             }
 
             case 'stitchScreenReady': {
+                // Update state without touching existing screens
                 const updatedScreens = [...state.stitchScreens];
                 const existingIdx = updatedScreens.findIndex(s => s.id === msg.screen.id);
                 if (existingIdx >= 0) {
@@ -2961,7 +2989,60 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 } else {
                     updatedScreens.unshift(msg.screen);
                 }
-                renderStitchScreens(updatedScreens);
+                state.stitchScreens = updatedScreens;
+
+                // Surgically update only the affected card — a full renderStitchScreens
+                // would rebuild every img element from state, re-using CDN URLs that may
+                // have expired since the gallery first loaded, causing working images to fail.
+                const existingCard = stitchGallery
+                    ? stitchGallery.querySelector(`.stitch-screen-card[data-screen-id="${CSS.escape(msg.screen.id)}"]`)
+                    : null;
+
+                if (existingCard) {
+                    const screen = msg.screen;
+                    const makeThumbPlaceholder = () => {
+                        const ph = document.createElement('div');
+                        ph.className = 'stitch-thumb-placeholder';
+                        const label = document.createElement('span');
+                        label.textContent = 'Preview not ready yet';
+                        ph.appendChild(label);
+                        const btnReload = document.createElement('button');
+                        btnReload.className = 'strip-btn';
+                        btnReload.textContent = '↻ Reload Screen';
+                        btnReload.addEventListener('click', () => {
+                            if (state.stitchBusy) return;
+                            clearStitchScreenPoll(screen.projectId || (stitchProjectSelect ? stitchProjectSelect.value : ''), screen.id, state.stitchWorkspaceRoot);
+                            scheduleStitchScreenPoll(screen, { immediate: true, manual: true });
+                        });
+                        ph.appendChild(btnReload);
+                        return ph;
+                    };
+                    const oldThumb = existingCard.querySelector('.stitch-screen-thumbnail, .stitch-thumb-placeholder');
+                    if (screen.imageUrl) {
+                        const img = document.createElement('img');
+                        img.className = 'stitch-screen-thumbnail';
+                        img.src = screen.imageUrl;
+                        img.alt = screen.name || screen.id;
+                        img.title = 'Click to view preview';
+                        img.addEventListener('click', () => openStitchPreview(screen));
+                        img.addEventListener('error', () => {
+                            img.replaceWith(makeThumbPlaceholder());
+                            scheduleStitchScreenPoll(screen, { reason: 'image-error', immediate: true });
+                        }, { once: true });
+                        if (oldThumb) oldThumb.replaceWith(img); else existingCard.prepend(img);
+                    } else {
+                        const ph = makeThumbPlaceholder();
+                        if (oldThumb) oldThumb.replaceWith(ph); else existingCard.prepend(ph);
+                    }
+                    // Update preview pane if this screen is active
+                    if (state.activePreviewScreenId === screen.id) {
+                        const isPreviewPaneVisible = stitchPreviewPane && (stitchPreviewPane.style.display === 'flex' || stitchPreviewPane.style.display === 'block');
+                        if (isPreviewPaneVisible) openStitchPreview(screen);
+                    }
+                } else {
+                    // New screen not yet in the gallery — full render needed
+                    renderStitchScreens(updatedScreens);
+                }
 
                 const hasImage = !!msg.screen.imageUrl;
                 const isFailed = msg.screen.status === 'FAILED';

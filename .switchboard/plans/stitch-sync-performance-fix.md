@@ -259,3 +259,17 @@ No automated tests required per session directive. The test suite will be run se
 ---
 
 **Recommendation:** Send to Coder
+
+## Review Findings
+
+Two material issues found and fixed:
+
+1. **CSP missing `file:` scheme** — The webview's `img-src` directive did not include `file:`, which would block cached `file://` URIs from loading in `<img>` tags. Added `file:` to the CSP in `src/webview/design.html`.
+
+2. **`stitchDownloadAsset` broken for cached images** — The download handler used `fetch()` on `screen.imageUrl`, but cached images return `file://` URIs which `fetch()` cannot load. Updated `stitchDownloadAsset` in `src/services/DesignPanelProvider.ts` to read `file://` URLs directly from disk via `vscode.workspace.fs.readFile()` instead of `fetch()`.
+
+**Files changed:** `src/services/DesignPanelProvider.ts` (download handler fix), `src/webview/design.html` (CSP fix).
+
+**Validation:** Skipped per session directive (no compilation or test execution). Code changes are minimal and localized.
+
+**Remaining risks:** Raw `file://` URIs in VS Code webviews depend on Electron allowing cross-origin file loads from a `vscode-webview://` origin; manual verification of image display after panel recreation is still required. Old `.stitch/screens/` caches remain orphaned.

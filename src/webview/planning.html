@@ -2735,26 +2735,10 @@
         .complexity-dot.high { background: #da3633; }
         .complexity-dot.very-high { background: #ff00ff; }
 
-        /* Tickets local/online mode switch */
-        .tickets-mode-switch { display: flex; gap: 4px; flex: 1; min-width: 0; }
-        .tickets-mode-btn {
-            flex: 1; background: transparent; border: 1px solid var(--border-color, #333);
-            color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px;
-            letter-spacing: 1px; text-transform: uppercase; padding: 4px 6px;
-            cursor: pointer; border-radius: 3px;
-        }
-        .tickets-mode-btn.active {
-            border-color: var(--accent-teal); color: var(--accent-teal);
-            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
-        }
-        /* Online-only controls hidden while the Local view is active */
-        #controls-strip-tickets.tickets-local-mode #tickets-project-picker,
-        #controls-strip-tickets.tickets-local-mode #tickets-state-filter,
-        #controls-strip-tickets.tickets-local-mode #tickets-status-filter,
-        #controls-strip-tickets.tickets-local-mode #tickets-create,
-        #controls-strip-tickets.tickets-local-mode #btn-import-all-tickets,
-        #controls-strip-tickets.tickets-local-mode #btn-import-all-plans,
-        #controls-strip-tickets.tickets-local-mode #tickets-hierarchy-nav {
+        /* Local-only mode: hide online preview and comment area */
+        #preview-pane-tickets #markdown-preview-tickets,
+        #preview-pane-tickets #tickets-preview-meta-bar,
+        #preview-pane-tickets #tickets-comment-input-area {
             display: none !important;
         }
 
@@ -3190,6 +3174,8 @@
                     <select id="tickets-status-filter" style="display:none"></select>
                     <button id="tickets-create" class="strip-btn" disabled title="Configure an integration in Setup first">+ New Ticket</button>
                     <button id="tickets-refresh" class="strip-btn">Refresh</button>
+                    <button id="btn-import-all-tickets" class="strip-btn" title="Pull latest tickets from remote (ClickUp/Linear)">Sync</button>
+                    <button id="btn-import-all-plans" class="strip-btn" title="Import tickets as Switchboard plans">Import as Plans</button>
                 </div>
                 <div class="controls-strip-row">
                     <div id="tickets-hierarchy-nav" style="display:none; flex-wrap: wrap; gap: 8px; align-items: center;"></div>
@@ -3198,15 +3184,14 @@
             </div>
             <div class="content-row">
                 <div id="tree-pane-tickets">
-                    <div id="tickets-sidebar-actions" style="display:none; padding: 8px; border-bottom: 1px solid var(--border-color); flex-direction: column; gap: 6px;">
-                        <button id="btn-import-all-tickets" class="planning-button" style="width: 100%; box-sizing: border-box; text-align: center; margin: 0;" title="Pull latest tickets from remote (ClickUp/Linear)">Sync</button>
-                        <button id="btn-import-all-plans" class="planning-button secondary" style="width: 100%; box-sizing: border-box; text-align: center; margin: 0;" title="Import tickets as Switchboard plans">Import as Plans</button>
+                    <div class="sidebar-toggle-row">
+                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
                     </div>
                     <div id="tickets-empty-state" class="empty-state">No tickets loaded.</div>
                     <div id="tickets-issues-container"></div>
-                    <button id="tickets-load-more" class="planning-button" style="display:none">Load More</button>
-                    <div id="tickets-local-empty-state" class="empty-state" style="display:none">No imported tickets yet. Switch to Online and click Edit on a ticket to import it here.</div>
+                    <div id="tickets-local-empty-state" class="empty-state" style="display:none">No imported tickets yet. Select a list and click Sync to pull tickets.</div>
                     <div id="tickets-local-container" style="display:none"></div>
+                    <button id="tickets-load-more" class="planning-button" style="display:none; margin-top: 8px;">Load More</button>
                 </div>
                 <div class="preview-panel-wrapper">
                     <div id="preview-pane-tickets" style="flex: 1; width: 100%; box-sizing: border-box; display: flex; flex-direction: column;">
@@ -3226,7 +3211,7 @@
                             <button id="btn-cancel-local-ticket" class="strip-btn" style="display:none;">Cancel</button>
                             <button id="btn-push-local-ticket" class="strip-btn" title="Push this markdown back to the remote ticket">Push to Remote</button>
                             <button id="btn-delete-local-ticket" class="strip-btn" title="Delete the local copy (remote ticket is untouched)">Delete Local</button>
-                            <span id="tickets-local-file-label" style="font-size:10px; margin-left:auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
+                            <button id="btn-comment-local-ticket" class="strip-btn">Comment</button>
                         </div>
                         <div id="tickets-comment-input-area" style="display:none; padding: 10px; border-bottom: 1px solid var(--border-color); background: var(--panel-bg2); margin: 10px;">
                             <textarea id="tickets-comment-textarea" placeholder="Type a comment..." style="width: 100%; height: 60px; background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-primary); font-family: inherit; font-size: 12px; padding: 4px; box-sizing: border-box; resize: vertical;"></textarea>

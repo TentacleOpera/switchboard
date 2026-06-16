@@ -469,6 +469,29 @@ const MIGRATION_V29_SQL = [
     `CREATE INDEX IF NOT EXISTS idx_plans_is_epic ON plans(is_epic)`,
 ];
 
+// V32: promote stitch.manifest blob to first-class tables
+const MIGRATION_V32_SQL = [
+    `CREATE TABLE IF NOT EXISTS stitch_projects (
+        id          TEXT PRIMARY KEY,
+        name        TEXT NOT NULL DEFAULT '',
+        update_time TEXT NOT NULL DEFAULT '',
+        updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE TABLE IF NOT EXISTS stitch_screens (
+        id           TEXT PRIMARY KEY,
+        project_id   TEXT NOT NULL,
+        name         TEXT NOT NULL DEFAULT '',
+        device_type  TEXT NOT NULL DEFAULT '',
+        status       TEXT NOT NULL DEFAULT '',
+        status_msg   TEXT NOT NULL DEFAULT '',
+        updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (project_id) REFERENCES stitch_projects(id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_stitch_screens_project ON stitch_screens(project_id)`,
+    `DELETE FROM config WHERE key = 'stitch.manifest'`,
+];
+
+
 
 /**
  * Generic plan upsert. On conflict, updates metadata fields and allows the
@@ -4462,6 +4485,24 @@ export class KanbanDatabase {
             }
         }
 
+        // V32: promote stitch.manifest blob to stitch_projects / stitch_screens tables
+        const v32 = await this.getMigrationVersion();
+        if (v32 < 32) {
+            try {
+                this._db.exec('BEGIN');
+                for (const sql of MIGRATION_V32_SQL) {
+                    this._db.exec(sql);
+                }
+                this._db.exec('COMMIT');
+                await this.setMigrationVersion(32);
+                console.log('[KanbanDatabase] V32 migration completed: stitch_projects / stitch_screens tables created, manifest blob dropped');
+            } catch (e) {
+                try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+                console.error('[KanbanDatabase] V32 migration FAILED — rolled back. DB unchanged. Error:', e);
+            }
+        }
+
+
     }
 
     /**
@@ -5216,7 +5257,115 @@ FROM plans
         return rows;
     }
 
+    // ── Stitch projects ──
+    public async upsertStitchProject(id: string, name: string, updateTime: string): Promise<boolean> {
+        return this._persistedUpdate(
+            `INSERT INTO stitch_projects (id, name, update_time, updated_at)
+             VALUES (?, ?, ?, datetime('now'))
+             ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                update_time = excluded.update_time,
+                updated_at = datetime('now')`,
+            [id, name ?? '', updateTime ?? '']
+        );
+    }
+
+    public async getStitchProjects(): Promise<Array<{ id: string; name: string; updateTime: string }>> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const out: Array<{ id: string; name: string; updateTime: string }> = [];
+        const stmt = this._db.prepare('SELECT id, name, update_time FROM stitch_projects ORDER BY update_time DESC');
+        try {
+            while (stmt.step()) {
+                const r = stmt.getAsObject();
+                out.push({ id: String(r.id), name: String(r.name ?? ''), updateTime: String(r.update_time ?? '') });
+            }
+        } finally {
+            stmt.free();
+        }
+        return out;
+    }
+
+    // ── Stitch screens ──
+    public async upsertStitchScreen(screen: {
+        id: string; projectId: string; name: string;
+        deviceType: string | null; status: string | null; statusMessage: string | null;
+    }): Promise<boolean> {
+        return this._persistedUpdate(
+            `INSERT INTO stitch_screens (id, project_id, name, device_type, status, status_msg, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+             ON CONFLICT(id) DO UPDATE SET
+                project_id = excluded.project_id,
+                name = excluded.name,
+                device_type = excluded.device_type,
+                status = excluded.status,
+                status_msg = excluded.status_msg,
+                updated_at = datetime('now')`,
+            [screen.id, screen.projectId, screen.name ?? '', screen.deviceType ?? '', screen.status ?? '', screen.statusMessage ?? '']
+        );
+    }
+
+    public async bulkUpsertStitchScreens(screens: Array<{
+        id: string; projectId: string; name: string;
+        deviceType: string | null; status: string | null; statusMessage: string | null;
+    }>): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        try {
+            this._db.exec('BEGIN');
+            const sql = `INSERT INTO stitch_screens (id, project_id, name, device_type, status, status_msg, updated_at)
+                         VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+                         ON CONFLICT(id) DO UPDATE SET
+                            project_id = excluded.project_id,
+                            name = excluded.name,
+                            device_type = excluded.device_type,
+                            status = excluded.status,
+                            status_msg = excluded.status_msg,
+                            updated_at = datetime('now')`;
+            for (const s of screens) {
+                this._db.run(sql, [
+                    s.id,
+                    s.projectId,
+                    s.name ?? '',
+                    s.deviceType ?? '',
+                    s.status ?? '',
+                    s.statusMessage ?? ''
+                ]);
+            }
+            this._db.exec('COMMIT');
+        } catch (error) {
+            try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+            console.error('[KanbanDatabase] Failed bulk upserting screens:', error);
+            return false;
+        }
+        return this._persist();
+    }
+
+    public async getStitchScreensForProject(projectId: string): Promise<Array<{
+        id: string; projectId: string; name: string;
+        deviceType: string; status: string; statusMessage: string;
+    }>> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const out: Array<{ id: string; projectId: string; name: string; deviceType: string; status: string; statusMessage: string }> = [];
+        const stmt = this._db.prepare('SELECT id, project_id, name, device_type, status, status_msg FROM stitch_screens WHERE project_id = ?', [projectId]);
+        try {
+            while (stmt.step()) {
+                const r = stmt.getAsObject();
+                out.push({
+                    id: String(r.id),
+                    projectId: String(r.project_id),
+                    name: String(r.name ?? ''),
+                    deviceType: String(r.device_type ?? ''),
+                    status: String(r.status ?? ''),
+                    statusMessage: String(r.status_msg ?? ''),
+                });
+            }
+        } finally {
+            stmt.free();
+        }
+        return out;
+    }
+
     private static async _loadSqlJs(): Promise<SqlJsStatic> {
+
         if (!KanbanDatabase._sqlJsPromise) {
             KanbanDatabase._sqlJsPromise = (async () => {
                 console.log('[KanbanDatabase._loadSqlJs] Starting sql.js load...');

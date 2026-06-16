@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { KanbanDatabase } from './KanbanDatabase';
 import { LocalFolderService } from './LocalFolderService';
 import { TaskViewerProvider } from './TaskViewerProvider';
 import { PanelStateStore } from './PanelStateStore';
@@ -29,6 +30,8 @@ interface TreeNode {
     title?: string;
     metadata?: any;
 }
+
+
 
 export class DesignPanelProvider implements vscode.Disposable {
     private _panel?: vscode.WebviewPanel;
@@ -630,6 +633,30 @@ export class DesignPanelProvider implements vscode.Disposable {
         return path.join(workspaceRoot, '.switchboard', 'stitch');
     }
 
+    private async _formatScreenFromCache(cached: {
+        id: string; projectId: string; name: string;
+        deviceType: string; status: string; statusMessage: string;
+    }, workspaceRoot: string): Promise<any> {
+        const fileUri = vscode.Uri.file(
+            path.join(this._getImageCacheDir(workspaceRoot), `${path.basename(cached.id)}.png`)
+        );
+        let imageUrl = '';
+        try {
+            await vscode.workspace.fs.stat(fileUri);
+            imageUrl = this._panel?.webview.asWebviewUri(fileUri).toString() || '';
+        } catch {}
+        return {
+            id: cached.id,
+            projectId: cached.projectId,
+            name: cached.name,
+            deviceType: cached.deviceType,
+            imageUrl,
+            htmlUrl: '',
+            status: cached.status,
+            statusMessage: cached.statusMessage
+        };
+    }
+
     private async _fetchWithTimeout(url: string, timeoutMs: number = 30000): Promise<Response> {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -647,49 +674,48 @@ export class DesignPanelProvider implements vscode.Disposable {
     }
 
     private async _getCachedImageUri(screen: any, workspaceRoot: string): Promise<string> {
-        if (!workspaceRoot) {
-            try {
-                return await screen.getImage() || '';
-            } catch {
-                return '';
-            }
+        let cdnUrl: string;
+        try {
+            cdnUrl = await screen.getImage() || '';
+        } catch {
+            cdnUrl = '';
         }
-        
+        if (!cdnUrl) return '';
+
+        // Apply hi-res transform for immediate display (same as makeFifeHighResUrl in webview)
+        const hiResUrl = (cdnUrl.includes('/fife/') || cdnUrl.includes('lh3.googleusercontent.com')) && !cdnUrl.includes('?')
+            ? cdnUrl.replace(/=[wsh]\d+(?:-[wsh]\d+)?$/, '') + '=w1200'
+            : cdnUrl;
+
+        if (!workspaceRoot) return hiResUrl;
+
         const cacheDir = this._getImageCacheDir(workspaceRoot);
         const safeId = path.basename(screen.id);
         const cachePath = path.join(cacheDir, `${safeId}.png`);
-        
-        // Check if file exists on disk
+        const fileUri = vscode.Uri.file(cachePath);
+
+        // If already cached, return the webview URI
         try {
-            await vscode.workspace.fs.stat(vscode.Uri.file(cachePath));
-            // Return file:// URI - works across panel recreations
-            return vscode.Uri.file(cachePath).toString();
+            await vscode.workspace.fs.stat(fileUri);
+            return this._panel?.webview.asWebviewUri(fileUri).toString() || hiResUrl;
         } catch {
-            // File doesn't exist - download it
+            // Not cached yet — download in background, return CDN URL immediately so the
+            // gallery renders now without waiting for the download to finish
         }
-        
-        // Download from API
-        try {
-            const url = await screen.getImage();
-            if (!url) {
-                return '';
-            }
-            
-            await vscode.workspace.fs.createDirectory(vscode.Uri.file(cacheDir));
-            
-            const res = await this._fetchWithTimeout(url, 60000);
-            if (!res.ok) {
-                throw new Error(`Failed to fetch image: ${res.statusText}`);
-            }
-            const buffer = Buffer.from(await res.arrayBuffer());
-            await vscode.workspace.fs.writeFile(vscode.Uri.file(cachePath), buffer);
-            
-            // Return file:// URI
-            return vscode.Uri.file(cachePath).toString();
-        } catch (err) {
-            console.error('Failed to download image to cache:', err);
-            return '';
-        }
+
+        this._downloadToCache(hiResUrl, cacheDir, fileUri).catch(err =>
+            console.error('Stitch image cache download failed:', err)
+        );
+
+        return hiResUrl;
+    }
+
+    private async _downloadToCache(url: string, cacheDir: string, fileUri: vscode.Uri): Promise<void> {
+        await vscode.workspace.fs.createDirectory(vscode.Uri.file(cacheDir));
+        const res = await this._fetchWithTimeout(url, 60000);
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        const buffer = Buffer.from(await res.arrayBuffer());
+        await vscode.workspace.fs.writeFile(fileUri, buffer);
     }
 
     private async _formatScreen(screen: any, workspaceRoot: string): Promise<any> {
@@ -1225,6 +1251,21 @@ export class DesignPanelProvider implements vscode.Disposable {
                         this.postMessage({ type: 'stitchApiKeyStatus', configured: false, workspaceRoot });
                         return;
                     }
+                    const config = vscode.workspace.getConfiguration('switchboard');
+                    const defaultProjectId = config.get<string>('stitch.defaultProjectId') || '';
+                    const defaultModelId = config.get<string>('stitch.defaultModelId') || 'GEMINI_3_FLASH';
+                    const defaultCreativeRange = config.get<string>('stitch.defaultCreativeRange') || 'EXPLORE';
+
+                    const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                    const dbProjects = await db.getStitchProjects();
+
+                    // If we have cached projects and forceRefresh is NOT set, serve from DB and exit.
+                    if (dbProjects.length > 0 && !message.forceRefresh) {
+                        this.postMessage({ type: 'stitchProjectsReady', projects: dbProjects, defaultProjectId, defaultModelId, defaultCreativeRange, workspaceRoot });
+                        return;
+                    }
+
+                    // Otherwise fetch from API
                     const stitch = await loadStitch();
                     const list = await stitch.projects();
                     const projects = list.map((p: any) => ({
@@ -1232,18 +1273,13 @@ export class DesignPanelProvider implements vscode.Disposable {
                         name: p.data?.title || p.data?.name || p.id,
                         updateTime: p.data?.updateTime || p.data?.createTime || ''
                     }));
-                    const config = vscode.workspace.getConfiguration('switchboard');
-                    const defaultProjectId = config.get<string>('stitch.defaultProjectId') || '';
-                    const defaultModelId = config.get<string>('stitch.defaultModelId') || 'GEMINI_3_FLASH';
-                    const defaultCreativeRange = config.get<string>('stitch.defaultCreativeRange') || 'EXPLORE';
-                    this.postMessage({
-                        type: 'stitchProjectsReady',
-                        projects,
-                        defaultProjectId,
-                        defaultModelId,
-                        defaultCreativeRange,
-                        workspaceRoot
-                    });
+
+                    if (workspaceRoot) {
+                        for (const p of projects) {
+                            await db.upsertStitchProject(p.id, p.name, p.updateTime);
+                        }
+                    }
+                    this.postMessage({ type: 'stitchProjectsReady', projects, defaultProjectId, defaultModelId, defaultCreativeRange, workspaceRoot });
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
                 }
@@ -1252,18 +1288,103 @@ export class DesignPanelProvider implements vscode.Disposable {
             case 'stitchGetProjectScreens':
                 try {
                     const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
+                    const projectId: string = message.projectId;
+
+                    const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                    await db.ensureReady();
+
+                    // --- Phase 1: serve from cache immediately ---
+                    const cachedWithImage = new Set<string>(); // screens we already sent WITH an image
+                    const cachedIds = new Set<string>();       // all screens we sent from cache
+
+                    if (workspaceRoot) {
+                        const cached = await db.getStitchScreensForProject(projectId);
+                        if (cached.length > 0) {
+                            const formatted = await Promise.all(cached.map(s => this._formatScreenFromCache(s, workspaceRoot)));
+                            this.postMessage({ type: 'stitchScreensReady', screens: formatted, workspaceRoot });
+                            for (const f of formatted) {
+                                cachedIds.add(f.id);
+                                if (f.imageUrl) cachedWithImage.add(f.id);
+                            }
+                        }
+                    }
+
+                    // --- Phase 2: fetch from API ---
                     const stitch = await loadStitch();
-                    const projectInstance = stitch.project(message.projectId);
-                    const list = await projectInstance.screens();
-                    const formatted = await Promise.all(list.map(async (screen: any) => {
+                    const list = await stitch.project(projectId).screens();
+                    for (const screen of list) {
                         this._activeScreens.set(screen.id, screen);
+                    }
+
+                    // Update DB (append new screens, update statuses) using bulk upsert
+                    if (workspaceRoot) {
+                        const screensToUpsert = list.map((s: any) => ({
+                            id: s.id,
+                            projectId: s.projectId || projectId,
+                            name: s.data?.title || s.data?.displayName || s.id,
+                            deviceType: s.data?.deviceType || null,
+                            status: s.data?.screenMetadata?.status || null,
+                            statusMessage: s.data?.screenMetadata?.statusMessage || null
+                        }));
+                        await db.bulkUpsertStitchScreens(screensToUpsert);
+                    }
+
+                    // --- Phase 3: send what the cache couldn't cover ---
+                    if (cachedIds.size === 0) {
+                        // No cache at all — send every screen at once
+                        const formatted = await Promise.all(list.map((s: any) => this._formatScreen(s, workspaceRoot)));
+                        this.postMessage({ type: 'stitchScreensReady', screens: formatted, workspaceRoot });
+                    } else {
+                        // Cache was served — fetch screens that are genuinely new (not in cache at all) OR cached without image (recovery)
+                        const needsUpdate = list.filter((s: any) => !cachedIds.has(s.id) || !cachedWithImage.has(s.id));
+                        await Promise.all(needsUpdate.map(async (screen: any) => {
+                            const formatted = await this._formatScreen(screen, workspaceRoot);
+                            this.postMessage({ type: 'stitchScreenReady', screen: formatted, workspaceRoot });
+                        }));
+                    }
+                } catch (err: any) {
+                    this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
+                }
+                break;
+
+            case 'stitchRebuildImageCache':
+                try {
+                    const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
+                    const projectId: string = message.projectId;
+                    if (!projectId) throw new Error('No project selected to rebuild cache');
+
+                    const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                    await db.ensureReady();
+                    const cached = await db.getStitchScreensForProject(projectId);
+
+                    const cacheDir = this._getImageCacheDir(workspaceRoot);
+                    for (const s of cached) {
+                        const fileUri = vscode.Uri.file(
+                            path.join(cacheDir, `${path.basename(s.id)}.png`)
+                        );
+                        try {
+                            await vscode.workspace.fs.delete(fileUri);
+                        } catch {
+                            // ignore if not exist
+                        }
+                    }
+
+                    const stitch = await loadStitch();
+                    const formatted = await Promise.all(cached.map(async (s) => {
+                        let screen = this._activeScreens.get(s.id);
+                        if (!screen) {
+                            screen = await stitch.project(projectId).getScreen(s.id);
+                            this._activeScreens.set(s.id, screen);
+                        }
                         return this._formatScreen(screen, workspaceRoot);
                     }));
+
                     this.postMessage({ type: 'stitchScreensReady', screens: formatted, workspaceRoot });
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
                 }
                 break;
+
 
             case 'stitchCreateProject':
                 try {
@@ -1293,8 +1414,6 @@ export class DesignPanelProvider implements vscode.Disposable {
                     const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
                     if (!message.projectId || !message.screenId) throw new Error('Missing project or screen id');
                     const stitch = await loadStitch();
-                    // getScreen() fetches fresh details — new download URLs and title —
-                    // unlike the cached instance, whose data may predate render completion.
                     const fresh = await stitch.project(message.projectId).getScreen(message.screenId);
                     this._activeScreens.set(fresh.id, fresh);
                     this.postMessage({ type: 'stitchScreenReady', screen: await this._formatScreen(fresh, workspaceRoot), workspaceRoot });
@@ -1768,14 +1887,20 @@ export class DesignPanelProvider implements vscode.Disposable {
                     await vscode.workspace.fs.createDirectory(vscode.Uri.file(outputDir));
 
                     const targetPath = path.join(outputDir, safeFilename);
-                    const res = await fetch(message.url);
 
-                    if (isPng) {
-                        const buffer = Buffer.from(await res.arrayBuffer());
+                    if (message.url.startsWith('file://')) {
+                        const fileUri = vscode.Uri.parse(message.url);
+                        const buffer = Buffer.from(await vscode.workspace.fs.readFile(fileUri));
                         await vscode.workspace.fs.writeFile(vscode.Uri.file(targetPath), buffer);
                     } else {
-                        const text = await res.text();
-                        await vscode.workspace.fs.writeFile(vscode.Uri.file(targetPath), Buffer.from(text, 'utf8'));
+                        const res = await fetch(message.url);
+                        if (isPng) {
+                            const buffer = Buffer.from(await res.arrayBuffer());
+                            await vscode.workspace.fs.writeFile(vscode.Uri.file(targetPath), buffer);
+                        } else {
+                            const text = await res.text();
+                            await vscode.workspace.fs.writeFile(vscode.Uri.file(targetPath), Buffer.from(text, 'utf8'));
+                        }
                     }
 
                     vscode.window.showInformationMessage(`Downloaded ${safeFilename} to ${path.basename(outputDir)}/`);
