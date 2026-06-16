@@ -1422,6 +1422,7 @@
     const btnNewStitchProject = document.getElementById('btn-new-stitch-project');
     const btnRefreshStitchProjects = document.getElementById('btn-refresh-stitch-projects');
     const btnRebuildStitchCache = document.getElementById('btn-rebuild-stitch-cache');
+    const btnForceReloadScreens = document.getElementById('btn-force-reload-screens');
     const btnOpenDesignMd = document.getElementById('btn-open-design-md');
 
     function saveState() {
@@ -1504,6 +1505,7 @@
         if (btnNewStitchProject) btnNewStitchProject.disabled = busy;
         if (btnRefreshStitchProjects) btnRefreshStitchProjects.disabled = busy;
         if (btnRebuildStitchCache) btnRebuildStitchCache.disabled = busy || !hasProject;
+        if (btnForceReloadScreens) btnForceReloadScreens.disabled = busy || !hasProject;
         if (stitchGallery) {
             stitchGallery.querySelectorAll('button').forEach(b => { b.disabled = busy; });
         }
@@ -1714,6 +1716,13 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                (screen.projectId === state.selectedStitchProjectId || !screen.projectId) &&
                !screen.imageUrl &&
                screen.status !== 'FAILED';
+    }
+
+    function hasScreenStateChanged(newScreen, existingScreen) {
+        if (!existingScreen) return true;
+        return newScreen.imageUrl !== existingScreen.imageUrl ||
+               newScreen.status !== existingScreen.status ||
+               newScreen.statusMessage !== existingScreen.statusMessage;
     }
 
     function startMissingStitchScreenPolling(screens, reason) {
@@ -2090,6 +2099,21 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
             if (!projectId || state.stitchBusy) return;
             vscode.postMessage({
                 type: 'stitchRebuildImageCache',
+                projectId,
+                workspaceRoot: state.stitchWorkspaceRoot
+            });
+        });
+    }
+
+    if (btnForceReloadScreens) {
+        btnForceReloadScreens.addEventListener('click', () => {
+            const projectId = stitchProjectSelect ? stitchProjectSelect.value : '';
+            if (!projectId || state.stitchBusy) return;
+            const confirmed = confirm('This will delete the cached screen list for this project and re-fetch from the Stitch API. Continue?');
+            if (!confirmed) return;
+            setStitchBusy(true);
+            vscode.postMessage({
+                type: 'stitchForceReloadScreens',
                 projectId,
                 workspaceRoot: state.stitchWorkspaceRoot
             });
@@ -2984,6 +3008,7 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 // Update state without touching existing screens
                 const updatedScreens = [...state.stitchScreens];
                 const existingIdx = updatedScreens.findIndex(s => s.id === msg.screen.id);
+                const existingScreen = existingIdx >= 0 ? updatedScreens[existingIdx] : null;
                 if (existingIdx >= 0) {
                     updatedScreens[existingIdx] = msg.screen;
                 } else {
@@ -3050,21 +3075,24 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 const key = getStitchScreenPollKey(projectId, msg.screen.id, state.stitchWorkspaceRoot);
                 const isPolling = state.stitchScreenPolls && state.stitchScreenPolls.has(key);
 
-                if (hasImage) {
-                    clearStitchScreenPoll(projectId, msg.screen.id, state.stitchWorkspaceRoot);
-                    if (state.stitchScreenPolls.size > 0) {
-                        setStitchStatus(`Preview ready — ${state.stitchScreenPolls.size} still waiting`, 'busy');
+                if (hasScreenStateChanged(msg.screen, existingScreen)) {
+                    if (hasImage) {
+                        clearStitchScreenPoll(projectId, msg.screen.id, state.stitchWorkspaceRoot);
+                        if (state.stitchScreenPolls.size > 0) {
+                            setStitchStatus(`Preview ready — ${state.stitchScreenPolls.size} still waiting`, 'busy');
+                        } else {
+                            setStitchStatus('Screen ready', 'success');
+                        }
+                    } else if (isFailed) {
+                        clearStitchScreenPoll(projectId, msg.screen.id, state.stitchWorkspaceRoot);
+                        setStitchStatus(msg.screen.statusMessage || 'Rendering failed', 'error');
                     } else {
-                        setStitchStatus('Screen ready', 'success');
+                        // No image yet — start polling regardless of whether we were already polling.
+                        // Previously this only polled if isPolling was already true, so genuinely new
+                        // screens arriving without an image were silently dropped and never retried.
+                        setStitchStatus(`Waiting for preview(s)`, 'busy');
+                        scheduleStitchScreenPoll(msg.screen);
                     }
-                } else if (isFailed) {
-                    clearStitchScreenPoll(projectId, msg.screen.id, state.stitchWorkspaceRoot);
-                    setStitchStatus(msg.screen.statusMessage || 'Rendering failed', 'error');
-                } else if (isPolling) {
-                    setStitchStatus(`Still rendering… waiting for preview(s)`, 'busy');
-                    scheduleStitchScreenPoll(msg.screen);
-                } else {
-                    setStitchStatus('Screen created — rendering in progress', 'info');
                 }
                 break;
             }

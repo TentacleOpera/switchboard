@@ -945,6 +945,24 @@ export class DesignPanelProvider implements vscode.Disposable {
         return processedHtml;
     }
 
+    public async rebuildStitchCache(workspaceRoot: string): Promise<void> {
+        await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: 'Rebuilding Stitch cache...',
+            cancellable: false
+        }, async () => {
+            const db = KanbanDatabase.forWorkspace(workspaceRoot);
+            await db.ensureReady();
+            await db.clearStitchCache();
+            this._activeScreens.clear();
+            await this._handleMessage({
+                type: 'stitchListProjects',
+                workspaceRoot,
+                forceRefresh: true
+            });
+        });
+    }
+
     private async _handleMessage(message: any): Promise<void> {
         const hasKey = this._setupStitchApiKey();
 
@@ -1311,7 +1329,11 @@ export class DesignPanelProvider implements vscode.Disposable {
 
                     // --- Phase 2: fetch from API ---
                     const stitch = await loadStitch();
-                    const list = await stitch.project(projectId).screens();
+                    const allAssets = await stitch.project(projectId).screens();
+                    // project.screens() returns ALL assets including reference uploads (images,
+                    // documents, specs). Generated screens always have both a deviceType AND
+                    // a screenMetadata object. Reference uploads may have one but not both.
+                    const list = allAssets.filter((s: any) => !!s.data?.deviceType && s.data?.screenMetadata !== undefined && s.data?.screenMetadata !== null);
                     for (const screen of list) {
                         this._activeScreens.set(screen.id, screen);
                     }
@@ -1335,8 +1357,8 @@ export class DesignPanelProvider implements vscode.Disposable {
                         const formatted = await Promise.all(list.map((s: any) => this._formatScreen(s, workspaceRoot)));
                         this.postMessage({ type: 'stitchScreensReady', screens: formatted, workspaceRoot });
                     } else {
-                        // Cache was served — fetch screens that are genuinely new (not in cache at all) OR cached without image (recovery)
-                        const needsUpdate = list.filter((s: any) => !cachedIds.has(s.id) || !cachedWithImage.has(s.id));
+                        // Cache was served — only fetch screens genuinely new (not in DB at all)
+                        const needsUpdate = list.filter((s: any) => !cachedIds.has(s.id));
                         await Promise.all(needsUpdate.map(async (screen: any) => {
                             const formatted = await this._formatScreen(screen, workspaceRoot);
                             this.postMessage({ type: 'stitchScreenReady', screen: formatted, workspaceRoot });
@@ -1385,6 +1407,48 @@ export class DesignPanelProvider implements vscode.Disposable {
                 }
                 break;
 
+            case 'stitchForceReloadScreens':
+                try {
+                    const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
+                    const projectId: string = message.projectId;
+                    if (!projectId) throw new Error('No project selected to force reload');
+
+                    const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                    await db.ensureReady();
+
+                    await db.deleteStitchScreensForProject(projectId);
+
+                    for (const [screenId, screen] of this._activeScreens.entries()) {
+                        if (screen && (screen.projectId === projectId || screen.project_id === projectId)) {
+                            this._activeScreens.delete(screenId);
+                        }
+                    }
+
+                    const stitch = await loadStitch();
+                    const allAssets = await stitch.project(projectId).screens();
+                    const list = allAssets.filter((s: any) => !!s.data?.deviceType && s.data?.screenMetadata !== undefined && s.data?.screenMetadata !== null);
+                    for (const screen of list) {
+                        this._activeScreens.set(screen.id, screen);
+                    }
+
+                    if (workspaceRoot) {
+                        const screensToUpsert = list.map((s: any) => ({
+                            id: s.id,
+                            projectId: s.projectId || projectId,
+                            name: s.data?.title || s.data?.displayName || s.id,
+                            deviceType: s.data?.deviceType || null,
+                            status: s.data?.screenMetadata?.status || null,
+                            statusMessage: s.data?.screenMetadata?.statusMessage || null
+                        }));
+                        await db.bulkUpsertStitchScreens(screensToUpsert);
+                    }
+
+                    const formatted = await Promise.all(list.map((s: any) => this._formatScreen(s, workspaceRoot)));
+                    this.postMessage({ type: 'stitchScreensReady', screens: formatted, workspaceRoot });
+                } catch (err: any) {
+                    this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
+                }
+                break;
 
             case 'stitchCreateProject':
                 try {
@@ -1402,6 +1466,14 @@ export class DesignPanelProvider implements vscode.Disposable {
                         name: p.data?.title || p.data?.name || p.id,
                         updateTime: p.data?.updateTime || p.data?.createTime || ''
                     }));
+                    // Persist the freshly created project (and any others) so the cache-gated
+                    // stitchListProjects path serves it on next panel open without a forceRefresh.
+                    if (workspaceRoot) {
+                        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                        for (const p of projects) {
+                            await db.upsertStitchProject(p.id, p.name, p.updateTime);
+                        }
+                    }
                     // Pass the new project as the default so the webview auto-selects it.
                     this.postMessage({ type: 'stitchProjectsReady', projects, defaultProjectId: project.id, selectProjectId: project.id, workspaceRoot });
                 } catch (err: any) {

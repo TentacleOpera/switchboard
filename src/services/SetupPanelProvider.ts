@@ -1122,8 +1122,17 @@ export class SetupPanelProvider implements vscode.Disposable {
                         await localService.saveFolderPathsConfig(config);
                         this._panel?.webview.postMessage({
                             type: 'ticketsFoldersListed',
-                            paths: localService.getTicketsFolderPaths()
+                            paths: localService.getTicketsFolderPaths(),
+                            ticketsAutoSync: localService.getTicketsAutoSync()
                         });
+                    }
+                    break;
+                }
+                case 'saveTicketsAutoSync': {
+                    const workspaceRoot = this._getCurrentWorkspaceRoot();
+                    if (workspaceRoot && this._taskViewerProvider) {
+                        const localService = this._taskViewerProvider.getLocalFolderService(workspaceRoot);
+                        await localService.setTicketsAutoSync(message.enabled === true);
                     }
                     break;
                 }
@@ -1133,7 +1142,8 @@ export class SetupPanelProvider implements vscode.Disposable {
                         const localService = this._taskViewerProvider.getLocalFolderService(workspaceRoot);
                         this._panel?.webview.postMessage({
                             type: 'ticketsFoldersListed',
-                            paths: localService.getTicketsFolderPaths()
+                            paths: localService.getTicketsFolderPaths(),
+                            ticketsAutoSync: localService.getTicketsAutoSync()
                         });
                     }
                     break;

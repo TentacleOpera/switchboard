@@ -816,6 +816,22 @@ export async function activate(context: vscode.ExtensionContext) {
     );
     context.subscriptions.push(openDesignPanelDisposable);
 
+    const rebuildStitchCacheDisposable = vscode.commands.registerCommand('switchboard.rebuildStitchCache', async () => {
+        const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
+        if (!workspaceRoot) {
+            vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
+            return;
+        }
+        const confirm = await vscode.window.showWarningMessage(
+            'This will delete ALL cached Stitch projects and screens for the current workspace database and re-fetch from the API. Continue?',
+            { modal: true },
+            'Rebuild'
+        );
+        if (confirm !== 'Rebuild') return;
+        await designPanelProvider.rebuildStitchCache(workspaceRoot);
+    });
+    context.subscriptions.push(rebuildStitchCacheDisposable);
+
     const triggerPlanningPanelSyncDisposable = vscode.commands.registerCommand(
         'switchboard.triggerPlanningPanelSync',
         async (mode?: string) => {

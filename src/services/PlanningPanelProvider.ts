@@ -70,6 +70,8 @@ export class PlanningPanelProvider {
     private _activeDocWatchDebounce: NodeJS.Timeout | undefined;
     private _kanbanPlansWatchers: vscode.FileSystemWatcher[] = [];
     private _kanbanPlansWatchDebounce: NodeJS.Timeout | undefined;
+    private _ticketsAutoSyncWatchers: Map<string, vscode.FileSystemWatcher> = new Map();
+    private _ticketsAutoSyncDebounces: Map<string, NodeJS.Timeout> = new Map();
     private _lastPanelWriteTimestamp: number = 0;
     private _isAutoRefreshing: boolean = false;
     private _nonce: string = '';
@@ -996,7 +998,10 @@ export class PlanningPanelProvider {
                     const provider = (clickUpConfig?.setupComplete) ? 'clickup'
                         : (linearConfig?.setupComplete) ? 'linear'
                         : null;
-                    this._panel?.webview.postMessage({ type: 'integrationProviderPreference', provider, workspaceRoot });
+                    const localService = this._getLocalFolderService(workspaceRoot);
+                    const ticketsAutoSync = localService.getTicketsAutoSync();
+                    if (provider) { this._updateTicketsAutoSyncWatcher(workspaceRoot, ticketsAutoSync); }
+                    this._panel?.webview.postMessage({ type: 'integrationProviderPreference', provider, workspaceRoot, ticketsAutoSync });
                 } catch (err) {
                     console.warn('[PlanningPanel] Failed to determine integration provider preference:', err);
                 }
@@ -1054,10 +1059,14 @@ export class PlanningPanelProvider {
                         const provider = (clickUpConfig?.setupComplete) ? 'clickup'
                             : (linearConfig?.setupComplete) ? 'linear'
                             : null;
+                        const localService = this._getLocalFolderService(root);
+                        const ticketsAutoSync = localService.getTicketsAutoSync();
+                        if (provider) { this._updateTicketsAutoSyncWatcher(root, ticketsAutoSync); }
                         this._panel?.webview.postMessage({
                             type: 'integrationProviderPreference',
                             provider,
-                            workspaceRoot: root
+                            workspaceRoot: root,
+                            ticketsAutoSync
                         });
                     } catch (err) {
                         console.warn('[PlanningPanel] Failed to determine integration preference for root:', root, err);
@@ -4967,6 +4976,61 @@ export class PlanningPanelProvider {
         }
     }
 
+    private _updateTicketsAutoSyncWatcher(workspaceRoot: string, enabled: boolean): void {
+        const existing = this._ticketsAutoSyncWatchers.get(workspaceRoot);
+        if (!enabled) {
+            if (existing) {
+                try { existing.dispose(); } catch (e) {}
+                this._ticketsAutoSyncWatchers.delete(workspaceRoot);
+            }
+            return;
+        }
+        if (existing) { return; } // already watching
+
+        const localService = this._getLocalFolderService(workspaceRoot);
+        const ticketsFolder = localService.getTicketsFolderPath();
+        const watchGlob = ticketsFolder
+            ? new vscode.RelativePattern(ticketsFolder, '**/*.md')
+            : new vscode.RelativePattern(workspaceRoot, '.switchboard/tickets/**/*.md');
+
+        const watcher = vscode.workspace.createFileSystemWatcher(watchGlob, true, false, true);
+        watcher.onDidChange(async (uri) => {
+            const fileName = path.basename(uri.fsPath);
+            const match = fileName.match(/^(linear|clickup)_([^_]+)_.*\.md$/);
+            if (!match) { return; }
+            const [, provider, id] = match;
+
+            const debounceKey = uri.fsPath;
+            const existing = this._ticketsAutoSyncDebounces.get(debounceKey);
+            if (existing) { clearTimeout(existing); }
+            this._ticketsAutoSyncDebounces.set(debounceKey, setTimeout(async () => {
+                this._ticketsAutoSyncDebounces.delete(debounceKey);
+                try {
+                    const result: any = await vscode.commands.executeCommand(
+                        'switchboard.pushTicketEdits',
+                        { workspaceRoot, provider: provider as 'linear' | 'clickup', id }
+                    );
+                    this._panel?.webview.postMessage({
+                        type: 'pushTicketResult',
+                        success: result?.success ?? false,
+                        id,
+                        error: result?.error,
+                        autoSync: true
+                    });
+                } catch (e) {
+                    this._panel?.webview.postMessage({
+                        type: 'pushTicketResult',
+                        success: false,
+                        id,
+                        error: e instanceof Error ? e.message : String(e),
+                        autoSync: true
+                    });
+                }
+            }, 2000));
+        });
+        this._ticketsAutoSyncWatchers.set(workspaceRoot, watcher);
+    }
+
     public dispose(): void {
         this.stopPeriodicSync();
         if (this._activeDocWatchDebounce) {
@@ -4997,6 +5061,12 @@ export class PlanningPanelProvider {
             try { watcher.dispose(); } catch (e) {}
         }
         this._kanbanPlansWatchers = [];
+        for (const watcher of this._ticketsAutoSyncWatchers.values()) {
+            try { watcher.dispose(); } catch (e) {}
+        }
+        this._ticketsAutoSyncWatchers.clear();
+        for (const t of this._ticketsAutoSyncDebounces.values()) { clearTimeout(t); }
+        this._ticketsAutoSyncDebounces.clear();
 
         this._disposables.forEach(d => d.dispose());
         this._disposables = [];
@@ -5014,6 +5084,17 @@ export class PlanningPanelProvider {
         const db = KanbanDatabase.forWorkspace(workspaceRoot);
         const workspaceId = await this._getWorkspaceId(workspaceRoot);
         const records = await db.getBoard(workspaceId);
+        const completedLimit = Math.max(1, Math.min(
+            vscode.workspace.getConfiguration('switchboard').get<number>('kanban.completedLimit', 100) ?? 100,
+            500
+        ));
+        const completedRecords = await db.getCompletedPlans(workspaceId, completedLimit);
+        const allRecords = [...records, ...completedRecords];
+        allRecords.sort((a, b) => {
+            const aTime = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+            const bTime = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+            return bTime - aTime;
+        });
 
         // Resolve to the effective (mapped parent) root so that plan.workspaceRoot
         // matches the workspaceItems dropdown values sent to the webview.
@@ -5025,7 +5106,7 @@ export class PlanningPanelProvider {
             item => item.workspaceRoot === effectiveRoot
         )?.label || path.basename(effectiveRoot);
 
-        return records.map((r: any) => ({
+        return allRecords.map((r: any) => ({
             planId: r.planId,
             sessionId: r.sessionId || '',
             topic: r.topic || path.basename(r.planFile || '') || 'Untitled',
@@ -5072,6 +5153,18 @@ export class PlanningPanelProvider {
             // No state file or parse error — use defaults
         }
         const allColumns = buildKanbanColumns(customAgents, customKanbanColumns);
+        if (!allColumns.some(c => c.id === 'BACKLOG')) {
+            allColumns.push({
+                id: 'BACKLOG',
+                label: 'Backlog',
+                order: 5,
+                kind: 'created' as const,
+                source: 'built-in' as const,
+                autobanEnabled: false,
+                dragDropMode: 'cli'
+            });
+            allColumns.sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
+        }
         if (!plans || plans.length === 0) {
             return allColumns.filter(col => {
                 if (!col.hideWhenNoAgent) return true;

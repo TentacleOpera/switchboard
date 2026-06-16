@@ -19,6 +19,7 @@ export interface LocalFolderPathsConfig {
     imagesFolderPaths: string[];
     stitchFolderPaths: string[];
     briefsFolderPaths: string[];
+    ticketsAutoSync?: boolean;
 }
 
 export class LocalFolderService {
@@ -95,7 +96,8 @@ export class LocalFolderService {
                 ticketsFolderPaths: [],
                 imagesFolderPaths: [],
                 stitchFolderPaths: [],
-                briefsFolderPaths: []
+                briefsFolderPaths: [],
+                ticketsAutoSync: false
             };
             return {
                 localFolderPaths: parsed.localFolderPaths || [],
@@ -104,7 +106,8 @@ export class LocalFolderService {
                 ticketsFolderPaths: parsed.ticketsFolderPaths || [],
                 imagesFolderPaths: parsed.imagesFolderPaths || [],
                 stitchFolderPaths: parsed.stitchFolderPaths || [],
-                briefsFolderPaths: parsed.briefsFolderPaths || []
+                briefsFolderPaths: parsed.briefsFolderPaths || [],
+                ticketsAutoSync: parsed.ticketsAutoSync === true
             };
         } catch {
             return {
@@ -114,7 +117,8 @@ export class LocalFolderService {
                 ticketsFolderPaths: [],
                 imagesFolderPaths: [],
                 stitchFolderPaths: [],
-                briefsFolderPaths: []
+                briefsFolderPaths: [],
+                ticketsAutoSync: false
             };
         }
     }
@@ -161,7 +165,8 @@ export class LocalFolderService {
                     ticketsFolderPaths: parsed.ticketsFolderPaths || [],
                     imagesFolderPaths: parsed.imagesFolderPaths || [],
                     stitchFolderPaths: parsed.stitchFolderPaths || [],
-                    briefsFolderPaths: parsed.briefsFolderPaths || []
+                    briefsFolderPaths: parsed.briefsFolderPaths || [],
+                    ticketsAutoSync: parsed.ticketsAutoSync === true
                 };
                 this._folderPathsCache = cfg;
                 return cfg;
@@ -174,7 +179,8 @@ export class LocalFolderService {
             ticketsFolderPaths: [],
             imagesFolderPaths: [],
             stitchFolderPaths: [],
-            briefsFolderPaths: []
+            briefsFolderPaths: [],
+            ticketsAutoSync: false
         };
     }
 
@@ -693,6 +699,16 @@ export class LocalFolderService {
         const resolvedToRemove = this.resolveFolderPath(folderPath);
 
         cfg.ticketsFolderPaths = currentPaths.filter(p => this.resolveFolderPath(p) !== resolvedToRemove);
+        await this.saveFolderPathsConfig(cfg);
+    }
+
+    getTicketsAutoSync(): boolean {
+        return this._getOrLoadCachedConfig().ticketsAutoSync === true;
+    }
+
+    async setTicketsAutoSync(value: boolean): Promise<void> {
+        const cfg = await this.loadFolderPathsConfig();
+        cfg.ticketsAutoSync = value;
         await this.saveFolderPathsConfig(cfg);
     }
 
