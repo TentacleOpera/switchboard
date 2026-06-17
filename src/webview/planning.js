@@ -5426,16 +5426,15 @@ Return ONLY the drafted prompt with no additional commentary.`;
             resetTicketsInMemoryState();
             lastIntegrationProvider = newProvider;
             ticketsLoadedOnce = false;
+            // The backend responds to switchTicketsProvider with an
+            // integrationProviderStates message, whose handler drives the
+            // (autoSync-aware) ticket load exactly once. Loading here too would
+            // double-fetch (autoSync on) or flash remote-then-local (autoSync off).
             vscode.postMessage({
                 type: 'switchTicketsProvider',
                 provider: newProvider,
                 workspaceRoot: ticketsWorkspaceRoot
             });
-            if (newProvider === 'clickup') {
-                loadClickUpSpaces();
-            } else {
-                loadLinearProject();
-            }
         });
 
         document.getElementById('tickets-workspace-filter')?.addEventListener('change', (e) => {

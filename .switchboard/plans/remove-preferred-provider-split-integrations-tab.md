@@ -307,3 +307,7 @@ If issues arise, revert changes in reverse order:
 
 Complexity 7 → **Send to Lead Coder**
 
+## Review Findings
+
+Implementation is plan-compliant: `preferredProvider`/`integrationProviderPreference`/`saveIntegrationProviderPreference` return zero matches across `src/`, setting removed from `package.json` and `.vscode/settings.json`, setup.html split into clickup/linear/notion tabs, ContinuousSyncService uses plan-metadata-driven sync (logs both-ID→ClickUp priority, skips when neither), and both continuous-sync test harnesses carry `clickupTaskId` (debounce test adds explicit neither-ID skip assertion). Fixed one MAJOR double-trigger in `src/webview/planning.js`: the `tickets-provider-selector` change listener fired a ticket load directly *and* the backend `switchTicketsProvider`→`integrationProviderStates` round-trip fired a second autoSync-aware load — removed the listener's direct load so it happens once. Files changed: `src/webview/planning.js`. Validation: straggler grep zero matches, change-listener fix confirmed (compilation/tests skipped per session directive — user to run suite). Remaining risks: deferred NITs (redundant provider branch at PlanningPanelProvider.ts:1173-1179, stale optional-chaining comment at ContinuousSyncService.ts:478-481) and the plan's documented memory-only `_activeTicketsProvider` reset-on-reload behavior.
+
