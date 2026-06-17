@@ -80,3 +80,6 @@ Key risks: copy-paste drift across three monolithic HTML files and potential lin
 ---
 
 **Recommendation:** Send to Intern
+
+## Review Findings
+Files changed: `src/webview/kanban.html` only. The `.cyber-theme-enabled .strip-btn:hover:not(:disabled) { box-shadow: var(--glow-teal); }` rule is present at lines 253-255, placed immediately after `.strip-btn:hover:not(:disabled)` as specified, and `--glow-teal` is confirmed defined in `:root` at line 28. Purely additive, theme-gated rule — no duplicate `.cyber-theme-enabled .strip-btn:hover` exists, default theme unaffected. Validation: static review only (compile/tests skipped); manual hover check under afterburner/claudify still required. Remaining risk: none.

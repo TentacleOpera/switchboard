@@ -171,3 +171,6 @@ Ensure `.shared-tab-content` styles (lines 112-117, 445-454) remain unchanged as
 - None - this is a pure CSS/HTML class name change with no functional logic impact, provided JS selectors are updated to match.
 
 **Recommendation:** Send to Intern
+
+## Review Findings
+Files changed: `src/webview/setup.html` only. CSS block (407-474) replaced with `.controls-strip`/`.strip-btn` including `flex-shrink:0; white-space:nowrap;` and both cyber-theme overrides; HTML classes (481-493) and JS selectors (1588, 1617) all renamed to `.strip-btn`; `.shared-tab-content` panel rules correctly preserved. Grep confirms zero orphaned `.shared-tab-bar`/`.shared-tab-btn` references — no dead tab-switching risk. Validation: static review only (compile/tests skipped per directive); manual webview check still required. Remaining risk: none material; the `--font-mono`→`--font-family` change flagged in "User Review Required" is intentional and present.

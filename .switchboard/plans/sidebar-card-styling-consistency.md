@@ -132,3 +132,6 @@ None required — this is a visual CSS change with no testable logic. The projec
 ---
 
 **Recommendation:** Send to Intern
+
+## Review Findings
+Files changed: `src/webview/project.html` only. `.epic-plan-item` (272-303) and `.constitution-file-item` (305-336) blocks added after `.kanban-plan-item`, byte-for-byte mirroring its base/hover/selected and cyber-theme variants, with the documenting comment at line 271. Specificity is correct — the new single-class rules override the generic `.kanban-plan-item, .epic-plan-item, .constitution-file-item` block (225-237), so the `border` shorthand cleanly supersedes the generic `border-bottom` and the `.selected` border-left resolves without conflict. Validation: static review only (compile/tests skipped); manual gradient/theme-claudify check still required. Remaining risk: none material; duplication is the accepted maintenance trade-off noted in the plan.

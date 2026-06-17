@@ -198,3 +198,6 @@ Key risks: (1) The existing `_showTemporaryNotification` pattern (`TaskViewerPro
 ## Recommendation
 
 **Send to Coder**
+
+## Review Findings
+Files changed: `src/services/KanbanProvider.ts` (7 dispatch/complete toasts now route via null-safe `this.postMessage({type:'showStatusMessage',...})` at 4999/5398/5425/5466/5496/5690/5752), `src/extension.ts` (added `postKanbanStatus` helper at 2286 using `kanbanProvider?.postMessage`, applied at 2497/2557; broad `showTemporaryNotification` adoption), `src/utils/showTemporaryNotification.ts` (new shared 2.5s withProgress util), and `src/webview/kanban.html` (showStatusMessage now clears a stored `_statusTimeoutId` and auto-clears at 5s — "latest wins" correct). Grep confirms no leftover duplicate toasts at converted sites and silent-skip is honored everywhere. Validation: static/inline review only (compile/tests skipped per directive). Remaining risk (NIT): the pre-existing `animationend` handler (8589) sets `display:none` at the 3s flash end, so messages visually disappear at ~3s while the new timeout only clears `textContent` at 5s — harmless and matches the kept 3s animation, but "auto-hide after 5s" is effectively 3s visually; revisit only if the user wants the full 5s dwell.
