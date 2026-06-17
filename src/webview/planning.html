@@ -2350,6 +2350,7 @@
         .json-error { color: var(--vscode-errorForeground, #ff6b6b); padding: 12px; }
         .json-error button { margin-top: 8px; padding: 4px 12px; cursor: pointer; }
         .edit-mode #markdown-preview,
+        .edit-mode #markdown-preview-online,
         .edit-mode #kanban-preview-content {
             display: none !important;
         }
@@ -2612,6 +2613,22 @@
             height: 22px;
         }
 
+        .ticket-priority-dot,
+        .ticket-status-light {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .ticket-status-light {
+            box-shadow: 0 0 4px color-mix(in srgb, currentColor 0%, transparent);
+            border: 1px solid color-mix(in srgb, var(--panel-bg) 40%, transparent);
+        }
+
         .ticket-sync-badge {
             font-size: 9px;
             letter-spacing: 0.02em;
@@ -2621,12 +2638,22 @@
             pointer-events: none;
             user-select: none;
         }
+        /* Pin the sync badge to the bottom-left of the card, pushing the
+           action buttons to the right within the card-actions row. */
+        .ticket-node .card-actions .ticket-sync-badge {
+            margin-right: auto;
+            align-self: center;
+        }
         .ticket-sync-synced {
             color: var(--vscode-testing-iconPassed, #73c991);
             opacity: 0.7;
         }
         .ticket-sync-modified {
             color: var(--vscode-editorWarning-foreground, #cca700);
+        }
+        .ticket-sync-local {
+            color: var(--text-secondary);
+            opacity: 0.7;
         }
 
         /* ── Ticket Detail Preview Pane ── */
@@ -2895,6 +2922,58 @@
             background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
     </style>
     <style>
+/* Tag pills */
+.ticket-tag-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-size: 10px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border: 1px solid transparent;
+    background: var(--panel-bg2);
+    color: var(--text-secondary);
+}
+
+.ticket-tag-pill.clickup {
+    background: var(--tag-bg, var(--panel-bg2));
+    color: var(--tag-fg, var(--text-secondary));
+    border-color: var(--tag-bg, var(--border-color));
+}
+
+.ticket-tag-pill.linear {
+    background: var(--accent-teal-dim);
+    color: var(--accent-teal);
+    border-color: var(--accent-teal-dim);
+}
+
+/* Tags modal checkbox styling */
+.tag-checkbox-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.tag-checkbox-item:hover {
+    background: var(--card-bg-hover);
+}
+
+.tag-checkbox-item input[type="checkbox"] {
+    margin: 0;
+    cursor: pointer;
+}
+
+.tag-checkbox-label {
+    font-size: 12px;
+    color: var(--text-primary);
+}
+
 .shared-tab-bar {
   display: flex;
   align-items: center;
@@ -2957,7 +3036,7 @@
     <div id="research-tab-bar" class="shared-tab-bar">
         <button class="shared-tab-btn active" data-tab="local">LOCAL DOCS</button>
         <button class="shared-tab-btn" data-tab="online">ONLINE DOCS</button>
-        <button class="shared-tab-btn" data-tab="tickets">TICKETS</button>
+        <button class="shared-tab-btn" data-tab="tickets" id="tickets-tab-btn">TICKETS</button>
         <button class="shared-tab-btn" data-tab="research">RESEARCH</button>
         <button class="shared-tab-btn" data-tab="notebook">NotebookLM</button>
     </div>
@@ -3011,7 +3090,9 @@
                     <option value="">All Workspaces</option>
                 </select>
                 <button id="btn-import-full-doc-online" class="strip-btn" disabled>Import</button>
-                <button id="btn-edit-online" class="strip-btn" disabled style="display:none;" title="Editing not available for remote docs">Edit</button>
+                <button id="btn-edit-online" class="strip-btn" disabled>Edit</button>
+                <button id="btn-save-online" class="strip-btn" style="display:none;">Save</button>
+                <button id="btn-cancel-online" class="strip-btn" style="display:none;">Cancel</button>
                 <input type="text" id="online-docs-search" class="sidebar-search-input" placeholder="Search docs..." />
                 <span id="status-online"></span>
             </div>
@@ -3031,6 +3112,7 @@
                             <div id="markdown-preview-online">
                                 <div class="empty-state">Select a document from the sidebar to preview</div>
                             </div>
+                            <textarea id="markdown-editor-online" class="markdown-editor" style="display:none;"></textarea>
                         </div>
                     </div>
                     <div class="cyber-scanlines"></div>
@@ -3152,6 +3234,10 @@
                     <div class="tickets-workspace-picker">
                         <select id="tickets-workspace-filter" class="workspace-filter-select" style="display:none;"></select>
                         <span id="tickets-workspace-label" class="workspace-static-label" style="display:none;"></span>
+                        <select id="tickets-provider-selector" class="workspace-filter-select" style="display:none; margin-left: 8px;">
+                            <option value="clickup">ClickUp</option>
+                            <option value="linear">Linear</option>
+                        </select>
                     </div>
                     <select id="tickets-project-picker" style="display:none"></select>
                     <select id="tickets-state-filter" style="display:none"></select>
@@ -3159,6 +3245,7 @@
                     <button id="tickets-create" class="strip-btn" disabled title="Configure an integration in Setup first">+ New Ticket</button>
                     <button id="tickets-refresh" class="strip-btn" title="Re-fetch from source and save local copies">Refetch</button>
                     <button id="tickets-sync-all" class="strip-btn" title="Push all local ticket changes back to the integration">Sync changes</button>
+                    <button id="tickets-tags" class="strip-btn" disabled title="Edit tags">Tags</button>
                 </div>
                 <div class="controls-strip-row">
                     <div id="tickets-hierarchy-nav" style="display:none; flex-wrap: wrap; gap: 8px; align-items: center;"></div>
@@ -3179,18 +3266,13 @@
                 </div>
                 <div class="preview-panel-wrapper">
                     <div id="preview-pane-tickets" style="flex: 1; width: 100%; box-sizing: border-box; display: flex; flex-direction: column;">
-                        <div id="tickets-preview-meta-bar" style="display:none;">
-                            <button id="btn-edit-ticket" class="strip-btn">Edit</button>
-                            <button id="btn-save-ticket-edit" class="strip-btn" style="display:none; background: var(--accent-teal); color: black;">Save</button>
-                            <button id="btn-cancel-ticket-edit" class="strip-btn" style="display:none;">Cancel</button>
-                            <button id="btn-push-ticket" class="strip-btn">Push</button>
-                            <button id="btn-delete-ticket" class="strip-btn">Delete</button>
-                            <div class="kanban-meta-group">
-                                <span class="kanban-meta-label">Status:</span>
-                                <select id="select-status-ticket" class="kanban-meta-dropdown" style="display:inline-block; background: var(--panel-bg2, #1a1a2e); border: 1px solid var(--border-color); color: var(--text-secondary); font-size: 11px;"></select>
+                        <div class="preview-header-actions" style="display:flex; justify-content: space-between; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--border-color); background: var(--panel-bg2);">
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <button id="btn-post-comment" class="strip-btn">Comment</button>
+                                <button id="btn-show-attachments" class="strip-btn" style="display:none;">Attachments (<span id="attachments-count">0</span>)</button>
+                                <span id="tickets-refining-status" style="display:none; font-size:11px; color:var(--accent-teal);">Refining...</span>
                             </div>
-                            <button id="btn-comment-ticket" class="strip-btn">Comment</button>
-                            <button id="btn-view-attachments" class="strip-btn" style="display:none;">Attachments</button>
+                            <button id="btn-open-ticket" class="strip-btn" style="display:none;">Open</button>
                         </div>
 
                         <div id="tickets-comment-input-area" style="display:none; padding: 10px; border-bottom: 1px solid var(--border-color); background: var(--panel-bg2); margin: 10px;">
@@ -3205,6 +3287,7 @@
                                 <div style="width: 32px; height: 32px; border: 3px solid var(--border-color); border-top-color: var(--accent-teal); border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
                                 <div style="font-size: 12px;">Loading tickets...</div>
                             </div>
+                            <div id="tickets-tags-display" style="display: none; padding: 12px 16px 8px 16px; gap: 6px; flex-wrap: wrap;"></div>
                             <!-- Markdown preview container matching local docs -->
                             <div id="markdown-preview-tickets">
                                 <div id="tickets-empty-preview" class="empty-state">Select a ticket to preview</div>
@@ -3347,6 +3430,25 @@
             </div>
             <div class="modal-body" style="margin-top: 10px;">
                 <div id="attachments-list" style="display: flex; flex-direction: column; gap: 8px; max-height: 400px; overflow-y: auto; text-align: left;"></div>
+            </div>
+        </div>
+    <div class="folder-modal" id="tags-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="tags-modal-title">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h3 id="tags-modal-title">Edit Tags</h3>
+                <button class="modal-close-btn" id="btn-close-tags-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" style="margin-top: 10px;">
+                <div style="display: flex; flex-direction: column; gap: 12px;">
+                    <div>
+                        <label style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); display: block; margin-bottom: 8px;">Available Tags</label>
+                        <div id="tags-available-list" style="display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow-y: auto;"></div>
+                    </div>
+                    <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px;">
+                        <button id="btn-cancel-tags" class="strip-btn">Cancel</button>
+                        <button id="btn-save-tags" class="planning-button" style="margin: 0; padding: 4px 12px;">Save</button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

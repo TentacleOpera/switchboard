@@ -68,7 +68,7 @@
       },
       {
         "command": "switchboard.openKanban",
-        "title": "Switchboard: Open AUTOBAN"
+        "title": "Switchboard: Open KANBAN"
       },
       {
         "command": "switchboard.openSetupPanel",
@@ -321,19 +321,7 @@
           "default": "",
           "description": "URL or path to the Design System Doc to append to planner prompts. Only used when designSystemDocEnabled is true."
         },
-        "switchboard.integrations.preferredProvider": {
-          "type": "string",
-          "enum": [
-            "linear",
-            "clickup"
-          ],
-          "default": "linear",
-          "description": "Primary project management integration provider. Controls which configuration section is visible in the Setup panel.",
-          "enumDescriptions": [
-            "Show Linear configuration section in the Setup panel",
-            "Show ClickUp configuration section in the Setup panel"
-          ]
-        },
+
         "switchboard.team.strictPrompts": {
           "type": "boolean",
           "default": false,

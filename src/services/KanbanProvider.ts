@@ -820,7 +820,7 @@ export class KanbanProvider implements vscode.Disposable {
 
         this._panel = vscode.window.createWebviewPanel(
             'switchboard-kanban',
-            'AUTOBAN',
+            'KANBAN',
             vscode.ViewColumn.One,
             {
                 enableScripts: true,
@@ -2424,7 +2424,8 @@ export class KanbanProvider implements vscode.Disposable {
         return { designDocLink, designDocContent };
     }
 
-    private async _resolveConstitution(workspaceRoot: string): Promise<{ constitutionLink?: string; constitutionContent?: string }> {
+    private async _resolveConstitution(workspaceRoot: string, enabled: boolean = true): Promise<{ constitutionLink?: string; constitutionContent?: string }> {
+        if (!enabled) return {};
         const filePath = path.join(workspaceRoot, 'CONSTITUTION.md');
         if (fs.existsSync(filePath)) {
             try {
@@ -2468,6 +2469,11 @@ export class KanbanProvider implements vscode.Disposable {
                 const { designSystemDocLink } = await this._resolveDesignSystemDoc(workspaceRoot);
                 mergedAddons.designSystemDocLink = designSystemDocLink;
             }
+            if (mergedAddons.constitution) {
+                const { constitutionLink, constitutionContent } = await this._resolveConstitution(workspaceRoot, true);
+                mergedAddons.constitutionLink = constitutionLink;
+                mergedAddons.constitutionContent = constitutionContent;
+            }
             const promptTab = this._getRoleConfig(role)?.prompt?.trim() || '';
             const instructions = promptTab || agentConfig?.promptInstructions || '';
             return buildCustomAgentPrompt(
@@ -2509,9 +2515,10 @@ export class KanbanProvider implements vscode.Disposable {
             const { designDocLink, designDocContent } = await this._resolveGlobalDesignDoc(workspaceRoot);
             resolvedOptions.designDocLink = designDocLink;
             resolvedOptions.designDocContent = designDocContent;
+            resolvedOptions.constitutionEnabled = promptsConfig.constitutionEnabled;
             const { designSystemDocLink } = await this._resolveDesignSystemDoc(workspaceRoot);
             resolvedOptions.designSystemDocLink = designSystemDocLink;
-            const { constitutionLink, constitutionContent } = await this._resolveConstitution(workspaceRoot);
+            const { constitutionLink, constitutionContent } = await this._resolveConstitution(workspaceRoot, resolvedOptions.constitutionEnabled);
             resolvedOptions.constitutionLink = constitutionLink;
             resolvedOptions.constitutionContent = constitutionContent;
         } else if (role === 'lead' || role === 'coder' || role === 'intern') {
@@ -2632,6 +2639,7 @@ export class KanbanProvider implements vscode.Disposable {
             aggressivePairProgramming: plannerConfig?.addons?.aggressivePairProgramming ?? config.get<boolean>('aggressivePairProgramming.enabled', false),
             designDocEnabled: plannerConfig?.addons?.designDoc ?? config.get<boolean>('planner.designDocEnabled', false),
             designDocLink: config.get<string>('planner.designDocLink', ''),
+            constitutionEnabled: plannerConfig?.addons?.constitution ?? config.get<boolean>('planner.constitutionEnabled', false),
             designSystemDocEnabled: plannerConfig?.addons?.designSystemDoc ?? config.get<boolean>('planner.designSystemDocEnabled', false),
             designSystemDocLink: config.get<string>('planner.designSystemDocLink', ''),
             plannerWorkflowPath: plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agent/workflows/improve-plan.md'),
@@ -4107,6 +4115,20 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
                 break;
             }
+            case 'getConstitutionStatus': {
+                const wr = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!wr) break;
+                const filePath = path.join(wr, 'CONSTITUTION.md');
+                const exists = fs.existsSync(filePath);
+                const promptsConfig = await this._getPromptsConfig(wr);
+                const enabled = promptsConfig.constitutionEnabled ?? false;
+                let status = 'None';
+                if (enabled && exists) { status = 'CONSTITUTION.md'; }
+                else if (enabled) { status = 'File not found'; }
+                else { status = 'Disabled'; }
+                this._panel?.webview.postMessage({ type: 'constitutionStatus', status, planFile: msg.planFile });
+                break;
+            }
             case 'openPlanByPath': {
                 const planPath = msg.planPath;
                 const workspaceRoot = this._currentWorkspaceRoot;
@@ -4988,7 +5010,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     }
                 }
                 await this._refreshBoard(workspaceRoot);
-                vscode.window.showInformationMessage(`Dispatched ${dispatchedCount} LOW-complexity plans to Jules.`);
+                this.postMessage({ type: 'showStatusMessage', message: `Dispatched ${dispatchedCount} LOW-complexity plans to Jules.`, isError: false });
                 break;
             }
             case 'moveSelected': {
@@ -5387,7 +5409,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     }
                 }
                 await this._refreshBoard(workspaceRoot);
-                vscode.window.showInformationMessage(`Dispatched ${dispatchedCount} plans to Jules.`);
+                this.postMessage({ type: 'showStatusMessage', message: `Dispatched ${dispatchedCount} plans to Jules.`, isError: false });
                 break;
             }
             case 'splitterSelected': {
@@ -5414,7 +5436,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     workspaceRoot
                 );
                 await this._refreshBoard(workspaceRoot);
-                vscode.window.showInformationMessage(`Dispatched ${eligibleSessionIds.length} plan(s) to Splitter.`);
+                this.postMessage({ type: 'showStatusMessage', message: `Dispatched ${eligibleSessionIds.length} plan(s) to Splitter.`, isError: false });
                 break;
             }
             case 'completePlan': {
@@ -5455,7 +5477,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     if (ok) { successCount++; }
                 }
                 await this._refreshBoard(workspaceRoot);
-                vscode.window.showInformationMessage(`Completed ${successCount} of ${msg.sessionIds.length} plans.`);
+                this.postMessage({ type: 'showStatusMessage', message: `Completed ${successCount} of ${msg.sessionIds.length} plans.`, isError: false });
                 break;
             }
             case 'completeAll': {
@@ -5485,7 +5507,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     if (ok) { successCount++; }
                 }
                 await this._refreshBoard(workspaceRoot);
-                vscode.window.showInformationMessage(`Completed ${successCount} of ${reviewedCards.length} plans.`);
+                this.postMessage({ type: 'showStatusMessage', message: `Completed ${successCount} of ${reviewedCards.length} plans.`, isError: false });
                 break;
             }
             case 'uncompleteCard': {
@@ -5679,7 +5701,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 } else {
                     // CLI Coder: Lead prompt to clipboard, Coder prompt to terminal
                     await vscode.env.clipboard.writeText(leadPrompt);
-                    vscode.window.showInformationMessage('Complex prompt copied to clipboard. Dispatching Routine tasks to Coder terminal...');
+                    this.postMessage({ type: 'showStatusMessage', message: 'Complex prompt copied to clipboard. Dispatching Routine tasks to Coder terminal...', isError: false });
                     const worktreePath = plans[0]?.worktreePath;
                     await vscode.commands.executeCommand('switchboard.dispatchToCoderTerminal', coderPrompt, worktreePath);
 
@@ -5741,7 +5763,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     }
                 }
                 const failMsg = failed > 0 ? ` ${failed} failed.` : '';
-                vscode.window.showInformationMessage(`Code map dispatched for ${succeeded}/${msg.sessionIds.length} plan(s).${failMsg}`);
+                this.postMessage({ type: 'showStatusMessage', message: `Code map dispatched for ${succeeded}/${msg.sessionIds.length} plan(s).${failMsg}`, isError: false });
                 break;
             }
             case 'getDbPath': {
@@ -6264,22 +6286,19 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (!db || !await db.ensureReady()) break;
 
                 try {
-                    const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, msg.epicTopic);
+                    const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, msg.epicTopic, msg.repoName);
 
                     // Add to worktrees database table
                     const epicId = msg.epicId ? String(msg.epicId) : undefined;
-                    await db.addWorktree(branch, wtPath, epicId);
+                    await db.addWorktree(branch, wtPath, epicId, msg.project);
 
-                    // Force-create new terminals in worktree — existing terminals are unaffected
-                    const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-                    const roleToName: Record<string, string> = {
-                        'planner': 'Planner', 'lead': 'Lead Coder', 'coder': 'Coder',
-                        'intern': 'Intern', 'reviewer': 'Reviewer', 'analyst': 'Analyst'
-                    };
-                    for (const [role, enabled] of Object.entries(visibleAgents)) {
-                        if (!enabled) continue;
-                        const agentName = roleToName[role] || role.charAt(0).toUpperCase() + role.slice(1);
-                        await vscode.commands.executeCommand('switchboard.addAutobanTerminalFromKanban', role, agentName, wtPath);
+                    // Force-create new terminals in worktree
+                    if (this._taskViewerProvider) {
+                        const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+                        const activeAgents = Object.entries(visibleAgents)
+                            .filter(([_, enabled]) => enabled)
+                            .map(([role]) => role);
+                        await this._taskViewerProvider.ensureWorktreeTerminals(wtPath, activeAgents);
                     }
 
                     vscode.window.showInformationMessage(`Worktree created: ${branch}`);
@@ -6306,19 +6325,16 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 }
 
                 try {
-                    const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, msg.epicTopic);
+                    const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, msg.epicTopic, msg.repoName);
                     await db.addWorktree(branch, wtPath, msg.epicId ? String(msg.epicId) : undefined);
 
-                    // Force-create terminals in worktree
-                    const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-                    const roleToName: Record<string, string> = {
-                        'planner': 'Planner', 'lead': 'Lead Coder', 'coder': 'Coder',
-                        'intern': 'Intern', 'reviewer': 'Reviewer', 'analyst': 'Analyst'
-                    };
-                    for (const [role, enabled] of Object.entries(visibleAgents)) {
-                        if (!enabled) continue;
-                        const agentName = roleToName[role] || role.charAt(0).toUpperCase() + role.slice(1);
-                        await vscode.commands.executeCommand('switchboard.addAutobanTerminalFromKanban', role, agentName, wtPath);
+                    // Force-create terminals in worktree using shared ensureWorktreeTerminals
+                    if (this._taskViewerProvider) {
+                        const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+                        const activeAgents = Object.entries(visibleAgents)
+                            .filter(([_, enabled]) => enabled)
+                            .map(([role]) => role);
+                        await this._taskViewerProvider.ensureWorktreeTerminals(wtPath, activeAgents);
                     }
 
                     vscode.window.showInformationMessage(`Worktree created for epic: ${branch}`);
@@ -6329,23 +6345,139 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 }
                 break;
             }
+            case 'createWorktreeForProject': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                if (!db || !await db.ensureReady()) break;
+
+                // Block if project already has an active linked worktree
+                const allWorktrees = await db.getWorktrees();
+                const existing = allWorktrees.find(w => w.project === msg.project && w.status === 'active');
+                if (existing) {
+                    vscode.window.showInformationMessage(`Project already has worktree: ${existing.branch}`);
+                    break;
+                }
+
+                try {
+                    const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, msg.project, msg.repoName);
+                    await db.addWorktree(branch, wtPath, undefined, msg.project);
+
+                    // Force-create terminals in worktree using shared ensureWorktreeTerminals
+                    if (this._taskViewerProvider) {
+                        const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+                        const activeAgents = Object.entries(visibleAgents)
+                            .filter(([_, enabled]) => enabled)
+                            .map(([role]) => role);
+                        await this._taskViewerProvider.ensureWorktreeTerminals(wtPath, activeAgents);
+                    }
+
+                    vscode.window.showInformationMessage(`Worktree created for project: ${branch}`);
+                    await this._refreshBoard(workspaceRoot);
+                    await this._sendWorktreeConfig(workspaceRoot);
+                } catch (e: any) {
+                    vscode.window.showErrorMessage(`Failed to create worktree: ${e.message}`);
+                }
+                break;
+            }
+            case 'createWorktreesForAllEpics': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                if (!db || !await db.ensureReady()) break;
+
+                try {
+                    const workspaceId = await db.getWorkspaceId() || '';
+                    const epics = await db.getEpicPlans(workspaceId);
+                    const allWorktrees = await db.getWorktrees();
+                    
+                    let createdCount = 0;
+                    let skippedCount = 0;
+                    
+                    for (const epic of epics) {
+                        const existing = allWorktrees.find(w => String(w.epic_id) === epic.planId && w.status === 'active');
+                        if (existing) {
+                            skippedCount++;
+                            continue;
+                        }
+
+                        try {
+                            const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, epic.topic);
+                            await db.addWorktree(branch, wtPath, epic.planId);
+
+                            if (this._taskViewerProvider) {
+                                const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+                                const activeAgents = Object.entries(visibleAgents)
+                                    .filter(([_, enabled]) => enabled)
+                                    .map(([role]) => role);
+                                await this._taskViewerProvider.ensureWorktreeTerminals(wtPath, activeAgents);
+                            }
+                            createdCount++;
+                        } catch (e: any) {
+                            console.error(`Failed to create worktree for epic ${epic.topic}:`, e);
+                            skippedCount++;
+                        }
+                    }
+
+                    vscode.window.showInformationMessage(`Created ${createdCount} worktree(s); skipped ${skippedCount} already-linked or failed.`);
+                    await this._refreshBoard(workspaceRoot);
+                    await this._sendWorktreeConfig(workspaceRoot);
+                } catch (e: any) {
+                    vscode.window.showErrorMessage(`Failed to batch create worktrees: ${e.message}`);
+                }
+                break;
+            }
+            case 'toggleWorktreeAgentsOpenWithGrid': {
+                const { worktreeId, enabled, workspaceRoot: msgRoot } = msg;
+                const workspaceRoot = this._resolveWorkspaceRoot(msgRoot);
+                if (!workspaceRoot) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                if (!db || !await db.ensureReady()) break;
+
+                await db.setWorktreeAgentsOpenWithGrid(Number(worktreeId), !!enabled);
+                await this._sendWorktreeConfig(workspaceRoot);
+                break;
+            }
+            case 'setSuppressMainTerminals': {
+                const { enabled, workspaceRoot: msgRoot } = msg;
+                const workspaceRoot = this._resolveWorkspaceRoot(msgRoot);
+                if (!workspaceRoot) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                if (!db || !await db.ensureReady()) break;
+
+                await db.setMeta('worktree_suppress_main_terminals', enabled ? 'true' : '');
+                await this._sendWorktreeConfig(workspaceRoot);
+                break;
+            }
+            case 'openWorktreeTerminals': {
+                const { worktreeId, workspaceRoot: msgRoot } = msg;
+                const workspaceRoot = this._resolveWorkspaceRoot(msgRoot);
+                if (!workspaceRoot) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                if (!db || !await db.ensureReady()) break;
+
+                const allWorktrees = await db.getWorktrees();
+                const wt = allWorktrees.find(w => w.id === Number(worktreeId));
+                if (!wt) {
+                    vscode.window.showErrorMessage(`Worktree not found for ID: ${worktreeId}`);
+                    break;
+                }
+
+                if (this._taskViewerProvider) {
+                    const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+                    const activeAgents = Object.entries(visibleAgents)
+                        .filter(([_, enabled]) => enabled)
+                        .map(([role]) => role);
+                    await this._taskViewerProvider.ensureWorktreeTerminals(wt.path, activeAgents);
+                    await this._taskViewerProvider.revealWorktreeTerminal(wt.path);
+                }
+                break;
+            }
             case 'focusWorktree': {
                 const { worktreePath } = msg;
                 this._focusedWorktreePath = worktreePath || null;
                 if (this._taskViewerProvider) {
                     this._taskViewerProvider.notifyStateChanged();
-                }
-                break;
-            }
-            case 'clearRememberedWorktreeChoice': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (!workspaceRoot) break;
-                const db = this._getKanbanDb(workspaceRoot);
-                if (db && await db.ensureReady()) {
-                    await db.setMeta('worktree_agent_behaviour', '');
-                    await db.setMeta('worktree_remembered_path', '');
-                    await db.setMeta('worktree_remember_enabled', '');
-                    vscode.window.showInformationMessage('Remembered worktree choice cleared.');
                 }
                 break;
             }
@@ -6790,7 +6922,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         return content;
     }
 
-    private async _createSafetyWorktree(workspaceRoot: string, epicTopic?: string): Promise<{ branch: string; path: string }> {
+    private async _createSafetyWorktree(workspaceRoot: string, epicTopic?: string, repoName?: string): Promise<{ branch: string; path: string }> {
         const execFileAsync = promisify(cp.execFile);
 
         // Resolve workspace root first — getControlPlaneSelectionStatus returns garbage if this is empty.
@@ -6800,6 +6932,24 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         const cpStatus = this.getControlPlaneSelectionStatus(workspaceRoot);
         if (!cpStatus.controlPlaneRoot) {
             throw new Error('Could not resolve a workspace root for worktree creation.');
+        }
+
+        if (repoName && (repoName.includes('..') || repoName.includes('/') || repoName.includes('\\'))) {
+            throw new Error('Invalid repository name');
+        }
+
+        let effectiveGitRoot = workspaceRoot;
+        if (repoName && cpStatus.mode === 'explicit') {
+            effectiveGitRoot = path.join(cpStatus.controlPlaneRoot, repoName);
+        } else if (cpStatus.isRepoScoped && cpStatus.repoScopeFilter) {
+            effectiveGitRoot = path.join(cpStatus.controlPlaneRoot, cpStatus.repoScopeFilter);
+        }
+
+        if (!fs.existsSync(effectiveGitRoot)) {
+            throw new Error(`Repository directory does not exist: ${effectiveGitRoot}`);
+        }
+        if (!fs.existsSync(path.join(effectiveGitRoot, '.git'))) {
+            throw new Error(`Not a git repository: ${effectiveGitRoot}`);
         }
 
         // Worktrees must live BESIDE the repo, never inside it, to keep `git status` clean.
@@ -6820,8 +6970,8 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         while (true) {
             try {
                 const fullPath = path.join(worktreesParent, branch);
-                // CRITICAL: git worktree add MUST run from workspaceRoot (the git repo), not the control plane root
-                await execFileAsync('git', ['worktree', 'add', '-b', branch, fullPath], { cwd: workspaceRoot });
+                // CRITICAL: git worktree add MUST run from effectiveGitRoot (the git repo), not the control plane root
+                await execFileAsync('git', ['worktree', 'add', '-b', branch, fullPath], { cwd: effectiveGitRoot });
                 return { branch, path: fullPath };
             } catch (e: any) {
                 if (e.message?.includes('already exists') || e.message?.includes('already used')) {
@@ -6839,16 +6989,68 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         if (!db || !await db.ensureReady()) return;
         const worktrees = await db.getWorktrees();
         const cpStatus = this.getControlPlaneSelectionStatus(workspaceRoot);
-        this._panel?.webview.postMessage({
-            type: 'worktreeConfig',
-            worktrees: worktrees.map(w => ({
+        
+        const workspaceId = await db.getWorkspaceId() || '';
+        const suppressMainTerminals = (await db.getMeta('worktree_suppress_main_terminals')) === 'true';
+        const projects = await db.getProjects(workspaceId);
+        
+        // Fetch all active epic plans to pass to webview for selection and mapping
+        const epicPlans = await db.getEpicPlans(workspaceId);
+        const epics = epicPlans.map(p => ({ planId: p.planId, topic: p.topic }));
+
+        // Map worktrees and resolve epicTopic + epicProject
+        const mappedWorktrees = [];
+        for (const w of worktrees) {
+            let epicTopic: string | undefined = undefined;
+            let epicProject: string | undefined = undefined;
+            if (w.epic_id) {
+                const epicPlan = await db.getPlanByPlanId(w.epic_id);
+                if (epicPlan) {
+                    epicTopic = epicPlan.topic;
+                    epicProject = epicPlan.project || undefined;
+                }
+            }
+            mappedWorktrees.push({
                 id: w.id,
                 branch: w.branch,
                 path: w.path,
                 epicId: w.epic_id,
                 createdAt: w.created_at,
-            })),
+                project: w.project,
+                agentsOpenWithGrid: w.agentsOpenWithGrid,
+                epicTopic,
+                epicProject,
+            });
+        }
+
+        let availableRepos: string[] = [];
+        if (cpStatus.mode === 'explicit' && cpStatus.controlPlaneRoot) {
+            try {
+                const entries = fs.readdirSync(cpStatus.controlPlaneRoot, { withFileTypes: true });
+                for (const entry of entries) {
+                    if (entry.isDirectory()) {
+                        const childPath = path.join(cpStatus.controlPlaneRoot, entry.name);
+                        const gitPath = path.join(childPath, '.git');
+                        if (fs.existsSync(gitPath)) {
+                            availableRepos.push(entry.name);
+                        }
+                    }
+                }
+                availableRepos.sort();
+            } catch (err) {
+                console.error('[KanbanProvider] Failed to scan control plane directory for child repos:', err);
+            }
+        }
+
+        this._panel?.webview.postMessage({
+            type: 'worktreeConfig',
+            worktrees: mappedWorktrees,
             controlPlaneMode: cpStatus.mode,
+            suppressMainTerminals,
+            projects,
+            epics,
+            availableRepos,
+            activeRepoFilter: this._repoScopeFilter,
         });
     }
 

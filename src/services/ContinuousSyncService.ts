@@ -479,20 +479,17 @@ export class ContinuousSyncService implements vscode.Disposable {
       // unit-test harnesses that stub only a minimal vscode surface. Without
       // this guard, _executeSync throws before reaching the sync call and
       // every existing regression test fails at the first assertion.
-      const folderUri = vscode.workspace?.workspaceFolders?.find((folder) =>
-        path.resolve(folder.uri.fsPath) === path.resolve(workspaceRoot)
-      )?.uri;
-      const preferredProvider = vscode.workspace?.getConfiguration
-        ? vscode.workspace
-            .getConfiguration('switchboard', folderUri)
-            .get<'linear' | 'clickup'>('integrations.preferredProvider') || 'linear'
-        : 'linear';
-
       let syncResult;
-      if (preferredProvider === 'clickup') {
+      if (plan.clickupTaskId) {
+        if (plan.linearIssueId) {
+          console.log('[ContinuousSync] Plan has both clickupTaskId and linearIssueId; prioritizing ClickUp.');
+        }
         syncResult = await this._syncToClickUp(plan, content, workspaceRoot, controller.signal);
-      } else {
+      } else if (plan.linearIssueId) {
         syncResult = await this._syncToLinear(plan, content, workspaceRoot, controller.signal);
+      } else {
+        // No sync target - skip
+        return;
       }
 
       // Handle skip results - map to UI states and emit one-shot toasts

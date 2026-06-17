@@ -22,6 +22,8 @@ export interface WorktreeRow {
     epic_id: string | null;
     created_at: string;
     status: 'active' | 'merged' | 'abandoned';
+    project: string | null;
+    agentsOpenWithGrid: boolean;
 }
 
 export type KanbanPlanStatus = 'active' | 'archived' | 'completed' | 'deleted';
@@ -154,7 +156,9 @@ CREATE TABLE IF NOT EXISTS worktrees (
     path        TEXT NOT NULL,
     epic_id     TEXT,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    status      TEXT NOT NULL DEFAULT 'active'
+    status      TEXT NOT NULL DEFAULT 'active',
+    project     TEXT,
+    agents_open_with_grid INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS linear_issue_links (
     issue_id   TEXT PRIMARY KEY,
@@ -493,8 +497,14 @@ const MIGRATION_V32_SQL = [
 
 // V33: add content_type to imported_docs
 const MIGRATION_V33_SQL = [
-    \`ALTER TABLE imported_docs ADD COLUMN content_type TEXT NOT NULL DEFAULT 'doc'\`,
-    \`CREATE INDEX IF NOT EXISTS idx_imported_docs_type ON imported_docs(content_type, workspace_id)\`,
+    `ALTER TABLE imported_docs ADD COLUMN content_type TEXT NOT NULL DEFAULT 'doc'`,
+    `CREATE INDEX IF NOT EXISTS idx_imported_docs_type ON imported_docs(content_type, workspace_id)`,
+];
+
+// V34: add project and agents_open_with_grid to worktrees
+const MIGRATION_V34_SQL = [
+    `ALTER TABLE worktrees ADD COLUMN project TEXT`,
+    `ALTER TABLE worktrees ADD COLUMN agents_open_with_grid INTEGER DEFAULT 0`,
 ];
 
 
@@ -2107,7 +2117,7 @@ export class KanbanDatabase {
     public async getWorktrees(): Promise<WorktreeRow[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
         const stmt = this._db.prepare(
-            `SELECT id, branch, path, epic_id, created_at, status FROM worktrees WHERE status = 'active' ORDER BY created_at DESC`
+            `SELECT id, branch, path, epic_id, created_at, status, project, agents_open_with_grid FROM worktrees WHERE status = 'active' ORDER BY created_at DESC`
         );
         const rows: any[] = [];
         try {
@@ -2124,14 +2134,21 @@ export class KanbanDatabase {
             epic_id: r.epic_id !== null && r.epic_id !== undefined && r.epic_id !== '' ? String(r.epic_id) : null,
             created_at: String(r.created_at || ''),
             status: r.status as 'active' | 'merged' | 'abandoned',
+            project: r.project !== null && r.project !== undefined && r.project !== '' ? String(r.project) : null,
+            agentsOpenWithGrid: Number(r.agents_open_with_grid) === 1,
         }));
     }
 
-    public async addWorktree(branch: string, wtPath: string, epicId?: string): Promise<number> {
+    public async addWorktree(branch: string, wtPath: string, epicId?: string, project?: string): Promise<number> {
         if (!(await this.ensureReady()) || !this._db) return 0;
         this._db.run(
-            `INSERT INTO worktrees (branch, path, epic_id) VALUES (?, ?, ?)`,
-            [branch, wtPath, epicId !== undefined && epicId !== null ? epicId : null]
+            `INSERT INTO worktrees (branch, path, epic_id, project) VALUES (?, ?, ?, ?)`,
+            [
+                branch,
+                wtPath,
+                epicId !== undefined && epicId !== null ? epicId : null,
+                project !== undefined && project !== null ? project : null
+            ]
         );
         await this._persist();
         
@@ -2155,10 +2172,19 @@ export class KanbanDatabase {
         return this._persist();
     }
 
+    public async setWorktreeAgentsOpenWithGrid(id: number, enabled: boolean): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        this._db.run(
+            `UPDATE worktrees SET agents_open_with_grid = ? WHERE id = ?`,
+            [enabled ? 1 : 0, id]
+        );
+        return this._persist();
+    }
+
     public async getWorktreeByBranch(branch: string): Promise<WorktreeRow | undefined> {
         if (!(await this.ensureReady()) || !this._db) return undefined;
         const stmt = this._db.prepare(
-            `SELECT id, branch, path, epic_id, created_at, status FROM worktrees WHERE branch = ? LIMIT 1`,
+            `SELECT id, branch, path, epic_id, created_at, status, project, agents_open_with_grid FROM worktrees WHERE branch = ? LIMIT 1`,
             [branch]
         );
         try {
@@ -2171,6 +2197,8 @@ export class KanbanDatabase {
                     epic_id: r.epic_id !== null && r.epic_id !== undefined && r.epic_id !== '' ? String(r.epic_id) : null,
                     created_at: String(r.created_at || ''),
                     status: r.status as 'active' | 'merged' | 'abandoned',
+                    project: r.project !== null && r.project !== undefined && r.project !== '' ? String(r.project) : null,
+                    agentsOpenWithGrid: Number(r.agents_open_with_grid) === 1,
                 };
             }
             return undefined;
@@ -2395,6 +2423,16 @@ export class KanbanDatabase {
         );
         const rows = this._readRows(stmt);
         return rows.length > 0 ? rows[0] : null;
+    }
+
+    public async getEpicPlans(workspaceId: string): Promise<KanbanPlanRecord[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE workspace_id = ? AND is_epic = 1 AND status = 'active'`,
+            [workspaceId]
+        );
+        return this._readRows(stmt);
     }
 
     public async getPlanByPlanFile(planFile: string, workspaceId: string): Promise<KanbanPlanRecord | null> {
@@ -4602,6 +4640,30 @@ export class KanbanDatabase {
             } catch (e) {
                 try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
                 console.error('[KanbanDatabase] V33 migration FAILED — rolled back. DB unchanged. Error:', e);
+            }
+        }
+
+        // V34: add project and agents_open_with_grid to worktrees
+        const v34 = await this.getMigrationVersion();
+        if (v34 < 34) {
+            try {
+                this._db.exec('BEGIN');
+                for (const sql of MIGRATION_V34_SQL) {
+                    try {
+                        this._db.exec(sql);
+                    } catch (e) {
+                        const msg = e instanceof Error ? e.message : String(e);
+                        if (!msg.includes('duplicate column') && !msg.includes('already exists')) {
+                            throw e;
+                        }
+                    }
+                }
+                this._db.exec('COMMIT');
+                await this.setMigrationVersion(34);
+                console.log('[KanbanDatabase] V34 migration completed: project and agents_open_with_grid columns added to worktrees');
+            } catch (e) {
+                try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+                console.error('[KanbanDatabase] V34 migration FAILED — rolled back. DB unchanged. Error:', e);
             }
         }
 

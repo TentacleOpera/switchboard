@@ -27,10 +27,8 @@ const vscodeStub = {
     },
     workspace: {
         workspaceFolders: [],
-        // The new debounce path reads `switchboard.integrations.preferredProvider`;
-        // our harness plans hit the ClickUp side, so force that here.
         getConfiguration: () => ({
-            get: (key) => (key === 'integrations.preferredProvider' ? 'clickup' : undefined)
+            get: () => undefined
         })
     },
     Uri: {

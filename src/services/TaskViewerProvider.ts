@@ -1542,12 +1542,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
         }
 
-        if (plan && plan.epicId) {
+        if (plan) {
             const db = await this.getKanbanDbForRoot(plan.workingDir ?? plan.absolutePath);
             if (db) {
-                const linkedWorktree = (await db.getWorktrees()).find(w => String(w.epic_id) === String(plan.epicId) && w.status === 'active');
-                if (linkedWorktree) {
-                    plan.worktreePath = linkedWorktree.path;
+                const worktreePath = await TaskViewerProvider.resolveWorktreePathForPlan(db, {
+                    epicId: plan.epicId,
+                    project: plan.project
+                });
+                if (worktreePath) {
+                    plan.worktreePath = worktreePath;
                 }
             }
         }
@@ -2604,12 +2607,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         topic = plan.topic;
                         workingDir = resolveWorkingDir(workspaceRoot, plan.repoScope || '');
                         epicId = plan.epicId ?? undefined;
-                        if (epicId) {
-                            const linkedWorktree = (await db.getWorktrees()).find(w => String(w.epic_id) === epicId && w.status === 'active');
-                            if (linkedWorktree) {
-                                worktreePath = linkedWorktree.path;
-                            }
-                        }
+                        worktreePath = await TaskViewerProvider.resolveWorktreePathForPlan(db, {
+                            epicId: plan.epicId,
+                            project: plan.project
+                        });
                     }
                 }
                 if (!planFile) {
@@ -3758,12 +3759,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             link: designSystemDocSetting.link
         });
 
-        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        const preferredProvider = vscode.workspace.getConfiguration('switchboard', folderUri).get<'linear' | 'clickup'>('integrations.preferredProvider') || 'linear';
-        this._view.webview.postMessage({
-            type: 'integrationProviderPreference',
-            provider: preferredProvider
-        });
+
 
         this._view.webview.postMessage({
             type: 'switchboardThemeNameSetting',
@@ -3896,7 +3892,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         linearSetupComplete: boolean;
         notionSetupComplete: boolean;
         notionBackupSetupComplete: boolean;
-        preferredProvider: 'linear' | 'clickup';
         clickupState?: ClickUpSetupState;
         linearState?: LinearSetupState;
         notionState?: NotionSetupState;
@@ -3907,8 +3902,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const designDocSetting = this.handleGetDesignDocSetting();
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         const folderUri = resolvedRoot ? vscode.Uri.file(resolvedRoot) : undefined;
-        const config = vscode.workspace.getConfiguration('switchboard', folderUri);
-        const preferredProvider = config.get<'linear' | 'clickup'>('integrations.preferredProvider') || 'linear';
         // Read token presence from secret storage
         const [clickupHasToken, linearHasToken, notionHasToken] = await Promise.all([
             this._context.secrets.get('switchboard.clickup.apiToken').then(t => !!t),
@@ -3921,7 +3914,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 linearSetupComplete: false,
                 notionSetupComplete: false,
                 notionBackupSetupComplete: false,
-                preferredProvider: 'linear',
                 clickupState: undefined,
                 linearState: undefined,
                 notionState: {
@@ -4058,7 +4050,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             linearSetupComplete: linearConfig?.setupComplete === true,
             notionSetupComplete: notionConfig?.setupComplete === true,
             notionBackupSetupComplete: !!notionBackupConfig?.databaseId,
-            preferredProvider,
             clickupState,
             linearState,
             notionState,
@@ -4440,37 +4431,31 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     private _buildLinearImportPlanContent(node: LinearImportNode, parentIssue?: LinearIssue, createdAt?: string): string {
         const issue = node.issue;
-        const stateType = String(issue.state?.type || '').toLowerCase();
-        const kanbanColumn = stateType === 'backlog' ? 'BACKLOG' : 'CREATED';
-        const assignee = issue.assignee ? (issue.assignee.name || issue.assignee.email) : '';
-        const labels = issue.labels.map((label) => label.name).filter(Boolean).join(', ');
 
         const yamlFrontmatter = createdAt ? [
             '---',
             `created: ${createdAt}`,
-            `kanbanColumn: ${kanbanColumn}`,
             '---',
             ''
         ].join('\n') : '';
 
-        const metadataLines = [
-            `> Imported from Linear issue \`${issue.identifier || issue.id}\``,
-            `> **Linear Issue ID:** ${issue.id}`,
-            issue.url ? `> **URL:** ${issue.url}` : '',
-            parentIssue ? `> **Parent Issue:** ${this._describeLinearIssue(parentIssue)}` : '',
-            issue.state?.name ? `> **State:** ${issue.state.name}` : '',
-            assignee ? `> **Assignee:** ${assignee}` : '',
-            labels ? `> **Labels:** ${labels}` : ''
-        ].filter(Boolean).join('\n');
-
-        return [
+        const parts = [
             yamlFrontmatter,
             `# ${issue.title || `Linear Issue ${issue.identifier || issue.id}`}`,
             '',
-            metadataLines,
-            '',
             issue.description || '',
-        ].join('\n');
+        ];
+
+        const commentsSection = this._buildCommentsSection(
+            (node.comments || []).map(c => ({
+                author: c.user?.name || c.user?.email || 'Unknown',
+                date: c.createdAt,
+                body: c.body
+            }))
+        );
+        if (commentsSection) { parts.push('', commentsSection); }
+
+        return parts.join('\n');
     }
 
     private async _createImportedLinearPlan(
@@ -4625,9 +4610,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
             const projectFilter = this._kanbanProvider?.getProjectFilter() ?? null;
 
-            // Build plan content for the parent task
+            // Build plan content for the parent task (include fetched comments)
             const createdAt = new Date().toISOString();
-            const planContent = this._buildClickUpImportPlanContent(task, createdAt);
+            const planContent = this._buildClickUpImportPlanContent(task, createdAt, details.comments);
             const { planFileAbsolute: rootPlanFile } = await this._createInitiatedPlan(
                 task.name || `ClickUp Task ${task.id}`,
                 planContent,
@@ -4645,10 +4630,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             await db.updateClickUpTaskIdByPlanFile(rootPlanFile, workspaceId, task.id);
             const importedPlanFiles = [rootPlanFileRelative];
 
-            // Import subtasks as separate plans
+            // Import subtasks as separate plans (each with its own comments —
+            // bulk subtask data omits them, so fetch per-subtask).
             for (const subtask of subtasks) {
                 const subtaskCreatedAt = new Date().toISOString();
-                const subtaskContent = this._buildClickUpImportPlanContent(subtask, subtaskCreatedAt);
+                let subtaskComments: Array<{ comment_text: string; user?: { username?: string; email?: string }; date?: string }> = [];
+                try { subtaskComments = await clickUp.getTaskComments(subtask.id); } catch { /* non-fatal */ }
+                const subtaskContent = this._buildClickUpImportPlanContent(subtask, subtaskCreatedAt, subtaskComments);
                 const { planFileAbsolute: subtaskPlanFile } = await this._createInitiatedPlan(
                     subtask.name || `ClickUp Subtask ${subtask.id}`,
                     subtaskContent,
@@ -4715,45 +4703,56 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     private _buildClickUpImportPlanContent(
         task: any,
-        createdAt?: string
+        createdAt?: string,
+        comments?: Array<{ comment_text: string; user?: { username?: string; email?: string }; date?: string }>
     ): string {
-        const statusName = task.status?.status || 'Unknown';
-        const statusLower = statusName.toLowerCase();
-        const kanbanColumn = statusLower === 'backlog' ? 'BACKLOG' : 'CREATED';
-        const priority = task.priority?.priority || '';
-        const dueDate = task.due_date ? new Date(Number(task.due_date)).toLocaleDateString() : '';
-        const assignees = (task.assignees || []).map((a: any) => a.username || a.email || a.id).join(', ');
-        const tags = (task.tags || [])
-            .map((t: any) => t.name)
-            .filter((n: string) => n && !n.toLowerCase().startsWith('switchboard:'))
-            .join(', ');
         const description = (task.markdownDescription || task.markdown_description || task.description || '').trim();
         const yamlFrontmatter = createdAt ? [
             '---',
             `created: ${createdAt}`,
-            `kanbanColumn: ${kanbanColumn}`,
             '---',
             ''
         ].join('\n') : '';
 
-        const metaLines = [
-            `> Imported from ClickUp task \`${task.id}\``,
-            `> **ClickUp Task ID:** ${task.id}`,
-            task.url ? `> **URL:** ${task.url}` : '',
-            priority ? `> **Priority:** ${priority}` : '',
-            dueDate ? `> **Due:** ${dueDate}` : '',
-            assignees ? `> **Assignees:** ${assignees}` : '',
-            tags ? `> **Tags:** ${tags}` : '',
-        ].filter(Boolean).join('\n');
-
-        return [
+        const parts = [
             yamlFrontmatter,
             `# ${task.name || `ClickUp Task ${task.id}`}`,
             '',
-            metaLines,
-            '',
             description || '',
-        ].join('\n');
+        ];
+
+        const commentsSection = this._buildCommentsSection(
+            (comments || []).map(c => ({
+                author: c.user?.username || c.user?.email || 'Unknown',
+                date: c.date,
+                body: c.comment_text
+            }))
+        );
+        if (commentsSection) { parts.push('', commentsSection); }
+
+        return parts.join('\n');
+    }
+
+    /** Renders a `## Comments` markdown section, or '' if there are none. */
+    private _buildCommentsSection(
+        comments: Array<{ author: string; date?: string; body: string }>
+    ): string {
+        const usable = (comments || []).filter(c => (c.body || '').trim());
+        if (usable.length === 0) { return ''; }
+        const lines: string[] = ['## Comments', ''];
+        for (const c of usable) {
+            // ClickUp dates are epoch-ms strings; Linear dates are ISO strings.
+            let when = '';
+            if (c.date) {
+                const epoch = Number(c.date);
+                const ms = (Number.isFinite(epoch) && epoch > 0) ? epoch : Date.parse(c.date);
+                if (Number.isFinite(ms) && ms > 0) {
+                    try { when = ` — ${new Date(ms).toISOString().slice(0, 10)}`; } catch { when = ''; }
+                }
+            }
+            lines.push(`**${c.author}**${when}:`, '', c.body.trim(), '', '---', '');
+        }
+        return lines.join('\n').trim();
     }
 
     public async handleApplyNotionConfig(
@@ -4913,10 +4912,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
         }
 
-        // Load integration provider preference
-        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        const preferredProvider = vscode.workspace.getConfiguration('switchboard', folderUri).get<'linear' | 'clickup'>('integrations.preferredProvider') || 'linear';
-
         this._view?.webview.postMessage({
             type: 'initialState',
             needsSetup: this._needsSetup,
@@ -4926,8 +4921,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             activeSubTab,
             workspaceRoot: workspaceRoot || undefined,
             clickupHierarchyState,
-            linearProjectPickerValue,
-            integrationProviderPreference: preferredProvider
+            linearProjectPickerValue
         });
     }
 
@@ -5117,7 +5111,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             markdownDescription: task.markdownDescription || '',
             list: task.list,
             url: task.url,
-            parentId: task.parentId || task.parent || null
+            priority: task.priority || null,
+            parentId: task.parentId || task.parent || null,
+            tags: Array.isArray(task.tags) ? task.tags.map((t: any) => ({
+                name: String(t?.name || '').trim(),
+                tagFg: String(t?.tag_fg || t?.tagFg || '').trim(),
+                tagBg: String(t?.tag_bg || t?.tagBg || '').trim()
+            })) : []
         };
     }
 
@@ -6457,6 +6457,76 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 resolve(undefined);
             }).then(() => { /* updateState resolves after persistence */ });
         });
+    }
+
+    /** Resolve the worktree path for a plan based on precedence: epic worktree -> project worktree -> undefined. */
+    public static async resolveWorktreePathForPlan(db: KanbanDatabase, plan: { epicId?: string | null; project?: string | null }): Promise<string | undefined> {
+        const worktrees = await db.getWorktrees();
+        const activeWorktrees = worktrees.filter(w => w.status === 'active');
+        if (plan.epicId) {
+            const epicWt = activeWorktrees.find(w => String(w.epic_id) === String(plan.epicId));
+            if (epicWt) {
+                return epicWt.path;
+            }
+        }
+        if (plan.project) {
+            const projectWt = activeWorktrees.find(w => w.project === plan.project);
+            if (projectWt) {
+                return projectWt.path;
+            }
+        }
+        return undefined;
+    }
+
+    /** Ensure terminals exist for each active agent in the worktree, create-if-missing and capped. */
+    public async ensureWorktreeTerminals(worktreePath: string, roles: string[]): Promise<void> {
+        const resolvedPath = path.resolve(worktreePath);
+        const roleToName: Record<string, string> = {
+            'planner': 'Planner', 'lead': 'Lead Coder', 'coder': 'Coder',
+            'intern': 'Intern', 'reviewer': 'Reviewer', 'analyst': 'Analyst'
+        };
+        for (const role of roles) {
+            const agentName = roleToName[role] || role.charAt(0).toUpperCase() + role.slice(1);
+            
+            // Check if we already have an alive terminal for this path + role
+            const existing = await this._findTerminalNameByWorktreePathAndRole(resolvedPath, role);
+            if (existing) {
+                continue;
+            }
+
+            const workspaceRoot = this._resolveWorkspaceRoot();
+            if (workspaceRoot) {
+                const normalizedRole = this._normalizeAutobanPoolRole(role);
+                const livePrimaryRoleTerminals = await this._getAliveAutobanTerminalNames(normalizedRole, workspaceRoot, false);
+                const configuredPool = this._getConfiguredAutobanPool(normalizedRole);
+                const poolSize = configuredPool.length > 0 ? configuredPool.length : livePrimaryRoleTerminals.length;
+                if (poolSize >= 5) { // MAX_AUTOBAN_TERMINALS_PER_ROLE is 5
+                    vscode.window.showWarningMessage(`Could not open ${agentName} terminal for ${path.basename(resolvedPath)}: role terminal limit reached`);
+                    continue;
+                }
+            }
+
+            await this._createAutobanTerminal(role, agentName, resolvedPath);
+        }
+    }
+
+    /** Reveal/focus the terminal associated with a worktree path. */
+    public async revealWorktreeTerminal(worktreePath: string): Promise<boolean> {
+        const terminalName = await this.findTerminalNameByWorktreePath(worktreePath);
+        if (terminalName) {
+            const suffixed = this._suffixedName(terminalName);
+            const term = this._registeredTerminals?.get(suffixed);
+            if (term) {
+                term.show();
+                return true;
+            }
+            const vterm = vscode.window.terminals.find(t => t.name === terminalName || this._suffixedName(t.name) === suffixed);
+            if (vterm) {
+                vterm.show();
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Called by Kanban automation panel to remove a terminal from the autoban pool. */
@@ -8354,6 +8424,122 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                 scope: 'task',
                                 taskId: data.taskId,
                                 error: error instanceof Error ? error.message : 'Failed to load task details'
+                            });
+                        }
+                        break;
+                    }
+                    case 'linearUpdateIssueLabels': {
+                        const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
+                        const issueId = String(data.issueId || '').trim();
+                        const labelIds = Array.isArray(data.labelIds) ? data.labelIds : [];
+                        
+                        if (!workspaceRoot || !issueId) {
+                            this._view?.webview.postMessage({
+                                type: 'linearError',
+                                scope: 'task',
+                                issueId,
+                                error: 'Invalid issue ID or workspace.',
+                                workspaceRoot
+                            });
+                            break;
+                        }
+
+                        try {
+                            const linear = this._getLinearService(workspaceRoot);
+                            await linear.updateIssueLabels(issueId, labelIds);
+                            this._view?.webview.postMessage({
+                                type: 'linearLabelsUpdated',
+                                issueId,
+                                labelIds,
+                                workspaceRoot
+                            });
+                        } catch (error) {
+                            this._view?.webview.postMessage({
+                                type: 'linearError',
+                                scope: 'task',
+                                issueId,
+                                error: error instanceof Error ? error.message : String(error),
+                                workspaceRoot
+                            });
+                        }
+                        break;
+                    }
+                    case 'clickupUpdateTaskTags': {
+                        const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
+                        const taskId = String(data.taskId || '').trim();
+                        const rawTags = Array.isArray(data.tags) ? data.tags : [];
+                        const tagNames = rawTags.map((t: any) => typeof t === 'string' ? t : String(t?.name || '')).filter(Boolean);
+
+                        if (!workspaceRoot || !taskId) {
+                            this._view?.webview.postMessage({
+                                type: 'clickupError',
+                                scope: 'task',
+                                taskId,
+                                error: 'Invalid task ID or workspace.',
+                                workspaceRoot
+                            });
+                            break;
+                        }
+
+                        try {
+                            const clickUp = this._getClickUpService(workspaceRoot);
+                            await clickUp.updateTask(taskId, { tags: tagNames });
+                            this._view?.webview.postMessage({
+                                type: 'clickupTagsUpdated',
+                                taskId,
+                                tags: tagNames,
+                                workspaceRoot
+                            });
+                        } catch (error) {
+                            this._view?.webview.postMessage({
+                                type: 'clickupError',
+                                scope: 'task',
+                                taskId,
+                                error: error instanceof Error ? error.message : String(error),
+                                workspaceRoot
+                            });
+                        }
+                        break;
+                    }
+                    case 'linearLoadAutomationCatalog': {
+                        const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
+                        if (!workspaceRoot) { break; }
+                        try {
+                            const linear = this._getLinearService(workspaceRoot);
+                            const catalog = await linear.getAutomationCatalog();
+                            this._view?.webview.postMessage({
+                                type: 'linearAutomationCatalogLoaded',
+                                labels: catalog.labels,
+                                workspaceRoot
+                            });
+                        } catch (error) {
+                            this._view?.webview.postMessage({
+                                type: 'linearError',
+                                scope: 'task',
+                                error: error instanceof Error ? error.message : String(error),
+                                workspaceRoot
+                            });
+                        }
+                        break;
+                    }
+                    case 'clickupLoadSpaceTags': {
+                        const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
+                        const spaceId = String(data.spaceId || '').trim();
+                        if (!workspaceRoot || !spaceId) { break; }
+                        try {
+                            const clickUp = this._getClickUpService(workspaceRoot);
+                            const tags = await clickUp.getSpaceTags(spaceId);
+                            this._view?.webview.postMessage({
+                                type: 'clickupSpaceTagsLoaded',
+                                tags,
+                                workspaceRoot
+                            });
+                        } catch (error) {
+                            this._view?.webview.postMessage({
+                                type: 'clickupError',
+                                scope: 'task',
+                                error: error instanceof Error ? error.message : String(error),
+                                workspaceRoot
                             });
                         }
                         break;
@@ -14711,12 +14897,10 @@ What would you like to find?`;
                 workingDir = resolveWorkingDir(resolvedWorkspaceRoot, plan.repoScope || '');
                 previousColumn = plan.kanbanColumn;
                 epicId = plan.epicId ?? undefined;
-                if (epicId) {
-                    const linkedWorktree = (await db.getWorktrees()).find(w => String(w.epic_id) === epicId && w.status === 'active');
-                    if (linkedWorktree) {
-                        worktreePath = linkedWorktree.path;
-                    }
-                }
+                worktreePath = await TaskViewerProvider.resolveWorktreePathForPlan(db, {
+                    epicId: plan.epicId,
+                    project: plan.project
+                });
             }
         }
 
@@ -17390,7 +17574,12 @@ What would you like to find?`;
 
             try {
                 const cacheService = this._getCacheService(resolvedRoot);
-                const contentHash = crypto.createHash('sha256').update(content).digest('hex');
+                // Hash the body only — the YAML frontmatter is local bookkeeping with
+                // no remote equivalent, and must be excluded so sync status doesn't
+                // flip when a kanban column / timestamp is written. Mirrors
+                // PlanningPanelProvider._hashTicketContent.
+                const contentBody = content.replace(/^---\n[\s\S]*?\n---\n*/, '');
+                const contentHash = crypto.createHash('sha256').update(contentBody).digest('hex');
                 const slugPrefix = `${provider}_${id}`;
                 await cacheService.registerImportedTicket(provider, id, title, slugPrefix, filePath, contentHash);
             } catch (cacheErr) {
@@ -17422,48 +17611,38 @@ What would you like to find?`;
     }
 
 
+    private _scanForTicketFile(dir: string, prefix: string): string | null {
+        let entries: import('fs').Dirent[];
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
+        for (const entry of entries) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                const found = this._scanForTicketFile(full, prefix);
+                if (found) { return found; }
+            } else if (entry.isFile() && entry.name.startsWith(prefix) && entry.name.endsWith('.md')) {
+                return full;
+            }
+        }
+        return null;
+    }
+
     private async _findTicketDocument(resolvedRoot: string, provider: string, id: string): Promise<string | null> {
-        let segments: string[] = [];
-        if (provider === 'clickup') {
-            const clickUp = this._getClickUpService(resolvedRoot);
-            const result = await clickUp.httpRequest('GET', `/task/${id}`);
-            if (result.status !== 200 || !result.data) {
-                return null;
-            }
-            const spaceName = result.data.space?.name || '_unknown';
-            const folderName = result.data.folder?.name || '';
-            const listName = result.data.list?.name || '_unknown';
-            segments.push(spaceName);
-            if (folderName) {
-                segments.push(folderName);
-            }
-            segments.push(listName);
-        } else {
-            const linear = this._getLinearService(resolvedRoot);
-            const issue = await linear.getIssue(id);
-            if (!issue) {
-                return null;
-            }
-            const teamName = linear.getTeamName();
-            const projectName = issue.project?.name || '_no-project';
-            segments.push(teamName, projectName);
-        }
-
-        let targetDir = this._buildTicketDir(resolvedRoot, provider, segments);
-        if (!targetDir) {
-            const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
-            targetDir = path.join(resolvedRoot, '.switchboard', 'tickets', providerDir, ...segments.map(s => this._slugify(s).slice(0, 60)));
-        }
-
+        // Search recursively for the ticket file by its `${provider}_${id}_` prefix.
+        // Don't reconstruct the path from live space/folder/list names — tickets are
+        // imported into nested folder hierarchies (sprints, etc.) that won't match.
         const prefix = `${provider}_${id}_`;
-        if (fs.existsSync(targetDir)) {
-            try {
-                const files = fs.readdirSync(targetDir);
-                const matched = files.find((f: string) => f.startsWith(prefix) && f.endsWith('.md'));
-                if (matched) {
-                    return path.join(targetDir, matched);
-                }
-            } catch { /* ignore */ }
+        const baseDirs: string[] = [];
+        try {
+            const localFolderService = new LocalFolderService(resolvedRoot);
+            for (const f of localFolderService.getTicketsFolderPaths()) {
+                if (f) { baseDirs.push(path.join(f, provider)); }
+            }
+        } catch { /* ignore */ }
+        baseDirs.push(path.join(resolvedRoot, '.switchboard', 'tickets', provider));
+
+        for (const dir of baseDirs) {
+            const found = this._scanForTicketFile(dir, prefix);
+            if (found) { return found; }
         }
         return null;
     }
@@ -17512,19 +17691,34 @@ What would you like to find?`;
             }
             const description = bodyLines.slice(0, endIdx).join('\n').trim();
 
+            // The first `# ` heading is the ticket title for both providers.
+            const titleFromHeading = (lines[0] && lines[0].startsWith('# '))
+                ? lines[0].substring(2).trim()
+                : undefined;
+
             if (provider === 'linear') {
                 const linear = this._getLinearService(resolvedRoot);
-                await linear.updateIssueDescription(id, description);
+                await linear.updateIssueDescription(id, description, titleFromHeading);
             } else {
                 const clickUp = this._getClickUpService(resolvedRoot);
-                let name: string | undefined;
-                if (lines[0] && lines[0].startsWith('# ')) {
-                    name = lines[0].substring(2).trim();
-                }
+                const name = titleFromHeading;
+                // ClickUp's WRITE field for markdown is `markdown_content`
+                // (`markdown_description` is read-only on GET responses and is
+                // silently ignored on PUT).
                 await clickUp.updateTask(id, {
-                    markdown_description: description,
+                    markdown_content: description,
                     ...(name ? { name } : {})
                 });
+            }
+
+            // Local now matches remote — record the fetch/sync time so the ticket
+            // reads "synced" again (file mtime is older than this push time).
+            try {
+                const cacheService = this._getCacheService(resolvedRoot);
+                const slugPrefix = `${provider}_${id}`;
+                await cacheService.registerImportedTicket(provider, id, titleFromHeading || id, slugPrefix, filePath, '');
+            } catch (touchErr) {
+                console.error('[TaskViewerProvider] failed to update ticket sync time after push:', touchErr);
             }
 
             return { success: true, message: `Pushed edits to remote ticket ${id}.` };
@@ -17573,6 +17767,17 @@ What would you like to find?`;
             const filename = `${provider}_${id}_${slug}.md`;
             const filePath = path.join(targetDir, filename);
             fs.writeFileSync(filePath, content, 'utf8');
+
+            // Record the fetch time as last_synced_at. Without this, the freshly
+            // re-fetched file (mtime = now) would read as "modified" because the
+            // DB still held an older sync time — the exact opposite of a refetch.
+            try {
+                const cacheService = this._getCacheService(resolvedRoot);
+                const slugPrefix = `${provider}_${id}`;
+                await cacheService.registerImportedTicket(provider, id, title, slugPrefix, filePath, '');
+            } catch (regErr) {
+                console.error('[TaskViewerProvider] failed to record sync time after bulk write:', regErr);
+            }
 
             return { success: true, filePath };
         } catch (error) {
@@ -17748,7 +17953,12 @@ What would you like to find?`;
         await Promise.all(pool);
 
         if (importMode === 'plan') {
-            await this._syncFilesAndRefreshRunSheets(resolvedRoot);
+            // Per-item importClickUpTask/importLinearTask create plans under the
+            // EFFECTIVE workspace root (resolveEffectiveWorkspaceRoot), not the raw
+            // resolvedRoot. Refresh that same root, or the board won't pick up the
+            // newly-imported plans when the two roots differ.
+            const effectiveRoot = this._kanbanProvider?.resolveEffectiveWorkspaceRoot(resolvedRoot) || resolvedRoot;
+            await this._syncFilesAndRefreshRunSheets(effectiveRoot);
         }
 
         return { success: true, successCount, failCount, errors };

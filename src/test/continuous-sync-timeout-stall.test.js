@@ -29,13 +29,8 @@ const vscodeStub = {
     },
     workspace: {
         workspaceFolders: [],
-        // The new quiet-period debounce path reads
-        // `switchboard.integrations.preferredProvider` to decide which
-        // integration to target. The harness plans have `clickupTaskId` set
-        // and `linearIssueId: null`, so the ClickUp provider must win here
-        // or the sync path short-circuits before hitting httpRequest.
         getConfiguration: () => ({
-            get: (key) => (key === 'integrations.preferredProvider' ? 'clickup' : undefined)
+            get: () => undefined
         })
     },
     Uri: {

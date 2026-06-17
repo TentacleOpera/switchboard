@@ -20,7 +20,7 @@
 	"switchboard.ollama.intern.mode": "cloud",
 	"switchboard.ollama.intern.model": "gemma4:31b-cloud",
 	"switchboard.ollama.intern.baseUrl": "https://ollama.com/api",
-	"switchboard.integrations.preferredProvider": "clickup",
+
 	"switchboard.research.localFolderPath": "/Users/patrickvuleta/Documents/Claude/Projects",
 	"switchboard.planner.designDocLink": "/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/docs/technical_documentation_gaps_c3c1aa74.md",
 	"switchboard.preventAgentFileOpening": false,

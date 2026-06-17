@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'nonce-{{NONCE}}' 'unsafe-inline' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'unsafe-inline'; img-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: data:; font-src {{WEBVIEW_CSP_SOURCE}} https:; connect-src https:; frame-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: http: about:srcdoc blob: data:;">
-    <title>Switchboard Project Management</title>
+    <title>Switchboard Project</title>
     <style>
         @keyframes spin {
             from { transform: rotate(0deg); }
@@ -266,6 +266,73 @@
         }
         .cyber-theme-enabled .kanban-plan-item:hover {
             box-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+
+        /* .epic-plan-item and .constitution-file-item mirror .kanban-plan-item styling */
+        .epic-plan-item {
+            padding: 12px;
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            transition: background 0.15s;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            margin: 3px 0;
+            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            border-left: 3px solid var(--accent-teal-dim);
+        }
+        .epic-plan-item:hover {
+            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
+        }
+        .epic-plan-item.selected {
+            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            border-color: var(--accent-teal);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 35%, transparent),
+                        inset 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            color: var(--accent-teal);
+        }
+        .cyber-theme-enabled .epic-plan-item:hover {
+            box-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+        .cyber-theme-enabled .epic-plan-item.selected {
+            box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 40%, transparent),
+                        inset 0 0 6px color-mix(in srgb, var(--accent-teal) 15%, transparent);
+        }
+
+        .constitution-file-item {
+            padding: 12px;
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            transition: background 0.15s;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            margin: 3px 0;
+            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            border-left: 3px solid var(--accent-teal-dim);
+        }
+        .constitution-file-item:hover {
+            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
+        }
+        .constitution-file-item.selected {
+            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            border-color: var(--accent-teal);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 35%, transparent),
+                        inset 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            color: var(--accent-teal);
+        }
+        .cyber-theme-enabled .constitution-file-item:hover {
+            box-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+        .cyber-theme-enabled .constitution-file-item.selected {
+            box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 40%, transparent),
+                        inset 0 0 6px color-mix(in srgb, var(--accent-teal) 15%, transparent);
         }
         .kanban-plan-meta {
             font-size: 11px;
@@ -995,6 +1062,7 @@
                 <button id="btn-edit-constitution" class="strip-btn" disabled>Edit</button>
                 <button id="btn-save-constitution" class="strip-btn" style="display:none;">Save</button>
                 <button id="btn-cancel-constitution" class="strip-btn" style="display:none;">Cancel</button>
+                <span style="margin-left: auto; font-size: 11px; opacity: 0.8;">Enable "Project Constitution Reference" in the planner addons to inject this constitution into planning prompts.</span>
             </div>
             <div class="content-row">
                 <div id="constitution-list-pane">

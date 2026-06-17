@@ -1010,6 +1010,38 @@ export class LinearSyncService {
     }
   }
 
+  public async updateIssueLabels(issueId: string, labelIds: string[]): Promise<void> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedIssueId = String(issueId || '').trim();
+    if (!normalizedIssueId) {
+      throw new Error('Linear label updates require an issue ID.');
+    }
+
+    const result = await this.graphqlRequest(`
+      mutation($id: String!, $labelIds: [String!]!) {
+        issueUpdate(id: $id, input: { labelIds: $labelIds }) { success }
+      }
+    `, { id: normalizedIssueId, labelIds });
+
+    if (!result.data?.issueUpdate?.success) {
+      throw new Error(`Linear issue ${normalizedIssueId} rejected the requested label update.`);
+    }
+
+    // Invalidate cache
+    if (this._cacheService) {
+      const projectId = this._issueProjectIndex.get(normalizedIssueId);
+      if (projectId) {
+        this._cacheService.invalidateTaskCache('linear', `project:${projectId}`);
+      } else {
+        this._cacheService.invalidateTaskCache('linear');
+      }
+    }
+  }
+
   public async addIssueComment(issueId: string, comment: string): Promise<void> {
     const config = await this.loadConfig();
     if (!config?.setupComplete) {
@@ -1122,7 +1154,7 @@ export class LinearSyncService {
     return { url: assetUrl };
   }
 
-  public async updateIssueDescription(issueId: string, description: string): Promise<void> {
+  public async updateIssueDescription(issueId: string, description: string, title?: string): Promise<void> {
     const config = await this.loadConfig();
     if (!config?.setupComplete) {
       throw new Error('Linear not configured');
@@ -1133,12 +1165,13 @@ export class LinearSyncService {
     if (!normalizedIssueId || !normalizedDescription) {
       throw new Error('Linear description updates require both an issue ID and non-empty content.');
     }
+    const normalizedTitle = title ? String(title).trim() : '';
 
     const result = await this.graphqlRequest(`
-      mutation($id: String!, $description: String!) {
-        issueUpdate(id: $id, input: { description: $description }) { success }
+      mutation($id: String!, $description: String!${normalizedTitle ? ', $title: String!' : ''}) {
+        issueUpdate(id: $id, input: { description: $description${normalizedTitle ? ', title: $title' : ''} }) { success }
       }
-    `, { id: normalizedIssueId, description: normalizedDescription });
+    `, { id: normalizedIssueId, description: normalizedDescription, ...(normalizedTitle ? { title: normalizedTitle } : {}) });
 
     if (!result.data?.issueUpdate?.success) {
       throw new Error(`Linear issue ${normalizedIssueId} rejected the requested description update.`);

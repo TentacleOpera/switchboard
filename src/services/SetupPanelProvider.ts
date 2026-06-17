@@ -670,23 +670,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     await this._taskViewerProvider.handleSaveDefaultPromptOverrides(message);
                     await vscode.commands.executeCommand('switchboard.refreshUI');
                     break;
-                case 'saveIntegrationProviderPreference': {
-                    const provider = message.provider === 'clickup' ? 'clickup' : 'linear';
-                    // NOTE: intentionally folder-scoped — this setting is per-project, not shared across workspaces
-                    const folderUri = this._getWorkspaceFolderUri(this._getCurrentWorkspaceRoot() ?? undefined);
-                    const config = vscode.workspace.getConfiguration('switchboard', folderUri);
-                    await config.update(
-                        'integrations.preferredProvider',
-                        provider,
-                        folderUri ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Workspace
-                    );
-                    // Broadcast to sidebar so tab label updates
-                    this._taskViewerProvider.broadcastToWebviews({
-                        type: 'integrationProviderPreference',
-                        provider
-                    });
-                    break;
-                }
+
                 case 'updateKanbanStructure':
                     await this._taskViewerProvider.handleUpdateKanbanStructure(message.sequence);
                     break;

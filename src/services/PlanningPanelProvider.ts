@@ -88,6 +88,7 @@ export class PlanningPanelProvider {
     private _watcherGeneration: number = 0;
     private _activeDesignDocSourceId: string | null = null;
     private _activeDesignDocId: string | null = null;
+    private _activeTicketsProvider = new Map<string, 'clickup' | 'linear'>();
     private readonly _SERVER_DENY_LIST: readonly string[] = [
         '.switchboard',
         '.git',
@@ -274,7 +275,7 @@ export class PlanningPanelProvider {
 
         this._projectPanel = vscode.window.createWebviewPanel(
             'switchboard-project',
-            'PROJECT MANAGEMENT',
+            'PROJECT',
             vscode.ViewColumn.One,
             {
                 enableScripts: true,
@@ -544,6 +545,9 @@ export class PlanningPanelProvider {
 
         // Refresh imported docs when files are created, deleted, or changed
         const refreshImportedDocs = () => {
+            if (Date.now() - this._lastPanelWriteTimestamp < 2000) {
+                return;
+            }
             if (workspaceRoot) {
                 this._handleFetchImportedDocs(workspaceRoot);
             }
@@ -1064,12 +1068,18 @@ export class PlanningPanelProvider {
             title: task.name,
             identifier: task.id,
             status: task.status?.status || 'Unknown',
+            statusColor: task.status?.color || '',
             assignees: task.assignees || [],
             description: task.description?.trim() || 'No description provided.',
             markdownDescription: task.markdownDescription || '',
             list: task.list,
             url: task.url,
-            parentId: task.parentId || task.parent || null
+            parentId: task.parentId || task.parent || null,
+            tags: Array.isArray(task.tags) ? task.tags.map((t: any) => ({
+                name: String(t?.name || '').trim(),
+                tagFg: String(t?.tag_fg || t?.tagFg || '').trim(),
+                tagBg: String(t?.tag_bg || t?.tagBg || '').trim()
+            })) : []
         };
     }
 
@@ -1156,15 +1166,35 @@ export class PlanningPanelProvider {
                         this._adapterFactories.getClickUpSyncService(workspaceRoot).loadConfig(),
                         this._adapterFactories.getLinearSyncService(workspaceRoot).loadConfig()
                     ]);
-                    const provider = (clickUpConfig?.setupComplete) ? 'clickup'
-                        : (linearConfig?.setupComplete) ? 'linear'
-                        : null;
+                    const clickupSetupComplete = clickUpConfig?.setupComplete === true;
+                    const linearSetupComplete = linearConfig?.setupComplete === true;
+                    let activeProvider = this._activeTicketsProvider.get(workspaceRoot);
+                    if (!activeProvider) {
+                        if (clickupSetupComplete && linearSetupComplete) {
+                            activeProvider = 'clickup';
+                        } else if (clickupSetupComplete) {
+                            activeProvider = 'clickup';
+                        } else if (linearSetupComplete) {
+                            activeProvider = 'linear';
+                        }
+                        if (activeProvider) {
+                            this._activeTicketsProvider.set(workspaceRoot, activeProvider);
+                        }
+                    }
+                    const provider = activeProvider || null;
                     const localService = this._getLocalFolderService(workspaceRoot);
                     const ticketsAutoSync = localService.getTicketsAutoSync();
                     if (provider) { this._updateTicketsAutoSyncWatcher(workspaceRoot, ticketsAutoSync); }
-                    this._panel?.webview.postMessage({ type: 'integrationProviderPreference', provider, workspaceRoot, ticketsAutoSync });
+                    this._panel?.webview.postMessage({
+                        type: 'integrationProviderStates',
+                        clickupSetupComplete,
+                        linearSetupComplete,
+                        provider,
+                        workspaceRoot,
+                        ticketsAutoSync
+                    });
                 } catch (err) {
-                    console.warn('[PlanningPanel] Failed to determine integration provider preference:', err);
+                    console.warn('[PlanningPanel] Failed to determine integration provider states:', err);
                 }
                 break;
             }
@@ -1222,21 +1252,64 @@ export class PlanningPanelProvider {
                             this._adapterFactories.getClickUpSyncService(root).loadConfig(),
                             this._adapterFactories.getLinearSyncService(root).loadConfig()
                         ]);
-                        const provider = (clickUpConfig?.setupComplete) ? 'clickup'
-                            : (linearConfig?.setupComplete) ? 'linear'
-                            : null;
+                        const clickupSetupComplete = clickUpConfig?.setupComplete === true;
+                        const linearSetupComplete = linearConfig?.setupComplete === true;
+                        let activeProvider = this._activeTicketsProvider.get(root);
+                        if (!activeProvider) {
+                            if (clickupSetupComplete && linearSetupComplete) {
+                                activeProvider = 'clickup';
+                            } else if (clickupSetupComplete) {
+                                activeProvider = 'clickup';
+                            } else if (linearSetupComplete) {
+                                activeProvider = 'linear';
+                            }
+                            if (activeProvider) {
+                                this._activeTicketsProvider.set(root, activeProvider);
+                            }
+                        }
+                        const provider = activeProvider || null;
                         const localService = this._getLocalFolderService(root);
                         const ticketsAutoSync = localService.getTicketsAutoSync();
                         if (provider) { this._updateTicketsAutoSyncWatcher(root, ticketsAutoSync); }
                         this._setupTicketsViewWatcher(root);
                         this._panel?.webview.postMessage({
-                            type: 'integrationProviderPreference',
+                            type: 'integrationProviderStates',
+                            clickupSetupComplete,
+                            linearSetupComplete,
                             provider,
                             workspaceRoot: root,
                             ticketsAutoSync
                         });
                     } catch (err) {
                         console.warn('[PlanningPanel] Failed to determine integration preference for root:', root, err);
+                    }
+                }
+                break;
+            }
+            case 'switchTicketsProvider': {
+                const { provider, workspaceRoot } = msg;
+                if (workspaceRoot && (provider === 'clickup' || provider === 'linear')) {
+                    this._activeTicketsProvider.set(workspaceRoot, provider);
+                    try {
+                        const [clickUpConfig, linearConfig] = await Promise.all([
+                            this._adapterFactories.getClickUpSyncService(workspaceRoot).loadConfig(),
+                            this._adapterFactories.getLinearSyncService(workspaceRoot).loadConfig()
+                        ]);
+                        const clickupSetupComplete = clickUpConfig?.setupComplete === true;
+                        const linearSetupComplete = linearConfig?.setupComplete === true;
+                        const localService = this._getLocalFolderService(workspaceRoot);
+                        const ticketsAutoSync = localService.getTicketsAutoSync();
+                        if (provider) { this._updateTicketsAutoSyncWatcher(workspaceRoot, ticketsAutoSync); }
+                        this._panel?.webview.postMessage({
+                            type: 'integrationProviderStates',
+                            clickupSetupComplete,
+                            linearSetupComplete,
+                            provider,
+                            workspaceRoot,
+                            ticketsAutoSync
+                        });
+                    } catch (err) {
+                        console.warn('[PlanningPanel] Failed to switch ticket provider:', err);
                     }
                 }
                 break;
@@ -1725,6 +1798,53 @@ export class PlanningPanelProvider {
                         docId,
                         success: false,
                         error: result.error || 'Failed to delete file'
+                    });
+                }
+                break;
+            }
+            case 'saveOnlineDocFile': {
+                const slugPrefix = msg.slugPrefix;
+                const content = msg.content || '';
+                try {
+                    const workspaceId = await this._getWorkspaceId(workspaceRoot);
+                    let localPath: string | null = null;
+                    if (this._cacheService) {
+                        localPath = await this._cacheService.resolveImportedDocPath(slugPrefix, workspaceId);
+                    }
+                    if (!localPath) {
+                        this._panel?.webview.postMessage({
+                            type: 'saveOnlineDocFileResult',
+                            success: false,
+                            error: 'Document not imported yet'
+                        });
+                        break;
+                    }
+                    
+                    // Validate path is within workspace
+                    const allRoots = this._getWorkspaceRoots();
+                    const resolved = path.resolve(localPath);
+                    const isAllowed = allRoots.some(r => resolved.startsWith(path.resolve(r)));
+                    if (!isAllowed) {
+                        this._panel?.webview.postMessage({
+                            type: 'saveOnlineDocFileResult',
+                            success: false,
+                            error: 'Path access not allowed'
+                        });
+                        break;
+                    }
+
+                    this._lastPanelWriteTimestamp = Date.now();
+                    await fs.promises.writeFile(resolved, content, 'utf8');
+
+                    this._panel?.webview.postMessage({
+                        type: 'saveOnlineDocFileResult',
+                        success: true
+                    });
+                } catch (err) {
+                    this._panel?.webview.postMessage({
+                        type: 'saveOnlineDocFileResult',
+                        success: false,
+                        error: String(err)
                     });
                 }
                 break;
@@ -2704,6 +2824,122 @@ export class PlanningPanelProvider {
                 }
                 break;
             }
+            case 'linearUpdateIssueLabels': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const issueId = String(msg.issueId || '').trim();
+                const labelIds = Array.isArray(msg.labelIds) ? msg.labelIds : [];
+                
+                if (!workspaceRoot || !issueId) {
+                    this._panel?.webview.postMessage({
+                        type: 'linearError',
+                        scope: 'task',
+                        issueId,
+                        error: 'Invalid issue ID or workspace.',
+                        workspaceRoot
+                    });
+                    break;
+                }
+
+                try {
+                    const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
+                    await linear.updateIssueLabels(issueId, labelIds);
+                    this._panel?.webview.postMessage({
+                        type: 'linearLabelsUpdated',
+                        issueId,
+                        labelIds,
+                        workspaceRoot
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'linearError',
+                        scope: 'task',
+                        issueId,
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
+                    });
+                }
+                break;
+            }
+            case 'clickupUpdateTaskTags': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const taskId = String(msg.taskId || '').trim();
+                const rawTags = Array.isArray(msg.tags) ? msg.tags : [];
+                const tagNames = rawTags.map((t: any) => typeof t === 'string' ? t : String(t?.name || '')).filter(Boolean);
+
+                if (!workspaceRoot || !taskId) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupError',
+                        scope: 'task',
+                        taskId,
+                        error: 'Invalid task ID or workspace.',
+                        workspaceRoot
+                    });
+                    break;
+                }
+
+                try {
+                    const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
+                    await clickUp.updateTask(taskId, { tags: tagNames });
+                    this._panel?.webview.postMessage({
+                        type: 'clickupTagsUpdated',
+                        taskId,
+                        tags: tagNames,
+                        workspaceRoot
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupError',
+                        scope: 'task',
+                        taskId,
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
+                    });
+                }
+                break;
+            }
+            case 'linearLoadAutomationCatalog': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) { break; }
+                try {
+                    const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
+                    const catalog = await linear.getAutomationCatalog();
+                    this._panel?.webview.postMessage({
+                        type: 'linearAutomationCatalogLoaded',
+                        labels: catalog.labels,
+                        workspaceRoot
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'linearError',
+                        scope: 'task',
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
+                    });
+                }
+                break;
+            }
+            case 'clickupLoadSpaceTags': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const spaceId = String(msg.spaceId || '').trim();
+                if (!workspaceRoot || !spaceId) { break; }
+                try {
+                    const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
+                    const tags = await clickUp.getSpaceTags(spaceId);
+                    this._panel?.webview.postMessage({
+                        type: 'clickupSpaceTagsLoaded',
+                        tags,
+                        workspaceRoot
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupError',
+                        scope: 'task',
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
+                    });
+                }
+                break;
+            }
             case 'clickupSaveSpaceSelection': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) {
@@ -2868,6 +3104,17 @@ export class PlanningPanelProvider {
                         'switchboard.importAllTasks',
                         { workspaceRoot, provider, ids, listId, projectId, workspaceId, page, append, importMode }
                     );
+                    // Webview status is silent — surface the real outcome natively so
+                    // failures aren't invisible (mirrors the ticket-push handler).
+                    const errDetail = (result?.errors || []).slice(0, 3)
+                        .map((e: any) => `${e.id}: ${e.error}`).join('; ');
+                    if (!result?.success) {
+                        vscode.window.showErrorMessage(`Import all (${importMode}) failed: ${result?.error || 'unknown'}`);
+                    } else if ((result.successCount || 0) === 0) {
+                        vscode.window.showWarningMessage(`Import all (${importMode}): nothing imported (${ids?.length ?? 0} requested${errDetail ? ' — ' + errDetail : ''}).`);
+                    } else if ((result.failCount || 0) > 0) {
+                        vscode.window.showWarningMessage(`Import all (${importMode}): ${result.successCount} imported, ${result.failCount} failed — ${errDetail}`);
+                    }
                     this._panel?.webview.postMessage({
                         type: 'importAllTicketsComplete',
                         success: result.success,
@@ -2882,10 +3129,12 @@ export class PlanningPanelProvider {
                         page
                     });
                 } catch (error) {
+                    const errMsg = error instanceof Error ? error.message : String(error);
+                    vscode.window.showErrorMessage(`Import all (${importMode}) failed: ${errMsg}`);
                     this._panel?.webview.postMessage({
                         type: 'importAllTicketsComplete',
                         success: false,
-                        error: error instanceof Error ? error.message : String(error),
+                        error: errMsg,
                         importMode,
                         workspaceRoot,
                         provider,
@@ -2893,6 +3142,13 @@ export class PlanningPanelProvider {
                         projectId,
                         page
                     });
+                }
+                break;
+            }
+            case 'openExternalUrl': {
+                const url = msg.url as string;
+                if (url && (url.startsWith('https://') || url.startsWith('http://'))) {
+                    vscode.env.openExternal(vscode.Uri.parse(url));
                 }
                 break;
             }
@@ -2952,6 +3208,10 @@ export class PlanningPanelProvider {
                         'switchboard.pushTicketEdits',
                         { workspaceRoot, provider, id }
                     );
+                    if (!result?.success) {
+                        // Webview status is silent; surface the real reason natively.
+                        vscode.window.showErrorMessage(`Push to ${provider} failed: ${result?.error || 'unknown error'}`);
+                    }
                     this._panel?.webview.postMessage({
                         type: 'pushTicketResult',
                         success: result.success,
@@ -2961,11 +3221,13 @@ export class PlanningPanelProvider {
                         workspaceRoot
                     });
                 } catch (error) {
+                    const errMsg = error instanceof Error ? error.message : String(error);
+                    vscode.window.showErrorMessage(`Push to ${provider} failed: ${errMsg}`);
                     this._panel?.webview.postMessage({
                         type: 'pushTicketResult',
                         success: false,
                         id,
-                        error: error instanceof Error ? error.message : String(error),
+                        error: errMsg,
                         workspaceRoot
                     });
                 }
@@ -3061,19 +3323,15 @@ export class PlanningPanelProvider {
                                     const exists = dbTickets.find(dbT => dbT.slugPrefix === `${provider}_${t.id}`);
                                     if (!exists) {
                                         try {
-                                            let hash = '';
-                                            try {
-                                                const fileContent = fs.readFileSync(t.filePath, 'utf8');
-                                                hash = crypto.createHash('sha256').update(fileContent).digest('hex');
-                                            } catch {}
-
+                                            // Register the orphan so it has a last_synced_at baseline.
+                                            // Sync status is timestamp-based; the content hash is unused.
                                             await this._cacheService.registerImportedTicket(
                                                 provider,
                                                 t.id,
                                                 t.title,
                                                 `${provider}_${t.id}`,
                                                 t.filePath,
-                                                hash
+                                                ''
                                             );
                                         } catch (err) {
                                             console.error('[PlanningPanelProvider] failed to backfill ticket:', err);
@@ -3091,6 +3349,7 @@ export class PlanningPanelProvider {
                             for (const dbT of dbTickets) {
                                 if (dbT.sourceId === provider) {
                                     let kanbanColumn = '';
+                                    let syncStatus: 'synced' | 'modified' | 'local-only' = 'local-only';
                                     if (fs.existsSync(dbT.filePath)) {
                                         try {
                                             const content = fs.readFileSync(dbT.filePath, 'utf8');
@@ -3099,6 +3358,10 @@ export class PlanningPanelProvider {
                                                 const km = fm[1].match(/kanbanColumn:\s*(.+)/);
                                                 if (km) { kanbanColumn = km[1].trim(); }
                                             }
+                                            // Sync status is purely a timestamp comparison against the
+                                            // DB's last-fetch time: if the local file was edited after we
+                                            // last pulled it from the source, it has unpushed local changes.
+                                            syncStatus = this._ticketSyncStatusFromTimestamps(dbT.filePath, dbT.lastSyncedAt);
                                         } catch {}
                                     }
                                     tickets.push({
@@ -3106,7 +3369,8 @@ export class PlanningPanelProvider {
                                         title: dbT.docName,
                                         status: kanbanColumn || '',
                                         filePath: dbT.filePath,
-                                        lastSyncedAt: dbT.lastSyncedAt
+                                        lastSyncedAt: dbT.lastSyncedAt,
+                                        syncStatus
                                     });
                                 }
                             }
@@ -3122,6 +3386,31 @@ export class PlanningPanelProvider {
                 }
 
                 this._panel?.webview.postMessage({ type: 'localTicketFilesListed', provider, tickets });
+                break;
+            }
+            case 'getTicketSyncStatuses': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const provider = (msg.provider as 'clickup' | 'linear') || 'clickup';
+                const ids: string[] = msg.ids || [];
+                if (!workspaceRoot || ids.length === 0) break;
+                if (!this._cacheService && workspaceRoot) {
+                    this._cacheService = this._adapterFactories.getCacheService(workspaceRoot);
+                }
+                if (!this._cacheService) break;
+                const statuses: Record<string, 'synced' | 'modified' | 'local-only'> = {};
+                try {
+                    const dbTickets = await this._cacheService.getImportedTickets();
+                    for (const id of ids) {
+                        const slugPrefix = `${provider}_${id}`;
+                        const dbT = dbTickets.find(t => t.slugPrefix === slugPrefix);
+                        if (!dbT || !fs.existsSync(dbT.filePath)) { statuses[id] = 'local-only'; continue; }
+                        // file edited since last fetch from source → has local changes.
+                        statuses[id] = this._ticketSyncStatusFromTimestamps(dbT.filePath, dbT.lastSyncedAt);
+                    }
+                } catch (err) {
+                    console.error('[PlanningPanelProvider] getTicketSyncStatuses error:', err);
+                }
+                this._panel?.webview.postMessage({ type: 'ticketSyncStatusesLoaded', provider, statuses });
                 break;
             }
             case 'readLocalTicketFile': {
@@ -5512,6 +5801,28 @@ export class PlanningPanelProvider {
     }
 
 
+
+    /**
+     * Ticket sync status, decided purely from timestamps in the database.
+     * `lastSyncedAt` is when we last fetched/pushed this ticket from the source;
+     * the file's mtime is when it was last edited on disk. If the local edit is
+     * newer than the last sync, the ticket has local changes that aren't on the
+     * source yet → 'modified'. Otherwise → 'synced'.
+     */
+    private _ticketSyncStatusFromTimestamps(filePath: string, lastSyncedAt?: string): 'synced' | 'modified' | 'local-only' {
+        if (!lastSyncedAt) { return 'local-only'; }
+        try {
+            const nfs = require('fs') as typeof import('fs');
+            const mtimeMs = nfs.statSync(filePath).mtimeMs;
+            const lastSyncedMs = Date.parse(lastSyncedAt);
+            if (!Number.isFinite(lastSyncedMs)) { return 'local-only'; }
+            // 1s grace: the import writes the file then records last_synced_at a
+            // few ms later, so a freshly-imported file is never falsely modified.
+            return mtimeMs > lastSyncedMs + 1000 ? 'modified' : 'synced';
+        } catch {
+            return 'local-only';
+        }
+    }
 
     private _scanLocalTicketFiles(dir: string, provider: string, out: any[]): void {
         // eslint-disable-next-line @typescript-eslint/no-var-requires

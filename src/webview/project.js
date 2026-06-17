@@ -177,6 +177,10 @@
                     epicsPreviewContent.innerHTML = msg.content || '';
                 }
                 break;
+            case 'constitutionStatus':
+                const el = document.getElementById('kanban-meta-constitution');
+                if (el) el.textContent = msg.status;
+                break;
             case 'activateKanbanTabAndSelectPlan': {
                 _pendingKanbanSelection = {
                     planId: msg.planId || '',
@@ -551,11 +555,21 @@
                     ${['Unknown', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10'].map(v => `<option value="${v}" ${v === plan.complexity ? 'selected' : ''}>${v}</option>`).join('')}
                 </select>
             </div>
+            <div class="kanban-meta-group">
+                <span class="kanban-meta-label">Constitution:</span>
+                <span class="kanban-meta-value" id="kanban-meta-constitution">Loading...</span>
+            </div>
             <div class="kanban-meta-group" style="margin-left: auto;">
                 <button class="strip-btn" id="kanban-meta-log-btn">Log</button>
                 <button class="strip-btn" id="kanban-meta-delete-btn">Delete</button>
             </div>
         `;
+
+        vscode.postMessage({
+            type: 'getConstitutionStatus',
+            workspaceRoot: plan.workspaceRoot,
+            planFile: plan.planFile
+        });
 
         // Column select toggles
         const columnToggle = document.getElementById('kanban-meta-column');

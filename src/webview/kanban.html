@@ -250,6 +250,10 @@
             color: var(--accent-teal);
         }
 
+        .cyber-theme-enabled .strip-btn:hover:not(:disabled) {
+            box-shadow: var(--glow-teal);
+        }
+
         .strip-btn.is-active {
             color: var(--accent-teal);
             border-color: var(--accent-teal-dim);
@@ -2512,6 +2516,11 @@
                   <span>Planning Epic Reference</span>
                   <span class="tooltip">Include planning epic as context</span>
                 </label>
+                <label class="checkbox-item" title="Include project constitution as context for planning">
+                  <input type="checkbox" id="plannerAddonConstitution">
+                  <span>Project Constitution Reference</span>
+                  <span class="tooltip">Include project constitution as context</span>
+                </label>
                 <label class="checkbox-item" title="Append design system doc as context for planning">
                   <input type="checkbox" id="plannerAddonDesignSystemDoc">
                   <span>Design Doc Reference</span>
@@ -2906,6 +2915,7 @@
                 document.getElementById('plannerAddonSwitchboardSafeguards').checked = config.addons?.switchboardSafeguards !== false;
 
                 document.getElementById('plannerAddonPlanningEpic').checked = !!config.addons?.designDoc;
+                document.getElementById('plannerAddonConstitution').checked = !!config.addons?.constitution;
                 document.getElementById('plannerAddonDesignSystemDoc').checked = !!config.addons?.designSystemDoc;
                 document.getElementById('plannerAddonAggressivePairProgramming').checked = !!config.addons?.aggressivePairProgramming;
                 document.getElementById('plannerAddonGitProhibition').checked = !!config.addons?.gitProhibition;
@@ -3641,13 +3651,14 @@
             }
 
             // Planner specific add-on listeners
-            ['plannerAddonSwitchboardSafeguards', 'plannerAddonPlanningEpic', 'plannerAddonDesignSystemDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonClearAntigravityContext', 'plannerAddonCavemanOutput', 'plannerAddonSkipCompilation', 'plannerAddonSkipTests'].forEach(id => {
+            ['plannerAddonSwitchboardSafeguards', 'plannerAddonPlanningEpic', 'plannerAddonConstitution', 'plannerAddonDesignSystemDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonClearAntigravityContext', 'plannerAddonCavemanOutput', 'plannerAddonSkipCompilation', 'plannerAddonSkipTests'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) {
                     el.addEventListener('change', (e) => {
                         const addonIdMap = {
                             'plannerAddonPlanningEpic': 'designDoc',
-                            'plannerAddonDesignSystemDoc': 'designSystemDoc'
+                            'plannerAddonDesignSystemDoc': 'designSystemDoc',
+                            'plannerAddonConstitution': 'constitution'
                         };
                         const addonId = id.replace('plannerAddon', '');
                         const finalAddonId = addonIdMap[id] || (addonId.charAt(0).toLowerCase() + addonId.slice(1));
@@ -4660,7 +4671,7 @@
                     Focus: <strong>${escapeHtml(epic?.topic ?? 'Epic')}</strong>
                     ${wtInfo ? `&nbsp;·&nbsp;<span style="font-family:monospace; background: var(--badge-bg, #333); padding: 1px 4px; border-radius: 3px;">${escapeHtml(wtInfo.branch)}</span>` : ''}
                 </span>
-                <button class="btn-icon" onclick="clearEpicFocusMode()" title="Clear focus" style="background:none; border:none; color:inherit; font-size:14px; cursor:pointer;">×</button>
+                <button class="btn-icon" title="Clear focus" style="background:none; border:none; color:inherit; font-size:14px; cursor:pointer;">×</button>
             `;
         }
 
@@ -4987,12 +4998,12 @@
             if (card.isEpic) {
                 const linkedWorktree = currentEpicWorktrees[card.planId];
                 wtButton = linkedWorktree
-                    ? ` <span class="wt-chip" title="Worktree: ${linkedWorktree.branch}" onclick="enterEpicFocusMode('${escapeAttr(card.planId)}')"
+                    ? ` <span class="wt-chip" title="Worktree: ${linkedWorktree.branch}" data-epic-id="${escapeAttr(card.planId)}"
                            style="font-family:monospace; font-size:10px; cursor:pointer; padding:1px 5px; background:var(--badge-bg, #333); border-radius:3px; margin-left:5px;">
                          ${escapeHtml(linkedWorktree.branch)}
                        </span>`
-                    : ` <button class="card-btn icon-btn" title="Create Worktree for this epic"
-                           onclick="postKanbanMessage({type:'createWorktreeForEpic', epicId:'${escapeAttr(card.planId)}', epicTopic:'${escapeAttr(card.topic)}', workspaceRoot:'${escapeAttr(card.workspaceRoot || currentWorkspaceRoot)}'})"
+                    : ` <button class="card-btn icon-btn create-wt-chip" title="Create Worktree for this epic"
+                           data-epic-id="${escapeAttr(card.planId)}" data-epic-topic="${escapeAttr(card.topic)}" data-workspace-root="${escapeAttr(card.workspaceRoot || currentWorkspaceRoot)}"
                            style="opacity:0.6; font-size:10px; cursor:pointer; background:none; border:none; color:inherit; padding: 2px 4px; margin-left: 5px;">⎇</button>`;
             }
             const completeOrDoneBtn = isCompleted
@@ -5574,6 +5585,7 @@
         let lastAntigravityColumn = '';
         let lastSafetySession = null;
         let lastWorktreeConfig = null;
+        let selectedWorktreeRepo = '';
         let currentAutomationMode = 'single-column';
         let lastAntigravityBatchSize = 5;
         let managedTerminalPools = {};
@@ -5603,6 +5615,15 @@
                         statusEl.classList.remove('flashing');
                         void statusEl.offsetWidth; // Trigger reflow to restart animation
                         statusEl.classList.add('flashing');
+
+                        if (statusEl._statusTimeoutId) {
+                            clearTimeout(statusEl._statusTimeoutId);
+                        }
+                        statusEl._statusTimeoutId = setTimeout(() => {
+                            statusEl.textContent = '';
+                            statusEl.classList.remove('flashing');
+                            statusEl._statusTimeoutId = null;
+                        }, 5000);
                     }
                     break;
                 }
@@ -8197,34 +8218,177 @@
 
             const descriptionDiv = document.createElement('div');
             descriptionDiv.style.cssText = 'padding:8px; font-size:10px; color:var(--text-secondary); line-height:1.4;';
-            descriptionDiv.innerHTML = '<strong>When to use:</strong> When you want git worktrees covering agent work for a sprint or batch. Coder prompts reference the worktree path so agents edit code inside the worktree instead of the workspace root.<br><br>' +
-                '<strong>Workflow:</strong> Create a worktree, let agents implement changes, then merge the branch back when satisfied.';
+            descriptionDiv.innerHTML = '<strong>Routing order:</strong> epic worktree → project worktree → main repo.<br><br>' +
+                'When you want git worktrees covering agent work for a project or epic. Coder prompts reference the worktree path so agents edit code inside the worktree instead of the workspace root.';
             configSection.appendChild(descriptionDiv);
             container.appendChild(configSection);
 
-            // Create worktree form / button
+            // Tab-level settings
+            const settingsSection = document.createElement('div');
+            settingsSection.style.cssText = 'display: flex; align-items: center; gap: 8px; font-size: 11px; padding: 4px 8px;';
+            const suppressCheckbox = document.createElement('input');
+            suppressCheckbox.type = 'checkbox';
+            suppressCheckbox.id = 'suppress-main-terminals-chk';
+            suppressCheckbox.checked = !!(config && config.suppressMainTerminals);
+            suppressCheckbox.addEventListener('change', () => {
+                postKanbanMessage({
+                    type: 'setSuppressMainTerminals',
+                    enabled: suppressCheckbox.checked,
+                    workspaceRoot: currentWorkspaceRoot
+                });
+            });
+            const suppressLabel = document.createElement('label');
+            suppressLabel.htmlFor = 'suppress-main-terminals-chk';
+            suppressLabel.textContent = 'Suppress main repo agent terminals';
+            settingsSection.appendChild(suppressCheckbox);
+            settingsSection.appendChild(suppressLabel);
+            container.appendChild(settingsSection);
+
+            // Create worktree forms
             const actionSection = document.createElement('div');
             actionSection.className = 'db-subsection';
-            actionSection.style.cssText = 'padding: 12px; display: flex; flex-direction: column; gap: 8px; border: 1px dashed var(--border-color); border-radius: 6px;';
+            actionSection.style.cssText = 'padding: 12px; display: flex; flex-direction: column; gap: 12px; border: 1px dashed var(--border-color); border-radius: 6px;';
 
             const stateTitle = document.createElement('div');
             stateTitle.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted);';
             stateTitle.textContent = 'CREATE NEW WORKTREE';
             actionSection.appendChild(stateTitle);
 
-            const createBtn = document.createElement('button');
-            createBtn.className = 'worktree-primary-btn';
-            createBtn.textContent = 'CREATE WORKTREE';
-            createBtn.addEventListener('click', () => {
-                if (createBtn.disabled) return;
-                createBtn.disabled = true;
-                postKanbanMessage({ type: 'createWorktree', workspaceRoot: currentWorkspaceRoot });
-                setTimeout(() => { createBtn.disabled = false; }, 5000);
+            // Repo select dropdown for control plane mode
+            const repos = (config && config.availableRepos) || [];
+            if (config && config.controlPlaneMode === 'explicit') {
+                const repoForm = document.createElement('div');
+                repoForm.style.cssText = 'display: flex; gap: 8px; align-items: center; margin-bottom: 8px;';
+                const repoLabel = document.createElement('span');
+                repoLabel.style.fontSize = '11px';
+                repoLabel.textContent = 'Target Repo:';
+                
+                const repoSelect = document.createElement('select');
+                repoSelect.id = 'worktree-repo-select';
+                repoSelect.style.cssText = 'flex: 1; padding: 4px; font-size: 11px; background: var(--input-bg, #222); color: var(--text-normal, #ccc); border: 1px solid var(--border-color);';
+                
+                if (repos.length === 0) {
+                    const noRepoOpt = document.createElement('option');
+                    noRepoOpt.value = '';
+                    noRepoOpt.textContent = 'No git repositories detected';
+                    repoSelect.appendChild(noRepoOpt);
+                    repoSelect.disabled = true;
+                    selectedWorktreeRepo = '';
+                } else {
+                    repos.forEach(repo => {
+                        const opt = document.createElement('option');
+                        opt.value = repo;
+                        opt.textContent = repo;
+                        repoSelect.appendChild(opt);
+                    });
+                    
+                    const defaultRepo = config.activeRepoFilter || repos[0];
+                    repoSelect.value = defaultRepo;
+                    selectedWorktreeRepo = defaultRepo;
+                    
+                    repoSelect.addEventListener('change', () => {
+                        selectedWorktreeRepo = repoSelect.value;
+                    });
+                }
+                
+                repoForm.appendChild(repoLabel);
+                repoForm.appendChild(repoSelect);
+                actionSection.appendChild(repoForm);
+            } else {
+                selectedWorktreeRepo = '';
+            }
+
+            // 1. Create worktree for project dropdown
+            const projForm = document.createElement('div');
+            projForm.style.cssText = 'display: flex; gap: 8px; align-items: center;';
+            const projLabel = document.createElement('span');
+            projLabel.style.fontSize = '11px';
+            projLabel.textContent = 'Project:';
+            const projSelect = document.createElement('select');
+            projSelect.style.cssText = 'flex: 1; padding: 4px; font-size: 11px; background: var(--input-bg, #222); color: var(--text-normal, #ccc); border: 1px solid var(--border-color);';
+            const defaultOpt = document.createElement('option');
+            defaultOpt.value = '';
+            defaultOpt.textContent = '-- Choose a Project --';
+            projSelect.appendChild(defaultOpt);
+            
+            const projects = (config && config.projects) || [];
+            projects.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p;
+                opt.textContent = p;
+                projSelect.appendChild(opt);
             });
-            actionSection.appendChild(createBtn);
+
+            const createProjBtn = document.createElement('button');
+            createProjBtn.className = 'worktree-primary-btn';
+            createProjBtn.style.padding = '4px 8px';
+            createProjBtn.style.fontSize = '10px';
+            createProjBtn.textContent = 'Create Project Worktree';
+            if (config && config.controlPlaneMode === 'explicit' && repos.length === 0) {
+                createProjBtn.disabled = true;
+                createProjBtn.title = 'No git repositories detected in control plane';
+            }
+            createProjBtn.addEventListener('click', () => {
+                const selectedProj = projSelect.value;
+                if (!selectedProj) {
+                    showUIMessage('Please select a project first.');
+                    return;
+                }
+                createProjBtn.disabled = true;
+                postKanbanMessage({
+                    type: 'createWorktreeForProject',
+                    project: selectedProj,
+                    workspaceRoot: currentWorkspaceRoot,
+                    repoName: selectedWorktreeRepo || undefined
+                });
+                setTimeout(() => { createProjBtn.disabled = false; }, 5000);
+            });
+            projForm.appendChild(projLabel);
+            projForm.appendChild(projSelect);
+            projForm.appendChild(createProjBtn);
+            actionSection.appendChild(projForm);
+
+            // 2. Create worktrees for all epics
+            const batchEpicsBtn = document.createElement('button');
+            batchEpicsBtn.className = 'worktree-primary-btn';
+            batchEpicsBtn.style.alignSelf = 'flex-start';
+            batchEpicsBtn.textContent = 'Create Worktrees for All Epics';
+            batchEpicsBtn.addEventListener('click', () => {
+                batchEpicsBtn.disabled = true;
+                postKanbanMessage({
+                    type: 'createWorktreesForAllEpics',
+                    workspaceRoot: currentWorkspaceRoot
+                });
+                setTimeout(() => { batchEpicsBtn.disabled = false; }, 5000);
+            });
+            actionSection.appendChild(batchEpicsBtn);
+
+            // 3. Ad-hoc unbound
+            const adhocForm = document.createElement('div');
+            adhocForm.style.cssText = 'display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--border-subtle); padding-top: 8px;';
+            const createUnboundBtn = document.createElement('button');
+            createUnboundBtn.className = 'btn-secondary';
+            createUnboundBtn.style.fontSize = '10px';
+            createUnboundBtn.textContent = 'Create Worktree (Unbound)';
+            if (config && config.controlPlaneMode === 'explicit' && repos.length === 0) {
+                createUnboundBtn.disabled = true;
+                createUnboundBtn.title = 'No git repositories detected in control plane';
+            }
+            createUnboundBtn.addEventListener('click', () => {
+                createUnboundBtn.disabled = true;
+                postKanbanMessage({
+                    type: 'createWorktree',
+                    workspaceRoot: currentWorkspaceRoot,
+                    repoName: selectedWorktreeRepo || undefined
+                });
+                setTimeout(() => { createUnboundBtn.disabled = false; }, 5000);
+            });
+            adhocForm.appendChild(createUnboundBtn);
+            actionSection.appendChild(adhocForm);
+
             container.appendChild(actionSection);
 
-            // Worktrees list section
+            // Active worktrees list section
             const listSection = document.createElement('div');
             listSection.className = 'db-subsection';
             
@@ -8237,7 +8401,7 @@
 
             const listDiv = document.createElement('div');
             listDiv.id = 'worktree-list';
-            listDiv.style.cssText = 'margin-top:8px; display:flex; flex-direction:column; gap:4px;';
+            listDiv.style.cssText = 'margin-top:8px; display:flex; flex-direction:column; gap:8px;';
             listSection.appendChild(listDiv);
             container.appendChild(listSection);
 
@@ -8251,15 +8415,159 @@
                     list.innerHTML = '<div style="font-size:11px; color:var(--text-secondary); padding:4px 0;">No active worktrees.</div>';
                     return;
                 }
-                list.innerHTML = worktrees.map(w => `
-                    <div class="worktree-row" data-id="${w.id}" style="display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border-subtle);">
-                        <span class="wt-status-badge" data-wt-id="${w.id}" style="font-size:10px; color:var(--text-secondary); min-width: 60px;">⋯</span>
-                        <span style="flex:1; font-size:11px; font-family:monospace; word-break:break-all;">${w.branch}</span>
-                        <span style="font-size:10px; color:var(--text-secondary); white-space:nowrap; margin-right:8px;">${w.createdAt ? w.createdAt.slice(0, 10) : ''}</span>
-                        <button class="btn-secondary" style="padding: 3px 6px; font-size: 10px; font-family: inherit; letter-spacing: normal;" onclick="mergeWorktree(${w.id},'${String(w.branch).replace(/'/g, "\\'")}','${String(w.path).replace(/'/g, "\\'")}')">Merge</button>
-                        <button class="btn-danger" style="padding: 3px 6px; font-size: 10px; font-family: inherit; letter-spacing: normal;" onclick="abandonWorktree(${w.id},'${String(w.branch).replace(/'/g, "\\'")}','${String(w.path).replace(/'/g, "\\'")}')">Abandon</button>
-                    </div>
-                `).join('');
+                list.innerHTML = '';
+
+                // Helper to render a worktree row (as DOM element so we can bind events cleanly, avoiding inline onclick/CSP bugs)
+                function renderWorktreeRow(w, isNested = false) {
+                    const row = document.createElement('div');
+                    row.className = 'worktree-row';
+                    row.style.cssText = `display:flex; flex-direction:column; gap:4px; padding:8px; border:1px solid var(--border-subtle); border-radius:4px; margin-bottom:4px; background:var(--card-bg, #252526);${isNested ? ' margin-left: 20px; border-left: 2px solid var(--button-primary-bg, #007acc);' : ''}`;
+
+                    const mainLine = document.createElement('div');
+                    mainLine.style.cssText = 'display:flex; align-items:center; gap:8px;';
+
+                    if (isNested) {
+                        const arrow = document.createElement('span');
+                        arrow.style.cssText = 'color: var(--text-muted); font-weight: bold;';
+                        arrow.textContent = '↳';
+                        mainLine.appendChild(arrow);
+                    }
+
+                    const statusBadge = document.createElement('span');
+                    statusBadge.className = 'wt-status-badge';
+                    statusBadge.setAttribute('data-wt-id', w.id);
+                    statusBadge.style.cssText = 'font-size:10px; color:var(--text-secondary); min-width: 60px;';
+                    statusBadge.textContent = '⋯';
+                    mainLine.appendChild(statusBadge);
+
+                    const branchSpan = document.createElement('span');
+                    branchSpan.style.cssText = 'flex:1; font-size:11px; font-family:monospace; word-break:break-all; font-weight:bold;';
+                    branchSpan.textContent = w.branch;
+                    mainLine.appendChild(branchSpan);
+
+                    // Chip mapping
+                    let chipText = '';
+                    let chipTitle = '';
+                    if (w.epicTopic) {
+                        chipText = `Epic: ${w.epicTopic}`;
+                        chipTitle = w.epicProject ? `Project: ${w.epicProject}` : '';
+                    } else if (w.project) {
+                        chipText = `Project: ${w.project}`;
+                        chipTitle = `Bound to project ${w.project}`;
+                    } else {
+                        chipText = 'Unbound';
+                    }
+                    const chip = document.createElement('span');
+                    chip.style.cssText = 'font-size:10px; padding:2px 6px; background:var(--badge-bg, #333); border-radius:10px; color:var(--text-muted); max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+                    chip.textContent = chipText;
+                    if (chipTitle) chip.title = chipTitle;
+                    mainLine.appendChild(chip);
+
+                    const dateSpan = document.createElement('span');
+                    dateSpan.style.cssText = 'font-size:10px; color:var(--text-secondary); white-space:nowrap; margin-right:8px;';
+                    dateSpan.textContent = w.createdAt ? w.createdAt.slice(0, 10) : '';
+                    mainLine.appendChild(dateSpan);
+
+                    // Actions
+                    const openBtn = document.createElement('button');
+                    openBtn.className = 'btn-secondary';
+                    openBtn.style.cssText = 'padding: 3px 6px; font-size: 10px; font-family: inherit; margin-right:4px;';
+                    openBtn.textContent = 'Open terminals';
+                    openBtn.addEventListener('click', () => {
+                        postKanbanMessage({
+                            type: 'openWorktreeTerminals',
+                            worktreeId: w.id,
+                            workspaceRoot: currentWorkspaceRoot
+                        });
+                    });
+                    mainLine.appendChild(openBtn);
+
+                    const mergeBtn = document.createElement('button');
+                    mergeBtn.className = 'btn-secondary';
+                    mergeBtn.style.cssText = 'padding: 3px 6px; font-size: 10px; font-family: inherit; margin-right:4px;';
+                    mergeBtn.textContent = 'Merge';
+                    mergeBtn.addEventListener('click', () => {
+                        mergeWorktree(w.id, w.branch, w.path);
+                    });
+                    mainLine.appendChild(mergeBtn);
+
+                    const abandonBtn = document.createElement('button');
+                    abandonBtn.className = 'btn-danger';
+                    abandonBtn.style.cssText = 'padding: 3px 6px; font-size: 10px; font-family: inherit;';
+                    abandonBtn.textContent = 'Abandon';
+                    abandonBtn.addEventListener('click', () => {
+                        abandonWorktree(w.id, w.branch, w.path);
+                    });
+                    mainLine.appendChild(abandonBtn);
+
+                    row.appendChild(mainLine);
+
+                    // Scope line and terminal toggle checkbox
+                    const detailsLine = document.createElement('div');
+                    detailsLine.style.cssText = 'display:flex; justify-content:space-between; align-items:center; font-size:10px; color:var(--text-muted); border-top:1px solid var(--border-subtle); padding-top:4px; margin-top:2px;';
+
+                    const scopeSpan = document.createElement('span');
+                    if (w.epicTopic) {
+                        scopeSpan.textContent = `Scope: Catches plans in epic '${w.epicTopic}' — overrides project worktree.`;
+                    } else if (w.project) {
+                        scopeSpan.textContent = `Scope: Catches '${w.project}' plans not claimed by an epic worktree.`;
+                    } else {
+                        scopeSpan.textContent = 'Scope: No automatic routing — work manually.';
+                    }
+                    detailsLine.appendChild(scopeSpan);
+
+                    const chkWrapper = document.createElement('div');
+                    chkWrapper.style.cssText = 'display:flex; align-items:center; gap:4px; cursor:pointer;';
+                    const chk = document.createElement('input');
+                    chk.type = 'checkbox';
+                    chk.checked = !!w.agentsOpenWithGrid;
+                    chk.title = 'Open terminals for this worktree automatically when clicking the main Agents button';
+                    chk.addEventListener('change', () => {
+                        postKanbanMessage({
+                            type: 'toggleWorktreeAgentsOpenWithGrid',
+                            worktreeId: w.id,
+                            enabled: chk.checked,
+                            workspaceRoot: currentWorkspaceRoot
+                        });
+                    });
+                    const label = document.createElement('span');
+                    label.textContent = 'Open terminals with grid';
+                    label.style.fontSize = '9px';
+                    chkWrapper.appendChild(chk);
+                    chkWrapper.appendChild(label);
+                    detailsLine.appendChild(chkWrapper);
+
+                    row.appendChild(detailsLine);
+                    return row;
+                }
+
+                // Render structure:
+                // First group project worktrees.
+                const projectWTs = worktrees.filter(w => w.project);
+                const epicWTs = worktrees.filter(w => w.epicTopic);
+                const unboundWTs = worktrees.filter(w => !w.project && !w.epicTopic);
+
+                projectWTs.forEach(pWt => {
+                    list.appendChild(renderWorktreeRow(pWt, false));
+                    // Find nested epic WTs for this project
+                    const children = epicWTs.filter(eWt => eWt.epicProject === pWt.project);
+                    children.forEach(c => {
+                        list.appendChild(renderWorktreeRow(c, true));
+                    });
+                });
+
+                // Render top-level epics (not nested)
+                epicWTs.forEach(eWt => {
+                    const hasParent = projectWTs.some(pWt => pWt.project === eWt.epicProject);
+                    if (!hasParent) {
+                        list.appendChild(renderWorktreeRow(eWt, false));
+                    }
+                });
+
+                // Render unbound WTs
+                unboundWTs.forEach(u => {
+                    list.appendChild(renderWorktreeRow(u, false));
+                });
 
                 // Send request for statuses
                 postKanbanMessage({
@@ -8298,6 +8606,39 @@
                 const btn = e.target.closest('button, .complexity-routing-btn');
                 if (btn && !btn.disabled && !btn.classList.contains('disabled')) {
                     flashIconBtn(btn);
+                }
+
+                // CSP Delegators
+                const wtChip = e.target.closest('.wt-chip');
+                if (wtChip) {
+                    const epicId = wtChip.getAttribute('data-epic-id');
+                    if (epicId) {
+                        enterEpicFocusMode(epicId);
+                        return;
+                    }
+                }
+
+                const createWtChip = e.target.closest('.create-wt-chip');
+                if (createWtChip) {
+                    const epicId = createWtChip.getAttribute('data-epic-id');
+                    const epicTopic = createWtChip.getAttribute('data-epic-topic');
+                    const workspaceRoot = createWtChip.getAttribute('data-workspace-root');
+                    if (epicId && epicTopic) {
+                        postKanbanMessage({
+                            type: 'createWorktreeForEpic',
+                            epicId,
+                            epicTopic,
+                            workspaceRoot: workspaceRoot || currentWorkspaceRoot,
+                            repoName: selectedWorktreeRepo || undefined
+                        });
+                        return;
+                    }
+                }
+
+                const clearEpicFocus = e.target.closest('#kanban-focus-banner .btn-icon');
+                if (clearEpicFocus) {
+                    clearEpicFocusMode();
+                    return;
                 }
             });
 

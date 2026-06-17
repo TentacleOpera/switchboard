@@ -102,6 +102,8 @@ export interface PromptBuilderOptions {
     constitutionLink?: string;
     /** Full content of the project constitution. */
     constitutionContent?: string;
+    /** Whether constitution injection is enabled. */
+    constitutionEnabled?: boolean;
     /** When present, appends a Design System Doc link to planner prompts. */
     designSystemDocLink?: string;
     /** When present, the full pre-fetched content of the design system doc. */
@@ -1336,6 +1338,12 @@ export function buildCustomAgentPrompt(
         prompt += `\n\nDESIGN SYSTEM DOC REFERENCE (pre-fetched):\n${addons.designSystemDocContent}`;
     } else if (addons?.designSystemDocLink) {
         prompt += `\n\nDESIGN SYSTEM DOC REFERENCE:\n${addons.designSystemDocLink}`;
+    }
+
+    if (addons?.constitutionContent) {
+        prompt += `\n\nPROJECT CONSTITUTION (pre-fetched):\n${addons.constitutionContent}`;
+    } else if (addons?.constitutionLink) {
+        prompt += `\n\nPROJECT CONSTITUTION:\n${addons.constitutionLink}`;
     }
 
     if (promptInstructions) prompt += `\n\nAdditional Instructions: ${promptInstructions}`;

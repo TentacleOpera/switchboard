@@ -25,10 +25,10 @@
         analystAvailable: false,
         docsListCollapsed: persistedState.docsListCollapsed || false,
         kanbanListCollapsed: persistedState.kanbanListCollapsed || false,
-        editMode: { local: false, kanban: false },
-        editOriginalContent: { local: null, kanban: null },
-        dirtyFlags: { local: false, kanban: false },
-        externalChangePending: { local: false, kanban: false },
+        editMode: { local: false, kanban: false, online: false },
+        editOriginalContent: { local: null, kanban: null, online: null },
+        dirtyFlags: { local: false, kanban: false, online: false },
+        externalChangePending: { local: false, kanban: false, online: false },
         reviewMode: { kanban: false },
         kanbanReviewSelectedText: '',
         localWorkspaceRootFilter: '',
@@ -196,6 +196,9 @@
     let _restoringClickUpHierarchy = false;
     let pendingClickUpDetailIssueId = '';
 
+    let currentTicketTags = [];
+    let availableLinearLabels = [];
+    let availableClickUpTags = [];
 
     // Cached HTML strings for DOM guard comparisons
     let _lastTicketsStateFilterHtml = '';
@@ -219,6 +222,108 @@
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#39;');
+    }
+
+    function renderTicketTags(tags, provider) {
+        const container = document.getElementById('tickets-tags-display');
+        if (!container) return;
+        
+        container.innerHTML = '';
+        container.style.display = 'flex';
+        
+        if (!tags || tags.length === 0) {
+            container.style.display = 'none';
+            return;
+        }
+        
+        tags.forEach(tag => {
+            const pill = document.createElement('span');
+            pill.className = `ticket-tag-pill ${provider}`;
+            
+            if (provider === 'clickup' && tag.tagFg && tag.tagBg) {
+                pill.style.setProperty('--tag-fg', tag.tagFg);
+                pill.style.setProperty('--tag-bg', tag.tagBg);
+            }
+            
+            pill.textContent = tag.name || tag;
+            container.appendChild(pill);
+        });
+    }
+
+    function openTagsModal() {
+        const modal = document.getElementById('tags-modal');
+        const availableList = document.getElementById('tags-available-list');
+        
+        if (!modal || !availableList) return;
+        
+        availableList.innerHTML = '';
+        
+        const provider = lastIntegrationProvider;
+        const availableTags = provider === 'linear' ? availableLinearLabels : availableClickUpTags;
+        
+        if (availableTags.length === 0) {
+            availableList.innerHTML = '<div style="color: var(--text-secondary); font-size: 12px; padding: 8px;">No tags available</div>';
+        } else {
+            availableTags.forEach(tag => {
+                const item = document.createElement('label');
+                item.className = 'tag-checkbox-item';
+                
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.value = provider === 'linear' ? tag.id : tag.name;
+                
+                const currentTagNames = currentTicketTags.map(t => t.name || t);
+                checkbox.checked = currentTagNames.includes(tag.name);
+                
+                const label = document.createElement('span');
+                label.className = 'tag-checkbox-label';
+                label.textContent = tag.name;
+                
+                item.appendChild(checkbox);
+                item.appendChild(label);
+                availableList.appendChild(item);
+            });
+        }
+        
+        modal.style.display = 'flex';
+    }
+
+    function saveTags() {
+        const modal = document.getElementById('tags-modal');
+        const availableList = document.getElementById('tags-available-list');
+
+        if (!modal || !availableList) return;
+
+        const checkboxes = availableList.querySelectorAll('input[type="checkbox"]:checked');
+        const selectedIds = Array.from(checkboxes).map(cb => cb.value);
+
+        const provider = lastIntegrationProvider;
+        const ticketId = provider === 'linear'
+            ? selectedLinearIssue?.issue?.id
+            : selectedClickUpIssue?.task?.id;
+
+        if (!ticketId) {
+            showTicketsStatus('No ticket selected', true);
+            return;
+        }
+
+        if (provider === 'linear') {
+            vscode.postMessage({
+                type: 'linearUpdateIssueLabels',
+                issueId: ticketId,
+                labelIds: selectedIds,
+                workspaceRoot: ticketsWorkspaceRoot
+            });
+        } else {
+            vscode.postMessage({
+                type: 'clickupUpdateTaskTags',
+                taskId: ticketId,
+                tags: selectedIds,
+                workspaceRoot: ticketsWorkspaceRoot
+            });
+        }
+
+        modal.style.display = 'none';
     }
 
     function escapeAttr(value) {
@@ -272,6 +377,7 @@
             selectStatusTicket: document.getElementById('select-status-ticket'),
             btnCommentTicket: document.getElementById('btn-comment-ticket'),
             btnViewAttachments: document.getElementById('btn-view-attachments'),
+            btnOpenTicket: document.getElementById('btn-open-ticket'),
             attachmentsModal: document.getElementById('attachments-modal'),
             attachmentsList: document.getElementById('attachments-list'),
             ticketsStatusFooter: document.getElementById('tickets-status-footer'),
@@ -421,8 +527,10 @@
         // 1. Clean up dirty flags and edit/review modes (same logic as click handler)
         if (state.dirtyFlags.local && tabName !== 'local') { exitEditMode('local', true); }
         if (state.dirtyFlags.kanban && tabName !== 'kanban') { exitEditMode('kanban', true); }
+        if (state.dirtyFlags.online && tabName !== 'online') { exitEditMode('online', true); }
         if (state.editMode.local && tabName !== 'local') { exitEditMode('local', true); }
         if (state.editMode.kanban && tabName !== 'kanban') { exitEditMode('kanban', true); }
+        if (state.editMode.online && tabName !== 'online') { exitEditMode('online', true); }
         if (state.reviewMode.kanban && tabName !== 'kanban') { exitReviewMode('kanban', true); }
 
         // 2. Clear stale pending selection when navigating away from kanban
@@ -954,6 +1062,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     function loadDocumentPreview(sourceId, docId, docName) {
         if (state.dirtyFlags.local) {
             exitEditMode('local', true);
+        }
+        if (state.dirtyFlags.online) {
+            exitEditMode('online', true);
         }
 
         if (state.selectedEl) {
@@ -1738,6 +1849,16 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 }
                 return;
             }
+            if (state.editMode.online) {
+                // Defer reload — don't clobber the editor
+                state.externalChangePending.online = true;
+                const statusOnline = document.getElementById('status-online');
+                if (statusOnline) {
+                    statusOnline.textContent = 'File changed externally — save to overwrite or cancel to reload';
+                    statusOnline.style.color = 'var(--vscode-errorForeground, #ff6b6b)';
+                }
+                return;
+            }
             const statusEl = sourceId === 'local-folder' ? document.getElementById('status') : document.getElementById('status-online');
             if (statusEl) {
                 const originalText = statusEl.textContent;
@@ -1759,17 +1880,28 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
         const btnImportFullDoc = document.getElementById(btnImportFullId);
         const btnEditLocal = document.getElementById('btn-edit-local');
+        const btnEditOnline = document.getElementById('btn-edit-online');
 
         if (sourceId === 'local-folder' || sourceId === 'antigravity') {
             state.activeDocFilePath = filePath || null;
             if (btnEditLocal) btnEditLocal.disabled = false;
+            if (btnEditOnline) btnEditOnline.disabled = true;
             if (btnImportFullDoc) {
                 btnImportFullDoc.style.display = 'none';
                 btnImportFullDoc.disabled = true;
             }
         } else {
-            state.activeDocFilePath = null;
+            state.activeDocFilePath = filePath || null;
             if (btnEditLocal) btnEditLocal.disabled = true;
+            const isImported = state.importedDocs.has(state.activeDocId);
+            if (btnEditOnline) {
+                btnEditOnline.disabled = !isImported;
+                if (!isImported) {
+                    btnEditOnline.title = 'Import this document first to edit';
+                } else {
+                    btnEditOnline.title = 'Edit document content';
+                }
+            }
             if (btnImportFullDoc) {
                 btnImportFullDoc.style.display = '';
                 btnImportFullDoc.disabled = false;
@@ -1835,6 +1967,17 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         if (state.editMode.local && !isOnline) {
             if (msg.isAutoRefreshed) {
                 const statusEl2 = document.getElementById('status');
+                if (statusEl2) {
+                    statusEl2.textContent = 'File changed externally — save to overwrite or cancel to reload';
+                    statusEl2.style.color = 'var(--vscode-editorWarning-foreground, #cca700)';
+                    setTimeout(() => { statusEl2.textContent = ''; statusEl2.style.color = ''; }, 5000);
+                }
+            }
+            return;
+        }
+        if (state.editMode.online && isOnline) {
+            if (msg.isAutoRefreshed) {
+                const statusEl2 = document.getElementById('status-online');
                 if (statusEl2) {
                     statusEl2.textContent = 'File changed externally — save to overwrite or cancel to reload';
                     statusEl2.style.color = 'var(--vscode-editorWarning-foreground, #cca700)';
@@ -2423,7 +2566,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             'postTicketCommentResult', 'attachmentDownloaded', 'clickupTaskImported',
             'attachmentsListResult', 'attachmentOpened', 'attachmentRevealed',
             'linearTaskImported', 'editTicketResult', 'pushTicketResult',
-            'importAllTicketsComplete', 'ticketsAskAgentResult', 'linearError', 'clickupError'
+            'importAllTicketsComplete', 'ticketsAskAgentResult', 'linearError', 'clickupError',
+            'ticketSyncStatusesLoaded', 'linearLabelsUpdated', 'clickupTagsUpdated',
+            'linearAutomationCatalogLoaded', 'clickupSpaceTagsLoaded'
         ];
         if (ticketsMsgTypes.includes(msg.type)) {
             if (msg.workspaceRoot && msg.workspaceRoot !== ticketsWorkspaceRoot) {
@@ -2729,6 +2874,30 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             case 'previewError':
                 handlePreviewError(msg);
                 break;
+            case 'saveOnlineDocFileResult': {
+                const { success, error } = msg;
+                const textarea = document.getElementById('markdown-editor-online');
+                if (success) {
+                    state.activeDocContent = textarea ? textarea.value : '';
+                    exitEditMode('online', true);
+                    if (markdownPreviewOnline) {
+                        markdownPreviewOnline.innerHTML = renderMarkdown(state.activeDocContent);
+                    }
+                    const statusOnline = document.getElementById('status-online');
+                    if (statusOnline) {
+                        statusOnline.textContent = 'Saved successfully';
+                        statusOnline.style.color = 'var(--accent-teal)';
+                        setTimeout(() => { statusOnline.textContent = ''; statusOnline.style.color = ''; }, 2000);
+                    }
+                } else {
+                    const statusOnline = document.getElementById('status-online');
+                    if (statusOnline) {
+                        statusOnline.textContent = `Save failed: ${error || 'Unknown error'}`;
+                        statusOnline.style.color = 'var(--vscode-errorForeground, #ff6b6b)';
+                    }
+                }
+                break;
+            }
             case 'onlineDocCreated':
                 if (msg.success && msg.docId) {
                     // Refresh and select the new doc
@@ -2943,6 +3112,21 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 state.ticketsFolderPathsByRoot[msg.workspaceRoot || ''] = msg.paths || [];
                 renderFolderListModal();
                 break;
+            case 'ticketSyncStatusesLoaded': {
+                const provider = msg.provider;
+                const statuses = msg.statuses || {};
+                if (provider === 'clickup') {
+                    clickUpProjectIssues = clickUpProjectIssues.map(t => ({
+                        ...t, syncStatus: statuses[t.id] ?? t.syncStatus
+                    }));
+                } else {
+                    linearProjectIssues = linearProjectIssues.map(t => ({
+                        ...t, syncStatus: statuses[t.id] ?? t.syncStatus
+                    }));
+                }
+                renderTicketsTab();
+                break;
+            }
             case 'importAllTicketsComplete':
                 setTicketsLoadingState(false);
                 isImportingAll = false;
@@ -2956,12 +3140,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         statusText += ' Failed: ' + msg.errors.map(e => e.id).join(', ');
                     }
                     showTicketsStatus(statusText, msg.failCount > 0);
-                    if (msg.importMode === 'document') {
-                        // local mode removed — nothing to do here
-                    }
-                } else {
+                }  else {
                     showTicketsStatus(msg.error || 'Bulk import failed', true);
                 }
+                _requestTicketSyncStatuses();
                 break;
             case 'syncAllTicketsResult':
                 setTicketsLoadingState(false);
@@ -2980,7 +3162,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (localProvider === 'clickup') {
                     clickUpProjectIssues = tickets.map(t => ({
                         id: t.id, title: t.title, identifier: t.id,
-                        status: t.status || '', assignees: [], filePath: t.filePath
+                        status: t.status || '', assignees: [], filePath: t.filePath,
+                        syncStatus: t.syncStatus
                     }));
                     clickUpProjectStatus = 'loaded';
                     clickUpProjectMessage = '';
@@ -2988,7 +3171,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 } else {
                     linearProjectIssues = tickets.map(t => ({
                         id: t.id, title: t.title, identifier: t.id,
-                        state: { name: t.status || '' }, assignee: null, description: '', filePath: t.filePath
+                        state: { name: t.status || '' }, assignee: null, description: '', filePath: t.filePath,
+                        syncStatus: t.syncStatus
                     }));
                     linearProjectStatus = 'loaded';
                     linearProjectMessage = '';
@@ -3005,7 +3189,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     break;
                 }
                 // Strip leading H1 — the render function always prepends <h1>title</h1> itself
-                const rendered = renderMarkdown((msg.content || '').replace(/^#[^\n]*\n?/, ''));
+                const localBodyMarkdown = (msg.content || '').replace(/^#[^\n]*\n?/, '').trim();
+                const rendered = renderMarkdown(localBodyMarkdown);
                 // Local file is the source of truth for description. localDescription: true
                 // prevents the API response from overwriting it when it arrives.
                 if (msg.provider === 'clickup') {
@@ -3016,6 +3201,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         comments: existing?.comments || [],
                         attachments: existing?.attachments || [],
                         renderedDescriptionHtml: rendered,
+                        descriptionMarkdown: localBodyMarkdown,
                         localDescription: true
                     };
                     clickUpTaskDetailCache.set(msg.id, selectedClickUpIssue);
@@ -3027,6 +3213,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         comments: existing?.comments || [],
                         attachments: existing?.attachments || [],
                         renderedDescriptionHtml: rendered,
+                        descriptionMarkdown: localBodyMarkdown,
                         localDescription: true
                     };
                     linearIssueDetailCache.set(msg.id, selectedLinearIssue);
@@ -3039,30 +3226,33 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 const changedProvider = msg.provider;
                 const isCurrentClickUp = changedProvider === 'clickup' && selectedClickUpIssue?.task?.id === changedId;
                 const isCurrentLinear = changedProvider === 'linear' && selectedLinearIssue?.issue?.id === changedId;
+                const changedBodyMarkdown = (msg.content || '').replace(/^#[^\n]*\n?/, '').trim();
                 if (isCurrentClickUp || isCurrentLinear) {
-                    const rendered = renderMarkdown((msg.content || '').replace(/^#[^\n]*\n?/, ''));
+                    const rendered = renderMarkdown(changedBodyMarkdown);
                     if (isCurrentClickUp) {
-                        selectedClickUpIssue = { ...selectedClickUpIssue, renderedDescriptionHtml: rendered };
+                        selectedClickUpIssue = { ...selectedClickUpIssue, renderedDescriptionHtml: rendered, descriptionMarkdown: changedBodyMarkdown };
                         clickUpTaskDetailCache.set(changedId, selectedClickUpIssue);
                     } else {
-                        selectedLinearIssue = { ...selectedLinearIssue, renderedDescriptionHtml: rendered };
+                        selectedLinearIssue = { ...selectedLinearIssue, renderedDescriptionHtml: rendered, descriptionMarkdown: changedBodyMarkdown };
                         linearIssueDetailCache.set(changedId, selectedLinearIssue);
                     }
                     renderTicketsTab();
                 }
                 // Always update cache so next click shows fresh content
-                const changedRendered = renderMarkdown((msg.content || '').replace(/^#[^\n]*\n?/, ''));
+                const changedRendered = renderMarkdown(changedBodyMarkdown);
                 if (changedProvider === 'clickup') {
                     const existing = clickUpTaskDetailCache.get(changedId);
                     clickUpTaskDetailCache.set(changedId, {
                         ...(existing || { task: { id: changedId, title: msg.title, name: msg.title, status: '', assignees: [] }, subtasks: [], comments: [], attachments: [] }),
-                        renderedDescriptionHtml: changedRendered
+                        renderedDescriptionHtml: changedRendered,
+                        descriptionMarkdown: changedBodyMarkdown
                     });
                 } else {
                     const existing = linearIssueDetailCache.get(changedId);
                     linearIssueDetailCache.set(changedId, {
                         ...(existing || { issue: { id: changedId, title: msg.title, state: { name: '' }, assignee: null }, subtasks: [], comments: [], attachments: [] }),
-                        renderedDescriptionHtml: changedRendered
+                        renderedDescriptionHtml: changedRendered,
+                        descriptionMarkdown: changedBodyMarkdown
                     });
                 }
                 break;
@@ -3079,6 +3269,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 setTicketsLoadingState(false);
                 if (!msg.success) {
                     showTicketsStatus(msg.error || 'Failed to push edits', true);
+                } else {
+                    showTicketsStatus('Pushed to source ✓', false);
+                    // Local now matches remote — refresh badges so it flips to synced.
+                    _requestTicketSyncStatuses();
                 }
                 break;
             case 'ticketDeleted':
@@ -3438,7 +3632,31 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     });
                 } else {
                     _pendingRefreshImport = false;
+                    _requestTicketSyncStatuses();
                 }
+                vscode.postMessage({
+                    type: 'linearLoadAutomationCatalog',
+                    workspaceRoot: ticketsWorkspaceRoot
+                });
+                break;
+            case 'linearLabelsUpdated':
+                if (selectedLinearIssue && selectedLinearIssue.issue?.id === msg.issueId) {
+                    loadLinearTaskDetails(msg.issueId);
+                }
+                showTicketsStatus('Labels updated successfully');
+                break;
+            case 'clickupTagsUpdated':
+                if (selectedClickUpIssue && selectedClickUpIssue.task?.id === msg.taskId) {
+                    selectedClickUpIssue.task.tags = msg.tags || [];
+                    renderTicketTags(selectedClickUpIssue.task.tags, 'clickup');
+                }
+                showTicketsStatus('Tags updated successfully');
+                break;
+            case 'linearAutomationCatalogLoaded':
+                availableLinearLabels = msg.labels || [];
+                break;
+            case 'clickupSpaceTagsLoaded':
+                availableClickUpTags = msg.tags || [];
                 break;
             case 'linearProjectsLoaded':
                 linearAvailableProjects = msg.projects || [];
@@ -3452,6 +3670,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     comments: msg.comments || [],
                     attachments: msg.attachments || [],
                     renderedDescriptionHtml: _keepLinearDesc ? _prevLinear.renderedDescriptionHtml : msg.renderedDescriptionHtml,
+                    descriptionMarkdown: _keepLinearDesc ? _prevLinear.descriptionMarkdown : (msg.issue.description || ''),
                     localDescription: _keepLinearDesc || false
                 };
                 linearIssueDetailCache.set(msg.issue.id, selectedLinearIssue);
@@ -3481,6 +3700,14 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     }
                 }
                 renderTicketsTab();
+                const targetSpaceId = clickUpSelectedSpaceId || (clickUpAvailableSpaces[0]?.id);
+                if (targetSpaceId) {
+                    vscode.postMessage({
+                        type: 'clickupLoadSpaceTags',
+                        spaceId: targetSpaceId,
+                        workspaceRoot: ticketsWorkspaceRoot
+                    });
+                }
                 break;
             case 'clickupFoldersLoaded':
                 clickUpAvailableFolders = msg.folders || [];
@@ -3560,6 +3787,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     });
                 } else {
                     _pendingRefreshImport = false;
+                    _requestTicketSyncStatuses();
                 }
                 break;
             case 'clickupTaskDetailsLoaded': {
@@ -3571,6 +3799,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     comments: msg.comments || [],
                     attachments: msg.attachments || [],
                     renderedDescriptionHtml: _keepClickUpDesc ? _prevClickUp.renderedDescriptionHtml : msg.renderedDescriptionHtml,
+                    descriptionMarkdown: _keepClickUpDesc ? _prevClickUp.descriptionMarkdown : (msg.task.markdownDescription || msg.task.description || ''),
                     localDescription: _keepClickUpDesc || false
                 };
                 clickUpTaskDetailCache.set(msg.task.id, selectedClickUpIssue);
@@ -3605,9 +3834,31 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 }
                 break;
             }
-            case 'integrationProviderPreference':
+            case 'integrationProviderStates':
                 if (msg.workspaceRoot === ticketsWorkspaceRoot) {
+                    const clickupSetup = msg.clickupSetupComplete === true;
+                    const linearSetup = msg.linearSetupComplete === true;
+                    const tabBtn = document.getElementById('tickets-tab-btn');
+                    const providerSelector = document.getElementById('tickets-provider-selector');
+                    
+                    if (clickupSetup && linearSetup) {
+                        if (providerSelector) providerSelector.style.display = '';
+                        if (tabBtn) tabBtn.textContent = 'TICKETS';
+                    } else if (clickupSetup) {
+                        if (providerSelector) providerSelector.style.display = 'none';
+                        if (tabBtn) tabBtn.textContent = 'CLICKUP';
+                    } else if (linearSetup) {
+                        if (providerSelector) providerSelector.style.display = 'none';
+                        if (tabBtn) tabBtn.textContent = 'LINEAR';
+                    } else {
+                        if (providerSelector) providerSelector.style.display = 'none';
+                        if (tabBtn) tabBtn.textContent = 'TICKETS';
+                    }
+
                     lastIntegrationProvider = msg.provider || null;
+                    if (providerSelector && lastIntegrationProvider) {
+                        providerSelector.value = lastIntegrationProvider;
+                    }
                     ticketsAutoSync = msg.ticketsAutoSync === true;
                     if (isTicketsTabActive() && lastIntegrationProvider) {
                         if (ticketsAutoSync) {
@@ -4802,13 +5053,19 @@ Return ONLY the drafted prompt with no additional commentary.`;
         if (tab === 'kanban' && state.reviewMode.kanban) {
             exitReviewMode('kanban', true);
         }
-        const previewPane = tab === 'local' ? document.getElementById('preview-pane') : (tab === 'design' ? document.getElementById('preview-pane-design') : document.getElementById('kanban-preview-pane'));
-        const textarea = document.getElementById(tab === 'local' ? 'markdown-editor-local' : (tab === 'design' ? 'markdown-editor-design' : 'kanban-editor'));
+        const previewPane = tab === 'local' ? document.getElementById('preview-pane') : 
+                            (tab === 'design' ? document.getElementById('preview-pane-design') : 
+                            (tab === 'online' ? document.getElementById('preview-pane-online') : 
+                            document.getElementById('kanban-preview-pane')));
+        const textarea = document.getElementById(tab === 'local' ? 'markdown-editor-local' : 
+                         (tab === 'design' ? 'markdown-editor-design' : 
+                         (tab === 'online' ? 'markdown-editor-online' : 
+                         'kanban-editor')));
 
         if (!previewPane || !textarea) return;
 
         let content = '';
-        if (tab === 'local') {
+        if (tab === 'local' || tab === 'online') {
             content = state.activeDocContent || '';
             state.editOriginalContent[tab] = content;
         } else {
@@ -4818,9 +5075,9 @@ Return ONLY the drafted prompt with no additional commentary.`;
         textarea.value = content;
         previewPane.classList.add('edit-mode');
 
-        const btnEdit = document.getElementById(tab === 'local' ? 'btn-edit-local' : 'btn-edit-kanban');
-        const btnSave = document.getElementById(tab === 'local' ? 'btn-save-local' : 'btn-save-kanban');
-        const btnCancel = document.getElementById(tab === 'local' ? 'btn-cancel-local' : 'btn-cancel-kanban');
+        const btnEdit = document.getElementById(tab === 'local' ? 'btn-edit-local' : (tab === 'online' ? 'btn-edit-online' : 'btn-edit-kanban'));
+        const btnSave = document.getElementById(tab === 'local' ? 'btn-save-local' : (tab === 'online' ? 'btn-save-online' : 'btn-save-kanban'));
+        const btnCancel = document.getElementById(tab === 'local' ? 'btn-cancel-local' : (tab === 'online' ? 'btn-cancel-online' : 'btn-cancel-kanban'));
 
         if (btnEdit) btnEdit.style.display = 'none';
         if (btnSave) btnSave.style.display = '';
@@ -4833,14 +5090,16 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function exitEditMode(tab, discard) {
         // No confirmation needed; proceed with exit
 
-        const previewPane = tab === 'local' ? document.getElementById('preview-pane') : document.getElementById('kanban-preview-pane');
+        const previewPane = tab === 'local' ? document.getElementById('preview-pane') : 
+                            (tab === 'online' ? document.getElementById('preview-pane-online') : 
+                            document.getElementById('kanban-preview-pane'));
         if (previewPane) {
             previewPane.classList.remove('edit-mode');
         }
 
-        const btnEdit = document.getElementById(tab === 'local' ? 'btn-edit-local' : 'btn-edit-kanban');
-        const btnSave = document.getElementById(tab === 'local' ? 'btn-save-local' : 'btn-save-kanban');
-        const btnCancel = document.getElementById(tab === 'local' ? 'btn-cancel-local' : 'btn-cancel-kanban');
+        const btnEdit = document.getElementById(tab === 'local' ? 'btn-edit-local' : (tab === 'online' ? 'btn-edit-online' : 'btn-edit-kanban'));
+        const btnSave = document.getElementById(tab === 'local' ? 'btn-save-local' : (tab === 'online' ? 'btn-save-online' : 'btn-save-kanban'));
+        const btnCancel = document.getElementById(tab === 'local' ? 'btn-cancel-local' : (tab === 'online' ? 'btn-cancel-online' : 'btn-cancel-kanban'));
 
         if (btnEdit) btnEdit.style.display = '';
         if (btnSave) btnSave.style.display = 'none';
@@ -4876,6 +5135,12 @@ Return ONLY the drafted prompt with no additional commentary.`;
                         requestId: ++state.previewRequestId
                     });
                 }
+            } else if (tab === 'online') {
+                vscode.postMessage({
+                    type: 'fetchDocsFile',
+                    slugPrefix: state.activeDocId,
+                    requestId: ++state.previewRequestId
+                });
             }
         }
 
@@ -4887,6 +5152,34 @@ Return ONLY the drafted prompt with no additional commentary.`;
     const btnSaveLocal = document.getElementById('btn-save-local');
     const btnCancelLocal = document.getElementById('btn-cancel-local');
     const markdownEditorLocal = document.getElementById('markdown-editor-local');
+
+    const btnEditOnline = document.getElementById('btn-edit-online');
+    const btnSaveOnline = document.getElementById('btn-save-online');
+    const btnCancelOnline = document.getElementById('btn-cancel-online');
+    const markdownEditorOnline = document.getElementById('markdown-editor-online');
+
+    if (btnEditOnline) {
+        btnEditOnline.addEventListener('click', () => enterEditMode('online'));
+    }
+    if (btnSaveOnline) {
+        btnSaveOnline.addEventListener('click', () => {
+            const content = markdownEditorOnline ? markdownEditorOnline.value : '';
+            vscode.postMessage({
+                type: 'saveOnlineDocFile',
+                slugPrefix: state.activeDocId,
+                content
+            });
+        });
+    }
+    if (btnCancelOnline) {
+        btnCancelOnline.addEventListener('click', () => exitEditMode('online', false));
+    }
+    if (markdownEditorOnline) {
+        markdownEditorOnline.addEventListener('input', () => {
+            state.dirtyFlags.online = true;
+        });
+        setupTextareaTabInterceptor(markdownEditorOnline);
+    }
 
     if (btnEditLocal) {
         btnEditLocal.addEventListener('click', () => enterEditMode('local'));
@@ -5126,6 +5419,25 @@ Return ONLY the drafted prompt with no additional commentary.`;
         // Custom update call to populate dropdown if integrations already fetched
         updateTicketsWorkspacePicker();
 
+        document.getElementById('tickets-provider-selector')?.addEventListener('change', (e) => {
+            const newProvider = e.target.value;
+            if (!newProvider || !ticketsWorkspaceRoot) return;
+            saveTicketsState();
+            resetTicketsInMemoryState();
+            lastIntegrationProvider = newProvider;
+            ticketsLoadedOnce = false;
+            vscode.postMessage({
+                type: 'switchTicketsProvider',
+                provider: newProvider,
+                workspaceRoot: ticketsWorkspaceRoot
+            });
+            if (newProvider === 'clickup') {
+                loadClickUpSpaces();
+            } else {
+                loadLinearProject();
+            }
+        });
+
         document.getElementById('tickets-workspace-filter')?.addEventListener('change', (e) => {
             const newRoot = e.target.value;
             if (!newRoot) return;
@@ -5235,17 +5547,25 @@ Return ONLY the drafted prompt with no additional commentary.`;
             const id = provider === 'linear' ? issue?.issue?.id : issue?.task?.id;
             if (!id) return;
             const task = provider === 'linear' ? issue.issue : issue.task;
-            const title = task.title || task.identifier || task.id;
-            const markdownBody = htmlToMarkdown(editDiv.innerHTML);
+            const titleEl = document.getElementById('ticket-edit-title');
+            const fallbackTitle = task.title || task.identifier || task.id;
+            // textContent strips any stray formatting the contenteditable may inject.
+            const title = ((titleEl ? titleEl.textContent : fallbackTitle) || '').trim() || fallbackTitle;
+            // The editor now holds raw markdown — use it verbatim, no lossy HTML round-trip.
+            const markdownBody = (editDiv.value || '').trim();
             const fullMarkdown = `# ${title}\n\n${markdownBody}`;
-            // Update in-memory immediately so display is consistent
+            // Update in-memory immediately so display is consistent (title included)
             const rendered = renderMarkdown(markdownBody);
             if (provider === 'clickup') {
-                selectedClickUpIssue = { ...selectedClickUpIssue, renderedDescriptionHtml: rendered, localDescription: true };
+                selectedClickUpIssue = { ...selectedClickUpIssue, task: { ...selectedClickUpIssue.task, title }, renderedDescriptionHtml: rendered, descriptionMarkdown: markdownBody, localDescription: true };
                 clickUpTaskDetailCache.set(id, selectedClickUpIssue);
+                const listItem = clickUpProjectIssues.find(t => t.id === id);
+                if (listItem) { listItem.title = title; }
             } else {
-                selectedLinearIssue = { ...selectedLinearIssue, renderedDescriptionHtml: rendered, localDescription: true };
+                selectedLinearIssue = { ...selectedLinearIssue, issue: { ...selectedLinearIssue.issue, title }, renderedDescriptionHtml: rendered, descriptionMarkdown: markdownBody, localDescription: true };
                 linearIssueDetailCache.set(id, selectedLinearIssue);
+                const listItem = linearProjectIssues.find(i => i.id === id);
+                if (listItem) { listItem.title = title; }
             }
             vscode.postMessage({ type: 'saveLocalTicketFile', provider, id, content: fullMarkdown, workspaceRoot: ticketsWorkspaceRoot });
             exitTicketsEditMode();
@@ -5300,6 +5620,12 @@ Return ONLY the drafted prompt with no additional commentary.`;
                     textarea.focus();
                 }
             }
+        });
+
+        // Action bar: Open ticket in browser
+        document.getElementById('btn-open-ticket')?.addEventListener('click', (e) => {
+            const url = e.currentTarget.dataset.url;
+            if (url) vscode.postMessage({ type: 'openExternalUrl', url });
         });
 
         // Action bar: View Attachments button toggle
@@ -5514,6 +5840,25 @@ Return ONLY the drafted prompt with no additional commentary.`;
             }
         });
 
+        // Tags button
+        document.getElementById('tickets-tags')?.addEventListener('click', openTagsModal);
+
+        // Modal close buttons
+        document.getElementById('btn-close-tags-modal')?.addEventListener('click', () => {
+            const modal = document.getElementById('tags-modal');
+            if (modal) modal.style.display = 'none';
+        });
+        document.getElementById('btn-cancel-tags')?.addEventListener('click', () => {
+            const modal = document.getElementById('tags-modal');
+            if (modal) modal.style.display = 'none';
+        });
+        document.getElementById('btn-save-tags')?.addEventListener('click', saveTags);
+        document.getElementById('tags-modal')?.addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) {
+                e.currentTarget.style.display = 'none';
+            }
+        });
+
         // Submit form
         document.getElementById('btn-submit-create-ticket')?.addEventListener('click', () => {
             const titleInput = document.getElementById('create-ticket-title');
@@ -5559,6 +5904,11 @@ Return ONLY the drafted prompt with no additional commentary.`;
         ticketsEditMode = true;
         const task = provider === 'linear' ? issue.issue : issue.task;
         const descHtml = issue.renderedDescriptionHtml || '';
+        // Edit RAW markdown so headings/lists can actually be restructured.
+        // Fall back to converting the rendered HTML only if we have no source markdown.
+        const descMarkdown = (issue.descriptionMarkdown !== undefined && issue.descriptionMarkdown !== null)
+            ? issue.descriptionMarkdown
+            : htmlToMarkdown(descHtml);
         _ticketsEditBackupHtml = descHtml;
 
         document.getElementById('btn-edit-ticket').style.display = 'none';
@@ -5572,8 +5922,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         const comments = issue.comments || [];
         const attachments = issue.attachments || [];
-        let html = `<h1 style="user-select:none;pointer-events:none;">${escapeHtml(task.title || task.identifier || task.id)}</h1>`;
-        html += `<div id="ticket-edit-description" contenteditable="true" spellcheck="true" style="outline:1px solid var(--accent-teal);border-radius:4px;padding:8px;min-height:80px;line-height:1.6;">${descHtml}</div>`;
+        let html = `<h1 id="ticket-edit-title" contenteditable="true" spellcheck="true" style="outline:1px solid var(--accent-teal);border-radius:4px;padding:4px 8px;">${escapeHtml(task.title || task.identifier || task.id)}</h1>`;
+        html += `<textarea id="ticket-edit-description" spellcheck="true" style="width:100%;box-sizing:border-box;outline:1px solid var(--accent-teal);border:none;border-radius:4px;padding:8px;min-height:240px;line-height:1.6;font-family:var(--vscode-editor-font-family,monospace);font-size:13px;resize:vertical;background:var(--panel-bg2,#1e1e1e);color:var(--text-primary,#ddd);">${escapeHtml(descMarkdown)}</textarea>`;
 
         if (comments.length > 0) {
             html += '<h3 style="user-select:none;">Comments</h3>';
@@ -5823,6 +6173,37 @@ Return ONLY the drafted prompt with no additional commentary.`;
         });
     }
 
+    // Maps a ticket status/state name to a status-light colour. Used for the
+    // top-right indicator on every sidebar ticket card. Always returns a colour
+    // so the light shows for all tickets (live or local-only).
+    function _ticketStatusLightColor(status) {
+        const s = String(status || '').toLowerCase();
+        if (!s) { return '#8a8a8a'; }
+        if (/(done|complete|closed|resolved|merged|shipped|deployed|archived|live)/.test(s)) { return '#3fb950'; }
+        if (/(review|qa|testing|verify|approval)/.test(s)) { return '#a371f7'; }
+        if (/(progress|doing|active|started|develop|dev|wip|implement|build)/.test(s)) { return '#4ea7fc'; }
+        if (/(block|hold|stuck|waiting|paused|cancel)/.test(s)) { return '#f85149'; }
+        if (/(backlog|todo|to do|open|created|new|triage|planned|ready)/.test(s)) { return '#d29922'; }
+        return '#8a8a8a';
+    }
+
+    // Resolves the external URL for a ticket so the "Open" action works for every
+    // ticket, including local-only ones (which carry no API url). ClickUp URLs are
+    // deterministic from the task id; Linear requires the API-provided url.
+    function _ticketExternalUrl(provider, id, existingUrl) {
+        if (existingUrl) { return existingUrl; }
+        if (provider === 'clickup' && id) { return `https://app.clickup.com/t/${id}`; }
+        return '';
+    }
+
+    // Builds the sync-status badge shown bottom-left on each card. Renders for all
+    // states (synced / modified / local-only) so it's present on every card.
+    function _ticketSyncBadge(syncStatus) {
+        if (syncStatus === 'modified') { return `<span class="ticket-sync-badge ticket-sync-modified">modified</span>`; }
+        if (syncStatus === 'synced') { return `<span class="ticket-sync-badge ticket-sync-synced">synced</span>`; }
+        return `<span class="ticket-sync-badge ticket-sync-local">local</span>`;
+    }
+
     function renderTicketsLinearList() {
         if (!isTicketsTabActive()) return;
 
@@ -5874,13 +6255,19 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         const newHtml = filteredIssues.map((issue) => {
             const isSelected = selectedLinearIssue && selectedLinearIssue.issue.id === issue.id;
+            const syncBadge = _ticketSyncBadge(issue.syncStatus);
+            const statusName = issue.state?.name || '';
+            const statusColor = issue.state?.color || _ticketStatusLightColor(statusName);
+            const statusLight = `<span class="ticket-status-light" style="background:${escapeAttr(statusColor)}" title="${escapeAttr(statusName || 'No status')}"></span>`;
             return `
             <div class="ticket-node${isSelected ? ' selected' : ''}" data-linear-issue-id="${escapeAttr(issue.id)}">
+                ${statusLight}
                 <div class="tickets-issue-title">${escapeHtml(issue.title || issue.identifier || issue.id)}</div>
                 <div class="tickets-issue-meta">${escapeHtml(issue.state?.name || 'Unknown state')}</div>
                 <div class="tickets-issue-meta">${escapeHtml(issue.assignee?.name || issue.assignee?.email || 'Unassigned')}</div>
                 <div class="tickets-issue-meta">${escapeHtml((issue.description || '').trim().slice(0, 180) || 'No description provided.')}</div>
                 <div class="card-actions">
+                    ${syncBadge}
                     <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(issue.id)}" data-provider="linear">Add to kanban</button>
                     <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(issue.id)}" data-provider="linear">Link to ticket</button>
                 </div>
@@ -5906,17 +6293,29 @@ Return ONLY the drafted prompt with no additional commentary.`;
             if (previewMetaBar) previewMetaBar.style.display = 'none';
             if (deleteConfirmBanner) deleteConfirmBanner.style.display = 'none';
             if (commentInputArea) commentInputArea.style.display = 'none';
+            const tagsButton = document.getElementById('tickets-tags');
+            if (tagsButton) tagsButton.disabled = true;
+            renderTicketTags([], 'linear');
             return;
         }
 
         const issue = selectedLinearIssue.issue;
+        const tagsButton = document.getElementById('tickets-tags');
+        if (tagsButton) tagsButton.disabled = false;
+        currentTicketTags = issue.labels || [];
+        renderTicketTags(currentTicketTags, 'linear');
 
         if (previewMetaBar) {
             previewMetaBar.style.display = 'flex';
-            const { btnViewAttachments } = getTicketsTabElements();
+            const { btnViewAttachments, btnOpenTicket } = getTicketsTabElements();
             if (btnViewAttachments) {
                 const hasAttachments = selectedLinearIssue.attachments && selectedLinearIssue.attachments.length > 0;
                 btnViewAttachments.style.display = hasAttachments ? '' : 'none';
+            }
+            if (btnOpenTicket) {
+                const openUrl = _ticketExternalUrl('linear', issue.identifier || issue.id, issue.url);
+                btnOpenTicket.style.display = openUrl ? '' : 'none';
+                btnOpenTicket.dataset.url = openUrl;
             }
             const statusSelect = document.getElementById('select-status-ticket');
             if (statusSelect) {
@@ -6004,7 +6403,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         if (projectPicker) projectPicker.style.display = 'none';
         if (stateFilter) stateFilter.style.display = 'none';
         if (clickUpStatusFilter) {
-            clickUpStatusFilter.style.display = clickUpSelectedListId ? '' : 'none';
+            clickUpStatusFilter.style.display = (clickUpSelectedListId || clickUpProjectIssues.length > 0) ? '' : 'none';
         }
         if (refreshButton) refreshButton.style.display = '';
         if (hierarchyNav) hierarchyNav.style.display = '';
@@ -6139,6 +6538,11 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 });
                 vscode.postMessage({
                     type: 'clickupLoadFolders',
+                    spaceId,
+                    workspaceRoot: ticketsWorkspaceRoot || undefined
+                });
+                vscode.postMessage({
+                    type: 'clickupLoadSpaceTags',
                     spaceId,
                     workspaceRoot: ticketsWorkspaceRoot || undefined
                 });
@@ -6303,12 +6707,18 @@ Return ONLY the drafted prompt with no additional commentary.`;
             ? `<div class="empty-state">No tasks found.</div>`
             : tasks.map(task => {
                 const isSelected = selectedClickUpIssue && selectedClickUpIssue.task.id === task.id;
+                const syncBadge = _ticketSyncBadge(task.syncStatus);
+                const statusName = task.status || '';
+                const statusColor = task.statusColor || _ticketStatusLightColor(statusName);
+                const statusLight = `<span class="ticket-status-light" style="background:${escapeAttr(statusColor)}" title="${escapeAttr(statusName || 'No status')}"></span>`;
                 return `
                 <div class="ticket-node${isSelected ? ' selected' : ''}" data-clickup-task-id="${escapeAttr(task.id)}">
+                    ${statusLight}
                     <div class="tickets-issue-title">${escapeHtml(task.title || task.identifier)}</div>
                     <div class="tickets-issue-meta">${escapeHtml(task.status || 'Unknown')}</div>
                     <div class="tickets-issue-meta">${task.assignees?.length ? escapeHtml(task.assignees.map(a => a.username || a.email).join(', ')) : 'Unassigned'}</div>
                     <div class="card-actions">
+                        ${syncBadge}
                         <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(task.id)}" data-provider="clickup">Add to kanban</button>
                         <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(task.id)}" data-provider="clickup">Link to ticket</button>
                     </div>
@@ -6338,17 +6748,29 @@ Return ONLY the drafted prompt with no additional commentary.`;
             if (previewMetaBar) previewMetaBar.style.display = 'none';
             if (deleteConfirmBanner) deleteConfirmBanner.style.display = 'none';
             if (commentInputArea) commentInputArea.style.display = 'none';
+            const tagsButton = document.getElementById('tickets-tags');
+            if (tagsButton) tagsButton.disabled = true;
+            renderTicketTags([], 'clickup');
             return;
         }
 
         const task = selectedClickUpIssue.task;
+        const tagsButton = document.getElementById('tickets-tags');
+        if (tagsButton) tagsButton.disabled = false;
+        currentTicketTags = task.tags || [];
+        renderTicketTags(currentTicketTags, 'clickup');
 
         if (previewMetaBar) {
             previewMetaBar.style.display = 'flex';
-            const { btnViewAttachments } = getTicketsTabElements();
+            const { btnViewAttachments, btnOpenTicket } = getTicketsTabElements();
             if (btnViewAttachments) {
                 const hasAttachments = selectedClickUpIssue.attachments && selectedClickUpIssue.attachments.length > 0;
                 btnViewAttachments.style.display = hasAttachments ? '' : 'none';
+            }
+            if (btnOpenTicket) {
+                const openUrl = _ticketExternalUrl('clickup', task.id, task.url);
+                btnOpenTicket.style.display = openUrl ? '' : 'none';
+                btnOpenTicket.dataset.url = openUrl;
             }
             const statusSelect = document.getElementById('select-status-ticket');
             if (statusSelect) {
@@ -6616,6 +7038,18 @@ Return ONLY the drafted prompt with no additional commentary.`;
         vscode.postMessage({ type: 'listLocalTicketFiles', provider: lastIntegrationProvider, workspaceRoot: ticketsWorkspaceRoot });
     }
 
+    function _requestTicketSyncStatuses() {
+        if (!lastIntegrationProvider || !ticketsWorkspaceRoot) return;
+        const issues = lastIntegrationProvider === 'clickup' ? clickUpProjectIssues : linearProjectIssues;
+        if (!issues.length) return;
+        vscode.postMessage({
+            type: 'getTicketSyncStatuses',
+            provider: lastIntegrationProvider,
+            ids: issues.map(t => t.id),
+            workspaceRoot: ticketsWorkspaceRoot
+        });
+    }
+
     // ===== STATE PERSISTENCE =====
 
     function resetTicketsInMemoryState() {
@@ -6725,7 +7159,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function restoreTicketsState() {
         if (ticketsWorkspaceRoot) {
             // Only set up the file watcher — do NOT send ticketsRootChanged which triggers
-            // integrationProviderPreference → loadClickUpSpaces → importAllTickets
+            // integrationProviderStates → loadClickUpSpaces → importAllTickets
             vscode.postMessage({ type: 'setupTicketsWatcher', workspaceRoot: ticketsWorkspaceRoot });
         } else {
             vscode.postMessage({ type: 'ticketsDefaultRoot' });

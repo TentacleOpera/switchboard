@@ -28,6 +28,7 @@ import { PanelStateStore } from './services/PanelStateStore';
 import { PlannerPromptWriter } from './services/PlannerPromptWriter';
 import { PlanningPanelCacheService } from './services/PlanningPanelCacheService';
 import { ResearchImportService } from './services/ResearchImportService';
+import { showTemporaryNotification } from './utils/showTemporaryNotification';
 
 // Status bar item for setup notification
 let setupStatusBarItem: vscode.StatusBarItem;
@@ -952,7 +953,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }
 
         const restoredPart = restoreResult.restored > 0 ? `Restored ${restoreResult.restored} plan(s) from backup. ` : '';
-        vscode.window.showInformationMessage(
+        showTemporaryNotification(
             `Kanban database reset. ${restoredPart}Imported ${importResult.count} plan(s) from .switchboard/plans/.`
         );
     });
@@ -999,7 +1000,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }
 
         if (found.length < 2) {
-            vscode.window.showInformationMessage('Only one database found. Nothing to reconcile.');
+            showTemporaryNotification('Only one database found. Nothing to reconcile.');
             return;
         }
 
@@ -1026,7 +1027,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const merged = await KanbanDatabase.reconcileDatabases(source.detail!, target.detail!);
             await KanbanDatabase.invalidateWorkspace(workspaceRoot);
             vscode.commands.executeCommand('switchboard.refreshUI');
-            vscode.window.showInformationMessage(`✅ Reconciliation complete. ${merged} plans merged.`);
+            showTemporaryNotification(`✅ Reconciliation complete. ${merged} plans merged.`);
         } catch (err) {
             vscode.window.showErrorMessage(`Reconciliation failed: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -1160,6 +1161,11 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(addAutobanTerminalDisposable);
 
+    const revealWorktreeTerminalDisposable = vscode.commands.registerCommand('switchboard.revealWorktreeTerminal', async (worktreePath: string) => {
+        await taskViewerProvider.revealWorktreeTerminal(worktreePath);
+    });
+    context.subscriptions.push(revealWorktreeTerminalDisposable);
+
     const removeAutobanTerminalDisposable = vscode.commands.registerCommand('switchboard.removeAutobanTerminalFromKanban', async (role: string, terminalName: string) => {
         await taskViewerProvider.removeAutobanTerminalFromKanban(role, terminalName);
     });
@@ -1190,7 +1196,7 @@ export async function activate(context: vscode.ExtensionContext) {
         });
         if (token) {
             await context.secrets.store('switchboard.clickup.apiToken', token.trim());
-            vscode.window.showInformationMessage('ClickUp API token saved securely.');
+            showTemporaryNotification('ClickUp API token saved securely.');
         }
     });
     context.subscriptions.push(setClickUpTokenDisposable);
@@ -1250,7 +1256,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 const msg = result.imported === 0
                     ? `No new tasks to import (${result.skipped} already tracked).`
                     : `Imported ${result.imported} task${result.imported !== 1 ? 's' : ''} as plan files.${result.skipped ? ` (${result.skipped} skipped)` : ''}`;
-                vscode.window.showInformationMessage(msg);
+                showTemporaryNotification(msg);
             }
         );
     });
@@ -1316,7 +1322,7 @@ export async function activate(context: vscode.ExtensionContext) {
         });
         if (token) {
             await context.secrets.store('switchboard.linear.apiToken', token.trim());
-            vscode.window.showInformationMessage('Linear API token saved securely.');
+            showTemporaryNotification('Linear API token saved securely.');
         }
     });
     context.subscriptions.push(setLinearTokenDisposable);
@@ -1340,7 +1346,7 @@ export async function activate(context: vscode.ExtensionContext) {
         });
         if (token) {
             await context.secrets.store('switchboard.notion.apiToken', token.trim());
-            vscode.window.showInformationMessage('Notion API token saved securely.');
+            showTemporaryNotification('Notion API token saved securely.');
         }
     });
     context.subscriptions.push(setNotionTokenDisposable);
@@ -1365,7 +1371,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 if (!result.success) {
                     vscode.window.showErrorMessage(`Notion fetch failed: ${result.error}`);
                 } else {
-                    vscode.window.showInformationMessage(`Notion design doc fetched (${result.charCount?.toLocaleString()} chars).`);
+                    showTemporaryNotification(`Notion design doc fetched (${result.charCount?.toLocaleString()} chars).`);
                 }
             }
         );
@@ -1404,7 +1410,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 const msg = result.imported === 0
                     ? `No new issues to import (${result.skipped} already tracked or closed).`
                     : `Imported ${result.imported} issue${result.imported !== 1 ? 's' : ''} as plan files.${result.skipped ? ` (${result.skipped} skipped)` : ''}`;
-                vscode.window.showInformationMessage(msg);
+                showTemporaryNotification(msg);
             }
         );
     });
@@ -1938,7 +1944,7 @@ export async function activate(context: vscode.ExtensionContext) {
             // 2. Clean transient .switchboard/ subdirectories
             await cleanWorkspace(selectedWorkspaceRoot, outputChannel ?? undefined);
 
-            vscode.window.showInformationMessage('Switchboard housekeeping complete.');
+            showTemporaryNotification('Switchboard housekeeping complete.');
         } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
             vscode.window.showErrorMessage(`Switchboard housekeeping failed: ${msg}`);
@@ -1975,7 +1981,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }
         const effectiveStateRoot = resolveEffectiveStateRoot(selectedWorkspaceRoot) || selectedWorkspaceRoot;
         await cleanWorkspace(effectiveStateRoot, outputChannel ?? undefined);
-        vscode.window.showInformationMessage('Switchboard working memory cleaned.');
+        showTemporaryNotification('Switchboard working memory cleaned.');
         taskViewerProvider.refresh();
     });
     context.subscriptions.push(cleanWorkspaceDisposable);
@@ -2109,7 +2115,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const keys = Object.keys(terminals);
 
             if (keys.length === 0) {
-                vscode.window.showInformationMessage('No registered terminals to focus.');
+                showTemporaryNotification('No registered terminals to focus.');
                 return;
             }
 
@@ -2277,6 +2283,10 @@ export async function activate(context: vscode.ExtensionContext) {
         });
     }
 
+    function postKanbanStatus(message: string, isError = false) {
+        kanbanProvider?.postMessage({ type: 'showStatusMessage', message, isError });
+    }
+
     async function createAgentGrid(options?: { cwdOverride?: string }) {
         const currentWorkspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot()
             ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -2286,6 +2296,26 @@ export async function activate(context: vscode.ExtensionContext) {
         }
         const verifyWorkspace = () => kanbanProvider!.getCurrentWorkspaceRoot() === currentWorkspaceRoot;
         const effectiveWorkspaceRoot = kanbanProvider!.resolveEffectiveWorkspaceRoot(currentWorkspaceRoot);
+
+        let suppressMain = false;
+        let gridWorktrees: any[] = [];
+        const kpAny = kanbanProvider as any;
+        const db = kpAny && typeof kpAny._getKanbanDb === 'function' ? kpAny._getKanbanDb(currentWorkspaceRoot) : null;
+        if (db) {
+            try {
+                const ready = await db.ensureReady();
+                if (ready) {
+                    suppressMain = (await db.getMeta('worktree_suppress_main_terminals')) === 'true';
+                    gridWorktrees = (await db.getWorktrees()).filter((w: any) => w.status === 'active' && w.agentsOpenWithGrid);
+                }
+            } catch { /* ignore DB errors */ }
+        }
+
+        if (suppressMain && gridWorktrees.length === 0) {
+            vscode.window.showWarningMessage('Suppress main is on but no worktree is set to open terminals — nothing to open.');
+            return;
+        }
+
         const gridTerminals = new Map<string, vscode.Terminal>();
         let effectiveCwd = effectiveWorkspaceRoot;
         if (options?.cwdOverride) {
@@ -2294,30 +2324,8 @@ export async function activate(context: vscode.ExtensionContext) {
             } else {
                 vscode.window.showWarningMessage(`cwdOverride path does not exist: ${options.cwdOverride}. Using workspace root.`);
             }
-        } else {
-            // Check for remembered worktree path
-            const kpAny = kanbanProvider as any;
-            const db = kpAny && typeof kpAny._getKanbanDb === 'function' ? kpAny._getKanbanDb(currentWorkspaceRoot) : null;
-            if (db) {
-                try {
-                    const ready = await db.ensureReady();
-                    if (ready) {
-                        const rememberEnabled = await db.getMeta('worktree_remember_enabled');
-                        if (rememberEnabled === 'true') {
-                            const rememberedPath = await db.getMeta('worktree_remembered_path');
-                            if (rememberedPath && fs.existsSync(rememberedPath)) {
-                                effectiveCwd = rememberedPath;
-                            } else if (rememberedPath) {
-                                // Stale path — clear and notify
-                                await db.setMeta('worktree_remember_enabled', '');
-                                await db.setMeta('worktree_remembered_path', '');
-                                vscode.window.showInformationMessage('Remembered worktree path no longer exists. Using workspace root instead.');
-                            }
-                        }
-                    }
-                } catch { /* ignore DB errors */ }
-            }
         }
+
         const visibleAgents = await taskViewerProvider.getVisibleAgents(effectiveWorkspaceRoot);
         const includeJulesMonitor = visibleAgents.jules !== false;
         const customAgents = await taskViewerProvider.getCustomAgents(effectiveWorkspaceRoot);
@@ -2343,205 +2351,218 @@ export async function activate(context: vscode.ExtensionContext) {
         if (includeJulesMonitor) {
             agents.push({ name: 'Jules Monitor', role: 'jules_monitor' });
         }
-        const normalizeGridTerminalName = (value: string | undefined): string => (value || '').trim();
-        const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const matchesGridAgentName = (terminal: vscode.Terminal, agentName: string): boolean => {
-            const creationName = (terminal.creationOptions as vscode.TerminalOptions | undefined)?.name;
-            const terminalName = normalizeGridTerminalName(terminal.name);
-            const createdName = normalizeGridTerminalName(creationName);
-            // Matches primary agent names (exact, or with VS Code duplicate suffix like " (2)")
-            // but excludes pool terminals which use bare number suffix like " 2"
-            const primaryPattern = new RegExp(`^${escapeRegex(agentName)}(?: \\(\\d+\\))?$`);
-            return primaryPattern.test(terminalName) || primaryPattern.test(createdName);
-        };
-        const clearGridBlockers = async () => {
-            const agentNames = new Set(agents.map(a => a.name));
-            if (!includeJulesMonitor) { agentNames.add('Jules Monitor'); }
-            for (const [name, terminal] of Array.from(registeredTerminals.entries())) {
-                const bareName = stripIdeSuffix(name);
-                if ((agentNames.has(name) || agentNames.has(bareName)) && terminal.exitStatus !== undefined) {
-                    registeredTerminals.delete(name);
-                }
+
+        // Open worktree terminals if configured
+        for (const w of gridWorktrees) {
+            if (w.path) {
+                // Note on dual subsystems: worktree terminals deliberately use the autoban registry
+                // and are matched for routing by worktreePath, not name.
+                const roles = agents.map(a => a.role);
+                await taskViewerProvider.ensureWorktreeTerminals(w.path, roles);
             }
-            if (!includeJulesMonitor) {
-                const julesMatches = vscode.window.terminals.filter(t => t.exitStatus === undefined && matchesGridAgentName(t, 'Jules Monitor'));
-                for (const terminal of julesMatches) {
-                    outputChannel?.appendLine(`[Extension] Disposing hidden grid terminal '${terminal.name}' for agent 'Jules Monitor'`);
-                    terminal.dispose();
-                }
-                registeredTerminals.delete('Jules Monitor');
-                registeredTerminals.delete(suffixedName('Jules Monitor'));
-            }
-            for (const agent of agents) {
-                const matches = vscode.window.terminals.filter(t => t.exitStatus === undefined && matchesGridAgentName(t, agent.name));
-                if (matches.length === 0) continue;
-                const healthy: vscode.Terminal[] = [];
-                for (const term of matches) {
-                    if (term.exitStatus !== undefined) {
-                        outputChannel?.appendLine(`[Extension] Disposing exited grid terminal '${term.name}' for agent '${agent.name}'`);
-                        term.dispose();
-                        continue;
-                    }
-                    healthy.push(term);
-                }
-                if (healthy.length > 1) {
-                    for (const extra of healthy.slice(1)) {
-                        outputChannel?.appendLine(`[Extension] Disposing duplicate grid terminal '${extra.name}' for agent '${agent.name}'`);
-                        extra.dispose();
+        }
+
+        if (!suppressMain) {
+            const normalizeGridTerminalName = (value: string | undefined): string => (value || '').trim();
+            const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const matchesGridAgentName = (terminal: vscode.Terminal, agentName: string): boolean => {
+                const creationName = (terminal.creationOptions as vscode.TerminalOptions | undefined)?.name;
+                const terminalName = normalizeGridTerminalName(terminal.name);
+                const createdName = normalizeGridTerminalName(creationName);
+                // Matches primary agent names (exact, or with VS Code duplicate suffix like " (2)")
+                // but excludes pool terminals which use bare number suffix like " 2"
+                const primaryPattern = new RegExp(`^${escapeRegex(agentName)}(?: \\(\\d+\\))?$`);
+                return primaryPattern.test(terminalName) || primaryPattern.test(createdName);
+            };
+            const clearGridBlockers = async () => {
+                const agentNames = new Set(agents.map(a => a.name));
+                if (!includeJulesMonitor) { agentNames.add('Jules Monitor'); }
+                for (const [name, terminal] of Array.from(registeredTerminals.entries())) {
+                    const bareName = stripIdeSuffix(name);
+                    if ((agentNames.has(name) || agentNames.has(bareName)) && terminal.exitStatus !== undefined) {
+                        registeredTerminals.delete(name);
                     }
                 }
-            }
-            await taskViewerProvider.updateState(async (state: any) => {
-                if (!state.terminals) state.terminals = {};
-                const currentIde = vscode.env.appName || '';
-                for (const name of agentNames) {
-                    for (const key of [name, suffixedName(name)]) {
-                        const entry = state.terminals[key];
-                        if (!entry) continue;
-                        if (isCompatibleIdeName(entry.ideName, currentIde)) {
-                            delete state.terminals[key];
+                if (!includeJulesMonitor) {
+                    const julesMatches = vscode.window.terminals.filter(t => t.exitStatus === undefined && matchesGridAgentName(t, 'Jules Monitor'));
+                    for (const terminal of julesMatches) {
+                        outputChannel?.appendLine(`[Extension] Disposing hidden grid terminal '${terminal.name}' for agent 'Jules Monitor'`);
+                        terminal.dispose();
+                    }
+                    registeredTerminals.delete('Jules Monitor');
+                    registeredTerminals.delete(suffixedName('Jules Monitor'));
+                }
+                for (const agent of agents) {
+                    const matches = vscode.window.terminals.filter(t => t.exitStatus === undefined && matchesGridAgentName(t, agent.name));
+                    if (matches.length === 0) continue;
+                    const healthy: vscode.Terminal[] = [];
+                    for (const term of matches) {
+                        if (term.exitStatus !== undefined) {
+                            outputChannel?.appendLine(`[Extension] Disposing exited grid terminal '${term.name}' for agent '${agent.name}'`);
+                            term.dispose();
+                            continue;
+                        }
+                        healthy.push(term);
+                    }
+                    if (healthy.length > 1) {
+                        for (const extra of healthy.slice(1)) {
+                            outputChannel?.appendLine(`[Extension] Disposing duplicate grid terminal '${extra.name}' for agent '${agent.name}'`);
+                            extra.dispose();
                         }
                     }
                 }
-            });
-        };
-        // Pre-subscribe to shell execution events BEFORE creating terminals to avoid race:
-        // If we subscribe after terminal.show(), fast shells may start and fire the event
-        // before our listener is attached, causing an unnecessary 5s timeout fallback.
-        const shellReadyTerminals = new Set<vscode.Terminal>();
-        const preSubscription = vscode.window.onDidStartTerminalShellExecution((e) => {
-            shellReadyTerminals.add(e.terminal);
-        });
-        taskViewerProvider.sendLoadingState(true);
-        try {
-            await clearGridBlockers();
-            const createdTerminals: vscode.Terminal[] = [];
-            const batchRegistrations: any[] = [];
-            for (let i = 0; i < agents.length; i++) {
-                const agent = agents[i];
-                let terminal = vscode.window.terminals.find(t => t.exitStatus === undefined && matchesGridAgentName(t, agent.name));
-                const alreadyExisted = !!terminal;
-                if (!terminal) {
-                    const gridTermOpts: vscode.TerminalOptions = {
-                        name: agent.name,
-                        location: vscode.TerminalLocation.Panel,
-                        cwd: effectiveCwd
-                    };
-                    terminal = vscode.window.createTerminal(gridTermOpts);
-                    createdTerminals.push(terminal);
-                }
-                batchRegistrations.push({
-                    name: suffixedName(agent.name),
-                    purpose: 'agent-grid',
-                    role: agent.role,
-                    pid: null,
-                    friendlyName: agent.name,
-                    skipParentResolution: true,
-                    ideName: vscode.env.appName,
-                    worktreePath: effectiveCwd
-                });
-                outputChannel?.appendLine(`[Extension] Queued grid terminal '${agent.name}' (PID: null — skipParentResolution) for batch registration`);
-                gridTerminals.set(suffixedName(agent.name), terminal);
-                registeredTerminals.set(suffixedName(agent.name), terminal);
-                terminal.show();
-                try {
-                    await vscode.commands.executeCommand('workbench.action.terminal.moveToTerminalPanel');
-                } catch (e) {
-                    outputChannel?.appendLine(`[Extension] Could not move terminal to panel: ${e}`);
-                }
-            }
-            if (batchRegistrations.length > 0) {
                 await taskViewerProvider.updateState(async (state: any) => {
                     if (!state.terminals) state.terminals = {};
-                    for (const reg of batchRegistrations) {
-                        if (!state.terminals[reg.name]) {
-                            state.terminals[reg.name] = { purpose: reg.purpose };
+                    const currentIde = vscode.env.appName || '';
+                    for (const name of agentNames) {
+                        for (const key of [name, suffixedName(name)]) {
+                            const entry = state.terminals[key];
+                            if (!entry) continue;
+                            if (isCompatibleIdeName(entry.ideName, currentIde)) {
+                                delete state.terminals[key];
+                            }
                         }
-                        state.terminals[reg.name].role = reg.role;
-                        state.terminals[reg.name].friendlyName = reg.friendlyName;
-                        state.terminals[reg.name].lastSeen = new Date().toISOString();
-                        if (reg.pid) state.terminals[reg.name].pid = reg.pid;
-                        if (reg.ideName) state.terminals[reg.name].ideName = reg.ideName;
-                        if (reg.worktreePath) state.terminals[reg.name].worktreePath = reg.worktreePath;
                     }
                 });
-                taskViewerProvider.refresh();
-                outputChannel?.appendLine(`[Extension] Registrations for ${batchRegistrations.length} terminal(s) were persisted to state.json`);
-            }
-
-            const newlyCreatedTerminals = new Set(createdTerminals);
-            if (newlyCreatedTerminals.size === 0) {
-                const firstAgent = agents[0];
-                if (firstAgent) {
-                    await vscode.commands.executeCommand('switchboard.focusTerminalByName', firstAgent.name);
-                    vscode.window.showInformationMessage(`Agent terminals already open. Focused: ${firstAgent.name}`);
-                }
-                return;
-            }
-
+            };
+            // Pre-subscribe to shell execution events BEFORE creating terminals to avoid race:
+            // If we subscribe after terminal.show(), fast shells may start and fire the event
+            // before our listener is attached, causing an unnecessary 5s timeout fallback.
+            const shellReadyTerminals = new Set<vscode.Terminal>();
+            const preSubscription = vscode.window.onDidStartTerminalShellExecution((e) => {
+                shellReadyTerminals.add(e.terminal);
+            });
+            taskViewerProvider.sendLoadingState(true);
             try {
-                // Wait for all created terminals' shells to start before sending commands
-                const awaiting = createdTerminals.filter(t => !shellReadyTerminals.has(t));
-                if (awaiting.length > 0) {
-                    await new Promise<void>((resolve) => {
-                        const remaining = new Set(awaiting);
-                        const disposable = vscode.window.onDidStartTerminalShellExecution((e) => {
-                            if (remaining.has(e.terminal)) {
-                                remaining.delete(e.terminal);
-                                if (remaining.size === 0) {
-                                    disposable.dispose();
-                                    resolve();
-                                }
-                            }
-                        });
-                        // Safety timeout: resolve after 5s even if some shells didn't report
-                        setTimeout(() => {
-                            disposable.dispose();
-                            if (remaining.size > 0) {
-                                outputChannel?.appendLine(`[Extension] Shell init timeout — ${remaining.size} terminal(s) did not report ready, proceeding anyway`);
-                            }
-                            resolve();
-                        }, 5000);
+                await clearGridBlockers();
+                const createdTerminals: vscode.Terminal[] = [];
+                const batchRegistrations: any[] = [];
+                for (let i = 0; i < agents.length; i++) {
+                    const agent = agents[i];
+                    let terminal = vscode.window.terminals.find(t => t.exitStatus === undefined && matchesGridAgentName(t, agent.name));
+                    const alreadyExisted = !!terminal;
+                    if (!terminal) {
+                        const gridTermOpts: vscode.TerminalOptions = {
+                            name: agent.name,
+                            location: vscode.TerminalLocation.Panel,
+                            cwd: effectiveCwd
+                        };
+                        terminal = vscode.window.createTerminal(gridTermOpts);
+                        createdTerminals.push(terminal);
+                    }
+                    batchRegistrations.push({
+                        name: suffixedName(agent.name),
+                        purpose: 'agent-grid',
+                        role: agent.role,
+                        pid: null,
+                        friendlyName: agent.name,
+                        skipParentResolution: true,
+                        ideName: vscode.env.appName,
+                        worktreePath: effectiveCwd
                     });
-                }
-
-                outputChannel?.appendLine(`[Extension] createAgentGrid: sending startup commands for ${agents.length} agent(s), effectiveWorkspaceRoot=${effectiveWorkspaceRoot}`);
-                for (const agent of agents) {
-                    let cmd = await taskViewerProvider.getAgentStartupCommand(agent.role, effectiveWorkspaceRoot);
-                    if (cmd && cmd.trim()) {
-                        const terminal = gridTerminals.get(suffixedName(agent.name));
-                        if (terminal && newlyCreatedTerminals.has(terminal)) {
-                            terminal.sendText(cmd.trim(), true);
-                            outputChannel?.appendLine(`[Extension] Sent startup command for '${agent.name}' (${agent.role}): ${cmd.trim()}`);
-
-                            // NEW: Cache the binary-derived agent display name
-                            const binary = cmd.trim().split(/\s+/)[0];
-                            const displayName = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase() + ' CLI';
-                            taskViewerProvider.setTerminalAgentInfo(suffixedName(agent.name), agent.role, displayName);
-
-                            if (!registeredTerminals.has(suffixedName(agent.name))) {
-                                outputChannel?.appendLine(`[Extension] Startup command sent via local reference (registeredTerminals missing for '${agent.name}')`);
-                            }
-                        } else if (terminal) {
-                            outputChannel?.appendLine(`[Extension] Skipping startup command for already running '${agent.name}' (${agent.role})`);
-                        } else {
-                            outputChannel?.appendLine(`[Extension] WARNING: terminal not found in gridTerminals for '${agent.name}' (key=${suffixedName(agent.name)})`);
-                        }
-                    } else {
-                        outputChannel?.appendLine(`[Extension] WARNING: empty startup command for '${agent.name}' (${agent.role}), cmd='${cmd || ''}'`);
+                    outputChannel?.appendLine(`[Extension] Queued grid terminal '${agent.name}' (PID: null — skipParentResolution) for batch registration`);
+                    gridTerminals.set(suffixedName(agent.name), terminal);
+                    registeredTerminals.set(suffixedName(agent.name), terminal);
+                    terminal.show();
+                    try {
+                        await vscode.commands.executeCommand('workbench.action.terminal.moveToTerminalPanel');
+                    } catch (e) {
+                        outputChannel?.appendLine(`[Extension] Could not move terminal to panel: ${e}`);
                     }
                 }
+                if (batchRegistrations.length > 0) {
+                    await taskViewerProvider.updateState(async (state: any) => {
+                        if (!state.terminals) state.terminals = {};
+                        for (const reg of batchRegistrations) {
+                            if (!state.terminals[reg.name]) {
+                                state.terminals[reg.name] = { purpose: reg.purpose };
+                            }
+                            state.terminals[reg.name].role = reg.role;
+                            state.terminals[reg.name].friendlyName = reg.friendlyName;
+                            state.terminals[reg.name].lastSeen = new Date().toISOString();
+                            if (reg.pid) state.terminals[reg.name].pid = reg.pid;
+                            if (reg.ideName) state.terminals[reg.name].ideName = reg.ideName;
+                            if (reg.worktreePath) state.terminals[reg.name].worktreePath = reg.worktreePath;
+                        }
+                    });
+                    taskViewerProvider.refresh();
+                    outputChannel?.appendLine(`[Extension] Registrations for ${batchRegistrations.length} terminal(s) were persisted to state.json`);
+                }
+
+                const newlyCreatedTerminals = new Set(createdTerminals);
+                if (newlyCreatedTerminals.size === 0) {
+                    const firstAgent = agents[0];
+                    if (firstAgent) {
+                        await vscode.commands.executeCommand('switchboard.focusTerminalByName', firstAgent.name);
+                        postKanbanStatus(`Agent terminals already open. Focused: ${firstAgent.name}`);
+                    }
+                    return;
+                }
+
+                try {
+                    // Wait for all created terminals' shells to start before sending commands
+                    const awaiting = createdTerminals.filter(t => !shellReadyTerminals.has(t));
+                    if (awaiting.length > 0) {
+                        await new Promise<void>((resolve) => {
+                            const remaining = new Set(awaiting);
+                            const disposable = vscode.window.onDidStartTerminalShellExecution((e) => {
+                                if (remaining.has(e.terminal)) {
+                                    remaining.delete(e.terminal);
+                                    if (remaining.size === 0) {
+                                        disposable.dispose();
+                                        resolve();
+                                    }
+                                }
+                            });
+                            // Safety timeout: resolve after 5s even if some shells didn't report
+                            setTimeout(() => {
+                                disposable.dispose();
+                                if (remaining.size > 0) {
+                                    outputChannel?.appendLine(`[Extension] Shell init timeout — ${remaining.size} terminal(s) did not report ready, proceeding anyway`);
+                                }
+                                resolve();
+                            }, 5000);
+                        });
+                    }
+
+                    outputChannel?.appendLine(`[Extension] createAgentGrid: sending startup commands for ${agents.length} agent(s), effectiveWorkspaceRoot=${effectiveWorkspaceRoot}`);
+                    for (const agent of agents) {
+                        let cmd = await taskViewerProvider.getAgentStartupCommand(agent.role, effectiveWorkspaceRoot);
+                        if (cmd && cmd.trim()) {
+                            const terminal = gridTerminals.get(suffixedName(agent.name));
+                            if (terminal && newlyCreatedTerminals.has(terminal)) {
+                                terminal.sendText(cmd.trim(), true);
+                                outputChannel?.appendLine(`[Extension] Sent startup command for '${agent.name}' (${agent.role}): ${cmd.trim()}`);
+
+                                // NEW: Cache the binary-derived agent display name
+                                const binary = cmd.trim().split(/\s+/)[0];
+                                const displayName = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase() + ' CLI';
+                                taskViewerProvider.setTerminalAgentInfo(suffixedName(agent.name), agent.role, displayName);
+
+                                if (!registeredTerminals.has(suffixedName(agent.name))) {
+                                    outputChannel?.appendLine(`[Extension] Startup command sent via local reference (registeredTerminals missing for '${agent.name}')`);
+                                }
+                            } else if (terminal) {
+                                outputChannel?.appendLine(`[Extension] Skipping startup command for already running '${agent.name}' (${agent.role})`);
+                            } else {
+                                outputChannel?.appendLine(`[Extension] WARNING: terminal not found in gridTerminals for '${agent.name}' (key=${suffixedName(agent.name)})`);
+                            }
+                        } else {
+                            outputChannel?.appendLine(`[Extension] WARNING: empty startup command for '${agent.name}' (${agent.role}), cmd='${cmd || ''}'`);
+                        }
+                    }
+                } catch (e) {
+                    outputChannel?.appendLine(`[Extension] Startup command execution failed: ${e}`);
+                }
+                postKanbanStatus(`Agent Grid initialized: ${agents.map(a => a.name).join(', ')}`);
             } catch (e) {
-                outputChannel?.appendLine(`[Extension] Startup command execution failed: ${e}`);
+                const msg = e instanceof Error ? e.message : String(e);
+                outputChannel?.appendLine(`[Extension] createAgentGrid failed: ${msg}`);
+                vscode.window.showErrorMessage(`Failed to open agent terminals: ${msg}`);
+            } finally {
+                preSubscription.dispose();
+                taskViewerProvider.sendLoadingState(false);
             }
-            vscode.window.showInformationMessage(`Agent Grid initialized: ${agents.map(a => a.name).join(', ')}`);
-        } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            outputChannel?.appendLine(`[Extension] createAgentGrid failed: ${msg}`);
-            vscode.window.showErrorMessage(`Failed to open agent terminals: ${msg}`);
-        } finally {
-            preSubscription.dispose();
-            taskViewerProvider.sendLoadingState(false);
         }
     }
 

@@ -404,61 +404,73 @@
         }
     </style>
     <style>
-.shared-tab-bar {
+.controls-strip {
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 8px 16px 0;
-  background: var(--panel-bg);
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--panel-bg2);
   border-bottom: 1px solid var(--border-color);
-  overflow-x: auto;
-  overflow-y: hidden;
-}
-.shared-tab-btn {
   flex-shrink: 0;
-  white-space: nowrap;
+}
+
+.strip-btn {
   background: transparent;
-  border: 1px solid transparent;
-  border-bottom: none;
+  border: 1px solid var(--border-color);
   color: var(--text-secondary);
-  font-family: var(--font-mono);
+  font-family: var(--font-family);
   font-size: 10px;
   letter-spacing: 1px;
   text-transform: uppercase;
-  padding: 8px 16px;
+  padding: 4px 10px;
   cursor: pointer;
-  border-radius: 3px 3px 0 0;
+  border-radius: 2px;
   transition: all 0.15s;
-  position: relative;
-  top: 1px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
-.shared-tab-btn:hover {
-  color: var(--text-primary);
-  background: color-mix(in srgb, var(--accent-teal) 5%, transparent);
-}
-.shared-tab-btn.active {
+
+.strip-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+  border-color: var(--accent-teal-dim);
   color: var(--accent-teal);
-  background: var(--panel-bg2);
-  border-color: var(--border-color);
-  border-bottom-color: var(--panel-bg2);
 }
+
+.strip-btn.active {
+  background: var(--accent-teal-dim);
+  border-color: var(--accent-teal);
+  color: var(--accent-teal);
+  font-weight: 600;
+}
+
+.strip-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  border-color: var(--border-color);
+  color: var(--text-secondary);
+}
+
 .shared-tab-content {
   display: none;
   flex: 1;
   flex-direction: column;
   overflow: hidden;
 }
+
 .shared-tab-content.active {
   display: flex;
   overflow-y: auto;
 }
-.cyber-theme-enabled .shared-tab-btn.active {
-  box-shadow: 0 -2px 8px color-mix(in srgb, var(--accent-teal) 30%, transparent);
-}
-.cyber-theme-enabled .shared-tab-bar {
+
+.cyber-theme-enabled .controls-strip {
   background: rgba(10, 10, 10, 0.65);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
+  border-bottom-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+}
+
+.cyber-theme-enabled .strip-btn:hover:not(:disabled) {
+  box-shadow: var(--glow-teal);
 }
     </style>
 </head>
@@ -466,17 +478,19 @@
 <body>
     <div class="setup-shell">
         <!-- Tab Navigation -->
-        <div class="shared-tab-bar" role="tablist" aria-label="Setup sections">
-            <button class="shared-tab-btn active" data-tab="setup" role="tab" aria-selected="true">Setup</button>
-            <button class="shared-tab-btn" data-tab="kanban" role="tab" aria-selected="false">Kanban</button>
-            <button class="shared-tab-btn" data-tab="database" role="tab" aria-selected="false">Database</button>
-            <button class="shared-tab-btn" data-tab="control-plane" role="tab" aria-selected="false">Control Plane</button>
-            <button class="shared-tab-btn" data-tab="mappings" role="tab" aria-selected="false">Mappings</button>
-            <button class="shared-tab-btn" data-tab="integration" role="tab" aria-selected="false">Integrations</button>
-            <button class="shared-tab-btn" data-tab="artifacts-panel" role="tab" aria-selected="false">Artifacts Panel</button>
-            <button class="shared-tab-btn" data-tab="plan-scanner" role="tab" aria-selected="false">Plan Scanner</button>
-            <button class="shared-tab-btn" data-tab="theme" role="tab" aria-selected="false">Theme</button>
-            <button class="shared-tab-btn" data-tab="status-bar" role="tab" aria-selected="false">Status Bar</button>
+        <div class="controls-strip" role="tablist" aria-label="Setup sections">
+            <button class="strip-btn active" data-tab="setup" role="tab" aria-selected="true">Setup</button>
+            <button class="strip-btn" data-tab="kanban" role="tab" aria-selected="false">Kanban</button>
+            <button class="strip-btn" data-tab="database" role="tab" aria-selected="false">Database</button>
+            <button class="strip-btn" data-tab="control-plane" role="tab" aria-selected="false">Control Plane</button>
+            <button class="strip-btn" data-tab="mappings" role="tab" aria-selected="false">Mappings</button>
+            <button class="strip-btn" data-tab="clickup" role="tab" aria-selected="false">ClickUp</button>
+            <button class="strip-btn" data-tab="linear" role="tab" aria-selected="false">Linear</button>
+            <button class="strip-btn" data-tab="notion" role="tab" aria-selected="false">Notion</button>
+            <button class="strip-btn" data-tab="artifacts-panel" role="tab" aria-selected="false">Artifacts Panel</button>
+            <button class="strip-btn" data-tab="plan-scanner" role="tab" aria-selected="false">Plan Scanner</button>
+            <button class="strip-btn" data-tab="theme" role="tab" aria-selected="false">Theme</button>
+            <button class="strip-btn" data-tab="status-bar" role="tab" aria-selected="false">Status Bar</button>
         </div>
 
         <div class="shared-tab-content active" id="startup-fields" data-tab-content="setup">
@@ -624,25 +638,9 @@
                 </div>
             </div>
 
-        <div class="shared-tab-content" id="project-mgmt-fields" data-tab-content="integration">
-
+        <div class="shared-tab-content" id="clickup-fields" data-tab-content="clickup">
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
-                    Configure ClickUp, Linear, and Notion integrations for plan sync, issue import, and design-doc retrieval.
-                </div>
-
-                <div style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
-                    <label class="startup-row" style="display:block; margin-bottom:6px;">
-                        <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">
-                            Project Management Provider
-                        </span>
-                        <select id="integration-provider-selector" style="width:100%; box-sizing:border-box; font-family:var(--font-mono); font-size:11px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; border-radius:4px;">
-                            <option value="linear" selected>Linear</option>
-                            <option value="clickup">ClickUp</option>
-                        </select>
-                    </label>
-                    <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
-                        Select your primary project management integration. Notion design document fetching is available regardless of this selection.
-                    </div>
+                    Configure ClickUp integration for plan sync, issue import, and custom field mapping.
                 </div>
 
                 <div style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
@@ -651,8 +649,8 @@
                             Ticket Import Location
                         </span>
                         <div style="display:flex; gap:8px; margin-top:4px;">
-                            <input id="ticket-import-folder-input" type="text" placeholder="e.g. /Users/me/Tickets" style="flex:1; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; border-radius:4px;">
-                            <button id="btn-browse-ticket-folder" class="secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
+                            <input class="ticket-import-folder-input" type="text" placeholder="e.g. /Users/me/Tickets" style="flex:1; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; border-radius:4px;">
+                            <button class="btn-browse-ticket-folder secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
                         </div>
                     </label>
                     <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
@@ -660,7 +658,7 @@
                     </div>
                     <div style="margin-top:10px;">
                         <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                            <input id="tickets-auto-sync-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                            <input class="tickets-auto-sync-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
                             <span style="font-size:11px;">Enable Tickets auto-sync</span>
                         </label>
                         <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
@@ -669,7 +667,7 @@
                     </div>
                 </div>
 
-                <div id="clickup-config-section" class="hidden">
+                <div id="clickup-config-section">
                 <div class="db-subsection">
                     <div class="subsection-header">
                         <span>ClickUp</span>
@@ -791,6 +789,36 @@
                         <div id="clickup-automation-rules-list" style="display:flex; flex-direction:column; gap:8px;"></div>
                     </div>
                 </div>
+                </div>
+        </div>
+
+        <div class="shared-tab-content" id="linear-fields" data-tab-content="linear">
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                    Configure Linear integration for plan sync, issue import, and workflow state mapping.
+                </div>
+
+                <div style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
+                    <label class="startup-row" style="display:block; margin-bottom:6px;">
+                        <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">
+                            Ticket Import Location
+                        </span>
+                        <div style="display:flex; gap:8px; margin-top:4px;">
+                            <input class="ticket-import-folder-input" type="text" placeholder="e.g. /Users/me/Tickets" style="flex:1; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; border-radius:4px;">
+                            <button class="btn-browse-ticket-folder secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
+                        </div>
+                    </label>
+                    <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
+                        Where imported tickets are saved. Defaults to <code>.switchboard/plans</code> if left empty.
+                    </div>
+                    <div style="margin-top:10px;">
+                        <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                            <input class="tickets-auto-sync-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                            <span style="font-size:11px;">Enable Tickets auto-sync</span>
+                        </label>
+                        <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                            When on, tickets save locally whenever a list loads, and local edits auto-push to ClickUp/Linear on file save.
+                        </div>
+                    </div>
                 </div>
 
                 <div id="linear-config-section">
@@ -917,6 +945,12 @@
                     </div>
                 </div>
                 </div>
+        </div>
+
+        <div class="shared-tab-content" id="notion-fields" data-tab-content="notion">
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                    Configure Notion integration for design document fetching.
+                </div>
 
                 <div class="db-subsection">
                     <div class="subsection-header">
@@ -941,7 +975,7 @@
                     <div id="notion-option-summary" style="display:none; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
                     <div id="notion-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
                 </div>
-            </div>
+        </div>
 
         <div class="shared-tab-content" id="artifacts-panel-fields" data-tab-content="artifacts-panel">
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
@@ -1339,6 +1373,7 @@
 
         let lastStartupCommands = {};
         let lastAllDbPaths = [];
+        let selectedDatabaseIndex = 0;
         let lastVisibleAgents = { ...DEFAULT_VISIBLE_AGENTS };
         let lastCustomAgents = [];
         let lastCustomKanbanColumns = [];
@@ -1350,6 +1385,74 @@
         let currentDbPath = '';
         let workspaceRoot = '';
         let lastPlanIngestionFolder = '';
+
+        function renderSingleDatabaseCard(db, index) {
+            const isMapped = db.isMapped;
+            const mappedBadge = isMapped ? `<span style="font-size:9px; color:var(--accent-orange, #ed8936); margin-left:8px; border:1px solid var(--accent-orange, #ed8936); padding:1px 4px; border-radius:3px;">Mapped</span>` : '';
+            const foldersList = db.workspaceRoots.map(r => `<div style="font-size:10px; color:var(--text-secondary); margin-bottom:2px; word-break:break-all;">${escapeHtml(r)}</div>`).join('');
+            const locationDisabled = isMapped ? 'disabled' : '';
+
+            let selectedValue = 'local';
+            const pathValue = db.dbPath || '';
+            if (pathValue.includes('GoogleDrive') || pathValue.includes('Google Drive')) {
+                selectedValue = 'google-drive';
+            } else if (pathValue.includes('Dropbox')) {
+                selectedValue = 'dropbox';
+            } else if (pathValue.includes('iCloud') || pathValue.includes('com~apple~CloudDocs')) {
+                selectedValue = 'icloud';
+            } else if (pathValue && !pathValue.includes('.switchboard/kanban.db')) {
+                selectedValue = 'custom';
+            }
+
+            return `
+            <div class="db-card" data-db-index="${index}" style="border:1px solid var(--border-color); border-radius:4px; padding:12px; margin-bottom:12px; background:var(--panel-bg2, rgba(255,255,255,0.03));">
+                <div style="font-family:var(--font-mono); font-size:10px; color:var(--accent-teal, #4fd1c5); margin-bottom:6px; word-break:break-all; font-weight:bold;">${escapeHtml(db.dbPath)}${mappedBadge}</div>
+                <div style="margin-bottom:12px; border-left:2px solid var(--border-color); padding-left:8px;">${foldersList}</div>
+
+                <div class="db-subsection" style="margin-top:0; padding-top:0; border-top:none;">
+                    <div class="subsection-header" style="margin-top:0;"><span>Location</span></div>
+                    <div class="db-location-options">
+                        <label class="db-radio-option"><input type="radio" name="db-location-${index}" value="local" ${selectedValue === 'local' ? 'checked' : ''} ${locationDisabled}><span>Local</span></label>
+                        <label class="db-radio-option"><input type="radio" name="db-location-${index}" value="google-drive" ${selectedValue === 'google-drive' ? 'checked' : ''} ${locationDisabled}><span>Google Drive</span></label>
+                        <label class="db-radio-option"><input type="radio" name="db-location-${index}" value="dropbox" ${selectedValue === 'dropbox' ? 'checked' : ''} ${locationDisabled}><span>Dropbox</span></label>
+                        <label class="db-radio-option"><input type="radio" name="db-location-${index}" value="icloud" ${selectedValue === 'icloud' ? 'checked' : ''} ${locationDisabled}><span>iCloud</span></label>
+                        <label class="db-radio-option"><input type="radio" name="db-location-${index}" value="custom" ${selectedValue === 'custom' ? 'checked' : ''} ${locationDisabled}><span>Custom</span></label>
+                    </div>
+                    <input type="text" id="db-custom-path-${index}" class="db-custom-path-input ${selectedValue === 'custom' ? '' : 'hidden'}" placeholder="Enter custom database path..." value="${selectedValue === 'custom' ? escapeHtml(db.dbPath) : ''}" style="width:100%; margin-top:4px;">
+                    <button class="db-update-location-btn db-action-btn w-full" data-db-index="${index}" style="margin-top:8px;" ${locationDisabled ? 'disabled' : ''}>UPDATE LOCATION</button>
+                </div>
+
+                <div class="db-subsection">
+                    <div class="subsection-header"><span>Rebuild</span></div>
+                    <div style="font-size:10px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;">If the database is corrupted, this will delete and recreate it. If a <code>kanban-state-backup.json</code> exists, plan columns and metadata will be restored from it first; any new plan files in <code>.switchboard/plans/</code> will then be imported.</div>
+                    <button class="db-reset-btn db-action-btn danger w-full" data-db-index="${index}">REBUILD DATABASE</button>
+                </div>
+
+                <div class="db-subsection">
+                    <div class="subsection-header"><span>Automatic Backups</span></div>
+                    <div style="font-size:10px; color:var(--text-secondary); line-height:1.5;">
+                        <p style="margin:0 0 6px;">Switchboard writes a rolling backup of the database to <code>.switchboard/dbbackup/</code> each time the extension starts. The 5 most recent backups are kept. These can be used to recover from startup-triggered data loss.</p>
+                        <p style="margin:0 0 6px;">For additional protection, consider scheduling a daily copy of <code>.switchboard/kanban.db</code> to a location outside the project — for example using a cron job or a folder sync tool. A <code>.switchboard/dbbackup/</code> subfolder works well as the destination if you want backups co-located with the project.</p>
+                        <p style="margin:0;">Example cron (daily at 2am, keeping 30 days):<br>
+                        <code style="display:block; margin-top:4px; white-space:pre-wrap; word-break:break-all;">0 2 * * * cp /path/to/.switchboard/kanban.db /path/to/.switchboard/dbbackup/kanban.db.$(date +\%Y-\%m-\%d) && ls -t /path/to/.switchboard/dbbackup/kanban.db.* | tail -n +31 | xargs rm -f</code></p>
+                    </div>
+                </div>
+
+                <div class="db-subsection">
+                    <div class="subsection-header"><span>Notion Backup</span></div>
+                    <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
+                        Backup to Notion database. Requires integration token.
+                    </div>
+                    <input type="text" class="notion-db-url-input" data-db-index="${index}" placeholder="https://notion.so/workspace/..." style="width:100%;">
+                    <div style="display:flex; gap:8px; margin-top:8px;">
+                        <button class="notion-backup-btn db-action-btn" data-db-index="${index}" style="flex:1;">BACKUP</button>
+                        <button class="notion-restore-btn db-action-btn" data-db-index="${index}" style="flex:1;">RESTORE</button>
+                    </div>
+                    <button class="notion-auto-setup-btn secondary-btn w-full" data-db-index="${index}" style="margin-top:8px;">AUTO-CREATE NOTION DATABASE</button>
+                </div>
+            </div>
+            `;
+        }
 
         function renderDatabases(databases) {
             const container = document.getElementById('databases-list');
@@ -1363,75 +1466,34 @@
             }
             placeholder?.classList.add('hidden');
 
-            container.innerHTML = databases.map((db, index) => {
-                const isMapped = db.isMapped;
-                const mappedBadge = isMapped ? `<span style="font-size:9px; color:var(--accent-orange, #ed8936); margin-left:8px; border:1px solid var(--accent-orange, #ed8936); padding:1px 4px; border-radius:3px;">Mapped</span>` : '';
-                const foldersList = db.workspaceRoots.map(r => `<div style="font-size:10px; color:var(--text-secondary); margin-bottom:2px; word-break:break-all;">${escapeHtml(r)}</div>`).join('');
-                const locationDisabled = isMapped ? 'disabled' : '';
-                const mappedNote = isMapped ? `<div style="font-size:10px; color:var(--accent-orange, #ed8936); margin-top:4px; margin-bottom:8px;">Managed by Workspace Mappings — edit location in the Workspace tab.</div>` : '';
+            if (selectedDatabaseIndex >= databases.length) {
+                selectedDatabaseIndex = 0;
+            }
 
-                let selectedValue = 'local';
-                const pathValue = db.dbPath || '';
-                if (pathValue.includes('GoogleDrive') || pathValue.includes('Google Drive')) {
-                    selectedValue = 'google-drive';
-                } else if (pathValue.includes('Dropbox')) {
-                    selectedValue = 'dropbox';
-                } else if (pathValue.includes('iCloud') || pathValue.includes('com~apple~CloudDocs')) {
-                    selectedValue = 'icloud';
-                } else if (pathValue && !pathValue.includes('.switchboard/kanban.db')) {
-                    selectedValue = 'custom';
-                }
-
-                return `
-                <div class="db-card" data-db-index="${index}" style="border:1px solid var(--border-color); border-radius:4px; padding:12px; margin-bottom:12px; background:var(--panel-bg2, rgba(255,255,255,0.03));">
-                    <div style="font-family:var(--font-mono); font-size:10px; color:var(--accent-teal, #4fd1c5); margin-bottom:6px; word-break:break-all; font-weight:bold;">${escapeHtml(db.dbPath)}${mappedBadge}</div>
-                    <div style="margin-bottom:12px; border-left:2px solid var(--border-color); padding-left:8px;">${foldersList}</div>
-
-                    <div class="db-subsection" style="margin-top:0; padding-top:0; border-top:none;">
-                        <div class="subsection-header" style="margin-top:0;"><span>Location</span></div>
-                        ${mappedNote}
-                        <div class="db-location-options">
-                            <label class="db-radio-option"><input type="radio" name="db-location-${index}" value="local" ${selectedValue === 'local' ? 'checked' : ''} ${locationDisabled}><span>Local</span></label>
-                            <label class="db-radio-option"><input type="radio" name="db-location-${index}" value="google-drive" ${selectedValue === 'google-drive' ? 'checked' : ''} ${locationDisabled}><span>Google Drive</span></label>
-                            <label class="db-radio-option"><input type="radio" name="db-location-${index}" value="dropbox" ${selectedValue === 'dropbox' ? 'checked' : ''} ${locationDisabled}><span>Dropbox</span></label>
-                            <label class="db-radio-option"><input type="radio" name="db-location-${index}" value="icloud" ${selectedValue === 'icloud' ? 'checked' : ''} ${locationDisabled}><span>iCloud</span></label>
-                            <label class="db-radio-option"><input type="radio" name="db-location-${index}" value="custom" ${selectedValue === 'custom' ? 'checked' : ''} ${locationDisabled}><span>Custom</span></label>
-                        </div>
-                        <input type="text" id="db-custom-path-${index}" class="db-custom-path-input ${selectedValue === 'custom' ? '' : 'hidden'}" placeholder="Enter custom database path..." value="${selectedValue === 'custom' ? escapeHtml(db.dbPath) : ''}" style="width:100%; margin-top:4px;">
-                        <button class="db-update-location-btn db-action-btn w-full" data-db-index="${index}" style="margin-top:8px;" ${locationDisabled ? 'disabled' : ''}>UPDATE LOCATION</button>
-                    </div>
-
-                    <div class="db-subsection">
-                        <div class="subsection-header"><span>Rebuild</span></div>
-                        <div style="font-size:10px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;">If the database is corrupted, this will delete and recreate it. If a <code>kanban-state-backup.json</code> exists, plan columns and metadata will be restored from it first; any new plan files in <code>.switchboard/plans/</code> will then be imported.</div>
-                        <button class="db-reset-btn db-action-btn danger w-full" data-db-index="${index}">REBUILD DATABASE</button>
-                    </div>
-
-                    <div class="db-subsection">
-                        <div class="subsection-header"><span>Automatic Backups</span></div>
-                        <div style="font-size:10px; color:var(--text-secondary); line-height:1.5;">
-                            <p style="margin:0 0 6px;">Switchboard writes a rolling backup of the database to <code>.switchboard/dbbackup/</code> each time the extension starts. The 5 most recent backups are kept. These can be used to recover from startup-triggered data loss.</p>
-                            <p style="margin:0 0 6px;">For additional protection, consider scheduling a daily copy of <code>.switchboard/kanban.db</code> to a location outside the project — for example using a cron job or a folder sync tool. A <code>.switchboard/dbbackup/</code> subfolder works well as the destination if you want backups co-located with the project.</p>
-                            <p style="margin:0;">Example cron (daily at 2am, keeping 30 days):<br>
-                            <code style="display:block; margin-top:4px; white-space:pre-wrap; word-break:break-all;">0 2 * * * cp /path/to/.switchboard/kanban.db /path/to/.switchboard/dbbackup/kanban.db.$(date +\%Y-\%m-\%d) && ls -t /path/to/.switchboard/dbbackup/kanban.db.* | tail -n +31 | xargs rm -f</code></p>
-                        </div>
-                    </div>
-
-                    <div class="db-subsection">
-                        <div class="subsection-header"><span>Notion Backup</span></div>
-                        <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
-                            Backup to Notion database. Requires integration token.
-                        </div>
-                        <input type="text" class="notion-db-url-input" data-db-index="${index}" placeholder="https://notion.so/workspace/..." style="width:100%;">
-                        <div style="display:flex; gap:8px; margin-top:8px;">
-                            <button class="notion-backup-btn db-action-btn" data-db-index="${index}" style="flex:1;">BACKUP</button>
-                            <button class="notion-restore-btn db-action-btn" data-db-index="${index}" style="flex:1;">RESTORE</button>
-                        </div>
-                        <button class="notion-auto-setup-btn secondary-btn w-full" data-db-index="${index}" style="margin-top:8px;">AUTO-CREATE NOTION DATABASE</button>
-                    </div>
-                </div>
-                `;
-            }).join('');
+            if (databases.length === 1) {
+                selectedDatabaseIndex = 0;
+                container.innerHTML = renderSingleDatabaseCard(databases[0], 0);
+            } else {
+                let selectHtml = `<div style="margin-bottom:12px;">
+                    <div style="font-size:11px; font-weight:bold; color:var(--text-secondary); margin-bottom:6px;">Select Database Workspace:</div>
+                    <select id="db-selector" style="width:100%; box-sizing:border-box; font-family:var(--font-mono); font-size:11px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; border-radius:4px;">`;
+                
+                databases.forEach((db, index) => {
+                    let label = db.parentFolder;
+                    if (!label && db.workspaceRoots && db.workspaceRoots.length > 0 && db.workspaceRoots[0]) {
+                        label = db.workspaceRoots[0].split(/[\\/]/).pop();
+                    }
+                    if (!label) {
+                        label = "Unknown workspace";
+                    }
+                    const selected = index === selectedDatabaseIndex ? 'selected' : '';
+                    selectHtml += `<option value="${index}" ${selected}>${escapeHtml(label)}</option>`;
+                });
+                
+                selectHtml += `</select></div>`;
+                
+                container.innerHTML = selectHtml + renderSingleDatabaseCard(databases[selectedDatabaseIndex], selectedDatabaseIndex);
+            }
         }
         let lastGitIgnoreConfig = {
             strategy: 'targetedGitignore',
@@ -1445,7 +1507,7 @@
         let lastClickupSetupState = null;
         let lastLinearSetupState = null;
         let lastNotionSetupState = null;
-        let selectedIntegrationProvider = 'linear';
+
         let lastControlPlaneCandidate = null;
         let lastControlPlaneStatus = null;
         let lastControlPlanePreview = null;
@@ -1489,7 +1551,9 @@
                 'db-sync-fields': 'database',
                 'control-plane-fields': 'control-plane',
                 'mappings-fields': 'mappings',
-                'project-mgmt-fields': 'integration',
+                'clickup-fields': 'clickup',
+                'linear-fields': 'linear',
+                'notion-fields': 'notion',
                 'planning-panel-fields': 'planning-panel'
             };
 
@@ -1521,7 +1585,7 @@
 
         // Initialize tabs
         function initTabs() {
-            const tabButtons = document.querySelectorAll('.shared-tab-btn');
+            const tabButtons = document.querySelectorAll('.strip-btn');
             const tabContents = document.querySelectorAll('.shared-tab-content');
 
             // Restore persisted tab if available
@@ -1550,7 +1614,7 @@
 
         // Activate specific tab
         function activateTab(tabId, persist = true) {
-            const tabButtons = document.querySelectorAll('.shared-tab-btn');
+            const tabButtons = document.querySelectorAll('.strip-btn');
             const tabContents = document.querySelectorAll('.shared-tab-content');
 
             // Update button states
@@ -1584,7 +1648,13 @@
                     vscode.postMessage({ type: 'getAllDbPaths' });
                     vscode.postMessage({ type: 'getStartupCommands' });
                 },
-                'integration': () => {
+                'clickup': () => {
+                    requestIntegrationSetupStates();
+                },
+                'linear': () => {
+                    requestIntegrationSetupStates();
+                },
+                'notion': () => {
                     requestIntegrationSetupStates();
                 },
                 'control-plane': () => {
@@ -2251,17 +2321,7 @@
             }
         }
 
-        function updateIntegrationProviderVisibility() {
-            const clickupSection = document.getElementById('clickup-config-section');
-            const linearSection = document.getElementById('linear-config-section');
 
-            if (clickupSection) {
-                clickupSection.classList.toggle('hidden', selectedIntegrationProvider !== 'clickup');
-            }
-            if (linearSection) {
-                linearSection.classList.toggle('hidden', selectedIntegrationProvider !== 'linear');
-            }
-        }
 
         function cloneClickupSetupState(state) {
             return state ? JSON.parse(JSON.stringify(state)) : null;
@@ -3188,16 +3248,28 @@
         document.getElementById('linear-browse-exclude-projects')?.addEventListener('click', () => {
             vscode.postMessage({ type: 'linearBrowseProjects', target: 'exclude' });
         });
-        document.getElementById('btn-browse-ticket-folder')?.addEventListener('click', () => {
-            vscode.postMessage({ type: 'browseTicketsFolder' });
+        document.querySelectorAll('.btn-browse-ticket-folder').forEach(el => {
+            el.addEventListener('click', () => {
+                vscode.postMessage({ type: 'browseTicketsFolder' });
+            });
         });
-        document.getElementById('ticket-import-folder-input')?.addEventListener('blur', () => {
-            const input = document.getElementById('ticket-import-folder-input');
-            const val = input ? input.value.trim() : '';
-            vscode.postMessage({ type: 'saveTicketsFolder', folderPath: val });
+        document.querySelectorAll('.ticket-import-folder-input').forEach(el => {
+            el.addEventListener('blur', (e) => {
+                const val = e.target.value.trim();
+                document.querySelectorAll('.ticket-import-folder-input').forEach(input => {
+                    input.value = val;
+                });
+                vscode.postMessage({ type: 'saveTicketsFolder', folderPath: val });
+            });
         });
-        document.getElementById('tickets-auto-sync-toggle')?.addEventListener('change', (e) => {
-            vscode.postMessage({ type: 'saveTicketsAutoSync', enabled: e.target.checked === true });
+        document.querySelectorAll('.tickets-auto-sync-toggle').forEach(el => {
+            el.addEventListener('change', (e) => {
+                const checked = e.target.checked === true;
+                document.querySelectorAll('.tickets-auto-sync-toggle').forEach(toggle => {
+                    toggle.checked = checked;
+                });
+                vscode.postMessage({ type: 'saveTicketsAutoSync', enabled: checked });
+            });
         });
         document.getElementById('btn-apply-notion-config')?.addEventListener('click', () => {
             let token = document.getElementById('notion-token-input')?.value.trim() || '';
@@ -3243,6 +3315,11 @@
 
         document.getElementById('databases-list')?.addEventListener('change', (e) => {
             const target = e.target;
+            if (target.id === 'db-selector') {
+                selectedDatabaseIndex = parseInt(target.value, 10);
+                renderDatabases(lastAllDbPaths);
+                return;
+            }
             if (target.classList.contains('notion-db-url-input')) {
                 const index = target.dataset.dbIndex;
                 const db = lastAllDbPaths[index];
@@ -3583,18 +3660,6 @@
             });
         });
  
-        const providerSelector = document.getElementById('integration-provider-selector');
-        if (providerSelector) {
-            providerSelector.addEventListener('change', (e) => {
-                if (isHydratingSetupState) return; // Don't persist during hydration
-                selectedIntegrationProvider = e.target.value;
-                updateIntegrationProviderVisibility();
-                vscode.postMessage({
-                    type: 'saveIntegrationProviderPreference',
-                    provider: selectedIntegrationProvider
-                });
-            });
-        }
         setControlPlaneSetupMode(controlPlaneSetupMode);
  
  
@@ -3773,28 +3838,24 @@
             const message = event.data;
             switch (message.type) {
                 case 'ticketsFoldersListed': {
-                    const input = document.getElementById('ticket-import-folder-input');
-                    if (input) {
+                    document.querySelectorAll('.ticket-import-folder-input').forEach(input => {
                         input.value = message.paths && message.paths.length > 0 ? message.paths[0] : '';
-                    }
-                    const toggle = document.getElementById('tickets-auto-sync-toggle');
-                    if (toggle) {
+                    });
+                    document.querySelectorAll('.tickets-auto-sync-toggle').forEach(toggle => {
                         toggle.checked = message.ticketsAutoSync === true;
-                    }
+                    });
                     break;
                 }
                 case 'ticketsFolderPathResult': {
-                    const input = document.getElementById('ticket-import-folder-input');
-                    if (input) {
+                    document.querySelectorAll('.ticket-import-folder-input').forEach(input => {
                         input.value = message.path || '';
-                    }
+                    });
                     break;
                 }
                 case 'browseTicketsFolderResult': {
-                    const input = document.getElementById('ticket-import-folder-input');
-                    if (input) {
+                    document.querySelectorAll('.ticket-import-folder-input').forEach(input => {
                         input.value = message.path || '';
-                    }
+                    });
                     vscode.postMessage({ type: 'saveTicketsFolder', folderPath: message.path || '' });
                     break;
                 }
@@ -4266,15 +4327,7 @@
                         renderLinearSetupState();
                         renderNotionSetupState();
                     });
-                    // Hydrate provider selector from persisted preference
-                    if (message.preferredProvider) {
-                        selectedIntegrationProvider = message.preferredProvider;
-                        const providerSelectorEl = document.getElementById('integration-provider-selector');
-                        if (providerSelectorEl) {
-                            providerSelectorEl.value = selectedIntegrationProvider;
-                        }
-                        updateIntegrationProviderVisibility();
-                    }
+
                     break;
                 case 'clickupApplyResult':
                     setApplyButtonBusy('clickup', false);

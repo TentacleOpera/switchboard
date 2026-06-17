@@ -1251,6 +1251,28 @@ export class ClickUpSyncService {
     };
   }
 
+  /** Fetches only a task's comments (lighter than getTaskDetails). */
+  public async getTaskComments(
+    taskId: string
+  ): Promise<Array<{ id: string; comment_text: string; user: { username: string; email: string }; date: string }>> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) { throw new Error('ClickUp not configured'); }
+    const normalizedTaskId = String(taskId || '').trim();
+    if (!normalizedTaskId) { return []; }
+    const commentsResult = await this.httpRequest('GET', `/task/${normalizedTaskId}/comment`);
+    return Array.isArray(commentsResult.data?.comments)
+      ? commentsResult.data.comments.map((comment: any) => ({
+          id: String(comment?.id || '').trim(),
+          comment_text: String(comment?.comment_text || comment?.text_content || '').trim(),
+          user: {
+            username: String(comment?.user?.username || '').trim(),
+            email: String(comment?.user?.email || '').trim()
+          },
+          date: String(comment?.date || '').trim()
+        }))
+      : [];
+  }
+
   public async createTask(params: {
     name: string;
     listId: string;
@@ -1339,6 +1361,7 @@ export class ClickUpSyncService {
     updates: {
       name?: string;
       description?: string;
+      markdown_content?: string;
       markdown_description?: string;
       status?: string;
       assignees?: number[];
@@ -1365,7 +1388,10 @@ export class ClickUpSyncService {
       this.httpRequest('PUT', `/task/${normalizedTaskId}`, updates)
     );
     if (updateResult.status !== 200) {
-      throw new Error(`Failed to update ClickUp task ${normalizedTaskId}. Status: ${updateResult.status}`);
+      const detail = typeof updateResult.data === 'string'
+        ? updateResult.data
+        : JSON.stringify(updateResult.data);
+      throw new Error(`Failed to update ClickUp task ${normalizedTaskId}. Status: ${updateResult.status} — ${detail}`);
     }
 
     // Invalidate cache for the list containing this task
@@ -1380,6 +1406,24 @@ export class ClickUpSyncService {
     }
 
     return this._normalizeClickUpTask(updateResult.data);
+  }
+
+  public async getSpaceTags(spaceId: string): Promise<Array<{ name: string; tagFg: string; tagBg: string }>> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || !config.workspaceId) {
+        throw new Error('ClickUp not configured');
+    }
+    const normalizedSpaceId = String(spaceId || '').trim();
+    if (!normalizedSpaceId) {
+        throw new Error('Space ID required');
+    }
+    const result = await this.httpRequest('GET', `/space/${normalizedSpaceId}/tag`);
+    const tags = Array.isArray(result.data?.tags) ? result.data.tags : [];
+    return tags.map((tag: any) => ({
+        name: String(tag?.name || '').trim(),
+        tagFg: String(tag?.tag_fg || tag?.tagFg || '').trim(),
+        tagBg: String(tag?.tag_bg || tag?.tagBg || '').trim()
+    })).filter((t: { name: string }) => t.name.length > 0);
   }
 
   public async addTaskComment(taskId: string, comment: string): Promise<void> {
@@ -2197,7 +2241,8 @@ export class ClickUpSyncService {
     };
 
     if (planContent) {
-      body.markdown_description = `${planContent}\n\n---\n[Switchboard] PlanFile: ${plan.planFile} | Plan: ${plan.planId}`;
+      // WRITE field is `markdown_content`; `markdown_description` is read-only.
+      body.markdown_content = `${planContent}\n\n---\n[Switchboard] PlanFile: ${plan.planFile} | Plan: ${plan.planId}`;
     }
 
     await this.retry(() =>
