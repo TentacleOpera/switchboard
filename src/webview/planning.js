@@ -7247,6 +7247,9 @@ Return ONLY the drafted prompt with no additional commentary.`;
         const hasLocalSelection = state.activeSource === 'local-folder' && state.activeDocId;
         const hasOnlineSource = Object.keys(state.enabledSources || {}).some(k => state.enabledSources[k] !== false);
         btnSyncToOnline.disabled = !(hasLocalSelection && hasOnlineSource);
+        // Unified Docs tab: canSync-based visibility is the single source of truth for the
+        // shared Sync button. Delegate so per-doc canSync gating is not overridden on selection.
+        updateSyncButtonVisibility();
     }
 
     // Sync-to-online button state is updated inside updateLocalActiveContextButtonState and handleOnlineDocsReady
