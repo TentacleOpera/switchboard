@@ -5434,22 +5434,29 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     private async _findTerminalNameByWorktreePathAndRole(
         worktreePath: string,
-        role: string
+        role: string,
+        strictRole: boolean = false
     ): Promise<string | undefined> {
         const resolvedTarget = path.resolve(worktreePath);
+        const normalizedRole = this._normalizeAgentKey(role);
         return new Promise<string | undefined>((resolve) => {
             this.updateState(async (state) => {
                 if (state.terminals) {
                     for (const [name, info] of Object.entries(state.terminals) as [string, any][]) {
-                        if (info.worktreePath && path.resolve(info.worktreePath) === resolvedTarget && info.role === role) {
+                        if (info.worktreePath && path.resolve(info.worktreePath) === resolvedTarget && this._normalizeAgentKey(info.role) === normalizedRole) {
                             resolve(name);
                             return;
                         }
                     }
-                    for (const [name, info] of Object.entries(state.terminals) as [string, any][]) {
-                        if (info.worktreePath && path.resolve(info.worktreePath) === resolvedTarget) {
-                            resolve(name);
-                            return;
+                    // Path-only fallback is for routing (any worktree terminal will do). It MUST be
+                    // skipped for the create-if-missing guard (strictRole), otherwise once the first
+                    // role's terminal exists every other role matches it and is never created.
+                    if (!strictRole) {
+                        for (const [name, info] of Object.entries(state.terminals) as [string, any][]) {
+                            if (info.worktreePath && path.resolve(info.worktreePath) === resolvedTarget) {
+                                resolve(name);
+                                return;
+                            }
                         }
                     }
                 }
@@ -6485,11 +6492,28 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             'planner': 'Planner', 'lead': 'Lead Coder', 'coder': 'Coder',
             'intern': 'Intern', 'reviewer': 'Reviewer', 'analyst': 'Analyst'
         };
+        // Only roles backed by the autoban pool can have worktree terminals. Roles like 'analyst'
+        // or 'jules_monitor' are not in the pool; passing them to _createAutobanTerminal raises an
+        // error toast on every press, so filter them out up front (silently — they simply have no
+        // worktree terminal and dispatch falls back to the main tree for them, as before).
+        const wsRootForRoles = this._resolveWorkspaceRoot();
+        let eligiblePoolRoles: Set<string> | null = null;
+        if (wsRootForRoles) {
+            try {
+                const customAgentRoles = (await this.getCustomAgents(wsRootForRoles)).map(a => a.role);
+                eligiblePoolRoles = new Set(this._autobanPoolRoles(customAgentRoles).map(r => this._normalizeAutobanPoolRole(r)));
+            } catch { /* if we can't resolve, fall through and let _createAutobanTerminal validate */ }
+        }
         for (const role of roles) {
+            if (eligiblePoolRoles && !eligiblePoolRoles.has(this._normalizeAutobanPoolRole(role))) {
+                continue;
+            }
             const agentName = roleToName[role] || role.charAt(0).toUpperCase() + role.slice(1);
             
-            // Check if we already have an alive terminal for this path + role
-            const existing = await this._findTerminalNameByWorktreePathAndRole(resolvedPath, role);
+            // Check if we already have an alive terminal for this path + role.
+            // strictRole=true: a different role's terminal on the same path must NOT count as a match,
+            // otherwise only the first role ever gets a terminal created.
+            const existing = await this._findTerminalNameByWorktreePathAndRole(resolvedPath, role, true);
             if (existing) {
                 continue;
             }
