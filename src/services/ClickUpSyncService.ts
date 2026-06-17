@@ -1339,6 +1339,7 @@ export class ClickUpSyncService {
     updates: {
       name?: string;
       description?: string;
+      markdown_description?: string;
       status?: string;
       assignees?: number[];
       due_date?: number;
@@ -2196,7 +2197,7 @@ export class ClickUpSyncService {
     };
 
     if (planContent) {
-      body.description = `${planContent}\n\n---\n[Switchboard] PlanFile: ${plan.planFile} | Plan: ${plan.planId}`;
+      body.markdown_description = `${planContent}\n\n---\n[Switchboard] PlanFile: ${plan.planFile} | Plan: ${plan.planId}`;
     }
 
     await this.retry(() =>

@@ -20,7 +20,7 @@ Builds on Parts 1–4 (worktrees table, epic linkage, dispatch routing, sub-bar 
 
 ## Metadata
 
-- **Tags:** backend, frontend, db-migration, git, dispatch, ux
+- **Tags:** backend, frontend, database, ui, ux, bugfix, refactor
 - **Complexity:** 7
 
 ## User Review Required
@@ -29,6 +29,30 @@ None — design decisions confirmed with the user:
 - Bind both epics and projects; projects one-at-a-time, epics batched.
 - Per-worktree opt-in for "agents button opens worktree terminals" PLUS a manual "Open terminals" button.
 - Tab-level "Suppress main repo agent terminals", default unchecked.
+
+## Complexity Audit
+
+### Routine
+- V33 migration: add-only `ALTER TABLE ... ADD COLUMN` wrapped in try/catch, following the exact V26/V27 idempotent pattern (`KanbanDatabase.ts:4276-4316`). Fresh DBs are covered because `_initialize` runs `SCHEMA_SQL` then `_runMigrations()` from version 0 (`KanbanDatabase.ts:1134-1137`), so the `ALTER` applies to new databases too — no `SCHEMA_SQL` change required.
+- `WorktreeRow`/`getWorktrees`/`getWorktreeByBranch`/`addWorktree` extensions: mechanical column additions mirroring the existing `epic_id` mapping.
+- New backend message handlers modelled directly on the existing `createWorktreeForEpic` handler (`KanbanProvider.ts:6294`).
+- CSP de-inlining of the 5 known inline `onclick` handlers — confirmed exactly 5, all worktree-related (`kanban.html:4663, 4990, 4995, 8259, 8260`); the rest of the board already uses `addEventListener`.
+
+### Complex / Risky
+- **Terminal lifecycle (Phase 4 + Phase 2.6).** `addAutobanTerminalFromKanban` → `_createAutobanTerminal` (`TaskViewerProvider.ts:6021`) **always mints a new uniquely-suffixed terminal** (`getNextAutobanTerminalName`); it does NOT create-if-missing by `worktreePath`. It is also subject to `MAX_AUTOBAN_TERMINALS_PER_ROLE = 5` (`autobanState.ts:14`, enforced `TaskViewerProvider.ts:6042`), beyond which it silently warns and returns. This is the single most error-prone area.
+- **Dual terminal subsystems** glued inside `createAgentGrid`: the main grid uses purpose `'agent-grid'` via `vscode.window.createTerminal` (deduped by `matchesGridAgentName`), while worktree terminals use purpose `'autoban-backup'` via the pooled, capped autoban path.
+- **Three dispatch routing sites** must receive identical project-lookup logic: `_handleTriggerAgentAction` (`TaskViewerProvider.ts:14710`), readiness builder (`:1548`), and `getValidPlans` batch builder (`:2608`). Divergence makes displayed Scope text lie.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** Pressing "Open terminals" or create-agents repeatedly (or quickly after restart) races terminal creation: because there is no create-if-missing guard, concurrent/repeat presses spawn duplicate `Coder N` terminals for the same `worktreePath`. When multiple same-path terminals exist, `findTerminalNameByWorktreePath` (`TaskViewerProvider.ts:6439`) returns the first `Object.entries` match — non-deterministic across reloads.
+- **Security:** None new. Branch names derived from project/epic names must pass through the existing slugify in `_createSafetyWorktree`; do not interpolate raw names into shell `git` invocations (existing handlers use `execFile` arg arrays, not shell strings — preserve that).
+- **Side Effects:** `MAX_AUTOBAN_TERMINALS_PER_ROLE = 5` caps worktree terminals per role across all worktrees on the autoban path. Batch-all-epics with ≥6 epics, or many opt-in worktrees, silently fails to create the overflow role terminals → dispatch silently falls back to the main tree (the very bug this plan exists to fix). Must be surfaced, not swallowed.
+- **Dependencies & Conflicts:** Removing `clearRememberedWorktreeChoice` (`KanbanProvider.ts:6340`) and the `worktree_remember_*` block in `createAgentGrid` (`extension.ts:2298-2319`) must be done together with the webview affordance removal (Phase 5) so no dead message handler or orphan UI control remains. The epic→project nesting join calls `getPlanByPlanId(epic_id)` (`KanbanDatabase.ts:2312`) — guard against a null/missing/cross-workspace epic plan and fall back to top-level rendering (display-only, so failure is cosmetic).
+
+## Adversarial Synthesis
+
+Key risks: (1) `addAutobanTerminalFromKanban` always creates rather than create-if-missing, so repeat/restart presses spawn duplicate per-worktree terminals and accelerate hitting the hard `MAX_AUTOBAN_TERMINALS_PER_ROLE = 5` ceiling, which silently fails and resurrects the silent main-repo fallback; (2) the project routing lookup must be applied identically at all three dispatch sites or behaviour diverges from the displayed Scope text. Mitigations: introduce a shared `_ensureWorktreeTerminals(w, visibleAgents)` helper that does per-role create-if-missing via `findTerminalNameByWorktreePath` and reports cap-hit skips with a worktree/role-named toast; centralize the project lookup in one helper invoked at all three sites; guard the epic→project nesting join against missing plans. Fresh-DB schema and cross-workspace `epic_id` concerns were reviewed and judged non-blocking (migrations run from 0 on new DBs; cross-workspace linkage is a pre-existing, out-of-scope limitation).
 
 ## Problem Analysis
 
@@ -92,7 +116,9 @@ Terminal records persist to a per-workspace state file with their `worktreePath`
 
 5. New `setSuppressMainTerminals`: `{ enabled }` → `db.setMeta('worktree_suppress_main_terminals', enabled ? 'true' : '')`. Re-send worktree config.
 
-6. New `openWorktreeTerminals`: `{ worktreeId }` → resolve the worktree path → for each visible agent role, `switchboard.addAutobanTerminalFromKanban(role, agentName, wtPath)` (create-if-missing), then reveal the first via a new `switchboard.revealWorktreeTerminal` command (Phase 4). This is the "Open terminals" / locate action.
+6. New `openWorktreeTerminals`: `{ worktreeId }` → resolve the worktree path → for each visible agent role, create-if-missing that worktree's terminal, then reveal the first via a new `switchboard.revealWorktreeTerminal` command (Phase 4). This is the "Open terminals" / locate action.
+
+   **Clarification (create-if-missing is NOT free):** `addAutobanTerminalFromKanban` → `_createAutobanTerminal` (`TaskViewerProvider.ts:6021`) **always creates a new uniquely-suffixed terminal** via `getNextAutobanTerminalName`; it has no create-if-missing semantics and is capped by `MAX_AUTOBAN_TERMINALS_PER_ROLE = 5`. Therefore this handler (and Phase 4) MUST guard each role with a pre-check — see the shared `_ensureWorktreeTerminals` helper below — calling `findTerminalNameByWorktreePath(w.path)` / a role+path match and skipping creation when a live terminal already exists. Without this guard, repeat presses spawn duplicate `Coder N` terminals and burn through the per-role cap, after which overflow creations silently warn-and-return and dispatch falls back to the main tree.
 
 7. `_sendWorktreeConfig` (6837): extend the payload with, per worktree, `project`, `agentsOpenWithGrid`, and — for epic-bound worktrees — `epicTopic` and `epicProject` (the epic plan's own `.project`, used by the webview to nest the row under the matching project worktree). Add top-level `suppressMainTerminals` (from meta), `projects` (`db.getProjects(workspaceId)` — see `KanbanDatabase.ts:1984`), and `epics` (id+topic list) for the dropdowns/batch button.
 
@@ -102,10 +128,11 @@ Terminal records persist to a per-workspace state file with their `worktreePath`
 
 **File: `src/services/TaskViewerProvider.ts`**
 
-The plan record already carries `.project`. Add a project-based worktree lookup parallel to the existing epic lookup at both routing sites:
+The plan record already carries `.project` (`KanbanPlanRecord.project`, `KanbanDatabase.ts:39`). Add a project-based worktree lookup parallel to the existing epic lookup at **all three** routing sites. **Clarification:** there are three, not two — extract a single shared resolver (e.g. `resolveWorktreePathForPlan(db, { epicId, project })` returning `epic → project → undefined`) and call it at every site so the precedence rule cannot drift between them:
 
-- Single dispatch `_handleTriggerAgentAction` (14697-14714): after the epic lookup, if `worktreePath` is still unset and `plan.project` is non-empty, find an active worktree with matching `project` and set `worktreePath`.
-- Batch dispatch readiness (≈1540-1552 and ≈2600-2630): same dual lookup before building each `BatchPromptPlan`.
+- Single dispatch `_handleTriggerAgentAction` (14697-14714, epic lookup at 14710-14714): after the epic lookup, if `worktreePath` is still unset and `plan.project` is non-empty, find an active worktree with matching `project` and set `worktreePath`.
+- Readiness builder (≈1545-1553, epic lookup at 1548): same dual lookup before populating `plan.worktreePath`.
+- Batch builder `getValidPlans` (≈2607-2612, epic lookup at 2608): same dual lookup before pushing into `validPlans`.
 
 **Precedence (intentional hierarchy):** the routing order is `epic worktree → project worktree → main repo`. A project worktree is the base branch for the whole mini-workspace; epic worktrees layer on top and override for their own epic's plans. So a plan in both an epic-worktree and a project-worktree routes to the epic one; a project plan not claimed by any epic-worktree routes to the project one; a plan in neither routes to workspace root (unchanged, no error). This order is surfaced in the tab (Phase 5.4) so it is never invisible.
 
@@ -120,11 +147,15 @@ The plan record already carries `.project`. Add a project-based worktree lookup 
    - `gridWorktrees = getWorktrees().filter(w => w.status === 'active' && w.agentsOpenWithGrid)`
 3. Behaviour:
    - If `!suppressMain`: create the main-repo grid as today (cwd = workspace root).
-   - For each `w` in `gridWorktrees`: create that worktree's agent set (cwd = `w.path`) via the existing per-terminal path (`taskViewerProvider.addAutobanTerminalFromKanban(role, agentName, w.path)` for each visible agent) — this is exactly the worktree-creation terminal logic, reused.
+   - For each `w` in `gridWorktrees`: create that worktree's agent set (cwd = `w.path`) via the shared `_ensureWorktreeTerminals` helper (below) — NOT a raw loop over `addAutobanTerminalFromKanban`.
    - If `suppressMain && gridWorktrees.length === 0`: warn ("Suppress main is on but no worktree is set to open terminals — nothing to open") and do nothing.
-   This re-establishes worktree terminals on restart whenever the per-worktree checkbox is set, with zero extra clicks.
+   This re-establishes worktree terminals on (re)press of create-agents after restart whenever the per-worktree checkbox is set, with no extra clicks beyond the create-agents action itself.
 
-4. New command `switchboard.revealWorktreeTerminal(worktreePath)` in `extension.ts` + a method on `TaskViewerProvider` that calls `findTerminalNameByWorktreePath` (6439) and `terminal.show()` on the match (the "locate" behaviour). Used by the per-row Open terminals button.
+   **Clarification — shared `_ensureWorktreeTerminals(w, visibleAgents)` helper (on `TaskViewerProvider`):** For each visible agent role, first check whether a live terminal already exists for `w.path`+role (reuse the `findTerminalNameByWorktreePath` registry lookup at 6439, extended to also match role, or iterate the alive autoban registry filtering on `worktreePath`). Only call `addAutobanTerminalFromKanban(role, agentName, w.path)` when none exists (true create-if-missing). When `_createAutobanTerminal` returns early due to `MAX_AUTOBAN_TERMINALS_PER_ROLE = 5`, surface a worktree/role-named toast (e.g. "Could not open <role> terminal for <branch>: role terminal limit reached") instead of the existing generic warning, so the cap-hit and the resulting routing fallback are visible. Both `openWorktreeTerminals` (Phase 2.6) and this `createAgentGrid` loop call this single helper so dedupe/cap behaviour is identical in both paths.
+
+   **Note on dual subsystems:** the main grid terminals are purpose `'agent-grid'` (created directly by `createAgentGrid`, deduped by `matchesGridAgentName`); worktree terminals are purpose `'autoban-backup'` (pooled/capped). This mixing is consistent with the existing `createWorktree` handler, which already uses the autoban path. Add a short comment in `createAgentGrid` documenting that worktree terminals deliberately use the autoban registry and are matched for routing by `worktreePath`, not name.
+
+4. New command `switchboard.revealWorktreeTerminal(worktreePath)` in `extension.ts` + a method on `TaskViewerProvider` that calls `findTerminalNameByWorktreePath` (6439) and `terminal.show()` on the match (the "locate" behaviour). Used by the per-row Open terminals button. If multiple terminals share the same `worktreePath`, `findTerminalNameByWorktreePath` returns the first registry match — acceptable for reveal/locate, but the create-if-missing guard in `_ensureWorktreeTerminals` should keep duplicates from accumulating in the first place.
 
 ### Phase 5 — Webview: rebuild the tab, CSP-safe (kanban.html)
 
@@ -158,11 +189,23 @@ Rebuild the panel with **no inline `onclick`** — all wiring via `addEventListe
 
 - `src/services/KanbanDatabase.ts` — V33 migration; `WorktreeRow`; `getWorktrees`/`getWorktreeByBranch`/`addWorktree`; `setWorktreeAgentsOpenWithGrid`.
 - `src/services/KanbanProvider.ts` — new/updated handlers (project create, all-epics batch, toggle, suppress, open terminals); `_sendWorktreeConfig` payload; remove remember-choice handler.
-- `src/services/TaskViewerProvider.ts` — project routing at both dispatch sites; reveal-terminal method.
-- `src/extension.ts` — worktree-aware `createAgentGrid`; remove legacy remember hack; `revealWorktreeTerminal` command.
+- `src/services/TaskViewerProvider.ts` — shared `resolveWorktreePathForPlan` used at all THREE dispatch sites (14710, 1548, 2608); shared `_ensureWorktreeTerminals` create-if-missing helper; reveal-terminal method.
+- `src/extension.ts` — worktree-aware `createAgentGrid` (calls `_ensureWorktreeTerminals`); remove legacy remember hack; `revealWorktreeTerminal` command.
 - `src/webview/kanban.html` — rebuilt `createWorktreesPanel` (CSP-safe); epic/focus chips de-inlined.
 
 ## Verification Plan
+
+> **Session directive:** Compilation (`tsc`) and the automated test suite are explicitly OUT OF SCOPE for this session — the user runs them separately. The steps below describe the intended automated coverage plus manual acceptance checks; do not execute them as part of this pass.
+
+### Automated Tests
+
+- **Migration unit test**: assert V33 applies once and is idempotent on a re-run; `worktrees` has `project` + `agents_open_with_grid` columns with correct defaults; fresh-DB init (migrations from 0) also yields the columns.
+- **DB layer**: `addWorktree(branch, path, undefined, project)` persists `project`; `getWorktrees`/`getWorktreeByBranch` map `project`/`agentsOpenWithGrid` correctly; `setWorktreeAgentsOpenWithGrid` toggles the flag.
+- **Routing resolver**: unit-test `resolveWorktreePathForPlan` for all precedence cases — epic-only, project-only, both (epic wins), neither (undefined) — and assert it is invoked at all three dispatch sites.
+- **Terminal dedupe**: `_ensureWorktreeTerminals` creates one terminal per role on first call and creates NONE on a second call for the same worktree (create-if-missing); when the role pool is at `MAX_AUTOBAN_TERMINALS_PER_ROLE`, it emits the named cap-hit toast and does not throw.
+- **CSP regression guard**: a test/grep asserting zero inline `onclick` remain in `kanban.html`.
+
+### Manual Acceptance
 
 1. **Migration**: open an existing workspace → V33 applies once, idempotent on reopen; `worktrees` has `project` + `agents_open_with_grid`.
 2. **Project worktree**: pick a project → Create → worktree row shows project chip; dispatch a plan in that project → routes to the worktree terminal; dispatch a plan in no project → routes to root.
@@ -177,10 +220,13 @@ Rebuild the panel with **no inline `onclick`** — all wiring via `addEventListe
 ## Risks
 
 - **Routing precedence ambiguity** (plan in both an epic-worktree and a project-worktree): resolved by the documented `epic → project → main` rule, surfaced both in a code comment AND in the tab (legend + per-row Scope text + nesting), so the resolution is never hidden from the user.
+- **Per-role terminal cap (`MAX_AUTOBAN_TERMINALS_PER_ROLE = 5`)**: worktree terminals use the autoban pool, which is hard-capped at 5 per role across ALL worktrees on that path. Batch-all-epics with ≥6 epics, or 6+ opt-in worktrees, will fail to create the overflow role terminals — and the existing failure mode is a silent `showWarningMessage` + `return`, after which dispatch routes back to the main tree (the exact bug this plan fixes). Mitigation: `_ensureWorktreeTerminals` MUST surface a worktree/role-named toast on cap-hit so the fallback is visible; opt-in per worktree (default off) keeps the common case bounded; document the limit in the checkbox tooltip. A future scope pass may raise/segment the cap per worktree.
+- **Duplicate terminals / create-always**: `addAutobanTerminalFromKanban` always creates a new uniquely-suffixed terminal. Without the `_ensureWorktreeTerminals` create-if-missing guard, repeat "Open terminals" or create-agents presses spawn duplicate `Coder N` terminals for the same `worktreePath`, accelerating cap exhaustion and making `findTerminalNameByWorktreePath` non-deterministic. Mitigation: the shared helper guards every creation path.
 - **Terminal fan-out**: many worktrees with the checkbox set × many roles = many terminals on create-agents. Mitigation: opt-in per worktree (default off) keeps it bounded; document the cost in the checkbox tooltip.
+- **Epic→project nesting join**: `_sendWorktreeConfig` resolves each epic worktree's project via `getPlanByPlanId(epic_id)`; guard against a null/missing/cross-workspace epic plan and fall back to top-level rendering. Display-only, so failure is cosmetic, not data-corrupting.
 - **Migration on shared parent DBs** (workspaceDatabaseMappings): `worktrees` is not workspace-scoped by column; project names can repeat across child workspaces. Acceptable for now (same limitation as existing epic linkage); note for a future scope pass.
 - **CSP regression**: any future `innerHTML`+`onclick` reintroduces the dead-button class of bug. Add a short comment at the top of `createWorktreesPanel` mandating `addEventListener`.
 
 ## Recommendation
 
-**Complexity: 7 → Send to Lead Coder.** Touches DB migration, two dispatch-critical routing sites, the create-agents lifecycle in `extension.ts`, and a full webview panel rebuild. The dispatch-routing and `createAgentGrid` changes are the risky cross-cutting parts and warrant a lead.
+**Complexity: 7 → Send to Lead Coder.** Touches a DB migration, three dispatch-critical routing sites (centralized via `resolveWorktreePathForPlan`), the capped/non-deduping autoban terminal lifecycle in `extension.ts` + `TaskViewerProvider.ts` (centralized via `_ensureWorktreeTerminals`), and a full webview panel rebuild. The dispatch-routing and terminal-lifecycle changes are the risky cross-cutting parts and warrant a lead.

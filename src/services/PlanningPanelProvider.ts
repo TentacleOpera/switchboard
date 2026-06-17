@@ -46,6 +46,8 @@ interface KanbanPlanSummary {
     mtime: number;
     planFile: string;
     complexity: string;
+    isEpic?: number;
+    epicId?: string;
 }
 
 export class PlanningPanelProvider {
@@ -802,7 +804,7 @@ export class PlanningPanelProvider {
     }
 
     private async _handleFetchKanbanPlanPreview(filePath: string, requestId: number): Promise<void> {
-        const allRoots = this._getWorkspaceRoots();
+        const allRoots = Array.from(this._getAllowedRoots());
         const resolved = path.resolve(filePath);
         const isAllowed = allRoots.some(r => resolved.startsWith(path.resolve(r)));
         const targetPanel = this._projectPanel || this._panel;
@@ -1175,6 +1177,11 @@ export class PlanningPanelProvider {
                         await this._stateStore.setPanelState(tabKey, state);
                     }
                 }
+                break;
+            }
+            case 'setupTicketsWatcher': {
+                const root = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (root) { this._setupTicketsViewWatcher(root); }
                 break;
             }
             case 'ticketsDefaultRoot': {
@@ -1844,7 +1851,7 @@ export class PlanningPanelProvider {
             case 'openKanbanPlan': {
                 const filePath: string = msg.filePath || '';
                 const resolved = path.resolve(filePath);
-                const isAllowed = allRoots.some(r => resolved.startsWith(path.resolve(r)));
+                const isAllowed = Array.from(this._getAllowedRoots()).some(r => resolved.startsWith(path.resolve(r)));
                 if (!filePath || !isAllowed || !fs.existsSync(resolved)) {
                     this._projectPanel?.webview.postMessage({ type: 'kanbanPlanOpenResult', success: false, error: 'File not found or not in workspace' });
                     break;
@@ -1867,7 +1874,7 @@ export class PlanningPanelProvider {
             case 'setKanbanPlanContext': {
                 const filePath: string = msg.filePath || '';
                 const resolved = path.resolve(filePath);
-                const isAllowed = allRoots.some(r => resolved.startsWith(path.resolve(r)));
+                const isAllowed = Array.from(this._getAllowedRoots()).some(r => resolved.startsWith(path.resolve(r)));
                 if (!filePath || !isAllowed || !fs.existsSync(resolved)) {
                     this._projectPanel?.webview.postMessage({ type: 'kanbanContextSet', success: false, error: 'File not found or not in workspace' });
                     break;
@@ -2887,6 +2894,27 @@ export class PlanningPanelProvider {
                         page
                     });
                 }
+                break;
+            }
+            case 'saveLocalTicketFile': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const { provider, id, content } = msg;
+                if (!workspaceRoot || !id || typeof content !== 'string') break;
+                let baseDir = path.join(workspaceRoot, '.switchboard', 'tickets');
+                try {
+                    const lfs = new LocalFolderService(workspaceRoot);
+                    const folders = lfs.getTicketsFolderPaths();
+                    if (folders.length > 0 && folders[0]) { baseDir = folders[0]; }
+                } catch { }
+                const filePath = this._findLocalTicketFile(path.join(baseDir, provider), provider, id);
+                if (!filePath) break;
+                try {
+                    const nfs = require('fs') as typeof import('fs');
+                    const existing = nfs.readFileSync(filePath, 'utf8');
+                    const frontmatterMatch = existing.match(/^(---\n[\s\S]*?\n---\n?)/);
+                    const frontmatter = frontmatterMatch ? frontmatterMatch[1] : '';
+                    nfs.writeFileSync(filePath, frontmatter + content, 'utf8');
+                } catch { }
                 break;
             }
             case 'editTicket': {
@@ -5623,7 +5651,9 @@ export class PlanningPanelProvider {
             repoScope: r.repoScope || '',
             mtime: r.updatedAt ? new Date(r.updatedAt).getTime() : 0,
             planFile: r.planFile || '',
-            complexity: r.complexity || 'Unknown'
+            complexity: r.complexity || 'Unknown',
+            isEpic: r.isEpic,
+            epicId: r.epicId || ''
         }));
     }
 

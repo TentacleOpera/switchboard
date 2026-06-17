@@ -4211,7 +4211,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             throw new Error('No workspace open');
         }
 
-        await this._getClickUpService(resolvedRoot).updateTask(taskId, options);
+        const { description, ...rest } = options;
+        await this._getClickUpService(resolvedRoot).updateTask(taskId, {
+            ...rest,
+            ...(description !== undefined ? { markdown_description: description } : {})
+        });
         this._showTemporaryNotification(`Updated ClickUp task ${taskId}`);
     }
 
@@ -4723,7 +4727,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             .map((t: any) => t.name)
             .filter((n: string) => n && !n.toLowerCase().startsWith('switchboard:'))
             .join(', ');
-        const description = (task.markdown_description || task.description || '').trim();
+        const description = (task.markdownDescription || task.markdown_description || task.description || '').trim();
         const yamlFrontmatter = createdAt ? [
             '---',
             `created: ${createdAt}`,
@@ -17509,7 +17513,7 @@ What would you like to find?`;
                     name = lines[0].substring(2).trim();
                 }
                 await clickUp.updateTask(id, {
-                    description,
+                    markdown_description: description,
                     ...(name ? { name } : {})
                 });
             }

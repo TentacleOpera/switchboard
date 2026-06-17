@@ -212,6 +212,10 @@ function renderMarkdown(markdown) {
         .replace(/^\* (.+)$/gm, '<li>$1</li>')
         .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
         .replace(/^\d+\. (.+)$/gm, '<li>$1</li>')
+        .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt, url) => {
+            const safeUrl = escapeAttr(sanitizeUrl(url));
+            return `<img src="${safeUrl}" alt="${escapeAttr(alt)}" style="max-width:100%;height:auto;display:block;margin:4px 0;">`;
+        })
         .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, text, url) => {
             const safeUrl = escapeAttr(sanitizeUrl(url));
             return `<a href="${safeUrl}">${text}</a>`;

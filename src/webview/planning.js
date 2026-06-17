@@ -125,6 +125,8 @@
     let ticketsInitialized = false;
     let ticketsLoadedOnce = false;
     let lastIntegrationProvider = null;
+    let ticketsEditMode = false;
+    let _ticketsEditBackupHtml = null;
     let ticketsWorkspaceRoot = '';
     let ticketsAutoSync = false;
     let _pendingRefreshImport = false;
@@ -3004,17 +3006,26 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 }
                 // Strip leading H1 — the render function always prepends <h1>title</h1> itself
                 const rendered = renderMarkdown((msg.content || '').replace(/^#[^\n]*\n?/, ''));
+                // Show local content immediately for fast display.
+                // localDescription is NOT set — when the API response arrives it will overwrite
+                // the description with the richer API version (includes inline images).
                 if (msg.provider === 'clickup') {
+                    const existing = clickUpTaskDetailCache.get(msg.id);
                     selectedClickUpIssue = {
-                        task: { id: msg.id, title: msg.title, name: msg.title, status: '', assignees: [] },
-                        subtasks: [], comments: [], attachments: [],
+                        task: existing?.task || { id: msg.id, title: msg.title, name: msg.title, status: '', assignees: [] },
+                        subtasks: existing?.subtasks || [],
+                        comments: existing?.comments || [],
+                        attachments: existing?.attachments || [],
                         renderedDescriptionHtml: rendered
                     };
                     clickUpTaskDetailCache.set(msg.id, selectedClickUpIssue);
                 } else {
+                    const existing = linearIssueDetailCache.get(msg.id);
                     selectedLinearIssue = {
-                        issue: { id: msg.id, title: msg.title, state: { name: '' }, assignee: null },
-                        subtasks: [], comments: [], attachments: [],
+                        issue: existing?.issue || { id: msg.id, title: msg.title, state: { name: '' }, assignee: null },
+                        subtasks: existing?.subtasks || [],
+                        comments: existing?.comments || [],
+                        attachments: existing?.attachments || [],
                         renderedDescriptionHtml: rendered
                     };
                     linearIssueDetailCache.set(msg.id, selectedLinearIssue);
@@ -3431,7 +3442,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             case 'linearProjectsLoaded':
                 linearAvailableProjects = msg.projects || [];
                 break;
-            case 'linearTaskDetailsLoaded':
+            case 'linearTaskDetailsLoaded': {
                 selectedLinearIssue = {
                     issue: msg.issue,
                     subtasks: msg.subtasks || [],
@@ -3439,10 +3450,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     attachments: msg.attachments || [],
                     renderedDescriptionHtml: msg.renderedDescriptionHtml
                 };
-                // Cache the full details
                 linearIssueDetailCache.set(msg.issue.id, selectedLinearIssue);
-                renderTicketsTab();
+                if (!ticketsEditMode) renderTicketsTab();
                 break;
+            }
             case 'clickupSpacesLoaded':
                 clickUpAvailableSpaces = msg.spaces || [];
                 clickUpAvailableFolders = [];
@@ -3547,7 +3558,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     _pendingRefreshImport = false;
                 }
                 break;
-            case 'clickupTaskDetailsLoaded':
+            case 'clickupTaskDetailsLoaded': {
                 selectedClickUpIssue = {
                     task: msg.task,
                     subtasks: msg.subtasks || [],
@@ -3555,10 +3566,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     attachments: msg.attachments || [],
                     renderedDescriptionHtml: msg.renderedDescriptionHtml
                 };
-                // Cache the full details
                 clickUpTaskDetailCache.set(msg.task.id, selectedClickUpIssue);
-                renderTicketsTab();
+                if (!ticketsEditMode) renderTicketsTab();
                 break;
+            }
             case 'ticketsDefaultRoot': {
                 // Don't overwrite a value already restored from persisted state
                 if (ticketsWorkspaceRoot && _workspaceItems.some(item => item.workspaceRoot === ticketsWorkspaceRoot)) {
@@ -5205,17 +5216,36 @@ Return ONLY the drafted prompt with no additional commentary.`;
             });
         });
 
-        // Action bar: Edit — imports the ticket to a local markdown copy and
-        // switches to the Local view where it can be edited and pushed back.
         document.getElementById('btn-edit-ticket')?.addEventListener('click', () => {
+            enterTicketsEditMode();
+        });
+
+        document.getElementById('btn-save-ticket-edit')?.addEventListener('click', () => {
+            const editDiv = document.getElementById('ticket-edit-description');
+            if (!editDiv) return;
             const provider = lastIntegrationProvider;
-            const id = provider === 'linear'
-                ? selectedLinearIssue?.issue.id
-                : selectedClickUpIssue?.task.id;
+            const issue = provider === 'linear' ? selectedLinearIssue : selectedClickUpIssue;
+            const id = provider === 'linear' ? issue?.issue?.id : issue?.task?.id;
             if (!id) return;
-            setTicketsLoadingState(true);
-            showTicketsStatus('Importing to local…', false);
-            vscode.postMessage({ type: 'editTicket', provider, id, workspaceRoot: ticketsWorkspaceRoot });
+            const task = provider === 'linear' ? issue.issue : issue.task;
+            const title = task.title || task.identifier || task.id;
+            const markdownBody = htmlToMarkdown(editDiv.innerHTML);
+            const fullMarkdown = `# ${title}\n\n${markdownBody}`;
+            // Update in-memory immediately so display is consistent
+            const rendered = renderMarkdown(markdownBody);
+            if (provider === 'clickup') {
+                selectedClickUpIssue = { ...selectedClickUpIssue, renderedDescriptionHtml: rendered, localDescription: true };
+                clickUpTaskDetailCache.set(id, selectedClickUpIssue);
+            } else {
+                selectedLinearIssue = { ...selectedLinearIssue, renderedDescriptionHtml: rendered, localDescription: true };
+                linearIssueDetailCache.set(id, selectedLinearIssue);
+            }
+            vscode.postMessage({ type: 'saveLocalTicketFile', provider, id, content: fullMarkdown, workspaceRoot: ticketsWorkspaceRoot });
+            exitTicketsEditMode();
+        });
+
+        document.getElementById('btn-cancel-ticket-edit')?.addEventListener('click', () => {
+            exitTicketsEditMode();
         });
 
         // Action bar: Push
@@ -5428,14 +5458,18 @@ Return ONLY the drafted prompt with no additional commentary.`;
                         selectedLinearIssue = linearIssueDetailCache.get(linearId);
                         renderTicketsLinearPanel();
                     } else {
+                        // Local file for fast description, API for comments/attachments
                         vscode.postMessage({ type: 'readLocalTicketFile', provider: 'linear', id: linearId, workspaceRoot: ticketsWorkspaceRoot });
+                        vscode.postMessage({ type: 'linearLoadTaskDetails', issueId: linearId, workspaceRoot: ticketsWorkspaceRoot || undefined });
                     }
                 } else if (clickUpId) {
                     if (clickUpTaskDetailCache.has(clickUpId)) {
                         selectedClickUpIssue = clickUpTaskDetailCache.get(clickUpId);
                         renderTicketsClickUpPanel();
                     } else {
+                        // Local file for fast description, API for comments/attachments
                         vscode.postMessage({ type: 'readLocalTicketFile', provider: 'clickup', id: clickUpId, workspaceRoot: ticketsWorkspaceRoot });
+                        vscode.postMessage({ type: 'clickupLoadTaskDetails', taskId: clickUpId, workspaceRoot: ticketsWorkspaceRoot || undefined });
                     }
                 }
             }
@@ -5509,6 +5543,63 @@ Return ONLY the drafted prompt with no additional commentary.`;
     }
 
     // ===== RENDERING FUNCTIONS =====
+
+    function enterTicketsEditMode() {
+        const provider = lastIntegrationProvider;
+        const issue = provider === 'linear' ? selectedLinearIssue : selectedClickUpIssue;
+        if (!issue) return;
+        ticketsEditMode = true;
+        const task = provider === 'linear' ? issue.issue : issue.task;
+        const descHtml = issue.renderedDescriptionHtml || '';
+        _ticketsEditBackupHtml = descHtml;
+
+        document.getElementById('btn-edit-ticket').style.display = 'none';
+        document.getElementById('btn-push-ticket').style.display = 'none';
+        document.getElementById('btn-delete-ticket').style.display = 'none';
+        document.getElementById('btn-save-ticket-edit').style.display = '';
+        document.getElementById('btn-cancel-ticket-edit').style.display = '';
+
+        const detailContent = document.getElementById('tickets-detail-content');
+        if (!detailContent) return;
+
+        const comments = issue.comments || [];
+        const attachments = issue.attachments || [];
+        let html = `<h1 style="user-select:none;pointer-events:none;">${escapeHtml(task.title || task.identifier || task.id)}</h1>`;
+        html += `<div id="ticket-edit-description" contenteditable="true" spellcheck="true" style="outline:1px solid var(--accent-teal);border-radius:4px;padding:8px;min-height:80px;line-height:1.6;">${descHtml}</div>`;
+
+        if (comments.length > 0) {
+            html += '<h3 style="user-select:none;">Comments</h3>';
+            html += comments.map(comment => `
+                <div class="tickets-comment-item">
+                    <span class="tickets-comment-author">${escapeHtml(comment.user?.name || comment.user?.email || 'Unknown')}</span>
+                    <span class="tickets-comment-date">${escapeHtml(comment.createdAt ? comment.createdAt.slice(0, 10) : '')}</span>
+                    <div class="tickets-comment-body">${escapeHtml(comment.body || '').replace(/\n/g, '<br>')}</div>
+                </div>
+            `).join('');
+        }
+        if (attachments.length > 0) {
+            html += '<h3 style="user-select:none;">Attachments</h3>';
+            html += attachments.map(a => `<button type="button" class="tickets-attachment-item" data-clickup-attachment-url="${escapeAttr(a.url || '')}">${escapeHtml(a.title || a.filename || a.url || 'Attachment')}</button>`).join('');
+        }
+
+        _lastTicketsClickUpDetailContentHtml = '';
+        _lastTicketsDetailContentHtml = '';
+        detailContent.innerHTML = html;
+        document.getElementById('ticket-edit-description')?.focus();
+    }
+
+    function exitTicketsEditMode() {
+        ticketsEditMode = false;
+        _ticketsEditBackupHtml = null;
+        document.getElementById('btn-edit-ticket').style.display = '';
+        document.getElementById('btn-push-ticket').style.display = '';
+        document.getElementById('btn-delete-ticket').style.display = '';
+        document.getElementById('btn-save-ticket-edit').style.display = 'none';
+        document.getElementById('btn-cancel-ticket-edit').style.display = 'none';
+        _lastTicketsClickUpDetailContentHtml = '';
+        _lastTicketsDetailContentHtml = '';
+        renderTicketsTab();
+    }
 
     function renderTicketsTab() {
         if (!isTicketsTabActive()) return;
@@ -5796,7 +5887,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
     }
 
     function renderTicketsLinearTaskDetail() {
-        if (!isTicketsTabActive()) return;
+        if (!isTicketsTabActive() || ticketsEditMode) return;
 
         const { subtasksNav, detailContent, previewMetaBar, deleteConfirmBanner, commentInputArea } = getTicketsTabElements();
         if (!detailContent) return;
@@ -6228,7 +6319,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
     }
 
     function renderTicketsClickUpTaskDetail() {
-        if (!isTicketsTabActive()) return;
+        if (!isTicketsTabActive() || ticketsEditMode) return;
 
         const { subtasksNav, detailContent, previewMetaBar, deleteConfirmBanner, commentInputArea } = getTicketsTabElements();
         if (!detailContent) return;
@@ -6400,6 +6491,60 @@ Return ONLY the drafted prompt with no additional commentary.`;
         });
     }
 
+    function nodeToMarkdown(node) {
+        if (node.nodeType === 3) return node.textContent; // TEXT_NODE
+        if (node.nodeType !== 1) return ''; // not ELEMENT_NODE
+        const tag = node.tagName.toLowerCase();
+        const inner = () => Array.from(node.childNodes).map(nodeToMarkdown).join('');
+        switch (tag) {
+            case 'h1': return `# ${inner().trim()}\n\n`;
+            case 'h2': return `## ${inner().trim()}\n\n`;
+            case 'h3': return `### ${inner().trim()}\n\n`;
+            case 'h4': return `#### ${inner().trim()}\n\n`;
+            case 'h5': return `##### ${inner().trim()}\n\n`;
+            case 'h6': return `###### ${inner().trim()}\n\n`;
+            case 'p': return `${inner().trim()}\n\n`;
+            case 'div': { const t = inner(); return t ? t + '\n' : ''; }
+            case 'br': return '\n';
+            case 'strong': case 'b': return `**${inner()}**`;
+            case 'em': case 'i': return `*${inner()}*`;
+            case 'del': case 's': return `~~${inner()}~~`;
+            case 'code': {
+                if (node.parentElement && node.parentElement.tagName.toLowerCase() === 'pre') return inner();
+                return `\`${inner()}\``;
+            }
+            case 'pre': {
+                const codeEl = node.querySelector('code');
+                const lang = (codeEl && codeEl.className.replace('language-', '')) || '';
+                const body = codeEl ? codeEl.textContent : inner();
+                return `\`\`\`${lang}\n${body}\n\`\`\`\n\n`;
+            }
+            case 'a': return `[${inner()}](${node.getAttribute('href') || ''})`;
+            case 'img': return `![${node.getAttribute('alt') || ''}](${node.getAttribute('src') || ''})`;
+            case 'ul': return Array.from(node.children).filter(c => c.tagName === 'LI').map(li => `- ${nodeToMarkdown(li).trim()}\n`).join('') + '\n';
+            case 'ol': return Array.from(node.children).filter(c => c.tagName === 'LI').map((li, i) => `${i + 1}. ${nodeToMarkdown(li).trim()}\n`).join('') + '\n';
+            case 'li': return inner();
+            case 'blockquote': return inner().split('\n').map(l => `> ${l}`).join('\n') + '\n\n';
+            case 'hr': return '---\n\n';
+            case 'table': {
+                const rows = Array.from(node.querySelectorAll('tr'));
+                if (!rows.length) return '';
+                const cells = r => Array.from(r.querySelectorAll('th,td')).map(c => nodeToMarkdown(c).trim());
+                const header = cells(rows[0]);
+                let md = `| ${header.join(' | ')} |\n| ${header.map(() => '---').join(' | ')} |\n`;
+                for (let i = 1; i < rows.length; i++) md += `| ${cells(rows[i]).join(' | ')} |\n`;
+                return md + '\n';
+            }
+            default: return inner();
+        }
+    }
+
+    function htmlToMarkdown(html) {
+        const div = document.createElement('div');
+        div.innerHTML = html;
+        return nodeToMarkdown(div).replace(/\n{3,}/g, '\n\n').trim();
+    }
+
     function flashCopyBtn(btn) {
         const originalText = btn.textContent;
         btn.textContent = 'Copied!';
@@ -6466,6 +6611,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
     // ===== STATE PERSISTENCE =====
 
     function resetTicketsInMemoryState() {
+        ticketsEditMode = false;
+        _ticketsEditBackupHtml = null;
         linearIssueDetailCache.clear();
         clickUpTaskDetailCache.clear();
         linearProjectIssues = [];
@@ -6568,7 +6715,11 @@ Return ONLY the drafted prompt with no additional commentary.`;
     }
 
     function restoreTicketsState() {
-        if (!ticketsWorkspaceRoot) {
+        if (ticketsWorkspaceRoot) {
+            // Only set up the file watcher — do NOT send ticketsRootChanged which triggers
+            // integrationProviderPreference → loadClickUpSpaces → importAllTickets
+            vscode.postMessage({ type: 'setupTicketsWatcher', workspaceRoot: ticketsWorkspaceRoot });
+        } else {
             vscode.postMessage({ type: 'ticketsDefaultRoot' });
         }
     }

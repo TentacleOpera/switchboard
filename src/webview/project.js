@@ -409,10 +409,7 @@
 
             itemDiv.innerHTML = `
                 <div style="width: 100%;">
-                    <div style="display: flex; align-items: flex-start; gap: 8px;">
-                        <span class="kanban-plan-topic">${escapeHtml(plan.topic)}</span>
-                        <span class="complexity-dot ${complexityClass}" title="Complexity: ${escapeHtml(plan.complexity)}"></span>
-                    </div>
+                    <div class="kanban-plan-topic">${escapeHtml(plan.topic)}</div>
                     <div class="kanban-plan-meta" style="margin-top: 4px;">
                         ${escapeHtml(metaParts.join(' · '))} · ${escapeHtml(displayTime)}
                     </div>
@@ -423,6 +420,7 @@
                         </select>
                         ${plan.planFile ? `<button class="kanban-plan-copy-link" data-plan-file="${escapeHtml(plan.planFile)}">Copy Link</button>` : ''}
                         ${plan.sessionId ? `<button class="kanban-plan-copy-prompt" data-session-id="${escapeHtml(plan.sessionId)}" data-column="${escapeHtml(plan.column)}" data-workspace-root="${escapeHtml(plan.workspaceRoot)}">Copy Prompt</button>` : ''}
+                        <span class="complexity-dot ${complexityClass}" title="Complexity: ${escapeHtml(plan.complexity)}" style="margin-left: auto;"></span>
                     </div>
                 </div>
             `;

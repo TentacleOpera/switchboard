@@ -105,5 +105,9 @@ const allRoots = Array.from(this._getAllowedRoots());
 - Dedicated `.switchboard/plans/epics/` directory
 - "Show on Kanban" toggle for epics
 
+## Review Findings
+
+The core `fetchKanbanPlans` change (`_getWorkspaceRoots()` → `Array.from(this._getAllowedRoots())`) correctly surfaces epics from mapped parent folders. Three downstream security checks were still using `_getWorkspaceRoots()`, which would reject opened/previewed/context-set plans from mapped parents now that they appear in the EPICS tab. Fixed `openKanbanPlan`, `setKanbanPlanContext`, and `_handleFetchKanbanPlanPreview` to use `_getAllowedRoots()` for their `isAllowed` checks. Files changed: `src/services/PlanningPanelProvider.ts` at lines 805, 1847, and 1870. Compilation skipped per session policy; no test run requested. Remaining risk: `ticketsRootChanged` in `_handleMessage` still uses the outer-scope `_getWorkspaceRoots()` variable, so mapped-parent root selections in the tickets tab may be silently rejected — this is a pre-existing issue outside the epic-fetch scope.
+
 ---
 **Recommendation:** Send to Intern

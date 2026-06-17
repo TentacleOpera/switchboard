@@ -2612,6 +2612,23 @@
             height: 22px;
         }
 
+        .ticket-sync-badge {
+            font-size: 9px;
+            letter-spacing: 0.02em;
+            padding: 1px 5px;
+            border-radius: 3px;
+            align-self: flex-start;
+            pointer-events: none;
+            user-select: none;
+        }
+        .ticket-sync-synced {
+            color: var(--vscode-testing-iconPassed, #73c991);
+            opacity: 0.7;
+        }
+        .ticket-sync-modified {
+            color: var(--vscode-editorWarning-foreground, #cca700);
+        }
+
         /* ── Ticket Detail Preview Pane ── */
         /* Matches #markdown-preview typography and spacing */
         #preview-pane-tickets {
@@ -3164,6 +3181,8 @@
                     <div id="preview-pane-tickets" style="flex: 1; width: 100%; box-sizing: border-box; display: flex; flex-direction: column;">
                         <div id="tickets-preview-meta-bar" style="display:none;">
                             <button id="btn-edit-ticket" class="strip-btn">Edit</button>
+                            <button id="btn-save-ticket-edit" class="strip-btn" style="display:none; background: var(--accent-teal); color: black;">Save</button>
+                            <button id="btn-cancel-ticket-edit" class="strip-btn" style="display:none;">Cancel</button>
                             <button id="btn-push-ticket" class="strip-btn">Push</button>
                             <button id="btn-delete-ticket" class="strip-btn">Delete</button>
                             <div class="kanban-meta-group">
