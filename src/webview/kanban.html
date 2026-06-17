@@ -8282,7 +8282,9 @@
                         repoSelect.appendChild(opt);
                     });
                     
-                    const defaultRepo = config.activeRepoFilter || repos[0];
+                    const defaultRepo = (config.activeRepoFilter && repos.includes(config.activeRepoFilter))
+                        ? config.activeRepoFilter
+                        : repos[0];
                     repoSelect.value = defaultRepo;
                     selectedWorktreeRepo = defaultRepo;
                     

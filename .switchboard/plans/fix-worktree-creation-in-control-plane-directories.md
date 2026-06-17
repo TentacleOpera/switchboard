@@ -135,3 +135,7 @@ Skipped per session directive. The test suite will be run separately by the user
 ---
 
 **Recommendation:** Send to Coder
+
+## Review Findings
+
+Implementation matches the plan: `_createSafetyWorktree` resolves `effectiveGitRoot` (repoName → scope filter → workspaceRoot) with traversal guard and dir+`.git` validation, `_sendWorktreeConfig` scans immediate children for `.git` and ships `availableRepos`/`activeRepoFilter`, and the `createWorktree`/`createWorktreeForEpic`/`createWorktreeForProject` handlers all forward `msg.repoName`. Fixed one MAJOR state-consistency bug in `src/webview/kanban.html` (dropdown default could diverge from the rendered `<select>` when the active scope filter no longer had a `.git`); default is now constrained to a repo present in `availableRepos`. Verified single-trigger refresh (`worktreeConfig` → `renderWorktreesTab`), no races (sync fs scan), and `stateFs` passthrough for `readdirSync`/`mkdirSync`. Compile and tests skipped per session directive. Remaining risk (NIT, out of scope): `createWorktreesForAllEpics` does not forward `repoName`, so batch-all-epics in explicit mode with no scope filter still fails — pre-existing, not a regression.
