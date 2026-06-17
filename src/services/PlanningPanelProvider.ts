@@ -1777,7 +1777,7 @@ export class PlanningPanelProvider {
                 if (requestId <= (this._latestRequestIds.get(guardKey) || 0)) { break; }
                 this._latestRequestIds.set(guardKey, requestId);
                 try {
-                    const allRoots = this._getWorkspaceRoots();
+                    const allRoots = Array.from(this._getAllowedRoots());
                     const allPlans: any[] = [];
                     const seenIds = new Set<string>();
                     const allWorkspaceProjects: Record<string, string[]> = {};
