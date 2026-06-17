@@ -1132,6 +1132,14 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     const LOCAL_SOURCES = ['local-folder'];
     const ONLINE_SOURCES = ['clickup', 'linear', 'notion'];
 
+    // state.activeDocId for an online tree selection is the remote docId. The backend
+    // resolves the local .md file by slugPrefix, so translate via the imported-docs map
+    // (keyed by docId/slugPrefix/docName); fall back to activeDocId if not found.
+    function resolveActiveOnlineSlugPrefix() {
+        const entry = state.importedDocs.get(state.activeDocId);
+        return entry && entry.slugPrefix ? entry.slugPrefix : state.activeDocId;
+    }
+
     // DEPRECATED: Inline folder list removed; use renderFolderListModal() instead.
     // Kept for safety — returns early if target element not found.
     function renderFolderList(paths) {
@@ -2433,6 +2441,18 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         slugPrefix: doc.slugPrefix,
                         canSync: doc.canSync
                     });
+                    // Online docs are selected from the online tree by their remote
+                    // docId (state.activeDocId === remote id), so key by docId too —
+                    // otherwise the inline Edit gate and slugPrefix resolution miss.
+                    if (doc.docId) {
+                        state.importedDocs.set(doc.docId, {
+                            sourceId: doc.sourceId,
+                            docId: doc.docId,
+                            docName: doc.docName,
+                            slugPrefix: doc.slugPrefix,
+                            canSync: doc.canSync
+                        });
+                    }
 
                     let displayLabel = doc.docName;
                     
@@ -2510,6 +2530,14 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 });
             });
         });
+
+        // If the currently-previewed online doc just became imported, enable inline Edit
+        // (covers the first-time import race where importedDocsReady lands after previewReady).
+        const btnEditOnlineRefresh = document.getElementById('btn-edit-online');
+        if (btnEditOnlineRefresh && getActiveTabName() === 'online' && state.activeDocId && state.importedDocs.has(state.activeDocId)) {
+            btnEditOnlineRefresh.disabled = false;
+            btnEditOnlineRefresh.title = 'Edit document content';
+        }
     }
 
     function handleSyncResult(msg) {
@@ -2996,7 +3024,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     // Update the imported docs list
                     vscode.postMessage({ type: 'fetchImportedDocs' });
 
-                    if (msg.savedPath) {
+                    if (msg.savedPath && getActiveTabName() !== 'online') {
                         switchToTab('local');
                         let found = null;
                         const nodes = document.querySelectorAll('.tree-node');
@@ -5138,7 +5166,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             } else if (tab === 'online') {
                 vscode.postMessage({
                     type: 'fetchDocsFile',
-                    slugPrefix: state.activeDocId,
+                    slugPrefix: resolveActiveOnlineSlugPrefix(),
                     requestId: ++state.previewRequestId
                 });
             }
@@ -5166,7 +5194,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             const content = markdownEditorOnline ? markdownEditorOnline.value : '';
             vscode.postMessage({
                 type: 'saveOnlineDocFile',
-                slugPrefix: state.activeDocId,
+                slugPrefix: resolveActiveOnlineSlugPrefix(),
                 content
             });
         });
