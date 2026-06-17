@@ -492,7 +492,11 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             const metadata = await parsePlanMetadata(content, relativePath);
 
             if (!plan) {
-                const project = metadata.project || this._currentProjects.get(workspaceRoot) || '';
+                const effectiveRoot = resolveEffectiveWorkspaceRootFromMappings(workspaceRoot);
+                if (effectiveRoot !== workspaceRoot) {
+                    this._outputChannel?.appendLine(`[GlobalPlanWatcher] _handlePlanFile: resolved ${workspaceRoot} → ${effectiveRoot} for project lookup`);
+                }
+                const project = metadata.project || this._currentProjects.get(effectiveRoot) || '';
                 // New plan - parse and insert (sessionId left empty; plan_file+workspace_id is the unique key)
                 const newRecord: KanbanPlanRecord = {
                     planId: uuidv4(),

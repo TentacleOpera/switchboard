@@ -490,5 +490,24 @@ suite('GlobalPlanWatcherService', () => {
             const upserted = upsertSpy.getCall(0).args[0][0];
             assert.strictEqual(upserted.project, 'PII Data');
         });
+
+        test('new plans detected by watcher resolve child workspace path during handle', async () => {
+            resolveStub.withArgs('/child/root').returns('/parent/root');
+            service.setCurrentProject('/child/root', 'PII Data');
+
+            dbStub.getPlanByPlanFile = sandbox.stub().resolves(undefined);
+            sandbox.stub(fs.promises, 'stat').resolves({
+                mtime: fixedMtime,
+                birthtime: fixedBirthtime,
+            } as any);
+            sandbox.stub(fs.promises, 'readFile').resolves('# Plan\n\n## Topic\nTest topic');
+            const parseStub = sandbox.stub(await import('../planMetadataUtils'), 'parsePlanMetadata');
+            parseStub.resolves({ sessionId: 'sess-123', topic: 'Test topic', complexity: '3', tags: '', dependencies: '', kanbanColumn: 'CREATED' });
+
+            await (service as any)._handlePlanFile(parentMockUri, '/child/root');
+
+            const upserted = upsertSpy.getCall(0).args[0][0];
+            assert.strictEqual(upserted.project, 'PII Data');
+        });
     });
 });

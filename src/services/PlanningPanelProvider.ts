@@ -3531,9 +3531,18 @@ export class PlanningPanelProvider {
                 const provider = msg.provider;
                 const paths: string[] = [];
                 if (workspaceRoot) {
-                    for (const dir of this._getTicketDocumentDirs(workspaceRoot, provider)) {
-                        if (!fs.existsSync(dir)) { continue; }
-                        paths.push(dir);
+                    if (Array.isArray(msg.ticketIds) && msg.ticketIds.length > 0) {
+                        for (const id of msg.ticketIds) {
+                            if (typeof id === 'string' && id && !id.includes('/') && !id.includes('\\') && !id.includes('..')) {
+                                const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
+                                paths.push(path.join(workspaceRoot, '.switchboard', 'tickets', providerDir, `${id}.md`));
+                            }
+                        }
+                    } else {
+                        for (const dir of this._getTicketDocumentDirs(workspaceRoot, provider)) {
+                            if (!fs.existsSync(dir)) { continue; }
+                            paths.push(dir);
+                        }
                     }
                 }
                 await vscode.env.clipboard.writeText(paths.join('\n'));

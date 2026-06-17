@@ -5544,10 +5544,18 @@ Return ONLY the drafted prompt with no additional commentary.`;
         });
 
         linkAllButton?.addEventListener('click', () => {
+            const provider = lastIntegrationProvider;
+            let ids = [];
+            if (provider === 'linear') {
+                ids = getFilteredLinearIssues().map(issue => issue.id);
+            } else if (provider === 'clickup') {
+                ids = getFilteredClickUpTasks().map(task => task.id);
+            }
             vscode.postMessage({
                 type: 'copyToClipboard',
                 provider: lastIntegrationProvider,
-                workspaceRoot: ticketsWorkspaceRoot
+                workspaceRoot: ticketsWorkspaceRoot,
+                ticketIds: ids
             });
             flashCopyBtn(linkAllButton);
         });
