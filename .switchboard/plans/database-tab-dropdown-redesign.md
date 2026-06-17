@@ -114,3 +114,6 @@ Key risks: incorrect `data-db-index` mapping causing the wrong database operatio
 - [ ] Misleading "Workspace tab" text is removed
 
 **Recommendation:** Send to Intern
+
+## Review Findings
+Implementation in `src/webview/setup.html` matches the plan: three-branch `renderDatabases` (empty/single/multi), `<select id="db-selector">` with `parentFolder`→root-basename→"Unknown workspace" label fallback and `escapeHtml`, `data-db-index` bound to `selectedDatabaseIndex`, delegated `change` listener on `#databases-list`, and full removal of the `mappedNote`/"Workspace tab" text (repo-wide grep clean). All review findings were NITs only — no CRITICAL/MAJOR, so no code fixes were applied. One intentional deviation: `selectedDatabaseIndex` is preserved across `allDbPathsUpdated` (reset only when out of bounds) rather than reset to 0 — a UX improvement over the plan. Validation: static-only per session directives (compile/tests skipped); caller/regression trace confirmed correct index resolution, no double-bound listeners, no orphaned references, no race exposure. Remaining risk: none material.
