@@ -1,8 +1,12 @@
-# Online Docs Tab — Inline Editing & Unified Docs Model
+# Unified Docs Tab — Merge Online & Local Docs
 
 ## Goal
 
-Eliminate the friction of the current import-to-local-then-switch workflow. Users should be able to view and edit online docs directly in the Online Docs tab, with a sync button to push changes back to the source. The local file is the working copy; the online source is the sync target — the same model the Tickets tab uses.
+Collapse the separate **Local Docs** and **Online Docs** tabs into a single **Docs** tab. From the user's perspective there is one thing — a doc — that may or may not be connected to an online source. The online connection is metadata (a per-doc sync indicator), not a reason to live in a different tab.
+
+This plan supersedes the earlier two-phase approach. The previously shipped "inline editing on a still-separate Online Docs tab" (old Phase 1 / Option A) is **explicitly dropped** as the end-state: it left the confusing dual-tab model in place, which is exactly the issue the user reported ("why am I still seeing two separate tabs"). The unified tab (old Phase 2 / Option B — described in the original plan as the better long-term design) is now the **sole, mandatory scope**.
+
+The local `.md` file in `.switchboard/docs/` remains the working copy; the online source is the sync target — the same model the Tickets tab uses.
 
 ## Metadata
 
@@ -11,7 +15,7 @@ Eliminate the friction of the current import-to-local-then-switch workflow. User
 
 ## User Review Required
 
-Yes — the decision to collapse Online Docs and Local Docs into a single unified "Docs" tab (vs. keeping them separate with editing added to Online Docs) needs product sign-off before implementation.
+No — the product decision is already made. The user has explicitly directed that the two tabs be unified into one. Do **not** ship a solution that leaves two separate Docs tabs.
 
 ## Problem Analysis
 
@@ -29,125 +33,102 @@ The deeper issue is that the Online Docs / Local Docs split is the wrong abstrac
 
 ## Requirements
 
-### Option A — Inline editing in Online Docs tab (smaller change)
+Merge Online Docs and Local Docs into a single **Docs** tab. Concretely:
 
-- When a doc is open in the Online Docs preview pane, show an Edit button
-- Clicking Edit switches the preview to an editable textarea (same pattern as the Tickets tab edit mode)
-- Saving writes to the local `.md` file
-- The existing Sync button pushes the local file back to the source
-- Import button remains for docs that haven't been fetched yet (first-time fetch)
-- File watcher already added (see `_setupDocsFolderWatcher`) refreshes the panel when the file changes externally
+- One tab button (`DOCS`) replaces the two buttons `LOCAL DOCS` and `ONLINE DOCS` in `planning.html`.
+- One tree pane lists **all** docs: local-folder docs and online-source docs (ClickUp / Linear / Notion), grouped under **collapsible** source sections (see Navigation & Information Architecture).
+- **Source switching = hybrid (Model C):** the grouped tree shows everything by default, with a **source filter** (toggle chips: `Local · ClickUp · Linear · Notion`) to show/hide sections, plus a **separate workspace dropdown** to scope by repo root. The two axes (source vs. workspace) stay as separate controls — they are not merged into one list.
+- Each doc row shows a **sync indicator**: connected-to-source vs. local-only.
+- Selecting a doc shows it in a single preview/edit pane. The inline Edit/Save/Cancel + textarea affordance already built for the Online tab is reused — there is now exactly **one** set of edit controls, not two.
+- **Save** writes to the local `.md` working copy; **Sync** pushes to the online source. Local-only docs have no Sync button (`canSync: false`).
+- Clicking a connected doc that is not yet imported triggers the existing first-time fetch (`_handleFetchPreview`) before showing it.
+- The current per-tab edit-mode keys (`local` / `online`) collapse to a single `docs` edit mode.
 
-### Option B — Unified Docs tab (larger change, better long-term)
+**Out of scope:** keeping any second Docs tab, or any fallback that re-introduces the Local/Online split. The acceptance bar is a single tab — anything else is a failed implementation.
 
-- Merge Online Docs and Local Docs into a single Docs tab
-- Each doc in the list shows a sync indicator: connected to source (ClickUp/Notion/Linear) or local-only
-- Clicking a connected doc fetches latest from source if not yet local, then shows it in the edit pane
-- Edit pane is always editable (no separate view/edit mode toggle needed)
-- Save writes locally; Sync pushes to source
-- Local-only docs have no sync button
+## Navigation & Information Architecture
 
-**Recommendation: Option B.** Option A adds editing but leaves the confusing dual-tab model in place. The Local Docs tab becomes redundant once online docs are editable in place. Option B is more work upfront but removes a conceptual split that currently requires users to understand the import-to-local model.
+The controls strip carries two **independent** scoping controls plus search:
+
+1. **Workspace dropdown** (existing, merged) — scopes the whole list to one repo root or "All Workspaces". This replaces the separate `#local-workspace-filter` and `#online-workspace-filter`, which today hold divergent state.
+2. **Source filter chips** (new) — `Local · ClickUp · Linear · Notion`, each a toggle that shows/hides that source's sections. Backed by the existing `enabledSources` flags so it is cheap. Default: all on. State persists across reloads.
+3. **Search** (existing, merged) — one search input filtering doc titles across all visible sections.
+
+### Fixing the folder-spam problem (explicit user complaint)
+
+**Current behavior:** `renderLocalDocs` (`planning.js:1249`) renders every configured source folder as a non-collapsible `source-folder-header` (`:1340`) with all docs flattened beneath it. With more than a few folders the sidebar becomes a long, undifferentiated scroll — the user explicitly dislikes this.
+
+**Required change — make sections collapsible (accordion):**
+- Every section header (source-folder header for local, source header for online — `:1340`, `:1647`) becomes a clickable disclosure row with a chevron (`▸`/`▾`) and a doc count, e.g. `▸ designs/ (12)`.
+- Collapse/expand state is **persisted per section** (keyed by source folder path / source id) in webview state, so reopening the panel restores the user's layout.
+- **Auto-collapse heuristic:** when more than `N` (default 4) local source folders are present, render them collapsed by default so the user sees a short list of folder headers instead of a wall of docs. Sections with an active/selected doc, or matching the current search, auto-expand.
+- Search and the source-filter chips still apply across collapsed sections (a matching collapsed section auto-expands to reveal hits).
+- Nested subfolders (`:1433`) keep their existing hierarchy but inherit the same collapsible behavior.
+
+This converts the sidebar from "flat wall of every doc in every folder" into "a tidy list of collapsible folder/source groups you expand on demand," which is the navigation model the user asked for.
 
 ## Complexity Audit
 
+### Already done (reuse, do not rebuild)
+- Inline edit controls + textarea (`btn-edit-online`/`btn-save-online`/`btn-cancel-online`, `markdown-editor-online`) and the `saveOnlineDocFile` handler exist and work.
+- `_handleSyncToSource` (`PlanningPanelProvider.ts:4970`) already does SHA-256 conflict detection and a VS Code modal for resolution — reuse as-is.
+- `_setupDocsFolderWatcher` self-write suppression (2s `_lastPanelWriteTimestamp` check) already prevents save-induced list jitter.
+- `resolveImportedDocPath` / `resolveActiveOnlineSlugPrefix()` resolution path is in place and used by the save handler.
+
 ### Routine
-- Adding `btn-edit-online`, `btn-save-online`, `btn-cancel-online` and `markdown-editor-online` textarea to `planning.html` (mirrors local docs pattern at lines ~2998–3000)
-- Extending `state.editMode`, `state.editOriginalContent`, `state.dirtyFlags`, and `state.externalChangePending` in `planning.js` (line ~28) to include `online`
-- Wiring `enterEditMode('online')` and `exitEditMode('online')` in `planning.js` (lines ~4832–4914) — follow existing `local`/`kanban` branches
-- Adding `saveOnlineDocFile` message handler in `PlanningPanelProvider.ts` (around line ~1528 message switch) that resolves path via `cacheService.resolveImportedDocPath` and writes file
-- Updating `switchToTab` and `loadDocumentPreview` in `planning.js` to exit online edit mode before tab/doc switches
+- Replace the two tab buttons in `planning.html` (`data-tab="local"`, `data-tab="online"`) with one `data-tab="docs"` button, and merge `#local-content` + `#online-content` into a single `#docs-content` body (one controls strip, one tree pane, one preview/edit pane).
+- Collapse the `local`/`online` edit-mode keys in `planning.js` (`state.editMode`, `editOriginalContent`, `dirtyFlags`, `externalChangePending`) into a single `docs` key, and point `enterEditMode`/`exitEditMode` at the single pane/textarea/buttons.
+- Update `switchToTab` to handle `docs` (sidebar state + exit `docs` edit mode on leave) and drop the `local`/`online` branches.
 
 ### Complex / Risky
-- **Edit mode state machine fragility:** `enterEditMode`/`exitEditMode` currently only handle `local`, `kanban`, and a broken `design` fallback. Adding `online` increases regression surface unless the functions are made source-agnostic. `design` tab currently falls through to `kanban-preview-pane` (line ~4836, ~4867).
-- **File watcher jitter during active edit:** `_setupDocsFolderWatcher` (line ~534) triggers `_handleFetchImportedDocs` on every `.md` change in `.switchboard/docs/`. Writing the file during online edit will fire this, potentially re-rendering the imported docs list and resetting selection/scroll.
-- **Phase 2 — View-layer unification:** `renderOnlineDocs` (line ~1493) and `renderLocalDocs` (line ~1131) emit separate DOM trees and message types. Merging them into `renderUnifiedDocs` requires consuming both `_sendLocalDocsReady` and `_handleFetchImportedDocs` outputs in one list without backend model changes.
-- **Phase 2 — Data model merge (future):** `_sendLocalDocsReady` and `_handleFetchImportedDocs` post different message shapes (`localDocsReady` vs `importedDocsReady`). A true backend unification would require a new `_sendUnifiedDocsReady` method and retirement of the dual pipeline.
-- **First-time fetch UX:** `_handleFetchPreview` (line ~4498) already auto-fetches from adapter and caches to `.switchboard/docs/` when a doc is not yet imported. The missing piece is surfacing an `Import first` error in the edit button state when `resolveImportedDocPath` returns null.
-- **Conflict detection is already implemented:** `_handleSyncToSource` (line ~4970) performs SHA-256 hash comparison, fetches remote content, and shows a VS Code modal dialog for conflict resolution. This applies immediately to any doc edited inline; the plan should leverage it rather than marking it out of scope.
+- **View-layer merge is the core work:** `renderOnlineDocs` (`planning.js:1611`) and `renderLocalDocs` emit separate DOM trees. A new `renderUnifiedDocs(localRoots, onlineRoots, enabledSources)` must render both into one `#tree-pane` — local docs tagged `sourceId:'local-only'`, `canSync:false`; online docs tagged with the real source id and `canSync:true`. Preserve search + workspace filter behavior for both.
+- **Dual backend pipeline stays during transition:** `_sendLocalDocsReady` (`localDocsReady`) and `_sendOnlineDocsReady` (`onlineDocsReady`) post different shapes. The webview must consume **both** and merge in the view layer. The backend `_sendUnifiedDocsReady` merge is an **optional follow-up**, not a blocker for the single-tab UX.
+- **Edit-mode state machine fragility:** `enterEditMode`/`exitEditMode` also handle `kanban` and a broken `design` fallback (falls through to `kanban-preview-pane`). Collapsing `local`+`online` to `docs` must not disturb the `kanban` branch.
+- **Selection/scroll preservation:** merging two list-refresh sources into one pane risks resetting selection when either `localDocsReady` or `onlineDocsReady`/`importedDocsReady` arrives. Re-render must preserve the active doc selection.
+- **First-time fetch:** clicking a connected (not-yet-imported) doc must route through existing `_handleFetchPreview` auto-fetch + cache before enabling Edit.
+- **Duplicate docs:** a doc present both locally and online (same slug) must dedupe to one row showing the sync indicator, not two rows.
 
 ## Proposed Changes
 
-### Phase 1 — Inline editing on Online Docs tab (unblocks agents immediately)
+**Single delivery — the unified Docs tab.** There is no longer a staged "inline-editing-first" step; that already shipped and is being superseded. All changes below must land together so the user never sees two Docs tabs.
 
-#### `src/webview/planning.html` (around line 3039)
-- **Context:** Online Docs controls strip lacks edit/save/cancel buttons and the preview pane has no textarea.
-- **Logic:** Mirror the Local Docs pattern (`btn-edit-local`, `btn-save-local`, `btn-cancel-local`, `markdown-editor-local`) in the Online Docs tab.
+### 1. `src/webview/planning.html` — one tab, one body
+- **Context:** `planning.html:3037-3038` declares two buttons (`data-tab="local"` LOCAL DOCS, `data-tab="online"` ONLINE DOCS). `#local-content` (`:3045`) and `#online-content` (`:3087`) are two separate tab bodies, each with its own controls strip, tree pane, preview pane, and editor textarea.
+- **Change:** Replace the two tab buttons with a single `<button class="shared-tab-btn" data-tab="docs">DOCS</button>`. Merge the two bodies into one `#docs-content` containing a single controls strip (workspace filter, **source filter chips**, Import, Edit/Save/Cancel, Sync, search), a single `#tree-pane`, and a single preview/edit pane with one `#markdown-preview` and one `#markdown-editor` textarea.
 - **Implementation:**
-  - Add `btn-edit-online`, `btn-save-online`, `btn-cancel-online` next to `#btn-import-full-doc-online` in `#controls-strip-online`.
-  - Add `<textarea id="markdown-editor-online" class="markdown-editor" style="display:none; width:100%; height:100%; ...">` inside `#preview-pane-online`.
-- **Edge Cases:** Ensure the new buttons reuse existing `.strip-btn` classes and the textarea uses the same CSS as `#markdown-editor-local` to avoid style drift.
+  - Keep the local-docs body as the base (it owns the canonical `#tree-pane`, `#preview-pane`, `#markdown-editor-local`, sync button) and fold the online-only affordances into it. Reuse existing `.strip-btn` / `.markdown-editor` CSS to avoid style drift.
+  - Add a `#docs-source-filter` chip group to the controls strip: one toggle chip per source (`Local`, `ClickUp`, `Linear`, `Notion`). Reuse a small `.filter-chip` style (active/inactive states); wire clicks in JS (step 2).
+  - Retire the now-duplicate ids: `#online-content`, `#controls-strip-online`, `#tree-pane-online`, `#preview-pane-online`, `#markdown-preview-online`, `#markdown-editor-online`, `#online-workspace-filter`, `#online-docs-search`, `#status-online`, and `btn-*-online`.
+- **Edge Cases:** Preserve persisted sidebar collapsed state and keyboard shortcuts. Keep one merged workspace-filter dropdown and one search input. Hide a chip if that source isn't connected (no adapter).
 
-#### `src/webview/planning.js` (lines ~28, ~421, ~955, ~1730, ~4832, ~4916)
-- **Context:** `state.editMode` only supports `local` and `kanban`. `enterEditMode`/`exitEditMode` do not handle `online`.
-- **Logic:** Extend edit-mode state machine to support a third tab key: `online`.
-- **Implementation:**
-  - Line ~28: Add `online: false` to `editMode`, `editOriginalContent`, `dirtyFlags`, and `externalChangePending`.
-  - Line ~421 (`switchToTab`): Add `if (state.dirtyFlags.online && tabName !== 'online') { exitEditMode('online', true); }` and `if (state.editMode.online && tabName !== 'online') { exitEditMode('online', true); }`.
-  - Line ~955 (`loadDocumentPreview`): Add `if (state.dirtyFlags.online) { exitEditMode('online', true); }` before loading a new doc.
-  - Line ~1730 (`handlePreviewReady`): Add deferral guard for `state.editMode.online` on auto-refresh (mirror local logic: set `externalChangePending.online = true`, show warning in `#status-online`).
-  - Line ~4832 (`enterEditMode`): Add `online` branch — resolve preview pane as `#preview-pane-online`, textarea as `#markdown-editor-online`, buttons as `#btn-edit-online` / `#btn-save-online` / `#btn-cancel-online`.
-  - Line ~4864 (`exitEditMode`): Add `online` branch — toggle the same three buttons and remove `edit-mode` class from `#preview-pane-online`.
-  - Line ~4916 (button wiring): Add event listeners for `#btn-edit-online` (enterEditMode), `#btn-save-online` (post `saveOnlineDocFile` with `slugPrefix: state.activeDocId` and textarea value), `#btn-cancel-online` (exitEditMode).
-- **Edge Cases:** If the user switches tabs while online edit is dirty, changes are discarded without confirmation (matches current local behavior). Ensure `#btn-edit-online` is disabled when the doc is not yet imported (`resolveImportedDocPath` returns null).
+### 2. `src/webview/planning.js` — unified renderer + state
+- **Context:** `renderLocalDocs` and `renderOnlineDocs` (`:1611`) build separate trees; `handleLocalDocsReady` (`:1743`) and `handleOnlineDocsReady` (`:1792`) feed them separately. `switchToTab` (`:526`) and the edit-mode machine branch on `local`/`online`.
+- **Change & Implementation:**
+  - Add `renderUnifiedDocs(localRoots, onlineRoots, enabledSources)` that renders both into the single `#tree-pane`: local-folder docs under a "Local" header tagged `sourceId:'local-only'`, `canSync:false`, `isLocalOnly:true`; online docs under their source headers (ClickUp/Linear/Notion) tagged with the real source id and `canSync:true`. Preserve the source refresh / + New / location controls from `renderOnlineDocs` and the search + workspace-filter behavior from both.
+  - Have `handleLocalDocsReady` and `handleOnlineDocsReady` both cache their latest payload (`state._lastLocalDocsMsg`, `state._lastOnlineDocsMsg`) and call a single `rerenderUnifiedDocs()` that merges whichever payloads are present. This consumes **both** `localDocsReady` and `onlineDocsReady` without backend changes.
+  - Collapse `state.editMode`/`editOriginalContent`/`dirtyFlags`/`externalChangePending` keys `local` and `online` into one `docs` key. Point `enterEditMode('docs')`/`exitEditMode('docs')` at the single `#preview-pane`, `#markdown-editor`, and `#btn-edit`/`#btn-save`/`#btn-cancel`. Leave the `kanban` branch untouched.
+  - Replace the `local`/`online` branches in `switchToTab` with a single `docs` branch (sidebar state via `state.docsListCollapsed`; exit `docs` edit mode when leaving).
+  - On save, route through the existing `saveOnlineDocFile` path for online-backed docs (resolved via `resolveActiveOnlineSlugPrefix()`) and the existing local save path for local-only docs, keyed off the selected row's `isLocalOnly` flag.
+  - **Collapsible sections:** make each section header (`source-folder-header` at `:1340`, online `source-header` at `:1647`) a disclosure toggle with a chevron + doc count. Track open/closed per section in `state.docsSectionCollapsed` (keyed by folder path / source id), persisted via the existing webview state mechanism. Apply the auto-collapse heuristic (default-collapse when >4 local source folders) and auto-expand sections containing the active doc or matching the current search.
+  - **Source filter chips:** add `state.docsSourceFilter` (defaults all-on, persisted). Wire `#docs-source-filter` chip clicks to toggle a source's visibility and re-run `rerenderUnifiedDocs()`. Reuse `enabledSources` semantics so a disabled chip hides that source's sections.
+- **Edge Cases:**
+  - **Selection preservation:** `rerenderUnifiedDocs()` must restore the active doc selection (and scroll) after either payload arrives, so an online refresh doesn't clear a local selection or vice-versa.
+  - **Duplicate docs:** a doc present both locally and online (same slug) dedupes to one row that shows the sync indicator (prefer the online entry, keep local as the working copy).
+  - **First-time fetch:** clicking a connected, not-yet-imported doc routes through existing `_handleFetchPreview` auto-fetch + cache before enabling Edit.
+  - **Sync button visibility:** shown only when the selected row's `canSync` is true; hidden for local-only docs.
 
-#### `src/services/PlanningPanelProvider.ts` (around line 1528, new case in message switch)
-- **Context:** No `saveOnlineDocFile` handler exists. The provider already handles `saveFileContent` (line ~2229) and `saveLocalTicketFile` (line ~2920).
-- **Logic:** Resolve the local path via `cacheService.resolveImportedDocPath`, validate it lies within the workspace, write the content, and post a result message.
-- **Implementation:**
-  - Add `case 'saveOnlineDocFile':` in the main message switch near line 1528.
-  - Resolve `workspaceRoot` via `this._resolveWorkspaceRoot(msg.workspaceRoot)`.
-  - Get `workspaceId = await this._getWorkspaceId(workspaceRoot)`.
-  - Call `localPath = await this._cacheService.resolveImportedDocPath(msg.slugPrefix, workspaceId)`.
-  - If `!localPath`, post `saveOnlineDocFileResult` with `success: false, error: 'Document not imported yet'`.
-  - Validate `localPath` is within workspace (reuse `saveFileContent` path guard logic).
-  - Write with `fs.promises.writeFile(localPath, msg.content, 'utf8')`.
-  - Update `this._lastPanelWriteTimestamp = Date.now()` (line ~5044 pattern) so the docs folder watcher can ignore self-induced writes.
-  - Post `saveOnlineDocFileResult` with `success: true`.
-- **Edge Cases:** Doc not yet imported → clear error message telling webview to import first. Path traversal attempt → reject with validation error.
-
-#### `src/services/PlanningPanelProvider.ts` (around line 534, `_setupDocsFolderWatcher`)
-- **Context:** The file watcher fires `_handleFetchImportedDocs` on every `.md` change, including writes from `saveOnlineDocFile`.
-- **Logic:** Suppress the refresh when the write originated from the panel itself.
-- **Implementation:** In `_setupDocsFolderWatcher`'s `refreshImportedDocs` callback, check `if (Date.now() - this._lastPanelWriteTimestamp < 2000) { return; }` before calling `_handleFetchImportedDocs`. `_lastPanelWriteTimestamp` is already updated during sync and file saves.
-- **Edge Cases:** If an external agent edits the file within 2 seconds of a panel write, the refresh may be suppressed once. Acceptable trade-off; the next change will trigger it.
-
-### Phase 2 — Unified Docs tab
-
-#### `src/webview/planning.js` (around line 1493, new function)
-- **Context:** `renderOnlineDocs` and `renderLocalDocs` produce separate DOM trees in separate tabs.
-- **Logic:** Create a view-layer merge that consumes both `localDocsReady` and `importedDocsReady` messages and renders a single list.
-- **Implementation:**
-  - New function `renderUnifiedDocs(localRoots, onlineRoots, enabledSources)`.
-  - Local docs inject `sourceId: 'local-only'`, `canSync: false`, `isLocalOnly: true`.
-  - Online docs inject `sourceId` (clickup/linear/notion), `canSync: true` (if adapter supports sync), `isLocalOnly: false`.
-  - Render a single `#tree-pane-unified` with source headers and doc cards, preserving search and workspace filter behavior.
-- **Edge Cases:** Duplicate docs (same slug exists locally and online) — deduplicate by preferring the online entry with a `sync indicator` and keeping the local entry as a fallback row.
-
-#### `src/webview/planning.html` (around line 3033)
-- **Context:** Separate `#online-content` and `#local-content` tab bodies.
-- **Logic:** Replace both with a single `#docs-content` tab that hosts the unified tree and preview.
-- **Implementation:** Merge the two tab structures into one. Keep one tree pane, one preview pane, one controls strip. Retire `#tree-pane-online` and `#tree-pane` in favor of `#tree-pane-unified`.
-- **Edge Cases:** Preserve persisted sidebar collapsed state and keyboard shortcuts.
-
-#### `src/webview/planning.js` (around line 4832)
-- **Context:** With a single Docs tab, there is no longer an "online" vs "local" edit mode — only a unified "docs" edit mode.
-- **Logic:** Reuse the existing `local` edit mode machinery since the unified tab is essentially the local docs tab with extra online sources injected into the list.
-- **Implementation:** Online docs selected from the unified list set `activeSource` to the real source ID (e.g. `clickup`). The edit path still resolves via `resolveImportedDocPath` and writes to `.switchboard/docs/`, exactly as Phase 1. Save and Sync behavior is identical.
-- **Edge Cases:** Local-only docs have no sync button. Online docs show sync button only when `canSync` is true.
-
-#### `src/services/PlanningPanelProvider.ts` (around line 4812 and 559)
-- **Context:** `_handleFetchImportedDocs` and `_sendLocalDocsReady` emit separate messages.
-- **Logic:** Eventually merge them into a single `_sendUnifiedDocsReady` method. This is a backend unification step to be done after the view-layer merge is stable.
-- **Implementation:** (Future) Create `_sendUnifiedDocsReady` that gathers local docs + imported docs, merges them, and posts `unifiedDocsReady`. Update file watchers to call this instead of separate sends.
-- **Edge Cases:** Preserve backward compatibility during transition by continuing to emit `localDocsReady` and `importedDocsReady` until the webview fully consumes `unifiedDocsReady`.
+### 3. `src/services/PlanningPanelProvider.ts` — keep dual pipeline (no backend merge required)
+- **Context:** `_sendLocalDocsReady` (`:4614`, posts `localDocsReady`) and `_sendOnlineDocsReady` (`:4730`, posts `onlineDocsReady`) emit different shapes. `_handleFetchRoots` (`:4759`) already calls both.
+- **Change:** **No backend change is required for the single-tab UX.** The webview merges the two existing messages in the view layer (step 2). Continue emitting both `localDocsReady` and `onlineDocsReady`.
+- **Optional follow-up (not a blocker, do not gate delivery on it):** a future `_sendUnifiedDocsReady` could merge local + imported docs server-side and retire the dual pipeline. Defer until the view-layer merge is proven stable. The existing `saveOnlineDocFile` handler and `_setupDocsFolderWatcher` self-write suppression remain as-is.
+- **Edge Cases:** `localWorkspaceRootFilter` and `onlineWorkspaceRootFilter` UI state must be reconciled into one filter in the webview; the backend filters need no change.
 
 ## Edge-Case & Dependency Audit
 
 - **Race Conditions:** `_handleSyncToSource` and `saveOnlineDocFile` can race if the user clicks Sync immediately after Save. `saveFileContent` writes synchronously; `_handleSyncToSource` reads the file afterward. Safe as long as Save completes before Sync starts. No explicit re-entrancy guard exists on either handler.
 - **Security:** `saveOnlineDocFile` must resolve the file path strictly within the workspace. `resolveImportedDocPath` (line ~535 in `PlanningPanelCacheService.ts`) uses DB lookup or directory scan limited to `.switchboard/docs/`. The new handler should reject any webview-supplied arbitrary path and fall back to the resolved path only.
 - **Side Effects:** Writing to `.switchboard/docs/*.md` triggers `_setupDocsFolderWatcher` → `_handleFetchImportedDocs`. During active edit, this can cause list flicker. Mitigation: suppress the imported-docs refresh when the write originated from the panel itself (e.g., compare `_lastPanelWriteTimestamp` already tracked at line ~5044).
-- **Dependencies & Conflicts:** Phase 2 unification touches both `_sendLocalDocsReady` (local folder service) and `_handleFetchImportedDocs` (DB-backed import registry). Both must continue to work independently during the transition. The `localWorkspaceRootFilter` and `onlineWorkspaceRootFilter` UI state would also need merging.
+- **Dependencies & Conflicts:** The unified view-layer merge consumes both `_sendLocalDocsReady` (local folder service) and `_sendOnlineDocsReady` (online adapters). Both must continue to work independently — the webview merges them. The `localWorkspaceRootFilter` and `onlineWorkspaceRootFilter` UI state must be reconciled into one filter.
 
 ## Dependencies
 
@@ -158,16 +139,20 @@ The deeper issue is that the Online Docs / Local Docs split is the wrong abstrac
 
 ## Adversarial Synthesis
 
-Key risks: (1) Adding a third edit mode to a fragile `enterEditMode`/`exitEditMode` state machine increases regression surface, especially given the existing `design` tab fallback bug; (2) The docs folder watcher fires on every write in `.switchboard/docs/`, which will jitter the imported docs list while a user is typing unless suppressed; (3) Option B's unified list model requires touching both `_sendLocalDocsReady` and `_handleFetchImportedDocs`, creating a dual-write hazard during transition. Mitigations: extend the edit-mode functions carefully with explicit `online` branches, add a `_panelWriteInProgress` guard or timestamp check in `_setupDocsFolderWatcher`, and implement Option B as view-layer unification first before merging backend data pipelines.
+Key risks: (1) Collapsing the `local`+`online` edit modes into one `docs` mode must not disturb the `kanban` branch of the fragile `enterEditMode`/`exitEditMode` state machine (and the known broken `design` fallback); (2) Merging two independent list-refresh sources (`localDocsReady`, `onlineDocsReady`) into one pane can reset the active selection/scroll on every refresh unless re-render preserves it; (3) Duplicate docs (same slug local + online) could render twice. Mitigations: keep the `kanban` branch byte-for-byte unchanged and only add the unified `docs` key; cache both payloads and re-merge via a single `rerenderUnifiedDocs()` that restores selection; dedupe by slug preferring the online entry. The inline-editing save/sync/watcher machinery already shipped and is reused unchanged, which lowers regression surface. No backend data-pipeline merge is attempted in this pass.
 
 ## Acceptance Criteria
 
-- [ ] User can edit an online doc without leaving the Online Docs tab
-- [ ] Save writes to the local `.md` file via `saveOnlineDocFile` → `resolveImportedDocPath` → `fs.promises.writeFile`
-- [ ] Sync button pushes local changes back to the online source; existing conflict detection in `_handleSyncToSource` triggers if remote changed since last sync
-- [ ] No tab switching required to go from viewing to editing
-- [ ] File watcher keeps the pane live when an agent edits the file externally; auto-refresh defers reload if user is in online edit mode
-- [ ] (Phase 2) Single Docs tab shows all docs regardless of source, with sync indicator per doc
+- [ ] **There is exactly ONE Docs tab.** `LOCAL DOCS` and `ONLINE DOCS` are gone, replaced by a single `DOCS` tab. (This is the primary failure the user reported.)
+- [ ] The single Docs tab lists all docs regardless of source (local-folder + ClickUp/Linear/Notion), grouped under source headers, with a per-doc sync indicator.
+- [ ] Selecting any doc shows it in one shared preview/edit pane; there is exactly one set of Edit/Save/Cancel controls.
+- [ ] Save writes to the local `.md` working copy (online-backed via `saveOnlineDocFile` → `resolveImportedDocPath` → `fs.promises.writeFile`; local-only via the local save path).
+- [ ] Sync button appears only for source-connected docs (`canSync`) and pushes local changes back; existing conflict detection in `_handleSyncToSource` triggers if remote changed.
+- [ ] No tab switching required to go from viewing to editing any doc.
+- [ ] **Source filter chips** (`Local · ClickUp · Linear · Notion`) show/hide each source's sections; a separate workspace dropdown scopes by repo root. Both states persist.
+- [ ] **Sidebar sections are collapsible** with chevron + doc count; collapse state persists, and with many local folders the list defaults to a tidy set of collapsed headers rather than a flat wall of docs.
+- [ ] File watcher keeps the pane live on external edits; auto-refresh defers reload while the user is in `docs` edit mode, and a list refresh preserves the active selection.
+- [ ] Existing `kanban` edit mode and Tickets tab behavior are unaffected.
 
 ## Verification Plan
 
@@ -175,14 +160,20 @@ Key risks: (1) Adding a third edit mode to a fragile `enterEditMode`/`exitEditMo
 
 - **Unit test `PlanningPanelCacheService.resolveImportedDocPath`:** Verify correct path resolution for hash-suffixed filenames (e.g., `docSlug_abc12345.md`) and collision suffixes (`_1`, `_2`).
 - **Unit test `PlanningPanelProvider._handleSyncToSource` conflict detection:** Mock adapter with `fetchContent` returning changed content; assert modal flow and correct `updateLastSynced` call.
-- **Integration test — online edit save → watcher → refresh:** Simulate webview posting `saveOnlineDocFile`, provider writing file, file watcher firing, and webview receiving `previewReady` with `isAutoRefreshed: true` while deferring reload because `editMode.online` is active.
-- **UI test — end-to-end inline editing:** Click Edit on an imported online doc → textarea appears → modify content → Save → verify disk file updated → click Sync → verify `syncResult` success.
-- **Regression test — local docs edit mode:** Confirm existing `local` edit/save/cancel flow remains unaffected after adding `online` branches.
+- **Unit test — `renderUnifiedDocs` merge:** Given a `localDocsReady` payload and an `onlineDocsReady` payload, assert a single tree renders both, with local rows `canSync:false`/`isLocalOnly:true` and online rows tagged with the real source id and `canSync:true`; assert duplicate slugs collapse to one row.
+- **Unit test — selection preservation:** With a doc selected, simulate a second `localDocsReady`/`onlineDocsReady` arriving; assert the active selection is restored after `rerenderUnifiedDocs()`.
+- **Integration test — edit save → watcher → refresh:** Simulate webview posting the save, provider writing the file, watcher firing, and webview receiving `previewReady` with `isAutoRefreshed: true` while deferring reload because `editMode.docs` is active.
+- **UI test — end-to-end on the single tab:** From the one `DOCS` tab, select an online doc → Edit → modify → Save → verify disk file updated → Sync → verify `syncResult` success; then select a local-only doc and confirm no Sync button.
+- **Regression test — kanban edit mode:** Confirm the `kanban` edit/save flow is unaffected after collapsing `local`+`online` into `docs`.
 
 > **Note:** Skip compilation and test execution for this session per directive. Tests will be run separately by the user.
 
-**Recommendation: Send to Coder** (Complexity 6 — multi-file coordination with reused patterns, moderate risk from state machine extension).
+**Recommendation: Send to Coder** (Complexity 6 — frontend-heavy view-layer merge reusing already-shipped save/sync/watcher machinery; main risk is selection preservation and not disturbing the `kanban` branch).
 
-## Review Findings
+## Why This Plan Was Rescoped
 
-Phase 1 scaffolding (HTML buttons/textarea, edit-mode `online` branches, `saveOnlineDocFile` handler, watcher 2s suppression at `PlanningPanelProvider.ts:548`, preview-ready deferral guard) was correctly implemented, but the online flow consistently passed the remote `docId` where the backend requires a `slugPrefix` — `state.activeDocId` for an online-tree selection is the remote id, while `state.importedDocs` and `resolveImportedDocPath`/`getImportBySlug` key on `slugPrefix`. This was CRITICAL: the Edit button never enabled (`planning.js:1896`) and saves resolved `null` ("Document not imported yet"). Fixed in `src/webview/planning.js` by also keying `importedDocs` by `docId`, adding `resolveActiveOnlineSlugPrefix()` used by the save handler and the deferred reload, re-enabling Edit when `importedDocsReady` confirms import, and stopping the post-import `switchToTab('local')` yank when the user is on the Online tab (honors the "no tab switch" criterion). Files changed: `src/webview/planning.js` only; validation was static (grep-confirmed all online paths route through the resolver, no orphaned refs; compilation/tests skipped per session directive). Remaining risks: the Online tab strip still has no dedicated sync-to-source button (sync works via the imported-docs-list card, `planning.js:2500`), backend `isDocumentImported` queries `getImportBySlug(docId)` which is latent/pre-existing and unused by the corrected frontend path, and Phase 2 unification remains unimplemented (future).
+The original plan shipped only its "Phase 1" (inline editing added to a still-separate Online Docs tab) and explicitly deferred "Phase 2" (the unified tab) behind a product sign-off gate and a "(Future)" tag. The user's testing feedback — *"I thought this was meant to unify the online docs and local docs tabs? why am I still seeing two separate tabs"* — confirms the dual-tab model is the defect. The product decision is now made: **unify into one tab.** This rewrite drops the staged approach, removes the sign-off gate, and makes the single unified Docs tab the sole, mandatory deliverable. The previously shipped inline-editing handlers (`saveOnlineDocFile`, the edit controls, watcher suppression, `resolveActiveOnlineSlugPrefix()`) are kept and reused unchanged — only the tab structure and rendering are unified.
+
+## Prior Review Findings (from the superseded Phase 1 implementation, retained for context)
+
+The Phase 1 scaffolding (HTML buttons/textarea, edit-mode `online` branches, `saveOnlineDocFile` handler, watcher 2s suppression at `PlanningPanelProvider.ts:548`, preview-ready deferral guard) was correctly implemented, but the online flow originally passed the remote `docId` where the backend requires a `slugPrefix`. That was fixed in `src/webview/planning.js` by keying `importedDocs` by `docId` and adding `resolveActiveOnlineSlugPrefix()` (used by the save handler and deferred reload). These fixes carry forward into the unified tab. The `resolveActiveOnlineSlugPrefix()` helper in particular is a dependency of step 2's save routing.

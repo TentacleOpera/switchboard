@@ -3012,6 +3012,32 @@
   border-color: var(--border-color);
   border-bottom-color: var(--panel-bg2);
 }
+.filter-chips-group {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-right: 12px;
+}
+.filter-chip {
+  background: var(--panel-bg2);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+.filter-chip:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-teal-dim);
+}
+.filter-chip.active {
+  color: var(--accent-teal);
+  border-color: var(--accent-teal);
+  background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+}
 .shared-tab-content {
   display: none;
   flex: 1;
@@ -3034,34 +3060,38 @@
 </head>
 <body class="cyber-theme-enabled">
     <div id="research-tab-bar" class="shared-tab-bar">
-        <button class="shared-tab-btn active" data-tab="local">LOCAL DOCS</button>
-        <button class="shared-tab-btn" data-tab="online">ONLINE DOCS</button>
+        <button class="shared-tab-btn active" data-tab="docs">DOCS</button>
         <button class="shared-tab-btn" data-tab="tickets" id="tickets-tab-btn">TICKETS</button>
         <button class="shared-tab-btn" data-tab="research">RESEARCH</button>
         <button class="shared-tab-btn" data-tab="notebook">NotebookLM</button>
     </div>
     <div class="container">
-        <!-- Local Docs Tab: breadcrumb on top, then sidebar + content -->
-        <div id="local-content" class="shared-tab-content active">
-            <div class="controls-strip" id="controls-strip-local">
-                <select id="local-workspace-filter" class="workspace-filter-select">
+        <!-- Unified Docs Tab: breadcrumb on top, then sidebar + content -->
+        <div id="docs-content" class="shared-tab-content active">
+            <div class="controls-strip" id="controls-strip-docs">
+                <select id="docs-workspace-filter" class="workspace-filter-select">
                     <option value="">All Workspaces</option>
                 </select>
+                <div id="docs-source-filter" class="filter-chips-group">
+                    <button class="filter-chip active" data-source="local">Local</button>
+                    <button class="filter-chip active" data-source="clickup">ClickUp</button>
+                    <button class="filter-chip active" data-source="linear">Linear</button>
+                    <button class="filter-chip active" data-source="notion">Notion</button>
+                </div>
                 <button id="btn-import-full-doc" class="strip-btn" disabled style="display: none;">Import</button>
-                <button id="btn-edit-local" class="strip-btn" disabled>Edit</button>
-                <button id="btn-save-local" class="strip-btn" style="display:none;">Save</button>
-                <button id="btn-cancel-local" class="strip-btn" style="display:none;">Cancel</button>
+                <button id="btn-edit" class="strip-btn" disabled>Edit</button>
+                <button id="btn-save" class="strip-btn" style="display:none;">Save</button>
+                <button id="btn-cancel" class="strip-btn" style="display:none;">Cancel</button>
                 <button id="btn-sync-to-online" class="strip-btn" disabled>Sync to Online</button>
-                <input type="text" id="local-docs-search" class="sidebar-search-input" placeholder="Search docs..." />
+                <input type="text" id="docs-search" class="sidebar-search-input" placeholder="Search docs..." />
                 <span id="status" style="margin-left: 0; display: none;"></span>
-
             </div>
             <div class="content-row">
                 <div id="tree-pane">
                     <div class="sidebar-toggle-row">
                         <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
                     </div>
-                    <div class="empty-state">Loading local docs...</div>
+                    <div class="empty-state">Loading docs...</div>
                 </div>
                 <div class="preview-panel-wrapper">
                     <div id="preview-pane" style="flex: 1; width: 100%; box-sizing: border-box;">
@@ -3075,44 +3105,7 @@
                             <div id="markdown-preview">
                                 <div class="empty-state">Select a document from the sidebar to preview</div>
                             </div>
-                            <textarea id="markdown-editor-local" class="markdown-editor" style="display:none;"></textarea>
-                        </div>
-                    </div>
-                    <div class="cyber-scanlines"></div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Online Docs Tab: same structure -->
-        <div id="online-content" class="shared-tab-content">
-            <div class="controls-strip" id="controls-strip-online">
-                <select id="online-workspace-filter" class="workspace-filter-select">
-                    <option value="">All Workspaces</option>
-                </select>
-                <button id="btn-import-full-doc-online" class="strip-btn" disabled>Import</button>
-                <button id="btn-edit-online" class="strip-btn" disabled>Edit</button>
-                <button id="btn-save-online" class="strip-btn" style="display:none;">Save</button>
-                <button id="btn-cancel-online" class="strip-btn" style="display:none;">Cancel</button>
-                <input type="text" id="online-docs-search" class="sidebar-search-input" placeholder="Search docs..." />
-                <span id="status-online"></span>
-            </div>
-            <div class="content-row">
-                <div id="tree-pane-online">
-                    <div class="sidebar-toggle-row">
-                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
-                    </div>
-                    <div class="sidebar-skeleton"></div>
-                    <div class="sidebar-skeleton"></div>
-                    <div class="sidebar-skeleton"></div>
-                    <div class="sidebar-skeleton" style="width: 60%;"></div>
-                </div>
-                <div class="preview-panel-wrapper">
-                    <div id="preview-pane-online" style="flex: 1; width: 100%; box-sizing: border-box;">
-                        <div class="preview-content-wrapper">
-                            <div id="markdown-preview-online">
-                                <div class="empty-state">Select a document from the sidebar to preview</div>
-                            </div>
-                            <textarea id="markdown-editor-online" class="markdown-editor" style="display:none;"></textarea>
+                            <textarea id="markdown-editor" class="markdown-editor" style="display:none;"></textarea>
                         </div>
                     </div>
                     <div class="cyber-scanlines"></div>

@@ -174,3 +174,16 @@ Ensure `.shared-tab-content` styles (lines 112-117, 445-454) remain unchanged as
 
 ## Review Findings
 Files changed: `src/webview/setup.html` only. CSS block (407-474) replaced with `.controls-strip`/`.strip-btn` including `flex-shrink:0; white-space:nowrap;` and both cyber-theme overrides; HTML classes (481-493) and JS selectors (1588, 1617) all renamed to `.strip-btn`; `.shared-tab-content` panel rules correctly preserved. Grep confirms zero orphaned `.shared-tab-bar`/`.shared-tab-btn` references — no dead tab-switching risk. Validation: static review only (compile/tests skipped per directive); manual webview check still required. Remaining risk: none material; the `--font-mono`→`--font-family` change flagged in "User Review Required" is intentional and present.
+
+## Testing Failure Fix (2026-06-17)
+**Root Cause:** The original plan incorrectly identified `.controls-strip`/`.strip-btn` as the tab navigation pattern used in `planning.html` and `design.html`. In reality, `.controls-strip`/`.strip-btn` are used for *filter/action bars inside tab content panels* in those files, not for the tab navigation itself. The actual tab navigation in `planning.html` and `design.html` uses `.shared-tab-bar`/`.shared-tab-btn`. The plan's implementation replaced setup.html's tabs with toolbar styling, making them look like buttons rather than tabs.
+
+**Fix Applied:** Reverted setup.html tab navigation back to `.shared-tab-bar`/`.shared-tab-btn` with CSS copied exactly from `planning.html` and `design.html`, including:
+- Tab-bar styled with `gap: 2px`, `padding: 8px 16px 0`, `border-radius: 3px 3px 0 0`, `position: relative; top: 1px` overlap effect
+- Active tab with teal text, `background: var(--panel-bg2)`, and `border-bottom-color: var(--panel-bg2)` for seamless content join
+- Cyber-theme glow (`box-shadow`) and blur backdrop on `.shared-tab-bar`
+- Added missing `--accent-teal-dim` CSS variable to `:root`
+- Updated HTML classes and JS selectors back to `.shared-tab-btn`
+
+**Files Changed:** `src/webview/setup.html`
+**Verification:** Grep confirms zero orphaned `.strip-btn`/`.controls-strip` references remain.

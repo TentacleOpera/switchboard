@@ -24,6 +24,7 @@
             --text-secondary: #777777;
             --accent-primary: #00e5ff;
             --accent-teal: var(--accent-primary);
+            --accent-teal-dim: color-mix(in srgb, var(--accent-teal) 40%, transparent);
             --accent-green: #4ec9b0;
             --accent-red: #f85149;
             --accent-orange: #d18616;
@@ -404,73 +405,61 @@
         }
     </style>
     <style>
-.controls-strip {
+.shared-tab-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  background: var(--panel-bg2);
+  gap: 2px;
+  padding: 8px 16px 0;
+  background: var(--panel-bg);
   border-bottom: 1px solid var(--border-color);
-  flex-shrink: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
-
-.strip-btn {
+.shared-tab-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
   background: transparent;
-  border: 1px solid var(--border-color);
+  border: 1px solid transparent;
+  border-bottom: none;
   color: var(--text-secondary);
-  font-family: var(--font-family);
+  font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 1px;
   text-transform: uppercase;
-  padding: 4px 10px;
+  padding: 8px 16px;
   cursor: pointer;
-  border-radius: 2px;
+  border-radius: 3px 3px 0 0;
   transition: all 0.15s;
-  flex-shrink: 0;
-  white-space: nowrap;
+  position: relative;
+  top: 1px;
 }
-
-.strip-btn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
-  border-color: var(--accent-teal-dim);
+.shared-tab-btn:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent-teal) 5%, transparent);
+}
+.shared-tab-btn.active {
   color: var(--accent-teal);
-}
-
-.strip-btn.active {
-  background: var(--accent-teal-dim);
-  border-color: var(--accent-teal);
-  color: var(--accent-teal);
-  font-weight: 600;
-}
-
-.strip-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+  background: var(--panel-bg2);
   border-color: var(--border-color);
-  color: var(--text-secondary);
+  border-bottom-color: var(--panel-bg2);
 }
-
 .shared-tab-content {
   display: none;
   flex: 1;
   flex-direction: column;
   overflow: hidden;
 }
-
 .shared-tab-content.active {
   display: flex;
   overflow-y: auto;
 }
-
-.cyber-theme-enabled .controls-strip {
+.cyber-theme-enabled .shared-tab-btn.active {
+  box-shadow: 0 -2px 8px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+}
+.cyber-theme-enabled .shared-tab-bar {
   background: rgba(10, 10, 10, 0.65);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
-  border-bottom-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
-}
-
-.cyber-theme-enabled .strip-btn:hover:not(:disabled) {
-  box-shadow: var(--glow-teal);
 }
     </style>
 </head>
@@ -478,19 +467,19 @@
 <body>
     <div class="setup-shell">
         <!-- Tab Navigation -->
-        <div class="controls-strip" role="tablist" aria-label="Setup sections">
-            <button class="strip-btn active" data-tab="setup" role="tab" aria-selected="true">Setup</button>
-            <button class="strip-btn" data-tab="kanban" role="tab" aria-selected="false">Kanban</button>
-            <button class="strip-btn" data-tab="database" role="tab" aria-selected="false">Database</button>
-            <button class="strip-btn" data-tab="control-plane" role="tab" aria-selected="false">Control Plane</button>
-            <button class="strip-btn" data-tab="mappings" role="tab" aria-selected="false">Mappings</button>
-            <button class="strip-btn" data-tab="clickup" role="tab" aria-selected="false">ClickUp</button>
-            <button class="strip-btn" data-tab="linear" role="tab" aria-selected="false">Linear</button>
-            <button class="strip-btn" data-tab="notion" role="tab" aria-selected="false">Notion</button>
-            <button class="strip-btn" data-tab="artifacts-panel" role="tab" aria-selected="false">Artifacts Panel</button>
-            <button class="strip-btn" data-tab="plan-scanner" role="tab" aria-selected="false">Plan Scanner</button>
-            <button class="strip-btn" data-tab="theme" role="tab" aria-selected="false">Theme</button>
-            <button class="strip-btn" data-tab="status-bar" role="tab" aria-selected="false">Status Bar</button>
+        <div class="shared-tab-bar" role="tablist" aria-label="Setup sections">
+            <button class="shared-tab-btn active" data-tab="setup" role="tab" aria-selected="true">Setup</button>
+            <button class="shared-tab-btn" data-tab="kanban" role="tab" aria-selected="false">Kanban</button>
+            <button class="shared-tab-btn" data-tab="database" role="tab" aria-selected="false">Database</button>
+            <button class="shared-tab-btn" data-tab="control-plane" role="tab" aria-selected="false">Control Plane</button>
+            <button class="shared-tab-btn" data-tab="mappings" role="tab" aria-selected="false">Multi-Repo</button>
+            <button class="shared-tab-btn" data-tab="clickup" role="tab" aria-selected="false">ClickUp</button>
+            <button class="shared-tab-btn" data-tab="linear" role="tab" aria-selected="false">Linear</button>
+            <button class="shared-tab-btn" data-tab="notion" role="tab" aria-selected="false">Notion</button>
+            <button class="shared-tab-btn" data-tab="artifacts-panel" role="tab" aria-selected="false">Artifacts Panel</button>
+            <button class="shared-tab-btn" data-tab="plan-scanner" role="tab" aria-selected="false">Plan Scanner</button>
+            <button class="shared-tab-btn" data-tab="theme" role="tab" aria-selected="false">Theme</button>
+            <button class="shared-tab-btn" data-tab="status-bar" role="tab" aria-selected="false">Status Bar</button>
         </div>
 
         <div class="shared-tab-content active" id="startup-fields" data-tab-content="setup">
@@ -1585,7 +1574,7 @@
 
         // Initialize tabs
         function initTabs() {
-            const tabButtons = document.querySelectorAll('.strip-btn');
+            const tabButtons = document.querySelectorAll('.shared-tab-btn');
             const tabContents = document.querySelectorAll('.shared-tab-content');
 
             // Restore persisted tab if available
@@ -1614,7 +1603,7 @@
 
         // Activate specific tab
         function activateTab(tabId, persist = true) {
-            const tabButtons = document.querySelectorAll('.strip-btn');
+            const tabButtons = document.querySelectorAll('.shared-tab-btn');
             const tabContents = document.querySelectorAll('.shared-tab-content');
 
             // Update button states

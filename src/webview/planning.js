@@ -25,14 +25,15 @@
         analystAvailable: false,
         docsListCollapsed: persistedState.docsListCollapsed || false,
         kanbanListCollapsed: persistedState.kanbanListCollapsed || false,
-        editMode: { local: false, kanban: false, online: false },
-        editOriginalContent: { local: null, kanban: null, online: null },
-        dirtyFlags: { local: false, kanban: false, online: false },
-        externalChangePending: { local: false, kanban: false, online: false },
+        editMode: { docs: false, local: false, kanban: false, online: false },
+        editOriginalContent: { docs: null, local: null, kanban: null, online: null },
+        dirtyFlags: { docs: false, local: false, kanban: false, online: false },
+        externalChangePending: { docs: false, local: false, kanban: false, online: false },
         reviewMode: { kanban: false },
         kanbanReviewSelectedText: '',
-        localWorkspaceRootFilter: '',
-        onlineWorkspaceRootFilter: '',
+        docsWorkspaceRootFilter: '',
+        docsSectionCollapsed: persistedState.docsSectionCollapsed || {},
+        docsSourceFilter: persistedState.docsSourceFilter || ['local', 'clickup', 'linear', 'notion'],
         localDocsSearch: '',
         onlineDocsSearch: '',
         activeDesignDocEnabled: false,
@@ -68,22 +69,14 @@
             currentVal = researchWorkspaceRoot;
         } else if (tabKey === 'notebook' && notebookWorkspaceRoot) {
             currentVal = notebookWorkspaceRoot;
-        } else if (tabKey === 'localDocs') {
-            const restoredLocalRoot = _restoredPanelState.panel['localDocs.root'] || '';
-            if (restoredLocalRoot === '' || _workspaceItems.some(item => item.workspaceRoot === restoredLocalRoot)) {
-                state.localWorkspaceRootFilter = restoredLocalRoot;
+        } else if (tabKey === 'docs') {
+            const restoredDocsRoot = _restoredPanelState.panel['docs.root'] || '';
+            if (restoredDocsRoot === '' || _workspaceItems.some(item => item.workspaceRoot === restoredDocsRoot)) {
+                state.docsWorkspaceRootFilter = restoredDocsRoot;
             } else {
-                state.localWorkspaceRootFilter = '';
+                state.docsWorkspaceRootFilter = '';
             }
-            currentVal = state.localWorkspaceRootFilter;
-        } else if (tabKey === 'onlineDocs') {
-            const restoredOnlineRoot = _restoredPanelState.panel['onlineDocs.root'] || '';
-            if (restoredOnlineRoot === '' || _workspaceItems.some(item => item.workspaceRoot === restoredOnlineRoot)) {
-                state.onlineWorkspaceRootFilter = restoredOnlineRoot;
-            } else {
-                state.onlineWorkspaceRootFilter = '';
-            }
-            currentVal = state.onlineWorkspaceRootFilter;
+            currentVal = state.docsWorkspaceRootFilter;
         }
         populateWorkspaceDropdown(select, _workspaceItems, currentVal, includeAllOption);
     }
@@ -415,20 +408,34 @@
         }
     }
 
-    document.getElementById('local-workspace-filter')?.addEventListener('change', (e) => {
-        state.localWorkspaceRootFilter = e.target.value;
-        // keep the in-memory snapshot in sync so later workspaceItemsUpdated
-        // re-derivations don't reset the live selection to the boot-time value
-        _restoredPanelState.panel['localDocs.root'] = e.target.value;
-        persistTab('localDocs.root', state.localWorkspaceRootFilter);
-        handleLocalDocsReady(state._lastLocalDocsMsg || {});
+    document.getElementById('docs-workspace-filter')?.addEventListener('change', (e) => {
+        state.docsWorkspaceRootFilter = e.target.value;
+        _restoredPanelState.panel['docs.root'] = e.target.value;
+        persistTab('docs.root', state.docsWorkspaceRootFilter);
+        rerenderUnifiedDocs();
     });
 
-    document.getElementById('online-workspace-filter')?.addEventListener('change', (e) => {
-        state.onlineWorkspaceRootFilter = e.target.value;
-        _restoredPanelState.panel['onlineDocs.root'] = e.target.value;
-        persistTab('onlineDocs.root', state.onlineWorkspaceRootFilter);
-        handleOnlineDocsReady(state._lastOnlineDocsMsg || {});
+    document.querySelectorAll('#docs-source-filter .filter-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+            const source = chip.dataset.source;
+            let filter = state.docsSourceFilter || ['local', 'clickup', 'linear', 'notion'];
+            if (chip.classList.contains('active')) {
+                chip.classList.remove('active');
+                filter = filter.filter(s => s !== source);
+            } else {
+                chip.classList.add('active');
+                if (!filter.includes(source)) {
+                    filter.push(source);
+                }
+            }
+            state.docsSourceFilter = filter;
+            const currentPersisted = vscode.getState() || {};
+            vscode.setState({
+                ...currentPersisted,
+                docsSourceFilter: state.docsSourceFilter
+            });
+            rerenderUnifiedDocs();
+        });
     });
 
     function wireSidebarSearch(inputId, onSearch) {
@@ -443,13 +450,10 @@
         });
     }
 
-    wireSidebarSearch('local-docs-search', (value) => {
+    wireSidebarSearch('docs-search', (value) => {
         state.localDocsSearch = value;
-        handleLocalDocsReady(state._lastLocalDocsMsg || {});
-    });
-    wireSidebarSearch('online-docs-search', (value) => {
         state.onlineDocsSearch = value;
-        applyOnlineDocsSearchFilter();
+        rerenderUnifiedDocs();
     });
 
 
@@ -491,10 +495,8 @@
             applySidebarState('kanban', state.kanbanListCollapsed);
         } else {
             state.docsListCollapsed = !state.docsListCollapsed;
-            // Apply to local and research tabs (they share the same collapsed state)
-            applySidebarState('local', state.docsListCollapsed);
+            applySidebarState('docs', state.docsListCollapsed);
             applySidebarState('research', state.docsListCollapsed);
-            applySidebarState('online', state.docsListCollapsed);
         }
 
         // Persist state
@@ -508,9 +510,8 @@
     }
 
     // Initialize sidebar state
-    applySidebarState('local', state.docsListCollapsed);
+    applySidebarState('docs', state.docsListCollapsed);
     applySidebarState('research', state.docsListCollapsed);
-    applySidebarState('online', state.docsListCollapsed);
     applySidebarState('tickets', state.ticketsPreviewCollapsed);
     applySidebarState('kanban', state.kanbanListCollapsed);
 
@@ -525,9 +526,11 @@
 
     function switchToTab(tabName) {
         // 1. Clean up dirty flags and edit/review modes (same logic as click handler)
+        if (state.dirtyFlags.docs && tabName !== 'docs') { exitEditMode('docs', true); }
         if (state.dirtyFlags.local && tabName !== 'local') { exitEditMode('local', true); }
         if (state.dirtyFlags.kanban && tabName !== 'kanban') { exitEditMode('kanban', true); }
         if (state.dirtyFlags.online && tabName !== 'online') { exitEditMode('online', true); }
+        if (state.editMode.docs && tabName !== 'docs') { exitEditMode('docs', true); }
         if (state.editMode.local && tabName !== 'local') { exitEditMode('local', true); }
         if (state.editMode.kanban && tabName !== 'kanban') { exitEditMode('kanban', true); }
         if (state.editMode.online && tabName !== 'online') { exitEditMode('online', true); }
@@ -543,14 +546,14 @@
         tabContents.forEach(c => c.classList.remove('active'));
         const targetBtn = document.querySelector(`.shared-tab-btn[data-tab="${tabName}"]`);
         if (targetBtn) targetBtn.classList.add('active');
-        const targetContent = document.getElementById(`${tabName}-content`);
+        const targetContent = document.getElementById(tabName === 'docs' ? 'docs-content' : `${tabName}-content`);
         if (targetContent) targetContent.classList.add('active');
 
         // 4. Apply sidebar state
         if (tabName === 'tickets') { applySidebarState('tickets', state.ticketsPreviewCollapsed); }
         else if (tabName === 'kanban') { applySidebarState('kanban', state.kanbanListCollapsed); }
-        else if (tabName === 'local' || tabName === 'research' || tabName === 'online') {
-            applySidebarState(tabName, state.docsListCollapsed);
+        else if (tabName === 'docs' || tabName === 'local' || tabName === 'research' || tabName === 'online') {
+            applySidebarState(tabName === 'docs' ? 'docs' : tabName, state.docsListCollapsed);
         }
 
         // 5. Tab-specific initialization
@@ -690,7 +693,7 @@
 
     registerWorkspaceDropdown('research-workspace-filter', 'research', false);
     registerWorkspaceDropdown('notebook-workspace-filter', 'notebook', false);
-    registerWorkspaceDropdown('online-workspace-filter', 'onlineDocs');
+    registerWorkspaceDropdown('docs-workspace-filter', 'docs');
 
     document.getElementById('research-workspace-filter')?.addEventListener('change', (e) => {
         const newRoot = e.target.value;
@@ -809,11 +812,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     let _savedBrowseFilterContainers = {};
 
     const treePane = document.getElementById('tree-pane');
-    const treePaneOnline = document.getElementById('tree-pane-online');
+    const treePaneOnline = document.getElementById('tree-pane');
     const markdownPreview = document.getElementById('markdown-preview');
-    const markdownPreviewOnline = document.getElementById('markdown-preview-online');
+    const markdownPreviewOnline = document.getElementById('markdown-preview');
     const statusEl = document.getElementById('status');
-    const statusElOnline = document.getElementById('status-online');
+    const statusElOnline = document.getElementById('status');
 
     // Bulletproof Node Finder (eliminates querySelector CSS string escaping bugs completely)
     function findTreeNode(sourceId, nodeId) {
@@ -1169,7 +1172,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             removeBtn.textContent = 'Remove';
             removeBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                vscode.postMessage({ type: 'removeLocalFolder', folderPath: path, workspaceRoot: state.localWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '' });
+                vscode.postMessage({ type: 'removeLocalFolder', folderPath: path, workspaceRoot: state.docsWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '' });
             });
 
             row.appendChild(pathSpan);
@@ -1196,11 +1199,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
         let folderPaths = [];
         if (folderModalScope === 'tickets') {
-            folderPaths = getCurrentFolderPaths(state.ticketsFolderPathsByRoot || {}, state.localWorkspaceRootFilter);
+            folderPaths = getCurrentFolderPaths(state.ticketsFolderPathsByRoot || {}, state.docsWorkspaceRootFilter);
         } else if (folderModalScope === 'research') {
             folderPaths = getCurrentFolderPaths(state.localFolderPathsByRoot, researchWorkspaceRoot);
         } else {
-            folderPaths = getCurrentFolderPaths(state.localFolderPathsByRoot, state.localWorkspaceRootFilter);
+            folderPaths = getCurrentFolderPaths(state.localFolderPathsByRoot, state.docsWorkspaceRootFilter);
         }
 
         if (folderPaths.length === 0) {
@@ -1227,13 +1230,13 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 e.stopPropagation();
                 let workspaceRoot;
                 if (folderModalScope === 'tickets') {
-                    workspaceRoot = state.localWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '';
+                    workspaceRoot = state.docsWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '';
                     vscode.postMessage({ type: 'removeTicketsFolder', folderPath: path, workspaceRoot });
                 } else if (folderModalScope === 'research') {
                     workspaceRoot = researchWorkspaceRoot || _workspaceItems[0]?.workspaceRoot || '';
                     vscode.postMessage({ type: 'removeLocalFolder', folderPath: path, workspaceRoot });
                 } else {
-                    workspaceRoot = state.localWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '';
+                    workspaceRoot = state.docsWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '';
                     vscode.postMessage({ type: 'removeLocalFolder', folderPath: path, workspaceRoot });
                 }
             });
@@ -1246,13 +1249,37 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
 
 
-    function renderLocalDocs(rootEntry) {
-        const { sourceId, nodes, folderPaths } = rootEntry;
+    function updateSyncButtonVisibility() {
+        const btnSync = document.getElementById('btn-sync-to-online');
+        if (!btnSync) return;
         
-        // Clear only local pane
+        let canSync = false;
+        if (state.activeSource && ONLINE_SOURCES.includes(state.activeSource)) {
+            const entry = state.importedDocs.get(state.activeDocId);
+            if (entry && entry.canSync) {
+                canSync = true;
+            }
+        } else if (state.activeSource === 'local-folder') {
+            const entry = state.importedDocs.get(state.activeDocName) || state.importedDocs.get(state.activeDocId);
+            if (entry && entry.canSync) {
+                canSync = true;
+            }
+        }
+        
+        if (canSync) {
+            btnSync.style.display = '';
+            btnSync.disabled = false;
+        } else {
+            btnSync.style.display = 'none';
+            btnSync.disabled = true;
+        }
+    }
+
+    function renderUnifiedDocs(localRoots, onlineRoots, enabledSources) {
+        if (!treePane) return;
+        
         treePane.innerHTML = '';
         
-        // Re-add sidebar toggle
         const toggleRow = document.createElement('div');
         toggleRow.className = 'sidebar-toggle-row';
         
@@ -1261,7 +1288,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         foldersBtn.title = 'Manage Folders';
         foldersBtn.id = 'btn-manage-folders';
         foldersBtn.textContent = 'Manage Folders';
-        foldersBtn.addEventListener('click', openFoldersModal);
+        foldersBtn.addEventListener('click', () => openFoldersModal('local'));
         
         const toggleBtn = document.createElement('button');
         toggleBtn.className = 'sidebar-toggle-btn';
@@ -1273,267 +1300,440 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         toggleRow.appendChild(toggleBtn);
         treePane.appendChild(toggleRow);
         
-        if (sourceId === 'local-folder') {
-            // ALWAYS create docList container so handleLocalFolderPathUpdated can find it later
+        const filterSet = new Set(state.docsSourceFilter || ['local', 'clickup', 'linear', 'notion']);
+        
+        if (filterSet.has('local') && localRoots) {
+            const { sourceId, nodes, folderPaths, error } = localRoots;
+            
             const docList = document.createElement('div');
             docList.className = 'source-doc-list';
-            docList.dataset.sourceId = sourceId;
-            // Push content down to avoid overlapping with top-right absolute controls
-            docList.style.paddingTop = '0px';
+            docList.dataset.sourceId = 'local-folder';
             treePane.appendChild(docList);
-
-            if (!nodes || nodes.length === 0) {
-                // Check if there are imported docs from other sources (clickup, linear, notion)
-                const hasOtherImportedDocs = state.importedDocs.size > 0;
-                if (hasOtherImportedDocs) {
-                    // Don't show empty message - imported docs are displayed below
-                    docList.innerHTML = '';
-                } else {
-                    docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No folders configured or all folders are empty. Click Add Folder to get started.</div>';
-                }
+            
+            if (error) {
+                docList.innerHTML = `<div class="error-state">Error: ${error}</div>`;
+            } else if (!nodes || nodes.length === 0) {
+                docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No folders configured or all folders are empty. Click Manage Folders to get started.</div>';
             } else {
                 const folderNodes = (nodes || []).filter(n => n.kind === 'folder' || n.isDirectory);
                 let docNodes = (nodes || []).filter(n => n.kind === 'document' && !n.isDirectory);
-
-                // Apply sidebar search filter
+                
                 const search = String(state.localDocsSearch || '').trim().toLowerCase();
                 if (search) {
                     docNodes = docNodes.filter(d => (d.title || d.name || '').toLowerCase().includes(search));
                 }
-
-                // Group nodes by sourceFolder first
+                
                 const docsBySourceFolder = new Map();
                 const foldersBySourceFolder = new Map();
-
+                
                 docNodes.forEach(d => {
                     const sourceFolder = d.metadata?.sourceFolder;
-                    if (!sourceFolder) return; // skip docs without sourceFolder (shouldn't happen)
-                    if (!docsBySourceFolder.has(sourceFolder)) {
-                        docsBySourceFolder.set(sourceFolder, []);
-                    }
+                    if (!sourceFolder) return;
+                    if (!docsBySourceFolder.has(sourceFolder)) docsBySourceFolder.set(sourceFolder, []);
                     docsBySourceFolder.get(sourceFolder).push(d);
                 });
-
+                
                 folderNodes.forEach(f => {
                     const sourceFolder = f.metadata?.sourceFolder;
                     if (!sourceFolder) return;
-                    if (!foldersBySourceFolder.has(sourceFolder)) {
-                        foldersBySourceFolder.set(sourceFolder, []);
-                    }
+                    if (!foldersBySourceFolder.has(sourceFolder)) foldersBySourceFolder.set(sourceFolder, []);
                     foldersBySourceFolder.get(sourceFolder).push(f);
                 });
-
-                // Iterate over source folders (use folderPaths for consistent ordering)
-                const sourceFolders = [...new Set([
-                    ...(folderPaths || []),
-                    ...docsBySourceFolder.keys()
-                ])];
-
+                
+                const sourceFolders = [...new Set([...(folderPaths || []), ...docsBySourceFolder.keys()])];
+                const totalSourceFolders = sourceFolders.length;
+                
                 sourceFolders.forEach(sourceFolder => {
                     const folderDocs = docsBySourceFolder.get(sourceFolder) || [];
                     const sourceFolderNodes = foldersBySourceFolder.get(sourceFolder) || [];
-
-                    // Skip source folders with no visible documents
+                    
                     if (folderDocs.length === 0) return;
-
-                    // Source-folder subheader (basename of the full path)
+                    
+                    const folderName = sourceFolder.split(/[\\/]/).filter(Boolean).pop() || sourceFolder;
+                    
+                    const headerContainer = document.createElement('div');
+                    headerContainer.className = 'folder-section-container';
+                    
                     const sourceHeader = document.createElement('div');
                     sourceHeader.className = 'folder-subheader source-folder-header';
-                    // Browser-safe basename extraction (no Node path module in webview)
-                    const folderName = sourceFolder.split(/[\\/]/).filter(Boolean).pop() || sourceFolder;
-                    sourceHeader.title = sourceFolder; // full path as tooltip for disambiguation
-
+                    sourceHeader.title = sourceFolder;
+                    sourceHeader.style.cursor = 'pointer';
+                    
                     const labelWrapper = document.createElement('div');
-                    labelWrapper.style.cssText = 'display: flex; flex-direction: column; gap: 2px;';
+                    labelWrapper.style.cssText = 'display: flex; flex-direction: column; gap: 2px; flex: 1;';
+                    
                     const labelSpan = document.createElement('span');
-                    labelSpan.textContent = folderName;
+                    labelSpan.style.fontWeight = 'bold';
+                    
+                    const chevronSpan = document.createElement('span');
+                    chevronSpan.className = 'section-chevron';
+                    chevronSpan.style.marginRight = '6px';
+                    
+                    const docCount = folderDocs.length;
+                    labelSpan.textContent = `${folderName} (${docCount})`;
+                    labelSpan.prepend(chevronSpan);
                     labelWrapper.appendChild(labelSpan);
+                    
                     const pathSpan = document.createElement('span');
                     pathSpan.className = 'source-folder-path';
                     pathSpan.style.cssText = 'font-size: 10px; color: var(--text-secondary); font-weight: 400; text-transform: none; letter-spacing: 0;';
                     pathSpan.textContent = sourceFolder;
                     labelWrapper.appendChild(pathSpan);
+                    
                     sourceHeader.appendChild(labelWrapper);
-
+                    
+                    const actionsDiv = document.createElement('div');
+                    actionsDiv.style.cssText = 'display: flex; gap: 4px;';
+                    
                     const linkBtn = document.createElement('button');
                     linkBtn.className = 'folder-link-btn';
                     linkBtn.textContent = 'Link';
-                    linkBtn.title = `Copy link to folder ${folderName}`;
                     linkBtn.addEventListener('click', (e) => {
                         e.stopPropagation();
-                        vscode.postMessage({
-                            type: 'linkToFolder',
-                            folderPath: sourceFolder
-                        });
+                        vscode.postMessage({ type: 'linkToFolder', folderPath: sourceFolder });
                     });
-                    sourceHeader.appendChild(linkBtn);
-
+                    actionsDiv.appendChild(linkBtn);
+                    
                     const createBtn = document.createElement('button');
                     createBtn.className = 'folder-create-btn';
                     createBtn.textContent = '+';
-                    createBtn.title = `Create new document in ${folderName}`;
                     createBtn.addEventListener('click', (e) => {
                         e.stopPropagation();
-                        vscode.postMessage({
-                            type: 'createLocalDoc',
-                            folderPath: sourceFolder
-                        });
+                        vscode.postMessage({ type: 'createLocalDoc', folderPath: sourceFolder });
                     });
-                    sourceHeader.appendChild(createBtn);
-
+                    actionsDiv.appendChild(createBtn);
+                    
                     const importBtn = document.createElement('button');
                     importBtn.className = 'folder-import-btn';
                     importBtn.textContent = 'Import';
-                    importBtn.title = `Import document from clipboard into ${folderName}`;
                     importBtn.addEventListener('click', (e) => {
                         e.stopPropagation();
-
-                        // Disable all import buttons during operation
                         document.querySelectorAll('.folder-import-btn').forEach(btn => {
                             btn.disabled = true;
                             btn.textContent = '...';
                         });
-
                         const statusEl = document.getElementById('status');
                         if (statusEl) {
                             statusEl.style.color = '';
                             statusEl.textContent = 'Importing from clipboard...';
                         }
-
-                        vscode.postMessage({
-                            type: 'importResearchDoc',
-                            folderPath: sourceFolder
-                            // No docTitle — backend extracts from H1 or generates timestamp
+                        vscode.postMessage({ type: 'importResearchDoc', folderPath: sourceFolder });
+                    });
+                    actionsDiv.appendChild(importBtn);
+                    
+                    sourceHeader.appendChild(actionsDiv);
+                    headerContainer.appendChild(sourceHeader);
+                    
+                    const contentDiv = document.createElement('div');
+                    contentDiv.className = 'folder-section-content';
+                    headerContainer.appendChild(contentDiv);
+                    
+                    if (state.docsSectionCollapsed === undefined) {
+                        state.docsSectionCollapsed = {};
+                    }
+                    
+                    let isCollapsed = state.docsSectionCollapsed[sourceFolder];
+                    if (isCollapsed === undefined) {
+                        isCollapsed = totalSourceFolders > 4;
+                    }
+                    
+                    const hasSelectedDoc = folderDocs.some(d => state.activeSource === 'local-folder' && state.activeDocId === d.id);
+                    if (hasSelectedDoc || search) {
+                        isCollapsed = false;
+                    }
+                    
+                    state.docsSectionCollapsed[sourceFolder] = isCollapsed;
+                    
+                    const updateCollapsedUI = () => {
+                        chevronSpan.textContent = isCollapsed ? '▸ ' : '▾ ';
+                        contentDiv.style.display = isCollapsed ? 'none' : 'block';
+                    };
+                    
+                    sourceHeader.addEventListener('click', (e) => {
+                        if (e.target.closest('button')) return;
+                        isCollapsed = !isCollapsed;
+                        state.docsSectionCollapsed[sourceFolder] = isCollapsed;
+                        updateCollapsedUI();
+                        const currentPersisted = vscode.getState() || {};
+                        vscode.setState({
+                            ...currentPersisted,
+                            docsSectionCollapsed: state.docsSectionCollapsed
                         });
                     });
-                    sourceHeader.appendChild(importBtn);
-                    docList.appendChild(sourceHeader);
-
-                    // Within this source folder, apply existing folder-hierarchy grouping
+                    
+                    updateCollapsedUI();
+                    
                     const folderNameMap = new Map();
                     sourceFolderNodes.forEach(f => folderNameMap.set(f.id, f.name));
-
+                    
                     const docsByFolder = new Map();
                     const rootDocs = [];
                     folderDocs.forEach(d => {
                         const docPath = d.id || d.relativePath || '';
                         const lastSlashIdx = docPath.lastIndexOf('/');
                         const parentFolderId = lastSlashIdx > 0 ? docPath.substring(0, lastSlashIdx) : null;
-
+                        
                         if (parentFolderId && folderNameMap.has(parentFolderId)) {
-                            if (!docsByFolder.has(parentFolderId)) {
-                                docsByFolder.set(parentFolderId, []);
-                            }
+                            if (!docsByFolder.has(parentFolderId)) docsByFolder.set(parentFolderId, []);
                             docsByFolder.get(parentFolderId).push(d);
                         } else {
                             rootDocs.push(d);
                         }
                     });
-
+                    
                     sourceFolderNodes.forEach(folder => {
                         const folderDocsInSource = docsByFolder.get(folder.id) || [];
                         if (folderDocsInSource.length === 0) return;
-
+                        
                         const subheader = document.createElement('div');
                         subheader.className = 'folder-subheader';
                         const subLabel = document.createElement('span');
                         subLabel.textContent = folder.name;
                         subheader.appendChild(subLabel);
-
+                        
                         const subLinkBtn = document.createElement('button');
                         subLinkBtn.className = 'folder-link-btn';
                         subLinkBtn.textContent = 'Link';
-                        subLinkBtn.title = `Copy link to folder ${folder.name}`;
                         subLinkBtn.addEventListener('click', (e) => {
                             e.stopPropagation();
-                            vscode.postMessage({
-                                type: 'linkToFolder',
-                                folderPath: folder.id
-                            });
+                            vscode.postMessage({ type: 'linkToFolder', folderPath: folder.id });
                         });
                         subheader.appendChild(subLinkBtn);
-
+                        
                         const subCreateBtn = document.createElement('button');
                         subCreateBtn.className = 'folder-create-btn';
                         subCreateBtn.textContent = '+';
-                        subCreateBtn.title = `Create new document in ${folder.name}`;
                         subCreateBtn.addEventListener('click', (e) => {
                             e.stopPropagation();
-                            vscode.postMessage({
-                                type: 'createLocalDoc',
-                                folderPath: folder.id
-                            });
+                            vscode.postMessage({ type: 'createLocalDoc', folderPath: folder.id });
                         });
                         subheader.appendChild(subCreateBtn);
-
+                        
                         const subImportBtn = document.createElement('button');
                         subImportBtn.className = 'folder-import-btn';
                         subImportBtn.textContent = 'Import';
-                        subImportBtn.title = `Import document from clipboard into ${folder.name}`;
                         subImportBtn.addEventListener('click', (e) => {
                             e.stopPropagation();
                             document.querySelectorAll('.folder-import-btn').forEach(btn => {
                                 btn.disabled = true;
                                 btn.textContent = '...';
                             });
-                            const statusEl = document.getElementById('status');
-                            if (statusEl) {
-                                statusEl.style.color = '';
-                                statusEl.textContent = 'Importing from clipboard...';
-                            }
-                            vscode.postMessage({
-                                type: 'importResearchDoc',
-                                folderPath: folder.id
-                            });
+                            vscode.postMessage({ type: 'importResearchDoc', folderPath: folder.id });
                         });
                         subheader.appendChild(subImportBtn);
-
-                        docList.appendChild(subheader);
-
+                        
+                        contentDiv.appendChild(subheader);
+                        
                         folderDocsInSource.forEach(doc => {
-                            const { wrapper } = renderNode(doc, sourceId);
-                            docList.appendChild(wrapper);
+                            if (doc.name && state.importedDocs.has(doc.name)) {
+                                return;
+                            }
+                            const { wrapper } = renderNode(doc, 'local-folder');
+                            contentDiv.appendChild(wrapper);
                         });
                     });
-
+                    
                     rootDocs.forEach(doc => {
-                        const { wrapper } = renderNode(doc, sourceId);
-                        docList.appendChild(wrapper);
+                        if (doc.name && state.importedDocs.has(doc.name)) {
+                            return;
+                        }
+                        const { wrapper } = renderNode(doc, 'local-folder');
+                        contentDiv.appendChild(wrapper);
                     });
+                    
+                    docList.appendChild(headerContainer);
                 });
             }
-        } else {
-            const docList = document.createElement('div');
-            docList.className = 'source-doc-list';
-            docList.dataset.sourceId = sourceId;
-            treePane.appendChild(docList);
-            const search = String(state.localDocsSearch || '').trim().toLowerCase();
-            const filteredNodes = search
-                ? (nodes || []).filter(n => (n.title || n.name || '').toLowerCase().includes(search))
-                : (nodes || []);
-            filteredNodes.forEach(node => {
-                const { wrapper } = renderNode(node, sourceId);
-                docList.appendChild(wrapper);
+        }
+        
+        if (onlineRoots && onlineRoots.length > 0) {
+            const effectiveEnabledSources = enabledSources || { clickup: true, linear: true, notion: true };
+            const filteredRoots = onlineRoots.filter(({ sourceId }) => {
+                return filterSet.has(sourceId) && effectiveEnabledSources[sourceId] !== false;
+            });
+            
+            filteredRoots.forEach(({ sourceId, nodes }) => {
+                const headerContainer = document.createElement('div');
+                headerContainer.className = 'folder-section-container';
+                
+                const headerRow = document.createElement('div');
+                headerRow.className = 'source-header-row folder-subheader';
+                headerRow.style.cursor = 'pointer';
+                
+                const header = document.createElement('div');
+                header.className = 'source-header';
+                header.dataset.sourceId = sourceId;
+                
+                const chevronSpan = document.createElement('span');
+                chevronSpan.className = 'section-chevron';
+                chevronSpan.style.marginRight = '6px';
+                
+                header.textContent = SOURCE_DISPLAY_NAMES[sourceId] || sourceId;
+                header.prepend(chevronSpan);
+                headerRow.appendChild(header);
+                
+                const controlsContainer = document.createElement('div');
+                controlsContainer.className = 'source-controls';
+                controlsContainer.dataset.sourceId = sourceId;
+                
+                const refreshBtn = document.createElement('button');
+                refreshBtn.className = 'source-refresh-btn';
+                refreshBtn.textContent = '↻';
+                refreshBtn.title = 'Refresh';
+                refreshBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    refreshBtn.disabled = true;
+                    vscode.postMessage({ type: 'refreshSource', sourceId });
+                });
+                controlsContainer.appendChild(refreshBtn);
+                
+                const newBtn = document.createElement('button');
+                newBtn.className = 'source-new-btn';
+                newBtn.textContent = '+ New';
+                newBtn.title = 'Create new document';
+                newBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const activeContainer = state.activeContainers.get(sourceId);
+                    vscode.postMessage({ type: 'createOnlineDocument', sourceId, parentId: activeContainer?.id });
+                });
+                controlsContainer.appendChild(newBtn);
+                
+                const locationBtn = document.createElement('button');
+                locationBtn.className = 'source-location-btn';
+                locationBtn.innerHTML = '&#9881;';
+                locationBtn.title = 'Set upload location';
+                locationBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    vscode.postMessage({ type: 'setUploadLocation', sourceId });
+                });
+                controlsContainer.appendChild(locationBtn);
+                
+                headerRow.appendChild(controlsContainer);
+                headerContainer.appendChild(headerRow);
+                
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'folder-section-content source-doc-list';
+                contentDiv.dataset.sourceId = sourceId;
+                headerContainer.appendChild(contentDiv);
+                
+                if (!nodes || nodes.length === 0) {
+                    contentDiv.innerHTML = '<div class="tree-placeholder">Loading...</div>';
+                    vscode.postMessage({ type: 'fetchContainers', sourceId });
+                } else {
+                    const search = String(state.onlineDocsSearch || state.localDocsSearch || '').trim().toLowerCase();
+                    const filteredNodes = search
+                        ? (nodes || []).filter(n => (n.title || n.name || '').toLowerCase().includes(search))
+                        : (nodes || []);
+                    
+                    filteredNodes.forEach(node => {
+                        const { wrapper } = renderNode(node, sourceId);
+                        contentDiv.appendChild(wrapper);
+                    });
+                }
+                
+                if (state.docsSectionCollapsed === undefined) {
+                    state.docsSectionCollapsed = {};
+                }
+                
+                let isCollapsed = state.docsSectionCollapsed[sourceId];
+                if (isCollapsed === undefined) {
+                    isCollapsed = false;
+                }
+                
+                const hasSelectedDoc = nodes && nodes.some(d => state.activeSource === sourceId && state.activeDocId === d.id);
+                const search = String(state.onlineDocsSearch || state.localDocsSearch || '').trim().toLowerCase();
+                if (hasSelectedDoc || search) {
+                    isCollapsed = false;
+                }
+                
+                state.docsSectionCollapsed[sourceId] = isCollapsed;
+                
+                const updateCollapsedUI = () => {
+                    chevronSpan.textContent = isCollapsed ? '▸ ' : '▾ ';
+                    contentDiv.style.display = isCollapsed ? 'none' : 'block';
+                };
+                
+                headerRow.addEventListener('click', (e) => {
+                    if (e.target.closest('button') || e.target.closest('select')) return;
+                    isCollapsed = !isCollapsed;
+                    state.docsSectionCollapsed[sourceId] = isCollapsed;
+                    updateCollapsedUI();
+                    const currentPersisted = vscode.getState() || {};
+                    vscode.setState({
+                        ...currentPersisted,
+                        docsSectionCollapsed: state.docsSectionCollapsed
+                    });
+                });
+                
+                updateCollapsedUI();
+                treePane.appendChild(headerContainer);
             });
         }
-
-        // Add separate imported docs section (only if it doesn't exist)
-        let importedSection = document.getElementById('imported-docs-list');
-        if (!importedSection) {
-            importedSection = document.createElement('div');
-            importedSection.className = 'imported-docs-section';
-            importedSection.id = 'imported-docs-list';
-            treePane.appendChild(importedSection);
+        
+        if (state._lastLocalDocsMsg) {
+            renderAntigravitySessions(state._lastLocalDocsMsg.antigravitySessions || [], state._lastLocalDocsMsg.antigravityEnabled || false);
         }
+        
+        if (state.activeDocId) {
+            const activeNode = findTreeNode(state.activeSource, state.activeDocId);
+            if (activeNode) {
+                activeNode.classList.add('selected');
+                state.selectedEl = activeNode;
+            }
+        }
+        
+        updateSyncButtonVisibility();
+    }
 
-        // Fetch imported docs on initial load
-        vscode.postMessage({ type: 'fetchImportedDocs' });
+    function rerenderUnifiedDocs() {
+        const localRoots = state._lastLocalDocsMsg ? {
+            sourceId: state._lastLocalDocsMsg.sourceId || 'local-folder',
+            nodes: state.docsWorkspaceRootFilter
+                ? (state._lastLocalDocsMsg.nodes || []).filter(n => n.metadata?.root === state.docsWorkspaceRootFilter)
+                : (state._lastLocalDocsMsg.nodes || []),
+            folderPaths: getCurrentFolderPaths(state.localFolderPathsByRoot, state.docsWorkspaceRootFilter),
+            error: state._lastLocalDocsMsg.error
+        } : null;
+        
+        const onlineRoots = state._lastOnlineDocsMsg ? (
+            state.docsWorkspaceRootFilter
+                ? (state._lastOnlineDocsMsg.roots || []).filter(r => r.workspaceRoot === state.docsWorkspaceRootFilter)
+                : (state._lastOnlineDocsMsg.roots || [])
+        ) : null;
+        
+        renderUnifiedDocs(localRoots, onlineRoots, state.enabledSources);
+    }
+
+    function applyUnifiedDocsSearchFilter() {
+        const search = String(state.localDocsSearch || '').trim().toLowerCase();
+        if (!treePane) return;
+        const nodes = treePane.querySelectorAll('.tree-node');
+        nodes.forEach(node => {
+            if (node.classList.contains('source-folder-header') || node.classList.contains('source-header')) {
+                return;
+            }
+            const name = (node.dataset.name || '').toLowerCase();
+            const label = node.querySelector('.label');
+            const text = (label ? label.textContent : '').toLowerCase();
+            const match = !search || name.includes(search) || text.includes(search);
+            if (match) {
+                node.style.display = '';
+                let parent = node.parentElement;
+                while (parent && parent !== treePane) {
+                    if (parent.classList && parent.classList.contains('tree-node')) {
+                        parent.style.display = '';
+                    }
+                    parent = parent.parentElement;
+                }
+            } else {
+                node.style.display = 'none';
+            }
+        });
     }
 
     function renderAntigravitySessions(sessions, enabled) {
         if (!treePane) { return; }
 
-        // Remove existing section
         const existing = document.getElementById('antigravity-section');
         if (existing) { existing.remove(); }
 
@@ -1553,10 +1753,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             empty.textContent = 'No sessions found in brain directory';
             section.appendChild(empty);
         } else {
-            // Sort sessions by timestamp descending (most recent first)
             const sortedSessions = [...sessions].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
-            // Group sessions by date
             const groups = new Map();
             for (const session of sortedSessions) {
                 const dateKey = new Date(session.timestamp).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
@@ -1564,7 +1762,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 groups.get(dateKey).push(session);
             }
 
-            // Render groups
             for (const [dateKey, dateSessions] of groups) {
                 const dateHeader = document.createElement('div');
                 dateHeader.className = 'antigravity-date-subheader';
@@ -1574,7 +1771,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 for (const session of dateSessions) {
                     const sessionTime = new Date(session.timestamp).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 
-                    // Artifact rows under each session
                     for (const artifact of session.artifacts) {
                         const artifactCard = renderDocCard({
                             title: artifact.name,
@@ -1608,170 +1804,27 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         treePane.appendChild(section);
     }
 
-    function renderOnlineDocs(roots, enabledSources) {
-        if (!treePaneOnline) return;
-        
-        // Clear only online pane
-        treePaneOnline.innerHTML = '';
-
-        // Re-add sidebar toggle
-        const toggleRow = document.createElement('div');
-        toggleRow.className = 'sidebar-toggle-row';
-        const toggleBtn = document.createElement('button');
-        toggleBtn.className = 'sidebar-toggle-btn';
-        toggleBtn.title = 'Toggle sidebar';
-        toggleBtn.textContent = state.docsListCollapsed ? '»' : '«';
-        toggleBtn.addEventListener('click', toggleSidebarCollapsed);
-        toggleRow.appendChild(toggleBtn);
-        treePaneOnline.appendChild(toggleRow);
-
-        if (!roots || roots.length === 0) {
-            const empty = document.createElement('div');
-            empty.className = 'empty-state';
-            empty.textContent = 'No online sources connected — configure ClickUp, Linear or Notion in Setup.';
-            treePaneOnline.appendChild(empty);
-            return;
-        }
-
-        const effectiveEnabledSources = enabledSources || {
-            clickup: true,
-            linear: true,
-            notion: true
-        };
-
-        const filteredRoots = roots.filter(({ sourceId }) => {
-            return effectiveEnabledSources[sourceId] !== false;
-        });
-
-        filteredRoots.forEach(({ sourceId, nodes }) => {
-            const headerRow = document.createElement('div');
-            headerRow.className = 'source-header-row';
-
-            const header = document.createElement('div');
-            header.className = 'source-header';
-            header.dataset.sourceId = sourceId;
-            header.textContent = SOURCE_DISPLAY_NAMES[sourceId] || sourceId;
-            headerRow.appendChild(header);
-
-            const controlsContainer = document.createElement('div');
-            controlsContainer.className = 'source-controls';
-            controlsContainer.dataset.sourceId = sourceId;
-            
-            const refreshBtn = document.createElement('button');
-            refreshBtn.className = 'source-refresh-btn';
-            refreshBtn.textContent = '↻';
-            refreshBtn.title = 'Refresh';
-            refreshBtn.addEventListener('click', () => {
-                refreshBtn.disabled = true;
-                vscode.postMessage({ type: 'refreshSource', sourceId });
-            });
-            controlsContainer.appendChild(refreshBtn);
-
-            const newBtn = document.createElement('button');
-            newBtn.className = 'source-new-btn';
-            newBtn.textContent = '+ New';
-            newBtn.title = 'Create new document';
-            newBtn.addEventListener('click', () => {
-                const activeContainer = state.activeContainers.get(sourceId);
-                vscode.postMessage({ type: 'createOnlineDocument', sourceId, parentId: activeContainer?.id });
-            });
-            controlsContainer.appendChild(newBtn);
-
-            const locationBtn = document.createElement('button');
-            locationBtn.className = 'source-location-btn';
-            locationBtn.innerHTML = '&#9881;';
-            locationBtn.title = 'Set upload location';
-            locationBtn.addEventListener('click', () => {
-                vscode.postMessage({ type: 'setUploadLocation', sourceId });
-            });
-            controlsContainer.appendChild(locationBtn);
-
-            headerRow.appendChild(controlsContainer);
-
-            treePaneOnline.appendChild(headerRow);
-            
-            const docList = document.createElement('div');
-            docList.className = 'source-doc-list';
-            docList.dataset.sourceId = sourceId;
-            treePaneOnline.appendChild(docList);
-            
-            docList.innerHTML = '<div class="tree-placeholder">Loading...</div>';
-            
-            vscode.postMessage({ type: 'fetchContainers', sourceId });
-        });
-    }
-
-    function applyOnlineDocsSearchFilter() {
-        if (!treePaneOnline) return;
-        const search = String(state.onlineDocsSearch || '').trim().toLowerCase();
-        const docLists = treePaneOnline.querySelectorAll('.source-doc-list');
-        docLists.forEach(docList => {
-            const nodes = docList.querySelectorAll('.tree-node');
-            let hasVisible = false;
-            nodes.forEach(node => {
-                const name = (node.dataset.name || '').toLowerCase();
-                const label = node.querySelector('.label');
-                const text = (label ? label.textContent : '').toLowerCase();
-                const match = !search || name.includes(search) || text.includes(search);
-                if (match) {
-                    node.style.display = '';
-                    hasVisible = true;
-                    // Show ancestor folder nodes
-                    let parent = node.parentElement;
-                    while (parent && parent !== docList) {
-                        if (parent.classList && parent.classList.contains('tree-node')) {
-                            parent.style.display = '';
-                        }
-                        parent = parent.parentElement;
-                    }
-                } else {
-                    node.style.display = 'none';
-                }
-            });
-            // Hide/show corresponding source header (previous sibling in DOM order)
-            let headerRow = docList.previousElementSibling;
-            while (headerRow && !headerRow.classList.contains('source-header-row')) {
-                headerRow = headerRow.previousElementSibling;
-            }
-            if (headerRow) {
-                headerRow.style.display = hasVisible ? '' : 'none';
-            }
-            docList.style.display = hasVisible ? '' : 'none';
-        });
-    }
-
     function handleLocalDocsReady(msg) {
         console.log('[PlanningPanel Webview] handleLocalDocsReady called:', msg);
         state._lastLocalDocsMsg = msg;
         state.localFolderPathsByRoot = msg.folderPathsByRoot || {};
         state.ticketsFolderPathsByRoot = msg.ticketsFolderPathsByRoot || {};
-        if (state.localWorkspaceRootFilter && !(msg.workspaceItems || []).some(item => item.workspaceRoot === state.localWorkspaceRootFilter)) {
-            state.localWorkspaceRootFilter = '';
+        if (state.docsWorkspaceRootFilter && !(msg.workspaceItems || []).some(item => item.workspaceRoot === state.docsWorkspaceRootFilter)) {
+            state.docsWorkspaceRootFilter = '';
         }
-        populateWorkspaceDropdown('local-workspace-filter', msg.workspaceItems || [], state.localWorkspaceRootFilter);
-        const filteredNodes = state.localWorkspaceRootFilter
-            ? (msg.nodes || []).filter(n => n.metadata?.root === state.localWorkspaceRootFilter)
-            : (msg.nodes || []);
-        renderLocalDocs({
-            sourceId: msg.sourceId || 'local-folder',
-            nodes: filteredNodes,
-            folderPaths: getCurrentFolderPaths(state.localFolderPathsByRoot, state.localWorkspaceRootFilter),
-            error: msg.error
-        });
+        populateWorkspaceDropdown('docs-workspace-filter', msg.workspaceItems || [], state.docsWorkspaceRootFilter);
+        
+        rerenderUnifiedDocs();
 
-        // Handle antigravity sessions section
         renderAntigravitySessions(msg.antigravitySessions || [], msg.antigravityEnabled || false);
 
-        // Sync toggle state
         state.antigravityEnabled = msg.antigravityEnabled || false;
         const agToggleModal = document.getElementById('antigravity-toggle-modal');
         if (agToggleModal) { agToggleModal.checked = state.antigravityEnabled; }
 
-        // Keep modal folder list and research destination dropdown in sync when docs are refreshed
         renderFolderListModal();
         populateResearchFolderSelect(getCurrentFolderPaths(state.localFolderPathsByRoot, researchWorkspaceRoot));
 
-        // Retry pending import selection if the doc just appeared
         if (state._pendingImportDocName) {
             const pendingPath = state._pendingImportDocName;
             const nodes = document.querySelectorAll('.tree-node');
@@ -1791,25 +1844,16 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
     function handleOnlineDocsReady(msg) {
         state._lastOnlineDocsMsg = msg;
-        // Stash saved filter containers for re-application after containers load
         _savedBrowseFilterContainers = msg.browseFilterContainers || {};
         state.enabledSources = msg.enabledSources || {};
 
-        // Validate workspace filter against current items
-        if (state.onlineWorkspaceRootFilter && !_workspaceItems.some(item => item.workspaceRoot === state.onlineWorkspaceRootFilter)) {
-            state.onlineWorkspaceRootFilter = '';
+        if (state.docsWorkspaceRootFilter && !_workspaceItems.some(item => item.workspaceRoot === state.docsWorkspaceRootFilter)) {
+            state.docsWorkspaceRootFilter = '';
         }
 
-        populateWorkspaceDropdown('online-workspace-filter', msg.workspaceItems || _workspaceItems, state.onlineWorkspaceRootFilter);
-        const allRoots = msg.roots || [];
-        const filteredRoots = state.onlineWorkspaceRootFilter
-            ? allRoots.filter(r => r.workspaceRoot === state.onlineWorkspaceRootFilter)
-            : allRoots;
-        renderOnlineDocs(filteredRoots, msg.enabledSources || {
-            clickup: true,
-            linear: true,
-            notion: true
-        });
+        populateWorkspaceDropdown('docs-workspace-filter', msg.workspaceItems || _workspaceItems, state.docsWorkspaceRootFilter);
+        
+        rerenderUnifiedDocs();
         updateSyncToOnlineButtonState();
     }
 
@@ -1843,13 +1887,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     function handlePreviewReady(msg) {
         const { sourceId, requestId, content, docName, pages, isAutoRefreshed, filePath, htmlContent, webviewUri, isImage } = msg;
 
-
-
         // Auto-refresh notification
         if (isAutoRefreshed) {
-            if (state.editMode.local) {
-                // Defer reload — don't clobber the editor
-                state.externalChangePending.local = true;
+            if (state.editMode.docs) {
+                state.externalChangePending.docs = true;
                 const statusLocal = document.getElementById('status');
                 if (statusLocal) {
                     statusLocal.textContent = 'File changed externally — save to overwrite or cancel to reload';
@@ -1857,17 +1898,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 }
                 return;
             }
-            if (state.editMode.online) {
-                // Defer reload — don't clobber the editor
-                state.externalChangePending.online = true;
-                const statusOnline = document.getElementById('status-online');
-                if (statusOnline) {
-                    statusOnline.textContent = 'File changed externally — save to overwrite or cancel to reload';
-                    statusOnline.style.color = 'var(--vscode-errorForeground, #ff6b6b)';
-                }
-                return;
-            }
-            const statusEl = sourceId === 'local-folder' ? document.getElementById('status') : document.getElementById('status-online');
+            const statusEl = document.getElementById('status');
             if (statusEl) {
                 const originalText = statusEl.textContent;
                 statusEl.textContent = 'Document auto-refreshed';
@@ -1882,32 +1913,27 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
 
         const isOnline = ONLINE_SOURCES.includes(sourceId);
-        const targetPreview = isOnline ? markdownPreviewOnline : markdownPreview;
-        const targetStatus = isOnline ? statusElOnline : statusEl;
-        const btnImportFullId = isOnline ? 'btn-import-full-doc-online' : 'btn-import-full-doc';
-
-        const btnImportFullDoc = document.getElementById(btnImportFullId);
-        const btnEditLocal = document.getElementById('btn-edit-local');
-        const btnEditOnline = document.getElementById('btn-edit-online');
+        const targetPreview = markdownPreview;
+        const targetStatus = statusEl;
+        const btnImportFullDoc = document.getElementById('btn-import-full-doc');
+        const btnEdit = document.getElementById('btn-edit');
 
         if (sourceId === 'local-folder' || sourceId === 'antigravity') {
             state.activeDocFilePath = filePath || null;
-            if (btnEditLocal) btnEditLocal.disabled = false;
-            if (btnEditOnline) btnEditOnline.disabled = true;
+            if (btnEdit) btnEdit.disabled = false;
             if (btnImportFullDoc) {
                 btnImportFullDoc.style.display = 'none';
                 btnImportFullDoc.disabled = true;
             }
         } else {
             state.activeDocFilePath = filePath || null;
-            if (btnEditLocal) btnEditLocal.disabled = true;
             const isImported = state.importedDocs.has(state.activeDocId);
-            if (btnEditOnline) {
-                btnEditOnline.disabled = !isImported;
+            if (btnEdit) {
+                btnEdit.disabled = !isImported;
                 if (!isImported) {
-                    btnEditOnline.title = 'Import this document first to edit';
+                    btnEdit.title = 'Import this document first to edit';
                 } else {
-                    btnEditOnline.title = 'Edit document content';
+                    btnEdit.title = 'Edit document content';
                 }
             }
             if (btnImportFullDoc) {
@@ -1969,23 +1995,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             return;
         }
 
-        // If the user is actively editing this doc, don't clobber activeDocContent or the
-        // rendered preview — the edit-mode conflict detection baseline (editOriginalContent.local)
-        // was captured at edit-mode entry and must remain stable. On auto-refresh, just notify.
-        if (state.editMode.local && !isOnline) {
+        if (state.editMode.docs) {
             if (msg.isAutoRefreshed) {
                 const statusEl2 = document.getElementById('status');
-                if (statusEl2) {
-                    statusEl2.textContent = 'File changed externally — save to overwrite or cancel to reload';
-                    statusEl2.style.color = 'var(--vscode-editorWarning-foreground, #cca700)';
-                    setTimeout(() => { statusEl2.textContent = ''; statusEl2.style.color = ''; }, 5000);
-                }
-            }
-            return;
-        }
-        if (state.editMode.online && isOnline) {
-            if (msg.isAutoRefreshed) {
-                const statusEl2 = document.getElementById('status-online');
                 if (statusEl2) {
                     statusEl2.textContent = 'File changed externally — save to overwrite or cancel to reload';
                     statusEl2.style.color = 'var(--vscode-editorWarning-foreground, #cca700)';
@@ -2215,17 +2227,15 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         } else if (folderPath) {
             state.localFolderPathsByRoot[targetRoot] = [folderPath];
         }
-        const currentPaths = getCurrentFolderPaths(state.localFolderPathsByRoot, state.localWorkspaceRootFilter);
+        const currentPaths = getCurrentFolderPaths(state.localFolderPathsByRoot, state.docsWorkspaceRootFilter);
         renderFolderList(currentPaths);
         renderFolderListModal();
         populateResearchFolderSelect(getCurrentFolderPaths(state.localFolderPathsByRoot, researchWorkspaceRoot));
 
-        // Delegate to renderLocalDocs to ensure consistent source-folder grouping
-        renderLocalDocs({
-            sourceId: 'local-folder',
-            nodes: nodes || [],
-            folderPaths: currentPaths
-        });
+        if (state._lastLocalDocsMsg) {
+            state._lastLocalDocsMsg.nodes = nodes || [];
+        }
+        rerenderUnifiedDocs();
     }
 
     function populateResearchFolderSelect(paths) {
@@ -2533,8 +2543,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
         // If the currently-previewed online doc just became imported, enable inline Edit
         // (covers the first-time import race where importedDocsReady lands after previewReady).
-        const btnEditOnlineRefresh = document.getElementById('btn-edit-online');
-        if (btnEditOnlineRefresh && getActiveTabName() === 'online' && state.activeDocId && state.importedDocs.has(state.activeDocId)) {
+        const btnEditOnlineRefresh = document.getElementById('btn-edit');
+        if (btnEditOnlineRefresh && getActiveTabName() === 'docs' && state.activeDocId && state.importedDocs.has(state.activeDocId)) {
             btnEditOnlineRefresh.disabled = false;
             btnEditOnlineRefresh.title = 'Edit document content';
         }
@@ -2667,25 +2677,15 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 }
                 _restoredPanelState.panel['notebook.root'] = notebookWorkspaceRoot;
 
-                // Restore Local Docs workspace filter
-                const restoredLocalRoot = _restoredPanelState.panel['localDocs.root'] || '';
-                if (_workspaceItems.length === 0 || restoredLocalRoot === '' || _workspaceItems.some(item => item.workspaceRoot === restoredLocalRoot)) {
-                    state.localWorkspaceRootFilter = restoredLocalRoot;
+                // Restore Docs workspace filter
+                const restoredDocsRoot = _restoredPanelState.panel['docs.root'] || '';
+                if (_workspaceItems.length === 0 || restoredDocsRoot === '' || _workspaceItems.some(item => item.workspaceRoot === restoredDocsRoot)) {
+                    state.docsWorkspaceRootFilter = restoredDocsRoot;
                 } else {
-                    state.localWorkspaceRootFilter = '';
+                    state.docsWorkspaceRootFilter = '';
                 }
-                const localDropdown = document.getElementById('local-workspace-filter');
-                if (localDropdown) localDropdown.value = state.localWorkspaceRootFilter;
-
-                // Restore Online Docs workspace filter
-                const restoredOnlineRoot = _restoredPanelState.panel['onlineDocs.root'] || '';
-                if (_workspaceItems.length === 0 || restoredOnlineRoot === '' || _workspaceItems.some(item => item.workspaceRoot === restoredOnlineRoot)) {
-                    state.onlineWorkspaceRootFilter = restoredOnlineRoot;
-                } else {
-                    state.onlineWorkspaceRootFilter = '';
-                }
-                const onlineDropdown = document.getElementById('online-workspace-filter');
-                if (onlineDropdown) onlineDropdown.value = state.onlineWorkspaceRootFilter;
+                const docsDropdown = document.getElementById('docs-workspace-filter');
+                if (docsDropdown) docsDropdown.value = state.docsWorkspaceRootFilter;
 
                 // Restore Kanban filters
                 const restoredKanbanRoot = _restoredPanelState.panel['kanban.root'] || '';
@@ -2904,21 +2904,22 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 break;
             case 'saveOnlineDocFileResult': {
                 const { success, error } = msg;
-                const textarea = document.getElementById('markdown-editor-online');
+                const textarea = document.getElementById('markdown-editor') || document.getElementById('markdown-editor-online');
                 if (success) {
                     state.activeDocContent = textarea ? textarea.value : '';
+                    exitEditMode('docs', true);
                     exitEditMode('online', true);
                     if (markdownPreviewOnline) {
                         markdownPreviewOnline.innerHTML = renderMarkdown(state.activeDocContent);
                     }
-                    const statusOnline = document.getElementById('status-online');
+                    const statusOnline = document.getElementById('status') || document.getElementById('status-online');
                     if (statusOnline) {
                         statusOnline.textContent = 'Saved successfully';
                         statusOnline.style.color = 'var(--accent-teal)';
                         setTimeout(() => { statusOnline.textContent = ''; statusOnline.style.color = ''; }, 2000);
                     }
                 } else {
-                    const statusOnline = document.getElementById('status-online');
+                    const statusOnline = document.getElementById('status') || document.getElementById('status-online');
                     if (statusOnline) {
                         statusOnline.textContent = `Save failed: ${error || 'Unknown error'}`;
                         statusOnline.style.color = 'var(--vscode-errorForeground, #ff6b6b)';
@@ -3504,12 +3505,12 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 break;
             case 'saveFileContentResult': {
                 const { success, conflict, diskContent, error, tab } = msg;
-                const textarea = document.getElementById(tab === 'local' ? 'markdown-editor-local' : (tab === 'design' ? 'markdown-editor-design' : 'kanban-editor'));
+                const textarea = document.getElementById(tab === 'docs' ? 'markdown-editor' : (tab === 'local' ? 'markdown-editor-local' : (tab === 'design' ? 'markdown-editor-design' : 'kanban-editor')));
                 
                 if (success) {
-                    if (tab === 'local') {
+                    if (tab === 'local' || tab === 'docs') {
                         state.activeDocContent = textarea.value;
-                        exitEditMode('local', true);
+                        exitEditMode(tab, true);
                         markdownPreview.innerHTML = renderMarkdown(state.activeDocContent);
                         const statusLocal = document.getElementById('status');
                         if (statusLocal) {
@@ -5081,19 +5082,24 @@ Return ONLY the drafted prompt with no additional commentary.`;
         if (tab === 'kanban' && state.reviewMode.kanban) {
             exitReviewMode('kanban', true);
         }
-        const previewPane = tab === 'local' ? document.getElementById('preview-pane') : 
+        const previewPane = tab === 'docs' ? document.getElementById('preview-pane') : 
+                            (tab === 'local' ? document.getElementById('preview-pane') : 
                             (tab === 'design' ? document.getElementById('preview-pane-design') : 
                             (tab === 'online' ? document.getElementById('preview-pane-online') : 
-                            document.getElementById('kanban-preview-pane')));
-        const textarea = document.getElementById(tab === 'local' ? 'markdown-editor-local' : 
+                            document.getElementById('kanban-preview-pane'))));
+        const textarea = document.getElementById(tab === 'docs' ? 'markdown-editor' : 
+                         (tab === 'local' ? 'markdown-editor-local' : 
                          (tab === 'design' ? 'markdown-editor-design' : 
                          (tab === 'online' ? 'markdown-editor-online' : 
-                         'kanban-editor')));
+                         'kanban-editor'))));
 
         if (!previewPane || !textarea) return;
 
         let content = '';
-        if (tab === 'local' || tab === 'online') {
+        if (tab === 'docs') {
+            content = state.activeDocContent || '';
+            state.editOriginalContent.docs = content;
+        } else if (tab === 'local' || tab === 'online') {
             content = state.activeDocContent || '';
             state.editOriginalContent[tab] = content;
         } else {
@@ -5103,9 +5109,9 @@ Return ONLY the drafted prompt with no additional commentary.`;
         textarea.value = content;
         previewPane.classList.add('edit-mode');
 
-        const btnEdit = document.getElementById(tab === 'local' ? 'btn-edit-local' : (tab === 'online' ? 'btn-edit-online' : 'btn-edit-kanban'));
-        const btnSave = document.getElementById(tab === 'local' ? 'btn-save-local' : (tab === 'online' ? 'btn-save-online' : 'btn-save-kanban'));
-        const btnCancel = document.getElementById(tab === 'local' ? 'btn-cancel-local' : (tab === 'online' ? 'btn-cancel-online' : 'btn-cancel-kanban'));
+        const btnEdit = document.getElementById(tab === 'docs' ? 'btn-edit' : (tab === 'local' ? 'btn-edit-local' : (tab === 'online' ? 'btn-edit-online' : 'btn-edit-kanban')));
+        const btnSave = document.getElementById(tab === 'docs' ? 'btn-save' : (tab === 'local' ? 'btn-save-local' : (tab === 'online' ? 'btn-save-online' : 'btn-save-kanban')));
+        const btnCancel = document.getElementById(tab === 'docs' ? 'btn-cancel' : (tab === 'local' ? 'btn-cancel-local' : (tab === 'online' ? 'btn-cancel-online' : 'btn-cancel-kanban')));
 
         if (btnEdit) btnEdit.style.display = 'none';
         if (btnSave) btnSave.style.display = '';
@@ -5118,16 +5124,17 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function exitEditMode(tab, discard) {
         // No confirmation needed; proceed with exit
 
-        const previewPane = tab === 'local' ? document.getElementById('preview-pane') : 
+        const previewPane = tab === 'docs' ? document.getElementById('preview-pane') :
+                            (tab === 'local' ? document.getElementById('preview-pane') : 
                             (tab === 'online' ? document.getElementById('preview-pane-online') : 
-                            document.getElementById('kanban-preview-pane'));
+                            document.getElementById('kanban-preview-pane')));
         if (previewPane) {
             previewPane.classList.remove('edit-mode');
         }
 
-        const btnEdit = document.getElementById(tab === 'local' ? 'btn-edit-local' : (tab === 'online' ? 'btn-edit-online' : 'btn-edit-kanban'));
-        const btnSave = document.getElementById(tab === 'local' ? 'btn-save-local' : (tab === 'online' ? 'btn-save-online' : 'btn-save-kanban'));
-        const btnCancel = document.getElementById(tab === 'local' ? 'btn-cancel-local' : (tab === 'online' ? 'btn-cancel-online' : 'btn-cancel-kanban'));
+        const btnEdit = document.getElementById(tab === 'docs' ? 'btn-edit' : (tab === 'local' ? 'btn-edit-local' : (tab === 'online' ? 'btn-edit-online' : 'btn-edit-kanban')));
+        const btnSave = document.getElementById(tab === 'docs' ? 'btn-save' : (tab === 'local' ? 'btn-save-local' : (tab === 'online' ? 'btn-save-online' : 'btn-save-kanban')));
+        const btnCancel = document.getElementById(tab === 'docs' ? 'btn-cancel' : (tab === 'local' ? 'btn-cancel-local' : (tab === 'online' ? 'btn-cancel-online' : 'btn-cancel-kanban')));
 
         if (btnEdit) btnEdit.style.display = '';
         if (btnSave) btnSave.style.display = 'none';
@@ -5146,6 +5153,23 @@ Return ONLY the drafted prompt with no additional commentary.`;
                     filePath: _kanbanSelectedPlan.planFile,
                     requestId: _kanbanPreviewRequestId
                 });
+            } else if (tab === 'docs') {
+                if (state.activeSource === 'local-folder') {
+                    const lastSlash = state.activeDocFilePath ? Math.max(state.activeDocFilePath.lastIndexOf('/'), state.activeDocFilePath.lastIndexOf('\\')) : -1;
+                    vscode.postMessage({
+                        type: 'fetchPreview',
+                        sourceId: state.activeSource,
+                        docId: state.activeDocId,
+                        requestId: ++state.previewRequestId,
+                        sourceFolder: state.activeDocFilePath ? state.activeDocFilePath.substring(0, lastSlash) : undefined
+                    });
+                } else {
+                    vscode.postMessage({
+                        type: 'fetchDocsFile',
+                        slugPrefix: resolveActiveOnlineSlugPrefix(),
+                        requestId: ++state.previewRequestId
+                    });
+                }
             } else if (tab === 'local') {
                 if (state.activeSource === 'local-folder') {
                     const lastSlash = state.activeDocFilePath ? Math.max(state.activeDocFilePath.lastIndexOf('/'), state.activeDocFilePath.lastIndexOf('\\')) : -1;
@@ -5176,66 +5200,47 @@ Return ONLY the drafted prompt with no additional commentary.`;
     }
 
     // Wire up edit buttons
-    const btnEditLocal = document.getElementById('btn-edit-local');
-    const btnSaveLocal = document.getElementById('btn-save-local');
-    const btnCancelLocal = document.getElementById('btn-cancel-local');
-    const markdownEditorLocal = document.getElementById('markdown-editor-local');
+    const btnEditDocs = document.getElementById('btn-edit');
+    const btnSaveDocs = document.getElementById('btn-save');
+    const btnCancelDocs = document.getElementById('btn-cancel');
+    const markdownEditorDocs = document.getElementById('markdown-editor');
 
-    const btnEditOnline = document.getElementById('btn-edit-online');
-    const btnSaveOnline = document.getElementById('btn-save-online');
-    const btnCancelOnline = document.getElementById('btn-cancel-online');
-    const markdownEditorOnline = document.getElementById('markdown-editor-online');
-
-    if (btnEditOnline) {
-        btnEditOnline.addEventListener('click', () => enterEditMode('online'));
+    if (btnEditDocs) {
+        btnEditDocs.addEventListener('click', () => enterEditMode('docs'));
     }
-    if (btnSaveOnline) {
-        btnSaveOnline.addEventListener('click', () => {
-            const content = markdownEditorOnline ? markdownEditorOnline.value : '';
-            vscode.postMessage({
-                type: 'saveOnlineDocFile',
-                slugPrefix: resolveActiveOnlineSlugPrefix(),
-                content
-            });
-        });
-    }
-    if (btnCancelOnline) {
-        btnCancelOnline.addEventListener('click', () => exitEditMode('online', false));
-    }
-    if (markdownEditorOnline) {
-        markdownEditorOnline.addEventListener('input', () => {
-            state.dirtyFlags.online = true;
-        });
-        setupTextareaTabInterceptor(markdownEditorOnline);
-    }
-
-    if (btnEditLocal) {
-        btnEditLocal.addEventListener('click', () => enterEditMode('local'));
-    }
-    if (btnSaveLocal) {
-        btnSaveLocal.addEventListener('click', () => {
-            const filePath = state.activeDocFilePath;
-            const content = markdownEditorLocal ? markdownEditorLocal.value : '';
-            const originalContent = state.editOriginalContent.local;
-            if (filePath) {
+    if (btnSaveDocs) {
+        btnSaveDocs.addEventListener('click', () => {
+            const isLocalOnly = !ONLINE_SOURCES.includes(state.activeSource);
+            const content = markdownEditorDocs ? markdownEditorDocs.value : '';
+            if (isLocalOnly) {
+                const filePath = state.activeDocFilePath;
+                const originalContent = state.editOriginalContent.docs;
+                if (filePath) {
+                    vscode.postMessage({
+                        type: 'saveFileContent',
+                        filePath,
+                        content,
+                        originalContent,
+                        tab: 'docs'
+                    });
+                }
+            } else {
                 vscode.postMessage({
-                    type: 'saveFileContent',
-                    filePath,
-                    content,
-                    originalContent,
-                    tab: 'local'
+                    type: 'saveOnlineDocFile',
+                    slugPrefix: resolveActiveOnlineSlugPrefix(),
+                    content
                 });
             }
         });
     }
-    if (btnCancelLocal) {
-        btnCancelLocal.addEventListener('click', () => exitEditMode('local', false));
+    if (btnCancelDocs) {
+        btnCancelDocs.addEventListener('click', () => exitEditMode('docs', false));
     }
-    if (markdownEditorLocal) {
-        markdownEditorLocal.addEventListener('input', () => {
-            state.dirtyFlags.local = true;
+    if (markdownEditorDocs) {
+        markdownEditorDocs.addEventListener('input', () => {
+            state.dirtyFlags.docs = true;
         });
-        setupTextareaTabInterceptor(markdownEditorLocal);
+        setupTextareaTabInterceptor(markdownEditorDocs);
     }
 
     const btnEditKanban = document.getElementById('btn-edit-kanban');
@@ -5371,13 +5376,13 @@ Return ONLY the drafted prompt with no additional commentary.`;
     document.getElementById('btn-add-folder-modal').addEventListener('click', () => {
         let workspaceRoot;
         if (folderModalScope === 'tickets') {
-            workspaceRoot = state.localWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '';
+            workspaceRoot = state.docsWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '';
             vscode.postMessage({ type: 'addTicketsFolder', workspaceRoot });
         } else if (folderModalScope === 'research') {
             workspaceRoot = researchWorkspaceRoot || _workspaceItems[0]?.workspaceRoot || '';
             vscode.postMessage({ type: 'addLocalFolder', workspaceRoot });
         } else {
-            workspaceRoot = state.localWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '';
+            workspaceRoot = state.docsWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '';
             vscode.postMessage({ type: 'addLocalFolder', workspaceRoot });
         }
     });
