@@ -1062,6 +1062,42 @@ export class PlanningPanelProvider {
         return [path.join(baseDir, providerDir)];
     }
 
+    // Resolve a ticket's real on-disk file path by scanning for its
+    // `${provider}_${id}_` prefix. Mirrors TaskViewerProvider._findTicketDocument:
+    // tickets import into nested folder hierarchies that can't be reconstructed
+    // from live space/folder/list names, so we scan rather than build a flat path.
+    private _findTicketFilePath(resolvedRoot: string, provider: string, id: string): string | null {
+        const prefix = `${provider}_${id}_`;
+        const baseDirs: string[] = [];
+        try {
+            const localFolderService = new LocalFolderService(resolvedRoot);
+            for (const f of localFolderService.getTicketsFolderPaths()) {
+                if (f) { baseDirs.push(path.join(f, provider)); }
+            }
+        } catch { /* ignore */ }
+        baseDirs.push(path.join(resolvedRoot, '.switchboard', 'tickets', provider));
+        for (const dir of baseDirs) {
+            const found = this._scanForTicketFile(dir, prefix);
+            if (found) { return found; }
+        }
+        return null;
+    }
+
+    private _scanForTicketFile(dir: string, prefix: string): string | null {
+        let entries: import('fs').Dirent[];
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
+        for (const entry of entries) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                const found = this._scanForTicketFile(full, prefix);
+                if (found) { return found; }
+            } else if (entry.isFile() && entry.name.startsWith(prefix) && entry.name.endsWith('.md')) {
+                return full;
+            }
+        }
+        return null;
+    }
+
     private _mapClickUpTaskToSidebar(task: any): any {
         return {
             id: task.id,
@@ -3532,10 +3568,14 @@ export class PlanningPanelProvider {
                 const paths: string[] = [];
                 if (workspaceRoot) {
                     if (Array.isArray(msg.ticketIds) && msg.ticketIds.length > 0) {
+                        const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
                         for (const id of msg.ticketIds) {
                             if (typeof id === 'string' && id && !id.includes('/') && !id.includes('\\') && !id.includes('..')) {
-                                const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
-                                paths.push(path.join(workspaceRoot, '.switchboard', 'tickets', providerDir, `${id}.md`));
+                                // Ticket files are named `${provider}_${id}_<slug>.md` and live in
+                                // nested hierarchies (team/project/sprint), so resolve the real path
+                                // by prefix scan rather than reconstructing a flat path.
+                                const filePath = this._findTicketFilePath(workspaceRoot, providerDir, id);
+                                if (filePath) { paths.push(filePath); }
                             }
                         }
                     } else {

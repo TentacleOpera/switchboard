@@ -106,3 +106,7 @@ Key risks: malformed or unexpected `ticketIds` values could produce invalid or e
 ---
 
 **Recommendation:** Send to Intern
+
+## Review Findings
+
+CRITICAL: the plan's path scheme `tickets/{provider}/{id}.md` was factually wrong — ticket files are named `${provider}_${id}_<slug>.md` and live in nested folder hierarchies (team/project/sprint), as the canonical `TaskViewerProvider._findTicketDocument` explicitly warns. The implementation faithfully built flat paths that never resolve, so the feature copied broken links. Fixed in `PlanningPanelProvider.ts`: added `_findTicketFilePath`/`_scanForTicketFile` (recursive prefix scan mirroring the canonical resolver) and the `copyToClipboard` handler now resolves real on-disk paths per filtered ID (sanitization + legacy folder fallback preserved). Frontend (`planning.js:5546-5561`) was correct: filtered getters supply `.id` values matching the filename prefix. Validation: static review only (compile/tests skipped per directive); behavior note — not-yet-imported tickets have no file and are silently skipped, since their real paths are non-deterministic and cannot be pre-constructed.

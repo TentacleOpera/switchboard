@@ -107,3 +107,7 @@ if (effectiveRoot !== workspaceRoot) {
 ## Recommendation
 
 **Send to Intern**
+
+## Review Findings
+
+Implementation matches the plan exactly: `_handlePlanFile` now resolves `effectiveRoot` via `resolveEffectiveWorkspaceRootFromMappings` before the `_currentProjects.get` lookup (`GlobalPlanWatcherService.ts:495-499`), with the symmetric debug log. All `_currentProjects` reads/writes now key consistently on the effective root (L63, L65, L499), so the storage/lookup key divergence is closed. No fixes required. Validation: static review only — compilation and tests skipped per session directive; no callers of `_handlePlanFile` were affected (signature unchanged). Remaining risk: the unmitigated stale-read race on rapid project switching, already accepted in the plan as transient.

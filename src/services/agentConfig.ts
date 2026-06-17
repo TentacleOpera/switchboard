@@ -34,6 +34,10 @@ export interface CustomAgentAddons {
     designSystemDocLink?: string;
     designSystemDocContent?: string;
 
+    // Constitution
+    constitutionContent?: string;
+    constitutionLink?: string;
+
     // Workflow
     workflowFilePathEnabled?: boolean;
     workflowFilePath?: string;
@@ -200,6 +204,11 @@ export function parseCustomAgentAddons(raw: unknown): CustomAgentAddons | undefi
     if (s.designSystemDocContent) {
         const content = String(s.designSystemDocContent).trim();
         a.designSystemDocContent = content.length > 50000 ? content.slice(0, 50000) + '\n[TRUNCATED]' : content;
+    }
+    if (s.constitutionLink && typeof s.constitutionLink === 'string') a.constitutionLink = s.constitutionLink.trim();
+    if (s.constitutionContent && typeof s.constitutionContent === 'string') {
+        const content = s.constitutionContent.trim();
+        a.constitutionContent = content.length > 50000 ? content.slice(0, 50000) + '\n[TRUNCATED]' : content;
     }
     if (s.workflowFilePathEnabled === true) a.workflowFilePathEnabled = true;
     if (typeof s.workflowFilePath === 'string' && s.workflowFilePath.trim()) a.workflowFilePath = s.workflowFilePath.trim();
