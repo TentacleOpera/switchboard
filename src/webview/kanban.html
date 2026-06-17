@@ -4991,8 +4991,8 @@
                            style="font-family:monospace; font-size:10px; cursor:pointer; padding:1px 5px; background:var(--badge-bg, #333); border-radius:3px; margin-left:5px;">
                          ${escapeHtml(linkedWorktree.branch)}
                        </span>`
-                    : ` <button class="btn-icon" title="Create Worktree for this epic"
-                           onclick="postKanbanMessage({type:'createWorktreeForEpic', epicId:'${escapeAttr(card.planId)}', epicTopic:'${escapeAttr(card.topic)}', workspaceRoot:currentWorkspaceRoot})"
+                    : ` <button class="card-btn icon-btn" title="Create Worktree for this epic"
+                           onclick="postKanbanMessage({type:'createWorktreeForEpic', epicId:'${escapeAttr(card.planId)}', epicTopic:'${escapeAttr(card.topic)}', workspaceRoot:'${escapeAttr(card.workspaceRoot || currentWorkspaceRoot)}'})"
                            style="opacity:0.6; font-size:10px; cursor:pointer; background:none; border:none; color:inherit; padding: 2px 4px; margin-left: 5px;">⎇</button>`;
             }
             const completeOrDoneBtn = isCompleted

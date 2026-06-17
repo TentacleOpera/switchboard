@@ -7798,6 +7798,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     case 'openSetupPanel':
                         vscode.commands.executeCommand('switchboard.openSetupPanel', data.section);
                         break;
+                    case 'openProjectPanel':
+                        vscode.commands.executeCommand('switchboard.openProjectPanel');
+                        break;
                     case 'linearLoadProject': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
                         if (!workspaceRoot) {

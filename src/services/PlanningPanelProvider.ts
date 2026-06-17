@@ -72,6 +72,8 @@ export class PlanningPanelProvider {
     private _kanbanPlansWatchers: vscode.FileSystemWatcher[] = [];
     private _kanbanPlansWatchDebounce: NodeJS.Timeout | undefined;
     private _ticketsAutoSyncWatchers: Map<string, vscode.FileSystemWatcher> = new Map();
+    private _ticketsViewWatcher: vscode.FileSystemWatcher | undefined;
+    private _ticketsViewWatcherDebounces: Map<string, NodeJS.Timeout> = new Map();
     private _ticketsAutoSyncDebounces: Map<string, NodeJS.Timeout> = new Map();
     private _lastPanelWriteTimestamp: number = 0;
     private _isAutoRefreshing: boolean = false;
@@ -1219,6 +1221,7 @@ export class PlanningPanelProvider {
                         const localService = this._getLocalFolderService(root);
                         const ticketsAutoSync = localService.getTicketsAutoSync();
                         if (provider) { this._updateTicketsAutoSyncWatcher(root, ticketsAutoSync); }
+                        this._setupTicketsViewWatcher(root);
                         this._panel?.webview.postMessage({
                             type: 'integrationProviderPreference',
                             provider,
@@ -5436,6 +5439,47 @@ export class PlanningPanelProvider {
             }
         }
         return null;
+    }
+
+    private _setupTicketsViewWatcher(workspaceRoot: string): void {
+        if (this._ticketsViewWatcher) {
+            try { this._ticketsViewWatcher.dispose(); } catch { }
+            this._ticketsViewWatcher = undefined;
+        }
+        for (const t of this._ticketsViewWatcherDebounces.values()) { clearTimeout(t); }
+        this._ticketsViewWatcherDebounces.clear();
+
+        const localService = this._getLocalFolderService(workspaceRoot);
+        const ticketsFolder = localService.getTicketsFolderPath?.() || undefined;
+        const watchGlob = ticketsFolder
+            ? new vscode.RelativePattern(ticketsFolder, '**/*.md')
+            : new vscode.RelativePattern(workspaceRoot, '.switchboard/tickets/**/*.md');
+
+        const watcher = vscode.workspace.createFileSystemWatcher(watchGlob, true, false, true);
+        watcher.onDidChange((uri) => {
+            const fileName = path.basename(uri.fsPath);
+            const match = fileName.match(/^(linear|clickup)_([^_]+)_.*\.md$/);
+            if (!match) { return; }
+            const [, provider, id] = match;
+
+            const key = uri.fsPath;
+            const existing = this._ticketsViewWatcherDebounces.get(key);
+            if (existing) { clearTimeout(existing); }
+            this._ticketsViewWatcherDebounces.set(key, setTimeout(() => {
+                this._ticketsViewWatcherDebounces.delete(key);
+                try {
+                    const nfs = require('fs') as typeof import('fs');
+                    const raw = nfs.readFileSync(uri.fsPath, 'utf8');
+                    const content = raw.replace(/^---\n[\s\S]*?\n---\n?/, '').trim();
+                    const h1 = content.match(/^#\s+(.+)$/m);
+                    const title = h1 ? h1[1].trim() : id;
+                    this._panel?.webview.postMessage({ type: 'ticketFileChanged', provider, id, title, content });
+                } catch { }
+            }, 300));
+        });
+
+        this._ticketsViewWatcher = watcher;
+        this._disposables.push(watcher);
     }
 
     private _updateTicketsAutoSyncWatcher(workspaceRoot: string, enabled: boolean): void {

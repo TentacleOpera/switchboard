@@ -127,7 +127,6 @@
     let lastIntegrationProvider = null;
     let ticketsWorkspaceRoot = '';
     let ticketsAutoSync = false;
-    let ticketsLocalCacheMode = false;
     let _pendingRefreshImport = false;
     let researchWorkspaceRoot = '';
     let folderModalScope = 'local';
@@ -2975,7 +2974,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             case 'localTicketFilesListed': {
                 const localProvider = msg.provider || lastIntegrationProvider;
                 const tickets = msg.tickets || [];
-                ticketsLocalCacheMode = true;
                 ticketsLoadedOnce = true;
                 if (localProvider === 'clickup') {
                     clickUpProjectIssues = tickets.map(t => ({
@@ -2998,8 +2996,14 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 break;
             }
             case 'localTicketFileRead': {
-                if (!msg.success) { break; }
-                const rendered = renderMarkdown(msg.content || '');
+                if (!msg.success) {
+                    // No local file — fall back to live API fetch
+                    if (msg.provider === 'clickup') loadClickUpTaskDetails(msg.id);
+                    else loadLinearTaskDetails(msg.id);
+                    break;
+                }
+                // Strip leading H1 — the render function always prepends <h1>title</h1> itself
+                const rendered = renderMarkdown((msg.content || '').replace(/^#[^\n]*\n?/, ''));
                 if (msg.provider === 'clickup') {
                     selectedClickUpIssue = {
                         task: { id: msg.id, title: msg.title, name: msg.title, status: '', assignees: [] },
@@ -3018,6 +3022,39 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 renderTicketsTab();
                 break;
             }
+            case 'ticketFileChanged': {
+                const changedId = msg.id;
+                const changedProvider = msg.provider;
+                const isCurrentClickUp = changedProvider === 'clickup' && selectedClickUpIssue?.task?.id === changedId;
+                const isCurrentLinear = changedProvider === 'linear' && selectedLinearIssue?.issue?.id === changedId;
+                if (isCurrentClickUp || isCurrentLinear) {
+                    const rendered = renderMarkdown((msg.content || '').replace(/^#[^\n]*\n?/, ''));
+                    if (isCurrentClickUp) {
+                        selectedClickUpIssue = { ...selectedClickUpIssue, renderedDescriptionHtml: rendered };
+                        clickUpTaskDetailCache.set(changedId, selectedClickUpIssue);
+                    } else {
+                        selectedLinearIssue = { ...selectedLinearIssue, renderedDescriptionHtml: rendered };
+                        linearIssueDetailCache.set(changedId, selectedLinearIssue);
+                    }
+                    renderTicketsTab();
+                }
+                // Always update cache so next click shows fresh content
+                const changedRendered = renderMarkdown((msg.content || '').replace(/^#[^\n]*\n?/, ''));
+                if (changedProvider === 'clickup') {
+                    const existing = clickUpTaskDetailCache.get(changedId);
+                    clickUpTaskDetailCache.set(changedId, {
+                        ...(existing || { task: { id: changedId, title: msg.title, name: msg.title, status: '', assignees: [] }, subtasks: [], comments: [], attachments: [] }),
+                        renderedDescriptionHtml: changedRendered
+                    });
+                } else {
+                    const existing = linearIssueDetailCache.get(changedId);
+                    linearIssueDetailCache.set(changedId, {
+                        ...(existing || { issue: { id: changedId, title: msg.title, state: { name: '' }, assignee: null }, subtasks: [], comments: [], attachments: [] }),
+                        renderedDescriptionHtml: changedRendered
+                    });
+                }
+                break;
+            }
             case 'editTicketResult':
                 setTicketsLoadingState(false);
                 if (!msg.success) {
@@ -3028,14 +3065,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 break;
             case 'pushTicketResult':
                 setTicketsLoadingState(false);
-                if (msg.success) {
-                    showTicketsStatus('Pushed ✓', false);
-                    if (lastIntegrationProvider === 'linear') {
-                        loadLinearTaskDetails(msg.id);
-                    } else {
-                        loadClickUpTaskDetails(msg.id);
-                    }
-                } else {
+                if (!msg.success) {
                     showTicketsStatus(msg.error || 'Failed to push edits', true);
                 }
                 break;
@@ -3385,7 +3415,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     _restoredLinearProjectPickerValue = '';
                 }
                 renderTicketsTab();
-                if ((ticketsAutoSync || _pendingRefreshImport) && linearProjectPickerValue) {
+                if (ticketsAutoSync && linearProjectPickerValue) {
                     _pendingRefreshImport = false;
                     vscode.postMessage({
                         type: 'importAllTickets',
@@ -3503,7 +3533,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 clickUpProjectHasMore = msg.hasMore || false;
                 ticketsLoadedOnce = true;
                 renderTicketsTab();
-                if ((ticketsAutoSync || _pendingRefreshImport) && clickUpSelectedListId) {
+                if (ticketsAutoSync && clickUpSelectedListId) {
                     _pendingRefreshImport = false;
                     vscode.postMessage({
                         type: 'importAllTickets',
@@ -5305,10 +5335,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         // Refresh button — re-fetches online view
         refreshButton?.addEventListener('click', () => {
-            ticketsLocalCacheMode = false;
             linearIssueDetailCache.clear();
             clickUpTaskDetailCache.clear();
-            _pendingRefreshImport = true;
             if (lastIntegrationProvider === 'linear') {
                 loadLinearProject(true);
             } else if (lastIntegrationProvider === 'clickup') {
@@ -5399,19 +5427,15 @@ Return ONLY the drafted prompt with no additional commentary.`;
                     if (linearIssueDetailCache.has(linearId)) {
                         selectedLinearIssue = linearIssueDetailCache.get(linearId);
                         renderTicketsLinearPanel();
-                    } else if (ticketsLocalCacheMode) {
-                        vscode.postMessage({ type: 'readLocalTicketFile', provider: 'linear', id: linearId, workspaceRoot: ticketsWorkspaceRoot });
                     } else {
-                        loadLinearTaskDetails(linearId);
+                        vscode.postMessage({ type: 'readLocalTicketFile', provider: 'linear', id: linearId, workspaceRoot: ticketsWorkspaceRoot });
                     }
                 } else if (clickUpId) {
                     if (clickUpTaskDetailCache.has(clickUpId)) {
                         selectedClickUpIssue = clickUpTaskDetailCache.get(clickUpId);
                         renderTicketsClickUpPanel();
-                    } else if (ticketsLocalCacheMode) {
-                        vscode.postMessage({ type: 'readLocalTicketFile', provider: 'clickup', id: clickUpId, workspaceRoot: ticketsWorkspaceRoot });
                     } else {
-                        loadClickUpTaskDetails(clickUpId);
+                        vscode.postMessage({ type: 'readLocalTicketFile', provider: 'clickup', id: clickUpId, workspaceRoot: ticketsWorkspaceRoot });
                     }
                 }
             }
@@ -5899,26 +5923,11 @@ Return ONLY the drafted prompt with no additional commentary.`;
         const importAsPlansBtn = document.getElementById('tickets-import-all-kanban');
         if (importAsPlansBtn) importAsPlansBtn.style.display = clickUpSelectedListId ? '' : 'none';
 
-        // Local cache banner
-        let localCacheBanner = document.getElementById('tickets-local-cache-banner');
-        if (ticketsLocalCacheMode) {
-            if (!localCacheBanner) {
-                localCacheBanner = document.createElement('div');
-                localCacheBanner.id = 'tickets-local-cache-banner';
-                localCacheBanner.style.cssText = 'font-size:10px;color:var(--text-secondary);padding:4px 8px;border-bottom:1px solid var(--border-color);background:var(--panel-bg2,#1a1a2e);';
-                localCacheBanner.textContent = 'Showing local cache — click Refresh to fetch live data';
-                const treePane = document.getElementById('tree-pane-tickets');
-                if (treePane) treePane.insertBefore(localCacheBanner, treePane.firstChild);
-            }
-        } else if (localCacheBanner) {
-            localCacheBanner.remove();
-        }
-
         if (emptyState) {
-            if (!ticketsLocalCacheMode && !clickUpSelectedListId) {
+            if (!clickUpSelectedListId && clickUpProjectIssues.length === 0) {
                 emptyState.textContent = 'No list selected. Please select a Space, Folder, and List to view tasks.';
                 emptyState.style.display = '';
-            } else if (clickUpProjectStatus !== 'loaded') {
+            } else if (clickUpProjectStatus !== 'loaded' && clickUpProjectIssues.length === 0) {
                 emptyState.textContent = clickUpProjectMessage || 'Loading tasks...';
                 emptyState.style.display = '';
             } else {
@@ -5930,7 +5939,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             renderTicketsClickUpHierarchyNav();
         }
 
-        if (ticketsLocalCacheMode || clickUpSelectedListId) {
+        if (clickUpSelectedListId || clickUpProjectIssues.length > 0) {
             renderTicketsClickUpStatusFilterOptions();
             renderTicketsClickUpList();
         } else {
@@ -6457,7 +6466,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
     // ===== STATE PERSISTENCE =====
 
     function resetTicketsInMemoryState() {
-        ticketsLocalCacheMode = false;
         linearIssueDetailCache.clear();
         clickUpTaskDetailCache.clear();
         linearProjectIssues = [];
