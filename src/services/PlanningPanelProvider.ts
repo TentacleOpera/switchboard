@@ -2261,6 +2261,27 @@ export class PlanningPanelProvider {
                 });
                 break;
             }
+            case 'getConstitutionStatus': {
+                // project.js (project panel) requests constitution status for the meta bar.
+                // Resolution mirrors KanbanProvider._getPromptsConfig:
+                //   plannerConfig?.addons?.constitution ?? config('planner.constitutionEnabled', false)
+                const wr = (typeof msg.workspaceRoot === 'string' && allRoots.includes(msg.workspaceRoot))
+                    ? msg.workspaceRoot
+                    : workspaceRoot;
+                const filePath = path.join(wr, 'CONSTITUTION.md');
+                const exists = fs.existsSync(filePath);
+                const globalSettingsEnabled = this._context.globalState.get<boolean>('switchboard.globalSettingsEnabled', true);
+                const store = globalSettingsEnabled ? this._context.globalState : this._context.workspaceState;
+                const plannerConfig = store.get<any>('switchboard.prompts.roleConfig_planner', undefined);
+                const cfgDefault = vscode.workspace.getConfiguration('switchboard').get<boolean>('planner.constitutionEnabled', false);
+                const enabled = plannerConfig?.addons?.constitution ?? cfgDefault;
+                let status = 'None';
+                if (enabled && exists) { status = 'CONSTITUTION.md'; }
+                else if (enabled) { status = 'File not found'; }
+                else { status = 'Disabled'; }
+                this._projectPanel?.webview.postMessage({ type: 'constitutionStatus', status, planFile: msg.planFile });
+                break;
+            }
             case 'readConstitutionFile': {
                 const wsRoot = msg.workspaceRoot;
                 if (!allRoots.includes(wsRoot)) {

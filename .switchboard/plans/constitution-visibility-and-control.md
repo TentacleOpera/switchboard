@@ -367,4 +367,8 @@ Key risks: (1) `ROLE_ADDONS` desync between `sharedDefaults.js` and `kanban.html
 
 ---
 
+## Review Findings
+
+CRITICAL: `getConstitutionStatus` handler was wired into `KanbanProvider._handleMessage` and replied on the kanban panel, but `project.js` sends/receives on the project panel hosted by `PlanningPanelProvider` — so the meta bar stayed "Loading..." permanently. Fixed by moving the handler to `PlanningPanelProvider._handleMessage` (replies on `_projectPanel`, replicating the `plannerConfig?.addons?.constitution ?? planner.constitutionEnabled` resolution) and deleting the dead `KanbanProvider` case. Files changed: `src/services/PlanningPanelProvider.ts`, `src/services/KanbanProvider.ts`. Validation: grep sweep confirms producer→handler→consumer all on the project panel and no orphaned references; tsc/tests skipped per session directives. Remaining risks: constitution now defaults OFF (intentional behavior change vs. prior automatic injection); no caching layer for per-prompt file reads; NIT lexical leak (`const el` in bare switch case at `project.js:181`) left as-is.
+
 **Recommendation:** Send to Coder

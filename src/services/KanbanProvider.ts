@@ -4115,20 +4115,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
                 break;
             }
-            case 'getConstitutionStatus': {
-                const wr = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (!wr) break;
-                const filePath = path.join(wr, 'CONSTITUTION.md');
-                const exists = fs.existsSync(filePath);
-                const promptsConfig = await this._getPromptsConfig(wr);
-                const enabled = promptsConfig.constitutionEnabled ?? false;
-                let status = 'None';
-                if (enabled && exists) { status = 'CONSTITUTION.md'; }
-                else if (enabled) { status = 'File not found'; }
-                else { status = 'Disabled'; }
-                this._panel?.webview.postMessage({ type: 'constitutionStatus', status, planFile: msg.planFile });
-                break;
-            }
             case 'openPlanByPath': {
                 const planPath = msg.planPath;
                 const workspaceRoot = this._currentWorkspaceRoot;
