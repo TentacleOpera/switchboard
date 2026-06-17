@@ -3032,7 +3032,95 @@ export class PlanningPanelProvider {
                 } catch { }
                 const providerDir = path.join(baseDir, provider);
                 const tickets: any[] = [];
-                this._scanLocalTicketFiles(providerDir, provider, tickets);
+
+                if (!this._cacheService && workspaceRoot) {
+                    this._cacheService = this._adapterFactories.getCacheService(workspaceRoot);
+                }
+
+                if (this._cacheService) {
+                    const kanbanDb = (this._cacheService as any)._kanbanDb;
+                    if (kanbanDb) {
+                        try {
+                            const effectiveWsId = await (this._cacheService as any)._getEffectiveWorkspaceId(undefined);
+                            const throttleKey = 'last_ticket_heal_scan_' + effectiveWsId;
+                            const lastHealStr = await kanbanDb.getMeta(throttleKey);
+                            const lastHeal = lastHealStr ? new Date(lastHealStr).getTime() : 0;
+                            const now = Date.now();
+                            const twentyFourHours = 24 * 60 * 60 * 1000;
+
+                            // Query existing ticket entries in DB
+                            let dbTickets = await this._cacheService.getImportedTickets();
+
+                            // If DB has no entries OR throttle expired, perform backfill scan
+                            if (dbTickets.length === 0 || (now - lastHeal > twentyFourHours)) {
+                                const scannedTickets: any[] = [];
+                                this._scanLocalTicketFiles(providerDir, provider, scannedTickets);
+
+                                // Upsert missing tickets to DB
+                                for (const t of scannedTickets) {
+                                    const exists = dbTickets.find(dbT => dbT.slugPrefix === `${provider}_${t.id}`);
+                                    if (!exists) {
+                                        try {
+                                            let hash = '';
+                                            try {
+                                                const fileContent = fs.readFileSync(t.filePath, 'utf8');
+                                                hash = crypto.createHash('sha256').update(fileContent).digest('hex');
+                                            } catch {}
+
+                                            await this._cacheService.registerImportedTicket(
+                                                provider,
+                                                t.id,
+                                                t.title,
+                                                `${provider}_${t.id}`,
+                                                t.filePath,
+                                                hash
+                                            );
+                                        } catch (err) {
+                                            console.error('[PlanningPanelProvider] failed to backfill ticket:', err);
+                                        }
+                                    }
+                                }
+                                // Update the throttle key
+                                await kanbanDb.setMeta(throttleKey, new Date().toISOString());
+
+                                // Re-fetch from DB
+                                dbTickets = await this._cacheService.getImportedTickets();
+                            }
+
+                            // Map DB entries to the provider-specific tickets output list
+                            for (const dbT of dbTickets) {
+                                if (dbT.sourceId === provider) {
+                                    let kanbanColumn = '';
+                                    if (fs.existsSync(dbT.filePath)) {
+                                        try {
+                                            const content = fs.readFileSync(dbT.filePath, 'utf8');
+                                            const fm = content.match(/^---\n([\s\S]*?)\n---/);
+                                            if (fm) {
+                                                const km = fm[1].match(/kanbanColumn:\s*(.+)/);
+                                                if (km) { kanbanColumn = km[1].trim(); }
+                                            }
+                                        } catch {}
+                                    }
+                                    tickets.push({
+                                        id: dbT.remoteDocId || dbT.slugPrefix.replace(`${provider}_`, ''),
+                                        title: dbT.docName,
+                                        status: kanbanColumn || '',
+                                        filePath: dbT.filePath,
+                                        lastSyncedAt: dbT.lastSyncedAt
+                                    });
+                                }
+                            }
+                        } catch (err) {
+                            console.error('[PlanningPanelProvider] error listing tickets from cache DB:', err);
+                        }
+                    }
+                }
+
+                // Fallback to live file scan if still empty (e.g. database not ready or no entries found)
+                if (tickets.length === 0) {
+                    this._scanLocalTicketFiles(providerDir, provider, tickets);
+                }
+
                 this._panel?.webview.postMessage({ type: 'localTicketFilesListed', provider, tickets });
                 break;
             }

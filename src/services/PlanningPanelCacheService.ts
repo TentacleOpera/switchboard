@@ -455,6 +455,46 @@ cachedAt: ${new Date().toISOString()}
         await this._kanbanDb.removeImport(slugPrefix, effectiveWsId);
     }
 
+    public async registerImportedTicket(
+        sourceId: string,
+        docId: string,
+        docName: string,
+        slugPrefix: string,
+        filePath: string,
+        contentHash: string,
+        workspaceId?: string
+    ): Promise<void> {
+        if (!this._kanbanDb) return;
+        const ready = await this._kanbanDb.ensureReady();
+        if (!ready) return;
+        try {
+            const effectiveWsId = await this._getEffectiveWorkspaceId(workspaceId);
+            await this._kanbanDb.upsertImportedTicket(
+                effectiveWsId,
+                slugPrefix,
+                sourceId,
+                docId,
+                docName,
+                filePath,
+                contentHash
+            );
+        } catch (err: any) {
+            console.error(`[PlanningPanelCacheService] Ticket import registration failed: ${err.message}`);
+        }
+    }
+
+    public async getImportedTickets(workspaceId?: string): Promise<ImportedDocEntry[]> {
+        if (!this._kanbanDb) return [];
+        const effectiveWsId = await this._getEffectiveWorkspaceId(workspaceId);
+        return this._kanbanDb.listImportedTickets(effectiveWsId);
+    }
+
+    public async deleteImportedTicket(slugPrefix: string, workspaceId?: string): Promise<void> {
+        if (!this._kanbanDb) return;
+        const effectiveWsId = await this._getEffectiveWorkspaceId(workspaceId);
+        await this._kanbanDb.deleteImportedTicket(effectiveWsId, slugPrefix);
+    }
+
     /**
      * Check if a document would be a duplicate of an existing import.
      * Scans the registry for name or ID collisions across sources.

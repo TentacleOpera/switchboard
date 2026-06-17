@@ -214,5 +214,9 @@ If issues arise:
 2. Revert HTML structure changes in project.js (move complexity dot back to topic row)
 3. Clear browser/webview cache to ensure old styles are not cached
 
+## Review Findings
+
+One **CRITICAL** issue found and fixed: the grouped `.kanban-plan-item:hover` and `.kanban-plan-item.selected` rules at lines 231-236 still set `background` properties, which would override the new teal gradient on hover/selection because the ungrouped overrides did not explicitly set `background`. Fixed by adding the gradient `background` declaration to both ungrouped rules in `project.html`. HTML structure change in `project.js` correctly moves the dot into `.kanban-plan-actions` with `margin-left: auto`; no JS breakage detected. No tests run per session directive. Remaining risk: narrow viewports may cause flex item compression in the actions row.
+
 ---
 *Recommendation: Send to Intern*

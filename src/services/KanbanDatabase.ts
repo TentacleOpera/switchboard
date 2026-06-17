@@ -491,6 +491,12 @@ const MIGRATION_V32_SQL = [
     `DELETE FROM config WHERE key = 'stitch.manifest'`,
 ];
 
+// V33: add content_type to imported_docs
+const MIGRATION_V33_SQL = [
+    \`ALTER TABLE imported_docs ADD COLUMN content_type TEXT NOT NULL DEFAULT 'doc'\`,
+    \`CREATE INDEX IF NOT EXISTS idx_imported_docs_type ON imported_docs(content_type, workspace_id)\`,
+];
+
 
 
 /**
@@ -1740,8 +1746,8 @@ export class KanbanDatabase {
         this._db.run(
             `INSERT OR REPLACE INTO imported_docs 
              (slug_prefix, source_id, remote_doc_id, doc_name, parent_doc_name, 
-              file_path, imported_at, last_synced_at, content_hash, workspace_id, display_order)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              file_path, imported_at, last_synced_at, content_hash, workspace_id, display_order, content_type)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'doc')`,
             [
                 entry.slugPrefix,
                 entry.sourceId,
@@ -1759,11 +1765,11 @@ export class KanbanDatabase {
         await this._persist();
     }
 
-    public async removeImport(slugPrefix: string, workspaceId: string): Promise<void> {
+    public async removeImport(slugPrefix: string, workspaceId: string, contentType: string = 'doc'): Promise<void> {
         if (!(await this.ensureReady()) || !this._db) return;
         this._db.run(
-            'DELETE FROM imported_docs WHERE slug_prefix = ? AND workspace_id = ?',
-            [slugPrefix, workspaceId]
+            'DELETE FROM imported_docs WHERE slug_prefix = ? AND workspace_id = ? AND content_type = ?',
+            [slugPrefix, workspaceId, contentType]
         );
         await this._persist();
     }
@@ -1771,7 +1777,7 @@ export class KanbanDatabase {
     public async getImportedDocs(workspaceId: string): Promise<ImportedDocEntry[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
         const stmt = this._db.prepare(
-            `SELECT * FROM imported_docs WHERE workspace_id = ? ORDER BY imported_at DESC`,
+            `SELECT * FROM imported_docs WHERE workspace_id = ? AND content_type = 'doc' ORDER BY imported_at DESC`,
             [workspaceId]
         );
         
@@ -1799,11 +1805,11 @@ export class KanbanDatabase {
         return results;
     }
 
-    public async getImportBySlug(slugPrefix: string, workspaceId: string): Promise<ImportedDocEntry | null> {
+    public async getImportBySlug(slugPrefix: string, workspaceId: string, contentType: string = 'doc'): Promise<ImportedDocEntry | null> {
         if (!(await this.ensureReady()) || !this._db) return null;
         const stmt = this._db.prepare(
-            'SELECT * FROM imported_docs WHERE slug_prefix = ? AND workspace_id = ? LIMIT 1',
-            [slugPrefix, workspaceId]
+            'SELECT * FROM imported_docs WHERE slug_prefix = ? AND workspace_id = ? AND content_type = ? LIMIT 1',
+            [slugPrefix, workspaceId, contentType]
         );
         try {
             if (!stmt.step()) return null;
@@ -1823,6 +1829,77 @@ export class KanbanDatabase {
         } finally {
             stmt.free();
         }
+    }
+
+    public async upsertImportedTicket(
+        workspaceId: string,
+        slugPrefix: string,
+        sourceId: string,
+        remoteDocId: string,
+        docName: string,
+        filePath: string,
+        contentHash: string
+    ): Promise<void> {
+        if (!(await this.ensureReady()) || !this._db) return;
+        const now = new Date().toISOString();
+        this._db.run(
+            `INSERT OR REPLACE INTO imported_docs 
+             (slug_prefix, source_id, remote_doc_id, doc_name, parent_doc_name, 
+              file_path, imported_at, last_synced_at, content_hash, workspace_id, display_order, content_type)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ticket')`,
+            [
+                slugPrefix,
+                sourceId,
+                remoteDocId,
+                docName,
+                docName,
+                filePath,
+                now,
+                now,
+                contentHash,
+                workspaceId,
+                0
+            ]
+        );
+        await this._persist();
+    }
+
+    public async listImportedTickets(workspaceId: string): Promise<ImportedDocEntry[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const stmt = this._db.prepare(
+            `SELECT * FROM imported_docs WHERE workspace_id = ? AND content_type = 'ticket' ORDER BY imported_at DESC`,
+            [workspaceId]
+        );
+        const results: ImportedDocEntry[] = [];
+        try {
+            while (stmt.step()) {
+                const row = stmt.getAsObject() as any;
+                results.push({
+                    slugPrefix: String(row.slug_prefix),
+                    sourceId: String(row.source_id),
+                    remoteDocId: row.remote_doc_id ? String(row.remote_doc_id) : undefined,
+                    docName: String(row.doc_name),
+                    parentDocName: row.parent_doc_name ? String(row.parent_doc_name) : undefined,
+                    filePath: String(row.file_path),
+                    importedAt: String(row.imported_at),
+                    lastSyncedAt: row.last_synced_at ? String(row.last_synced_at) : undefined,
+                    contentHash: row.content_hash ? String(row.content_hash) : undefined,
+                    workspaceId: String(row.workspace_id),
+                    displayOrder: row.display_order ? Number(row.display_order) : 0
+                });
+            }
+        } finally {
+            stmt.free();
+        }
+        return results;
+    }
+
+    public async getImportedTicket(workspaceId: string, slugPrefix: string): Promise<ImportedDocEntry | null> {
+        return this.getImportBySlug(slugPrefix, workspaceId, 'ticket');
+    }
+
+    public async deleteImportedTicket(workspaceId: string, slugPrefix: string): Promise<void> {
+        await this.removeImport(slugPrefix, workspaceId, 'ticket');
     }
 
     // Healing / consistency
@@ -1924,8 +2001,8 @@ export class KanbanDatabase {
                     this._db.run(
                         `INSERT OR REPLACE INTO imported_docs 
                          (slug_prefix, source_id, remote_doc_id, doc_name, parent_doc_name, 
-                          file_path, imported_at, last_synced_at, content_hash, workspace_id)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                          file_path, imported_at, last_synced_at, content_hash, workspace_id, content_type)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'doc')`,
                         [
                             entry.slugPrefix,
                             entry.sourceId,
@@ -4501,6 +4578,30 @@ export class KanbanDatabase {
             } catch (e) {
                 try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
                 console.error('[KanbanDatabase] V32 migration FAILED — rolled back. DB unchanged. Error:', e);
+            }
+        }
+
+        // V33: add content_type to imported_docs to unify ticket + doc registry
+        const v33 = await this.getMigrationVersion();
+        if (v33 < 33) {
+            try {
+                this._db.exec('BEGIN');
+                for (const sql of MIGRATION_V33_SQL) {
+                    try {
+                        this._db.exec(sql);
+                    } catch (e) {
+                        const msg = e instanceof Error ? e.message : String(e);
+                        if (!msg.includes('duplicate column') && !msg.includes('already exists')) {
+                            throw e;
+                        }
+                    }
+                }
+                this._db.exec('COMMIT');
+                await this.setMigrationVersion(33);
+                console.log('[KanbanDatabase] V33 migration completed: content_type added to imported_docs');
+            } catch (e) {
+                try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+                console.error('[KanbanDatabase] V33 migration FAILED — rolled back. DB unchanged. Error:', e);
             }
         }
 

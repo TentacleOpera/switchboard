@@ -3006,9 +3006,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 }
                 // Strip leading H1 — the render function always prepends <h1>title</h1> itself
                 const rendered = renderMarkdown((msg.content || '').replace(/^#[^\n]*\n?/, ''));
-                // Show local content immediately for fast display.
-                // localDescription is NOT set — when the API response arrives it will overwrite
-                // the description with the richer API version (includes inline images).
+                // Local file is the source of truth for description. localDescription: true
+                // prevents the API response from overwriting it when it arrives.
                 if (msg.provider === 'clickup') {
                     const existing = clickUpTaskDetailCache.get(msg.id);
                     selectedClickUpIssue = {
@@ -3016,7 +3015,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         subtasks: existing?.subtasks || [],
                         comments: existing?.comments || [],
                         attachments: existing?.attachments || [],
-                        renderedDescriptionHtml: rendered
+                        renderedDescriptionHtml: rendered,
+                        localDescription: true
                     };
                     clickUpTaskDetailCache.set(msg.id, selectedClickUpIssue);
                 } else {
@@ -3026,7 +3026,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         subtasks: existing?.subtasks || [],
                         comments: existing?.comments || [],
                         attachments: existing?.attachments || [],
-                        renderedDescriptionHtml: rendered
+                        renderedDescriptionHtml: rendered,
+                        localDescription: true
                     };
                     linearIssueDetailCache.set(msg.id, selectedLinearIssue);
                 }
@@ -3443,12 +3444,15 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 linearAvailableProjects = msg.projects || [];
                 break;
             case 'linearTaskDetailsLoaded': {
+                const _prevLinear = linearIssueDetailCache.get(msg.issue.id);
+                const _keepLinearDesc = _prevLinear?.localDescription;
                 selectedLinearIssue = {
                     issue: msg.issue,
                     subtasks: msg.subtasks || [],
                     comments: msg.comments || [],
                     attachments: msg.attachments || [],
-                    renderedDescriptionHtml: msg.renderedDescriptionHtml
+                    renderedDescriptionHtml: _keepLinearDesc ? _prevLinear.renderedDescriptionHtml : msg.renderedDescriptionHtml,
+                    localDescription: _keepLinearDesc || false
                 };
                 linearIssueDetailCache.set(msg.issue.id, selectedLinearIssue);
                 if (!ticketsEditMode) renderTicketsTab();
@@ -3544,7 +3548,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 clickUpProjectHasMore = msg.hasMore || false;
                 ticketsLoadedOnce = true;
                 renderTicketsTab();
-                if (ticketsAutoSync && clickUpSelectedListId) {
+                if ((ticketsAutoSync || _pendingRefreshImport) && clickUpSelectedListId) {
                     _pendingRefreshImport = false;
                     vscode.postMessage({
                         type: 'importAllTickets',
@@ -3559,12 +3563,15 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 }
                 break;
             case 'clickupTaskDetailsLoaded': {
+                const _prevClickUp = clickUpTaskDetailCache.get(msg.task.id);
+                const _keepClickUpDesc = _prevClickUp?.localDescription;
                 selectedClickUpIssue = {
                     task: msg.task,
                     subtasks: msg.subtasks || [],
                     comments: msg.comments || [],
                     attachments: msg.attachments || [],
-                    renderedDescriptionHtml: msg.renderedDescriptionHtml
+                    renderedDescriptionHtml: _keepClickUpDesc ? _prevClickUp.renderedDescriptionHtml : msg.renderedDescriptionHtml,
+                    localDescription: _keepClickUpDesc || false
                 };
                 clickUpTaskDetailCache.set(msg.task.id, selectedClickUpIssue);
                 if (!ticketsEditMode) renderTicketsTab();
@@ -5367,6 +5374,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         refreshButton?.addEventListener('click', () => {
             linearIssueDetailCache.clear();
             clickUpTaskDetailCache.clear();
+            _pendingRefreshImport = true;
             if (lastIntegrationProvider === 'linear') {
                 loadLinearProject(true);
             } else if (lastIntegrationProvider === 'clickup') {

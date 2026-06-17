@@ -17388,6 +17388,15 @@ What would you like to find?`;
 
             fs.writeFileSync(filePath, content, 'utf8');
 
+            try {
+                const cacheService = this._getCacheService(resolvedRoot);
+                const contentHash = crypto.createHash('sha256').update(content).digest('hex');
+                const slugPrefix = `${provider}_${id}`;
+                await cacheService.registerImportedTicket(provider, id, title, slugPrefix, filePath, contentHash);
+            } catch (cacheErr) {
+                console.error('[TaskViewerProvider] failed to register imported ticket in cache:', cacheErr);
+            }
+
             return { success: true, filePath };
         } catch (error) {
             return { success: false, error: error instanceof Error ? error.message : String(error) };
@@ -17755,16 +17764,45 @@ What would you like to find?`;
         }
         const { provider, id } = data;
 
+        // Locate local ticket file before archiving
+        let localFilePath: string | null = null;
         try {
+            localFilePath = await this._findTicketDocument(resolvedRoot, provider, id);
+        } catch (err) {
+            // ignore
+        }
+
+        try {
+            let res: { success: boolean; error?: string };
             if (provider === 'linear') {
                 const linear = this._getLinearService(resolvedRoot);
-                const res = await linear.archiveIssue(id);
-                return res;
+                res = await linear.archiveIssue(id);
             } else {
                 const clickup = this._getClickUpService(resolvedRoot);
-                const res = await clickup.archiveTask(id);
-                return res;
+                res = await clickup.archiveTask(id);
             }
+
+            if (res.success) {
+                // Delete local file
+                if (localFilePath) {
+                    try {
+                        await fs.promises.unlink(localFilePath);
+                    } catch (unlinkErr: any) {
+                        if (unlinkErr.code !== 'ENOENT') {
+                            console.error('[TaskViewerProvider] failed to delete local ticket file:', unlinkErr);
+                        }
+                    }
+                }
+                // Delete DB registry entry
+                try {
+                    const cacheService = this._getCacheService(resolvedRoot);
+                    await cacheService.deleteImportedTicket(`${provider}_${id}`);
+                } catch (cacheErr) {
+                    console.error('[TaskViewerProvider] failed to remove ticket from registry:', cacheErr);
+                }
+            }
+
+            return res;
         } catch (error) {
             return { success: false, error: error instanceof Error ? error.message : String(error) };
         }
