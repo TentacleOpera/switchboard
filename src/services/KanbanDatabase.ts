@@ -2282,24 +2282,37 @@ export class KanbanDatabase {
         repoScope: string | null
     ): Promise<KanbanPlanRecord[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
-        let query = `SELECT ${PLAN_COLUMNS} FROM plans WHERE workspace_id = ? AND status = 'active'`;
+
+        // A specific project name requires JOINing the projects table. projects shares
+        // column names (workspace_id, created_at) with plans, so every plan column and
+        // predicate must be qualified with `plans.` to avoid "ambiguous column name".
+        const isProjectFilter = project !== null
+            && project !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER
+            && project !== '';
+
+        const selectColumns = isProjectFilter
+            ? PLAN_COLUMNS.split(',').map(c => `plans.${c.trim()}`).join(', ')
+            : PLAN_COLUMNS;
+        const fromClause = isProjectFilter
+            ? 'plans LEFT JOIN projects pr ON plans.project_id = pr.id'
+            : 'plans';
+
+        let query = `SELECT ${selectColumns} FROM ${fromClause} WHERE plans.workspace_id = ? AND plans.status = 'active'`;
         const params: unknown[] = [workspaceId];
 
         if (repoScope) {
-            query += " AND repo_scope IN (?, '')";
+            query += " AND plans.repo_scope IN (?, '')";
             params.push(repoScope);
         }
 
         if (project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
-            query += ` AND project_id IS NULL`;
-        } else if (project) {
-            query = query.replace(`SELECT ${PLAN_COLUMNS} FROM plans`,
-                `SELECT ${PLAN_COLUMNS}, pr.name AS project FROM plans LEFT JOIN projects pr ON plans.project_id = pr.id`);
+            query += ` AND plans.project_id IS NULL`;
+        } else if (isProjectFilter) {
             query += ` AND pr.name = ?`;
             params.push(project);
         }
 
-        query += ` ORDER BY updated_at DESC`;
+        query += ` ORDER BY plans.updated_at DESC`;
         const stmt = this._db.prepare(query, params);
         return this._readRows(stmt);
     }

@@ -143,6 +143,8 @@ export class KanbanProvider implements vscode.Disposable {
     private _repoScopeFilter: string | null = null;
     private _focusedWorktreePath: string | null = null;
     private _projectFilter: string | null = KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
+    private _projectFilterNeedsValidation: boolean = false;
+    private _projectFilterSaveTimeout: NodeJS.Timeout | null = null;
     private _allWorkspaceProjectsCache: Record<string, string[]> | null = null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- PlannerPromptWriter type lives in extension.ts; using any avoids a circular import
     private _plannerPromptWriter: any | null = null;
@@ -257,6 +259,14 @@ export class KanbanProvider implements vscode.Disposable {
         this._globalPlanWatcher = globalPlanWatcher;
         const persistedWorkspace = this._context.workspaceState.get<{ index: number; name: string } | null>('kanban.lastSelectedWorkspace', null);
         this._currentWorkspaceRoot = this._resolvePersistedWorkspace(persistedWorkspace);
+        if (this._currentWorkspaceRoot) {
+            const resolvedRoot = path.resolve(this._currentWorkspaceRoot);
+            const persistedFilter = this._context.workspaceState.get<string | null>(`kanban.projectFilter.${resolvedRoot}`, null);
+            if (persistedFilter !== null) {
+                this._projectFilter = persistedFilter;
+                this._projectFilterNeedsValidation = true;
+            }
+        }
         this._cliTriggersEnabled = this._getSetting<boolean>('kanban.cliTriggersEnabled', true);
         this._dynamicComplexityRoutingEnabled = this._getSetting<boolean>(
             'kanban.dynamicComplexityRoutingEnabled',
@@ -1824,6 +1834,13 @@ export class KanbanProvider implements vscode.Disposable {
             console.log(`[KanbanProvider] _refreshBoardImpl: workspaceId=${workspaceId}, dbReady=${dbReady}`);
 
             if (workspaceId && dbReady) {
+                if (this._projectFilterNeedsValidation) {
+                    this._projectFilterNeedsValidation = false;
+                    const projects = await db.getProjects(workspaceId);
+                    if (this._projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER && !projects.includes(this._projectFilter ?? '')) {
+                        this._projectFilter = KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
+                    }
+                }
                 const projectFilter = this._projectFilter;
                 const repoScope = this._repoScopeFilter;
                 const dbRows = (projectFilter !== null || repoScope)
@@ -3918,7 +3935,15 @@ This step is what moves the plan forward in the Switchboard pipeline.
     public setProjectFilter(filter: string | null): void {
         this._projectFilter = filter;
         if (this._currentWorkspaceRoot) {
-            this._globalPlanWatcher?.setCurrentProject(this._currentWorkspaceRoot, filter);
+            const resolvedRoot = path.resolve(this._currentWorkspaceRoot);
+            this._globalPlanWatcher?.setCurrentProject(resolvedRoot, filter);
+
+            if (this._projectFilterSaveTimeout) {
+                clearTimeout(this._projectFilterSaveTimeout);
+            }
+            this._projectFilterSaveTimeout = setTimeout(async () => {
+                await this._context.workspaceState.update(`kanban.projectFilter.${resolvedRoot}`, filter);
+            }, 100);
         }
     }
     public async queueIntegrationSyncForSession(

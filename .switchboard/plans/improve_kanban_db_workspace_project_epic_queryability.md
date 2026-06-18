@@ -313,3 +313,7 @@ CREATE INDEX IF NOT EXISTS idx_plans_project_id ON plans(project_id);
 ## Recommendation
 
 **Complexity: 6** → **Send to Coder**
+
+## Review Findings
+
+**Files changed (review fix):** `src/services/KanbanDatabase.ts` (`getBoardFilteredByProject`). Fixed a CRITICAL bug: the project-filter branch JOINed `projects` while selecting unqualified `PLAN_COLUMNS`, and `projects` shares `workspace_id`/`created_at` with `plans`, so SQLite threw `ambiguous column name` and the board refresh failed whenever a specific project filter was active (reproduced live via sqlite3, same engine as sql.js). Rewrote the branch to qualify all plan columns/predicates with `plans.` and dropped the redundant duplicate `pr.name AS project` output column. Verified the qualified query prepares and returns rows correctly. Remaining accepted risks: cross-DB reconcile can leave new columns empty (already noted in plan), and single-workspace setups with no `workspace_mappings` config get `workspace_name = ''`. Implementation otherwise matches the plan: schema/indexes, UPSERT, `setProjectForPlans`, V35 sequential backfill (correct JSON shape), importer injection, and all three skill docs are sound. (Compilation and automated tests skipped per session directives.)

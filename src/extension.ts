@@ -42,6 +42,7 @@ let kanbanStatusBarItem: vscode.StatusBarItem;
 let artifactsStatusBarItem: vscode.StatusBarItem;
 let projectStatusBarItem: vscode.StatusBarItem;
 let designStatusBarItem: vscode.StatusBarItem;
+let switchboardHubStatusBarItem: vscode.StatusBarItem;
 
 // Global references
 let outputChannel: vscode.OutputChannel | null = null;
@@ -1803,6 +1804,12 @@ export async function activate(context: vscode.ExtensionContext) {
     designStatusBarItem.command = 'switchboard.openDesignPanel';
     context.subscriptions.push(designStatusBarItem);
 
+    switchboardHubStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 95);
+    switchboardHubStatusBarItem.text = '$(circuit-board)';
+    switchboardHubStatusBarItem.tooltip = 'Switchboard: Actions Hub';
+    switchboardHubStatusBarItem.command = 'switchboard.openHub';
+    context.subscriptions.push(switchboardHubStatusBarItem);
+
     function updateStatusBarVisibility() {
         const config = vscode.workspace.getConfiguration('switchboard');
         const showAgentOpenToggle = config.get<boolean>('statusBar.showAgentOpenToggle', false);
@@ -1811,47 +1818,87 @@ export async function activate(context: vscode.ExtensionContext) {
         const showArtifactsButton = config.get<boolean>('statusBar.showArtifactsButton', false);
         const showDesignButton = config.get<boolean>('statusBar.showDesignButton', false);
         const showProjectButton = config.get<boolean>('statusBar.showProjectButton', false);
+        const compactMode = config.get<boolean>('statusBar.compactMode', true);
 
-        if (showAgentOpenToggle) {
-            fileOpeningPreventionStatusBarItem.show();
-        } else {
+        if (compactMode) {
             fileOpeningPreventionStatusBarItem.hide();
-        }
-
-        if (showTerminalControls) {
-            terminalOpenStatusBarItem.show();
-            terminalClearStatusBarItem.show();
-            terminalResetStatusBarItem.show();
-        } else {
             terminalOpenStatusBarItem.hide();
             terminalClearStatusBarItem.hide();
             terminalResetStatusBarItem.hide();
-        }
-
-        if (showKanbanButton) {
-            kanbanStatusBarItem.show();
-        } else {
             kanbanStatusBarItem.hide();
-        }
-
-        if (showProjectButton) {
-            projectStatusBarItem.show();
-        } else {
             projectStatusBarItem.hide();
-        }
-
-        if (showArtifactsButton) {
-            artifactsStatusBarItem.show();
-        } else {
             artifactsStatusBarItem.hide();
-        }
-
-        if (showDesignButton) {
-            designStatusBarItem.show();
-        } else {
             designStatusBarItem.hide();
-        }
 
+            let enabledCount = 0;
+            if (showAgentOpenToggle) {
+                enabledCount++;
+            }
+            if (showTerminalControls) {
+                enabledCount += 3;
+            }
+            if (showKanbanButton) {
+                enabledCount++;
+            }
+            if (showArtifactsButton) {
+                enabledCount++;
+            }
+            if (showProjectButton) {
+                enabledCount++;
+            }
+            if (showDesignButton) {
+                enabledCount++;
+            }
+
+            if (enabledCount > 0) {
+                switchboardHubStatusBarItem.tooltip = `Switchboard: ${enabledCount} action${enabledCount > 1 ? 's' : ''} available`;
+                switchboardHubStatusBarItem.show();
+            } else {
+                switchboardHubStatusBarItem.hide();
+            }
+        } else {
+            switchboardHubStatusBarItem.hide();
+
+            if (showAgentOpenToggle) {
+                fileOpeningPreventionStatusBarItem.show();
+            } else {
+                fileOpeningPreventionStatusBarItem.hide();
+            }
+
+            if (showTerminalControls) {
+                terminalOpenStatusBarItem.show();
+                terminalClearStatusBarItem.show();
+                terminalResetStatusBarItem.show();
+            } else {
+                terminalOpenStatusBarItem.hide();
+                terminalClearStatusBarItem.hide();
+                terminalResetStatusBarItem.hide();
+            }
+
+            if (showKanbanButton) {
+                kanbanStatusBarItem.show();
+            } else {
+                kanbanStatusBarItem.hide();
+            }
+
+            if (showProjectButton) {
+                projectStatusBarItem.show();
+            } else {
+                projectStatusBarItem.hide();
+            }
+
+            if (showArtifactsButton) {
+                artifactsStatusBarItem.show();
+            } else {
+                artifactsStatusBarItem.hide();
+            }
+
+            if (showDesignButton) {
+                designStatusBarItem.show();
+            } else {
+                designStatusBarItem.hide();
+            }
+        }
     }
 
     updateStatusBarVisibility();
@@ -1875,7 +1922,8 @@ export async function activate(context: vscode.ExtensionContext) {
             e.affectsConfiguration('switchboard.statusBar.showKanbanButton') ||
             e.affectsConfiguration('switchboard.statusBar.showArtifactsButton') ||
             e.affectsConfiguration('switchboard.statusBar.showDesignButton') ||
-            e.affectsConfiguration('switchboard.statusBar.showProjectButton')
+            e.affectsConfiguration('switchboard.statusBar.showProjectButton') ||
+            e.affectsConfiguration('switchboard.statusBar.compactMode')
         ) {
             updateStatusBarVisibility();
             void taskViewerProvider.postSetupPanelState();
@@ -1909,6 +1957,101 @@ export async function activate(context: vscode.ExtensionContext) {
         taskViewerProvider.refresh();
     });
     context.subscriptions.push(refreshDisposable);
+
+    const openHubDisposable = vscode.commands.registerCommand('switchboard.openHub', async () => {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        const showAgentOpenToggle = config.get<boolean>('statusBar.showAgentOpenToggle', false);
+        const showTerminalControls = config.get<boolean>('statusBar.showTerminalControls', false);
+        const showKanbanButton = config.get<boolean>('statusBar.showKanbanButton', false);
+        const showArtifactsButton = config.get<boolean>('statusBar.showArtifactsButton', false);
+        const showDesignButton = config.get<boolean>('statusBar.showDesignButton', false);
+        const showProjectButton = config.get<boolean>('statusBar.showProjectButton', false);
+
+        interface CommandQuickPickItem extends vscode.QuickPickItem {
+            command?: string;
+        }
+
+        const items: CommandQuickPickItem[] = [];
+
+        if (showAgentOpenToggle) {
+            const currentPreventAgentFileOpening = vscode.workspace.getConfiguration('switchboard').get<boolean>('preventAgentFileOpening', false);
+            items.push({
+                label: `$(shield) Guard: ${currentPreventAgentFileOpening ? 'On' : 'Off'}`,
+                description: 'Toggle agent file opening guard',
+                command: 'switchboard.togglePreventAgentFileOpening'
+            });
+        }
+
+        if (showTerminalControls) {
+            if (items.length > 0) {
+                items.push({ label: 'Terminal Controls', kind: vscode.QuickPickItemKind.Separator });
+            }
+            items.push({
+                label: '$(hubot) Agents',
+                description: 'Open agent terminals',
+                command: 'switchboard.createAgentGrid'
+            });
+            items.push({
+                label: '$(eraser) Clear',
+                description: 'Clear agent terminals',
+                command: 'switchboard.clearAllTerminals'
+            });
+            items.push({
+                label: '$(stop-circle) Reset',
+                description: 'Reset agent terminals',
+                command: 'switchboard.deregisterAllTerminals'
+            });
+        }
+
+        const hasPanelItems = showKanbanButton || showArtifactsButton || showProjectButton || showDesignButton;
+        if (hasPanelItems) {
+            if (items.length > 0) {
+                items.push({ label: 'Panels', kind: vscode.QuickPickItemKind.Separator });
+            }
+            if (showKanbanButton) {
+                items.push({
+                    label: '$(table) Kanban',
+                    description: 'Open Kanban Board',
+                    command: 'switchboard.openKanban'
+                });
+            }
+            if (showArtifactsButton) {
+                items.push({
+                    label: '$(notebook) Artifacts',
+                    description: 'Open Artifacts Panel',
+                    command: 'switchboard.openPlanningPanel'
+                });
+            }
+            if (showProjectButton) {
+                items.push({
+                    label: '$(project) Project',
+                    description: 'Open Project Management Panel',
+                    command: 'switchboard.openProjectPanel'
+                });
+            }
+            if (showDesignButton) {
+                items.push({
+                    label: '$(symbol-color) Design',
+                    description: 'Open Design Panel',
+                    command: 'switchboard.openDesignPanel'
+                });
+            }
+        }
+
+        if (items.length === 0) {
+            vscode.window.showInformationMessage('No status bar actions enabled in settings.');
+            return;
+        }
+
+        const selected = await vscode.window.showQuickPick(items, {
+            placeHolder: 'Switchboard actions...'
+        });
+
+        if (selected && selected.command) {
+            void vscode.commands.executeCommand(selected.command);
+        }
+    });
+    context.subscriptions.push(openHubDisposable);
 
     // Manual refresh integration cache command
     const refreshIntegrationCacheDisposable = vscode.commands.registerCommand('switchboard.refreshIntegrationCache', async () => {

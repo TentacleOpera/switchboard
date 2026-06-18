@@ -153,6 +153,10 @@
       {
         "command": "switchboard.clearAllTerminals",
         "title": "Switchboard: Clear Agent Terminals"
+      },
+      {
+        "command": "switchboard.openHub",
+        "title": "Switchboard: Open Status Bar Hub"
       }
     ],
     "configuration": {
@@ -643,6 +647,12 @@
           "type": "boolean",
           "default": false,
           "description": "Controls visibility of the Open Project Panel button on the status bar.",
+          "scope": "window"
+        },
+        "switchboard.statusBar.compactMode": {
+          "type": "boolean",
+          "default": true,
+          "description": "When true, groups enabled Switchboard status bar actions into a single compact hub dropdown. When false, shows individual buttons as before.",
           "scope": "window"
         },
         "switchboard.persistPanels": {
