@@ -55,6 +55,8 @@ export interface KanbanPlanRecord {
     worktreeStatus?: string; // 'none' | 'active' | 'merged' | 'deleted'
     isEpic?: number;
     epicId?: string;
+    workspaceName?: string;
+    projectId?: number | null;
 }
 
 export interface ImportedDocEntry {
@@ -128,11 +130,15 @@ CREATE TABLE IF NOT EXISTS plans (
     worktree_id       INTEGER,
     worktree_status   TEXT DEFAULT 'none',
     is_epic           INTEGER DEFAULT 0,
-    epic_id           TEXT DEFAULT ''
+    epic_id           TEXT DEFAULT '',
+    workspace_name    TEXT DEFAULT '',
+    project_id        INTEGER DEFAULT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_plans_column ON plans(kanban_column);
 CREATE INDEX IF NOT EXISTS idx_plans_workspace ON plans(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
+CREATE INDEX IF NOT EXISTS idx_plans_workspace_name ON plans(workspace_name);
+CREATE INDEX IF NOT EXISTS idx_plans_project_id ON plans(project_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_plans_plan_file_workspace ON plans(plan_file, workspace_id);
 CREATE TABLE IF NOT EXISTS config (
     key   TEXT PRIMARY KEY,
@@ -507,6 +513,20 @@ const MIGRATION_V34_SQL = [
     `ALTER TABLE worktrees ADD COLUMN agents_open_with_grid INTEGER DEFAULT 0`,
 ];
 
+// V35: backfill workspace_name and project_id in plans
+const MIGRATION_V35_SQL = [
+    // Backfill workspace_name from config JSON matching the workspace_id
+    `UPDATE plans SET workspace_name = COALESCE((
+        SELECT json_extract(m.value, '$.name')
+        FROM config, json_each(config.value, '$.mappings') m
+        WHERE config.key = 'workspace_mappings' AND json_extract(m.value, '$.id') = plans.workspace_id
+    ), '') WHERE workspace_name = '' OR workspace_name IS NULL`,
+    // Backfill project_id from denormalized project names
+    `UPDATE plans SET project_id = (
+        SELECT id FROM projects WHERE projects.name = plans.project AND projects.workspace_id = plans.workspace_id
+    ) WHERE project != '' AND (project_id IS NULL OR project_id = 0)`,
+];
+
 
 
 /**
@@ -520,8 +540,9 @@ INSERT INTO plans (
     plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
     repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
     brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-    clickup_task_id, linear_issue_id, worktree_id, is_epic, epic_id
- ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    clickup_task_id, linear_issue_id, worktree_id, is_epic, epic_id,
+    workspace_name, project_id
+ ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     topic = excluded.topic,
     plan_file = excluded.plan_file,
@@ -546,7 +567,9 @@ ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     linear_issue_id = excluded.linear_issue_id,
     worktree_id = excluded.worktree_id,
     is_epic = COALESCE(excluded.is_epic, is_epic),
-    epic_id = CASE WHEN excluded.epic_id IS NOT NULL AND excluded.epic_id != '' THEN excluded.epic_id ELSE epic_id END
+    epic_id = CASE WHEN excluded.epic_id IS NOT NULL AND excluded.epic_id != '' THEN excluded.epic_id ELSE epic_id END,
+    workspace_name = excluded.workspace_name,
+    project_id = excluded.project_id
 `;
 
 const MIGRATION_VERSION_KEY = 'kanban_db_migration_version';
@@ -555,7 +578,8 @@ const ORPHAN_PURGE_CONFIRMATION_DELAY_MS = 350;
 const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
                        repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
                        brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-                       clickup_task_id, linear_issue_id, worktree_id, worktree_status, is_epic, epic_id`;
+                       clickup_task_id, linear_issue_id, worktree_id, worktree_status, is_epic, epic_id,
+                       workspace_name, project_id`;
 
 // Parse column definitions from SCHEMA_SQL's plans table for schema reconciliation.
 // This ensures that databases created before a column was added to SCHEMA_SQL
@@ -1222,10 +1246,12 @@ export class KanbanDatabase {
                     record.dispatchedAgent || '', // 19
                     record.dispatchedIde || '',   // 20
                     record.clickupTaskId || '',   // 21
-                    record.linearIssueId || '',    // 22
+                    record.linearIssueId || '',   // 22
                     record.worktreeId ?? null,      // 23
                     record.isEpic ?? null,           // 24
-                    record.epicId || ''             // 25
+                    record.epicId || '',             // 25
+                    record.workspaceName || '',      // 26
+                    record.projectId ?? null         // 27
                 ]);
             }
             this._db.run('COMMIT');
@@ -2104,12 +2130,47 @@ export class KanbanDatabase {
                 [workspaceId, projectName]
             );
             this._db.run(
-                "UPDATE plans SET project = '' WHERE workspace_id = ? AND project = ?",
+                "UPDATE plans SET project = '', project_id = NULL WHERE workspace_id = ? AND project = ?",
                 [workspaceId, projectName]
             );
             return await this._persist();
         } catch (e) {
             console.error('[KanbanDatabase] deleteProject failed:', e);
+            return false;
+        }
+    }
+
+    public async setProjectForPlans(
+        workspaceId: string,
+        planIds: string[],
+        projectName: string | null
+    ): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        if (planIds.length === 0) return true;
+
+        let projectId: number | null = null;
+        if (projectName && projectName !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
+            const stmt = this._db.prepare(
+                'SELECT id FROM projects WHERE name = ? AND workspace_id = ?',
+                [projectName, workspaceId]
+            );
+            if (stmt.step()) {
+                projectId = Number(stmt.getAsObject().id);
+            }
+            stmt.free();
+        }
+
+        const now = new Date().toISOString();
+        const placeholders = planIds.map(() => '?').join(', ');
+        const query = `UPDATE plans SET project_id = ?, project = ?, updated_at = ? WHERE workspace_id = ? AND (plan_id IN (${placeholders}) OR session_id IN (${placeholders}))`;
+        const params: unknown[] = [projectId, projectName || '', now, workspaceId, ...planIds, ...planIds];
+
+        try {
+            this._db.run(query, params);
+            await this._persist();
+            return true;
+        } catch (error) {
+            console.error(`[KanbanDatabase] Failed to set project for plans:`, error);
             return false;
         }
     }
@@ -2212,23 +2273,7 @@ export class KanbanDatabase {
         projectName: string,
         workspaceId: string
     ): Promise<boolean> {
-        if (!(await this.ensureReady()) || !this._db || planIds.length === 0) return false;
-        const effectiveProjectName = projectName === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : projectName;
-        try {
-            this._db.run('BEGIN');
-            for (const planId of planIds) {
-                this._db.run(
-                    "UPDATE plans SET project = ? WHERE (plan_id = ? OR session_id = ?) AND workspace_id = ?",
-                    [effectiveProjectName, planId, planId, workspaceId]
-                );
-            }
-            this._db.run('COMMIT');
-            return await this._persist();
-        } catch (e) {
-            try { this._db.run('ROLLBACK'); } catch { }
-            console.error('[KanbanDatabase] assignPlansToProject failed:', e);
-            return false;
-        }
+        return this.setProjectForPlans(workspaceId, planIds, projectName);
     }
 
     public async getBoardFilteredByProject(
@@ -2237,23 +2282,25 @@ export class KanbanDatabase {
         repoScope: string | null
     ): Promise<KanbanPlanRecord[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
-        // Translate sentinel to empty-string filter for unassigned plans
-        const effectiveProject = project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : project;
-        if (effectiveProject === null && !repoScope) {
-            return this.getBoard(workspaceId);
-        }
-        let sql = `SELECT ${PLAN_COLUMNS} FROM plans WHERE workspace_id = ? AND status = 'active'`;
+        let query = `SELECT ${PLAN_COLUMNS} FROM plans WHERE workspace_id = ? AND status = 'active'`;
         const params: unknown[] = [workspaceId];
-        if (effectiveProject !== null && effectiveProject !== undefined) {
-            sql += ' AND project = ?';
-            params.push(effectiveProject);
-        }
+
         if (repoScope) {
-            sql += " AND repo_scope IN (?, '')";
+            query += " AND repo_scope IN (?, '')";
             params.push(repoScope);
         }
-        sql += ' ORDER BY updated_at DESC';
-        const stmt = this._db.prepare(sql, params);
+
+        if (project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
+            query += ` AND project_id IS NULL`;
+        } else if (project) {
+            query = query.replace(`SELECT ${PLAN_COLUMNS} FROM plans`,
+                `SELECT ${PLAN_COLUMNS}, pr.name AS project FROM plans LEFT JOIN projects pr ON plans.project_id = pr.id`);
+            query += ` AND pr.name = ?`;
+            params.push(project);
+        }
+
+        query += ` ORDER BY updated_at DESC`;
+        const stmt = this._db.prepare(query, params);
         return this._readRows(stmt);
     }
 
@@ -4667,6 +4714,28 @@ export class KanbanDatabase {
             }
         }
 
+        // V35: backfill workspace_name and project_id in plans table
+        const v35 = await this.getMigrationVersion();
+        if (v35 < 35) {
+            console.log('[KanbanDatabase] Running V35 backfill...');
+            try {
+                // Ensure columns exist first
+                this._ensureSchemaColumns();
+
+                this._db.run('BEGIN TRANSACTION');
+                for (const sql of MIGRATION_V35_SQL) {
+                    this._db.exec(sql);
+                }
+                this._db.run('COMMIT');
+                await this.setMigrationVersion(35);
+                console.log('[KanbanDatabase] V35 backfill completed.');
+            } catch (e) {
+                try { this._db.run('ROLLBACK'); } catch { /* ignore */ }
+                console.error('[KanbanDatabase] V35 backfill failed:', e);
+                // Do NOT stamp version — retry on next init
+            }
+        }
+
 
     }
 
@@ -4907,7 +4976,9 @@ FROM plans
                     dispatchedIde: p.dispatched_ide || p.dispatchedIde || '',
                     clickupTaskId: p.clickup_task_id || p.clickupTaskId || '',
                     linearIssueId: p.linear_issue_id || p.linearIssueId || '',
-                    worktreeId: p.worktree_id ?? p.worktreeId ?? undefined
+                    worktreeId: p.worktree_id ?? p.worktreeId ?? undefined,
+                    workspaceName: p.workspace_name || p.workspaceName || '',
+                    projectId: p.project_id !== null && p.project_id !== undefined ? Number(p.project_id) : (p.projectId !== null && p.projectId !== undefined ? Number(p.projectId) : null)
                 };
 
                 try {
@@ -4918,7 +4989,8 @@ FROM plans
                         record.workspaceId, record.createdAt, record.updatedAt, record.lastAction, record.sourceType,
                         record.brainSourcePath, record.mirrorPath, record.routedTo, record.dispatchedAgent,
                         record.dispatchedIde, record.clickupTaskId, record.linearIssueId, record.worktreeId ?? null,
-                        record.isEpic ?? null, record.epicId || ''
+                        record.isEpic ?? null, record.epicId || '',
+                        record.workspaceName || '', record.projectId ?? null
                     ]);
                     restored++;
                 } catch (e) {
@@ -5413,7 +5485,9 @@ FROM plans
                     worktreeId: row.worktree_id !== null && row.worktree_id !== undefined ? Number(row.worktree_id) : undefined,
                     worktreeStatus: String(row.worktree_status || 'none') as 'none' | 'active' | 'merged' | 'deleted',
                     isEpic: row.is_epic !== null && row.is_epic !== undefined ? Number(row.is_epic) : undefined,
-                    epicId: String(row.epic_id || '')
+                    epicId: String(row.epic_id || ''),
+                    workspaceName: String(row.workspace_name || ""),
+                    projectId: row.project_id !== null && row.project_id !== undefined ? Number(row.project_id) : null
                 });
             }
         } finally {

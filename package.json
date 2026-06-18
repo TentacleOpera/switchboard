@@ -645,6 +645,11 @@
           "description": "Controls visibility of the Open Project Panel button on the status bar.",
           "scope": "window"
         },
+        "switchboard.persistPanels": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically reopen Kanban, Project, Planning, and Design panels when VS Code restarts."
+        },
         "switchboard.theme.cyberPanel": {
           "type": "boolean",
           "default": false,

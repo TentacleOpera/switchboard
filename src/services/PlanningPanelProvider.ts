@@ -48,6 +48,8 @@ interface KanbanPlanSummary {
     complexity: string;
     isEpic?: number;
     epicId?: string;
+    clickupTaskId?: string;
+    linearIssueId?: string;
 }
 
 export class PlanningPanelProvider {
@@ -491,6 +493,70 @@ export class PlanningPanelProvider {
         // Send initial active design doc state
         await this._sendActiveDesignDocState();
     }
+
+    public async deserializeWebviewPanel(
+        panel: vscode.WebviewPanel,
+        state: any
+    ): Promise<void> {
+        this._panel = panel;
+        await this._hydratePanel(this._panel, false);
+    }
+
+    public async deserializeProjectPanel(
+        panel: vscode.WebviewPanel,
+        state: any
+    ): Promise<void> {
+        this._projectPanel = panel;
+        await this._hydratePanel(this._projectPanel, true);
+    }
+
+    private async _hydratePanel(
+        panel: vscode.WebviewPanel,
+        isProject: boolean
+    ): Promise<void> {
+        // Critical: set localResourceRoots so the webview can load scripts
+        this._updateWebviewRoots();
+
+        panel.iconPath = vscode.Uri.joinPath(this._extensionUri, 'icon.svg');
+        panel.webview.html = isProject
+            ? this._getProjectHtml(panel.webview)
+            : this._getHtml(panel.webview);
+
+        panel.webview.onDidReceiveMessage(
+            async (msg) => {
+                try {
+                    await this._handleMessage(msg, isProject);
+                } catch (err) {
+                    console.error(`[${isProject ? 'ProjectPanel' : 'PlanningPanel'}] Message handler error:`, err);
+                    panel.webview.postMessage({ type: 'error', message: String(err) });
+                }
+            },
+            null,
+            this._disposables
+        );
+
+        // Use the same dispose semantics as open(): for the planning panel,
+        // dispose all shared resources; for project panel, just null the ref.
+        if (isProject) {
+            panel.onDidDispose(() => {
+                this._projectPanel = undefined;
+            }, null, this._disposables);
+        } else {
+            panel.onDidDispose(() => {
+                this.dispose();
+            }, null, this._disposables);
+        }
+
+        const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
+        panel.webview.postMessage({ type: 'switchboardThemeChanged', theme });
+        const disabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
+        panel.webview.postMessage({ type: 'cyberAnimationSetting', disabled });
+
+        if (isProject) {
+            await this._sendActiveDesignDocState();
+        }
+    }
+
 
     public reveal(): void {
         if (this._panel) {
@@ -1934,6 +2000,92 @@ export class PlanningPanelProvider {
                 await vscode.commands.executeCommand('switchboard.importUnclaimedPlans');
                 break;
             }
+            case 'uploadPlanAttachment': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const { planFile, topic } = msg;
+                if (!workspaceRoot || !planFile) {
+                    this._panel?.webview.postMessage({
+                        type: 'uploadPlanAttachmentResult',
+                        success: false,
+                        error: 'Missing workspace root or plan file.',
+                        planFile
+                    });
+                    break;
+                }
+                try {
+                    const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                    const workspaceId = await this._getWorkspaceId(workspaceRoot);
+                    const plan = await db.getPlanByPlanFile(planFile, workspaceId);
+                    if (!plan) {
+                        this._panel?.webview.postMessage({
+                            type: 'uploadPlanAttachmentResult',
+                            success: false,
+                            error: 'Plan not found in kanban database.',
+                            planFile
+                        });
+                        break;
+                    }
+                    if (!plan.clickupTaskId && !plan.linearIssueId && !plan.clickup_task_id && !plan.linear_issue_id) {
+                        this._panel?.webview.postMessage({
+                            type: 'uploadPlanAttachmentResult',
+                            success: false,
+                            error: 'Plan is not linked to a ClickUp task or Linear issue.',
+                            planFile
+                        });
+                        break;
+                    }
+
+                    const planFileAbsolute = path.isAbsolute(planFile)
+                        ? planFile
+                        : path.join(workspaceRoot, planFile);
+                    const resolvedFile = path.resolve(planFileAbsolute);
+                    const resolvedRoot = path.resolve(workspaceRoot);
+                    if (!resolvedFile.startsWith(resolvedRoot + path.sep) && resolvedFile !== resolvedRoot) {
+                        this._panel?.webview.postMessage({
+                            type: 'uploadPlanAttachmentResult',
+                            success: false,
+                            error: 'Plan file path is outside the workspace root.',
+                            planFile
+                        });
+                        break;
+                    }
+                    const buffer = await fs.promises.readFile(planFileAbsolute);
+                    const fileName = path.basename(planFileAbsolute);
+                    const clickupTaskId = plan.clickupTaskId || plan.clickup_task_id;
+                    const linearIssueId = plan.linearIssueId || plan.linear_issue_id;
+
+                    if (clickupTaskId) {
+                        const clickup = this._adapterFactories.getClickUpSyncService(workspaceRoot);
+                        const result = await clickup.attachFile(clickupTaskId, fileName, buffer);
+                        this._panel?.webview.postMessage({
+                            type: 'uploadPlanAttachmentResult',
+                            success: true,
+                            url: result?.url || '',
+                            provider: 'clickup',
+                            planFile
+                        });
+                    } else if (linearIssueId) {
+                        const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
+                        const result = await linear.uploadAttachment(linearIssueId, buffer, fileName);
+                        this._panel?.webview.postMessage({
+                            type: 'uploadPlanAttachmentResult',
+                            success: true,
+                            url: result?.url || '',
+                            provider: 'linear',
+                            planFile
+                        });
+                    }
+                } catch (error) {
+                    const errMsg = error instanceof Error ? error.message : String(error);
+                    this._panel?.webview.postMessage({
+                        type: 'uploadPlanAttachmentResult',
+                        success: false,
+                        error: errMsg,
+                        planFile
+                    });
+                }
+                break;
+            }
             case 'fetchKanbanPlans': {
                 const requestId = typeof msg.requestId === 'number' ? msg.requestId : 0;
                 const guardKey = 'kanban-plans';
@@ -2306,8 +2458,7 @@ export class PlanningPanelProvider {
                     : workspaceRoot;
                 const filePath = path.join(wr, 'CONSTITUTION.md');
                 const exists = fs.existsSync(filePath);
-                const globalSettingsEnabled = this._context.globalState.get<boolean>('switchboard.globalSettingsEnabled', true);
-                const store = globalSettingsEnabled ? this._context.globalState : this._context.workspaceState;
+                const store = this._context.globalState;
                 const plannerConfig = store.get<any>('switchboard.prompts.roleConfig_planner', undefined);
                 const cfgDefault = vscode.workspace.getConfiguration('switchboard').get<boolean>('planner.constitutionEnabled', false);
                 const enabled = plannerConfig?.addons?.constitution ?? cfgDefault;
@@ -2772,6 +2923,15 @@ export class PlanningPanelProvider {
                 }
                 break;
             }
+            case 'invalidateClickUpCache': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const cacheService = this._adapterFactories.getCacheService(workspaceRoot);
+                cacheService.invalidateTaskCache('clickup');
+                const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
+                clickUp.clearTaskListIndex();
+                break;
+            }
             case 'clickupLoadProject': {
                 const loadSeq = msg.loadSeq;
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
@@ -2813,6 +2973,9 @@ export class PlanningPanelProvider {
                 }
 
                 try {
+                    const cacheService = this._adapterFactories.getCacheService(workspaceRoot);
+                    cacheService.invalidateTaskCache('clickup', listId);
+
                     const tasks = await clickUp.getListTasks(listId, {
                         includeClosed: msg.includeClosed || false,
                         archived: false
@@ -3316,26 +3479,6 @@ export class PlanningPanelProvider {
                 }
                 break;
             }
-            case 'openLocalTicket': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                const provider = msg.provider;
-                const id = msg.id;
-
-                if (workspaceRoot) {
-                    for (const dir of this._getTicketDocumentDirs(workspaceRoot, provider)) {
-                        if (!fs.existsSync(dir)) { continue; }
-                        let files: string[] = [];
-                        try { files = fs.readdirSync(dir); } catch { continue; }
-                        const match = files.find(f => f.startsWith(`${provider}_${id}_`));
-                        if (match) {
-                            const filePath = path.join(dir, match);
-                            await vscode.env.clipboard.writeText(filePath);
-                            break;
-                        }
-                    }
-                }
-                break;
-            }
             case 'listLocalTicketFiles': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const provider = (msg.provider as 'clickup' | 'linear') || 'clickup';
@@ -3769,6 +3912,17 @@ export class PlanningPanelProvider {
                         description: msg.description
                     });
                     if (task) {
+                        // A remote-only ticket diverges from every other ticket in the
+                        // tab (which are both local + online). Import it immediately so
+                        // the local file + DB entry exist, exactly like the Import button.
+                        try {
+                            await vscode.commands.executeCommand(
+                                'switchboard.importTaskAsDocument',
+                                { workspaceRoot, provider: 'clickup', id: task.id, includeSubtasks: false }
+                            );
+                        } catch (importErr) {
+                            console.error('[PlanningPanel] Created ClickUp task but local import failed:', importErr);
+                        }
                         this._panel?.webview.postMessage({
                             type: 'clickupTaskCreated',
                             success: true,
@@ -3820,6 +3974,19 @@ export class PlanningPanelProvider {
                         description: msg.description,
                         projectId
                     });
+                    // A remote-only ticket diverges from every other ticket in the tab
+                    // (which are both local + online). Import it immediately so the local
+                    // file + DB entry exist, exactly like the Import button.
+                    if (result?.id) {
+                        try {
+                            await vscode.commands.executeCommand(
+                                'switchboard.importTaskAsDocument',
+                                { workspaceRoot, provider: 'linear', id: result.id, includeSubtasks: false }
+                            );
+                        } catch (importErr) {
+                            console.error('[PlanningPanel] Created Linear issue but local import failed:', importErr);
+                        }
+                    }
                     this._panel?.webview.postMessage({
                         type: 'linearIssueCreated',
                         success: true,
@@ -5952,8 +6119,12 @@ export class PlanningPanelProvider {
             ? new vscode.RelativePattern(ticketsFolder, '**/*.md')
             : new vscode.RelativePattern(workspaceRoot, '.switchboard/tickets/**/*.md');
 
-        const watcher = vscode.workspace.createFileSystemWatcher(watchGlob, true, false, true);
-        watcher.onDidChange((uri) => {
+        // Watch all events (create + change + delete) rather than change-only.
+        // External/atomic writes (write-temp-then-rename) surface as create+delete
+        // rather than an in-place change, so a change-only watcher silently misses
+        // them — the same issue previously fixed for the kanban plans and docs watchers.
+        const watcher = vscode.workspace.createFileSystemWatcher(watchGlob);
+        const handleTicketFileEvent = (uri: vscode.Uri) => {
             const fileName = path.basename(uri.fsPath);
             const match = fileName.match(/^(linear|clickup)_([^_]+)_.*\.md$/);
             if (!match) { return; }
@@ -5973,7 +6144,10 @@ export class PlanningPanelProvider {
                     this._panel?.webview.postMessage({ type: 'ticketFileChanged', provider, id, title, content });
                 } catch { }
             }, 300));
-        });
+        };
+        watcher.onDidCreate(handleTicketFileEvent);
+        watcher.onDidChange(handleTicketFileEvent);
+        watcher.onDidDelete(handleTicketFileEvent);
 
         this._ticketsViewWatcher = watcher;
         this._disposables.push(watcher);
@@ -6122,7 +6296,9 @@ export class PlanningPanelProvider {
             planFile: r.planFile || '',
             complexity: r.complexity || 'Unknown',
             isEpic: r.isEpic,
-            epicId: r.epicId || ''
+            epicId: r.epicId || '',
+            clickupTaskId: r.clickupTaskId || r.clickup_task_id || '',
+            linearIssueId: r.linearIssueId || r.linear_issue_id || ''
         }));
     }
 

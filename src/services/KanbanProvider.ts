@@ -167,7 +167,7 @@ export class KanbanProvider implements vscode.Disposable {
         const existing = this._cacheServices.get(resolved);
         if (existing) { return existing; }
         const { PlanningPanelCacheService } = require('./PlanningPanelCacheService');
-        const service = new PlanningPanelCacheService(resolved);
+        const service = new PlanningPanelCacheService(resolved, KanbanDatabase.forWorkspace(resolved));
         this._cacheServices.set(resolved, service);
         return service;
     }
@@ -321,21 +321,26 @@ export class KanbanProvider implements vscode.Disposable {
         return Array.from(resolved);
     }
 
-    public onGlobalSettingsFlagChanged(enabled: boolean): void {
-        // Re-read all in-memory settings from the newly active store
-        // This ensures the next read reflects the correct store without a restart
-        this._reloadSettingsFromStore();
-    }
-
-    private _isGlobalSettingsEnabled(): boolean {
-        return this._taskViewerProvider?.getGlobalSettingsEnabled() ?? true;
-    }
-
     private _getSetting<T>(key: string, defaultValue: T): T {
-        if (this._isGlobalSettingsEnabled()) {
-            return this._context.globalState.get<T>(key, defaultValue);
+        const val = this._context.globalState.get<T>(key);
+        if (val !== undefined) {
+            return val;
         }
-        return this._context.workspaceState.get<T>(key, defaultValue);
+        if (this._taskViewerProvider) {
+            const root = this._taskViewerProvider._resolveWorkspaceRoot();
+            if (root) {
+                try {
+                    const db = KanbanDatabase.forWorkspace(root);
+                    if (db.isOpen()) {
+                        const dbVal = db.getConfigJsonSync<T>(key, defaultValue);
+                        if (dbVal !== undefined) {
+                            return dbVal;
+                        }
+                    }
+                } catch {}
+            }
+        }
+        return defaultValue;
     }
 
     private _getRoleConfig(role: string): any {
@@ -346,10 +351,18 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     private async _updateSetting<T>(key: string, value: T): Promise<void> {
-        if (this._isGlobalSettingsEnabled()) {
-            await this._context.globalState.update(key, value);
-        } else {
-            await this._context.workspaceState.update(key, value);
+        await this._context.globalState.update(key, value);
+        if (this._taskViewerProvider) {
+            const root = this._taskViewerProvider._resolveWorkspaceRoot();
+            if (root) {
+                try {
+                    const db = KanbanDatabase.forWorkspace(root);
+                    await db.ensureReady();
+                    await db.setConfigJson(key, value);
+                } catch (e) {
+                    console.error(`[KanbanProvider] Failed to mirror config key ${key} to DB:`, e);
+                }
+            }
         }
     }
 
@@ -426,6 +439,9 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     private async _getCustomKanbanColumns(workspaceRoot: string): Promise<CustomKanbanColumnConfig[]> {
+        if (this._taskViewerProvider) {
+            return this._taskViewerProvider.handleGetCustomKanbanColumns(workspaceRoot);
+        }
         const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
         try {
             if (!fs.existsSync(statePath)) {
@@ -856,6 +872,32 @@ export class KanbanProvider implements vscode.Disposable {
 
         this._setupSessionWatcher();
     }
+
+    public async deserializeWebviewPanel(
+        panel: vscode.WebviewPanel,
+        state: any
+    ): Promise<void> {
+        this._panel = panel;
+        this._panel.iconPath = vscode.Uri.joinPath(this._extensionUri, 'icon.svg');
+        this._panel.webview.html = await this._getHtml(this._panel.webview);
+        this._panel.webview.onDidReceiveMessage(
+            async (msg) => this._handleMessage(msg),
+            undefined,
+            this._disposables
+        );
+        this._panel.onDidDispose(() => {
+            this._panel = undefined;
+            this._lastColumnsSignature = null;
+        }, null, this._disposables);
+
+        const workspaceRoot = this._resolveWorkspaceRoot();
+        if (workspaceRoot) {
+            void this._getKanbanDb(workspaceRoot).ensureReady();
+            await this.applyLiveSyncConfig(workspaceRoot);
+        }
+        this._setupSessionWatcher();
+    }
+
 
     /**
      * Dispose legacy session/state file watchers.
@@ -2370,6 +2412,18 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     private async _getStartupCommands(workspaceRoot: string): Promise<any> {
+        if (this._taskViewerProvider) {
+            const commands = await this._taskViewerProvider.getStartupCommands(workspaceRoot);
+            const visibleAgents = await this._taskViewerProvider.getVisibleAgents(workspaceRoot);
+            const autoCommitOnCodeReview = await this._taskViewerProvider.handleGetAutoCommitOnCodeReviewSetting(workspaceRoot);
+            const julesAutoSyncEnabled = this._context.globalState.get<boolean>('switchboard.agents.julesAutoSyncEnabled', false);
+            return {
+                commands,
+                visibleAgents,
+                julesAutoSyncEnabled,
+                autoCommitOnCodeReview
+            };
+        }
         const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
         try {
             const content = await fs.promises.readFile(statePath, 'utf8');
@@ -2386,11 +2440,34 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     public async getAutoCommitOnCodeReview(workspaceRoot: string): Promise<boolean> {
+        if (this._taskViewerProvider) {
+            return this._taskViewerProvider.handleGetAutoCommitOnCodeReviewSetting(workspaceRoot);
+        }
         const state = await this._getStartupCommands(workspaceRoot);
         return state.autoCommitOnCodeReview ?? true;
     }
 
     private async _saveStartupCommands(workspaceRoot: string, msg: any): Promise<void> {
+        if (this._taskViewerProvider) {
+            await this._taskViewerProvider.updateState(async (state: any) => {
+                if (msg.commands) {
+                    state.startupCommands = msg.commands;
+                }
+                if (msg.visibleAgents) {
+                    state.visibleAgents = {
+                        ...(state.visibleAgents || {}),
+                        ...msg.visibleAgents
+                    };
+                }
+                if (typeof msg.julesAutoSyncEnabled === 'boolean') {
+                    state.julesAutoSyncEnabled = msg.julesAutoSyncEnabled;
+                }
+                if (typeof msg.autoCommitOnCodeReview === 'boolean') {
+                    state.autoCommitOnCodeReview = msg.autoCommitOnCodeReview;
+                }
+            });
+            return;
+        }
         const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
         try {
             let state: any = {};
@@ -3304,6 +3381,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
     }
 
     private async _getCustomAgents(workspaceRoot: string): Promise<CustomAgentConfig[]> {
+        if (this._taskViewerProvider) {
+            return this._taskViewerProvider.getCustomAgents(workspaceRoot);
+        }
         const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
         try {
             if (!fs.existsSync(statePath)) {
@@ -3474,6 +3554,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
     }
 
     private async _getVisibleAgents(workspaceRoot: string): Promise<Record<string, boolean>> {
+        if (this._taskViewerProvider) {
+            return this._taskViewerProvider.getVisibleAgents(workspaceRoot);
+        }
         const defaults: Record<string, boolean> = {
             lead: true,
             coder: true,
@@ -3506,6 +3589,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
     }
 
     private async _hasAssignedAgent(workspaceRoot: string, role: string): Promise<boolean> {
+        if (this._taskViewerProvider) {
+            const commands = await this._taskViewerProvider.getStartupCommands(workspaceRoot);
+            return typeof commands[role] === 'string' && commands[role].trim().length > 0;
+        }
         const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
         try {
             if (!fs.existsSync(statePath)) {
@@ -4376,7 +4463,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     const workspaceId = await this._readWorkspaceId(workspaceRoot);
                     if (workspaceId) {
                         const db = this._getKanbanDb(workspaceRoot);
-                        await db.assignPlansToProject(msg.planIds, msg.projectName, workspaceId);
+                        await db.setProjectForPlans(workspaceId, msg.planIds, msg.projectName);
                         await this._refreshBoard(workspaceRoot);
                     }
                 }

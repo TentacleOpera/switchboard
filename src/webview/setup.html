@@ -538,6 +538,13 @@
                         <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Hide plans in 'reviewed' and 'backlog' columns from the sidebar dropdown to reduce clutter.</span>
                     </div>
                 </label>
+                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
+                    <input id="persist-panels-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                    <div style="display:flex; flex-direction:column; gap:4px;">
+                        <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Persist Switchboard Panels Across IDE Restarts</span>
+                        <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Automatically reopen Kanban, Project, Planning, and Design panels when VS Code: restarts.</span>
+                    </div>
+                </label>
 
                 <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border-dim);">
                     <div style="font-size: 11px; color: var(--text-primary); font-weight: 600; margin-bottom: 8px;">PROMPT SETTINGS EXPORT / IMPORT</div>
@@ -618,12 +625,13 @@
                     <button id="btn-save-mappings" class="secondary-btn" style="flex:1;">Save Mappings</button>
                 </div>
                 <div id="workspace-mapping-status" style="font-size:10px; color:var(--text-secondary); margin-top:8px; font-family:var(--font-mono); white-space:pre-wrap;"></div>
-                <div class="setup-option-group" style="display: flex; align-items: flex-start; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-dim);">
-                    <input type="checkbox" id="global-settings-toggle" checked style="width:auto; margin:0; margin-top:2px;">
+                <div class="setup-option-group" style="display: flex; flex-direction: column; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-dim);">
                     <div style="display:flex; flex-direction:column; gap:4px;">
-                        <span class="setup-label-text" style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Global Settings</span>
-                        <span class="setup-label-desc" style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Persist settings across workspace switches. When disabled, settings are workspace-specific.</span>
+                        <span class="setup-label-text" style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Migrate Settings</span>
+                        <span class="setup-label-desc" style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Settings are now global by default. Copy your local database settings for this repository to your global settings.</span>
                     </div>
+                    <button id="btn-copy-db-settings" class="secondary-btn" style="margin-top: 4px;">Copy DB Settings to Global</button>
+                    <div id="copy-db-settings-status" style="font-size: 10px; color: var(--text-secondary); font-family: var(--font-mono); display: none;"></div>
                 </div>
             </div>
 
@@ -1632,6 +1640,7 @@
                     vscode.postMessage({ type: 'getPreventAgentFileOpeningSetting' });
                     vscode.postMessage({ type: 'getAutoCommitOnCodeReviewSetting' });
                     vscode.postMessage({ type: 'getExcludeReviewedBacklogSetting' });
+                    vscode.postMessage({ type: 'getPersistPanelsSetting' });
                 },
                 'database': () => {
                     vscode.postMessage({ type: 'getAllDbPaths' });
@@ -1651,7 +1660,6 @@
                 },
                 'mappings': () => {
                     vscode.postMessage({ type: 'getWorkspaceMappings' });
-                    vscode.postMessage({ type: 'getGlobalSettingsEnabled' });
                 },
                 'planning-panel': () => {
                     vscode.postMessage({ type: 'getPlanningSources' });
@@ -3540,9 +3548,16 @@
             workspaceMappings.forEach((mapping, index) => renderWorkspaceMappingItem(mapping, index));
         }
  
-        document.getElementById('global-settings-toggle')?.addEventListener('change', (e) => {
-            const enabled = e.target.checked;
-            vscode.postMessage({ type: 'setGlobalSettingsEnabled', enabled });
+        document.getElementById('btn-copy-db-settings')?.addEventListener('click', () => {
+            const btn = document.getElementById('btn-copy-db-settings');
+            const status = document.getElementById('copy-db-settings-status');
+            if (btn) btn.disabled = true;
+            if (status) {
+                status.style.display = 'block';
+                status.style.color = 'var(--text-secondary)';
+                status.textContent = 'Copying...';
+            }
+            vscode.postMessage({ type: 'copyDbSettingsToGlobal' });
         });
  
         document.getElementById('prevent-agent-file-opening-toggle')?.addEventListener('change', (e) => {
@@ -3598,6 +3613,10 @@
 
         document.getElementById('exclude-reviewed-backlog-toggle')?.addEventListener('change', (e) => {
             vscode.postMessage({ type: 'setExcludeReviewedBacklogSetting', enabled: e.target.checked });
+        });
+
+        document.getElementById('persist-panels-toggle')?.addEventListener('change', (e) => {
+            vscode.postMessage({ type: 'setPersistPanelsSetting', enabled: e.target.checked });
         });
  
         document.getElementById('workspace-mapping-enabled')?.addEventListener('change', (e) => {
@@ -3901,10 +3920,21 @@
                         runSetupHydration(() => renderPlanScannerConfig(message.config));
                     }
                     break;
-                case 'globalSettingsEnabled': {
+                case 'copyDbSettingsResult': {
                     runSetupHydration(() => {
-                        const toggle = document.getElementById('global-settings-toggle');
-                        if (toggle) toggle.checked = message.enabled === true;
+                        const btn = document.getElementById('btn-copy-db-settings');
+                        const status = document.getElementById('copy-db-settings-status');
+                        if (btn) btn.disabled = false;
+                        if (status) {
+                            status.style.display = 'block';
+                            if (message.copiedCount > 0) {
+                                status.style.color = 'var(--text-success, #4caf50)';
+                                status.textContent = `Copied ${message.copiedCount} settings to global`;
+                            } else {
+                                status.style.color = 'var(--text-secondary)';
+                                status.textContent = 'No DB settings found to copy';
+                            }
+                        }
                     });
                     break;
                 }
@@ -4125,6 +4155,13 @@
                 case 'excludeReviewedBacklogSetting': {
                     runSetupHydration(() => {
                         const toggle = document.getElementById('exclude-reviewed-backlog-toggle');
+                        if (toggle) toggle.checked = message.enabled === true;
+                    });
+                    break;
+                }
+                case 'persistPanelsSetting': {
+                    runSetupHydration(() => {
+                        const toggle = document.getElementById('persist-panels-toggle');
                         if (toggle) toggle.checked = message.enabled === true;
                     });
                     break;

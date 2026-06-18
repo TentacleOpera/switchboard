@@ -172,6 +172,73 @@ export class DesignPanelProvider implements vscode.Disposable {
         }
     }
 
+    public async deserializeWebviewPanel(
+        panel: vscode.WebviewPanel,
+        state: any
+    ): Promise<void> {
+        this._panel = panel;
+        this._panel.iconPath = vscode.Uri.joinPath(this._extensionUri, 'icon.svg');
+        this._panel.webview.html = this._getHtml(this._panel.webview);
+
+        this._panel.webview.onDidReceiveMessage(
+            async (message) => this._handleMessage(message),
+            undefined,
+            this._disposables
+        );
+
+        this._panel.onDidDispose(() => {
+            this._panel = undefined;
+            this.disposeWatchers();
+        }, null, this._disposables);
+
+        this._setupHtmlFolderWatchers();
+        this._setupDesignFolderWatchers();
+        this._setupImagesFolderWatchers();
+        this._setupBriefsFolderWatchers();
+
+        // Replicate the workspace-folder-change listener from open() so restored
+        // panels react to workspace changes (refreshes content and re-wires watchers).
+        this._disposables.push(
+            vscode.workspace.onDidChangeWorkspaceFolders(async () => {
+                this.postMessage({
+                    type: 'workspaceItemsUpdated',
+                    items: buildWorkspaceItems(this._getWorkspaceRoots())
+                });
+                this.disposeWatchers();
+                this._setupHtmlFolderWatchers();
+                this._setupDesignFolderWatchers();
+                this._setupImagesFolderWatchers();
+                this._setupBriefsFolderWatchers();
+                await this._sendHtmlDocsReady();
+                await this._sendDesignDocsReady();
+                await this._sendImagesDocsReady();
+                await this._sendBriefsDocsReady();
+            })
+        );
+
+        if (!this._themeListenersRegistered) {
+            this._themeListenersRegistered = true;
+            this._disposables.push(
+                vscode.window.onDidChangeActiveColorTheme(() => {
+                    this._panel?.webview.postMessage({ type: 'themeChanged' });
+                })
+            );
+            this._disposables.push(
+                vscode.workspace.onDidChangeConfiguration(e => {
+                    if (e.affectsConfiguration('switchboard.theme.disableCyberAnimation')) {
+                        const disabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
+                        this._panel?.webview.postMessage({ type: 'cyberAnimationSetting', disabled });
+                    }
+                    if (e.affectsConfiguration('switchboard.theme.name')) {
+                        const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
+                        this._panel?.webview.postMessage({ type: 'switchboardThemeChanged', theme });
+                    }
+                })
+            );
+        }
+    }
+
+
     public postMessage(message: any): void {
         this._panel?.webview.postMessage(message);
     }

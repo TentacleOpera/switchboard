@@ -96,6 +96,7 @@
     let _kanbanAvailableColumns = [];
     let _kanbanSelectedPlan = null;
     let _kanbanPreviewRequestId = 0;
+    let uploadingPlanAttachment = false;
 
     let _epicSelectedPlan = null;
     let _pendingKanbanSelection = null;
@@ -268,6 +269,18 @@
                     }
                 }
                 break;
+            case 'uploadPlanAttachmentResult': {
+                uploadingPlanAttachment = false;
+                if (_kanbanSelectedPlan && _kanbanSelectedPlan.planFile === msg.planFile) {
+                    renderKanbanMetaBar(_kanbanSelectedPlan);
+                }
+                if (msg.success) {
+                    alert(`Plan uploaded to ${msg.provider} ticket.\n${msg.url || ''}`);
+                } else {
+                    alert(`Upload failed: ${msg.error}`);
+                }
+                break;
+            }
             case 'fileSaved':
             case 'saveFileContentResult':
                 if (msg.success) {
@@ -560,6 +573,11 @@
                 <span class="kanban-meta-value" id="kanban-meta-constitution">Loading...</span>
             </div>
             <div class="kanban-meta-group" style="margin-left: auto;">
+                ${plan.clickupTaskId || plan.linearIssueId ? `
+                    <button class="strip-btn" id="kanban-meta-upload-btn" ${uploadingPlanAttachment ? 'disabled' : ''}>
+                        ${uploadingPlanAttachment ? 'Uploading...' : 'Upload'}
+                    </button>
+                ` : ''}
                 <button class="strip-btn" id="kanban-meta-log-btn">Log</button>
                 <button class="strip-btn" id="kanban-meta-delete-btn">Delete</button>
             </div>
@@ -613,6 +631,22 @@
         document.getElementById('kanban-meta-delete-btn').addEventListener('click', () => {
             vscode.postMessage({ type: 'deleteKanbanPlan', planId: plan.planId, planFile: plan.planFile, workspaceRoot: plan.workspaceRoot });
         });
+        const uploadBtn = document.getElementById('kanban-meta-upload-btn');
+        if (uploadBtn) {
+            uploadBtn.addEventListener('click', () => {
+                if (!_kanbanSelectedPlan) return;
+                if (uploadingPlanAttachment) return;
+                uploadingPlanAttachment = true;
+                uploadBtn.disabled = true;
+                uploadBtn.textContent = 'Uploading...';
+                vscode.postMessage({
+                    type: 'uploadPlanAttachment',
+                    workspaceRoot: _kanbanSelectedPlan.workspaceRoot,
+                    planFile: _kanbanSelectedPlan.planFile,
+                    topic: _kanbanSelectedPlan.topic || '(untitled)'
+                });
+            });
+        }
     }
 
     if (btnImportKanbanPlans) {

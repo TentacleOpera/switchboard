@@ -2577,6 +2577,31 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.window.onDidOpenTerminal(() => taskViewerProvider.refresh()),
         vscode.window.onDidCloseTerminal(() => taskViewerProvider.refresh())
     );
+    // Conditionally register panel serializers for persistence
+    const persistPanels = vscode.workspace.getConfiguration('switchboard').get<boolean>('persistPanels', false);
+    if (persistPanels) {
+        vscode.window.registerWebviewPanelSerializer('switchboard-kanban', {
+            deserializeWebviewPanel: async (panel, state) => {
+                await kanbanProvider!.deserializeWebviewPanel(panel, state);
+            }
+        });
+        vscode.window.registerWebviewPanelSerializer('switchboard-planning', {
+            deserializeWebviewPanel: async (panel, state) => {
+                await planningPanelProvider.deserializeWebviewPanel(panel, state);
+            }
+        });
+        vscode.window.registerWebviewPanelSerializer('switchboard-project', {
+            deserializeWebviewPanel: async (panel, state) => {
+                await planningPanelProvider.deserializeProjectPanel(panel, state);
+            }
+        });
+        vscode.window.registerWebviewPanelSerializer('switchboard-design', {
+            deserializeWebviewPanel: async (panel, state) => {
+                await designPanelProvider.deserializeWebviewPanel(panel, state);
+            }
+        });
+    }
+
     console.timeEnd('switchboard.activate');
 }
 

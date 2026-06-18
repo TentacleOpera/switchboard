@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as https from 'https';
+import { hostInlineImages } from './ImageHostingHelper';
 import { CANONICAL_COLUMNS } from './ClickUpSyncService';
 import { KanbanDatabase } from './KanbanDatabase';
 import type { AutoPullIntervalMinutes } from './IntegrationAutoPullService';
@@ -1681,6 +1682,25 @@ export class LinearSyncService {
       if (result.data.issueCreate.success) {
         const issueId = result.data.issueCreate.issue.id;
         const identifier = result.data.issueCreate.issue.identifier;
+        
+        if (description) {
+          try {
+            const resolvedPlanPath = path.isAbsolute(plan.planFile)
+              ? plan.planFile
+              : path.join(this._workspaceRoot, plan.planFile);
+            const { rewritten } = await hostInlineImages(
+              (fileName, buffer) => this.uploadAttachment(issueId, buffer, fileName),
+              description,
+              resolvedPlanPath
+            );
+            if (rewritten !== description) {
+              await this.updateIssueDescription(issueId, rewritten);
+            }
+          } catch (hostErr) {
+            console.warn(`[LinearSync] Created Linear issue ${issueId}, but inline image hosting failed:`, hostErr);
+          }
+        }
+
         // Overwrite the temp marker with the real issue ID — this is the race-free handoff.
         await this.setIssueIdForPlan(plan.planFile, issueId);
         issueCreated = true;
@@ -1749,9 +1769,24 @@ export class LinearSyncService {
     }));
 
     if (result.data?.issueCreate?.success) {
+      const issueId = result.data.issueCreate.issue.id;
+      const identifier = result.data.issueCreate.issue.identifier;
+      if (params.description) {
+        try {
+          const { rewritten } = await hostInlineImages(
+            (fileName, buffer) => this.uploadAttachment(issueId, buffer, fileName),
+            params.description
+          );
+          if (rewritten !== params.description) {
+            await this.updateIssueDescription(issueId, rewritten);
+          }
+        } catch (hostErr) {
+          console.warn(`[LinearSync] Created issue ${issueId}, but inline image hosting failed:`, hostErr);
+        }
+      }
       return {
-        id: result.data.issueCreate.issue.id,
-        identifier: result.data.issueCreate.issue.identifier
+        id: issueId,
+        identifier
       };
     } else {
       throw new Error("Failed to create Linear issue.");

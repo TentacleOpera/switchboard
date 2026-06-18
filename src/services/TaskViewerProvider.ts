@@ -67,6 +67,7 @@ import {
     type ClickUpAutomationRule,
     type LinearAutomationRule
 } from '../models/PipelineDefinition';
+import { hostInlineImages } from './ImageHostingHelper';
 import {
     AutobanConfigState,
     buildAutobanBroadcastState,
@@ -352,7 +353,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _linearServices: Map<string, LinearSyncService> = new Map();
     private _notionContentCache: Map<string, string | null> = new Map();
     private _localApiServer: LocalApiServer | null = null;
-    private _globalSettingsEnabled: boolean = true;
     private _isMigratingSettings: boolean = false;
 
     // Last-accessed tracking for background prefetch
@@ -386,9 +386,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         needsSetup: boolean = false
     ) {
         this._needsSetup = needsSetup;
-        this._globalSettingsEnabled = this._context.globalState.get<boolean>(
-            'switchboard.globalSettingsEnabled', true
-        );
+        const migrated = this._context.globalState.get<boolean>('switchboard.settingsUnified.v1', false);
+        if (!migrated) {
+            void this._runPhase0Migration();
+        }
         this._pipeline = new PipelineOrchestrator(
             () => this._postPipelineState(),
             async (role, sessionId, instruction) => {
@@ -529,51 +530,23 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return result;
     }
 
-    public getGlobalSettingsEnabled(): boolean {
-        return this._globalSettingsEnabled;
-    }
-
-    public async setGlobalSettingsEnabled(enabled: boolean): Promise<void> {
-        if (this._isMigratingSettings) {
-            return;
-        }
-
-        const wasEnabled = this._globalSettingsEnabled;
-        if (wasEnabled === enabled) {
-            return;
-        }
-
-        this._isMigratingSettings = true;
-        try {
-            this._globalSettingsEnabled = enabled;
-            await this._context.globalState.update('switchboard.globalSettingsEnabled', enabled);
-
-            // Propagate the updated flag to KanbanProvider so its in-memory reads stay in sync
-            this._kanbanProvider?.onGlobalSettingsFlagChanged(enabled);
-
-            // Trigger migration when toggling
-            if (!wasEnabled && enabled) {
-                await this._migrateWorkspaceStateToGlobal();
-            } else if (wasEnabled && !enabled) {
-                await this._migrateGlobalStateToWorkspace();
-            }
-        } finally {
-            this._isMigratingSettings = false;
-        }
-    }
-
     public getSetting<T>(key: string, defaultValue: T): T {
-        if (this._globalSettingsEnabled) {
-            return this._context.globalState.get<T>(key, defaultValue);
-        }
-        return this._context.workspaceState.get<T>(key, defaultValue);
+        return this._context.globalState.get<T>(key, defaultValue);
     }
 
     public async updateSetting<T>(key: string, value: T): Promise<void> {
-        if (this._globalSettingsEnabled) {
-            await this._context.globalState.update(key, value);
-        } else {
-            await this._context.workspaceState.update(key, value);
+        await this._context.globalState.update(key, value);
+        if (TaskViewerProvider._MIGRATABLE_NON_ROLE_KEYS.includes(key) || key.startsWith('switchboard.prompts.roleConfig_')) {
+            const root = this._resolveWorkspaceRoot();
+            if (root) {
+                try {
+                    const db = KanbanDatabase.forWorkspace(root);
+                    await db.ensureReady();
+                    await db.setConfigJson(key, value);
+                } catch (e) {
+                    console.error(`[TaskViewerProvider] Failed to mirror ${key} to DB:`, e);
+                }
+            }
         }
     }
 
@@ -718,26 +691,87 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return [...TaskViewerProvider._MIGRATABLE_NON_ROLE_KEYS, ...roleKeys];
     }
 
-    private async _migrateWorkspaceStateToGlobal(): Promise<void> {
-        const keysToMigrate = this._collectMigratableKeys(this._context.workspaceState);
-
-        for (const key of keysToMigrate) {
-            const value = this._context.workspaceState.get(key);
-            if (value !== undefined) {
-                await this._context.globalState.update(key, value);
+    private async _runPhase0Migration(): Promise<void> {
+        try {
+            const oldFlag = this._context.globalState.get<boolean>('switchboard.globalSettingsEnabled');
+            if (oldFlag === false) {
+                const keysToMigrate = this._collectMigratableKeys(this._context.workspaceState);
+                for (const key of keysToMigrate) {
+                    const value = this._context.workspaceState.get(key);
+                    if (value !== undefined) {
+                        await this._context.globalState.update(key, value);
+                    }
+                }
             }
+
+            const mapping: Record<string, string> = {
+                'switchboard.agents.visibleAgents': 'visibleAgents',
+                'switchboard.agents.startupCommands': 'startupCommands',
+                'switchboard.agents.customAgents': 'customAgents',
+                'switchboard.kanban.customColumns': 'customKanbanColumns',
+                'switchboard.agents.promptOverrides': 'defaultPromptOverrides',
+                'switchboard.kanban.autoCommitOnCodeReview': 'autoCommitOnCodeReview',
+                'switchboard.agents.julesAutoSyncEnabled': 'julesAutoSyncEnabled'
+            };
+
+            const root = this._resolveWorkspaceRoot();
+            if (root) {
+                const statePath = this._resolveStateFilePath(root);
+                if (statePath && fs.existsSync(statePath)) {
+                    const content = await fs.promises.readFile(statePath, 'utf8');
+                    const state = JSON.parse(content);
+                    for (const [globalKey, stateKey] of Object.entries(mapping)) {
+                        if (this._context.globalState.get(globalKey) === undefined && state[stateKey] !== undefined) {
+                            await this._context.globalState.update(globalKey, state[stateKey]);
+                        }
+                    }
+                }
+            }
+
+            await this._context.globalState.update('switchboard.settingsUnified.v1', true);
+            await this._context.globalState.update('switchboard.globalSettingsEnabled', undefined);
+        } catch (e) {
+            console.error('[TaskViewerProvider] Phase 0 migration failed:', e);
         }
     }
 
-    private async _migrateGlobalStateToWorkspace(): Promise<void> {
-        const keysToMigrate = this._collectMigratableKeys(this._context.globalState);
-
-        for (const key of keysToMigrate) {
-            const value = this._context.globalState.get(key);
-            if (value !== undefined) {
-                await this._context.workspaceState.update(key, value);
-            }
+    public async copyDbSettingsToGlobal(workspaceRoot?: string): Promise<{ copied: number }> {
+        const root = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!root) {
+            return { copied: 0 };
         }
+        const statePath = this._resolveStateFilePath(root);
+        if (!statePath || !fs.existsSync(statePath)) {
+            return { copied: 0 };
+        }
+        let copied = 0;
+        try {
+            const content = await fs.promises.readFile(statePath, 'utf8');
+            const state = JSON.parse(content);
+            
+            const mapping: Record<string, string> = {
+                'switchboard.agents.visibleAgents': 'visibleAgents',
+                'switchboard.agents.startupCommands': 'startupCommands',
+                'switchboard.agents.customAgents': 'customAgents',
+                'switchboard.kanban.customColumns': 'customKanbanColumns',
+                'switchboard.agents.promptOverrides': 'defaultPromptOverrides',
+                'switchboard.kanban.autoCommitOnCodeReview': 'autoCommitOnCodeReview',
+                'switchboard.agents.julesAutoSyncEnabled': 'julesAutoSyncEnabled'
+            };
+
+            for (const [globalKey, stateKey] of Object.entries(mapping)) {
+                if (state[stateKey] !== undefined) {
+                    await this._context.globalState.update(globalKey, state[stateKey]);
+                    copied++;
+                }
+            }
+
+            this.notifyStateChanged();
+            void vscode.commands.executeCommand('switchboard.refreshUI');
+        } catch (e) {
+            console.error('[TaskViewerProvider] copyDbSettingsToGlobal failed:', e);
+        }
+        return { copied };
     }
 
     /**
@@ -1683,6 +1717,29 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // Update
                 for (const updater of updaters) {
                     await updater(state);
+                }
+
+                // Unify to globalState
+                if (state.startupCommands !== undefined) {
+                    await this._context.globalState.update('switchboard.agents.startupCommands', state.startupCommands);
+                }
+                if (state.visibleAgents !== undefined) {
+                    await this._context.globalState.update('switchboard.agents.visibleAgents', state.visibleAgents);
+                }
+                if (state.customAgents !== undefined) {
+                    await this._context.globalState.update('switchboard.agents.customAgents', state.customAgents);
+                }
+                if (state.customKanbanColumns !== undefined) {
+                    await this._context.globalState.update('switchboard.kanban.customColumns', state.customKanbanColumns);
+                }
+                if (state.defaultPromptOverrides !== undefined) {
+                    await this._context.globalState.update('switchboard.agents.promptOverrides', state.defaultPromptOverrides);
+                }
+                if (state.autoCommitOnCodeReview !== undefined) {
+                    await this._context.globalState.update('switchboard.kanban.autoCommitOnCodeReview', state.autoCommitOnCodeReview);
+                }
+                if (state.julesAutoSyncEnabled !== undefined) {
+                    await this._context.globalState.update('switchboard.agents.julesAutoSyncEnabled', state.julesAutoSyncEnabled);
                 }
 
                 // Write only if state actually changed
@@ -3181,6 +3238,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     public async getStartupCommands(workspaceRoot?: string): Promise<Record<string, string>> {
+        const globalValue = this._context.globalState.get<Record<string, string>>('switchboard.agents.startupCommands');
+        const customAgentsGlobal = this._context.globalState.get<any[]>('switchboard.agents.customAgents');
+        
+        if (globalValue !== undefined) {
+            const startupCommands = { ...globalValue };
+            for (const agent of parseCustomAgents(customAgentsGlobal)) {
+                startupCommands[agent.role] = agent.startupCommand;
+            }
+            return startupCommands;
+        }
+
         const statePath = this._resolveStateFilePath(workspaceRoot);
         if (!statePath) {
             console.warn(`[TaskViewerProvider] getStartupCommands: statePath is null for workspaceRoot='${workspaceRoot}'`);
@@ -3243,6 +3311,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             researcher: false,
             splitter: false
         };
+
+        const globalValue = this._context.globalState.get<Record<string, boolean>>('switchboard.agents.visibleAgents');
+        const customAgentsGlobal = this._context.globalState.get<any[]>('switchboard.agents.customAgents');
+
+        if (globalValue !== undefined) {
+            for (const agent of parseCustomAgents(customAgentsGlobal)) {
+                defaults[agent.role] = true;
+            }
+            return { ...defaults, ...globalValue };
+        }
+
         const statePath = this._resolveStateFilePath(workspaceRoot);
         if (!statePath) return defaults;
         try {
@@ -3258,6 +3337,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     public async getCustomAgents(workspaceRoot?: string): Promise<CustomAgentConfig[]> {
+        const globalValue = this._context.globalState.get<CustomAgentConfig[]>('switchboard.agents.customAgents');
+        if (globalValue !== undefined) {
+            return parseCustomAgents(globalValue);
+        }
+
         const statePath = this._resolveStateFilePath(workspaceRoot);
         if (!statePath) return [];
         try {
@@ -3270,6 +3354,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     private async _getCustomKanbanColumns(workspaceRoot?: string): Promise<CustomKanbanColumnConfig[]> {
+        const globalValue = this._context.globalState.get<CustomKanbanColumnConfig[]>('switchboard.kanban.customColumns');
+        if (globalValue !== undefined) {
+            return parseCustomKanbanColumns(globalValue);
+        }
+
         const statePath = this._resolveStateFilePath(workspaceRoot);
         if (!statePath) {
             return [];
@@ -3306,28 +3395,21 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         visibleAgents: Record<string, boolean>;
         autoCommitOnCodeReview: boolean;
     }> {
-        const [commands, planIngestionFolder, visibleAgents] = await Promise.all([
+        const [commands, planIngestionFolder, visibleAgents, autoCommitOnCodeReview] = await Promise.all([
             this.getStartupCommands(workspaceRoot),
             this.getPlanIngestionFolder(workspaceRoot),
-            this.getVisibleAgents(workspaceRoot)
+            this.getVisibleAgents(workspaceRoot),
+            this.handleGetAutoCommitOnCodeReviewSetting(workspaceRoot)
         ]);
-        const statePath = this._resolveStateFilePath(workspaceRoot);
-        let autoCommitOnCodeReview = true;
-        if (statePath) {
-            try {
-                const content = await fs.promises.readFile(statePath, 'utf8');
-                const state = JSON.parse(content);
-                if (state.autoCommitOnCodeReview === false) autoCommitOnCodeReview = false;
-            } catch {}
-        }
         return { commands, planIngestionFolder, visibleAgents, autoCommitOnCodeReview };
     }
 
     public async handleGetAutoCommitOnCodeReviewSetting(workspaceRoot?: string): Promise<boolean> {
-        const root = this._resolveWorkspaceRoot(workspaceRoot);
-        if (this._kanbanProvider && root) {
-            return this._kanbanProvider.getAutoCommitOnCodeReview(root);
+        const globalValue = this._context.globalState.get<boolean>('switchboard.kanban.autoCommitOnCodeReview');
+        if (globalValue !== undefined) {
+            return globalValue;
         }
+
         const statePath = this._resolveStateFilePath(workspaceRoot);
         if (!statePath) return true;
         try {
@@ -3883,8 +3965,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         const integrationStates = await this.getIntegrationSetupStates(workspaceRoot);
         this._setupPanelProvider.postMessage({ type: 'integrationSetupStates', ...integrationStates });
-
-        this._setupPanelProvider.postMessage({ type: 'globalSettingsEnabled', enabled: this._globalSettingsEnabled });
     }
 
     public async getIntegrationSetupStates(workspaceRoot?: string): Promise<{
@@ -4184,7 +4264,26 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             priority: options?.priority
         });
         if (task) {
-            this._showTemporaryNotification(`Created ClickUp task: ${task.name}`);
+            if (options?.description) {
+                const clickUp = this._getClickUpService(resolvedRoot);
+                const { rewritten, warnings } = await hostInlineImages(
+                    (fileName, buffer) => clickUp.attachFile(task.id, fileName, buffer),
+                    options.description
+                );
+                if (rewritten !== options.description) {
+                    await clickUp.updateTask(task.id, {
+                        markdown_content: rewritten
+                    });
+                    task.description = rewritten;
+                }
+                if (warnings.length > 0) {
+                    this._showTemporaryNotification(`Created task, but image hosting failed: ${warnings.join('; ')}`);
+                } else {
+                    this._showTemporaryNotification(`Created ClickUp task: ${task.name}`);
+                }
+            } else {
+                this._showTemporaryNotification(`Created ClickUp task: ${task.name}`);
+            }
         }
         return task;
     }
@@ -5150,7 +5249,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const resolved = path.resolve(workspaceRoot);
         let service = this._cacheServices.get(resolved);
         if (!service) {
-            service = new PlanningPanelCacheService(resolved);
+            service = new PlanningPanelCacheService(resolved, KanbanDatabase.forWorkspace(resolved));
             this._cacheServices.set(resolved, service);
         }
         return service;
@@ -6799,17 +6898,22 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private async _getDefaultPromptOverrides(
         workspaceRoot?: string
     ): Promise<Partial<Record<string, DefaultPromptOverride>>> {
-        const statePath = this._resolveStateFilePath(workspaceRoot);
+        const globalValue = this._context.globalState.get<any>('switchboard.agents.promptOverrides');
         let overrides: Partial<Record<string, DefaultPromptOverride>> = {};
-        if (statePath) {
-            try {
-                const content = await fs.promises.readFile(statePath, 'utf8');
-                const state = JSON.parse(content);
-                overrides = parseDefaultPromptOverrides(state.defaultPromptOverrides);
-            } catch { /* file may not exist or be invalid */ }
+        if (globalValue !== undefined) {
+            overrides = parseDefaultPromptOverrides(globalValue);
+        } else {
+            const statePath = this._resolveStateFilePath(workspaceRoot);
+            if (statePath) {
+                try {
+                    const content = await fs.promises.readFile(statePath, 'utf8');
+                    const state = JSON.parse(content);
+                    overrides = parseDefaultPromptOverrides(state.defaultPromptOverrides);
+                } catch { /* file may not exist or be invalid */ }
+            }
         }
 
-        // Merge with roleConfigs from workspaceState
+        // Merge with roleConfigs from globalState
         const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'splitter'];
         for (const role of roles) {
             const config: any = this.getSetting(`switchboard.prompts.roleConfig_${role}`, undefined);
@@ -17720,17 +17824,34 @@ What would you like to find?`;
                 ? lines[0].substring(2).trim()
                 : undefined;
 
+            let descriptionToPush = description;
+            const warningsAll: string[] = [];
+
             if (provider === 'linear') {
                 const linear = this._getLinearService(resolvedRoot);
-                await linear.updateIssueDescription(id, description, titleFromHeading);
+                const res = await hostInlineImages(
+                    (fileName, buffer) => linear.uploadAttachment(id, buffer, fileName),
+                    description,
+                    filePath
+                );
+                descriptionToPush = res.rewritten;
+                warningsAll.push(...res.warnings);
+                await linear.updateIssueDescription(id, descriptionToPush, titleFromHeading);
             } else {
                 const clickUp = this._getClickUpService(resolvedRoot);
+                const res = await hostInlineImages(
+                    (fileName, buffer) => clickUp.attachFile(id, fileName, buffer),
+                    description,
+                    filePath
+                );
+                descriptionToPush = res.rewritten;
+                warningsAll.push(...res.warnings);
                 const name = titleFromHeading;
                 // ClickUp's WRITE field for markdown is `markdown_content`
                 // (`markdown_description` is read-only on GET responses and is
                 // silently ignored on PUT).
                 await clickUp.updateTask(id, {
-                    markdown_content: description,
+                    markdown_content: descriptionToPush,
                     ...(name ? { name } : {})
                 });
             }
@@ -17745,7 +17866,11 @@ What would you like to find?`;
                 console.error('[TaskViewerProvider] failed to update ticket sync time after push:', touchErr);
             }
 
-            return { success: true, message: `Pushed edits to remote ticket ${id}.` };
+            const baseMsg = `Pushed edits to remote ticket ${id}.`;
+            const message = warningsAll.length
+                ? `${baseMsg} (${warningsAll.length} image issue(s): ${warningsAll.join('; ')})`
+                : baseMsg;
+            return { success: true, message };
         } catch (error) {
             return { success: false, error: error instanceof Error ? error.message : String(error) };
         }

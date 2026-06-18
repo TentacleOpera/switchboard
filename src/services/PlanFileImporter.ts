@@ -48,6 +48,8 @@ export async function importPlanFiles(workspaceRoot: string, effectiveStateRoot?
     }
 
     const workspaceId = await ensureWorkspaceIdentity(effectiveRoot);
+    const workspaceMappings = await db.getWorkspaceMappings();
+    const workspaceNameMap = new Map(workspaceMappings.mappings.map(m => [m.id, m.name]));
 
     const now = new Date().toISOString();
     const records: KanbanPlanRecord[] = [];
@@ -124,7 +126,9 @@ export async function importPlanFiles(workspaceRoot: string, effectiveStateRoot?
             dispatchedAgent: '',
             dispatchedIde: '',
             clickupTaskId: hasMixedAutomationMetadata ? '' : clickupTaskId,
-            linearIssueId: hasMixedAutomationMetadata ? '' : linearIssueId
+            linearIssueId: hasMixedAutomationMetadata ? '' : linearIssueId,
+            workspaceName: workspaceNameMap.get(workspaceId) || '',
+            projectId: null
         });
     }
 

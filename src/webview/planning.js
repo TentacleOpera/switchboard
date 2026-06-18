@@ -192,6 +192,8 @@
     let currentTicketTags = [];
     let availableLinearLabels = [];
     let availableClickUpTags = [];
+    let _tagsModalOpen = false;
+    let _tagsCatalogLoading = false;
 
     // Cached HTML strings for DOM guard comparisons
     let _lastTicketsStateFilterHtml = '';
@@ -243,41 +245,79 @@
         });
     }
 
+    function requestTagsCatalog() {
+        const provider = lastIntegrationProvider;
+        if (provider === 'linear') {
+            vscode.postMessage({
+                type: 'linearLoadAutomationCatalog',
+                workspaceRoot: ticketsWorkspaceRoot
+            });
+        } else {
+            const spaceId = clickUpSelectedSpaceId || (clickUpAvailableSpaces[0]?.id);
+            if (spaceId) {
+                vscode.postMessage({
+                    type: 'clickupLoadSpaceTags',
+                    spaceId,
+                    workspaceRoot: ticketsWorkspaceRoot
+                });
+            }
+        }
+    }
+
+    function renderTagsModalList() {
+        const availableList = document.getElementById('tags-available-list');
+        if (!availableList) return;
+
+        const provider = lastIntegrationProvider;
+        const availableTags = provider === 'linear' ? availableLinearLabels : availableClickUpTags;
+
+        availableList.innerHTML = '';
+
+        if (!availableTags || availableTags.length === 0) {
+            availableList.innerHTML = _tagsCatalogLoading
+                ? '<div style="color: var(--text-secondary); font-size: 12px; padding: 8px;">Loading tags...</div>'
+                : '<div style="color: var(--text-secondary); font-size: 12px; padding: 8px;">No tags available</div>';
+            return;
+        }
+
+        const currentTagNames = currentTicketTags.map(t => t.name || t);
+        availableTags.forEach(tag => {
+            const item = document.createElement('label');
+            item.className = 'tag-checkbox-item';
+
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.value = provider === 'linear' ? tag.id : tag.name;
+            checkbox.checked = currentTagNames.includes(tag.name);
+
+            const label = document.createElement('span');
+            label.className = 'tag-checkbox-label';
+            label.textContent = tag.name;
+
+            item.appendChild(checkbox);
+            item.appendChild(label);
+            availableList.appendChild(item);
+        });
+    }
+
     function openTagsModal() {
         const modal = document.getElementById('tags-modal');
         const availableList = document.getElementById('tags-available-list');
-        
+
         if (!modal || !availableList) return;
-        
-        availableList.innerHTML = '';
-        
+
+        _tagsModalOpen = true;
+
         const provider = lastIntegrationProvider;
         const availableTags = provider === 'linear' ? availableLinearLabels : availableClickUpTags;
-        
-        if (availableTags.length === 0) {
-            availableList.innerHTML = '<div style="color: var(--text-secondary); font-size: 12px; padding: 8px;">No tags available</div>';
-        } else {
-            availableTags.forEach(tag => {
-                const item = document.createElement('label');
-                item.className = 'tag-checkbox-item';
-                
-                const checkbox = document.createElement('input');
-                checkbox.type = 'checkbox';
-                checkbox.value = provider === 'linear' ? tag.id : tag.name;
-                
-                const currentTagNames = currentTicketTags.map(t => t.name || t);
-                checkbox.checked = currentTagNames.includes(tag.name);
-                
-                const label = document.createElement('span');
-                label.className = 'tag-checkbox-label';
-                label.textContent = tag.name;
-                
-                item.appendChild(checkbox);
-                item.appendChild(label);
-                availableList.appendChild(item);
-            });
+
+        // Lazy-load the tag catalog if it wasn't fetched yet (e.g. restored-state path)
+        if (!availableTags || availableTags.length === 0) {
+            _tagsCatalogLoading = true;
+            requestTagsCatalog();
         }
-        
+
+        renderTagsModalList();
         modal.style.display = 'flex';
     }
 
@@ -317,6 +357,7 @@
         }
 
         modal.style.display = 'none';
+        _tagsModalOpen = false;
     }
 
     function escapeAttr(value) {
@@ -527,13 +568,9 @@
     function switchToTab(tabName) {
         // 1. Clean up dirty flags and edit/review modes (same logic as click handler)
         if (state.dirtyFlags.docs && tabName !== 'docs') { exitEditMode('docs', true); }
-        if (state.dirtyFlags.local && tabName !== 'local') { exitEditMode('local', true); }
         if (state.dirtyFlags.kanban && tabName !== 'kanban') { exitEditMode('kanban', true); }
-        if (state.dirtyFlags.online && tabName !== 'online') { exitEditMode('online', true); }
         if (state.editMode.docs && tabName !== 'docs') { exitEditMode('docs', true); }
-        if (state.editMode.local && tabName !== 'local') { exitEditMode('local', true); }
         if (state.editMode.kanban && tabName !== 'kanban') { exitEditMode('kanban', true); }
-        if (state.editMode.online && tabName !== 'online') { exitEditMode('online', true); }
         if (state.reviewMode.kanban && tabName !== 'kanban') { exitReviewMode('kanban', true); }
 
         // 2. Clear stale pending selection when navigating away from kanban
@@ -1063,11 +1100,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     }
 
     function loadDocumentPreview(sourceId, docId, docName) {
-        if (state.dirtyFlags.local) {
-            exitEditMode('local', true);
-        }
-        if (state.dirtyFlags.online) {
-            exitEditMode('online', true);
+        if (state.dirtyFlags.docs) {
+            exitEditMode('docs', true);
         }
 
         if (state.selectedEl) {
@@ -2904,13 +2938,12 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 break;
             case 'saveOnlineDocFileResult': {
                 const { success, error } = msg;
-                const textarea = document.getElementById('markdown-editor') || document.getElementById('markdown-editor-online');
+                const textarea = document.getElementById('markdown-editor');
                 if (success) {
                     state.activeDocContent = textarea ? textarea.value : '';
                     exitEditMode('docs', true);
-                    exitEditMode('online', true);
-                    if (markdownPreviewOnline) {
-                        markdownPreviewOnline.innerHTML = renderMarkdown(state.activeDocContent);
+                    if (markdownPreview) {
+                        markdownPreview.innerHTML = renderMarkdown(state.activeDocContent);
                     }
                     const statusOnline = document.getElementById('status') || document.getElementById('status-online');
                     if (statusOnline) {
@@ -3505,10 +3538,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 break;
             case 'saveFileContentResult': {
                 const { success, conflict, diskContent, error, tab } = msg;
-                const textarea = document.getElementById(tab === 'docs' ? 'markdown-editor' : (tab === 'local' ? 'markdown-editor-local' : (tab === 'design' ? 'markdown-editor-design' : 'kanban-editor')));
+                const textarea = document.getElementById(tab === 'docs' ? 'markdown-editor' : (tab === 'design' ? 'markdown-editor-design' : 'kanban-editor'));
                 
                 if (success) {
-                    if (tab === 'local' || tab === 'docs') {
+                    if (tab === 'docs') {
                         state.activeDocContent = textarea.value;
                         exitEditMode(tab, true);
                         markdownPreview.innerHTML = renderMarkdown(state.activeDocContent);
@@ -3683,9 +3716,17 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 break;
             case 'linearAutomationCatalogLoaded':
                 availableLinearLabels = msg.labels || [];
+                if (_tagsModalOpen && lastIntegrationProvider === 'linear') {
+                    _tagsCatalogLoading = false;
+                    renderTagsModalList();
+                }
                 break;
             case 'clickupSpaceTagsLoaded':
                 availableClickUpTags = msg.tags || [];
+                if (_tagsModalOpen && lastIntegrationProvider !== 'linear') {
+                    _tagsCatalogLoading = false;
+                    renderTagsModalList();
+                }
                 break;
             case 'linearProjectsLoaded':
                 linearAvailableProjects = msg.projects || [];
@@ -5078,20 +5119,25 @@ Return ONLY the drafted prompt with no additional commentary.`;
         });
     }
 
+    const EDIT_BUTTON_IDS = {
+        docs: { edit: 'btn-edit', save: 'btn-save', cancel: 'btn-cancel' },
+        kanban: { edit: 'btn-edit-kanban', save: 'btn-save-kanban', cancel: 'btn-cancel-kanban' }
+    };
+
     function enterEditMode(tab) {
         if (tab === 'kanban' && state.reviewMode.kanban) {
             exitReviewMode('kanban', true);
         }
-        const previewPane = tab === 'docs' ? document.getElementById('preview-pane') : 
-                            (tab === 'local' ? document.getElementById('preview-pane') : 
-                            (tab === 'design' ? document.getElementById('preview-pane-design') : 
-                            (tab === 'online' ? document.getElementById('preview-pane-online') : 
-                            document.getElementById('kanban-preview-pane'))));
-        const textarea = document.getElementById(tab === 'docs' ? 'markdown-editor' : 
-                         (tab === 'local' ? 'markdown-editor-local' : 
-                         (tab === 'design' ? 'markdown-editor-design' : 
-                         (tab === 'online' ? 'markdown-editor-online' : 
-                         'kanban-editor'))));
+        const previewPaneId = tab === 'docs' ? 'preview-pane'
+            : tab === 'design' ? 'preview-pane-design'
+            : tab === 'kanban' ? 'kanban-preview-pane'
+            : null;
+        const textareaId = tab === 'docs' ? 'markdown-editor'
+            : tab === 'design' ? 'markdown-editor-design'
+            : tab === 'kanban' ? 'kanban-editor'
+            : null;
+        const previewPane = previewPaneId ? document.getElementById(previewPaneId) : null;
+        const textarea = textareaId ? document.getElementById(textareaId) : null;
 
         if (!previewPane || !textarea) return;
 
@@ -5099,9 +5145,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
         if (tab === 'docs') {
             content = state.activeDocContent || '';
             state.editOriginalContent.docs = content;
-        } else if (tab === 'local' || tab === 'online') {
-            content = state.activeDocContent || '';
-            state.editOriginalContent[tab] = content;
         } else {
             content = state.editOriginalContent.kanban || '';
         }
@@ -5109,9 +5152,10 @@ Return ONLY the drafted prompt with no additional commentary.`;
         textarea.value = content;
         previewPane.classList.add('edit-mode');
 
-        const btnEdit = document.getElementById(tab === 'docs' ? 'btn-edit' : (tab === 'local' ? 'btn-edit-local' : (tab === 'online' ? 'btn-edit-online' : 'btn-edit-kanban')));
-        const btnSave = document.getElementById(tab === 'docs' ? 'btn-save' : (tab === 'local' ? 'btn-save-local' : (tab === 'online' ? 'btn-save-online' : 'btn-save-kanban')));
-        const btnCancel = document.getElementById(tab === 'docs' ? 'btn-cancel' : (tab === 'local' ? 'btn-cancel-local' : (tab === 'online' ? 'btn-cancel-online' : 'btn-cancel-kanban')));
+        const editBtnIds = EDIT_BUTTON_IDS[tab];
+        const btnEdit = editBtnIds ? document.getElementById(editBtnIds.edit) : null;
+        const btnSave = editBtnIds ? document.getElementById(editBtnIds.save) : null;
+        const btnCancel = editBtnIds ? document.getElementById(editBtnIds.cancel) : null;
 
         if (btnEdit) btnEdit.style.display = 'none';
         if (btnSave) btnSave.style.display = '';
@@ -5124,17 +5168,19 @@ Return ONLY the drafted prompt with no additional commentary.`;
     function exitEditMode(tab, discard) {
         // No confirmation needed; proceed with exit
 
-        const previewPane = tab === 'docs' ? document.getElementById('preview-pane') :
-                            (tab === 'local' ? document.getElementById('preview-pane') : 
-                            (tab === 'online' ? document.getElementById('preview-pane-online') : 
-                            document.getElementById('kanban-preview-pane')));
+        const previewPaneId = tab === 'docs' ? 'preview-pane'
+            : tab === 'design' ? 'preview-pane-design'
+            : tab === 'kanban' ? 'kanban-preview-pane'
+            : null;
+        const previewPane = previewPaneId ? document.getElementById(previewPaneId) : null;
         if (previewPane) {
             previewPane.classList.remove('edit-mode');
         }
 
-        const btnEdit = document.getElementById(tab === 'docs' ? 'btn-edit' : (tab === 'local' ? 'btn-edit-local' : (tab === 'online' ? 'btn-edit-online' : 'btn-edit-kanban')));
-        const btnSave = document.getElementById(tab === 'docs' ? 'btn-save' : (tab === 'local' ? 'btn-save-local' : (tab === 'online' ? 'btn-save-online' : 'btn-save-kanban')));
-        const btnCancel = document.getElementById(tab === 'docs' ? 'btn-cancel' : (tab === 'local' ? 'btn-cancel-local' : (tab === 'online' ? 'btn-cancel-online' : 'btn-cancel-kanban')));
+        const editBtnIds = EDIT_BUTTON_IDS[tab];
+        const btnEdit = editBtnIds ? document.getElementById(editBtnIds.edit) : null;
+        const btnSave = editBtnIds ? document.getElementById(editBtnIds.save) : null;
+        const btnCancel = editBtnIds ? document.getElementById(editBtnIds.cancel) : null;
 
         if (btnEdit) btnEdit.style.display = '';
         if (btnSave) btnSave.style.display = 'none';
@@ -5170,29 +5216,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
                         requestId: ++state.previewRequestId
                     });
                 }
-            } else if (tab === 'local') {
-                if (state.activeSource === 'local-folder') {
-                    const lastSlash = state.activeDocFilePath ? Math.max(state.activeDocFilePath.lastIndexOf('/'), state.activeDocFilePath.lastIndexOf('\\')) : -1;
-                    vscode.postMessage({
-                        type: 'fetchPreview',
-                        sourceId: state.activeSource,
-                        docId: state.activeDocId,
-                        requestId: ++state.previewRequestId,
-                        sourceFolder: state.activeDocFilePath ? state.activeDocFilePath.substring(0, lastSlash) : undefined
-                    });
-                } else {
-                    vscode.postMessage({
-                        type: 'fetchDocsFile',
-                        slugPrefix: state.activeDocId,
-                        requestId: ++state.previewRequestId
-                    });
-                }
-            } else if (tab === 'online') {
-                vscode.postMessage({
-                    type: 'fetchDocsFile',
-                    slugPrefix: resolveActiveOnlineSlugPrefix(),
-                    requestId: ++state.previewRequestId
-                });
             }
         }
 
@@ -5745,6 +5768,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 loadLinearProject(true);
             } else if (lastIntegrationProvider === 'clickup') {
                 if (clickUpSelectedListId) {
+                    vscode.postMessage({ type: 'invalidateClickUpCache', workspaceRoot: ticketsWorkspaceRoot });
                     loadClickUpProject(true);
                 } else {
                     loadClickUpSpaces();
@@ -5887,15 +5911,18 @@ Return ONLY the drafted prompt with no additional commentary.`;
         document.getElementById('btn-close-tags-modal')?.addEventListener('click', () => {
             const modal = document.getElementById('tags-modal');
             if (modal) modal.style.display = 'none';
+            _tagsModalOpen = false;
         });
         document.getElementById('btn-cancel-tags')?.addEventListener('click', () => {
             const modal = document.getElementById('tags-modal');
             if (modal) modal.style.display = 'none';
+            _tagsModalOpen = false;
         });
         document.getElementById('btn-save-tags')?.addEventListener('click', saveTags);
         document.getElementById('tags-modal')?.addEventListener('click', (e) => {
             if (e.target === e.currentTarget) {
                 e.currentTarget.style.display = 'none';
+                _tagsModalOpen = false;
             }
         });
 
@@ -7041,7 +7068,9 @@ Return ONLY the drafted prompt with no additional commentary.`;
     }
 
     function handleLinkToTicket(provider, id, btn) {
-        vscode.postMessage({ type: 'openLocalTicket', provider, id, workspaceRoot: ticketsWorkspaceRoot });
+        // Use the exact same message/handler as the "Link all" button, just scoped
+        // to a single ticket id, so both buttons share one proven code path.
+        vscode.postMessage({ type: 'copyToClipboard', provider, workspaceRoot: ticketsWorkspaceRoot, ticketIds: [id] });
         if (btn) { flashCopyBtn(btn); }
     }
 

@@ -151,13 +151,9 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this._panel.webview.postMessage({ type: 'importPromptSettingsResult', success });
                     break;
                 }
-                case 'setGlobalSettingsEnabled': {
-                    await this._taskViewerProvider.setGlobalSettingsEnabled(message.enabled);
-                    break;
-                }
-                case 'getGlobalSettingsEnabled': {
-                    const enabled = this._taskViewerProvider.getGlobalSettingsEnabled();
-                    this._panel.webview.postMessage({ type: 'globalSettingsEnabled', enabled });
+                case 'copyDbSettingsToGlobal': {
+                    const result = await this._taskViewerProvider.copyDbSettingsToGlobal();
+                    this._panel.webview.postMessage({ type: 'copyDbSettingsResult', copiedCount: result.copied });
                     break;
                 }
                 case 'getControlPlaneStatus': {
@@ -555,6 +551,12 @@ export class SetupPanelProvider implements vscode.Disposable {
                         enabled: this._taskViewerProvider.handleGetExcludeReviewedBacklogSetting()
                     });
                     break;
+                case 'getPersistPanelsSetting': {
+                    const config = vscode.workspace.getConfiguration('switchboard');
+                    const enabled = config.get<boolean>('persistPanels', false);
+                    this._panel.webview.postMessage({ type: 'persistPanelsSetting', enabled });
+                    break;
+                }
                 case 'setPreventAgentFileOpeningSetting':
                     await this._taskViewerProvider.handleSetPreventAgentFileOpeningSetting(message.enabled);
                     await vscode.commands.executeCommand('switchboard.refreshUI');
@@ -563,6 +565,13 @@ export class SetupPanelProvider implements vscode.Disposable {
                     await this._taskViewerProvider.handleSetExcludeReviewedBacklogSetting(message.enabled);
                     await vscode.commands.executeCommand('switchboard.refreshUI');
                     break;
+                case 'setPersistPanelsSetting': {
+                    const config = vscode.workspace.getConfiguration('switchboard');
+                    const enabled = message.enabled === true;
+                    await config.update('persistPanels', enabled, vscode.ConfigurationTarget.Global);
+                    this._panel.webview.postMessage({ type: 'persistPanelsSetting', enabled });
+                    break;
+                }
                 case 'getStatusShowAgentOpenSetting':
                     this._panel.webview.postMessage({
                         type: 'statusShowAgentOpenSetting',

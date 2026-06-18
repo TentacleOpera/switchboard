@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as https from 'https';
+import { hostInlineImages } from './ImageHostingHelper';
 import type { AutoPullIntervalMinutes } from './IntegrationAutoPullService';
 import { KanbanDatabase } from './KanbanDatabase';
 import {
@@ -1332,6 +1333,23 @@ export class ClickUpSyncService {
       return createResult.data ? this._normalizeClickUpTask(createResult.data) : null;
     }
 
+    if (description) {
+      try {
+        const { rewritten } = await hostInlineImages(
+          (fileName, buffer) => this.attachFile(taskId, fileName, buffer),
+          description
+        );
+        if (rewritten !== description) {
+          await this.updateTask(taskId, { markdown_content: rewritten });
+          if (createResult.data) {
+            createResult.data.description = rewritten;
+          }
+        }
+      } catch (hostErr) {
+        console.warn(`[ClickUpSync] Created task ${taskId}, but inline image hosting failed:`, hostErr);
+      }
+    }
+
     try {
       const taskResult = await this.retry(() =>
         this.httpRequest('GET', `/task/${taskId}`)
@@ -2215,6 +2233,26 @@ export class ClickUpSyncService {
       const result = await this.retry(() =>
         this.httpRequest('POST', `/list/${listId}/task`, body)
       );
+      if (result.status === 200) {
+        const taskId = result.data.id;
+        if (description) {
+          try {
+            const resolvedPlanPath = path.isAbsolute(plan.planFile)
+              ? plan.planFile
+              : path.join(this._workspaceRoot, plan.planFile);
+            const { rewritten } = await hostInlineImages(
+              (fileName, buffer) => this.attachFile(taskId, fileName, buffer),
+              description,
+              resolvedPlanPath
+            );
+            if (rewritten !== description) {
+              await this.updateTask(taskId, { markdown_content: rewritten });
+            }
+          } catch (hostErr) {
+            console.warn(`[ClickUpSync] Created task ${taskId} from plan, but inline image hosting failed:`, hostErr);
+          }
+        }
+      }
       return result.status === 200 ? result.data.id : null;
     } finally {
       // Always clear, even on throw. The autopull reads this set and must see

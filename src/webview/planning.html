@@ -3238,7 +3238,6 @@
                     <button id="tickets-create" class="strip-btn" disabled title="Configure an integration in Setup first">+ New Ticket</button>
                     <button id="tickets-refresh" class="strip-btn" title="Re-fetch from source and save local copies">Refetch</button>
                     <button id="tickets-sync-all" class="strip-btn" title="Push all local ticket changes back to the integration">Sync changes</button>
-                    <button id="tickets-tags" class="strip-btn" disabled title="Edit tags">Tags</button>
                 </div>
                 <div class="controls-strip-row">
                     <div id="tickets-hierarchy-nav" style="display:none; flex-wrap: wrap; gap: 8px; align-items: center;"></div>
@@ -3259,12 +3258,19 @@
                 </div>
                 <div class="preview-panel-wrapper">
                     <div id="preview-pane-tickets" style="flex: 1; width: 100%; box-sizing: border-box; display: flex; flex-direction: column;">
-                        <div class="preview-header-actions" style="display:flex; justify-content: space-between; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--border-color); background: var(--panel-bg2);">
-                            <div style="display:flex; gap:8px; align-items:center;">
-                                <button id="btn-post-comment" class="strip-btn">Comment</button>
-                                <button id="btn-show-attachments" class="strip-btn" style="display:none;">Attachments (<span id="attachments-count">0</span>)</button>
-                                <span id="tickets-refining-status" style="display:none; font-size:11px; color:var(--accent-teal);">Refining...</span>
+                        <div id="tickets-preview-meta-bar" style="display:none;">
+                            <button id="btn-edit-ticket" class="strip-btn">Edit</button>
+                            <button id="btn-save-ticket-edit" class="strip-btn" style="display:none; background: var(--accent-teal); color: black;">Save</button>
+                            <button id="btn-cancel-ticket-edit" class="strip-btn" style="display:none;">Cancel</button>
+                            <button id="btn-push-ticket" class="strip-btn">Push</button>
+                            <button id="btn-delete-ticket" class="strip-btn">Delete</button>
+                            <div class="kanban-meta-group">
+                                <span class="kanban-meta-label">Status:</span>
+                                <select id="select-status-ticket" class="kanban-meta-dropdown" style="display:inline-block; background: var(--panel-bg2, #1a1a2e); border: 1px solid var(--border-color); color: var(--text-secondary); font-size: 11px;"></select>
                             </div>
+                            <button id="tickets-tags" class="strip-btn" title="Edit tags">Tags</button>
+                            <button id="btn-comment-ticket" class="strip-btn">Comment</button>
+                            <button id="btn-view-attachments" class="strip-btn" style="display:none;">Attachments</button>
                             <button id="btn-open-ticket" class="strip-btn" style="display:none;">Open</button>
                         </div>
 
