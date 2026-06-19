@@ -8,7 +8,11 @@ out/
 dist/
 
 # Packaged extensions
-# *.vsix
+*.vsix
+
+# Local env / secrets — never commit
+.env
+.env.*
 
 # TypeScript cache
 *.tsbuildinfo

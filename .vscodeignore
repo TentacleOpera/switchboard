@@ -40,6 +40,12 @@ switchboard/**
 *.vsix
 .gitignore
 
+# Secrets / local env — must never ship
+.env
+.env.*
+**/.env
+**/.env.*
+
 # Dev utilities (not extension runtime)
 docs/**
 !docs/how_to_use_switchboard.md
