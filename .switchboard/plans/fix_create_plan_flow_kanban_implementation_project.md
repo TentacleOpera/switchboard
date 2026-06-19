@@ -273,3 +273,42 @@ The existing regression test (`src/test/direct-create-ticket-regression.test.js`
 ## Recommendation
 
 Complexity **6** (mixed: mostly routine, well-scoped wiring that reuses proven patterns, with two moderate cross-surface risks in Phases 3 and 4). **Send to Coder** — provided the three User Review items are signed off first.
+
+---
+
+## Reviewer Pass — 2026-06-19 (post-implementation)
+
+**Outcome: PASS. No CRITICAL or MAJOR findings; all six phases implemented faithfully. No code fixes required.**
+
+### Implementation verified (current source, not commit boundaries)
+
+- **Phase 1** — `project.html:1015` has `<button id="btn-create-kanban-plan" class="strip-btn" title="Create a new plan">Create</button>`, in the static `kanban-controls-strip` after Import. It is **not** in the dynamic edit-mode meta-bar, so it stays visible regardless of edit state. No `is-teal`.
+- **Phase 2** — `PlanningPanelProvider.ts:2153` `case 'createPlan'` executes `switchboard.initiatePlan`. Reachable for `isProject===true` (adjacent to `fetchKanbanPlans`).
+- **Phase 3** — `_createInitiatedPlan` returns `{ planFileAbsolute }` at `TaskViewerProvider.ts:16074` immediately after brain promotion. Both `_syncFilesAndRefreshRunSheets` and the dead `selectPlanFile` post are **removed** from this path. DB row still written by `_registerPlan` (16024) before the deletion point — no race. `planFileRelative` remains used elsewhere in the method (no lint warning).
+- **Phase 4** — `createDraftPlanTicket` (`TaskViewerProvider.ts:15438`) now derives the relative path and calls `this._kanbanProvider.activatePlanInProjectPanel(planFileRelative, workspaceRoot)` (15455), wrapped in try/catch. `KanbanProvider.activatePlanInProjectPanel` (`KanbanProvider.ts:167`) is a faithful extraction of the `reviewPlan` open/reveal/post sequence, planFile-only signature.
+- **Phase 5** — `planCreated` posted to `_view` (15458) and `_kanbanProvider?.postMessage?.()` (15459). All three webviews clear loading state on `planCreated`/`kanbanPlansReady` **and** have a 3s `setTimeout` self-restore fallback (project.js:707, implementation.html:1659, kanban.html:4276).
+- **Tests** — `direct-create-ticket-regression.test.js` updated (asserts `activatePlanInProjectPanel` in both providers; tolerant absence-check for the removed sync/selectPlanFile lines). `project-panel-kanban-create-button.test.js` created (button id/class, no `is-teal`, `createPlan` post, `case 'createPlan'` → `initiatePlan`).
+
+### Key race resolved (was the main risk)
+
+In-panel Create (panel open, kanban tab already active): `activateKanbanTabAndSelectPlan` (project.js:208) calls `kanbanTabBtn.click()`, whose listener (project.js:9-37) fires `fetchKanbanPlans` **unconditionally** → fresh `kanbanPlansReady` → `tryResolvePendingKanbanSelection()` resolves against a cache that now contains the new plan. The immediate resolve at 227 is a harmless no-op; pending selection only clears on a successful match (project.js:548). Both message orderings covered, as the plan claimed.
+
+### Findings (all NIT — none fixed, by directive: only CRITICAL/MAJOR get code fixes)
+
+- **NIT** `TaskViewerProvider.ts:16057` — `queueIntegrationSyncForPlanFile(..., {immediate:true})` is still `await`ed on the creation path. Pre-existing and out of this plan's scope, but the "sub-second / non-blocking" promise is *conditional* on ClickUp/Linear being unconfigured.
+- **NIT** `implementation.html:2250` — `case 'planCreated':` declares `const btnCreatePlan` without enclosing braces. Parses today (no duplicate in that switch) but is a latent switch-scope `SyntaxError` footgun; the kanban.html sibling (6020) uses `{ }`.
+- **NIT** `KanbanProvider.ts:5673` — `case 'reviewPlan'` was not refactored onto the new `activatePlanInProjectPanel` helper; duplicate open/reveal/post logic remains (they differ in passing real planId/sessionId, so not byte-identical).
+- **NIT** `direct-create-ticket-regression.test.js:104` — absence assertion matches an exact 12-space-indented two-line concatenation; weak against reformatting. Plan-sanctioned tolerance tradeoff; passes truthfully today since the lines are genuinely gone.
+
+### Validation results
+
+- Compilation: **skipped** (per session directive).
+- Tests: **skipped** (user runs the suite separately).
+- Static verification: all 6 phases present; **zero phantom symbols** (`is-teal`, `postMessageToKanbanWebview`, `_getSessionIdFromPlanFile`); all real symbols confirmed to exist; **no `confirm()` gates introduced** (CLAUDE.md hard rule upheld).
+
+### Remaining risks
+
+1. Brief stale sidebar run-sheet dropdown after eager-sync removal (accepted, User Review #2; DB row exists so correctness is unaffected).
+2. Sidebar CREATE now also force-opens the Project panel (intended, User Review #1).
+3. Residual creation-path latency only if ClickUp/Linear integration sync is configured (NIT #1 above).
+4. On creation failure, Create buttons recover via the 3s timeout (no `planCreated` posted in the catch) — designed fallback, not instant.
