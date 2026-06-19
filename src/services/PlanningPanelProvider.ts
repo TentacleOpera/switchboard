@@ -2605,7 +2605,7 @@ export class PlanningPanelProvider {
                 if (enabled && exists) { status = path.basename(filePath); }
                 else if (enabled) { status = 'File not found'; }
                 else { status = 'Disabled'; }
-                this._projectPanel?.webview.postMessage({ type: 'constitutionStatus', status, planFile: msg.planFile, enabled });
+                this._projectPanel?.webview.postMessage({ type: 'constitutionStatus', status, planFile: msg.planFile, enabled, workspaceRoot: wr });
                 break;
             }
             case 'readConstitutionFile': {

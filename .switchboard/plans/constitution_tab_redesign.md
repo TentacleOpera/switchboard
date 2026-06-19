@@ -413,3 +413,57 @@ The base `.empty-state` rule (project.html line ~229) is `text-align: center` bl
 ## Recommendation
 
 **Complexity: 7 → Send to Lead Coder.** Multi-file coordination across two providers, a path-resolution refactor touching 6+ call sites, a shared global-state write, file-watcher reconfiguration, and a cross-provider consistency requirement (custom path must reach the prompt-injection layer) put this above routine. The three blocking corrections (no-confirm delete, custom-path propagation, `globalState.update` API) must land or the feature ships broken.
+
+---
+
+## Reviewer Pass — 2026-06-19
+
+Implementation reviewed against this plan as source of truth. The three plan-flagged blocking corrections (no-confirm delete, custom-path propagation to all read sites incl. `KanbanProvider._resolveConstitution`, `globalState.update` API) all landed correctly. The skill rewrite (Issue 4) is present on disk at `.agent/skills/constitution_builder.md` and matches the intent-level template exactly — note `.agent/` is gitignored, so it correctly does **not** appear in the implementation commit's file list.
+
+Two NEW bugs were found that would have shipped Issue 2 (the enable/disable Planning-Reference toggle) completely inert. Both fixed in this pass.
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *Pulls the chair out, sits down backwards, sighs theatrically.*
+>
+> **[CRITICAL] The headline feature is a brick. `project.js:283` — the dead `hasFile` oracle.** You built an entire enable/disable toggle, a banner, a global-state write, a read-modify-write to preserve legacy keys — *beautiful* — and then you wired the Enable button's `disabled` state to a status string that can NEVER say "yes" at the one moment that matters. When the addon is globally OFF, the backend dutifully reports `status: 'Disabled'`. Your frontend reads `'Disabled'` and concludes `hasFile = false`. So the button is disabled *precisely* when a constitution exists and the user wants to turn it on. It is a light switch that only works when the light is already on. The three-state status (`<filename>` / `File not found` / `Disabled`) conflates "no file" with "off" — the plan even warned you to "derive file-existence from the per-workspace status," but that status is structurally incapable of carrying file-existence once disabled. Catch-22, shipped.
+>
+> **[MAJOR] And even if `hasFile` were right, the message never arrives. `PlanningPanelProvider.ts:2608` vs `project.js:281` — the phantom `workspaceRoot`.** The status handler guards on `_constitutionSelectedWorkspace.workspaceRoot === msg.workspaceRoot`. Noble. Except `getConstitutionStatus` posts back `{ status, planFile, enabled }` — and **no `workspaceRoot`**. So `msg.workspaceRoot` is `undefined`, the guard is `something === undefined`, eternally false, and the *entire* `constitutionStatus` handler body is dead code. The banner never updates on selection. The button never re-enables. You wrote thirty lines of toggle logic that the runtime steps over like a crack in the pavement. Two independent bugs, either one fatal, stacked on the same feature. *Belt and suspenders, except both are made of tissue.*
+>
+> **[NIT] `openSetConstitutionPath` fires on empty input.** `result !== undefined` lets an empty/whitespace string through to `setConstitutionPath`, which then pops an error toast for `''`. The plan said "on a non-empty result." Graceful-ish, but a user who hits Enter on a blank box gets scolded instead of a no-op.
+>
+> **[NIT] `_setupConstitutionWatcher()` rebuild leaves a pending debounce timer un-cleared.** Harmless — the stale timer just fires one idempotent `loadConstitutionFiles`. The plan called this out and accepted it. Fine. I'm only mentioning it so you know I saw it.
+>
+> **[NIT — out of scope] This commit smuggled in `planning.html`, `planning.js`, `KanbanDatabase.ts`, and an `importedAt` epics tweak** that have nothing to do with the Constitution tab. Auto-commit bundling. Not this plan's defect, but somebody should know those rode along.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep (correctly implemented):**
+- Issue 1 sync refresh after save (`PlanningPanelProvider.ts:2672`), mirrors the watcher's internal `_handleMessage(..., true)` call exactly.
+- Issue 6 delete — immediate `fs.unlinkSync`, **no confirmation dialog** of any kind. Compliant with the hard project rule.
+- Issue 7 — shared `constitutionUtils.getConstitutionPath`, routed through `_getConstitutionPath`, `KanbanProvider._resolveConstitution`, `getConstitutionStatus`, watcher, and all CRUD read sites. Validation rejects `..`, absolute, and non-`.md`. KanbanProvider injection path covered.
+- Issue 2 backend — `await store.update(...)` with `addons` guard and whole-object read-modify-write (preserves legacy keys).
+- Issue 3/5 async clipboard `await`ed before `constitutionPromptCopied`. Issue 4 skill rewrite. Issue 8 onboarding block + CSS (sidesteps the shared flex selector, as specified).
+
+**Fix now (done in this pass):**
+1. **CRITICAL** — `project.js:283`: derive `hasFile` from `_constitutionSelectedFile !== null` (the per-workspace read result), not from the conflated `status` string.
+2. **MAJOR** — `PlanningPanelProvider.ts:2608`: add `workspaceRoot: wr` to the `constitutionStatus` response so the frontend guard passes.
+
+**Defer / no action:**
+- The two NITs (empty-path toast, un-cleared debounce on watcher rebuild) — cosmetic, plan-acknowledged or graceful. Not worth a change.
+- Out-of-scope bundled files — flag to the committer; outside this plan.
+
+### Fixes Applied
+| Severity | File:line | Fix |
+|---|---|---|
+| CRITICAL | `src/webview/project.js:283` | `hasFile` now derives from `_constitutionSelectedFile !== null` instead of the `status` string, so the Enable button is clickable when a file exists and the addon is off. |
+| MAJOR | `src/services/PlanningPanelProvider.ts:2608` | Added `workspaceRoot: wr` to the `constitutionStatus` postMessage so the frontend per-workspace guard matches and the handler body executes. |
+
+### Validation
+- Per session directives, **compilation and tests were NOT run** (user runs them separately).
+- **ACTION REQUIRED for the user:** `project.js` was edited, so `npm run compile` must be run to rebuild `dist/webview/` before the change is live in the extension.
+- Static verification: confirmed `constitutionStatus` has exactly one sender (`PlanningPanelProvider.ts:2608`) and one consumer (`project.js:280`) — adding `workspaceRoot` is purely additive and breaks nothing. Confirmed `constitutionFileRead` (which sets `_constitutionSelectedFile`) runs synchronously before the async `getConstitutionStatus` response returns, so `_constitutionSelectedFile` is current when `hasFile` is computed.
+
+### Remaining Risks
+- **Toggle behavior deviation (accepted):** the implementation makes `btn-enable-constitution` a two-way toggle (text swaps to "Disable Reference") rather than the plan's enable-only-when-off button. With both fixes this is functionally correct and arguably better; redundant with the banner's "Turn off" but harmless.
+- **Manual QA still required** for Issue 2 end-to-end (select a workspace with a constitution, addon off → Enable button is clickable → click → banner appears, persists across reopen) and Issue 7 prompt-injection via KanbanProvider — neither can be confirmed by static review.

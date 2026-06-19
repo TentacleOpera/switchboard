@@ -280,7 +280,12 @@
             case 'constitutionStatus':
                 if (_constitutionSelectedWorkspace && _constitutionSelectedWorkspace.workspaceRoot === msg.workspaceRoot) {
                     const isEnabled = !!msg.enabled;
-                    const hasFile = msg.status !== 'None' && msg.status !== 'File not found' && msg.status !== 'Disabled';
+                    // File existence must be derived from the per-workspace read (set just
+                    // before this response is requested), NOT from `status`: when the addon
+                    // is globally OFF the backend reports 'Disabled' regardless of whether a
+                    // file exists, which would otherwise disable the Enable button exactly
+                    // when the user needs to click it.
+                    const hasFile = _constitutionSelectedFile !== null;
                     if (btnEnableConstitution) {
                         btnEnableConstitution.disabled = !hasFile;
                         btnEnableConstitution.textContent = isEnabled ? 'Disable Reference' : 'Enable as Planning Reference';
