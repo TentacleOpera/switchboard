@@ -54,8 +54,7 @@
         stitchCreativeRange: ['EXPLORE','REFINE','REIMAGINE'].includes(persistedState.stitchCreativeRange) ? persistedState.stitchCreativeRange : 'EXPLORE',
         stitchAspects: Array.isArray(persistedState.stitchAspects) && persistedState.stitchAspects.every(a => typeof a === 'string') ? persistedState.stitchAspects : ['LAYOUT','COLOR_SCHEME','IMAGES','TEXT_FONT','TEXT_CONTENT'],
         stitchThumbnailStripCollapsed: persistedState.stitchThumbnailStripCollapsed || false,
-        stitchGeneratorOpen: false,
-        stitchGeneratorImages: [],
+        stitchAttachedFiles: [],
         stitchScreenPolls: new Map(),
         stitchProjectRefreshAttempted: false,
     };
@@ -1293,6 +1292,8 @@
         
         if (btnEdit) btnEdit.disabled = !hasDoc || state.briefEditMode;
         if (btnDelete) btnDelete.disabled = !hasDoc;
+        const btnSendToStitch = document.getElementById('btn-send-brief-to-stitch');
+        if (btnSendToStitch) btnSendToStitch.disabled = !hasDoc || state.briefEditMode;
     }
 
     function enterBriefEditMode() {
@@ -1462,13 +1463,7 @@
         }
     }
 
-    const btnStitchPromptGenerator = document.getElementById('btn-stitch-prompt-generator');
-    const stitchPromptModal = document.getElementById('stitch-prompt-modal');
-    const btnCloseStitchGenerator = document.getElementById('btn-close-stitch-generator');
-    const stitchGeneratorInput = document.getElementById('stitch-generator-input');
-    const stitchGeneratorImageInput = document.getElementById('stitch-generator-image-input');
-    const stitchGeneratorThumbnails = document.getElementById('stitch-generator-thumbnails');
-    const btnCopyStitchPrompt = document.getElementById('btn-copy-stitch-prompt');
+    const btnStitchAttach = document.getElementById('btn-stitch-attach');
 
     // Single place that controls status colour — errors red, success teal,
     // everything else neutral. Direct .textContent writes left the colour
@@ -1516,158 +1511,39 @@
         if (previewBtnVariantsDropdownToggle) previewBtnVariantsDropdownToggle.disabled = busy;
         if (previewBtnReload) previewBtnReload.disabled = busy;
 
-        if (btnStitchPromptGenerator) btnStitchPromptGenerator.disabled = busy;
-        updateCopyButtonState();
+        if (btnStitchAttach) btnStitchAttach.disabled = busy;
     }
 
-    function updateCopyButtonState() {
-        if (!btnCopyStitchPrompt) return;
-        const hasText = !!(stitchGeneratorInput && stitchGeneratorInput.value.trim());
-        const hasImages = state.stitchGeneratorImages && state.stitchGeneratorImages.length > 0;
-        btnCopyStitchPrompt.disabled = state.stitchBusy || (!hasText && !hasImages);
-    }
-
-    function openStitchGenerator() {
-        if (state.stitchBusy) return;
-        state.stitchGeneratorOpen = true;
-        if (stitchPromptModal) {
-            stitchPromptModal.style.display = 'flex';
+    function renderAttachedFileChips() {
+        const container = document.getElementById('stitch-attached-files');
+        if (!container) return;
+        container.innerHTML = '';
+        if (!state.stitchAttachedFiles || state.stitchAttachedFiles.length === 0) {
+            container.style.display = 'none';
+            return;
         }
-        if (stitchGeneratorInput) {
-            stitchGeneratorInput.value = '';
-            stitchGeneratorInput.focus();
-        }
-        clearStitchGeneratorImages();
-        updateCopyButtonState();
-    }
-
-    function closeStitchGenerator() {
-        state.stitchGeneratorOpen = false;
-        if (stitchPromptModal) {
-            stitchPromptModal.style.display = 'none';
-        }
-        clearStitchGeneratorImages();
-    }
-
-    function clearStitchGeneratorImages() {
-        if (state.stitchGeneratorImages && state.stitchGeneratorImages.length > 0) {
-            state.stitchGeneratorImages.forEach(imgObj => {
-                if (imgObj.objectUrl) {
-                    URL.revokeObjectURL(imgObj.objectUrl);
-                }
+        container.style.display = 'flex';
+        state.stitchAttachedFiles.forEach((file, index) => {
+            const chip = document.createElement('span');
+            chip.className = 'stitch-attach-chip';
+            const icon = document.createElement('span');
+            icon.className = 'chip-icon';
+            icon.textContent = file.type === 'image' ? '\u{1F5BC}' : file.type === 'html' ? '\u{1F310}' : '\u{1F4DD}';
+            const name = document.createElement('span');
+            name.textContent = file.name;
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'chip-remove';
+            removeBtn.innerHTML = '&times;';
+            removeBtn.title = 'Remove';
+            removeBtn.addEventListener('click', () => {
+                state.stitchAttachedFiles.splice(index, 1);
+                renderAttachedFileChips();
             });
-        }
-        state.stitchGeneratorImages = [];
-        if (stitchGeneratorThumbnails) {
-            stitchGeneratorThumbnails.innerHTML = '';
-        }
-        if (stitchGeneratorImageInput) {
-            stitchGeneratorImageInput.value = '';
-        }
-        updateCopyButtonState();
-    }
-
-    function handleStitchGeneratorImagesChange(e) {
-        const files = e.target.files;
-        if (!files) return;
-
-        for (let i = 0; i < files.length; i++) {
-            const file = files[i];
-            const objectUrl = URL.createObjectURL(file);
-            const imgObj = {
-                name: file.name,
-                objectUrl: objectUrl
-            };
-            state.stitchGeneratorImages.push(imgObj);
-            renderThumbnail(imgObj);
-        }
-        updateCopyButtonState();
-    }
-
-    function renderThumbnail(imgObj) {
-        if (!stitchGeneratorThumbnails) return;
-
-        const container = document.createElement('div');
-        container.className = 'stitch-generator-thumb-container';
-
-        const img = document.createElement('img');
-        img.className = 'stitch-generator-thumb';
-        img.src = imgObj.objectUrl;
-        img.alt = imgObj.name;
-        img.title = imgObj.name;
-
-        const removeBtn = document.createElement('button');
-        removeBtn.className = 'stitch-generator-thumb-remove';
-        removeBtn.innerHTML = '&times;';
-        removeBtn.title = 'Remove image';
-        removeBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            URL.revokeObjectURL(imgObj.objectUrl);
-            state.stitchGeneratorImages = state.stitchGeneratorImages.filter(item => item !== imgObj);
-            container.remove();
-            updateCopyButtonState();
+            chip.appendChild(icon);
+            chip.appendChild(name);
+            chip.appendChild(removeBtn);
+            container.appendChild(chip);
         });
-
-        container.appendChild(img);
-        container.appendChild(removeBtn);
-        stitchGeneratorThumbnails.appendChild(container);
-    }
-
-    function generateStitchMetaPrompt(userDescription, imageRefs) {
-        const baseTemplate = `You are a UI/UX design prompt engineer. Your job is to transform a rough design idea and reference images into a single, detailed, high-quality text prompt suitable for an AI screen generator (Stitch by Google).
-
-User's design intent:
----
-{{USER_DESCRIPTION}}
----
-
-Reference images (inspect these for style, layout, colour palette, typography, and mood):
-{{IMAGE_REFS}}
-
-Output a single paragraph prompt (150-400 words) that describes:
-- The overall layout and visual hierarchy
-- Colour palette and mood
-- Typography style
-- Specific UI components and their arrangement
-- Any animations, interactions, or micro-copy
-- Device type considerations
-
-Do not output markdown headers, bullet lists, or explanations. Output only the final prompt text.`;
-
-        let imagesList = 'None';
-        if (imageRefs && imageRefs.length > 0) {
-            imagesList = imageRefs.map(name => `- Image: ${name}`).join('\n');
-        }
-
-        return baseTemplate
-            .replace('{{USER_DESCRIPTION}}', userDescription || '')
-            .replace('{{IMAGE_REFS}}', imagesList);
-    }
-
-    async function copyStitchPromptToClipboard() {
-        if (!btnCopyStitchPrompt) return;
-        const description = stitchGeneratorInput ? stitchGeneratorInput.value.trim() : '';
-        const imageRefs = state.stitchGeneratorImages.map(img => img.name);
-
-        const promptText = generateStitchMetaPrompt(description, imageRefs);
-        const originalText = btnCopyStitchPrompt.innerText || 'Copy Prompt';
-
-        try {
-            await navigator.clipboard.writeText(promptText);
-            btnCopyStitchPrompt.innerText = 'COPIED';
-            btnCopyStitchPrompt.disabled = true;
-            setTimeout(() => {
-                btnCopyStitchPrompt.innerText = originalText;
-                updateCopyButtonState();
-            }, 2000);
-        } catch (err) {
-            console.error('Failed to copy text: ', err);
-            btnCopyStitchPrompt.innerText = 'FAILED';
-            setTimeout(() => {
-                btnCopyStitchPrompt.innerText = originalText;
-                updateCopyButtonState();
-            }, 2000);
-        }
     }
 
     function makeFifeHighResUrl(imageUrl) {
@@ -2039,36 +1915,32 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
             if (state.activePreviewScreenId) {
                 closeStitchPreview();
                 e.stopPropagation();
-            } else if (state.stitchGeneratorOpen) {
-                closeStitchGenerator();
-                e.stopPropagation();
             }
         }
     });
 
-    if (btnStitchPromptGenerator) {
-        btnStitchPromptGenerator.addEventListener('click', openStitchGenerator);
-    }
-    if (btnCloseStitchGenerator) {
-        btnCloseStitchGenerator.addEventListener('click', closeStitchGenerator);
-    }
-    if (stitchPromptModal) {
-        stitchPromptModal.addEventListener('click', (e) => {
-            if (e.target === stitchPromptModal) {
-                closeStitchGenerator();
-            }
+    if (btnStitchAttach) {
+        btnStitchAttach.addEventListener('click', () => {
+            if (state.stitchBusy) return;
+            vscode.postMessage({ type: 'stitchPickAttachFiles' });
         });
     }
-    if (stitchGeneratorInput) {
-        stitchGeneratorInput.addEventListener('input', updateCopyButtonState);
+
+    const btnSendBriefToStitch = document.getElementById('btn-send-brief-to-stitch');
+    if (btnSendBriefToStitch) {
+        btnSendBriefToStitch.addEventListener('click', () => {
+            if (state.stitchBusy) return;
+            const briefNode = (state._lastBriefsDocsMsg?.nodes || []).find(n => n.id === state.activeBriefDocId);
+            const briefTitle = briefNode?.title || briefNode?.name || 'Untitled';
+            setStitchStatus('Creating Stitch project from brief…', 'busy');
+            vscode.postMessage({
+                type: 'stitchSendBrief',
+                docId: state.activeBriefDocId,
+                briefTitle,
+                sourceFolder: state.activeDocSourceFolder
+            });
+        });
     }
-    if (stitchGeneratorImageInput) {
-        stitchGeneratorImageInput.addEventListener('change', handleStitchGeneratorImagesChange);
-    }
-    if (btnCopyStitchPrompt) {
-        btnCopyStitchPrompt.addEventListener('click', copyStitchPromptToClipboard);
-    }
-    updateCopyButtonState();
 
     if (btnNewStitchProject) {
         btnNewStitchProject.addEventListener('click', () => {
@@ -2170,7 +2042,8 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 deviceType,
                 projectId: projectId || undefined,
                 modelId: state.stitchModelId,
-                workspaceRoot: state.stitchWorkspaceRoot
+                workspaceRoot: state.stitchWorkspaceRoot,
+                attachedFiles: state.stitchAttachedFiles || []
             });
         });
     }
@@ -2638,22 +2511,22 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
                 }
                 break;
 
-            case 'briefContentForInjectionReady': {
-                const promptInput = document.getElementById('stitch-prompt-input');
-                if (!promptInput) break;
-                
-                const templateHeader = "Here is the design brief for this task:";
-                const briefText = msg.content || '';
-                const injectionBlock = `\n\n${templateHeader}\n${briefText}`;
-                
-                const regex = /\n*Here is the design brief for this task:[\s\S]*$/;
-                if (regex.test(promptInput.value)) {
-                    promptInput.value = promptInput.value.replace(regex, injectionBlock);
-                } else {
-                    promptInput.value = promptInput.value + injectionBlock;
+            case 'stitchAttachedFilesPicked': {
+                if (msg.files && Array.isArray(msg.files)) {
+                    state.stitchAttachedFiles = msg.files;
+                    renderAttachedFileChips();
                 }
-                
-                promptInput.dispatchEvent(new Event('input'));
+                break;
+            }
+
+            case 'stitchBriefInjected': {
+                const promptInput = document.getElementById('stitch-prompt-input');
+                if (promptInput && msg.content) {
+                    promptInput.value = `\n\n--- Design Brief ---\n${msg.content}\n---`;
+                    promptInput.dispatchEvent(new Event('input'));
+                }
+                document.querySelector('[data-tab="stitch"]')?.click();
+                setStitchStatus('Brief loaded \u2014 review and click Generate', 'success');
                 break;
             }
 
@@ -3173,54 +3046,6 @@ Do not output markdown headers, bullet lists, or explanations. Output only the f
     });
 
     function initStitchControls() {
-        const btnAddBrief = document.getElementById('btn-stitch-add-brief');
-        const briefDropdownMenu = document.getElementById('stitch-briefs-dropdown-menu');
-        const briefListContainer = document.getElementById('stitch-briefs-list');
-
-        if (btnAddBrief && briefDropdownMenu && briefListContainer) {
-            btnAddBrief.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const visible = briefDropdownMenu.style.display === 'block';
-                if (!visible) {
-                    briefListContainer.innerHTML = '';
-                    const briefsMsg = state._lastBriefsDocsMsg || {};
-                    const nodes = briefsMsg.nodes || [];
-                    const briefs = nodes.filter(n => n.kind === 'document');
-                    if (briefs.length === 0) {
-                        briefListContainer.innerHTML = '<div style="font-size: 11px; color: var(--text-secondary); padding: 4px;">No briefs available</div>';
-                    } else {
-                        briefs.forEach(brief => {
-                            const item = document.createElement('div');
-                            item.className = 'dropdown-item';
-                            item.style.padding = '6px 8px';
-                            item.style.cursor = 'pointer';
-                            item.style.fontSize = '12px';
-                            item.style.borderBottom = '1px solid var(--border-color)';
-                            item.textContent = brief.title || brief.name;
-                            item.addEventListener('click', () => {
-                                briefDropdownMenu.style.display = 'none';
-                                vscode.postMessage({
-                                    type: 'fetchBriefForInjection',
-                                    docId: brief.id,
-                                    sourceFolder: brief.metadata ? brief.metadata.sourceFolder : undefined
-                                });
-                            });
-                            briefListContainer.appendChild(item);
-                        });
-                    }
-                    briefDropdownMenu.style.display = 'block';
-                } else {
-                    briefDropdownMenu.style.display = 'none';
-                }
-            });
-
-            document.addEventListener('click', (e) => {
-                if (!e.target.closest('.dropdown-container')) {
-                    briefDropdownMenu.style.display = 'none';
-                }
-            });
-        }
-
         if (stitchModelSelect) {
             stitchModelSelect.value = state.stitchModelId;
             stitchModelSelect.addEventListener('change', () => {

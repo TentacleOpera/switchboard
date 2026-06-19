@@ -146,7 +146,7 @@
             height: 100%;
             min-height: 0;
         }
-        #kanban-list-pane, #epics-list-pane, #constitution-list-pane {
+        #kanban-list-pane, #epics-list-pane, #constitution-list-pane, #tuning-list-pane {
             width: 320px;
             flex-shrink: 0;
             border-right: 1px solid var(--border-color);
@@ -170,7 +170,7 @@
             background: var(--panel-bg);
             min-height: 0;
         }
-        .constitution-preview-pane {
+        .constitution-preview-pane, .tuning-preview-pane {
             flex: 1;
             overflow-y: auto;
             padding: 16px;
@@ -201,7 +201,8 @@
         }
         .edit-mode #kanban-preview-content, 
         .edit-mode #epics-preview-content, 
-        .edit-mode #constitution-preview-content {
+        .edit-mode #constitution-preview-content,
+        .edit-mode #tuning-preview-content {
             display: none;
         }
         /* Active Doc Banner */
@@ -238,16 +239,16 @@
             font-style: italic;
         }
         /* Kanban specific plan items */
-        .kanban-plan-item, .epic-plan-item, .constitution-file-item {
+        .kanban-plan-item, .epic-plan-item, .constitution-file-item, .insight-item {
             padding: 12px;
             border-bottom: 1px solid var(--border-color);
             cursor: pointer;
             transition: background 0.15s;
         }
-        .kanban-plan-item:hover, .epic-plan-item:hover, .constitution-file-item:hover {
+        .kanban-plan-item:hover, .epic-plan-item:hover, .constitution-file-item:hover, .insight-item:hover {
             background: var(--card-bg-hover);
         }
-        .kanban-plan-item.selected, .epic-plan-item.selected, .constitution-file-item.selected {
+        .kanban-plan-item.selected, .epic-plan-item.selected, .constitution-file-item.selected, .insight-item.selected {
             background: color-mix(in srgb, var(--accent-teal) 8%, #0f0f0f);
             border-left: 3px solid var(--accent-teal);
         }
@@ -449,14 +450,16 @@
 
         .content-row.collapsed #kanban-list-pane,
         .content-row.collapsed #epics-list-pane,
-        .content-row.collapsed #constitution-list-pane {
+        .content-row.collapsed #constitution-list-pane,
+        .content-row.collapsed #tuning-list-pane {
             padding: 4px;
             overflow: hidden;
         }
 
         .content-row.collapsed #kanban-list-pane > *:not(.sidebar-toggle-row),
         .content-row.collapsed #epics-list-pane > *:not(.sidebar-toggle-row),
-        .content-row.collapsed #constitution-list-pane > *:not(.sidebar-toggle-row) {
+        .content-row.collapsed #constitution-list-pane > *:not(.sidebar-toggle-row),
+        .content-row.collapsed #tuning-list-pane > *:not(.sidebar-toggle-row) {
             display: none !important;
         }
 
@@ -655,7 +658,8 @@
 
         .cyber-theme-enabled #kanban-list-pane,
         .cyber-theme-enabled #epics-list-pane,
-        .cyber-theme-enabled #constitution-list-pane {
+        .cyber-theme-enabled #constitution-list-pane,
+        .cyber-theme-enabled #tuning-list-pane {
             background: rgba(10, 10, 10, 0.70);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
@@ -669,7 +673,8 @@
 
         .cyber-theme-enabled #kanban-preview-pane,
         .cyber-theme-enabled #epics-preview-pane,
-        .cyber-theme-enabled #constitution-preview-pane {
+        .cyber-theme-enabled #constitution-preview-pane,
+        .cyber-theme-enabled #tuning-preview-pane {
             background-color: rgba(255, 255, 255, 0.015);
             background-image:
                 linear-gradient(color-mix(in srgb, var(--accent-primary) 8%, transparent) 1px, transparent 1px),
@@ -695,14 +700,16 @@
         /* Inline code: neon glow */
         .cyber-theme-enabled #kanban-preview-content code,
         .cyber-theme-enabled #epics-preview-content code,
-        .cyber-theme-enabled #constitution-preview-content code {
+        .cyber-theme-enabled #constitution-preview-content code,
+        .cyber-theme-enabled #tuning-preview-content code {
             box-shadow: 0 0 6px color-mix(in srgb, var(--accent-teal) 25%, transparent);
         }
 
         /* Code blocks: subtle glow border */
         .cyber-theme-enabled #kanban-preview-content pre,
         .cyber-theme-enabled #epics-preview-content pre,
-        .cyber-theme-enabled #constitution-preview-content pre {
+        .cyber-theme-enabled #constitution-preview-content pre,
+        .cyber-theme-enabled #tuning-preview-content pre {
             box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent),
                          inset 0 0 12px rgba(0, 0, 0, 0.3);
         }
@@ -710,7 +717,8 @@
         /* Blockquotes: glowing left border */
         .cyber-theme-enabled #kanban-preview-content blockquote,
         .cyber-theme-enabled #epics-preview-content blockquote,
-        .cyber-theme-enabled #constitution-preview-content blockquote {
+        .cyber-theme-enabled #constitution-preview-content blockquote,
+        .cyber-theme-enabled #tuning-preview-content blockquote {
             border-left-color: var(--accent-teal);
             box-shadow: -4px 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent);
         }
@@ -723,7 +731,8 @@
         /* Unified Markdown Preview Styling (Kanban, Epics & Constitution) */
         #kanban-preview-content,
         #epics-preview-content,
-        #constitution-preview-content {
+        #constitution-preview-content,
+        #tuning-preview-content {
             flex: 1;
             width: 100%;
             box-sizing: border-box;
@@ -737,7 +746,8 @@
 
         #kanban-preview-content h1, #kanban-preview-content h2, #kanban-preview-content h3, #kanban-preview-content h4, #kanban-preview-content h5, #kanban-preview-content h6,
         #epics-preview-content h1, #epics-preview-content h2, #epics-preview-content h3, #epics-preview-content h4, #epics-preview-content h5, #epics-preview-content h6,
-        #constitution-preview-content h1, #constitution-preview-content h2, #constitution-preview-content h3, #constitution-preview-content h4, #constitution-preview-content h5, #constitution-preview-content h6 {
+        #constitution-preview-content h1, #constitution-preview-content h2, #constitution-preview-content h3, #constitution-preview-content h4, #constitution-preview-content h5, #constitution-preview-content h6,
+        #tuning-preview-content h1, #tuning-preview-content h2, #tuning-preview-content h3, #tuning-preview-content h4, #tuning-preview-content h5, #tuning-preview-content h6 {
             margin-top: 24px;
             margin-bottom: 12px;
             font-weight: 600;
@@ -748,7 +758,8 @@
         /* Cyber theme — display heading typography */
         body.cyber-theme-enabled #kanban-preview-content h1, body.cyber-theme-enabled #kanban-preview-content h2, body.cyber-theme-enabled #kanban-preview-content h3, body.cyber-theme-enabled #kanban-preview-content h4, body.cyber-theme-enabled #kanban-preview-content h5, body.cyber-theme-enabled #kanban-preview-content h6,
         body.cyber-theme-enabled #epics-preview-content h1, body.cyber-theme-enabled #epics-preview-content h2, body.cyber-theme-enabled #epics-preview-content h3, body.cyber-theme-enabled #epics-preview-content h4, body.cyber-theme-enabled #epics-preview-content h5, body.cyber-theme-enabled #epics-preview-content h6,
-        body.cyber-theme-enabled #constitution-preview-content h1, body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6 {
+        body.cyber-theme-enabled #constitution-preview-content h1, body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6,
+        body.cyber-theme-enabled #tuning-preview-content h1, body.cyber-theme-enabled #tuning-preview-content h2, body.cyber-theme-enabled #tuning-preview-content h3, body.cyber-theme-enabled #tuning-preview-content h4, body.cyber-theme-enabled #tuning-preview-content h5, body.cyber-theme-enabled #tuning-preview-content h6 {
             font-family: var(--display-font), var(--font-family);
             letter-spacing: var(--display-letter-spacing);
             font-stretch: var(--display-font-stretch);
@@ -757,13 +768,15 @@
         /* Cyber theme — doc preview h2-h6 use accent color */
         body.cyber-theme-enabled #kanban-preview-content h2, body.cyber-theme-enabled #kanban-preview-content h3, body.cyber-theme-enabled #kanban-preview-content h4, body.cyber-theme-enabled #kanban-preview-content h5, body.cyber-theme-enabled #kanban-preview-content h6,
         body.cyber-theme-enabled #epics-preview-content h2, body.cyber-theme-enabled #epics-preview-content h3, body.cyber-theme-enabled #epics-preview-content h4, body.cyber-theme-enabled #epics-preview-content h5, body.cyber-theme-enabled #epics-preview-content h6,
-        body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6 {
+        body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6,
+        body.cyber-theme-enabled #tuning-preview-content h2, body.cyber-theme-enabled #tuning-preview-content h3, body.cyber-theme-enabled #tuning-preview-content h4, body.cyber-theme-enabled #tuning-preview-content h5, body.cyber-theme-enabled #tuning-preview-content h6 {
             color: var(--accent-primary);
         }
 
         #kanban-preview-content h1,
         #epics-preview-content h1,
-        #constitution-preview-content h1 {
+        #constitution-preview-content h1,
+        #tuning-preview-content h1 {
             font-size: 2em; /* 2em relative to 13px base = 26px */
             margin-top: 0;
             padding-bottom: 0.3em;
@@ -775,7 +788,8 @@
 
         #kanban-preview-content h2,
         #epics-preview-content h2,
-        #constitution-preview-content h2 {
+        #constitution-preview-content h2,
+        #tuning-preview-content h2 {
             font-size: 1.5em; /* 1.5em relative to 13px base = 19.5px */
             padding-bottom: 0.3em;
             border-bottom: 1px solid var(--accent-teal-dim);
@@ -788,46 +802,55 @@
         #kanban-preview-content h3,
         #epics-preview-content h3,
         #constitution-preview-content h3,
+        #tuning-preview-content h3,
         #kanban-preview-content h4,
         #epics-preview-content h4,
         #constitution-preview-content h4,
+        #tuning-preview-content h4,
         #kanban-preview-content h5,
         #epics-preview-content h5,
         #constitution-preview-content h5,
+        #tuning-preview-content h5,
         #kanban-preview-content h6,
         #epics-preview-content h6,
-        #constitution-preview-content h6 {
+        #constitution-preview-content h6,
+        #tuning-preview-content h6 {
             text-transform: uppercase;
             color: var(--accent-teal);
         }
 
         #kanban-preview-content h3,
         #epics-preview-content h3,
-        #constitution-preview-content h3 {
+        #constitution-preview-content h3,
+        #tuning-preview-content h3 {
             font-size: 1.25em; /* 1.25em relative to 13px base = 16.25px */
         }
 
         #kanban-preview-content h4,
         #epics-preview-content h4,
-        #constitution-preview-content h4 {
+        #constitution-preview-content h4,
+        #tuning-preview-content h4 {
             font-size: 1em;
         }
 
         #kanban-preview-content h5,
         #epics-preview-content h5,
-        #constitution-preview-content h5 {
+        #constitution-preview-content h5,
+        #tuning-preview-content h5 {
             font-size: 0.875em;
         }
 
         #kanban-preview-content h6,
         #epics-preview-content h6,
-        #constitution-preview-content h6 {
+        #constitution-preview-content h6,
+        #tuning-preview-content h6 {
             font-size: 0.85em;
         }
 
         #kanban-preview-content p,
         #epics-preview-content p,
-        #constitution-preview-content p {
+        #constitution-preview-content p,
+        #tuning-preview-content p {
             margin-bottom: 16px;
             line-height: inherit; /* Inherits from container's 1.5 */
             color: var(--text-primary, #e0e0e0);
@@ -836,7 +859,8 @@
 
         #kanban-preview-content li,
         #epics-preview-content li,
-        #constitution-preview-content li {
+        #constitution-preview-content li,
+        #tuning-preview-content li {
             margin-bottom: 6px; /* Tighter list item spacing */
             line-height: inherit;
             color: var(--vscode-editor-foreground, #cccccc);
@@ -845,13 +869,15 @@
 
         #kanban-preview-content li p,
         #epics-preview-content li p,
-        #constitution-preview-content li p {
+        #constitution-preview-content li p,
+        #tuning-preview-content li p {
             margin-bottom: 0; /* Paragraphs inside list items: zero extra margin (li already spaced) */
         }
 
         #kanban-preview-content pre,
         #epics-preview-content pre,
-        #constitution-preview-content pre {
+        #constitution-preview-content pre,
+        #tuning-preview-content pre {
             background-color: var(--vscode-textCodeBlock-background, rgba(255,255,255,0.04));
             border: 1px solid var(--vscode-widget-border, rgba(127, 127, 127, 0.35));
             border-radius: 3px;
@@ -862,7 +888,8 @@
 
         #kanban-preview-content pre code,
         #epics-preview-content pre code,
-        #constitution-preview-content pre code {
+        #constitution-preview-content pre code,
+        #tuning-preview-content pre code {
             background: none;
             padding: 0;
             border: none;
@@ -873,7 +900,8 @@
 
         #kanban-preview-content code,
         #epics-preview-content code,
-        #constitution-preview-content code {
+        #constitution-preview-content code,
+        #tuning-preview-content code {
             font-family: var(--vscode-editor-font-family, 'SF Mono', Monaco, Menlo, Consolas, monospace);
             font-size: 1em; /* Match VS Code: inline code is same size as surrounding text */
             line-height: 1.357em;
@@ -886,7 +914,8 @@
 
         #kanban-preview-content blockquote,
         #epics-preview-content blockquote,
-        #constitution-preview-content blockquote {
+        #constitution-preview-content blockquote,
+        #tuning-preview-content blockquote {
             margin: 0;
             padding: 0 16px 0 10px; /* Match VS Code's markdown.css */
             border-left: 5px solid var(--vscode-textBlockQuote-border, var(--border-color));
@@ -897,7 +926,8 @@
 
         #kanban-preview-content ul, #kanban-preview-content ol,
         #epics-preview-content ul, #epics-preview-content ol,
-        #constitution-preview-content ul, #constitution-preview-content ol {
+        #constitution-preview-content ul, #constitution-preview-content ol,
+        #tuning-preview-content ul, #tuning-preview-content ol {
             margin-bottom: 16px; /* Match VS Code's tighter list spacing */
             padding-left: 2em;
         }
@@ -905,7 +935,8 @@
         /* Table Styling */
         #kanban-preview-content table,
         #epics-preview-content table,
-        #constitution-preview-content table {
+        #constitution-preview-content table,
+        #tuning-preview-content table {
             border-collapse: collapse;
             margin-bottom: 0.7em;
             font-size: inherit; /* Inherits from container */
@@ -913,7 +944,8 @@
 
         #kanban-preview-content th,
         #epics-preview-content th,
-        #constitution-preview-content th {
+        #constitution-preview-content th,
+        #tuning-preview-content th {
             text-align: left;
             border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.69));
             font-weight: 600;
@@ -922,7 +954,8 @@
 
         #kanban-preview-content td,
         #epics-preview-content td,
-        #constitution-preview-content td {
+        #constitution-preview-content td,
+        #tuning-preview-content td {
             padding: 5px 10px;
             border-top: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
             color: var(--vscode-editor-foreground, var(--text-primary));
@@ -930,13 +963,15 @@
 
         #kanban-preview-content tr:hover td,
         #epics-preview-content tr:hover td,
-        #constitution-preview-content tr:hover td {
+        #constitution-preview-content tr:hover td,
+        #tuning-preview-content tr:hover td {
             background: var(--vscode-list-hoverBackground, var(--card-bg-hover));
         }
 
         #kanban-preview-content .table-wrapper,
         #epics-preview-content .table-wrapper,
-        #constitution-preview-content .table-wrapper {
+        #constitution-preview-content .table-wrapper,
+        #tuning-preview-content .table-wrapper {
             overflow-x: auto;
             max-width: 100%;
             margin-bottom: 16px;
@@ -945,21 +980,24 @@
         /* Subtle, Interactive Links */
         #kanban-preview-content a,
         #epics-preview-content a,
-        #constitution-preview-content a {
+        #constitution-preview-content a,
+        #tuning-preview-content a {
             color: var(--vscode-textLink-foreground, var(--accent-teal));
             text-decoration: none;
         }
 
         #kanban-preview-content a:hover,
         #epics-preview-content a:hover,
-        #constitution-preview-content a:hover {
+        #constitution-preview-content a:hover,
+        #tuning-preview-content a:hover {
             color: var(--vscode-textLink-activeForeground, var(--accent-teal-bright));
             text-decoration: underline;
         }
 
         #kanban-preview-content hr,
         #epics-preview-content hr,
-        #constitution-preview-content hr {
+        #constitution-preview-content hr,
+        #tuning-preview-content hr {
             border: 0;
             height: 1px;
             border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
@@ -967,7 +1005,8 @@
 
         #kanban-preview-content img,
         #epics-preview-content img,
-        #constitution-preview-content img {
+        #constitution-preview-content img,
+        #tuning-preview-content img {
             max-width: 100%;
             max-height: 100%;
             position: relative;
@@ -977,7 +1016,8 @@
 
         #kanban-preview-content .empty-state,
         #epics-preview-content .empty-state,
-        #constitution-preview-content .empty-state {
+        #constitution-preview-content .empty-state,
+        #tuning-preview-content .empty-state {
             display: flex;
             align-items: center;
             justify-content: center;
@@ -1020,6 +1060,7 @@
         <button class="shared-tab-btn active" data-tab="kanban">KANBAN PLANS</button>
         <button class="shared-tab-btn" data-tab="epics">EPICS</button>
         <button class="shared-tab-btn" data-tab="constitution">CONSTITUTION</button>
+        <button class="shared-tab-btn" data-tab="tuning">TUNING</button>
     </div>
     <div class="container">
         <!-- Kanban tab -->
@@ -1127,6 +1168,41 @@
                             <div class="empty-state">Select a workspace to view its Constitution</div>
                         </div>
                         <textarea id="constitution-editor" class="markdown-editor"></textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tuning tab -->
+        <div id="tuning-content" class="shared-tab-content">
+            <div class="controls-strip">
+                <select id="tuning-workspace-filter">
+                    <option value="">All Workspaces</option>
+                </select>
+                <button id="btn-run-tuning-extract" class="strip-btn" title="Scan reviewed plans and extract adversarial insights">Extract Insights</button>
+                <button id="btn-run-tuning-governance" class="strip-btn" title="Review all insights and propose governance file updates">Propose Governance Updates</button>
+                <button id="btn-refresh-insights" class="strip-btn" title="Refresh insight list">Refresh</button>
+                <select id="tuning-insight-filter">
+                    <option value="">All Insights</option>
+                    <option value="open">Open</option>
+                    <option value="applied">Applied</option>
+                    <option value="dismissed">Dismissed</option>
+                </select>
+            </div>
+            <div class="content-row">
+                <div id="tuning-list-pane">
+                    <div class="sidebar-toggle-row">
+                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                    </div>
+                    <div class="empty-state">No insights yet. Run "Extract Insights" to scan reviewed plans.</div>
+                </div>
+                <div class="preview-panel-wrapper">
+                    <div class="cyber-scanlines"></div>
+                    <div id="tuning-preview-pane" class="tuning-preview-pane">
+                        <div id="tuning-preview-content">
+                            <div class="empty-state">Select an insight to preview</div>
+                        </div>
+                        <textarea id="tuning-editor" class="markdown-editor"></textarea>
                     </div>
                 </div>
             </div>

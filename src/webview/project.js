@@ -24,6 +24,8 @@
                 applySidebarState('epics', state.epicsListCollapsed);
             } else if (targetTab === 'constitution') {
                 applySidebarState('constitution', state.constitutionListCollapsed);
+            } else if (targetTab === 'tuning') {
+                applySidebarState('tuning', state.tuningListCollapsed);
             }
 
             if (activeTab === 'kanban') {
@@ -33,6 +35,8 @@
                 updateActiveEpicBanner();
             } else if (activeTab === 'constitution') {
                 vscode.postMessage({ type: 'loadConstitutionFiles' });
+            } else if (activeTab === 'tuning') {
+                vscode.postMessage({ type: 'loadInsights', workspaceRoot: tuningWorkspaceFilter ? tuningWorkspaceFilter.value : '' });
             }
         });
     });
@@ -46,7 +50,8 @@
         reviewMode: { kanban: false },
         kanbanListCollapsed: false,
         epicsListCollapsed: false,
-        constitutionListCollapsed: false
+        constitutionListCollapsed: false,
+        tuningListCollapsed: false
     };
 
     // Initialize from persisted state
@@ -54,6 +59,7 @@
     state.kanbanListCollapsed = persistedState.kanbanListCollapsed || false;
     state.epicsListCollapsed = persistedState.epicsListCollapsed || false;
     state.constitutionListCollapsed = persistedState.constitutionListCollapsed || false;
+    state.tuningListCollapsed = persistedState.tuningListCollapsed || false;
 
     function applySidebarState(tabName, collapsed) {
         const tabContent = document.getElementById(`${tabName}-content`);
@@ -78,6 +84,9 @@
         } else if (activeTab === 'constitution') {
             state.constitutionListCollapsed = !state.constitutionListCollapsed;
             applySidebarState('constitution', state.constitutionListCollapsed);
+        } else if (activeTab === 'tuning') {
+            state.tuningListCollapsed = !state.tuningListCollapsed;
+            applySidebarState('tuning', state.tuningListCollapsed);
         }
 
         // Persist state
@@ -86,7 +95,8 @@
             ...currentPersisted,
             kanbanListCollapsed: state.kanbanListCollapsed,
             epicsListCollapsed: state.epicsListCollapsed,
-            constitutionListCollapsed: state.constitutionListCollapsed
+            constitutionListCollapsed: state.constitutionListCollapsed,
+            tuningListCollapsed: state.tuningListCollapsed
         });
     }
 
@@ -155,6 +165,17 @@
     const constitutionPreviewPane = document.getElementById('constitution-preview-pane');
     const constitutionPreviewContent = document.getElementById('constitution-preview-content');
     const constitutionEditor = document.getElementById('constitution-editor');
+
+    // Tuning tab elements
+    const tuningWorkspaceFilter = document.getElementById('tuning-workspace-filter');
+    const tuningInsightFilter = document.getElementById('tuning-insight-filter');
+    const btnRunTuningExtract = document.getElementById('btn-run-tuning-extract');
+    const btnRunTuningGovernance = document.getElementById('btn-run-tuning-governance');
+    const btnRefreshInsights = document.getElementById('btn-refresh-insights');
+    const tuningListPane = document.getElementById('tuning-list-pane');
+    const tuningPreviewPane = document.getElementById('tuning-preview-pane');
+    const tuningPreviewContent = document.getElementById('tuning-preview-content');
+    const tuningEditor = document.getElementById('tuning-editor');
 
     const kanbanFilters = { column: '', workspaceRoot: '', project: '', search: '' };
     const epicsFilters = { workspaceRoot: '' };
@@ -455,6 +476,69 @@
                     alert('Save failed: ' + (msg.error || 'Unknown error'));
                 }
                 break;
+            }
+            case 'insightsLoaded': {
+                _tuningInsights = msg.insights || [];
+                renderInsightList(_tuningInsights);
+                break;
+            }
+            case 'insightContent': {
+                if (tuningPreviewContent && msg.content) {
+                    tuningPreviewContent.innerHTML = msg.renderedHtml || escapeHtml(msg.content);
+                    _tuningSelectedInsight = msg.filename;
+                    _tuningSelectedWorkspaceRoot = msg.workspaceRoot || '';
+                    const actionsDiv = document.createElement('div');
+                    actionsDiv.style.cssText = 'padding: 12px 0; display: flex; gap: 8px; border-top: 1px solid var(--border-color); margin-top: 16px;';
+                    actionsDiv.innerHTML = `
+                        <button class="strip-btn" id="btn-insight-copy-link">Copy Link</button>
+                        <button class="strip-btn" id="btn-insight-mark-applied">Mark Applied</button>
+                        <button class="strip-btn" id="btn-insight-dismiss">Dismiss</button>
+                        <button class="strip-btn" id="btn-insight-delete" style="color: #ff6b6b;">Delete</button>
+                    `;
+                    tuningPreviewContent.appendChild(actionsDiv);
+                    const btnCopyLink = document.getElementById('btn-insight-copy-link');
+                    const btnMarkApplied = document.getElementById('btn-insight-mark-applied');
+                    const btnDismiss = document.getElementById('btn-insight-dismiss');
+                    const btnDeleteInsight = document.getElementById('btn-insight-delete');
+                    if (btnCopyLink) btnCopyLink.addEventListener('click', () => {
+                        const link = `${_tuningSelectedWorkspaceRoot}/.switchboard/insights/${_tuningSelectedInsight}`;
+                        vscode.postMessage({ type: 'copyInsightLink', link });
+                    });
+                    if (btnMarkApplied) btnMarkApplied.addEventListener('click', () => {
+                        vscode.postMessage({ type: 'updateInsightStatus', filename: _tuningSelectedInsight, status: 'applied', workspaceRoot: _tuningSelectedWorkspaceRoot });
+                    });
+                    if (btnDismiss) btnDismiss.addEventListener('click', () => {
+                        vscode.postMessage({ type: 'updateInsightStatus', filename: _tuningSelectedInsight, status: 'dismissed', workspaceRoot: _tuningSelectedWorkspaceRoot });
+                    });
+                    if (btnDeleteInsight) btnDeleteInsight.addEventListener('click', () => {
+                        if (confirm('Delete this insight? This cannot be undone.')) {
+                            vscode.postMessage({ type: 'deleteInsight', filename: _tuningSelectedInsight, workspaceRoot: _tuningSelectedWorkspaceRoot });
+                        }
+                    });
+                }
+                break;
+            }
+            case 'tuningExtractComplete': {
+                if (tuningPreviewContent) {
+                    tuningPreviewContent.innerHTML = `<div class="empty-state">Extract prompt copied to clipboard. Paste it into your agent chat to run the tuning skill.\n\nPlans scanned: ${msg.planCount || 0}</div>`;
+                }
+                vscode.postMessage({ type: 'loadInsights', workspaceRoot: tuningWorkspaceFilter ? tuningWorkspaceFilter.value : '' });
+                break;
+            }
+            case 'tuningGovernanceComplete': {
+                if (tuningPreviewContent) {
+                    tuningPreviewContent.innerHTML = `<div class="empty-state">Governance prompt copied to clipboard. Paste it into your agent chat to propose governance updates.</div>`;
+                }
+                break;
+            }
+            case 'insightLinkCopied': {
+                if (btnRunTuningExtract) {
+                    const oldText = btnRunTuningExtract.textContent;
+                    btnRunTuningExtract.textContent = 'Copied!';
+                    setTimeout(() => { btnRunTuningExtract.textContent = oldText; }, 2000);
+                }
+                break;
+            }
         }
     });
 
@@ -465,13 +549,15 @@
         const currentWS = kanbanFilters.workspaceRoot;
         kanbanWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
         epicsWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
+        if (tuningWorkspaceFilter) tuningWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
 
         _kanbanWorkspaceItems.forEach(ws => {
             const opt = document.createElement('option');
             opt.value = ws.workspaceRoot;
             opt.textContent = ws.label;
             kanbanWorkspaceFilter.appendChild(opt.cloneNode(true));
-            epicsWorkspaceFilter.appendChild(opt);
+            epicsWorkspaceFilter.appendChild(opt.cloneNode(true));
+            if (tuningWorkspaceFilter) tuningWorkspaceFilter.appendChild(opt.cloneNode(true));
         });
         kanbanWorkspaceFilter.value = currentWS;
         epicsWorkspaceFilter.value = epicsFilters.workspaceRoot;
@@ -1378,6 +1464,106 @@
         return `${days}d ago`;
     }
 
+    // =========================================================================
+    // TUNING TAB
+    // =========================================================================
+    let _tuningInsights = [];
+    let _tuningSelectedInsight = null;
+    let _tuningSelectedWorkspaceRoot = '';
+
+    function renderInsightList(insights) {
+        if (!tuningListPane) return;
+        tuningListPane.innerHTML = '';
+
+        const toggleRow = document.createElement('div');
+        toggleRow.className = 'sidebar-toggle-row';
+        const toggleBtn = document.createElement('button');
+        toggleBtn.className = 'sidebar-toggle-btn';
+        toggleBtn.title = 'Toggle sidebar';
+        toggleBtn.textContent = state.tuningListCollapsed ? '»' : '«';
+        toggleBtn.addEventListener('click', toggleSidebarCollapsed);
+        toggleRow.appendChild(toggleBtn);
+        tuningListPane.appendChild(toggleRow);
+
+        const filterValue = tuningInsightFilter ? tuningInsightFilter.value : '';
+        const filtered = filterValue ? insights.filter(i => i.status === filterValue) : insights;
+
+        if (filtered.length === 0) {
+            const emptyState = document.createElement('div');
+            emptyState.className = 'empty-state';
+            emptyState.textContent = 'No insights yet. Run "Extract Insights" to scan reviewed plans.';
+            tuningListPane.appendChild(emptyState);
+            return;
+        }
+
+        const isAllWorkspaces = !tuningWorkspaceFilter || !tuningWorkspaceFilter.value;
+
+        filtered.forEach(insight => {
+            const itemDiv = document.createElement('div');
+            itemDiv.className = 'insight-item';
+            if (_tuningSelectedInsight === insight.filename && _tuningSelectedWorkspaceRoot === insight.workspaceRoot) {
+                itemDiv.classList.add('selected');
+            }
+
+            const severityColor = insight.severity === 'critical' ? '#ff6b6b' : insight.severity === 'recurring' ? 'var(--accent-orange)' : 'var(--text-secondary)';
+            const statusColor = insight.status === 'open' ? 'var(--accent-teal)' : insight.status === 'applied' ? '#4ec9b0' : 'var(--text-secondary)';
+            const workspaceLabel = isAllWorkspaces && insight.workspaceRoot ? `<div style="font-size: 10px; color: var(--text-secondary); margin-top: 2px;">${escapeHtml(insight.workspaceRoot.split('/').pop())}</div>` : '';
+
+            itemDiv.innerHTML = `
+                <div style="font-weight: 500;">${escapeHtml(insight.title)}</div>
+                <div style="font-size: 11px; margin-top: 4px; display: flex; gap: 8px; align-items: center;">
+                    <span style="color: ${severityColor};">● ${escapeHtml(insight.severity)}</span>
+                    <span style="color: ${statusColor};">● ${escapeHtml(insight.status)}</span>
+                    <span style="color: var(--text-secondary);">${insight.sourcePlans.length} source${insight.sourcePlans.length !== 1 ? 's' : ''}</span>
+                </div>
+                ${workspaceLabel}
+            `;
+
+            itemDiv.dataset.workspaceRoot = insight.workspaceRoot || '';
+            itemDiv.addEventListener('click', () => {
+                document.querySelectorAll('.insight-item').forEach(el => el.classList.remove('selected'));
+                itemDiv.classList.add('selected');
+                selectInsight(insight.filename, insight.workspaceRoot);
+            });
+
+            tuningListPane.appendChild(itemDiv);
+        });
+    }
+
+    function selectInsight(filename, workspaceRoot) {
+        vscode.postMessage({ type: 'readInsight', filename, workspaceRoot: workspaceRoot || '' });
+    }
+
+    if (tuningWorkspaceFilter) {
+        tuningWorkspaceFilter.addEventListener('change', () => {
+            vscode.postMessage({ type: 'loadInsights', workspaceRoot: tuningWorkspaceFilter.value });
+        });
+    }
+
+    if (tuningInsightFilter) {
+        tuningInsightFilter.addEventListener('change', () => {
+            renderInsightList(_tuningInsights);
+        });
+    }
+
+    if (btnRunTuningExtract) {
+        btnRunTuningExtract.addEventListener('click', () => {
+            vscode.postMessage({ type: 'runTuningExtract', workspaceRoot: tuningWorkspaceFilter ? tuningWorkspaceFilter.value : '' });
+        });
+    }
+
+    if (btnRunTuningGovernance) {
+        btnRunTuningGovernance.addEventListener('click', () => {
+            vscode.postMessage({ type: 'runTuningGovernance', workspaceRoot: tuningWorkspaceFilter ? tuningWorkspaceFilter.value : '' });
+        });
+    }
+
+    if (btnRefreshInsights) {
+        btnRefreshInsights.addEventListener('click', () => {
+            vscode.postMessage({ type: 'loadInsights', workspaceRoot: tuningWorkspaceFilter ? tuningWorkspaceFilter.value : '' });
+        });
+    }
+
     function _complexityToCssClass(complexity) {
         const score = parseInt(complexity, 10);
         if (isNaN(score) || score <= 0) return 'unknown';
@@ -1392,6 +1578,7 @@
     applySidebarState('kanban', state.kanbanListCollapsed);
     applySidebarState('epics', state.epicsListCollapsed);
     applySidebarState('constitution', state.constitutionListCollapsed);
+    applySidebarState('tuning', state.tuningListCollapsed);
 
     // Bind global event listeners for any static toggle buttons
     // (Dynamic buttons created by render functions get their own listeners)

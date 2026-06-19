@@ -1848,6 +1848,38 @@ export class DesignPanelProvider implements vscode.Disposable {
                             placeHolder: 'e.g. Onboarding Redesign'
                         });
                         if (!title) return; // user dismissed the input — nothing to do
+
+                        // Optional brief attachment step
+                        const briefChoice = await vscode.window.showQuickPick(
+                            ['Yes, attach a brief', 'No, skip'],
+                            { placeHolder: 'Attach a design brief to this project?' }
+                        );
+                        let briefContent: string | null = null;
+                        if (briefChoice === 'Yes, attach a brief') {
+                            const briefItems: Array<{ label: string; detail: string; data: any }> = [];
+                            for (const root of (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath)) {
+                                const svc = this._getLocalFolderService(root);
+                                const files = await svc.listBriefsFiles();
+                                for (const file of files) {
+                                    if (file.isFolder) continue;
+                                    briefItems.push({
+                                        label: file.title || file.name,
+                                        detail: file.sourceFolder,
+                                        data: file
+                                    });
+                                }
+                            }
+                            if (briefItems.length > 0) {
+                                const selected = await vscode.window.showQuickPick(briefItems, {
+                                    placeHolder: 'Select a design brief'
+                                });
+                                if (selected) {
+                                    const absPath = path.resolve(selected.data.sourceFolder, selected.data.relativePath);
+                                    briefContent = await fs.promises.readFile(absPath, 'utf8');
+                                }
+                            }
+                        }
+
                         const accessToken = (await this._context.secrets.get('switchboard.stitch.accessToken')) || '';
                         const stitch = await loadStitch(accessToken);
                         const project = await stitch.createProject(title);
@@ -1867,6 +1899,9 @@ export class DesignPanelProvider implements vscode.Disposable {
                         }
                         // Pass the new project as the default so the webview auto-selects it.
                         this.postMessage({ type: 'stitchProjectsReady', projects, defaultProjectId: project.id, selectProjectId: project.id, workspaceRoot });
+                        if (briefContent) {
+                            this.postMessage({ type: 'stitchBriefInjected', content: briefContent, projectId: project.id });
+                        }
                     } finally {
                         this._stitchOperationLock = false;
                     }
@@ -2244,35 +2279,92 @@ export class DesignPanelProvider implements vscode.Disposable {
                 }
                 break;
             }
-            case 'fetchBriefForInjection': {
+            case 'stitchPickAttachFiles': {
                 try {
-                    const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                    const result = await vscode.window.showOpenDialog({
+                        canSelectMany: true,
+                        openLabel: 'Attach reference files',
+                        filters: {
+                            'Reference Files': ['png', 'jpg', 'jpeg', 'webp', 'html', 'htm', 'md']
+                        }
+                    });
+                    if (!result || result.length === 0) break;
+                    const files = result.map(uri => {
+                        const filePath = uri.fsPath;
+                        const ext = path.extname(filePath).toLowerCase().replace('.', '');
+                        const name = path.basename(filePath);
+                        const type = ['png', 'jpg', 'jpeg', 'webp'].includes(ext) ? 'image'
+                            : ['html', 'htm'].includes(ext) ? 'html'
+                            : 'markdown';
+                        return { path: filePath, name, type };
+                    });
+                    this.postMessage({ type: 'stitchAttachedFilesPicked', files });
+                } catch (err: any) {
+                    vscode.window.showErrorMessage('Failed to pick files: ' + err.message);
+                }
+                break;
+            }
+
+            case 'stitchSendBrief': {
+                try {
+                    const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
+                    const root = workspaceRoot || '';
                     const sourceFolder = message.sourceFolder;
                     if (!sourceFolder) throw new Error('sourceFolder is required');
-                    
+
                     const rawDocId = String(message.docId || '');
                     const relativePath = rawDocId.includes(':')
                         ? rawDocId.substring(rawDocId.indexOf(':') + 1)
                         : rawDocId;
-                    
+
                     const resolvedFolder = path.resolve(sourceFolder);
                     const absPath = path.resolve(resolvedFolder, relativePath);
                     if (absPath !== resolvedFolder && !absPath.startsWith(resolvedFolder + path.sep)) {
                         throw new Error('Invalid file path');
                     }
-                    
+
                     const service = this._getLocalFolderService(root);
                     if (!service.getBriefsFolderPaths().map(p => path.resolve(p)).includes(resolvedFolder)) {
                         throw new Error('Folder is not configured briefs folder');
                     }
 
                     const content = await fs.promises.readFile(absPath, 'utf8');
-                    this.postMessage({
-                        type: 'briefContentForInjectionReady',
-                        content
+
+                    const title = await vscode.window.showInputBox({
+                        prompt: 'Title for the new Stitch project',
+                        placeHolder: 'e.g. Onboarding Redesign',
+                        value: message.briefTitle || ''
                     });
+                    if (!title) break; // user dismissed — nothing to do
+
+                    if (this._stitchOperationLock) {
+                        this.postMessage({ type: 'stitchError', error: 'Another Stitch operation is in progress. Please wait.', workspaceRoot });
+                        break;
+                    }
+                    this._stitchOperationLock = true;
+                    try {
+                        const accessToken = (await this._context.secrets.get('switchboard.stitch.accessToken')) || '';
+                        const stitch = await loadStitch(accessToken);
+                        const project = await stitch.createProject(title);
+                        const list = await stitch.projects();
+                        const projects = list.map((p: any) => ({
+                            id: p.id,
+                            name: p.data?.title || p.data?.name || p.id,
+                            updateTime: p.data?.updateTime || p.data?.createTime || ''
+                        }));
+                        if (workspaceRoot) {
+                            const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                            for (const p of projects) {
+                                await db.upsertStitchProject(p.id, p.name, p.updateTime);
+                            }
+                        }
+                        this.postMessage({ type: 'stitchProjectsReady', projects, defaultProjectId: project.id, selectProjectId: project.id, workspaceRoot });
+                        this.postMessage({ type: 'stitchBriefInjected', content, projectId: project.id });
+                    } finally {
+                        this._stitchOperationLock = false;
+                    }
                 } catch (err: any) {
-                    vscode.window.showErrorMessage('Failed to fetch brief: ' + err.message);
+                    this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
                 }
                 break;
             }
@@ -2294,7 +2386,28 @@ export class DesignPanelProvider implements vscode.Disposable {
                         const accessToken = (await this._context.secrets.get('switchboard.stitch.accessToken')) || '';
                         const stitch = await loadStitch(accessToken);
                         const projectInstance = stitch.project(message.projectId);
-                        const screen = await projectInstance.generate(message.prompt, message.deviceType, message.modelId);
+
+                        // Upload reference files and augment prompt with markdown context
+                        let augmentedPrompt = message.prompt || '';
+                        const attachedFiles = message.attachedFiles || [];
+                        for (const file of attachedFiles) {
+                            if (file.type === 'image' || file.type === 'html') {
+                                try {
+                                    await projectInstance.upload(file.path);
+                                } catch (uploadErr: any) {
+                                    console.error(`Failed to upload ${file.name}:`, uploadErr);
+                                }
+                            } else if (file.type === 'markdown') {
+                                try {
+                                    const mdContent = await fs.promises.readFile(file.path, 'utf8');
+                                    augmentedPrompt += `\n\n--- Design Context ---\n${mdContent}\n---`;
+                                } catch (readErr: any) {
+                                    console.error(`Failed to read ${file.name}:`, readErr);
+                                }
+                            }
+                        }
+
+                        const screen = await projectInstance.generate(augmentedPrompt, message.deviceType, message.modelId);
                         this._activeScreens.set(screen.id, screen);
                         this.postMessage({ type: 'stitchScreenReady', screen: await this._formatScreen(screen, workspaceRoot), workspaceRoot });
                     } finally {

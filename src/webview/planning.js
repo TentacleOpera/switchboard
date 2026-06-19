@@ -470,6 +470,7 @@
             btnCommentTicket: document.getElementById('btn-comment-ticket'),
             btnViewAttachments: document.getElementById('btn-view-attachments'),
             btnOpenTicket: document.getElementById('btn-open-ticket'),
+            btnDiagramPrompt: document.getElementById('btn-diagram-prompt'),
             attachmentsModal: document.getElementById('attachments-modal'),
             attachmentsList: document.getElementById('attachments-list'),
             ticketsStatusFooter: document.getElementById('tickets-status-footer'),
@@ -5939,6 +5940,37 @@ Return ONLY the drafted prompt with no additional commentary.`;
             if (url) vscode.postMessage({ type: 'openExternalUrl', url });
         });
 
+        // Action bar: Diagram Prompt — copies a prompt to clipboard for agent handoff
+        document.getElementById('btn-diagram-prompt')?.addEventListener('click', () => {
+            const provider = lastIntegrationProvider;
+            if (!provider) return;
+            const isLinear = provider === 'linear';
+            const issue = isLinear ? selectedLinearIssue : selectedClickUpIssue;
+            if (!issue) return;
+            const id = isLinear ? issue.issue.id : issue.task.id;
+            const title = isLinear ? (issue.issue.title || issue.issue.identifier || id) : (issue.task.name || issue.task.title || id);
+            const ticketUrl = _ticketExternalUrl(provider, isLinear ? (issue.issue.identifier || id) : id, isLinear ? issue.issue.url : issue.task.url);
+            const workspaceRoot = ticketsWorkspaceRoot;
+            const providerName = isLinear ? 'Linear' : 'ClickUp';
+            const prompt = `Generate an architectural diagram for this ticket and attach it inline.
+
+Ticket: ${title}
+URL: ${ticketUrl}
+ID: ${id}
+Provider: ${provider}
+Workspace: ${workspaceRoot}
+
+Instructions:
+1. Ask me what kind of diagram I want (flowchart, sequence, component, etc.) and what it should represent.
+2. Generate Mermaid syntax for the diagram.
+3. Render the Mermaid to a PNG file. You can use mermaid-cli (\`npx @mermaid-js/mermaid-cli -i input.mmd -o output.png\`) or any other method.
+4. Find the ticket's local markdown file — it's located under the \`.switchboard/tickets/${provider}/\` directory in the workspace root (or a custom tickets folder if configured), and the filename starts with \`${provider}_${id}_\`.
+5. Save the PNG file in the same directory as the ticket markdown file.
+6. Edit the ticket markdown file directly and insert the diagram as an inline image: \`![{diagram-name}](./{filename}.png)\` — place it where it makes sense in the description.
+7. Tell me when done. I will click "Push" in the Switchboard tickets tab, which will automatically upload the image to ${providerName} and rewrite the URL.`;
+            vscode.postMessage({ type: 'copyDiagramPrompt', prompt });
+        });
+
         // Action bar: View Attachments button toggle
         document.getElementById('btn-view-attachments')?.addEventListener('click', () => {
             const modal = document.getElementById('attachments-modal');
@@ -6622,7 +6654,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         if (previewMetaBar) {
             previewMetaBar.style.display = 'flex';
-            const { btnViewAttachments, btnOpenTicket } = getTicketsTabElements();
+            const { btnViewAttachments, btnOpenTicket, btnDiagramPrompt } = getTicketsTabElements();
             if (btnViewAttachments) {
                 const hasAttachments = selectedLinearIssue.attachments && selectedLinearIssue.attachments.length > 0;
                 btnViewAttachments.style.display = hasAttachments ? '' : 'none';
@@ -6631,6 +6663,9 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 const openUrl = _ticketExternalUrl('linear', issue.identifier || issue.id, issue.url);
                 btnOpenTicket.style.display = openUrl ? '' : 'none';
                 btnOpenTicket.dataset.url = openUrl;
+            }
+            if (btnDiagramPrompt) {
+                btnDiagramPrompt.style.display = '';
             }
             const statusSelect = document.getElementById('select-status-ticket');
             if (statusSelect) {
@@ -7089,7 +7124,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         if (previewMetaBar) {
             previewMetaBar.style.display = 'flex';
-            const { btnViewAttachments, btnOpenTicket } = getTicketsTabElements();
+            const { btnViewAttachments, btnOpenTicket, btnDiagramPrompt } = getTicketsTabElements();
             if (btnViewAttachments) {
                 const hasAttachments = selectedClickUpIssue.attachments && selectedClickUpIssue.attachments.length > 0;
                 btnViewAttachments.style.display = hasAttachments ? '' : 'none';
@@ -7098,6 +7133,9 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 const openUrl = _ticketExternalUrl('clickup', task.id, task.url);
                 btnOpenTicket.style.display = openUrl ? '' : 'none';
                 btnOpenTicket.dataset.url = openUrl;
+            }
+            if (btnDiagramPrompt) {
+                btnDiagramPrompt.style.display = '';
             }
             const statusSelect = document.getElementById('select-status-ticket');
             if (statusSelect) {

@@ -24,6 +24,7 @@ import { formatReviewLogEntries } from './reviewLogUtils';
 import { PanelStateStore } from './PanelStateStore';
 import { buildWorkspaceItems } from './workspaceUtils';
 import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
+import { InsightManager } from './InsightManager';
 
 export interface PlanningPanelAdapterFactories {
     getNotionService: (root: string) => NotionFetchService;
@@ -78,6 +79,8 @@ export class PlanningPanelProvider {
     private _kanbanPlansWatchDebounce: NodeJS.Timeout | undefined;
     private _constitutionWatchers: vscode.FileSystemWatcher[] = [];
     private _constitutionWatchDebounce: NodeJS.Timeout | undefined;
+    private _insightsWatchers: vscode.FileSystemWatcher[] = [];
+    private _insightsWatchDebounce: NodeJS.Timeout | undefined;
     private _ticketsAutoSyncWatchers: Map<string, vscode.FileSystemWatcher> = new Map();
     private _ticketsViewWatcher: vscode.FileSystemWatcher | undefined;
     private _ticketsViewWatcherDebounces: Map<string, NodeJS.Timeout> = new Map();
@@ -4106,6 +4109,20 @@ Please format the updated output document strictly as follows:
                     }
                 }
                 await vscode.env.clipboard.writeText(paths.join('\n'));
+                break;
+            }
+            case 'copyDiagramPrompt': {
+                try {
+                    const { prompt } = msg;
+                    if (typeof prompt !== 'string' || !prompt.trim()) {
+                        vscode.window.showErrorMessage('Diagram prompt is empty.');
+                        break;
+                    }
+                    await vscode.env.clipboard.writeText(prompt);
+                    vscode.window.showInformationMessage('Diagram prompt copied to clipboard');
+                } catch (err) {
+                    vscode.window.showErrorMessage(`Failed to copy diagram prompt: ${String(err)}`);
+                }
                 break;
             }
             case 'changeTicketStatus': {

@@ -190,6 +190,10 @@ No regression for any user — the tooltip is purely additive.
 9. Click the `$(circuit-board)` icon and verify the QuickPick still appears (existing behavior preserved)
 10. Toggle `statusBar.compactMode` to false and verify the hub hides and individual items show (no regression)
 
+## Review Findings
+
+Reviewed implementation against plan requirements. All 8 command links verified against registered commands (`extension.ts`) and `package.json` declarations. Old plain-string tooltip assignment removed — no orphaned references. `compactMode` early-return guard, `---` separator logic, and function hoisting all correct. No race conditions (fully synchronous). No double-trigger bugs (single call site inside `updateStatusBarVisibility()`). No test regressions (no tests reference these functions). Three NITs found (dead initial tooltip at line 1824, wasteful tooltip on hidden item when `enabledCount === 0`, redundant config read) — none warrant code fixes. No CRITICAL or MAJOR findings. Verification: compilation and tests skipped per session directive; static analysis (caller trace, command registration audit, orphaned reference grep) all pass. Remaining risk: VS Code tooltip height cap could overflow if many more actions are added in the future — low risk for current scope.
+
 ---
 
 **Recommendation:** Complexity 3 → Send to Intern
