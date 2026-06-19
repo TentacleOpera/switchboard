@@ -284,3 +284,47 @@ The requester considers ToS-compliance messaging unnecessary (4000+ downloads, z
 ## 10. Recommendation
 
 **Complexity: 5 → Send to Coder.** Documentation-only and mechanically routine, but the surface is large and accuracy on a public landing page is unforgiving — needs an agent that will reconcile against the live manifest and salvage the existing good prose, not an Intern that copies the plan verbatim.
+
+---
+
+## 11. Reviewer Pass (2026-06-19, v1.7.3)
+
+The README rewrite and `how_to_use_switchboard.md` restructure landed and were reviewed against this plan with every documented command/setting reconciled against the live `package.json` manifest (`contributes.commands`, `contributes.configuration`).
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *"A 'full-surface landing page,' you say. Then explain to me why you've printed two credentials — `switchboard.stitch.apiKey` and `switchboard.stitch.accessToken` — under a heading that literally reads **Settings:**, when neither exists in the manifest and both live in `context.secrets` (`DesignPanelProvider.ts:1339,1364`). This is the **exact Constitution trap** the plan screams about in three separate sections — 'do not present a non-setting as a settings.json key' — and you walked straight into it, except worse, because you're now telling four thousand strangers to paste a Google API token into a plaintext JSON file. That's not a typo, that's a security footgun on the marketplace front page. **CRITICAL.**"*
+>
+> *"Next: §3 line 187 and the §4 IA item 10 both demand Themes documented. The feature is wired — `theme.name`/`disableCyberAnimation` consumed by every panel provider — and the README mentions it **nowhere**. §8 says 'every shipped feature in §3 is represented.' You missed one a user can see with their own eyes. **MAJOR.**"*
+>
+> *"And before anyone congratulates the writer for 'leaving out diagrams' — were you right, or merely lucky? I checked. `DiagramRenderer`/`MermaidGenerator` are imported by exactly one consumer: `LocalApiServer.ts`, the plumbing you were explicitly told to bury. So the omission is *correct*, but for reasons nobody wrote down. **NIT** — document the reasoning, not just the result."*
+>
+> *"Loose threads: Design Doc/PRD attachment settings (`planner.designDoc*`) get narrated in the guide but never named in the README; `preventAgentFileOpening` and the four git-ignore strategies are settings the plan listed and you glossed. None fatal on a landing page. **NIT.**"*
+
+### Stage 2 — Balanced synthesis
+
+- **Keep:** Lifecycle-first IA, Constitution documented correctly as a Project-panel feature with the verbatim injected header, all Control Plane / panel / chat-command / sync claims (every command verified present in the manifest), ToS section + link removed while `docs/ToS_COMPLIANCE.md` stays on disk, deprecated items (`workspaceDatabaseMappings`, `theme.cyberPanel`, Google-Drive framing) absent, `LocalApiServer`/`test:integration` absent, voice + beer line + demoted savings story intact, v1.7.3 asserted, image placeholders present. `how_to_use` fully restructured with credit figures removed.
+- **Fix now (applied):** the two Stitch secrets mislabeled as settings; the missing Themes documentation.
+- **Defer (NIT):** `planner.designDoc*`, `preventAgentFileOpening`, git-ignore strategy enum. These are arguably covered by User Review #3's discretion on which non-headline settings warrant landing-page real estate; the requester can pull them in if desired.
+
+### Fixes applied (this pass)
+
+- `README.md:46-52` — Removed `switchboard.stitch.apiKey` and `switchboard.stitch.accessToken` from the "Settings:" list under Design in the Loop. Re-labelled the list "Settings (`settings.json`)" and added a sentence stating the API key / OAuth token are entered in the Design panel and held in VS Code `SecretStorage`, never in `settings.json`. (Accuracy + security; matched against `DesignPanelProvider.ts:1339,1364` and confirmed absent from `package.json`.)
+- `README.md:212` — Added a **Themes** entry to the Panels section documenting `switchboard.theme.name` (`afterburner` | `claudify`) and `switchboard.theme.disableCyberAnimation`. (Closes the §3/§4/§8 completeness gap.)
+
+### Validation results
+
+- Per session directives: **no compilation run, no automated tests run** (docs-only change; user runs the suite separately).
+- Manifest reconciliation (the real acceptance gate) — PASS:
+  - All 11 commands referenced in the README (`scaffoldMultiRepo`, `setupControlPlane`, `clearControlPlaneCache`, `reconcileKanbanDbs`, `resetKanbanDb`, `openKanban`, `openSetupPanel`, `openPlanningPanel`, `openProjectPanel`, `openDesignPanel`, `openHub`) exist in `contributes.commands`.
+  - Enums verified against manifest: `defaultMode` `["action","plan"]`, `stitch.authMode` `["apiKey","oauth"]`, `stitch.defaultModelId` `["GEMINI_3_FLASH","GEMINI_3_1_PRO"]`, `stitch.defaultCreativeRange` `["EXPLORE","REFINE","REIMAGINE"]`, `theme.name` `["afterburner","claudify"]`.
+  - No invented setting keys remain (the two Stitch secrets were the only ones; now corrected).
+  - Constitution documented as a Project-panel feature with the verbatim injected header — confirmed (`agentPromptBuilder.ts`).
+  - `docs/ToS_COMPLIANCE.md` present on disk; ToS section + in-README link absent. `docs/how_to_use_switchboard.md` link target resolves. Version stated v1.7.3.
+  - No `LocalApiServer`, `test:integration`, Google-Drive sync framing, `workspaceDatabaseMappings`, `theme.cyberPanel`, or "Plan Ingestion Folder" references in the README.
+
+### Remaining risks
+
+- **Image placeholders** (`docs/TODO_project_panel.png`, `TODO_design_panel.png`, `TODO_research_panel.png`) render broken until the requester supplies assets — accepted interim per Q6.
+- **User Review items #1–#3 still stand** for the requester: final section order, `/archive` + `/export` first-class status, and which non-headline settings (`planner.designDoc*`, `preventAgentFileOpening`, git-ignore strategies, operational/internal settings) belong on the landing page.
+- Marketplace metadata (`displayName`/`description`/keywords) intentionally untouched per §9 — flag only.

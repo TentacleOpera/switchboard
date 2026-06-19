@@ -4144,7 +4144,7 @@
                 const mode = columnDragDropModes[def.id] || 'cli';
                 const modeIcon = mode === 'prompt' ? ICON_PROMPT : ICON_CLI;
                 const modeTitle = mode === 'prompt' ? 'Mode: Copy Prompt (drag cards to copy prompt to clipboard)' : 'Mode: CLI Dispatch (drag cards to trigger CLI agent)';
-                const modeToggle = (!isCreated && !isLastWorkingColumn && !isCompleted) 
+                const modeToggle = (!isCreated && !isCompleted)
                     ? `<div class="mode-toggle mode-${mode}" data-column="${escapeAttr(def.id)}" data-tooltip="${escapeAttr(modeTitle)}">
                            <img src="${modeIcon}" alt="${mode}">
                        </div>` 

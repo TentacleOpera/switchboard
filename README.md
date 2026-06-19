@@ -43,11 +43,9 @@ Commands:
 Setting: `switchboard.kanban.controlPlaneRoot`
 
 ### 3. Design in the Loop (Google Stitch)
-Generate design assets inside the Design panel using Google Stitch.
-Settings:
-- `switchboard.stitch.apiKey`
+Generate design assets inside the Design panel using Google Stitch. Authenticate by entering your Stitch API key or OAuth access token directly in the Design panel — those credentials are held in VS Code's `SecretStorage`, never in `settings.json`.
+Settings (`settings.json`):
 - `switchboard.stitch.authMode` (`apiKey` | `oauth`)
-- `switchboard.stitch.accessToken`
 - `switchboard.stitch.defaultProjectId`
 - `switchboard.stitch.defaultOutputFolder`
 - `switchboard.stitch.defaultModelId` (`GEMINI_3_FLASH` | `GEMINI_3_1_PRO`)
@@ -209,6 +207,9 @@ Settings:
   Settings: `switchboard.research.localFolderPaths`, `switchboard.research.htmlFolderPaths`, `switchboard.research.designFolderPaths`, `switchboard.research.antigravityBrainEnabled`
 - **Status Bar Hub** (`switchboard.openHub`) — Grouped actions dropdown.
   Settings: `switchboard.statusBar.showAgentOpenToggle`, `switchboard.statusBar.showTerminalControls`, `switchboard.statusBar.showKanbanButton`, `switchboard.statusBar.showArtifactsButton`, `switchboard.statusBar.showDesignButton`, `switchboard.statusBar.showProjectButton`, `switchboard.statusBar.compactMode`
+
+### Themes
+Skin the UI to taste. Settings: `switchboard.theme.name` (`afterburner` | `claudify`), `switchboard.theme.disableCyberAnimation` (turn off the animated cyber background).
 
 ---
 
