@@ -191,7 +191,9 @@
 
     let currentTicketTags = [];
     let availableLinearLabels = [];
+    let availableLinearStates = [];
     let availableClickUpTags = [];
+    let availableClickUpStatuses = [];
     let _tagsModalOpen = false;
     let _tagsCatalogLoading = false;
 
@@ -3901,10 +3903,12 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 break;
             case 'linearAutomationCatalogLoaded':
                 availableLinearLabels = msg.labels || [];
+                availableLinearStates = msg.states || [];
                 if (_tagsModalOpen && lastIntegrationProvider === 'linear') {
                     _tagsCatalogLoading = false;
                     renderTagsModalList();
                 }
+                if (lastIntegrationProvider === 'linear') renderTicketsTab();
                 break;
             case 'clickupSpaceTagsLoaded':
                 availableClickUpTags = msg.tags || [];
@@ -3912,6 +3916,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     _tagsCatalogLoading = false;
                     renderTagsModalList();
                 }
+                break;
+            case 'clickupListStatusesLoaded':
+                availableClickUpStatuses = msg.statuses || [];
+                if (lastIntegrationProvider === 'clickup') renderTicketsTab();
                 break;
             case 'linearProjectsLoaded':
                 linearAvailableProjects = msg.projects || [];

@@ -170,3 +170,73 @@ Full cleanup (per user): remove the checkbox, the backend config write, and all 
 ---
 
 **Recommendation:** Complexity 4 (≤ 6) → **Send to Coder.**
+
+---
+
+## Reviewer Pass (2026-06-19) — Direct In-Place Review
+
+### Stage 1 — Grumpy Principal Engineer
+
+*The reviewer cracks his knuckles, glares at the diff, and begins.*
+
+> "A 'design-doc fetching' toggle that secretly clobbers a *global planner setting* every time some poor soul pastes a Notion token? That's not a feature, that's a landmine with a friendly label. So let's see if the cleanup crew actually defused it or just painted over the wire.
+>
+> **The checkbox** — `#notion-option-enable-design-doc` — *gone* from `setup.html`. Grep returns zero hits in `src/`. Good. I half-expected a ghost `setCheckboxState` call lingering like a bad smell. There isn't one.
+>
+> **`collectNotionApplyOptions` / `renderNotionOptionSummary`** — vaporized. Zero references. Not a single orphan caller waiting to throw `ReferenceError` the moment a webview hydrates. I am *almost* disappointed I can't yell about it.
+>
+> **The silent write** — the crime scene itself. `handleApplyNotionConfig` (TaskViewerProvider.ts:4809) now takes `(token: string)` and *only* stores/validates the token and saves `setupComplete: true`. No `planner.designDocEnabled` write. The murder weapon has been removed from the evidence locker. **The actual bug is fixed.**
+>
+> **The unused-local trap** — plan screamed that `const designDocSetting` at old line 3963 would become an orphan and break the build. I checked. It's *gone*. The two identically-named locals at 3811 and 3919 — the ones that feed the *legitimate* `designDocSetting` postMessages for the Planning tab — are untouched. Someone actually read the warning instead of nuking all three. Miracle.
+>
+> **`NotionSetupState`** — trimmed to `{ setupComplete: boolean }`. Both construction sites (early-return 3968 + main 3990) carry only `setupComplete`. `cloneNotionSetupState` is still a dumb `JSON.parse(JSON.stringify())` and doesn't care that the shape shrank. Fine.
+>
+> **The `designDocSetting` message handler** in setup.html — keeps the Planning-tab `#design-doc-toggle` / `#design-doc-status-line` updates, drops the `lastNotionSetupState` injection and the vestigial `renderNotionSetupState()` call. The Planning tab still hydrates. The Notion tab stopped eavesdropping.
+>
+> **The tests** — positive assertions for the dead checkbox/summary are gone; negative absence assertions slot cleanly into the existing OPERATION-MODE removed-element block (81–82) with no dangling `&&`. The `NotionSetupState` regex is loosened to `setupComplete: boolean;`. The regression test's `planner.designDocEnabled` / `designDocLink` assertions stay green because those keys still live at 7087–7097, 8897, and 14705–14730.
+>
+> So where's my righteous fury? I went looking for it. **`dist/webview/setup.html`** — the build artifact — *also* shows zero hits for the dead checkbox, so even a stale-bundle ambush isn't lurking. Copy at 1028/1047 left intact per User Review #2 — correct, Notion genuinely is a doc source.
+>
+> Fine. *Fine.* It's clean. I'll find something to be grumpy about tomorrow."
+
+**Findings:**
+- No CRITICAL findings.
+- No MAJOR findings.
+- **NIT (informational, not a defect):** `dist/webview/setup.html` currently happens to be clean, but per project convention it is a generated artifact — the authoritative fix lives in `src/`. A `npm run compile` is still required before runtime (deferred to user per session directive: SKIP COMPILATION).
+
+### Stage 2 — Balanced Synthesis
+
+**Keep (all correct, no action):**
+- `setup.html`: checkbox + summary div deleted; `collectNotionApplyOptions` / `renderNotionOptionSummary` deleted; apply postMessage reduced to `{ type: 'applyNotionConfig', token }`; `renderNotionSetupState()` reduced to `setApplyButtonBusy('notion', false)`; `designDocSetting` handler keeps Planning-tab updates and drops the Notion injection + trailing render call; `setupPanelState` hydration unchanged and still valid against the shrunk state.
+- `TaskViewerProvider.ts`: `NotionSetupState` trimmed to `{ setupComplete }`; both construction sites updated; unused `designDocSetting` local at old 3963 deleted; the 3811/3919 locals correctly preserved; `handleApplyNotionConfig(token)` no longer writes `planner.designDocEnabled`.
+- `SetupPanelProvider.ts`: `case 'applyNotionConfig'` calls `handleApplyNotionConfig(message.token)` with no `options`.
+- Tests: both files match the plan; negative assertions are well-formed; regression test stays green.
+
+**Fix now:** Nothing. No valid CRITICAL/MAJOR findings — no code changes applied by this reviewer pass.
+
+**Defer:** `npm run compile` + the two Jest tests + manual webview smoke-check, all explicitly delegated to the user this session (SKIP COMPILATION / SKIP TESTS directives).
+
+### Code Fixes Applied
+None. The implementation already satisfies every plan requirement; there were no material defects to fix.
+
+### Validation Results
+- `grep -rn` in `src/` → **0 hits** for `notion-option-enable-design-doc`, `collectNotionApplyOptions`, `renderNotionOptionSummary`, `enableDesignDocFetching` (the only matches are the intended *negative* absence assertions in `setup-panel-migration.test.js:81–82`).
+- `NotionSetupState` confirmed = `{ setupComplete: boolean }` (TaskViewerProvider.ts:208–210).
+- `handleApplyNotionConfig` confirmed single-arg, no `planner.designDocEnabled` write (TaskViewerProvider.ts:4809–4849).
+- `handleApplyNotionConfig` has exactly one caller (SetupPanelProvider.ts:424), already updated to the single-arg signature.
+- Unused `designDocSetting` local removed from `getIntegrationSetupStates`; legitimate locals at 3811/3919 preserved.
+- `planner.designDocEnabled` / `planner.designDocLink` still present in provider source (7087–7097, 8897, 14705–14730) → regression test assertions stay green.
+- `dist/webview/setup.html` → 0 stale hits (no rebuild ambush), though a fresh `npm run compile` remains the user's responsibility.
+- TypeScript compile and Jest **not run** this session per SKIP COMPILATION / SKIP TESTS directives.
+
+### Remaining Risks
+- **Build step pending (low):** `npm run compile` must run before the change is live; deferred to the user. `dist/` is already coincidentally clean, so no stale-checkbox runtime risk even if rebuild is delayed.
+- **Verification pending (low):** the two Jest tests and the manual "toggle Planning-tab design-doc on → apply Notion token → confirm it stays on" smoke check are user-run per session directives.
+- **MR-merge hazard (low, as plan noted):** a future branch touching `handleApplyNotionConfig`, `NotionSetupState`, or the Notion hydration path could resurrect the removed `options` param / `designDocEnabled` field on a careless merge. Re-grep after any merge.
+
+### Structured Summary
+- **CRITICAL:** none.
+- **MAJOR:** none.
+- **NIT:** `dist/webview/setup.html` is a generated artifact requiring `npm run compile` (deferred to user); not a code defect.
+- **Fixes applied:** none — implementation matched the plan on every point.
+- **Remaining risks:** pending build + test/smoke verification (user-run), and the standard merge-resurrection hazard.

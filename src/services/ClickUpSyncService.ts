@@ -1444,6 +1444,24 @@ export class ClickUpSyncService {
     })).filter((t: { name: string }) => t.name.length > 0);
   }
 
+  public async getListStatuses(listId: string): Promise<Array<{ status: string; color: string; type: string }>> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+        throw new Error('ClickUp not configured');
+    }
+    const normalizedListId = String(listId || '').trim();
+    if (!normalizedListId) {
+        throw new Error('List ID required');
+    }
+    const result = await this.httpRequest('GET', `/list/${normalizedListId}`);
+    const statuses = Array.isArray(result.data?.statuses) ? result.data.statuses : [];
+    return statuses.map((s: any) => ({
+        status: String(s?.status || '').trim(),
+        color: String(s?.color || '').trim(),
+        type: String(s?.type || '').trim()
+    })).filter((s: { status: string }) => s.status.length > 0);
+  }
+
   public async addTaskComment(taskId: string, comment: string): Promise<void> {
     const config = await this.loadConfig();
     if (!config?.setupComplete) {

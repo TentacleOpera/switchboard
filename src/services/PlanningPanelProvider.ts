@@ -3424,6 +3424,7 @@ Please format the updated output document strictly as follows:
                     this._panel?.webview.postMessage({
                         type: 'linearAutomationCatalogLoaded',
                         labels: catalog.labels,
+                        states: catalog.states,
                         workspaceRoot
                     });
                 } catch (error) {
@@ -3446,6 +3447,29 @@ Please format the updated output document strictly as follows:
                     this._panel?.webview.postMessage({
                         type: 'clickupSpaceTagsLoaded',
                         tags,
+                        workspaceRoot
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupError',
+                        scope: 'task',
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
+                    });
+                }
+                break;
+            }
+            case 'clickupLoadListStatuses': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const listId = String(msg.listId || '').trim();
+                if (!workspaceRoot || !listId) { break; }
+                try {
+                    const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
+                    const statuses = await clickUp.getListStatuses(listId);
+                    this._panel?.webview.postMessage({
+                        type: 'clickupListStatusesLoaded',
+                        statuses,
+                        listId,
                         workspaceRoot
                     });
                 } catch (error) {
