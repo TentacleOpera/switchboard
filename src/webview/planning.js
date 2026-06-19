@@ -2760,15 +2760,17 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 console.error('[PlanningPanel Webview] Backend error:', msg.message);
                 break;
             case 'planningPanelSyncModeReady': {
+                const validModes = ['no-sync', 'auto-sync-all', 'sync-selected'];
+                const mode = validModes.includes(msg.mode) ? msg.mode : 'no-sync';
                 const select = document.getElementById('docs-cache-mode');
                 if (select) {
-                    select.value = msg.mode;
+                    select.value = mode;
                 }
                 const picker = document.getElementById('docs-sync-container-picker');
                 if (picker) {
-                    picker.style.display = msg.mode === 'sync-selected' ? 'flex' : 'none';
+                    picker.style.display = mode === 'sync-selected' ? 'flex' : 'none';
                 }
-                if (msg.mode === 'sync-selected') {
+                if (mode === 'sync-selected') {
                     vscode.postMessage({ type: 'fetchAvailableSyncContainers' });
                 }
                 break;

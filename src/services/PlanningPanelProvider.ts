@@ -4781,28 +4781,44 @@ Please format the updated output document strictly as follows:
                 break;
             }
             case 'getPlanningPanelSyncMode': {
-                const { sourceRoot } = await this._resolveSyncConfig();
-                const resolvedRoot = sourceRoot || this._getWorkspaceRoot() || allRoots[0];
-                if (!resolvedRoot) {
-                    break;
+                try {
+                    const { sourceRoot } = await this._resolveSyncConfig();
+                    const resolvedRoot = sourceRoot || this._getWorkspaceRoot() || allRoots[0];
+                    if (!resolvedRoot) {
+                        this._panel?.webview.postMessage({
+                            type: 'planningPanelSyncModeReady',
+                            mode: 'no-sync',
+                            selectedContainers: []
+                        });
+                        break;
+                    }
+                    const db = KanbanDatabase.forWorkspace(resolvedRoot);
+                    const rawMode = await db.getConfig('planning.syncMode') || 'no-sync';
+                    const validModes = ['no-sync', 'auto-sync-all', 'sync-selected'];
+                    const mode = validModes.includes(rawMode) ? rawMode : 'no-sync';
+                    const selectedContainers = await db.getConfigJson<string[]>('planning.selectedContainers', []);
+                    this._panel?.webview.postMessage({
+                        type: 'planningPanelSyncModeReady',
+                        mode,
+                        selectedContainers
+                    });
+                } catch (err) {
+                    this._panel?.webview.postMessage({
+                        type: 'planningPanelSyncModeReady',
+                        mode: 'no-sync',
+                        selectedContainers: []
+                    });
                 }
-                const db = KanbanDatabase.forWorkspace(resolvedRoot);
-                const mode = await db.getConfig('planning.syncMode') || 'no-sync';
-                const selectedContainers = await db.getConfigJson<string[]>('planning.selectedContainers', []);
-                this._panel?.webview.postMessage({
-                    type: 'planningPanelSyncModeReady',
-                    mode,
-                    selectedContainers
-                });
                 break;
             }
             case 'setPlanningPanelSyncMode': {
+                const validModes = ['no-sync', 'auto-sync-all', 'sync-selected'];
+                const syncMode = validModes.includes(msg.mode) ? msg.mode : 'no-sync';
                 const { sourceRoot } = await this._resolveSyncConfig();
                 const resolvedRoot = sourceRoot || this._getWorkspaceRoot() || allRoots[0];
                 if (!resolvedRoot) {
                     break;
                 }
-                const syncMode = typeof msg.mode === 'string' ? msg.mode : 'no-sync';
                 const db = KanbanDatabase.forWorkspace(resolvedRoot);
                 await db.setConfig('planning.syncMode', syncMode);
                 this._resolvedConfigCache = null;
