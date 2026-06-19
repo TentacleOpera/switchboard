@@ -344,3 +344,49 @@ Key risks: (1) The plan file may not have a linked ticket ID (local plans). The 
 ## Risks
 
 - **Recommendation:** Send to Coder
+
+---
+
+## Code Review (2026-06-19)
+
+Reviewer-executor pass against the corrected plan. Verification was static only (compilation and tests skipped per session directive); every referenced symbol, import, and message route was traced in source.
+
+### Verified against plan
+- **`src/webview/project.js`** — `uploadingPlanAttachment` flag (line 99); conditional Upload button gated on `plan.clickupTaskId || plan.linearIssueId` inside `renderKanbanMetaBar` (lines 602–606); click listener attached *after* `innerHTML` with in-flight debounce (lines 678–693); `uploadPlanAttachmentResult` handler resets state and re-renders only when `msg.planFile === _kanbanSelectedPlan.planFile` (lines 296–307). Matches plan exactly.
+- **`src/services/PlanningPanelProvider.ts`** — `KanbanPlanSummary` extended with `clickupTaskId?`/`linearIssueId?` (lines 52–53); `_getKanbanPlans` mapper populates both with snake_case fallback (lines 6540–6541); `case 'uploadPlanAttachment'` (lines 2067–2152) with full guard chain (missing root/file → plan-not-found → not-linked → path-traversal), `fs.promises.readFile`, provider dispatch, and catch-all that always posts a result. Matches plan.
+- **Symbol resolution confirmed:** `fs` is imported at line 5 (`stateFs as fs`, exposes `.promises.readFile`); `_resolveWorkspaceRoot` (1130), `_getWorkspaceId` (5502), `KanbanDatabase.forWorkspace` (720), `getPlanByPlanFile` (2498) all exist; `_readRows` maps `clickup_task_id`/`linear_issue_id` → camelCase (5496–5497); `_adapterFactories.getClickUpSyncService`/`getLinearSyncService` defined (34–35), wired in extension.ts (789–790); `attachFile` returns `{url, fileName}` (ClickUpSyncService:1600), `uploadAttachment` returns `{url}` (LinearSyncService:1071) — `result?.url` is valid for both.
+- **Message routing confirmed:** `PlanningPanelProvider` serves `project.html`/`project.js` itself (329–354), so the Project-panel webview's `uploadPlanAttachment` message reaches this `_handleMessage`. Handler is correctly placed; not stranded in the wrong provider.
+- **dist build current:** `dist/webview/project.js` and `dist/extension.js` already contain the feature — no rebuild needed for it to run.
+
+### Stage 1 — Grumpy Principal Engineer
+> *"Show me where it breaks."* I went hunting for the usual graveyard sins and came up mostly empty, which is itself suspicious, but the corpse is clean.
+> - **The auto-commit is a LIE.** The commit literally titled `Upload Plan as Ticket Attachment` (693928c) contains *zero* of this feature — it's a stray `TaskViewerProvider.ts` ClickUp-refresh hunk from the *previous* plan. The actual implementation lives in the working tree / an earlier commit. The snapshot label is theatre; don't trust it to tell you what shipped. **(MAJOR — process, not code)**
+> - **Dead passenger `topic`.** `const { planFile, topic } = msg;` (2069) — `topic` is destructured, ferried across the postMessage boundary from the webview, and then... ignored forever. It does nothing. It will never do anything. Why is it here? **(NIT)**
+> - **`alert()` again?!** Six existing `alert()` calls in this file and you added two more (302, 304). In a sandboxed webview without `allow-modals` these can be silent no-ops. But — credit where due — the button state still resets via re-render regardless, and this is the file's entrenched convention, so I'll holster the pitchfork. **(NIT, pre-existing)**
+> - **Hand-rolled path guard.** The audit promised `isAllowedSwitchboardLocation`; the code ships a bespoke `startsWith(resolvedRoot + path.sep)` check (2107). It's *correct* for traversal on a read-only op, but it's a one-off where a shared guard existed. **(NIT)**
+> - **No dedup, infinite attachment spam.** Click ten times, get ten attachments. But it's documented as accepted in Risks, so fine. **(by design)**
+
+### Stage 2 — Balanced synthesis
+- **Keep:** Everything. The implementation is a faithful, complete realization of the corrected plan. Guard chain is exhaustive (every early-return and the catch both post a result → the webview can never wedge in "Uploading..."), the in-flight debounce is real, path traversal is blocked, both provider return shapes are handled with optional chaining, and message routing is genuinely correct.
+- **Fix now:** Nothing. No CRITICAL or MAJOR *code* defects found.
+- **Defer / accept:** unused `topic` (harmless — `noUnusedLocals` is off, so not even a compile warning); `alert()` usage (matches file convention; functionally safe due to re-render); inline path check (adequate for a read); no dedup (documented).
+- **Process note (not code):** the auto-commit titled for this plan does not contain this plan's diff. Whoever commits next should stage the real changes (`src/webview/project.js`, `src/services/PlanningPanelProvider.ts`) explicitly rather than trusting the snapshot label.
+
+### Fixes applied
+None. No valid CRITICAL/MAJOR code findings warranted a change.
+
+### Verification results
+- Compilation: **skipped** per session directive. Static trace: all symbols/imports/return-types resolve; no type mismatch found. `fs` import present, `_adapterFactories` accessors present and wired, DB field mapping confirmed.
+- Tests: **skipped** per session directive.
+- Build artifact: `dist/` already contains the feature (grep-confirmed).
+
+### Findings by severity
+- **CRITICAL:** none.
+- **MAJOR:** none in code. (Process: `693928c` auto-commit mislabeled — its diff is the prior plan's `TaskViewerProvider.ts:17931` hunk, not this feature.)
+- **NIT:** unused `topic` — `PlanningPanelProvider.ts:2069`; `alert()` for result toast — `project.js:302,304` (pre-existing convention); bespoke path guard vs shared `isAllowedSwitchboardLocation` — `PlanningPanelProvider.ts:2107`.
+
+### Remaining risks
+- Webview `alert()` may not surface in sandboxed configs, but button state self-heals via `renderKanbanMetaBar` re-render — no functional stall.
+- Duplicate attachments on repeated clicks (accepted, documented).
+- ClickUp/Linear token scope must include attachment upload; failures surface as the provider's raw error string (acceptable).
+- The named auto-commit does not contain this diff — ensure the real working-tree changes are committed deliberately.
