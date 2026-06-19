@@ -30,7 +30,10 @@
 22. [IDE Chat Commands](#22-ide-chat-commands)
 23. [Privacy & Security](#23-privacy--security)
 24. [Architecture](#24-architecture)
-25. [Troubleshooting / FAQ](#25-troubleshooting--faq)
+25. [File Layout & Runtime State](#25-file-layout--runtime-state)
+26. [Kanban Database Schema](#26-kanban-database-schema)
+27. [Webview Panels Reference](#27-webview-panels-reference)
+28. [Troubleshooting / FAQ](#28-troubleshooting--faq)
 
 ---
 
@@ -585,6 +588,7 @@ All commands registered in `extension.ts` and declared in `package.json`:
 | `switchboard.resetKanbanDb` | Switchboard: Reset Kanban Database |
 | `switchboard.reconcileKanbanDbs` | Switchboard: Reconcile Kanban Databases |
 | `switchboard.fullSync` | Full sync (file→DB + refresh) |
+| `switchboard.refresh` | Refresh sidebar |
 | `switchboard.refreshUI` | Refresh UI |
 | `switchboard.mappingsChanged` | Clear mapping cache |
 
@@ -781,6 +785,10 @@ These are slash commands available in IDE chat agents (Windsurf, Cursor, Antigra
 - `ArchiveManager` (`src/services/ArchiveManager.ts`) — Archives completed plans
 - Path configurable via `switchboard.archive.dbPath`
 
+---
+
+## 25. File Layout & Runtime State
+
 ### File Protocol
 - `.switchboard/` — Core runtime data (state, sessions, plans, context maps, archives)
 - `.agent/` — Workflow markdown contracts and persona files
@@ -796,7 +804,578 @@ These are slash commands available in IDE chat agents (Windsurf, Cursor, Antigra
 
 ---
 
-## 25. Troubleshooting / FAQ
+## 26. Kanban Database Schema
+
+The board state is persisted in a local SQLite database at `.switchboard/kanban.db`, using `sql.js` (WASM SQLite compiled to JavaScript). When the DB file is unavailable, the board falls back to file-derived state from run-sheet events in `.switchboard/sessions/*.json`.
+
+**Custom DB path:** `switchboard.kanban.dbPath` (resource-scoped, default `""` — uses `.switchboard/kanban.db` in the workspace root). Useful for cloud-synced multi-machine setups where the DB lives in a shared Dropbox/iCloud folder.
+
+**Control Plane DB:** `switchboard.kanban.controlPlaneRoot` (resource-scoped, default `""`). When set, the DB is read from the Control Plane root instead of the workspace root. See [Multi-Repo Control Plane](#7-multi-repo-control-plane).
+
+### Tables
+
+#### `plans` (primary table)
+
+Stores one row per plan/card on the Kanban board.
+
+| Column | Type | Default | Description |
+|--------|------|---------|-------------|
+| `plan_id` | TEXT | *(PK)* | Unique plan identifier (UUID or hash) |
+| `session_id` | TEXT | *(NOT NULL)* | Session identifier for run-sheet tracking |
+| `topic` | TEXT | *(NOT NULL)* | Plan title / display name |
+| `plan_file` | TEXT | `NULL` | Relative path to the `.md` plan file (stored relative; expanded to absolute at read time) |
+| `kanban_column` | TEXT | `'CREATED'` | Current column name (e.g. `CREATED`, `PLANNING`, `LEAD CODED`, `CODER CODED`, `CODE REVIEW`, `COMPLETED`) |
+| `status` | TEXT | `'active'` | Lifecycle status: `active`, `completed`, `archived`, `deleted` |
+| `complexity` | TEXT | `'Unknown'` | Complexity score as string integer `'1'`–`'10'`, or `'Unknown'` |
+| `tags` | TEXT | `''` | Comma-separated tag list |
+| `dependencies` | TEXT | `''` | Comma-separated plan IDs this plan depends on |
+| `repo_scope` | TEXT | `''` | Repository scope filter for multi-repo setups |
+| `project` | TEXT | `''` | Project name for project-level grouping |
+| `workspace_id` | TEXT | *(NOT NULL)* | Workspace identifier (SHA-256 hash of workspace root, truncated to 16 chars) |
+| `created_at` | TEXT | *(NOT NULL)* | ISO timestamp of plan creation |
+| `updated_at` | TEXT | *(NOT NULL)* | ISO timestamp of last update |
+| `last_action` | TEXT | `NULL` | Last workflow action (e.g. `planner`, `coder`, `handoff`, `jules`) |
+| `source_type` | TEXT | `'local'` | Origin: `local`, `brain`, `clickup-automation`, `linear-automation` |
+| `brain_source_path` | TEXT | `''` | Relative path to Antigravity brain source file |
+| `mirror_path` | TEXT | `''` | Relative path to mirrored plan file |
+| `routed_to` | TEXT | `''` | Agent role dispatched to: `lead`, `coder`, `intern`, or `''` |
+| `dispatched_agent` | TEXT | `''` | Terminal/tool name (e.g. `claude cli`, `copilot cli`) |
+| `dispatched_ide` | TEXT | `''` | IDE name (e.g. `Visual Studio Code`, `Cursor`, `Windsurf`) |
+| `clickup_task_id` | TEXT | `''` | ClickUp task ID for PM sync |
+| `linear_issue_id` | TEXT | `''` | Linear issue ID for PM sync |
+| `worktree_id` | INTEGER | `NULL` | FK to `worktrees.id` for epic-based worktree dispatch |
+| `worktree_status` | TEXT | `'none'` | Worktree state: `none`, `active`, `merged`, `deleted` |
+| `is_epic` | INTEGER | `0` | `1` if this plan is an epic, `0` otherwise |
+| `epic_id` | TEXT | `''` | `plan_id` of the parent epic (empty if standalone) |
+| `workspace_name` | TEXT | `''` | Human-readable workspace name (backfilled from config) |
+| `project_id` | INTEGER | `NULL` | FK to `projects.id` for project-level grouping |
+
+**Upsert semantics:** `INSERT ... ON CONFLICT(plan_file, workspace_id) DO UPDATE`. The unique constraint is on `(plan_file, workspace_id)`, not on `session_id` (changed in V20 migration). On conflict, `status` is only revived from `deleted` → `active` when the incoming record has `status = 'active'`; all other status transitions require explicit `updateStatus()` calls.
+
+#### `config`
+
+Key-value store for workspace-level configuration.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `key` | TEXT (PK) | Configuration key (e.g. `workspace_id`, `workspace_mappings`, `stitch.manifest`) |
+| `value` | TEXT | JSON or plain-text value |
+
+#### `migration_meta`
+
+Tracks which schema migrations have been applied.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `key` | TEXT (PK) | Always `kanban_db_migration_version` |
+| `value` | TEXT | Numeric migration version (e.g. `35`) |
+
+#### `projects`
+
+Workspace-scoped project registry for grouping plans.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER (PK, AUTOINCREMENT) | Project ID |
+| `name` | TEXT | Project name |
+| `workspace_id` | TEXT | Workspace scope |
+| `created_at` | TEXT | Creation timestamp |
+
+**Unique constraint:** `(name, workspace_id)`
+
+#### `worktrees`
+
+Git worktree registry for epic-based dispatch routing.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER (PK, AUTOINCREMENT) | Worktree ID |
+| `branch` | TEXT (UNIQUE) | Git branch name |
+| `path` | TEXT | Filesystem path to worktree |
+| `epic_id` | TEXT | `plan_id` of associated epic (nullable) |
+| `created_at` | TEXT | Creation timestamp |
+| `status` | TEXT | `active` or other lifecycle state |
+| `project` | TEXT | Project name (added V34) |
+| `agents_open_with_grid` | INTEGER | Whether agents auto-open with grid (added V34) |
+
+#### `plan_events`
+
+Event sourcing table for workflow/dispatch events.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `event_id` | INTEGER (PK, AUTOINCREMENT) | Event ID |
+| `plan_id` | TEXT | FK to `plans.plan_id` (nullable) |
+| `event_type` | TEXT | Event type (e.g. `dispatch`, `column_change`, `status_change`) |
+| `workflow` | TEXT | Workflow phase |
+| `action` | TEXT | Specific action taken |
+| `timestamp` | TEXT | ISO timestamp |
+| `device_id` | TEXT | Device identifier for multi-device sync |
+| `vector_clock` | TEXT | Vector clock for causal ordering |
+| `payload` | TEXT | JSON event payload |
+
+#### `activity_log`
+
+Audit stream for workflow and dispatch events.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER (PK, AUTOINCREMENT) | Log entry ID |
+| `timestamp` | TEXT | ISO timestamp |
+| `event_type` | TEXT | Event type |
+| `payload` | TEXT | JSON payload |
+| `correlation_id` | TEXT | Correlation ID for tracing |
+| `session_id` | TEXT | Session ID |
+
+#### `kanban_meta`
+
+Key-value store for Kanban-level metadata (parser versioning, backfill tracking).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `key` | TEXT (PK) | Metadata key |
+| `value` | TEXT | Metadata value |
+
+#### `imported_docs`
+
+Centralized registry of imported documents from PM tools (ClickUp docs, Linear issues, Notion pages).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `slug_prefix` | TEXT | URL-safe slug prefix |
+| `source_id` | TEXT | Source system ID (e.g. ClickUp doc ID) |
+| `remote_doc_id` | TEXT | Remote document ID |
+| `doc_name` | TEXT | Document name |
+| `parent_doc_name` | TEXT | Parent document name (for hierarchy) |
+| `file_path` | TEXT | Local file path |
+| `imported_at` | TEXT | Import timestamp |
+| `last_synced_at` | TEXT | Last sync timestamp |
+| `content_hash` | TEXT | Content hash for change detection |
+| `workspace_id` | TEXT | Workspace scope |
+| `display_order` | INTEGER | Sort order |
+| `content_type` | TEXT | `doc` or `ticket` (added V33) |
+
+**Primary key:** `(slug_prefix, workspace_id)`
+
+#### `import_sync_meta`
+
+Tracks sync health for imported documents.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `workspace_id` | TEXT (PK) | Workspace ID |
+| `last_heal_scan_at` | TEXT | Last heal scan timestamp |
+| `orphaned_entries` | INTEGER | Count of orphaned DB entries |
+| `orphaned_files` | INTEGER | Count of orphaned files on disk |
+
+#### `linear_issue_links`
+
+Maps Linear issues to local plan file paths.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `issue_id` | TEXT (PK) | Linear issue ID |
+| `plan_path` | TEXT | Local plan file path |
+| `synced_at` | TEXT | Last sync timestamp |
+
+#### `stitch_projects`
+
+Stitch project cache (promoted from config blob in V32).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | TEXT (PK) | Stitch project ID |
+| `name` | TEXT | Project name |
+| `update_time` | TEXT | Last update time from Stitch API |
+| `updated_at` | TEXT | Local cache timestamp |
+
+#### `stitch_screens`
+
+Stitch screen cache (promoted from config blob in V32).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | TEXT (PK) | Stitch screen ID |
+| `project_id` | TEXT | FK to `stitch_projects.id` |
+| `name` | TEXT | Screen name |
+| `device_type` | TEXT | `AGNOSTIC`, `DESKTOP`, `MOBILE`, `TABLET` |
+| `status` | TEXT | Generation status |
+| `status_msg` | TEXT | Status message |
+| `updated_at` | TEXT | Local cache timestamp |
+
+### Indexes
+
+| Index | Table | Columns | Type |
+|-------|-------|---------|------|
+| `idx_plans_column` | `plans` | `kanban_column` | Non-unique |
+| `idx_plans_workspace` | `plans` | `workspace_id` | Non-unique |
+| `idx_plans_status` | `plans` | `status` | Non-unique |
+| `idx_plans_workspace_name` | `plans` | `workspace_name` | Non-unique |
+| `idx_plans_project_id` | `plans` | `project_id` | Non-unique |
+| `idx_plans_plan_file_workspace` | `plans` | `(plan_file, workspace_id)` | **UNIQUE** |
+| `idx_plans_repo_scope` | `plans` | `(workspace_id, repo_scope)` | Non-unique |
+| `idx_plans_clickup_task` | `plans` | `(workspace_id, clickup_task_id)` | Non-unique |
+| `idx_plans_linear_issue` | `plans` | `(workspace_id, linear_issue_id)` | Non-unique |
+| `idx_plans_project` | `plans` | `(workspace_id, project)` | Non-unique |
+| `idx_plans_worktree` | `plans` | `worktree_id` | Non-unique |
+| `idx_plans_epic_id` | `plans` | `epic_id` | Non-unique |
+| `idx_plans_is_epic` | `plans` | `is_epic` | Non-unique |
+| `idx_projects_workspace` | `projects` | `workspace_id` | Non-unique |
+| `idx_worktrees_workspace` | `worktrees` | `workspace_id` | Non-unique |
+| `idx_events_plan` | `plan_events` | `(plan_id, timestamp)` | Non-unique |
+| `idx_events_time` | `plan_events` | `timestamp` | Non-unique |
+| `idx_activity_time` | `activity_log` | `timestamp` | Non-unique |
+| `idx_activity_session` | `activity_log` | `(session_id, timestamp)` | Non-unique |
+| `idx_imported_docs_source` | `imported_docs` | `(source_id, workspace_id)` | Non-unique |
+| `idx_imported_docs_parent` | `imported_docs` | `(parent_doc_name, workspace_id)` | Non-unique |
+| `idx_imported_docs_workspace` | `imported_docs` | `workspace_id` | Non-unique |
+| `idx_imported_docs_doc_name` | `imported_docs` | `(doc_name, workspace_id)` | Non-unique |
+| `idx_imported_docs_type` | `imported_docs` | `(content_type, workspace_id)` | Non-unique |
+| `idx_stitch_screens_project` | `stitch_screens` | `project_id` | Non-unique |
+
+### Migration System
+
+The database uses a versioned migration system tracked in `migration_meta`. The current schema version is **35**. Migrations run automatically on database initialization via `_runMigrations()`.
+
+**Key migrations:**
+
+| Version | Description |
+|---------|-------------|
+| V2 | Added `brain_source_path`, `mirror_path` columns; created `config` table |
+| V3 | Fixed zombie plans (active status in COMPLETED column); consolidated `workspace_id` from config |
+| V4 | Added `tags` column |
+| V5 | Created `plan_events` and `activity_log` tables for event sourcing |
+| V6 | Added `dependencies` column; consolidated `workspace_id` from config |
+| V7 | Added `routed_to`, `dispatched_agent`, `dispatched_ide` for routing analytics |
+| V8 | Migrated legacy complexity values (`Low` → `3`, `High` → `8`) |
+| V9 | Added `clickup_task_id` column and lookup index |
+| V10 | Repaired completed rows incorrectly rewritten to `archived` status |
+| V12 | Added `linear_issue_id` column and lookup index |
+| V13 | Added `repo_scope` column and filtered-query index |
+| V14 | Created `kanban_meta` table |
+| V15 | Created `imported_docs` and `import_sync_meta` tables |
+| V16 | Cleared incorrect `repo_scope = 'switchboard'` values |
+| V17 | Added `needs_path_fix` sentinel for relative→absolute path repair |
+| V18 | Added `needs_relative_conversion` sentinel; established invariant: DB stores relative paths only |
+| V19 | Deduplicated plans by `session_id`; enforced unique index |
+| V20 | **Breaking:** Removed `UNIQUE` from `session_id`; added `UNIQUE(plan_file, workspace_id)`; recreated `plan_events` with FK to `plan_id` |
+| V21 | Normalized absolute `plan_file` paths to relative |
+| V22 | Repaired `workspace_id` fragmentation and corrupted `kanban_column` values |
+| V23 | Created `projects` table; added `project` column to `plans` |
+| V24–V25 | Recreated `worktrees` table without unused `path` column |
+| V26 | Added `worktree_id` column to `plans` |
+| V27 | Added `worktree_status` column to `plans` |
+| V28 | Normalized `__unassigned__` sentinel values to empty string in `plans.project` |
+| V29 | Added `is_epic` and `epic_id` columns for epic support |
+| V30 | Recreated `worktrees` table with `epic_id` FK; migrated legacy meta keys |
+| V31 | Fixed `worktrees.epic_id` type from INTEGER to TEXT |
+| V32 | Promoted Stitch manifest blob to `stitch_projects` and `stitch_screens` tables |
+| V33 | Added `content_type` column to `imported_docs` for unified ticket/doc registry |
+| V34 | Added `project` and `agents_open_with_grid` columns to `worktrees` |
+| V35 | Backfilled `workspace_name` and `project_id` in `plans` from config and `projects` table |
+
+**Version-gated migrations** (V19+): Destructive migrations are wrapped in transactions and only execute if the current migration version is below the target. Failed migrations roll back and do not stamp the version, allowing retry on next initialization.
+
+**Pre-migration backups:** Before running migrations, `_writePreMigrationBackup()` creates a backup copy of the DB file.
+
+### Fallback Behavior
+
+When the database file is unavailable (corrupted, permissions, missing `sql.js` WASM), the board falls back to file-derived state by scanning run-sheet events in `.switchboard/sessions/*.json`. This provides read-only access to plan metadata but cannot persist changes.
+
+### Related Commands
+
+- `switchboard.resetKanbanDb` — Deletes the local DB and rebuilds from plan files
+- `switchboard.reconcileKanbanDbs` — Merges split databases (for Control Plane migration)
+- `switchboard.fullSync` — Forces file→DB sync and refreshes the board
+
+### Related Settings
+
+| Setting | Type | Default | Scope | Description |
+|---------|------|---------|-------|-------------|
+| `switchboard.kanban.completedLimit` | integer | 100 | resource | Max cards in Completed column (1–500) |
+| `switchboard.kanban.dbPath` | string | `""` | resource | Custom Kanban DB path |
+| `switchboard.kanban.controlPlaneRoot` | string | `""` | resource | Explicit Control Plane folder override |
+
+---
+
+## 27. Webview Panels Reference
+
+This section documents the UI controls and functionality of each Switchboard webview panel.
+
+### Sidebar (`implementation.html`)
+
+The primary Switchboard sidebar, hosted by `TaskViewerProvider`. Provides onboarding, quick-launch buttons, agent/terminal management, plan actions, and a live activity feed.
+
+**Onboarding Wizard**
+Shown on first launch (or when setup is incomplete):
+- **Step 1: Initialize** — Seeds `.agent/` workflow files, personas, and `.switchboard/` directory.
+- **Step 2a: Control Plane Question** — Choose between in-repo setup (writes `AGENTS.md`, `.agent/`, `.switchboard/` into the current repo) or external Control Plane setup (scaffolds into a parent folder with repo cloning via PAT).
+- **Step 2: CLI Config** — Configure startup commands for each agent role (Planner, Lead Coder, Coder, Intern, Reviewer, Acceptance Tester, Analyst, Jules). Toggle agent visibility with checkboxes. Set Jules auto-sync preference.
+
+**Quick-Launch Buttons**
+Row of buttons at the top of the sidebar for rapid panel access:
+- **KANBAN** — Opens the Kanban board
+- **PLANNING** — Opens the Planning/Artifacts panel
+- **SETUP** — Opens the Setup panel
+- **DESIGN** — Opens the Design panel
+- **PROJECT** — Opens the Project panel
+
+**Agents & Terminals Tab**
+Two sub-tabs:
+- **Agents** — Lists all configured agents with dispatch buttons. Shows agent status (alive/dead), terminal PID, and role.
+- **Terminals** — Terminal operations:
+  - **OPEN AGENT TERMINALS** — Creates terminal grid for all visible agents. Toggles to **CLEAR TERMINALS** when terminals are active.
+  - **RESET ALL AGENTS** — Deregisters all terminals (`switchboard.deregisterAllTerminals`).
+  - **AGENT SETUP** — Opens Kanban board to the Agents tab.
+
+**Plan Actions**
+- **COMPLETE** — Mark the active plan as completed.
+- **RECOVER** — Recover a completed plan (shown when a completed plan is selected).
+- **COPY** — Copy the active plan's file path to clipboard.
+- **CREATE** — Create a new draft plan (`switchboard.initiatePlan`).
+
+**Live Activity Feed**
+Collapsible accordion showing recent dispatch and autoban events. Each entry shows timestamp, agent role, plan title, and event type. **Load More** button fetches older events (50 at a time).
+
+### Kanban Board (`kanban.html`)
+
+The central orchestration panel, hosted by `KanbanProvider`. Eight tabs:
+
+**KANBAN Tab**
+The board itself with drag-and-drop columns. Controls strip:
+- **Workspace/Project Selector** — Filter board by workspace and project. **ASSIGN** button assigns selected plan(s) to the chosen workspace/project.
+- **EPIC** — Convert selected plans to an epic or manage an existing epic.
+- **+ (Add Project)** — Create a new project.
+- **Delete Project** — Remove a project (icon button).
+- **Scan Folders** — Force immediate plan scan (`switchboard.triggerPlanScan`).
+- **AUTOBAN** — Start/stop the automation engine.
+- **CLI Triggers** — Toggle between CLI terminal dispatch and clipboard prompt mode.
+- **Collapse Coders** — Toggle collapsed view for coder columns.
+- **Pair Programming Mode** dropdown — Select CLI Parallel / Hybrid / Full Clipboard.
+- **CHAT PROMPT** — Copy chat prompt (multi-plan if plans selected, otherwise general consultation).
+- Sub-bar: **Pause/Reset AUTOBAN timers**, status messages, worktree indicator.
+- Column headers: **+ (Add Plan)**, **Import from Clipboard** (multi-plan supported with `### PLAN N START` markers), **Backlog/New toggle** (CREATED column only), card count.
+
+**AGENTS Tab**
+Configure agent visibility and CLI startup commands:
+- **Visibility toggles** — Show/hide each built-in agent (Context Gatherer, Planner, Code Researcher, Splitter, Lead Coder, Coder, Intern, Reviewer, Acceptance Tester, Analyst, Ticket Updater, Researcher, Jules).
+- **CLI command inputs** — Startup command for each agent.
+- **Jules auto-sync** — Toggle auto git add/commit/push before Jules dispatch.
+- **Custom Agents** — Add custom agents with name, startup command, and prompt add-ons (configured in the PROMPTS tab).
+
+**PROMPTS Tab**
+Per-role prompt customization:
+- **Role Selector** — Dropdown to select agent role (includes custom agents).
+- **Planner Config** (shown for Planner role):
+  - **Workflow File** — Enable/disable, set workflow file path (e.g., `.agent/workflows/improve-plan.md`), validate path.
+  - **Add-ons** — Switchboard Safeguards, Planning Epic Reference, Project Constitution Reference, Design Doc Reference, Aggressive Pair Programming, Git Prohibition, Clear Antigravity Context, Caveman Output, Skip Compilation, Skip Tests.
+  - **Subagent Policy** — Not Specified / No Subagents / Use Subagents / Custom Subagent (with name input).
+- **Research Complexity** (shown for Researcher/Code Researcher): Quick / Standard / Deep / Academic. Save to Local Docs toggle.
+- **Non-Planner Add-ons** — Role-specific add-ons (inline challenge, accurate coding, pair programming, etc.).
+- **Edit Prompt Template** — Live preview of the composed prompt, editable before dispatch.
+
+**AUTOMATION Tab**
+Automation panel for configuring AUTOBAN rules and timing per column. Includes batch size, complexity filter, routing mode, max sends per terminal, global session cap, and terminal pool management.
+
+**WORKTREES Tab**
+Manage git worktrees for epic-based dispatch routing. Create, list, and delete worktrees associated with epics.
+
+**UAT Tab**
+User Acceptance Testing checklist. **REFRESH** button reloads the UAT checklist from the database. Shows test items with pass/fail status tracking.
+
+**SETUP Tab**
+Board-level configuration:
+- **Routing Configuration** — **OPEN ROUTING MAP** to configure complexity-based routing rules (drag complexity levels to agent tiers).
+- **Batch Operations** — **Unknown → Auto** toggle: include plans with unknown complexity in batch moves.
+- **Terminal Context** — **Clear before prompt** toggle with configurable delay (0–10000ms). Sends `/clear` to CLI agents before dispatching.
+- **Kanban Structure** — **ADD COLUMN** / **RESTORE DEFAULTS**. Drag active middle columns to reorder. New and Completed stay fixed.
+
+### Project Panel (`project.html`)
+
+Hosted by `PlanningPanelProvider` (project mode). Four tabs:
+
+**KANBAN PLANS Tab**
+- **Workspace filter**, **Column filter** — Filter plans by workspace and Kanban column.
+- **Import** — Scan configured AI IDE folders and pick unclaimed plans.
+- **Create** — Create a new plan.
+- **CHAT PROMPT** — Copy general chat planning prompt.
+- **Search** — Filter plans by text.
+- Plan list with selection and preview.
+
+**EPICS Tab**
+- **Active Planning Epic** indicator with **Turn off** button.
+- **Workspace filter**, **Set as Active Planning Context**, **+ New Epic**.
+- Epic list pane with selection.
+- **New Epic modal** — Name, description, workspace assignment.
+
+**CONSTITUTION Tab**
+- **Constitution Reference** indicator with **Turn off** button.
+- **Build via Planner** — Send constitution to Planner for plan generation.
+- **Copy Build Prompt** — Copy the build prompt to clipboard.
+- **Update via Planner** / **Copy Update Prompt** — Update an existing constitution via Planner.
+- **Enable as Planning Reference** — Inject constitution into all planner prompts.
+- **Edit** / **Save** / **Cancel** — Inline constitution editor.
+- **Delete** — Remove constitution.
+- **⚙ (Set Path)** — Change the constitution file path.
+- Constitution list pane with file selection.
+
+**TUNING Tab**
+Adversarial insight extraction and governance tuning:
+- **Workspace filter** — Filter insights by workspace.
+- **Extract Insights** — Scan reviewed plans and extract adversarial insights.
+- **Propose Governance Updates** — Review all insights and propose governance file updates.
+- **Refresh** — Reload insight list.
+- **Insight filter** — Filter by status (All / Open / Resolved).
+- Insight list with status management.
+
+### Design Panel (`design.html`)
+
+Hosted by `DesignPanelProvider`. Five tabs:
+
+**STITCH Tab**
+Google Stitch integration for AI-powered UI generation:
+- **Project Selector** — Choose Stitch project. **+ New Project** to create. **Refresh Projects** to re-fetch. **Rebuild Cache** to re-download preview images. **Force Reload Screens** to re-fetch screen list. **Download Design Tokens** for color palette. **Open DESIGN.md** for handoff file. **⚙️ Auth** to configure authentication.
+- **Sync Destination** — Select workspace for downloaded assets.
+- **Generation Strip** — Prompt input, device type (Agnostic/Desktop/Mobile/Tablet), model (Flash/Pro), **+ Attach** reference files, **Generate Screen**.
+- **Preview Pane** — Screen preview with **DL HTML** / **DL PNG** download buttons, destination folder selector, **Close**.
+- **Refine Row** — Refine prompt input, creative range (Explore/Refine/Reimagine), **Apply Edit**, **+3 Variants** with aspect selection (Layout, Color, Images, Font, Text).
+- **Thumbnail Strip** — Scrollable screen thumbnails with collapse toggle.
+
+**BRIEFS Tab**
+Design brief management:
+- **Workspace filter**, **Manage Folders**, **New Brief**, **Delete**, **Edit**, **Send to Stitch** (send brief as Stitch prompt), **Save** / **Cancel** (edit mode).
+- **Search** — Filter briefs by text.
+
+**HTML PREVIEWS Tab**
+Browse HTML prototype files:
+- **Workspace filter**, **Manage Folders**, **Open in Browser**, **Copy Link**.
+- **Search** — Filter previews by text.
+
+**IMAGES Tab**
+Browse image assets:
+- **Workspace filter**, **Manage Folders**, **Copy Link**.
+- **Search** — Filter images by text.
+
+**DESIGN SYSTEM Tab**
+Design system documentation and Stitch design systems:
+- **Local Docs sub-tab** — **Workspace filter**, **Manage Folders**, **Set as Active Design Doc**, **Link**, **Edit**, **Save** / **Cancel**. Search filter.
+- **Stitch Design Systems sub-tab** — View Stitch project design systems, **Create Design System**, **Refresh List**. Requires a Stitch project to be selected.
+
+### Planning / Artifacts Panel (`planning.html`)
+
+Hosted by `PlanningPanelProvider`. Four tabs:
+
+**DOCS Tab**
+Unified document browser for local plans and docs:
+- **Workspace filter**, **Sync Mode** dropdown (Auto Sync All / Sync Selected Containers).
+- **Import**, **Edit**, **Save**, **Cancel**, **Sync to Online** — Document management actions.
+- **Search** — Filter docs by text.
+- Sidebar with document tree, preview pane with markdown rendering.
+- Breadcrumb navigation for nested documents.
+
+**TICKETS Tab**
+PM tool ticket management (ClickUp/Linear):
+- **Workspace picker**, **Provider selector** (ClickUp/Linear), **Project picker**, **State filter**, **Status filter**.
+- **+ New Ticket**, **Refetch** (re-fetch from source), **Sync changes** (push local edits back).
+- **Hierarchy navigation** — Breadcrumb for parent/child ticket navigation.
+- **Search** — Filter tickets by text.
+- Sidebar: **Link all** (copy all ticket paths), **Import all to kanban**, ticket tree with **Load More** pagination.
+- Ticket preview meta bar: **Edit**, **Save**, **Cancel**, **Push** (push to PM tool), **Delete**, **Status** dropdown, **Tags**, **Comment**, **Attachments**, **Open** (open in browser), **Diagram Prompt**, **+ Subtask**, **Convert to Subtask**.
+- Comment input area with **Post Comment** / **Cancel**.
+- Subtasks navigation injected at top of preview.
+- Tags display with chip UI.
+
+**RESEARCH Tab**
+AI-assisted research workflow:
+- **Step 1: Draft Prompt** — Research topic input, **Copy Prompt Template**, **Draft with Analyst Agent**.
+- **Step 2: Run in Google AI Studio** — Link to aistudio.google.com, instructions for Search Grounding.
+- **Step 3: Save Results** — **Destination folder** selector, **Manage Folders**, **Import from Clipboard**.
+
+**NotebookLM Tab**
+Zero-cost planning via Google NotebookLM:
+- **Step 1: Bundle Code** — Package code into docx files for NotebookLM.
+- **Step 2: Upload to NotebookLM** — **Open NotebookLM** link, **Open Folder** (airlock folder).
+- **Step 3: Copy Sprint Planning Prompt** — Generate prompt for NotebookLM to write expanded plans.
+- **Step 4: Import Plans** — Paste expanded plans from NotebookLM. Matching titles overwrite; others create new plans.
+
+### Setup Panel (`setup.html`)
+
+Hosted by `SetupPanelProvider`. Ten tabs:
+
+**Setup Tab**
+- **Switchboard Guide** — **Copy Tutorial Prompt** (copies prompt referencing the user manual) and **Open Docs** (opens manual in markdown preview).
+- **Git Ignore Strategy** — Dropdown (targetedGitignore / localExclude / custom / none) with read-only rules preview.
+- **Workflow Settings**:
+  - **Agent File Opening Prevention** — Auto-close files opened by agents.
+  - **Auto-commit When Moving to Code Review** — Commit uncommitted changes before a plan enters Code Review.
+  - **Exclude Reviewed & Backlog from Sidebar** — Hide reviewed/backlog plans from sidebar dropdown.
+  - **Persist Switchboard Panels Across IDE Restarts** — Reopen Kanban, Project, Planning, and Design panels on restart.
+- **Prompt Settings Export / Import** — Export prompt configurations to `.switchboard/settings.json`, import from file.
+- **Reinitialise Plugin** — Restore `.switchboard/`, `AGENTS.md`, `.agent/` if deleted.
+
+**Database Tab**
+- **Additional plan folder** — Ingest `.md` files from an external folder.
+- **Databases list** — View and manage Kanban databases for open workspaces.
+
+**Control Plane Tab**
+- **External Switchboard Configuration** — Explanation of Control Plane concept.
+- **Open Control Plane Setup** — Opens modal with:
+  - **Migrate Existing** / **Fresh Setup** mode toggle.
+  - **Detection & Status** — Effective root, source, selected workspace, repo filter. Explicit root override input with save/reset. Clear cache button. Detect control plane button.
+  - **Migrate Existing pane** — Preview migration, execute migration (merge databases, copy plan files, promote shared config).
+  - **Fresh Setup pane** — Set up fresh control plane, scaffold & clone repositories (parent dir, workspace name, repo URLs, PAT).
+
+**Multi-Repo Tab**
+- **Workspace-to-Database Routing** — Enable mapping, add databases, save mappings.
+- **Migrate Settings** — Copy DB settings to global.
+
+**ClickUp Tab**
+- **Artifacts Panel Visibility** — Show ClickUp docs in Artifacts panel.
+- **API Token** — Enter and apply ClickUp token (stored in SecretStorage).
+- **Ticket Import** — Import location folder, auto-sync toggle.
+- **Kanban Board Mapping** — Enable Kanban sync, create AI Agents folder, create mapped lists, create custom fields, exclude backlog. Column mappings with create unmapped/save.
+- **Kanban Automation** — Enable realtime push sync, delete sync, complete sync, auto-pull. Automation rules (add rule, save automation).
+
+**Linear Tab**
+- **Artifacts Panel Visibility** — Show Linear docs in Artifacts panel.
+- **API Token** — Enter and apply Linear token (stored in SecretStorage).
+- **Ticket Import** — Import location folder, auto-sync toggle.
+- **Kanban Board Mapping** — Enable Kanban sync, map columns to Linear workflow states, create Switchboard label, exclude backlog, include/exclude projects.
+- **Kanban Automation** — Enable realtime push sync, complete sync, delete (archive) sync, auto-pull. Automation rules (add rule, save automation).
+
+**Notion Tab**
+- **Artifacts Panel Visibility** — Show Notion docs in Artifacts panel.
+- **Integration Token** — Enter and apply Notion token (stored in SecretStorage).
+
+**Plan Scanner Tab**
+- **Enable periodic scan** — Master toggle.
+- **Scan Speed** — Very Fast (3s) / Fast (5s) / Normal (10s) / Relaxed (30s) / Slow (60s) / Off.
+- **IDE Presets** — Toggle scanning for Antigravity, Windsurf/Devin, Cursor, Claude Code.
+- **Chat Plan Destinations** — Folders where chat agents write plans. Add multiple destinations.
+- **Custom Sources** — Add custom plan-file source paths for other tools.
+
+**Theme Tab**
+- **Theme Selection** — Afterburner (cyberpunk) / Claudify (Claude terracotta accent).
+- **Animation** — Enable/disable animated CRT sweep beam in planning panel preview.
+
+**Status Bar Tab**
+- **Show Agent Open Toggle** — Shield toggle for agent file opening guard.
+- **Show Terminal Controls** — Agents/Clear/Reset terminal buttons.
+- **Show Kanban Open Button** — Open Kanban from status bar.
+- **Show Artifacts Panel Open Button** — Open Artifacts panel from status bar.
+- **Show Design Panel Open Button** — Open Design panel from status bar.
+- **Show Project Panel Open Button** — Open Project panel from status bar.
+
+**Custom Prompts Modal** (accessible from Setup tab)
+- **Role tabs** — Select agent role to customize.
+- **Default Prompt Preview** — Read-only base prompt structure.
+- **Mode** — Append / Prepend / Replace (plan list always appended).
+- **Custom instructions** — Textarea for role-specific prompt override.
+- **Clear Override** / **Save All Overrides**.
+
+---
+
+## 28. Troubleshooting / FAQ
 
 ### Setup Issues
 **Q: The sidebar shows "Setup Required" — what do I do?**

@@ -476,7 +476,6 @@
                     alert('Save failed: ' + (msg.error || 'Unknown error'));
                 }
                 break;
-            }
             case 'insightsLoaded': {
                 _tuningInsights = msg.insights || [];
                 renderInsightList(_tuningInsights);

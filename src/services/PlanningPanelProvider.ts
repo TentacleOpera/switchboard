@@ -981,11 +981,11 @@ export class PlanningPanelProvider {
                 const allRecords = [...records, ...completedRecords];
 
                 for (const record of allRecords) {
-                    if (record.kanban_column && REVIEW_COLUMNS.has(record.kanban_column)) {
-                        if (record.plan_file) {
-                            const filePath = path.isAbsolute(record.plan_file)
-                                ? record.plan_file
-                                : path.resolve(root, record.plan_file);
+                    if (record.kanbanColumn && REVIEW_COLUMNS.has(record.kanbanColumn)) {
+                        if (record.planFile) {
+                            const filePath = path.isAbsolute(record.planFile)
+                                ? record.planFile
+                                : path.resolve(root, record.planFile);
                             if (fs.existsSync(filePath) && !seenFiles.has(filePath)) {
                                 seenFiles.add(filePath);
                                 planFiles.push(filePath);

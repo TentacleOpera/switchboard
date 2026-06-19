@@ -190,6 +190,7 @@
     let clickUpImportPending = false;
     let isImportingAll = false;
     let _restoringClickUpHierarchy = false;
+    let _pendingTicketsRestore = false;
     let pendingClickUpDetailIssueId = '';
 
     let currentTicketTags = [];
@@ -2865,6 +2866,13 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         vscode.postMessage({ type: 'ticketsDefaultRoot' });
                     }
                 } else {
+                    if (_pendingTicketsRestore) {
+                        _pendingTicketsRestore = false;
+                        const restoredState = getRestoredState('tickets', ticketsWorkspaceRoot);
+                        if (restoredState) {
+                            restoreTicketsStateForRoot(restoredState);
+                        }
+                    }
                     vscode.postMessage({ type: 'ticketsRootChanged', workspaceRoot: ticketsWorkspaceRoot });
                 }
                 if (!researchWorkspaceRoot) {
@@ -4146,14 +4154,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     if (restoredState) {
                         restoreTicketsStateForRoot(restoredState);
                     } else {
-                        ticketsLoadedOnce = false;
-                        if (isTicketsTabActive()) {
-                            if (lastIntegrationProvider === 'clickup') {
-                                loadClickUpSpaces();
-                            } else if (lastIntegrationProvider === 'linear') {
-                                loadLinearProject();
-                            }
-                        }
+                        _pendingTicketsRestore = true;
                     }
                 }
                 break;
@@ -4186,8 +4187,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     ticketsAutoSync = msg.ticketsAutoSync === true;
                     if (isTicketsTabActive() && lastIntegrationProvider) {
                         if (ticketsAutoSync) {
-                            if (lastIntegrationProvider === 'clickup') loadClickUpSpaces();
-                            else loadLinearProject();
+                            if (lastIntegrationProvider === 'clickup' && !_restoringClickUpHierarchy && !ticketsLoadedOnce) loadClickUpSpaces();
+                            else if (lastIntegrationProvider === 'linear' && !ticketsLoadedOnce) loadLinearProject();
                         } else if (!ticketsLoadedOnce) {
                             loadLocalTicketFiles();
                         }
@@ -7656,6 +7657,7 @@ Instructions:
         clickUpImportPending = false;
         isImportingAll = false;
         _restoringClickUpHierarchy = false;
+        _pendingTicketsRestore = false;
         pendingClickUpDetailIssueId = '';
 
         _lastTicketsStateFilterHtml = '';
