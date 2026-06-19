@@ -405,20 +405,21 @@
         return String(value || '').replace(/"/g, '&quot;');
     }
 
-    function showTicketsStatus(_text, _isError) { /* intentionally silent */ }
-
-    // Surface a transient error in the tickets footer. Unlike showTicketsStatus
-    // (intentionally silent), failures during navigation must be visible so the
-    // user understands why a dropdown/list didn't populate.
-    function showTicketsError(text) {
+    function showTicketsStatus(text, isError) {
         const { ticketsStatusFooter } = getTicketsTabElements();
         if (!ticketsStatusFooter) return;
         ticketsStatusFooter.textContent = text;
+        ticketsStatusFooter.style.color = isError ? 'var(--vscode-errorForeground, #f48771)' : 'var(--text-secondary)';
         ticketsStatusFooter.style.display = '';
         if (window._ticketsFooterTimeout) clearTimeout(window._ticketsFooterTimeout);
         window._ticketsFooterTimeout = setTimeout(() => {
             ticketsStatusFooter.style.display = 'none';
-        }, 6000);
+        }, 4000);
+    }
+
+    // Surface a transient error in the tickets footer — kept for navigation failures.
+    function showTicketsError(text) {
+        showTicketsStatus(text, true);
     }
 
     function setTicketsLoadingState(isLoading) {

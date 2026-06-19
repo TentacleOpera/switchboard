@@ -104,3 +104,62 @@ Bring `setup.html` in line with `kanban.html` and `planning.html` by fixing thre
 ---
 
 **Recommendation:** Complexity 2 (≤ 6) — **Send to Coder.**
+
+---
+
+## Reviewer Pass (2026-06-19)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *"Three lines. Three measly CSS lines. You wrote a 107-line plan with a 'Race Conditions' section for a change that touches no JavaScript. I came in sharpening my knives, expecting a bloodbath of cargo-culted divergence — and what do I find?*
+>
+> *The `.setup-shell` rule (`setup.html:104-108`) is clean: `display: flex; flex-direction: column; gap: 12px;` — no `max-width: 980px`, no `margin: 0 auto`. The centred straitjacket is GONE. Fine.*
+>
+> *The `body` rule (`setup.html:45-52`) reads `margin: 0; padding: 0;`. No 16px top gap leaking in. I HUNTED for a rogue `padding: 16px` and found it — at line 337, on `.modal-card`, where it belongs. Nice try, you didn't trip me.*
+>
+> *`<body class="cyber-theme-enabled">` at line 465. The glow rule `.cyber-theme-enabled .shared-tab-btn.active` (454-456) and the backdrop-blur (457-461) were already sitting there, inert, waiting for the gating class. Now they fire. The siblings — `kanban.html:2201`, `planning.html:3054` — wear the exact same class statically. Verbatim parity. I hate that I can't hate it.*
+>
+> **But.** Two splinters under my fingernail:
+> - **NIT:** Your plan's line numbers are FICTION. You cite `<body>` at line 467 (it's 465), `planning.html:3061` (it's 3054), glow at `:456`/backdrop at `:459` (they're 454-456/457-461). Off by a handful each. Harmless drift, but a plan that can't count loses my trust by paragraph three.
+> - **MAJOR (process, not code):** The auto-commit named `1d4dfba` — *'Fix setup.html layout, top gap, and missing teal tab glow'* — **does not touch `setup.html`.** `git show 1d4dfba -- src/webview/setup.html` is EMPTY. The actual end-state was already baked into `6f64897` ('Simplify Setup Panel'). The 'fix' commit is a hollow shell with a proud message and nothing inside. The CODE is right; the COMMIT is theatre."
+
+### Stage 2 — Balanced Synthesis
+
+- **Keep (all three changes are correct and complete):**
+  1. `.setup-shell` (`setup.html:104-108`) — centred `max-width`/`margin` removed; flex column + `gap: 12px` retained. ✓
+  2. `body` (`setup.html:45-52`) — `margin: 0; padding: 0;`, no top gap. ✓
+  3. `<body class="cyber-theme-enabled">` (`setup.html:465`) — activates the pre-existing teal glow (454-456) and backdrop-blur (457-461), matching `kanban.html:2201` / `planning.html:3054` verbatim. ✓
+- **Verified non-issues:** second `.setup-shell` block (`setup.html:401-403`, `padding-top: 0`) correctly left untouched; `padding: 16px` belongs to `.modal-card` (line 337), not `body`; no residual `980` anywhere in the file; theme handler only manipulates `theme-*` classes, so `cyber-theme-enabled` is never clobbered.
+- **Fix now:** Nothing in code. The implementation is already in its correct final state.
+- **Defer / accept:** The plan's "User Review Required" items (full-bleed intent, residual `.setup-shell { gap: 12px }`) remain genuine product sign-off calls, unchanged by this review. Plan-doc line-number drift is cosmetic and not worth re-editing every citation.
+
+### Code Fixes Applied
+
+- **None.** The current `setup.html` already satisfies every requirement of the plan. No CRITICAL or MAJOR *code* defect was found; the only MAJOR finding is a process/commit-hygiene observation outside the file's content.
+
+### Validation Results
+
+- **Compile:** Skipped per session directive (no `npm run compile`).
+- **Tests:** Skipped per session directive (run separately by the user).
+- **Static verification performed:**
+  - `grep 980 src/webview/setup.html` → no matches (no centred-width remnant).
+  - `grep "<body" src/webview/setup.html` → `465: <body class="cyber-theme-enabled">`.
+  - `grep "cyber-theme-enabled"` → glow rule (454), backdrop rule (457), body class (465) all present.
+  - Sibling parity confirmed: `kanban.html:2201`, `planning.html:3054` both `<body class="cyber-theme-enabled">`.
+  - `body` rule (45-52) = `margin: 0; padding: 0;`; `.setup-shell` (104-108) carries no `max-width`/`margin`.
+
+### Remaining Risks
+
+- **Low / cosmetic.** Code matches the plan's intent and the shipped sibling pattern exactly; regressions would be visually obvious and trivially revertible.
+- **Process risk (not code):** the implementation landed inside `6f64897` rather than the `1d4dfba` commit that claims it, so commit-message archaeology for this fix is misleading. No action required for correctness, but worth noting for changelog accuracy.
+- **Reminder:** `dist/webview/` must be rebuilt (`npm run compile`) for these `src/webview/setup.html` edits to take effect in the running extension — not done here per the skip-compilation directive.
+
+### Structured Summary
+
+| Severity | Finding | Location | Disposition |
+|---|---|---|---|
+| MAJOR | "Fix" commit `1d4dfba` contains no `setup.html` changes; end-state actually shipped in `6f64897` | git history | Process note only; code is correct, no fix |
+| NIT | Plan-doc line numbers drift from actual (body 467→465, planning 3061→3054, glow 456→454-456, backdrop 459→457-461) | plan file citations | Accepted; cosmetic |
+
+- **Fixes applied:** None — code already correct and complete.
+- **Remaining risks:** Cosmetic only; `dist/` rebuild pending (per skip directive).
