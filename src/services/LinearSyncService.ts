@@ -1043,6 +1043,37 @@ export class LinearSyncService {
     }
   }
 
+  public async updateIssueParent(issueId: string, parentId: string | null): Promise<void> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedIssueId = String(issueId || '').trim();
+    if (!normalizedIssueId) {
+      throw new Error('Linear parent updates require an issue ID.');
+    }
+
+    const result = await this.graphqlRequest(`
+      mutation($id: String!, $parentId: String) {
+        issueUpdate(id: $id, input: { parentId: $parentId }) { success }
+      }
+    `, { id: normalizedIssueId, parentId: parentId || null });
+
+    if (!result.data?.issueUpdate?.success) {
+      throw new Error(`Linear issue ${normalizedIssueId} rejected the requested parent update.`);
+    }
+
+    if (this._cacheService) {
+      const projectId = this._issueProjectIndex.get(normalizedIssueId);
+      if (projectId) {
+        this._cacheService.invalidateTaskCache('linear', `project:${projectId}`);
+      } else {
+        this._cacheService.invalidateTaskCache('linear');
+      }
+    }
+  }
+
   public async addIssueComment(issueId: string, comment: string): Promise<void> {
     const config = await this.loadConfig();
     if (!config?.setupComplete) {
@@ -1742,6 +1773,7 @@ export class LinearSyncService {
     description?: string;
     projectId?: string;
     stateId?: string;
+    parentId?: string;
   }): Promise<{ id: string; identifier: string }> {
     const config = await this.loadConfig();
     if (!config || !config.setupComplete || !config.teamId) {
@@ -1764,7 +1796,8 @@ export class LinearSyncService {
         description: params.description || '',
         labelIds: config.switchboardLabelId ? [config.switchboardLabelId] : [],
         ...(params.projectId ? { projectId: params.projectId } : {}),
-        ...(params.stateId ? { stateId: params.stateId } : {})
+        ...(params.stateId ? { stateId: params.stateId } : {}),
+        ...(params.parentId ? { parentId: params.parentId } : {})
       }
     }));
 

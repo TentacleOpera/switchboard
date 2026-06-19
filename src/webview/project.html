@@ -792,30 +792,6 @@
             background-size: 40px 40px, 40px 40px;
         }
 
-        /* Claudify: heading color override — h2-h6 → warm cream */
-        body.theme-claudify #kanban-preview-content h2,
-        body.theme-claudify #epics-preview-content h2,
-        body.theme-claudify #constitution-preview-content h2,
-        body.theme-claudify #tuning-preview-content h2,
-        body.theme-claudify #kanban-preview-content h3,
-        body.theme-claudify #epics-preview-content h3,
-        body.theme-claudify #constitution-preview-content h3,
-        body.theme-claudify #tuning-preview-content h3,
-        body.theme-claudify #kanban-preview-content h4,
-        body.theme-claudify #epics-preview-content h4,
-        body.theme-claudify #constitution-preview-content h4,
-        body.theme-claudify #tuning-preview-content h4,
-        body.theme-claudify #kanban-preview-content h5,
-        body.theme-claudify #epics-preview-content h5,
-        body.theme-claudify #constitution-preview-content h5,
-        body.theme-claudify #tuning-preview-content h5,
-        body.theme-claudify #kanban-preview-content h6,
-        body.theme-claudify #epics-preview-content h6,
-        body.theme-claudify #constitution-preview-content h6,
-        body.theme-claudify #tuning-preview-content h6 {
-            color: #F0EBE6;
-        }
-
         /* Claudify: warm glass tints */
         body.theme-claudify .controls-strip,
         body.theme-claudify .kanban-controls-strip {
@@ -885,6 +861,31 @@
         body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6,
         body.cyber-theme-enabled #tuning-preview-content h2, body.cyber-theme-enabled #tuning-preview-content h3, body.cyber-theme-enabled #tuning-preview-content h4, body.cyber-theme-enabled #tuning-preview-content h5, body.cyber-theme-enabled #tuning-preview-content h6 {
             color: var(--accent-primary);
+        }
+
+        /* Claudify: heading color override — h2-h6 → warm cream
+           (placed after cyber heading color rule to win specificity tie) */
+        body.theme-claudify #kanban-preview-content h2,
+        body.theme-claudify #epics-preview-content h2,
+        body.theme-claudify #constitution-preview-content h2,
+        body.theme-claudify #tuning-preview-content h2,
+        body.theme-claudify #kanban-preview-content h3,
+        body.theme-claudify #epics-preview-content h3,
+        body.theme-claudify #constitution-preview-content h3,
+        body.theme-claudify #tuning-preview-content h3,
+        body.theme-claudify #kanban-preview-content h4,
+        body.theme-claudify #epics-preview-content h4,
+        body.theme-claudify #constitution-preview-content h4,
+        body.theme-claudify #tuning-preview-content h4,
+        body.theme-claudify #kanban-preview-content h5,
+        body.theme-claudify #epics-preview-content h5,
+        body.theme-claudify #constitution-preview-content h5,
+        body.theme-claudify #tuning-preview-content h5,
+        body.theme-claudify #kanban-preview-content h6,
+        body.theme-claudify #epics-preview-content h6,
+        body.theme-claudify #constitution-preview-content h6,
+        body.theme-claudify #tuning-preview-content h6 {
+            color: #F0EBE6;
         }
 
         #kanban-preview-content h1,

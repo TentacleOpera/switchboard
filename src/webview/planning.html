@@ -3440,6 +3440,8 @@
                             <button id="btn-view-attachments" class="strip-btn" style="display:none;">Attachments</button>
                             <button id="btn-open-ticket" class="strip-btn" style="display:none;">Open</button>
                             <button id="btn-diagram-prompt" class="strip-btn" style="display:none;">Diagram Prompt</button>
+                            <button id="btn-add-subtask" class="strip-btn" title="Create a subtask under this ticket">+ Subtask</button>
+                            <button id="btn-convert-subtask" class="strip-btn" title="Convert this ticket to a subtask of another ticket">Convert to Subtask</button>
                         </div>
 
                         <div id="tickets-comment-input-area" style="display:none; padding: 10px; border-bottom: 1px solid var(--border-color); background: var(--panel-bg2); margin: 10px;">
@@ -3587,6 +3589,26 @@
                 <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
                     <button id="btn-cancel-create-ticket" class="strip-btn">Cancel</button>
                     <button id="btn-submit-create-ticket" class="planning-button" style="margin: 0; padding: 4px 12px;">Create</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="folder-modal" id="convert-subtask-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="convert-subtask-modal-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="convert-subtask-modal-title">Convert to Subtask</h3>
+                <button class="modal-close-btn" id="btn-close-convert-subtask-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px;">
+                <div id="convert-subtask-info" style="font-size: 12px; color: var(--text-secondary);"></div>
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label for="convert-subtask-search" style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Search Parent Ticket</label>
+                    <input type="text" id="convert-subtask-search" class="planning-input" placeholder="Type to search..." style="width: 100%; box-sizing: border-box;" />
+                </div>
+                <div id="convert-subtask-list" style="max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--border-color); padding: 8px; border-radius: 4px;"></div>
+                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
+                    <button id="btn-cancel-convert-subtask" class="strip-btn">Cancel</button>
+                    <button id="btn-confirm-convert-subtask" class="planning-button" style="margin: 0; padding: 4px 12px;" disabled>Convert</button>
                 </div>
             </div>
         </div>

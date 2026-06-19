@@ -191,5 +191,9 @@ case 'setPlanningPanelSyncMode': {
 - Simulate a backend error (e.g., temporarily throw in `_resolveSyncConfig`) → dropdown should show "Manual" (not blank), and no unhandled rejection should appear in the extension host output.
 - Send a `setPlanningPanelSyncMode` message with an invalid mode (e.g., `{ type: 'setPlanningPanelSyncMode', mode: 'garbage' }`) → DB should store `no-sync`, not `garbage`.
 
+## Review Findings
+
+All four plan changes verified as correctly implemented in source. Review found two MAJOR issues in `SetupPanelProvider.ts` — a parallel code path with the same unvalidated read/write bug that the plan fixed in `PlanningPanelProvider.ts`. Fixes applied: added `validModes` validation to `SetupPanelProvider.ts:767` (write-side `setPlanningPanelSyncMode` handler) and `SetupPanelProvider.ts:1312-1321` (read-side `_getPlanningPanelSyncMode` helper). Files changed: `src/services/SetupPanelProvider.ts` (2 edits). No CRITICAL findings. Remaining risks: `validModes` array duplicated across 5 locations (deferred — extract to shared constant); stale `dist/webview/planning.html` artifact (regenerated on next build). Verification: code-level inspection only per session directives (compilation and tests skipped).
+
 ## Recommendation
 Complexity 3 → **Send to Intern**

@@ -12,7 +12,54 @@ The "Switchboard Tutorial" button in `setup.html` and the `pluginTutorial` handl
 ### Solution
 Create a new, definitive `docs/switchboard_user_manual.md` covering every feature, panel, setting, command, agent role, workflow, integration, and troubleshooting scenario. Then update all four entry points to reference this manual.
 
-## Files to Create
+## User Review Required
+
+Yes — the manual's content scope (which features to cover, depth of each section) should be reviewed by the user before implementation begins. The `.vscodeignore` change is a one-line config addition with no user review needed.
+
+## Complexity Audit
+
+### Routine
+- Creating a new markdown documentation file (`docs/switchboard_user_manual.md`)
+- Updating a static clipboard prompt string in `setup.html` (line 3062)
+- Updating `_openDocs()` to check for the manual before falling back to README
+- Updating `pluginTutorial` case to reference the manual with README fallback
+- Adding a link in `README.md` (line 260)
+- Adding `!docs/switchboard_user_manual.md` to `.vscodeignore` (line 45)
+
+### Complex / Risky
+- Extracting all settings keys from `setup.html` (4,522 lines) and `SetupPanelProvider.ts` (1,447 lines) — requires systematic grep and cross-referencing to ensure completeness
+- Extracting all command IDs from `extension.ts` (3,388 lines) — 30+ registered commands across the file
+- Token budget management — the manual at 800-1500 lines may exceed agent context windows if read in full; tutorial prompts must reference specific ToC sections
+
+## Edge-Case & Dependency Audit
+
+**Race Conditions:**
+- None. All changes are static file modifications with no runtime concurrency concerns.
+
+**Security:**
+- No security implications. The manual is a documentation file with no executable code, no credentials, no API keys.
+
+**Side Effects:**
+- `.vscodeignore` change affects extension packaging — the manual will now be included in the `.vsix` bundle, increasing bundle size by ~30-50KB.
+- `setup.html` prompt change alters what users see when they click "Copy Tutorial Prompt" — existing users may notice the prompt text changed.
+- `_openDocs()` behavior change — clicking "Open Docs" now opens the manual instead of README. Users familiar with the old behavior may be briefly confused.
+
+**Dependencies & Conflicts:**
+- The manual file must exist before the code changes are useful. If code changes ship without the manual (e.g., partial deploy), the fallback to README.md covers `_openDocs()` and `pluginTutorial`, but the `setup.html` clipboard prompt will reference a non-existent file.
+- `.vscodeignore` must be updated in the same PR as the manual creation, or the manual won't ship in the `.vsix`.
+- No dependency on other plans or sessions.
+
+## Dependencies
+
+None — this plan is self-contained.
+
+## Adversarial Synthesis
+
+Key risks: (1) `.vscodeignore` excludes `docs/**` with only `docs/how_to_use_switchboard.md` as exception — the new manual will not ship unless `.vscodeignore` is explicitly updated. (2) The 4,522-line `setup.html` makes settings extraction error-prone without systematic grep methodology. (3) The `setup.html` clipboard prompt is a static string with no runtime fallback, unlike `_openDocs()` and `pluginTutorial` which have file-existence checks. Mitigations: add `!docs/switchboard_user_manual.md` to `.vscodeignore` as a required file modification; specify grep-based extraction approach for settings and commands; document the fallback semantics difference per entry point.
+
+## Proposed Changes
+
+### Files to Create
 
 ### 1. `docs/switchboard_user_manual.md`
 A comprehensive user manual with the following structure:
@@ -205,9 +252,25 @@ Add a link to the new manual:
 - [How to Use Switchboard (Detailed Guide)](docs/how_to_use_switchboard.md)
 ```
 
+### 6. `.vscodeignore` — line 45
+**CRITICAL:** Without this change, the manual will not be bundled in the `.vsix` package. The current `.vscodeignore` excludes all `docs/**` with only `docs/how_to_use_switchboard.md` as an exception.
+
+**Current (lines 44-45):**
+```
+docs/**
+!docs/how_to_use_switchboard.md
+```
+
+**New:**
+```
+docs/**
+!docs/how_to_use_switchboard.md
+!docs/switchboard_user_manual.md
+```
+
 ## Implementation Notes
 
-- The manual is a **documentation-only** deliverable — no code logic changes beyond updating file path references in 4 locations.
+- The manual is a **documentation-only** deliverable — no code logic changes beyond updating file path references in 5 locations (setup.html, SetupPanelProvider.ts, TaskViewerProvider.ts, README.md, .vscodeignore).
 - The manual should be written in clear, agent-readable markdown. An AI agent reading it should be able to explain any Switchboard feature to a user without needing to look elsewhere.
 - All settings keys should be extracted from the actual source code to ensure accuracy (not guessed).
 - All command IDs should be extracted from `extension.ts` command registrations.
@@ -216,18 +279,46 @@ Add a link to the new manual:
 
 ## Risks & Edge Cases
 
-- **Bundling:** The `docs/` folder must be included in the `.vscodeignore` allowlist so the manual ships with the extension. Need to verify `.vscodeignore` doesn't exclude `docs/`.
-- **Stale content:** The manual will need maintenance as features are added. Consider adding a "Last updated" date and version note.
-- **Token budget:** If an agent reads the full manual, it could be 800+ lines. The tutorial prompt should instruct agents to read relevant sections rather than the entire file at once.
-- **Fallback paths:** All three code entry points should gracefully fall back to README.md if the manual file is missing (e.g., older extension install).
+- **Bundling (RESOLVED):** `.vscodeignore` line 44 excludes `docs/**` with only `!docs/how_to_use_switchboard.md` as exception. Added `!docs/switchboard_user_manual.md` as file #6 to modify. Without this, the manual will not ship in the `.vsix`.
+- **Stale content:** The manual will need maintenance as features are added. Consider adding a "Last updated" date and version note at the top of the manual.
+- **Token budget:** If an agent reads the full manual, it could be 800+ lines. The tutorial prompt in `setup.html` should instruct agents to read specific ToC sections (e.g., "read sections 1-3 for setup guidance") rather than the entire file at once. The `pluginTutorial` handler should similarly reference section numbers.
+- **Fallback paths:** `_openDocs()` and `pluginTutorial` have runtime file-existence checks and can fall back to README.md. The `setup.html` clipboard prompt is a static string with no runtime fallback — if the manual doesn't exist in the install, the agent will fail to find it. This is acceptable because the `.vscodeignore` fix ensures the manual ships with the extension.
 
-## Validation
+## Verification Plan
+
+### Automated Tests
+
+No automated tests required — this is a documentation-only deliverable with static file path reference updates. Verification is manual.
+
+### Manual Verification Steps
 
 - [ ] Manual covers every panel, setting, command, workflow, and integration listed in README
-- [ ] All settings keys match actual source code
-- [ ] All command IDs match `extension.ts` registrations
-- [ ] Tutorial prompt in `setup.html` references the manual
-- [ ] `_openDocs()` opens the manual (with README fallback)
-- [ ] `pluginTutorial` handler references the manual (with README fallback)
-- [ ] README.md links to the new manual
-- [ ] `.vscodeignore` allows `docs/switchboard_user_manual.md` to be bundled
+- [ ] All settings keys match actual source code (grep `switchboard.` in `extension.ts` and `SetupPanelProvider.ts`, cross-reference with `setup.html` UI elements)
+- [ ] All command IDs match `extension.ts` registrations (grep `registerCommand` in `extension.ts` — 30+ commands across lines 667-1193+)
+- [ ] Tutorial prompt in `setup.html` (line 3062) references the manual with specific ToC section numbers
+- [ ] `_openDocs()` (lines 1300-1308) opens the manual with README fallback
+- [ ] `pluginTutorial` handler (lines 9176-9200) references the manual with README fallback
+- [ ] README.md (line 260) links to the new manual
+- [ ] `.vscodeignore` (line 45) includes `!docs/switchboard_user_manual.md`
+- [ ] Manual file exists at `docs/switchboard_user_manual.md` and is well-structured markdown
+
+### Verification Commands
+
+```bash
+# Verify all command IDs are documented in the manual
+grep -oP "registerCommand\('\K[^']+" src/extension.ts | while read cmd; do
+  grep -q "$cmd" docs/switchboard_user_manual.md || echo "MISSING: $cmd"
+done
+
+# Verify all switchboard. settings keys are documented
+grep -oP "switchboard\.\K[a-zA-Z.]+" src/extension.ts src/services/SetupPanelProvider.ts | sort -u | while read key; do
+  grep -q "switchboard.$key" docs/switchboard_user_manual.md || echo "MISSING SETTING: switchboard.$key"
+done
+
+# Verify .vscodeignore includes the manual
+grep -q 'docs/switchboard_user_manual.md' .vscodeignore && echo "OK: bundled" || echo "ERROR: not bundled"
+```
+
+## Recommendation
+
+Complexity 4 → **Send to Coder**

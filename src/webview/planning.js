@@ -168,6 +168,9 @@
     // ClickUp state
     let clickUpProjectIssues = [];
     let selectedClickUpIssue = null;
+    let _subtaskParent = null;
+    let _convertSelectedParentId = null;
+    let _convertCurrentTicketId = null;
     let clickUpProjectStatus = 'idle';
     let clickUpProjectMessage = '';
     let clickUpAvailableSpaces = [];
@@ -4204,7 +4207,15 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     const descInput = document.getElementById('create-ticket-description');
                     if (titleInput) titleInput.value = '';
                     if (descInput) descInput.value = '';
-                    loadClickUpProject(true);
+                    if (_subtaskParent) {
+                        const parentId = _subtaskParent.id;
+                        _subtaskParent = null;
+                        const modalTitle = document.getElementById('create-ticket-modal-title');
+                        if (modalTitle) modalTitle.textContent = 'Create New Ticket';
+                        loadClickUpTaskDetails(parentId);
+                    } else {
+                        loadClickUpProject(true);
+                    }
                 } else {
                     console.error('Failed to create ClickUp ticket:', msg.error);
                     showTicketsStatus('Failed to create ticket', true);
@@ -4224,10 +4235,34 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     const descInput = document.getElementById('create-ticket-description');
                     if (titleInput) titleInput.value = '';
                     if (descInput) descInput.value = '';
-                    loadLinearProject(true);
+                    if (_subtaskParent) {
+                        const parentId = _subtaskParent.id;
+                        _subtaskParent = null;
+                        const modalTitle = document.getElementById('create-ticket-modal-title');
+                        if (modalTitle) modalTitle.textContent = 'Create New Ticket';
+                        loadLinearTaskDetails(parentId);
+                    } else {
+                        loadLinearProject(true);
+                    }
                 } else {
                     console.error('Failed to create Linear ticket:', msg.error);
                     showTicketsStatus('Failed to create ticket', true);
+                }
+                break;
+            }
+            case 'subtaskConverted': {
+                const modal = document.getElementById('convert-subtask-modal');
+                if (modal) modal.style.display = 'none';
+                if (msg.success) {
+                    showTicketsStatus('Converted to subtask ✓', false);
+                    if (msg.provider === 'clickup') {
+                        loadClickUpProject(true);
+                    } else {
+                        loadLinearProject(true);
+                    }
+                } else {
+                    console.error('Failed to convert to subtask:', msg.error);
+                    showTicketsStatus(msg.error || 'Failed to convert ticket', true);
                 }
                 break;
             }
@@ -6157,6 +6192,9 @@ Instructions:
 
         // Create ticket button click
         document.getElementById('tickets-create')?.addEventListener('click', () => {
+            _subtaskParent = null;
+            const modalTitle = document.getElementById('create-ticket-modal-title');
+            if (modalTitle) modalTitle.textContent = 'Create New Ticket';
             const modal = document.getElementById('create-ticket-modal');
             if (modal) {
                 modal.style.display = 'block';
@@ -6175,14 +6213,23 @@ Instructions:
         document.getElementById('btn-close-create-ticket-modal')?.addEventListener('click', () => {
             const modal = document.getElementById('create-ticket-modal');
             if (modal) modal.style.display = 'none';
+            _subtaskParent = null;
+            const modalTitle = document.getElementById('create-ticket-modal-title');
+            if (modalTitle) modalTitle.textContent = 'Create New Ticket';
         });
         document.getElementById('btn-cancel-create-ticket')?.addEventListener('click', () => {
             const modal = document.getElementById('create-ticket-modal');
             if (modal) modal.style.display = 'none';
+            _subtaskParent = null;
+            const modalTitle = document.getElementById('create-ticket-modal-title');
+            if (modalTitle) modalTitle.textContent = 'Create New Ticket';
         });
         document.getElementById('create-ticket-modal')?.addEventListener('click', (e) => {
             if (e.target === e.currentTarget) {
                 e.currentTarget.style.display = 'none';
+                _subtaskParent = null;
+                const modalTitle = document.getElementById('create-ticket-modal-title');
+                if (modalTitle) modalTitle.textContent = 'Create New Ticket';
             }
         });
 
@@ -6239,9 +6286,154 @@ Instructions:
                 title,
                 description: description || undefined,
                 listId: clickUpSelectedListId || undefined,
-                projectName: linearProjectPickerValue || undefined
+                projectName: linearProjectPickerValue || undefined,
+                ...(_subtaskParent ? { parentId: _subtaskParent.id } : {})
             });
         });
+
+        // Add Subtask button
+        document.getElementById('btn-add-subtask')?.addEventListener('click', () => {
+            const provider = lastIntegrationProvider;
+            const issue = provider === 'linear' ? selectedLinearIssue : selectedClickUpIssue;
+            if (!issue) return;
+            const task = provider === 'linear' ? issue.issue : issue.task;
+            const ticketId = task?.id;
+            const ticketTitle = task?.title || task?.name || '';
+            if (!ticketId) return;
+            _subtaskParent = { id: ticketId, title: ticketTitle, provider };
+            const modal = document.getElementById('create-ticket-modal');
+            if (modal) {
+                modal.style.display = 'block';
+                const modalTitle = document.getElementById('create-ticket-modal-title');
+                if (modalTitle) modalTitle.textContent = 'Create Subtask under ' + ticketTitle;
+                const titleInput = document.getElementById('create-ticket-title');
+                const descInput = document.getElementById('create-ticket-description');
+                if (titleInput) { titleInput.value = ''; titleInput.focus(); }
+                if (descInput) descInput.value = '';
+            }
+        });
+
+        // Convert to Subtask button
+        document.getElementById('btn-convert-subtask')?.addEventListener('click', () => {
+            const provider = lastIntegrationProvider;
+            const issue = provider === 'linear' ? selectedLinearIssue : selectedClickUpIssue;
+            if (!issue) return;
+            const task = provider === 'linear' ? issue.issue : issue.task;
+            const ticketId = task?.id;
+            const ticketTitle = task?.title || task?.name || '';
+            if (!ticketId) return;
+            _convertCurrentTicketId = ticketId;
+            _convertSelectedParentId = null;
+            const modal = document.getElementById('convert-subtask-modal');
+            if (modal) modal.style.display = 'block';
+            const info = document.getElementById('convert-subtask-info');
+            if (info) info.innerHTML = 'Select a parent ticket for <strong>' + escapeHtml(ticketTitle) + '</strong>';
+            const searchInput = document.getElementById('convert-subtask-search');
+            if (searchInput) searchInput.value = '';
+            const confirmBtn = document.getElementById('btn-confirm-convert-subtask');
+            if (confirmBtn) confirmBtn.disabled = true;
+            _populateParentPicker(ticketId);
+        });
+
+        // Convert subtask modal close/cancel
+        document.getElementById('btn-close-convert-subtask-modal')?.addEventListener('click', () => {
+            const modal = document.getElementById('convert-subtask-modal');
+            if (modal) modal.style.display = 'none';
+        });
+        document.getElementById('btn-cancel-convert-subtask')?.addEventListener('click', () => {
+            const modal = document.getElementById('convert-subtask-modal');
+            if (modal) modal.style.display = 'none';
+        });
+        document.getElementById('convert-subtask-modal')?.addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) {
+                e.currentTarget.style.display = 'none';
+            }
+        });
+
+        // Search input for parent picker
+        document.getElementById('convert-subtask-search')?.addEventListener('input', () => {
+            if (_convertCurrentTicketId) _populateParentPicker(_convertCurrentTicketId);
+        });
+
+        // Confirm conversion
+        document.getElementById('btn-confirm-convert-subtask')?.addEventListener('click', () => {
+            if (!_convertSelectedParentId || !_convertCurrentTicketId) return;
+            vscode.postMessage({
+                type: 'convertToSubtask',
+                provider: lastIntegrationProvider,
+                taskId: _convertCurrentTicketId,
+                parentId: _convertSelectedParentId,
+                workspaceRoot: ticketsWorkspaceRoot || undefined
+            });
+        });
+    }
+
+    function _isDescendantOf(candidateId, ancestorId, parentIdMap) {
+        let current = parentIdMap.get(candidateId);
+        while (current) {
+            if (current === ancestorId) return true;
+            current = parentIdMap.get(current);
+        }
+        return false;
+    }
+
+    function _populateParentPicker(currentTicketId) {
+        const provider = lastIntegrationProvider;
+        const issues = provider === 'linear' ? linearProjectIssues : clickUpProjectIssues;
+        const listContainer = document.getElementById('convert-subtask-list');
+        if (!listContainer) return;
+
+        const searchInput = document.getElementById('convert-subtask-search');
+        const searchTerm = String(searchInput?.value || '').trim().toLowerCase();
+
+        if (!issues || issues.length === 0) {
+            listContainer.innerHTML = '<div style="color: var(--text-secondary); padding: 8px;">No tickets available. Load a project first.</div>';
+            return;
+        }
+
+        const parentIdMap = new Map();
+        for (const item of issues) {
+            if (item?.parentId) {
+                parentIdMap.set(item.id, item.parentId);
+            }
+        }
+
+        const candidates = issues.filter(item => {
+            if (!item?.id || item.id === currentTicketId) return false;
+            if (_isDescendantOf(item.id, currentTicketId, parentIdMap)) return false;
+            if (searchTerm) {
+                const haystack = [item.id, item.identifier, item.title].filter(Boolean).join(' ').toLowerCase();
+                if (!haystack.includes(searchTerm)) return false;
+            }
+            return true;
+        });
+
+        if (candidates.length === 0) {
+            listContainer.innerHTML = '<div style="color: var(--text-secondary); padding: 8px;">No matching tickets found.</div>';
+            return;
+        }
+
+        listContainer.innerHTML = '';
+        for (const candidate of candidates) {
+            const row = document.createElement('div');
+            row.style.cssText = 'padding: 6px 8px; cursor: pointer; border-radius: 3px; display: flex; align-items: center; gap: 6px;';
+            row.dataset.parentId = candidate.id;
+            const idLabel = candidate.identifier ? escapeHtml(candidate.identifier) : '';
+            const titleText = escapeHtml(candidate.title || candidate.name || candidate.id);
+            row.innerHTML = (idLabel ? '<span style="color: var(--text-secondary); font-size: 11px;">' + idLabel + '</span> ' : '') + '<span>' + titleText + '</span>';
+            row.addEventListener('mouseenter', () => { if (row.dataset.selected !== 'true') row.style.background = 'var(--panel-bg2, #1a1a2e)'; });
+            row.addEventListener('mouseleave', () => { if (row.dataset.selected !== 'true') row.style.background = ''; });
+            row.addEventListener('click', () => {
+                const prevSelected = listContainer.querySelector('[data-selected="true"]');
+                if (prevSelected) { prevSelected.dataset.selected = 'false'; prevSelected.style.background = ''; }
+                row.dataset.selected = 'true';
+                row.style.background = 'var(--accent-teal, #2dd4bf)';
+                _convertSelectedParentId = candidate.id;
+                const confirmBtn = document.getElementById('btn-confirm-convert-subtask');
+                if (confirmBtn) confirmBtn.disabled = false;
+            });
+            listContainer.appendChild(row);
+        }
     }
 
     // ===== RENDERING FUNCTIONS =====

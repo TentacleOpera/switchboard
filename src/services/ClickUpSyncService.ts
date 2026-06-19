@@ -181,6 +181,10 @@ export class ClickUpSyncService {
     this._taskListIndex.clear();
   }
 
+  public getTaskListId(taskId: string): string | undefined {
+    return this._taskListIndex.get(taskId);
+  }
+
   constructor(workspaceRoot: string, secretStorage: vscode.SecretStorage) {
     this._workspaceRoot = workspaceRoot;
     this._configPath = path.join(workspaceRoot, '.switchboard', 'clickup-config.json');
@@ -1386,6 +1390,7 @@ export class ClickUpSyncService {
       due_date?: number;
       priority?: number;
       tags?: string[];
+      parent?: string;
     }
   ): Promise<ClickUpTask | null> {
     const config = await this.loadConfig();

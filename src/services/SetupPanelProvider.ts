@@ -764,7 +764,8 @@ export class SetupPanelProvider implements vscode.Disposable {
                         vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
                         return;
                     }
-                    const syncMode = typeof message.mode === 'string' ? message.mode : 'no-sync';
+                    const validModes = ['no-sync', 'auto-sync-all', 'sync-selected'];
+                    const syncMode = validModes.includes(message.mode) ? message.mode : 'no-sync';
                     await this._setPlanningPanelSyncMode(workspaceRoot, syncMode);
                     await this._triggerPlanningPanelSync(workspaceRoot, syncMode);
                     break;
@@ -1311,7 +1312,9 @@ export class SetupPanelProvider implements vscode.Disposable {
     private async _getPlanningPanelSyncMode(workspaceRoot: string): Promise<string> {
         try {
             const db = KanbanDatabase.forWorkspace(workspaceRoot);
-            return await db.getConfig('planning.syncMode') || 'no-sync';
+            const rawMode = await db.getConfig('planning.syncMode') || 'no-sync';
+            const validModes = ['no-sync', 'auto-sync-all', 'sync-selected'];
+            return validModes.includes(rawMode) ? rawMode : 'no-sync';
         } catch {
             return 'no-sync';
         }

@@ -4417,10 +4417,16 @@ Please format the updated output document strictly as follows:
                 }
                 const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
                 try {
+                    let listId = msg.listId;
+                    if (msg.parentId) {
+                        const parentListId = clickUp.getTaskListId(msg.parentId);
+                        if (parentListId) listId = parentListId;
+                    }
                     const task = await clickUp.createTask({
                         name: msg.title,
-                        listId: msg.listId,
-                        description: msg.description
+                        listId,
+                        description: msg.description,
+                        ...(msg.parentId ? { parent: msg.parentId } : {})
                     });
                     if (task) {
                         // A remote-only ticket diverges from every other ticket in the
@@ -4483,7 +4489,8 @@ Please format the updated output document strictly as follows:
                     const result = await linear.createIssueSimple({
                         title: msg.title,
                         description: msg.description,
-                        projectId
+                        projectId,
+                        ...(msg.parentId ? { parentId: msg.parentId } : {})
                     });
                     // A remote-only ticket diverges from every other ticket in the tab
                     // (which are both local + online). Import it immediately so the local
@@ -4510,6 +4517,49 @@ Please format the updated output document strictly as follows:
                         success: false,
                         error: error instanceof Error ? error.message : String(error),
                         workspaceRoot
+                    });
+                }
+                break;
+            }
+            case 'convertToSubtask': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    this._panel?.webview.postMessage({
+                        type: 'subtaskConverted',
+                        success: false,
+                        error: 'No workspace folder found',
+                        provider: msg.provider,
+                        taskId: msg.taskId,
+                        parentId: msg.parentId
+                    });
+                    break;
+                }
+                try {
+                    if (msg.provider === 'clickup') {
+                        const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
+                        await clickUp.updateTask(msg.taskId, { parent: msg.parentId });
+                    } else if (msg.provider === 'linear') {
+                        const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
+                        await linear.updateIssueParent(msg.taskId, msg.parentId);
+                    } else {
+                        throw new Error(`Unknown provider: ${msg.provider}`);
+                    }
+                    this._panel?.webview.postMessage({
+                        type: 'subtaskConverted',
+                        success: true,
+                        provider: msg.provider,
+                        taskId: msg.taskId,
+                        parentId: msg.parentId,
+                        workspaceRoot
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'subtaskConverted',
+                        success: false,
+                        error: error instanceof Error ? error.message : String(error),
+                        provider: msg.provider,
+                        taskId: msg.taskId,
+                        parentId: msg.parentId
                     });
                 }
                 break;
