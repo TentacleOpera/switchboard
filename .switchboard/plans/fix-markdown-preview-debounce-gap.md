@@ -130,3 +130,49 @@ Run with `--forceExit` per the project jest workflow. (Per session directive, te
 
 ---
 **Recommendation:** Complexity 2 (≤ 6) → **Send to Coder**.
+
+---
+
+## Reviewer Pass (2026-06-19)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *Cracks knuckles. Pulls up the diff with the weary suspicion of someone who has been burned by "one-line defensive checks" before.*
+>
+> **A "debounce gap" fix. Adorable. Let's see if you actually closed the gap or just drew a chalk outline around it.**
+>
+> Line 898. There it is. `if (Date.now() - this._lastPanelWriteTimestamp < 1000) { return; }`, sitting *inside* the `setTimeout`, *after* the stale-watcher/stale-path check at 897. Fine. **It's in the right place** — the guard re-reads the timestamp at the moment the timer fires, not when it was scheduled. The whole point of this plan. You didn't put it before the `gen`/`filePath` check (which would waste a comparison on a dead watcher), and you didn't bury it after the `workspaceRoot` resolution (which would do pointless work before bailing). I came here to scream and instead I'm... grudgingly nodding. **NIT at most.**
+>
+> **Now the trap.** The original plan wanted a *second* guard shoved into `_handleFetchDocsFile`. I went looking for that landmine — line 5745 onward. And it is **not there.** Only the content-dedup at 5827. Good. Whoever implemented this read the correction and did NOT bolt a `_lastPanelWriteTimestamp` check onto a helper that also serves *user-initiated* fetches (`requestId >= 0`). Adding it there would have silently eaten legitimate clicks for a full second after every panel write. The dog that didn't bark. **Correct restraint — no finding.**
+>
+> **The threshold.** Watcher guards both say `< 1000`. The visibility guard at line 619 says `< 2000`. Inconsistent? Yes. *In scope?* No — the plan explicitly fenced that off, and the new guard correctly mirrors its *sibling* at line 889, not the distant cousin at 619. I'll allow it. **NIT, documented, deferred.**
+>
+> **The thing nobody wrote down.** That `_isAutoRefreshing = true` at 906 / `false` in the `finally` at 918 — this isn't in the plan. *Where did it come from?* I sniffed around: it's a pre-existing companion flag feeding `isAutoRefreshed` into every `previewReady` post (982, 5439, 5495, 5838...). Not this plan's child. It's set and cleared synchronously around the single awaited dispatch, with a `finally` so it can't get stuck `true`. Not a leak, not a regression, not my problem today. **No finding — but I'm noting it so the next reviewer doesn't waste twenty minutes like I did.**
+>
+> **Verdict:** I wanted blood. I got a clean, minimal, correctly-placed guard and a correctly-*omitted* second guard. Infuriating. Ship it.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep (no change):**
+- The single in-debounce guard at `PlanningPanelProvider.ts:898`. Placement is optimal: after the stale `gen`/`filePath` short-circuit (897), before `workspaceRoot` resolution (900) and the dispatch. One guard covers all three branches (`_handleFetchPreview`, `_handleFetchKanbanPlanPreview`, `_handleFetchDocsFile`) exactly as designed.
+- The deliberate **omission** of the redundant `_handleFetchDocsFile` guard. Verified absent (5745–5839 has only the content-dedup at 5827). This is the plan's explicit correction, correctly honored.
+- The three pre-existing content-dedup guards (kanban 968, local-folder/docs 5827, fetchPreview 5827/5439) remain intact and continue to suppress identical-content re-renders.
+
+**Fix now:** Nothing. No CRITICAL or MAJOR findings. The implementation is faithful to the plan with no scope creep attributable to this change.
+
+**Defer (NIT, out of scope per plan):**
+- Threshold inconsistency: watcher guards use `< 1000` (889, 898), visibility/refresh guard uses `< 2000` (619). The plan explicitly scoped this out; the new guard correctly matches its sibling. No action.
+- `_isAutoRefreshing` (906/918) is a pre-existing mechanism, not introduced here; no action.
+
+### Code Fixes Applied
+None — no valid CRITICAL/MAJOR findings.
+
+### Files Changed (by the implementation, this plan)
+- `src/services/PlanningPanelProvider.ts:898` — added in-debounce `_lastPanelWriteTimestamp < 1000` guard inside the active-doc-watcher `setTimeout` callback.
+
+### Validation Results
+- Per session directives: **compilation skipped** and **automated tests skipped** (run separately by the user). The automated-test plan above (drops-on-in-window-write, allows-after-window, branch coverage, stale-guard precedence) remains the recommended coverage.
+- Static review confirms: guard present and correctly placed (898); redundant `_handleFetchDocsFile` guard correctly absent; all three dedup guards intact; no working-tree diff outstanding.
+
+### Remaining Risks
+- Unchanged from the plan's **Remaining Risks** section: the 1s false-negative window (a one-shot legitimate external edit within ~1000ms of a panel write is skipped until the next change) is accepted, bounded, and identical to the pre-debounce guard's behavior. Continuous external rewrites correctly continue to refresh once writes fall outside the 1s window.
