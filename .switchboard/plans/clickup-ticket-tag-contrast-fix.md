@@ -12,7 +12,7 @@ Make ClickUp ticket tag labels readable in the **Tickets** tab of `planning.html
 
 - **Threshold choice:** YIQ luminance cutoff of `128` selects black vs. light text. This is a standard heuristic, not perceptual (no gamma correction). Acceptable for small uppercase pills — confirm you don't want WCAG relative-luminance instead.
 - **Guard change (behavior change):** The original `renderTicketTags()` guard requires *both* `tag.tagFg` and `tag.tagBg` before styling. This plan changes the guard to require only `tag.tagBg`, because the foreground is now derived. This means tags that ClickUp returns with a `tag_bg` but an empty `tag_fg` will now be styled (previously they fell through to the unreadable grey default). Confirm this is desired (it is the whole point of the fix, but it is a behavior change worth flagging).
-- **Out-of-scope sibling:** `TaskViewerProvider.ts:5198-5199` also constructs ClickUp tags with `tagFg`/`tagBg`. If that surface renders pills the same way, it has the same contrast bug. Deliberately **not** included here. Confirm whether a follow-up plan is wanted.
+- **Out-of-scope sibling (investigated — NOT a bug):** `TaskViewerProvider._mapClickUpTaskToSidebar` at `TaskViewerProvider.ts:5161-5165` (the earlier `5198-5199` reference was stale — that location is `PlanningPanelCacheService` construction) maps ClickUp `tagFg`/`tagBg` into its task objects, identical in shape to `ClickUpSyncService.ts:775-776`. However, this is data-mapping only: that provider renders into `implementation.html` (`TaskViewerProvider.ts:17263`, tasks posted at 8279/8489-8490), and `implementation.html` has **no tag-pill rendering at all** (no `tagFg`/`tagBg`/`--tag-fg`/`tag-pill` references). The colors are carried but never drawn as styled pills, so there is **no live contrast bug** on this path. No follow-up plan needed. The only ClickUp-tag rendering surface is `planning.js`, which this plan fixes.
 
 ## Problem Statement
 
@@ -125,3 +125,33 @@ CSS at `planning.html:2940-2944` already consumes the variables. `TaskViewerProv
 ---
 
 **Recommendation:** Complexity 3 (≤ 6) → **Send to Coder.**
+
+---
+
+## Reviewer Pass (2026-06-19)
+
+**Outcome: Implementation complete and faithful to the plan. No code changes required.**
+
+### Implementation verified
+- `getContrastColor(bgColor)` added at `src/webview/planning.js:222-258` — front guard `if (!bgColor) return null`, hex-3 / hex-6 / `rgb*` parsing, explicit `return null` for unknown formats, trailing `isNaN(r)||isNaN(g)||isNaN(b) → null`, then `Y = (R*299+G*587+B*114)/1000` returning `#111111` (Y≥128) or `#e0e0e0` (Y<128). Matches plan §Implementation Details exactly.
+- `renderTicketTags()` guard at `src/webview/planning.js:276` changed to `provider === 'clickup' && tag.tagBg` (was `tagFg && tagBg`). `--tag-bg` set from `tag.tagBg`; `--tag-fg` set **only if** `getContrastColor` returns truthy (`planning.js:277-281`). Linear branch untouched.
+- CSS at `src/webview/planning.html:2958-2962` already consumes `var(--tag-fg, var(--text-secondary))` / `var(--tag-bg, ...)` — no CSS change, as planned.
+
+### Findings by severity
+- **CRITICAL:** none.
+- **MAJOR:** none.
+- **NIT — `--tag-bg` set before parse-failure check** (`planning.js:277`): on unparseable `tagBg`, the raw value is still written to `--tag-bg` while `--tag-fg` is left unset. Documented in the plan's scenario table; harmless in practice (CSS treats invalid custom-property substitution as invalid-at-computed-value → falls back near default, text stays readable via `--text-secondary`). Not fixed — accepted to avoid churn.
+- **NIT — `rgb()` percentage syntax** (`planning.js:240`): `/\d+/g` would treat `rgb(100%,50%,0%)` as `100,50,0` (0-255). Theoretical only — ClickUp emits hex (`ClickUpSyncService.ts:775-776`). Not fixed.
+- **NIT (pre-existing, out of scope) — `pill.textContent = tag.name || tag`** (`planning.js:284`): renders `[object Object]` for a nameless object tag; shared with the Linear branch. Not touched.
+
+### Files changed by this reviewer pass
+- None. No CRITICAL/MAJOR findings required code fixes.
+
+### Validation results
+- Per session directives: compilation and automated tests skipped (run separately by the user).
+- **Build currency confirmed (read-only):** the webpack bundle `dist/webview/planning.js` contains the live, minified fix — guard `"clickup"===t&&e.tagBg`, helper `…isNaN…?null:(299*n+587*o+114*a)/1e3>=128?"#111111":"#e0e0e0"`, and `--tag-fg` set only when truthy. The shipped webview reflects the source change.
+
+### Remaining risks (carry-over from "User Review Required" — product decisions, not code defects)
+- **Threshold:** YIQ-128 heuristic vs WCAG relative-luminance. Acceptable for small uppercase pills; confirm if WCAG is preferred.
+- **Guard behavior change:** tags with `tag_bg` but empty `tag_fg` are now styled (the core fix, but a behavior change).
+- **Out-of-scope twin bug — investigated, NOT a defect:** `TaskViewerProvider._mapClickUpTaskToSidebar` (`TaskViewerProvider.ts:5161-5165`; the plan's original `5198-5199` reference was stale) maps `tagFg`/`tagBg` but its only render target, `implementation.html`, has no tag-pill rendering. Colors are carried, never drawn — no live contrast bug. No follow-up plan needed. `planning.js` is the sole ClickUp-tag rendering surface and is fixed by this plan.
