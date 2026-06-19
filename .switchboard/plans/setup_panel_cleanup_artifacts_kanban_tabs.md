@@ -156,3 +156,66 @@ The setup panel has grown organically and now contains tabs that duplicate entry
 ---
 
 **Recommendation: Send to Lead Coder.** (Complexity 7 — cross-provider message-contract duplication, DB-config cache invalidation, workspace-root consistency, and a silent config-overwrite trap make this more than a routine cleanup.)
+
+---
+
+## Reviewer Pass (2026-06-19)
+
+Direct adversarial reviewer-executor pass. Compilation and automated tests were intentionally **not** run this session (per session policy — user runs them separately).
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *Adjusts monocle, cracks knuckles.* So we're ripping two tabs out of a 4,000-install extension and rewiring a sync backend across two providers. Let me find the corpse you buried.
+>
+> **[Probe 1 — The Silent Disable Trap, CRITICAL-if-wrong]** The whole plan screams that `savePlanningSources` overwrites the *entire* `enabledSources` object, so a per-source toggle that posts only its own field would silently nuke the other three sources. Show me the toggle doesn't do that. — *Verdict: REFUTED.* `setup.html:3335` holds a module-level `lastPlanningSources`, each checkbox listener mutates only its own key (`3337-3348`), and `sendPlanningSources()` (`3350-3358`) posts the **complete** `{clickup, linear, notion, localFolder}` quad. Hydration (`3937-3954`) repopulates `lastPlanningSources` from the reply before any toggle fires. The trap is disarmed. Annoying.
+>
+> **[Probe 2 — Cache Staleness, CRITICAL-if-wrong]** You told me `triggerSync('sync-selected')` reads `selectedContainers` out of `_resolvedConfigCache`. If you write the DB and forget to invalidate, the sync runs against yesterday's containers. — *Verdict: REFUTED.* Both write paths null the cache (`setPlanningPanelSyncMode` PlanningPanelProvider.ts:4370, `setPlanningPanelSelectedContainers` :4445) **before** calling `triggerSync`, and `triggerSync`'s `sync-selected` branch re-resolves via `_resolveSyncConfig()` (6215) which repopulates from the DB. Fresh read guaranteed.
+>
+> **[Probe 3 — Workspace-Root Divergence, MAJOR-if-wrong]** Multi-root workspace. You write sync mode to root A, periodic sync fires against root B, chaos. — *Verdict: REFUTED.* All four cases resolve **one** root identically: `sourceRoot || this._getWorkspaceRoot() || allRoots[0]` (4347, 4363, 4376, 4438) and pass that *same* `resolvedRoot` to both `KanbanDatabase.forWorkspace()` and `triggerSync()`. Read, write, and trigger agree.
+>
+> **[Probe 4 — `allRoots` out of scope, CRITICAL-if-wrong]** The new cases dereference `allRoots[0]` but I see `const allRoots` declared inside *other* case blocks. Block scope says you've got a `ReferenceError` waiting. — *Verdict: REFUTED.* `_handleMessage` declares `allRoots` at method scope (1226) with an early `return` when empty (1227-1231). `allRoots[0]` is always defined by the time any case runs. The per-case redeclarations are unrelated shadows.
+>
+> **[Probe 5 — Config scope mismatch, MAJOR-if-wrong]** Setup writes `enabledSources` folder-scoped; if the Artifacts panel reads workspace-merged, a folder-scoped `false` gets lost. — *Verdict: REFUTED.* `_sendOnlineDocsReady` resolves the matching `folderUri` (PlanningPanelProvider.ts:5091) and reads via `getConfiguration('switchboard', folderUri)` (5092). Writer (`SetupPanelProvider.savePlanningSources:698-704`) and both readers (`getPlanningSources:800`, `_sendOnlineDocsReady:5091`) are all folder-scoped. Scopes agree.
+>
+> **[Probe 6 — Default-true regression, MAJOR-if-wrong]** Existing users who never touched the setting must not have sources vanish. — *Verdict: REFUTED.* `enabledSources[s] = enabledSourcesConfig[s] !== false` (5098) defaults missing/undefined to `true`; only an explicit `false` hides a source. Backward-compatible.
+>
+> **[Probe 7 — Dangling DOM/handlers in setup.html]** Did you leave a zombie listener pointing at a deleted `#planning-sync-mode` radio or `#planning-containers-list`? — *Verdict: REFUTED.* Grep for `planning-sync-mode`, `planning-containers-list`, `planningPanelSyncModeReady`, `availableSyncContainersReady`, `getPlanningPanelSyncMode`, `fetchAvailableSyncContainers` in `setup.html` returns **nothing**. Clean amputation.
+>
+> **[Probe 8 — Orphaned broadcast consumers]** You deleted the `planningSources` broadcast from `TaskViewerProvider.postSetupPanelState`. Anything still listening that now starves? — *Verdict: REFUTED.* No `planningSources`/`enabledSources` references remain in `TaskViewerProvider.ts`. setup.html's `case 'planningSources'` is still fed by the request/response `getPlanningSources` path in `SetupPanelProvider`. No starvation.
+>
+> **[Probe 9 — NIT]** `setPlanningPanelSelectedContainers` re-resolves config and, if `planning.syncMode` was never persisted at the resolved root, `_resolveSyncConfig` returns `configPath: null`, so `triggerSync`'s `sync-selected` branch (6216 `if (configPath && ...)`) silently skips `syncSelectedContainers` while still starting the periodic timer. — *Verdict: REAL but non-manifesting.* The container picker is only visible after the dropdown is set to `sync-selected`, which posts `setPlanningPanelSyncMode` first and persists `syncMode` at that root. So in the real UI flow `configPath` is always `'db'` by the time containers are checked. No fix warranted; documented as a latent edge.
+
+### Stage 2 — Balanced Synthesis
+
+Every CRITICAL/MAJOR probe came back **refuted** — the implementation defused each of the plan's own named traps. Nothing to fix in code.
+
+- **Keep:** the complete-object toggle post (`lastPlanningSources`), the invalidate-then-re-resolve cache discipline, the single-`resolvedRoot` consistency across all four cases, and the uniform folder-scoped read/write of `planning.enabledSources`.
+- **Fix now:** nothing. No valid CRITICAL or MAJOR finding.
+- **Defer:** Probe 9 (latent `configPath: null` skip) — only reachable via direct message injection, not the shipped UI; leave as-is. Plan's own **User Review #1** follow-up — remove the now-orphaned sync-mode handlers/helpers from `SetupPanelProvider` (lines 746-772 confirmed still present, intentionally left per plan). Track separately.
+
+### Code Fixes Applied
+None — no valid CRITICAL/MAJOR finding required a change.
+
+### Validation Results
+- Compilation: **skipped** (session policy).
+- Automated tests: **skipped** (session policy; user runs separately).
+- Static verification performed via targeted reads/greps:
+  - setup.html: Kanban & Artifacts-Panel tabs absent; 3 per-source toggles present (clickup/linear/notion); full-object save confirmed; no dangling sync-mode markup/handlers.
+  - PlanningPanelProvider.ts: 4 message cases present (4345-4448) with consistent root resolution + cache invalidation; `_sendOnlineDocsReady` folder-scoped + default-true (5074-5107); `triggerSync` re-resolves fresh config (6198-6221).
+  - SetupPanelProvider.ts: `openKanban`/`savePlanningSources`/`getPlanningSources` retained; orphaned sync-mode handlers left for follow-up; reads/writes folder-scoped.
+  - planning.html: Cache Mode `<select>` (3057-3061) + container picker (3070-3073) in `#controls-strip-docs`.
+  - planning.js: dropdown + picker handlers (500-513, 2726-2795) with element-existence guards; `getPlanningPanelSyncMode` posted on load (666, 7626).
+  - TaskViewerProvider.ts: `planningSources` broadcast removed.
+
+### Remaining Risks
+1. **Multi-root edge:** canonical root is `sourceRoot || activeRoot || allRoots[0]`. If a user switches the Kanban active workspace between writing sync mode and a later periodic tick, the panel-resolved root could differ from the command-path root (`extension.ts` uses `kanbanProvider.getCurrentWorkspaceRoot()`). Within the panel itself it is internally consistent; cross-entry-point consistency unverified — covered by Manual Validation step 8.
+2. **Latent `configPath: null` skip** (Probe 9) — not reachable via the shipped UI; left documented.
+3. **Orphaned `SetupPanelProvider` sync-mode handlers** — dead but harmless; cleanup deferred per User Review #1.
+4. Compilation + automated tests not run this session; the plan's four unit tests (Verification Plan) remain to be authored/run by the user.
+
+### Structured Summary
+- **CRITICAL:** none.
+- **MAJOR:** none.
+- **NIT:** `setPlanningPanelSelectedContainers` → `triggerSync('sync-selected')` no-ops when `planning.syncMode` unset at the resolved root (`PlanningPanelProvider.ts:4436-4447` → `:6213-6219`). Non-manifesting via UI; no fix.
+- **Fixes applied:** none required.
+- **Remaining risks:** multi-root cross-entry-point root consistency (manual step 8); deferred orphaned-handler cleanup; tests/compile pending user run.

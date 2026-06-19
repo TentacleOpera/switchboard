@@ -76,6 +76,8 @@ export class PlanningPanelProvider {
     private _activeDocWatchDebounce: NodeJS.Timeout | undefined;
     private _kanbanPlansWatchers: vscode.FileSystemWatcher[] = [];
     private _kanbanPlansWatchDebounce: NodeJS.Timeout | undefined;
+    private _constitutionWatchers: vscode.FileSystemWatcher[] = [];
+    private _constitutionWatchDebounce: NodeJS.Timeout | undefined;
     private _ticketsAutoSyncWatchers: Map<string, vscode.FileSystemWatcher> = new Map();
     private _ticketsViewWatcher: vscode.FileSystemWatcher | undefined;
     private _ticketsViewWatcherDebounces: Map<string, NodeJS.Timeout> = new Map();
@@ -477,6 +479,7 @@ export class PlanningPanelProvider {
                 console.log('[PlanningPanel] Workspace folders changed, re-registering adapters');
                 this._ensureAdaptersRegistered();
                 this._setupKanbanPlansWatcher();
+                this._setupConstitutionWatcher();
                 this._panel?.webview.postMessage({
                     type: 'workspaceItemsUpdated',
                     items: buildWorkspaceItems(this._getWorkspaceRoots())
@@ -490,6 +493,7 @@ export class PlanningPanelProvider {
 
         this._setupAntigravityWatcher();
         this._setupKanbanPlansWatcher();
+        this._setupConstitutionWatcher();
 
         // Send initial active design doc state
         await this._sendActiveDesignDocState();
@@ -783,6 +787,59 @@ export class PlanningPanelProvider {
             watcher.onDidDelete(triggerRefresh);
 
             this._kanbanPlansWatchers.push(watcher);
+            this._disposables.push(watcher);
+        }
+    }
+
+    private _setupConstitutionWatcher(): void {
+        // Watch each workspace root's CONSTITUTION.md so the project panel's
+        // Constitution tab live-updates when the file is created/edited/deleted
+        // outside the panel (e.g. an agent writes it directly to disk). Without
+        // this, the file list only refreshes on tab activation or in-panel save.
+
+        // Dispose existing watchers
+        for (const w of this._constitutionWatchers) {
+            w.dispose();
+            const idx = this._disposables.indexOf(w);
+            if (idx !== -1) { this._disposables.splice(idx, 1); }
+        }
+        this._constitutionWatchers = [];
+
+        const allRoots = this._getWorkspaceRoots();
+        const watchedPaths = new Set<string>();
+
+        for (const root of allRoots) {
+            if (watchedPaths.has(root)) { continue; }
+            watchedPaths.add(root);
+
+            const watcher = vscode.workspace.createFileSystemWatcher(
+                new vscode.RelativePattern(vscode.Uri.file(root), 'CONSTITUTION.md')
+            );
+
+            const triggerRefresh = () => {
+                if (!this._projectPanel) { return; }
+                if (this._constitutionWatchDebounce) {
+                    clearTimeout(this._constitutionWatchDebounce);
+                }
+                this._constitutionWatchDebounce = setTimeout(() => {
+                    this._constitutionWatchDebounce = undefined;
+                    if (!this._projectPanel) { return; }
+                    // Re-post the workspace list so hasConstitution flags refresh
+                    // (this is what makes a newly created file appear/disappear).
+                    this._handleMessage({
+                        type: 'loadConstitutionFiles',
+                        requestId: Date.now()
+                    }, true).catch(err => {
+                        console.error('[PlanningPanel] Error auto-refreshing constitution files:', err);
+                    });
+                }, 400);
+            };
+
+            watcher.onDidCreate(triggerRefresh);
+            watcher.onDidChange(triggerRefresh);
+            watcher.onDidDelete(triggerRefresh);
+
+            this._constitutionWatchers.push(watcher);
             this._disposables.push(watcher);
         }
     }
