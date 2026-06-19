@@ -914,6 +914,15 @@ export class KanbanProvider implements vscode.Disposable {
         state: any
     ): Promise<void> {
         this._panel = panel;
+        // Reset webview options to the CURRENT extensionUri before loading html. VS Code
+        // persists the localResourceRoots from the original panel, but after an extension
+        // update those URIs point at the previous version's install dir (404 → blocked
+        // scripts on the restored panel). Re-applying them with this._extensionUri keeps
+        // restored panels working across updates.
+        this._panel.webview.options = {
+            enableScripts: true,
+            localResourceRoots: [this._extensionUri]
+        };
         this._panel.iconPath = vscode.Uri.joinPath(this._extensionUri, 'icon.svg');
         this._panel.webview.html = await this._getHtml(this._panel.webview);
         this._panel.webview.onDidReceiveMessage(
@@ -5332,7 +5341,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 await vscode.env.clipboard.writeText(prompt);
                 const count = chatPlans.length;
                 const planWord = count > 0 ? ` for ${count} plan(s)` : '';
-                vscode.window.showInformationMessage(`Planning chat prompt copied to clipboard${planWord}.`);
+                this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Planning chat prompt copied${planWord}.`, isError: false });
                 break;
             }
             case 'copyChatWorkflow': {

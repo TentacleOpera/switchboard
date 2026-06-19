@@ -414,3 +414,101 @@ Add under `contributes.configuration.properties`:
 ## Recommendation
 
 **Send to Coder**
+
+---
+
+## Code Review — Reviewer-Executor Pass (2026-06-19)
+
+Implementation was found present and faithful to the plan in all eight files
+(`setup.html`, `SetupPanelProvider.ts`, `KanbanProvider.ts`, `PlanningPanelProvider.ts`,
+`DesignPanelProvider.ts`, `extension.ts`, `package.json`). Serializers register at the
+very end of `activate()` (extension.ts:2746–2769), gated on `switchboard.persistPanels`;
+`activationEvents` is `onStartupFinished`, so the extension is active when VS Code restores
+panels — no `onWebviewPanel:*` activation events needed. The Setup toggle wiring (ready →
+`getPersistPanelsSetting`, change → `setPersistPanelsSetting`, `persistPanelsSetting` handler)
+is complete and matches sibling toggles.
+
+### Stage 1 — Grumpy Principal Engineer
+
+> **CRITICAL — The dedup guard quietly guillotines the second restored panel.**
+> `_hydratePanel` (PlanningPanelProvider.ts:518) reverently calls `_updateWebviewRoots()` and
+> labels it "Critical: set localResourceRoots so the webview can load scripts." Adorable. But
+> `_updateWebviewRoots()` short-circuits the instant the roots signature matches its cache
+> (line 5127). `open()` and `openProject()` BOTH reset `_lastWebviewRootsSignature = ''` first —
+> there's a screaming all-caps comment at line 396 explaining that skipping this leaves a panel
+> "with scripts disabled… stuck on an infinite Loading…". `_hydratePanel` did NOT reset it. So when
+> a user restores BOTH the Planning and Project panels (the headline test case — "open all 4
+> panels, restart"), the first hydrate caches the signature and the second hydrate's
+> `_updateWebviewRoots()` returns early, never assigning `enableScripts`/`localResourceRoots` to
+> the second panel. You shipped the exact failure mode your own comment warns about, in the same file.
+>
+> **MAJOR — "It'll work after an update," says the risk table. Does it?**
+> The Risks table (this plan, the "older extension version… then updates" row) flatly asserts restore
+> "will work." Meanwhile `KanbanProvider.deserializeWebviewPanel` and
+> `DesignPanelProvider.deserializeWebviewPanel` never re-apply `webview.options`. VS Code persists the
+> panel's `localResourceRoots` from creation time — URIs baked with the OLD version's install path. Update
+> the extension (≈4,000 installs love doing this), restore a panel, and those roots 404 → scripts blocked →
+> a beautiful blank panel. The canonical VS Code serializer sample resets options "so we use latest uri for
+> localResourceRoots" for precisely this reason. Planning launders this through `_updateWebviewRoots()`
+> (current `extensionUri`); Kanban and Design simply pray.
+>
+> **NIT — "VS Code:" — since when does the IDE have a colon in its name?**
+> setup.html:541 ships user-facing copy "when VS Code: restarts." to ~4,000 humans. The colon is a
+> copy-paste scar from the plan text.
+>
+> **NIT — `this._panel.webview` sans optional-chaining** (SetupPanelProvider.ts:556,571). The plan snippet
+> used `this._panel?.`. The handler only runs on a live panel and every sibling case does the same, so this
+> is consistent-by-convention, not a real defect. Left as-is.
+>
+> **OBSERVATION (not a bug) — restored Planning panels are statically lit.** `_hydratePanel` omits the
+> theme listeners, docs/local/antigravity/kanban-plans/constitution watchers, and the
+> `onDidChangeWorkspaceFolders` listener that `open()` registers — and `open()` early-returns when
+> `this._panel` exists, so they never get registered later either. The plan, however, *explicitly* scoped
+> adapters/sync as deferred, and `_handleMessage` calls `_ensureAdaptersRegistered()` on every message
+> (line 1303), so a restored panel self-heals adapters on its first `ready`/`fetchRoots`. Net effect: the
+> panel is fully *functional*; it just won't auto-refresh on external file/theme/workspace changes until
+> reopened. Degraded reactivity, not breakage — and within the plan's stated scope.
+
+### Stage 2 — Balanced synthesis
+
+- **Fix now (CRITICAL):** Reset `_lastWebviewRootsSignature` in `_hydratePanel` so both restored
+  Planning/Project panels actually receive their webview options. This is a direct violation of the plan's
+  own "Critical: set localResourceRoots" requirement.
+- **Fix now (MAJOR):** Re-apply `webview.options` with the current `extensionUri` in Kanban and Design
+  `deserializeWebviewPanel`, before assigning `html`. Required to honor the plan's update-safety claim and
+  CLAUDE.md's "~4,000 installs on old versions" mandate.
+- **Fix now (NIT, user-visible):** Correct the "VS Code:" copy in setup.html.
+- **Keep:** serializer registration placement/gating, dispose semantics (Planning `this.dispose()` vs
+  Project null-ref, matching `open()`/`openProject()`), Design's replicated workspace + theme listeners,
+  package.json config entry, SetupPanelProvider handlers.
+- **Defer (documented):** Planning restored-panel live reactivity (watchers/theme listeners). Consciously
+  out of plan scope; adapters self-heal; panel remains functional. Acceptable as-is.
+
+### Fixes applied
+
+| Severity | File:line | Fix |
+|----------|-----------|-----|
+| CRITICAL | `src/services/PlanningPanelProvider.ts:518` (`_hydratePanel`) | Reset `this._lastWebviewRootsSignature = ''` before `_updateWebviewRoots()`, mirroring `open()`/`openProject()`, so the second-restored panel's `webview.options` are assigned. |
+| MAJOR | `src/services/KanbanProvider.ts:912` (`deserializeWebviewPanel`) | Set `this._panel.webview.options` (`enableScripts` + `localResourceRoots: [this._extensionUri]`) before assigning html — survives extension updates. |
+| MAJOR | `src/services/DesignPanelProvider.ts:174` (`deserializeWebviewPanel`) | Set `this._panel.webview.options` with current-`extensionUri` roots (dist/webview/designs/node_modules + workspace folders), mirroring `open()`, before assigning html. |
+| NIT | `src/webview/setup.html:541` | "when VS Code: restarts." → "when VS Code restarts." |
+
+### Validation results
+
+- **Compilation:** Skipped per session directive (SKIP COMPILATION). Edits use only pre-existing fields
+  (`this._extensionUri`, `this._panel`, `this._lastWebviewRootsSignature`) and the `vscode` import already
+  present in each file; no new imports or symbols introduced.
+- **Tests:** Skipped per session directive (SKIP TESTS). Plan's Verification Plan notes no automated tests
+  are applicable (serializer callbacks have no unit-test shim); manual testing per the Testing Strategy
+  section remains the verification path.
+
+### Remaining risks
+
+1. **`dist/` rebuild required.** Per CLAUDE.md, the extension serves webviews from `dist/webview/`; the
+   `setup.html` copy fix only takes effect after `npm run compile`. Compilation was skipped this session —
+   run it before packaging/release.
+2. **Toggle requires a restart to take effect.** Serializers are registered only at `activate()` based on
+   the setting's value; toggling ON/OFF mid-session applies on the next window restart. Expected VS Code
+   behavior; worth a one-line support note.
+3. **Restored Planning panel reactivity** (file/theme/workspace watchers) is deferred — see Stage 1
+   OBSERVATION. Functional but not live-reactive until reopened. In-scope per plan.

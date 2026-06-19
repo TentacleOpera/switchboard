@@ -909,11 +909,11 @@ export async function activate(context: vscode.ExtensionContext) {
             return;
         }
         const prompt = await kanbanProvider.copyGeneralChatPrompt(workspaceRoot);
-        if (prompt) {
-            vscode.window.showInformationMessage('Planning chat prompt copied to clipboard.');
-        } else {
+        if (!prompt) {
             vscode.window.showWarningMessage('No active workspace selected or found.');
+            return;
         }
+        return prompt;
     });
     context.subscriptions.push(copyChatPromptDisposable);
 

@@ -315,6 +315,18 @@
                 }
                 break;
             }
+            case 'chatPromptCopied': {
+                if (btnChatCopyPrompt) {
+                    const oldText = btnChatCopyPrompt.textContent;
+                    btnChatCopyPrompt.textContent = 'Copied!';
+                    btnChatCopyPrompt.disabled = true;
+                    setTimeout(() => {
+                        btnChatCopyPrompt.textContent = oldText;
+                        btnChatCopyPrompt.disabled = false;
+                    }, 2000);
+                }
+                break;
+            }
             case 'constitutionPromptCopied': {
                 const isUpdate = _constitutionSelectedFile !== null;
                 const copyBtn = isUpdate ? btnCopyUpdatePrompt : btnCopyBuildPrompt;

@@ -33,7 +33,7 @@
         kanbanReviewSelectedText: '',
         docsWorkspaceRootFilter: '',
         docsSectionCollapsed: persistedState.docsSectionCollapsed || {},
-        docsSourceFilter: persistedState.docsSourceFilter || ['local', 'clickup', 'linear', 'notion'],
+        docsSourceFilter: persistedState.docsSourceFilter || ['local', 'clickup', 'linear', 'notion', 'antigravity'],
         localDocsSearch: '',
         onlineDocsSearch: '',
         activeDesignDocEnabled: false,
@@ -529,7 +529,7 @@
         }
     });
 
-    const allSources = ['local', 'clickup', 'linear', 'notion'];
+    const allSources = ['local', 'clickup', 'linear', 'notion', 'antigravity'];
     const sourceFilterSelect = document.getElementById('docs-source-filter');
     if (sourceFilterSelect) {
         // Set initial dropdown value based on persisted state.
@@ -1419,7 +1419,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         toggleRow.appendChild(toggleBtn);
         treePane.appendChild(toggleRow);
         
-        const filterSet = new Set(state.docsSourceFilter || ['local', 'clickup', 'linear', 'notion']);
+        const filterSet = new Set(state.docsSourceFilter || ['local', 'clickup', 'linear', 'notion', 'antigravity']);
         
         if (filterSet.has('local') && localRoots) {
             const { sourceId, nodes, folderPaths, error } = localRoots;
@@ -1435,7 +1435,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No folders configured or all folders are empty. Click Manage Folders to get started.</div>';
             } else {
                 const folderNodes = (nodes || []).filter(n => n.kind === 'folder' || n.isDirectory);
-                let docNodes = (nodes || []).filter(n => n.kind === 'document' && !n.isDirectory);
+                let docNodes = (nodes || []).filter(n => n.kind === 'document' && !n.isDirectory && n.name !== 'implementation_plan.md');
                 
                 const search = String(state.localDocsSearch || '').trim().toLowerCase();
                 if (search) {
@@ -1789,7 +1789,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             });
         }
         
-        if (state._lastLocalDocsMsg) {
+        if (filterSet.has('antigravity') && state._lastLocalDocsMsg) {
             renderAntigravitySessions(state._lastLocalDocsMsg.antigravitySessions || [], state._lastLocalDocsMsg.antigravityEnabled || false);
         }
         
@@ -1934,8 +1934,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         populateWorkspaceDropdown('docs-workspace-filter', msg.workspaceItems || [], state.docsWorkspaceRootFilter);
         
         rerenderUnifiedDocs();
-
-        renderAntigravitySessions(msg.antigravitySessions || [], msg.antigravityEnabled || false);
 
         state.antigravityEnabled = msg.antigravityEnabled || false;
         const agToggleModal = document.getElementById('antigravity-toggle-modal');

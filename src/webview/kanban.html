@@ -180,7 +180,7 @@
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
-            color: var(--text-secondary);
+            color: var(--accent-teal);
         }
         #status-message.sub-bar-status {
             min-width: 0;
@@ -5618,7 +5618,7 @@
                         statusEl.textContent = msg.message || '';
                         statusEl.style.color = msg.isError
                             ? 'var(--vscode-errorForeground, #ff6b6b)'
-                            : 'var(--text-secondary)';
+                            : 'var(--accent-teal)';
                         statusEl.style.display = 'inline-block';
                         // Reset animation by removing class, forcing reflow, re-adding class
                         statusEl.classList.remove('flashing');

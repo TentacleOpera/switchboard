@@ -176,6 +176,21 @@ export class DesignPanelProvider implements vscode.Disposable {
         state: any
     ): Promise<void> {
         this._panel = panel;
+        // Reset webview options to the CURRENT extensionUri before loading html. VS Code
+        // persists the localResourceRoots from the original panel, but after an extension
+        // update those URIs point at the previous version's install dir (404 → blocked
+        // scripts on the restored panel). Re-applying them keeps restored panels working
+        // across updates. Mirrors the localResourceRoots set in open().
+        this._panel.webview.options = {
+            enableScripts: true,
+            localResourceRoots: [
+                vscode.Uri.joinPath(this._extensionUri, 'dist'),
+                vscode.Uri.joinPath(this._extensionUri, 'webview'),
+                vscode.Uri.joinPath(this._extensionUri, 'designs'),
+                vscode.Uri.joinPath(this._extensionUri, 'node_modules'),
+                ...(vscode.workspace.workspaceFolders || []).map(folder => folder.uri)
+            ]
+        };
         this._panel.iconPath = vscode.Uri.joinPath(this._extensionUri, 'icon.svg');
         this._panel.webview.html = this._getHtml(this._panel.webview);
 

@@ -519,7 +519,14 @@ export class PlanningPanelProvider {
         panel: vscode.WebviewPanel,
         isProject: boolean
     ): Promise<void> {
-        // Critical: set localResourceRoots so the webview can load scripts
+        // Critical: set localResourceRoots so the webview can load scripts.
+        // Reset the dedup guard first (mirrors open()/openProject()). Without this,
+        // when BOTH the Planning and Project panels are restored in the same session,
+        // the first _hydratePanel() caches the roots signature, and the second call
+        // short-circuits in _updateWebviewRoots() — leaving the second panel's
+        // webview.options (enableScripts + localResourceRoots) unset and its scripts
+        // blocked (stuck on "Loading…").
+        this._lastWebviewRootsSignature = '';
         this._updateWebviewRoots();
 
         panel.iconPath = vscode.Uri.joinPath(this._extensionUri, 'icon.svg');
@@ -557,9 +564,54 @@ export class PlanningPanelProvider {
         const disabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
         panel.webview.postMessage({ type: 'cyberAnimationSetting', disabled });
 
-        if (isProject) {
-            await this._sendActiveDesignDocState();
+        // For the Planning (non-Project) panel, replicate the live-update listeners and file
+        // watchers that open() registers, so a RESTORED panel auto-refreshes on external
+        // file/theme/workspace changes instead of going stale until the user reopens it.
+        // (Adapters self-register lazily in _handleMessage; periodic sync is intentionally NOT
+        // started here — deferred to the next explicit open() to avoid duplicate sync jobs.)
+        if (!isProject) {
+            this._disposables.push(
+                vscode.window.onDidChangeActiveColorTheme(() => {
+                    this._panel?.webview.postMessage({ type: 'themeChanged' });
+                })
+            );
+
+            this._disposables.push(
+                vscode.workspace.onDidChangeConfiguration(e => {
+                    if (e.affectsConfiguration('switchboard.theme.disableCyberAnimation')) {
+                        const animDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
+                        this._panel?.webview.postMessage({ type: 'cyberAnimationSetting', disabled: animDisabled });
+                    }
+                    if (e.affectsConfiguration('switchboard.theme.name')) {
+                        const themeName = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
+                        this._panel?.webview.postMessage({ type: 'switchboardThemeChanged', theme: themeName });
+                    }
+                })
+            );
+
+            this._disposables.push(
+                vscode.workspace.onDidChangeWorkspaceFolders(() => {
+                    console.log('[PlanningPanel] Workspace folders changed, re-registering adapters');
+                    this._ensureAdaptersRegistered();
+                    this._setupKanbanPlansWatcher();
+                    this._setupConstitutionWatcher();
+                    this._panel?.webview.postMessage({
+                        type: 'workspaceItemsUpdated',
+                        items: buildWorkspaceItems(this._getWorkspaceRoots())
+                    });
+                })
+            );
+
+            const allRoots = this._getWorkspaceRoots();
+            const workspaceRoot = this._getWorkspaceRoot() || (allRoots.length > 0 ? allRoots[0] : undefined);
+            this._setupDocsFolderWatcher(workspaceRoot);
+            this._setupLocalFolderWatchers();
+            this._setupAntigravityWatcher();
+            this._setupKanbanPlansWatcher();
+            this._setupConstitutionWatcher();
         }
+
+        await this._sendActiveDesignDocState();
     }
 
 
@@ -2070,7 +2122,10 @@ export class PlanningPanelProvider {
             }
             case 'copyChatPrompt': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || undefined;
-                await vscode.commands.executeCommand('switchboard.copyChatPrompt', workspaceRoot);
+                const prompt = await vscode.commands.executeCommand<string | undefined>('switchboard.copyChatPrompt', workspaceRoot);
+                if (prompt) {
+                    this._panel?.webview.postMessage({ type: 'chatPromptCopied' });
+                }
                 break;
             }
             case 'uploadPlanAttachment': {
