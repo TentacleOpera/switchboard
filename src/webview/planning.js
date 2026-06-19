@@ -2745,7 +2745,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             'linearTaskImported', 'editTicketResult', 'pushTicketResult',
             'importAllTicketsComplete', 'ticketsAskAgentResult', 'linearError', 'clickupError',
             'ticketSyncStatusesLoaded', 'linearLabelsUpdated', 'clickupTagsUpdated',
-            'linearAutomationCatalogLoaded', 'clickupSpaceTagsLoaded'
+            'linearAutomationCatalogLoaded', 'clickupSpaceTagsLoaded', 'clickupListStatusesLoaded'
         ];
         if (ticketsMsgTypes.includes(msg.type)) {
             if (msg.workspaceRoot && msg.workspaceRoot !== ticketsWorkspaceRoot) {
@@ -3314,6 +3314,22 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         if (statusEl) statusEl.textContent = '';
                         researchStatusTimeout = null;
                     }, 4000);
+
+                    if (msg.savedPath) {
+                        let found = null;
+                        const nodes = document.querySelectorAll('.tree-node');
+                        for (let i = 0; i < nodes.length; i++) {
+                            if (nodes[i].dataset.sourceId === 'local-folder' && nodes[i].dataset.absolutePath === msg.savedPath) {
+                                found = nodes[i];
+                                break;
+                            }
+                        }
+                        if (found) {
+                            loadDocumentPreview('local-folder', found.dataset.nodeId, found.dataset.name);
+                        } else {
+                            state._pendingImportDocName = msg.savedPath;
+                        }
+                    }
                 } else {
                     flashImportBtn('import-error');
                     // Cancel any pending success auto-clear so it doesn't wipe this error
@@ -4037,6 +4053,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 clickUpCurrentPage = msg.page || 0;
                 clickUpProjectHasMore = msg.hasMore || false;
                 ticketsLoadedOnce = true;
+                if (clickUpSelectedListId) {
+                    availableClickUpStatuses = [];
+                    vscode.postMessage({ type: 'clickupLoadListStatuses', listId: clickUpSelectedListId, workspaceRoot: ticketsWorkspaceRoot });
+                }
                 renderTicketsTab();
                 if ((ticketsAutoSync || _pendingRefreshImport) && clickUpSelectedListId) {
                     _pendingRefreshImport = false;
@@ -6616,20 +6636,32 @@ Return ONLY the drafted prompt with no additional commentary.`;
             }
             const statusSelect = document.getElementById('select-status-ticket');
             if (statusSelect) {
-                const stateMap = new Map();
-                linearProjectIssues.forEach(i => {
-                    if (i.state && i.state.id && i.state.name) {
-                        stateMap.set(i.state.name, i.state.id);
+                if (availableLinearStates.length > 0) {
+                    statusSelect.innerHTML = availableLinearStates
+                        .map(s => `<option value="${escapeAttr(s.id)}">${escapeHtml(s.name)}</option>`)
+                        .join('');
+                    if (issue.state && issue.state.id) {
+                        statusSelect.value = issue.state.id;
+                    } else if (issue.state && issue.state.name) {
+                        const matched = availableLinearStates.find(s => s.name === issue.state.name);
+                        if (matched) statusSelect.value = matched.id;
                     }
-                });
-                statusSelect.innerHTML = Array.from(stateMap.entries())
-                    .map(([name, id]) => `<option value="${escapeAttr(id)}">${escapeHtml(name)}</option>`)
-                    .join('');
-                if (issue.state && issue.state.id) {
-                    statusSelect.value = issue.state.id;
-                } else if (issue.state && issue.state.name) {
-                    const matchedId = stateMap.get(issue.state.name);
-                    if (matchedId) statusSelect.value = matchedId;
+                } else {
+                    const stateMap = new Map();
+                    linearProjectIssues.forEach(i => {
+                        if (i.state && i.state.id && i.state.name) {
+                            stateMap.set(i.state.name, i.state.id);
+                        }
+                    });
+                    statusSelect.innerHTML = Array.from(stateMap.entries())
+                        .map(([name, id]) => `<option value="${escapeAttr(id)}">${escapeHtml(name)}</option>`)
+                        .join('');
+                    if (issue.state && issue.state.id) {
+                        statusSelect.value = issue.state.id;
+                    } else if (issue.state && issue.state.name) {
+                        const matchedId = stateMap.get(issue.state.name);
+                        if (matchedId) statusSelect.value = matchedId;
+                    }
                 }
             }
         }
@@ -7071,9 +7103,9 @@ Return ONLY the drafted prompt with no additional commentary.`;
             }
             const statusSelect = document.getElementById('select-status-ticket');
             if (statusSelect) {
-                const statuses = Array.from(new Set(
-                    clickUpProjectIssues.map(t => t.status || 'Unknown')
-                )).sort();
+                const statuses = availableClickUpStatuses.length > 0
+                    ? availableClickUpStatuses.map(s => s.status)
+                    : Array.from(new Set(clickUpProjectIssues.map(t => t.status || 'Unknown'))).sort();
                 statusSelect.innerHTML = statuses
                     .map(status => `<option value="${escapeAttr(status)}">${escapeHtml(status)}</option>`)
                     .join('');
@@ -7373,6 +7405,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         }
 
         clickUpProjectIssues = [];
+        availableClickUpStatuses = [];
         selectedClickUpIssue = null;
         clickUpProjectStatus = 'idle';
         clickUpProjectMessage = '';

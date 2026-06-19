@@ -175,3 +175,67 @@ This keeps `state.docsSourceFilter` as an array, so `rerenderUnifiedDocs()` (whi
 
 ---
 **Recommendation:** Complexity 3 (≤ 6) — **Send to Coder.**
+
+---
+
+## Code Review (Reviewer-Executor Pass, 2026-06-19)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*Adjusts monocle, cracks knuckles, opens the diff expecting carnage.*
+
+So you've come to me with a humble little dropdown swap and the audacity to call it Complexity 3. Let's see what fresh horrors await... *scrolls* ...
+
+**`planning.html:3068-3074`** — Fine. FINE. The `<select>` is there, it reuses `.workspace-filter-select`, the `id` survived, and the five options are exactly the enum the plan promised. I went hunting for a stray `.filter-chip` somewhere — a forgotten CSS rule, a render function that still toes `.active` onto buttons that no longer exist, a message handler painting ghosts. `grep -rn "filter-chip" src/` returned **nothing**. Across the *entire* source tree. The dead markup AND its dead CSS are genuinely, properly buried. I'm almost disappointed. (NIT-grade disappointment.)
+
+**`planning.js:540` — `const currentFilter = state.docsSourceFilter || allSources`** — You initialize `docsSourceFilter` to an array at line 36, so it is NEVER null, NEVER undefined, and this `|| allSources` is a security blanket for a fear that cannot occur. The plan even *admits* it's redundant. You wrote a guard against a ghost. It's harmless, so I'll allow it, but I see you. **(NIT)**
+
+**`planning.js:545` — `if (currentFilter.length !== allSources.length)`** — HERE. Here is where I sharpen the knife. You use *array length equals four* as a proxy for *"the filter is all sources."* A persisted `['local','local','notion','clickup']` — duplicates! — or `['x','y','z','w']` — pure garbage! — has length 4, sails past your reset, and parks the dropdown on "All Sources" while the sidebar's `new Set(...)` quietly shows three. **The exact control-that-lies bug your own Adversarial Synthesis swore to slay.** *Theatrical gasp.* ...Except. *Squints at the only writer.* The legacy chip handler only ever pushed values from `data-source` attributes — `local/clickup/linear/notion` — guarded by `!filter.includes(source)` against dupes, seeded from those same four. So a length-4 persisted array is *necessarily* exactly those four, no dupes, no garbage. Your proxy is sound **only because the data provenance makes it sound.** It is correct by luck of upstream discipline, not by construction. I will let it live, but it owes its life to a handler you just deleted. **(NIT — fragile-but-correct)**
+
+**`planning.js:546,554` — `state.docsSourceFilter = allSources`** — You alias the shared module-level const into state. Twice. The consumer at `1422` does `new Set(state.docsSourceFilter)` — read-only — so today nothing mutates it and the alias is harmless. But the *instant* some future fool writes `state.docsSourceFilter.push(...)` or `.sort()`, they corrupt `allSources` module-wide and every "All Sources" selection thereafter is poisoned. The plan flags this. The comment flags this. I'll flag it a third time for the cheap seats. **(NIT — forward-looking landmine, currently disarmed)**
+
+**The empty-array migration** — I tried to break it. Old UI allowed *zero* sources. Persisted `[]`. `[] || allSources` → `[]` (empty array is truthy, you lucky devil). `length === 1`? No. Else branch: dropdown → `'all'`, `0 !== 4` → reset to all + persist. Sidebar shows everything, dropdown says everything. **Match.** The "impossible state" the plan claims to eliminate is, in fact, eliminated on load. Hmph.
+
+**The "stale dist" red herring** — I *smelled blood* when `grep -c allSources dist/webview/planning.js` returned 0 while the HTML had the new `<select>`. A half-built dist! The dropdown rendering with no handler, doing *literally nothing*! I started composing the eulogy... then remembered webpack *minifies*. `allSources` → `De`, the select → `Fe`. The minified dist at `docs-source-filter` contains the **entire** new normalization block and `change` listener, verbatim in spirit. dist is current. No corpse here. **(Non-finding.)**
+
+Verdict: I came for blood and left with three nitpicks, all of which the plan already confessed to in writing. Infuriating. Well done. *Slams monocle on desk.*
+
+### Stage 2 — Balanced Synthesis
+
+The implementation is a faithful, complete realization of the plan with **zero CRITICAL or MAJOR findings**. All three Stage-1 findings are NIT-grade and were explicitly anticipated in the plan's own Edge-Case audit and Adversarial Synthesis.
+
+- **Keep as-is:**
+  - HTML swap (`planning.html:3068-3074`) — exact match to plan, `id` preserved, dead CSS + markup fully removed (verified zero `filter-chip` references tree-wide).
+  - JS handler (`planning.js:532-562`) — matches plan verbatim; array contract to `rerenderUnifiedDocs()` (`planning.js:1422`, `new Set(...)`) preserved.
+  - Empty-array and multi-source migration paths both normalize correctly to "All Sources" + persist.
+- **Fix now:** Nothing. No finding rises above NIT, and each is either harmless (redundant guard) or correct-given-provenance (length proxy) or already-disarmed (shared-const alias).
+- **Can defer / document only:** The `length !== allSources.length` proxy and the shared-`allSources` alias are both fragile to *future* changes, not present bugs. The plan's existing "never mutate in place" caveat (Edge Cases & Risks table, row 3) already captures the contract that keeps them safe. No code change warranted.
+
+### Code Fixes Applied
+None. No valid CRITICAL or MAJOR finding exists; the NIT items were deliberate, documented trade-offs in the plan and changing them would add defensive code the plan explicitly rejected as over-engineering.
+
+### Validation Results
+- **Compilation:** Skipped per session directive. (Note: `dist/webview/planning.{html,js}` confirmed already up to date — the minified dist contains the new handler as `De`/`Fe`, so no rebuild is strictly required to validate, though the user should still `npm run compile` if `src/` is edited further.)
+- **Automated tests:** Skipped per session directive (and none cover this webview wiring, per plan).
+- **Static verification performed:**
+  - `grep -rn "filter-chip|filter-chips-group" src/` → **0 hits** (dead markup + CSS fully removed).
+  - `grep -n "docs-source-filter|docsSourceFilter" src/` → only the new `<select>`, init (`:36`), handler (`:532-558`), and consumer (`:1422`); no orphaned references.
+  - Old per-chip `click` handler confirmed absent from `src/webview/planning.js`.
+  - dist minified handler confirmed present and semantically identical to `src/`.
+
+### Remaining Risks
+1. **(NIT)** `length !== allSources.length` is a proxy for "all four sources" that would not catch a hypothetical length-4 duplicate/garbage persisted array. Not reachable from the only historical writer (the now-deleted chip handler). No action needed.
+2. **(NIT)** `state.docsSourceFilter` aliases the shared `allSources` const; safe only while no code mutates the filter in place. Guarded by the plan's existing caveat. No action needed.
+3. **Build hygiene:** If `src/webview/*` is edited further this session, `npm run compile` must run before the change appears in the running extension. dist is current as of this review.
+
+### Structured Summary
+| Severity | Finding | Location | Fix |
+|----------|---------|----------|-----|
+| CRITICAL | _(none)_ | — | — |
+| MAJOR | _(none)_ | — | — |
+| NIT | Length-4 proxy for "all sources" wouldn't catch dup/garbage arrays (unreachable from real writer) | `planning.js:545` | None (correct by provenance) |
+| NIT | Redundant `\|\| allSources` guard (state always initialized) | `planning.js:540` | None (harmless) |
+| NIT | Shared `allSources` const aliased into state | `planning.js:546,554` | None (no mutation path; plan-documented) |
+
+**Fixes applied:** None — no CRITICAL/MAJOR findings; all NITs are documented, deliberate trade-offs.
+**Remaining risks:** Two forward-looking NITs (already caveated in plan) + standard rebuild-after-`src`-edit hygiene. dist verified current.

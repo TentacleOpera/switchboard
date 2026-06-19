@@ -6290,7 +6290,8 @@ Please format the updated output document strictly as follows:
             this._panel?.webview.postMessage({
                 type: 'importResearchDocResult', 
                 success: true, 
-                docTitle: finalDocTitle 
+                docTitle: finalDocTitle,
+                savedPath: writeResult.savedPath
             });
 
             await this._handleFetchImportedDocs(workspaceRoot);
