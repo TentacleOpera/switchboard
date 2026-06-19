@@ -4241,6 +4241,59 @@ Please format the updated output document strictly as follows:
                     vscode.window.showErrorMessage(`Failed to copy diagram prompt: ${String(err)}`);
                 }
                 break;
+            case 'copyRefinePrompt': {
+                try {
+                    const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                    const { provider, id, title, description } = msg;
+                    if (!workspaceRoot || !id) {
+                        vscode.window.showErrorMessage('Missing workspace or ticket ID for refine prompt');
+                        break;
+                    }
+
+                    // Read user-editable skill file
+                    const skillPath = path.join(workspaceRoot, '.agent', 'skills', 'refine_ticket.md');
+                    let skillContent = '';
+                    try {
+                        const nfs = require('fs') as typeof import('fs');
+                        skillContent = nfs.readFileSync(skillPath, 'utf8');
+                    } catch {
+                        skillContent = `Refine this ticket into a complete specification with:
+- Summary, Background/Why, User Flow, Acceptance Criteria (checkboxed, testable)
+- Assumptions challenged, Open Questions, Dependencies
+- Mermaid flow diagram rendered to PNG if the flow is non-trivial
+- Write result back to the local file path provided.`;
+                    }
+
+                    // Resolve local ticket file path
+                    let localFilePath = '';
+                    try {
+                        let baseDir = path.join(workspaceRoot, '.switchboard', 'tickets');
+                        const lfs = new LocalFolderService(workspaceRoot);
+                        const folders = lfs.getTicketsFolderPaths();
+                        if (folders.length > 0 && folders[0]) { baseDir = folders[0]; }
+                        localFilePath = this._findLocalTicketFile(path.join(baseDir, provider), provider, id) || '';
+                    } catch { }
+
+                    const prompt = `You are refining a ${provider} ticket into a complete, agent-actionable specification.
+
+## Skill Instructions
+${skillContent}
+
+## Ticket to Refine
+- **Title:** ${title || ''}
+- **Description:** ${description || ''}
+- **Ticket ID:** ${id}
+- **Provider:** ${provider}
+${localFilePath ? `- **Local file path (write the refined content here):** ${localFilePath}` : ''}
+
+Read the existing ticket content from the local file if it exists. Determine what's missing. Produce a complete ticket following the skill instructions above. Write the refined markdown directly to the local file path, preserving any YAML frontmatter. Report back with a summary of what you added or changed.`;
+
+                    await vscode.env.clipboard.writeText(prompt);
+                    vscode.window.showInformationMessage('Refine prompt copied to clipboard');
+                } catch (err) {
+                    vscode.window.showErrorMessage(`Failed to copy refine prompt: ${String(err)}`);
+                }
+                break;
             }
             case 'changeTicketStatus': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);

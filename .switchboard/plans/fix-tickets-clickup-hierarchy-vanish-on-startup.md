@@ -162,3 +162,56 @@ Add `_pendingTicketsRestore = false;` alongside the other resets.
 
 - **Low:** Fix A could suppress a legitimate refresh if `ticketsLoadedOnce` is stale. However, `ticketsLoadedOnce` is reset to `false` in `resetTicketsInMemoryState` (workspace switch) and in the `ticketsDefaultRoot` no-state path. The only scenario where `ticketsLoadedOnce` stays `true` across a needed reload is a manual refresh — which uses `loadClickUpProject(true)` directly, not `loadClickUpSpaces()`. Safe.
 - **Low:** Fix B introduces a new flag `_pendingTicketsRestore`. If `restoredTabState` never arrives (backend error), the flag stays `true` and the tab never loads. However, `restoredTabState` is sent unconditionally in the `fetchRoots` handler (`PlanningPanelProvider.ts:1491-1495`), so this only fails if the entire panel initialization fails — in which case nothing works anyway.
+
+## Review Pass (2026-06-20)
+
+### Stage 1: Grumpy Principal Engineer
+
+> **Listen. I've been doing this since before your framework was a glint in npm's eye, and what I see here is a classic "fixed the race you thought about, created the race you didn't."**
+
+**CRITICAL — Fix B2 broke first-time users on the Tickets tab.** `planning.js:4157` (original implementation). The plan's edge case analysis claims: "No persisted state exists → `_pendingTicketsRestore` is set, then cleared when `restoredTabState` arrives." **WRONG.** The webview sends `ticketsDefaultRoot` at line 722 (`switchToTab` during page init) BEFORE `fetchRoots` at line 8020. The backend processes both concurrently, but `fetchRoots` sends `restoredTabState` synchronously (line 1491 — no await before the `postMessage`), while `ticketsDefaultRoot` handler awaits `_getIntegrationWorkspaces()` (line 1561). So `restoredTabState` arrives at the webview FIRST. By the time `ticketsDefaultRoot` response arrives, `restoredTabState` has already been processed. `_pendingTicketsRestore = true` is set but the `restoredTabState` handler already ran — the flag is **permanently stuck** and `ticketsRootChanged` is never sent. The ClickUp hierarchy **never loads** for first-time users whose initial tab is Tickets. This is a worse bug than the one being fixed. The plan's own edge case analysis was based on a false assumption about message ordering.
+
+**NIT — Plan's edge case analysis is inaccurate.** The "No persisted state" edge case claims `_pendingTicketsRestore` is "set, then cleared when `restoredTabState` arrives." This is only true in the narrow Bug 2 scenario where `ticketsDefaultRoot` response arrives before `restoredTabState` (which requires `_getIntegrationWorkspaces()` to be slower than `getAllStates()` — possible but not guaranteed). The common case is the reverse ordering, which the analysis didn't consider.
+
+**NIT — `switchToTab` line 700-702 lacks `!_restoringClickUpHierarchy` guard.** Fix A added both `!_restoringClickUpHierarchy` and `!ticketsLoadedOnce` to `integrationProviderStates`. The `switchToTab` load path (line 699-705) only has `!ticketsLoadedOnce`. This is safe because `restoreTicketsStateForRoot` sets both flags together (line 7712-7713), so `ticketsLoadedOnce === true` whenever `_restoringClickUpHierarchy === true`. Belt-and-suspenders would be nicer but this is not a bug.
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Severity | Action |
+|:--------|:---------|:-------|
+| Fix B2 stuck `_pendingTicketsRestore` breaks first-time load | CRITICAL | **Fix now** — distinguish "byRoot not yet populated" (defer) from "byRoot populated but no state for this root" (direct load) |
+| Edge case analysis inaccuracy | NIT | **Fix now** — update plan to reflect actual message ordering |
+| `switchToTab` missing `_restoringClickUpHierarchy` guard | NIT | **Defer** — `ticketsLoadedOnce` is sufficient, no race exists |
+
+### Code Fix Applied
+
+**File:** `src/webview/planning.js` — `ticketsDefaultRoot` handler (line ~4152-4171)
+
+**Root cause:** The original Fix B2 unconditionally set `_pendingTicketsRestore = true` when `getRestoredState` returned `undefined`, assuming `restoredTabState` would arrive later to clear it. But `restoredTabState` almost always arrives BEFORE the `ticketsDefaultRoot` response (backend sends it synchronously during `fetchRoots`, while `ticketsDefaultRoot` response requires an `await`). The flag gets stuck and the hierarchy never loads.
+
+**Fix:** Added a check on `Object.keys(_restoredPanelState.byRoot).length > 0` to distinguish:
+- **byRoot already populated** (restoredTabState has arrived) → no state for this root → fall through to direct `loadClickUpSpaces()` / `loadLinearProject()` (preserves original first-time-user behavior)
+- **byRoot empty** (restoredTabState hasn't arrived yet) → set `_pendingTicketsRestore = true` (deferred restore, the Bug 2 fix)
+
+This preserves the Bug 2 fix (deferred restore when `restoredTabState` genuinely hasn't arrived) while restoring the first-time-user load path that the original Fix B2 inadvertently removed.
+
+### Files Changed
+
+- `src/webview/planning.js` — `ticketsDefaultRoot` handler (line ~4152-4171): three-way branch replacing the original two-way `else { _pendingTicketsRestore = true; }`
+
+### Validation
+
+- **Compilation:** Skipped per session instructions.
+- **Tests:** Skipped per session instructions.
+- **Manual trace verification:** All six startup scenarios traced through the message ordering:
+  1. ✅ First-time user, initial tab = Tickets, `restoredTabState` arrives first → byRoot populated → direct load
+  2. ✅ First-time user, initial tab ≠ Tickets → byRoot populated, tab not active → no immediate load → loads on tab visit via `switchToTab` line 699
+  3. ✅ Returning user with persisted state, `restoredTabState` arrives first → `tickets.root` restored → `restoreTicketsStateForRoot` → `ticketsRootChanged` → `integrationProviderStates` → Fix A guards prevent double-load
+  4. ✅ Bug 2 scenario: `ticketsDefaultRoot` response arrives before `restoredTabState` → byRoot empty → `_pendingTicketsRestore = true` → cleared by `restoredTabState` else branch → `ticketsRootChanged` → load
+  5. ✅ Bug 1 scenario: double `loadClickUpSpaces()` → Fix A `!_restoringClickUpHierarchy && !ticketsLoadedOnce` guard prevents second wipe
+  6. ✅ Workspace switch → `resetTicketsInMemoryState` clears all flags including `_pendingTicketsRestore`
+
+### Remaining Risks
+
+- **Low:** If `_getIntegrationWorkspaces()` in the `ticketsDefaultRoot` backend handler completes faster than `getAllStates()` + `postMessage('restoredTabState')` in `fetchRoots`, the `ticketsDefaultRoot` response could arrive before `restoredTabState`. In this case, `_pendingTicketsRestore = true` is set (byRoot empty), then cleared by `restoredTabState`'s else branch. This is the intended Bug 2 fix path and works correctly.
+- **Low:** The `Object.keys(_restoredPanelState.byRoot).length > 0` check assumes `byRoot` is empty `{}` before `restoredTabState` arrives and has at least one key after. This is guaranteed by `PanelStateStore.getAllStates()` which always populates `byRoot[tabKey] = {}` for each tabKey (line 35), and the initialization at `planning.js:49` (`{ panel: {}, byRoot: {} }`).

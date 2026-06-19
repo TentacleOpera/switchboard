@@ -4153,7 +4153,19 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     const restoredState = getRestoredState('tickets', ticketsWorkspaceRoot);
                     if (restoredState) {
                         restoreTicketsStateForRoot(restoredState);
+                    } else if (Object.keys(_restoredPanelState.byRoot).length > 0) {
+                        // restoredTabState already arrived but no persisted state for this
+                        // root — load directly (first-time user / no saved hierarchy).
+                        ticketsLoadedOnce = false;
+                        if (isTicketsTabActive()) {
+                            if (lastIntegrationProvider === 'clickup') {
+                                loadClickUpSpaces();
+                            } else if (lastIntegrationProvider === 'linear') {
+                                loadLinearProject();
+                            }
+                        }
                     } else {
+                        // restoredTabState hasn't arrived yet — defer until it does
                         _pendingTicketsRestore = true;
                     }
                 }
@@ -6165,6 +6177,32 @@ Instructions:
                 handleLinkToTicket(provider, id, linkTicketBtn);
                 return;
             }
+            const refineBtn = e.target.closest('[data-refine-ticket-id]');
+            if (refineBtn) {
+                const id = refineBtn.dataset.refineTicketId;
+                const provider = refineBtn.dataset.provider;
+                let title = '';
+                let description = '';
+                if (provider === 'linear') {
+                    const issue = linearProjectIssues.find(i => i.id === id);
+                    title = issue?.title || issue?.identifier || '';
+                    description = issue?.description || '';
+                } else {
+                    const task = clickUpProjectIssues.find(t => t.id === id);
+                    title = task?.title || task?.identifier || '';
+                    description = task?.markdownDescription || task?.description || '';
+                }
+                vscode.postMessage({
+                    type: 'copyRefinePrompt',
+                    provider,
+                    id,
+                    title,
+                    description,
+                    workspaceRoot: ticketsWorkspaceRoot
+                });
+                flashCopyBtn(refineBtn);
+                return;
+            }
             const card = e.target.closest('[data-linear-issue-id], [data-clickup-task-id]');
             if (card) {
                 const linearId = card.dataset.linearIssueId;
@@ -6812,6 +6850,7 @@ Instructions:
                     ${syncBadge}
                     <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(issue.id)}" data-provider="linear">Add to kanban</button>
                     <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(issue.id)}" data-provider="linear">Link to ticket</button>
+                    <button type="button" class="card-icon-btn" data-refine-ticket-id="${escapeAttr(issue.id)}" data-provider="linear">Refine</button>
                 </div>
             </div>
             `;
@@ -7278,6 +7317,7 @@ Instructions:
                         ${syncBadge}
                         <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(task.id)}" data-provider="clickup">Add to kanban</button>
                         <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(task.id)}" data-provider="clickup">Link to ticket</button>
+                        <button type="button" class="card-icon-btn" data-refine-ticket-id="${escapeAttr(task.id)}" data-provider="clickup">Refine</button>
                     </div>
                 </div>
                 `;
