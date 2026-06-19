@@ -424,3 +424,76 @@ These were open questions; the user accepted all three recommendations (2026-06-
 **Recommendation: Send to Coder.** Complexity 5 (≤ 6). Routine single-file presentation
 refactor; the one real risk (the `syncSectionDisclosure()` heuristic vs. Linear's
 default-ON options) is fully specified above with a concrete mitigation.
+
+---
+
+## Reviewer Pass — 2026-06-19
+
+**Reviewer:** in-place reviewer-executor. Scope: `src/webview/setup.html` (source only).
+Compilation and automated tests skipped per session directive; verification was static /
+structural.
+
+### Verdict
+Implementation is **faithful to the plan**. No CRITICAL or MAJOR functional issues found.
+**No code fixes were required.** Findings below are NIT-level UX observations and accepted
+in-spec behavior.
+
+### What the implementation got right (verified)
+- **Primary risk mitigated.** Fresh Linear load keeps §3/§4 collapsed: `syncSectionDisclosure('linear')`
+  keys §3 off `map-columns`/`create-label`/`include-projects`/`exclude-projects` and §4 off
+  `realtime-sync`/`delete-sync`/`auto-pull` — `exclude-backlog` and `enable-complete-sync` are
+  **excluded** from both tests (`setup.html:2769-2785`). Confirmed `renderLinearOptionSummary`
+  early-returns on null state (`:2445-2449`), so on fresh load the default-ON `exclude-backlog`
+  (markup `checked`) and `complete-sync` (`!== false`) never enter the heuristic anyway.
+- **All ids preserved; zero duplicate ids** across the file (scripted scan). Every id the
+  collect/render handlers read (`collectClickupApplyOptions` `:2374`, `collectLinearApplyOptions`
+  `:2387`) still resolves.
+- **Master toggles namespaced `*-disclosure-*`** (`clickup-disclosure-kanban` `:700`,
+  `-automation` `:767`, `linear-disclosure-kanban` `:899`, `-automation` `:965`) — not matched by
+  any collect `getElementById` and not in the `instantAutosaveSelectors` / `textAutosaveSelectors`
+  lists (`:3175-3181`), so they never reach the apply payload or autosave.
+- **Class-based ticket-import mirroring intact** — `.ticket-import-folder-input` /
+  `.tickets-auto-sync-toggle` / `.btn-browse-ticket-folder` each appear exactly 2× (one per tab)
+  and the mirroring `querySelectorAll` handlers (`:3295-3312`) are unchanged.
+- **Nested-editor visibility composes.** `.hidden` is `display:none !important` (`:54-56`); the
+  `*-mappings-section` / `*-automation-section` editors nest inside the `*-kanban-body` /
+  `*-automation-body` wrappers, so net visibility = body-open AND editor-not-hidden.
+- **Summary/error placement per Resolved Decisions.** option-summary + setup-error sit in §1 next
+  to the apply button (ClickUp `:660-662`, Linear `:859-861`); `clickup-mapping-summary` stays in §3
+  (`:742`); Linear correctly has no column-mapping editor.
+- **Listener wiring improved over plan text.** The four disclosure `change` listeners are bound
+  once at init (`:3220-3231`) rather than re-bound inside `syncSectionDisclosure()` on every render
+  — avoids duplicate-listener accumulation. `syncSectionDisclosure()` only sets `.checked` + body
+  `.hidden`. Good deviation.
+
+### Findings
+- **NIT — ClickUp configured users always see §3 & §4 expanded.** For ClickUp the editors gate
+  purely on `setupComplete === true` (`renderClickupMappings` `:2562`, `renderClickupAutomation`
+  `:2645`), so `mappingsEditorVisible`/`automationEditorVisible` are true for *any* configured user
+  — even one who only wanted ticket import. §3/§4 then auto-open on every load. This is **exactly
+  what the plan specifies** ("§3 opens iff the column-mappings editor is visible"); collapsed-by-
+  default is scoped to fresh/no-config installs. In-spec; not fixed. Deferred — revisit only if the
+  designer wants configured-but-unmapped users to stay collapsed.
+- **NIT — re-render can collapse a section mid-interaction.** `syncSectionDisclosure()` runs at the
+  tail of every `renderClickup/LinearSetupState()` (`:2799`, `:2915`). If a host state message
+  arrives while a user has manually expanded a section with no intent options checked, the section
+  re-collapses to its intent-derived state. The plan explicitly chose "call on every render
+  (idempotent)," so this is in-spec. A `once`-guard would still satisfy the reload requirement, but
+  changing it deviates from the plan; deferred.
+
+### Code fixes applied
+None. No valid CRITICAL/MAJOR findings.
+
+### Verification results
+- Duplicate-id scan: **none**. Disclosure-toggle, body-wrapper, and apply-button id counts all
+  exactly 1. Mirroring-class counts exactly 2 each. (scripted)
+- Heuristic exclusion of `exclude-backlog` / `complete-sync` confirmed by reading
+  `syncSectionDisclosure` (`:2737-2787`).
+- Autosave selectors confirmed not to capture `*-disclosure-*` toggles (`:3175-3186`).
+- Compilation (`npm run compile`) and tests: **skipped per session directive** — user to run
+  separately. `dist/webview/setup.html` will be stale until the build runs.
+
+### Remaining risks
+- `dist/` drift until `npm run compile` is run (expected; source-only change).
+- The two NIT UX behaviors above (configured-ClickUp auto-expand; re-render collapse) are in-spec
+  but worth a designer glance in live use.
