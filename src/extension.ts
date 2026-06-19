@@ -1866,7 +1866,6 @@ export async function activate(context: vscode.ExtensionContext) {
             }
 
             if (enabledCount > 0) {
-                switchboardHubStatusBarItem.tooltip = `Switchboard: ${enabledCount} action${enabledCount > 1 ? 's' : ''} available`;
                 switchboardHubStatusBarItem.show();
             } else {
                 switchboardHubStatusBarItem.hide();
@@ -1914,9 +1913,56 @@ export async function activate(context: vscode.ExtensionContext) {
                 designStatusBarItem.hide();
             }
         }
+
+        updateHubTooltip();
     }
 
     updateStatusBarVisibility();
+
+    function updateHubTooltip() {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        const compactMode = config.get<boolean>('statusBar.compactMode', true);
+        if (!compactMode) return;
+
+        const showAgentOpenToggle = config.get<boolean>('statusBar.showAgentOpenToggle', false);
+        const showTerminalControls = config.get<boolean>('statusBar.showTerminalControls', false);
+        const showKanbanButton = config.get<boolean>('statusBar.showKanbanButton', false);
+        const showArtifactsButton = config.get<boolean>('statusBar.showArtifactsButton', false);
+        const showDesignButton = config.get<boolean>('statusBar.showDesignButton', false);
+        const showProjectButton = config.get<boolean>('statusBar.showProjectButton', false);
+
+        const lines: string[] = ['**Switchboard Actions**', ''];
+
+        if (showAgentOpenToggle) {
+            const isOn = config.get<boolean>('preventAgentFileOpening', false);
+            lines.push(`[$(shield) Guard: ${isOn ? 'On' : 'Off'}](command:switchboard.togglePreventAgentFileOpening)`);
+        }
+
+        if (showTerminalControls) {
+            if (lines.length > 2) lines.push('---');
+            lines.push(`[$(hubot) Agents](command:switchboard.createAgentGrid)`);
+            lines.push(`[$(eraser) Clear](command:switchboard.clearAllTerminals)`);
+            lines.push(`[$(stop-circle) Reset](command:switchboard.deregisterAllTerminals)`);
+        }
+
+        const hasPanels = showKanbanButton || showArtifactsButton || showProjectButton || showDesignButton;
+        if (hasPanels) {
+            if (lines.length > 2) lines.push('---');
+            if (showKanbanButton) lines.push(`[$(table) Kanban](command:switchboard.openKanban)`);
+            if (showArtifactsButton) lines.push(`[$(notebook) Artifacts](command:switchboard.openPlanningPanel)`);
+            if (showProjectButton) lines.push(`[$(project) Project](command:switchboard.openProjectPanel)`);
+            if (showDesignButton) lines.push(`[$(symbol-color) Design](command:switchboard.openDesignPanel)`);
+        }
+
+        if (lines.length <= 2) {
+            lines.push('*No actions enabled in settings.*');
+        }
+
+        const md = new vscode.MarkdownString(lines.join('\n\n'));
+        md.isTrusted = true;
+        md.supportThemeIcons = true;
+        switchboardHubStatusBarItem.tooltip = md;
+    }
 
     // Listen for configuration changes
     context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(async e => {

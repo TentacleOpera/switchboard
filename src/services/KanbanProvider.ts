@@ -844,6 +844,7 @@ export class KanbanProvider implements vscode.Disposable {
             });
             this._nativeFsWatchers = undefined;
         }
+        if (this._projectFilterSaveTimeout) clearTimeout(this._projectFilterSaveTimeout);
         this._integrationAutoPull.dispose();
         this._clickUpAutomationServices.clear();
         this._linearAutomationServices.clear();

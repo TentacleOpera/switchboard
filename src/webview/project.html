@@ -144,6 +144,7 @@
             flex: 1;
             overflow: hidden;
             height: 100%;
+            min-height: 0;
         }
         #kanban-list-pane, #epics-list-pane, #constitution-list-pane {
             width: 320px;
@@ -160,23 +161,27 @@
             flex-direction: column;
             overflow: hidden;
             position: relative;
+            min-height: 0;
         }
         .kanban-preview-pane, .epics-preview-pane {
             flex: 1;
             display: flex;
             flex-direction: column;
             background: var(--panel-bg);
+            min-height: 0;
         }
         .constitution-preview-pane {
             flex: 1;
             overflow-y: auto;
             padding: 16px;
             background: var(--panel-bg);
+            min-height: 0;
         }
         #kanban-preview-content, #epics-preview-content {
             padding: 16px;
             overflow-y: auto;
             flex: 1;
+            min-height: 0;
         }
         .markdown-editor {
             width: 100%;
@@ -569,7 +574,7 @@
         }
         .shared-tab-content.active {
             display: flex;
-            overflow-y: auto;
+            overflow: hidden;
         }
         .cyber-theme-enabled .shared-tab-btn.active {
             box-shadow: 0 -2px 8px color-mix(in srgb, var(--accent-teal) 30%, transparent);

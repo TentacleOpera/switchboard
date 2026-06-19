@@ -259,3 +259,13 @@ Shared prerequisite: one no-selection prompt method (a wrap of the existing `cop
 ---
 
 **Recommendation:** Complexity **4** → **Send to Coder.** With the keybinding dropped and Tier 4 deferred, this is routine UI relocation plus a thin reusable command. The single thing needing care is keeping the shared prompt method the one source of truth (parity test). The `/switchboard-chat` workflow already covers the keyboard-driven case at no build cost.
+
+## Review Findings
+
+**Reviewed:** 2026-06-19. Implementation verified against all three tiers. Tier 1: `switchboard.copyChatPrompt` command registered in `package.json:158` and `extension.ts:905-918`; shared `copyGeneralChatPrompt` method at `KanbanProvider.ts:677-685`; `copyChatWorkflow` case delegates to it (`:5347-5353`). No keybindings block — confirmed. Tier 2: button removed from top strip, relocated to sub-bar as labeled `CHAT PROMPT` at `kanban.html:2267`; fixed sibling of `#status-message`, not inside it; board-global listener at `:6687`. Tier 3: button at `project.html:1034` next to Import; wired in `project.js:848-855`; `PlanningPanelProvider.ts:2123-2130` dispatches the Tier 1 command; `chatPromptCopied` feedback handler in `project.js:318-329`.
+
+**Files changed in review:** `src/webview/kanban.html` — removed 8 lines of orphaned dead code (unreachable `case 'chatCopyPrompt'` in column-header context, `:4470-4477`).
+
+**Validation:** Compilation and test suite skipped per session directive. Static verification confirms: no `contributes.keybindings` in `package.json`; button absent from top strip; button present in sub-bar as fixed control; project.html button dispatches through the command, not a separate builder call; no double-trigger or race conditions identified.
+
+**Remaining risks:** (1) **NIT** — `chatCopyPrompt` no-selection path (`KanbanProvider.ts:5323-5345`) duplicates `copyGeneralChatPrompt` logic inline rather than delegating; identical today but a parity test is needed per the verification plan. (2) **NIT** — palette invocation of `switchboard.copyChatPrompt` gives no success feedback (no info message); the plan specified one. Functionality is correct; UX-only gap.

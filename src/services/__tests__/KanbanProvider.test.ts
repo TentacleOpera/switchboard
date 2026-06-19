@@ -546,6 +546,89 @@ Manual verification steps:
         });
     });
 
+    suite('project filter persistence', () => {
+        test('constructor restores persisted project filter for resolved workspace', () => {
+            const testRoot = '/test/workspace';
+            const resolvedRoot = path.resolve(testRoot);
+
+            sandbox.stub(KanbanProvider.prototype as any, '_getWorkspaceRoots').returns([testRoot]);
+
+            const customContext = {
+                extensionUri: vscode.Uri.file('/test'),
+                workspaceState: {
+                    get: sandbox.stub().callsFake((key: string, def: any) => {
+                        if (key === 'kanban.lastSelectedWorkspace') {
+                            return { index: 0, name: 'workspace', pathSegments: ['test', 'workspace'] };
+                        }
+                        if (key === `kanban.projectFilter.${resolvedRoot}`) {
+                            return 'MyProject';
+                        }
+                        return def;
+                    }),
+                    update: sandbox.stub().resolves()
+                },
+                globalState: {
+                    get: sandbox.stub().callsFake((_key: string, def: any) => def),
+                    update: sandbox.stub().resolves()
+                },
+                secrets: {
+                    get: sandbox.stub().resolves(''),
+                    store: sandbox.stub().resolves(),
+                    delete: sandbox.stub().resolves()
+                }
+            };
+
+            const restoreProvider = new KanbanProvider(vscode.Uri.file('/test'), customContext);
+            assert.strictEqual(restoreProvider.getProjectFilter(), 'MyProject');
+            assert.strictEqual((restoreProvider as any)._projectFilterNeedsValidation, true);
+        });
+
+        test('invalid persisted project filter falls back to UNASSIGNED_PROJECT_FILTER on first refresh', async () => {
+            const resolvedRoot = path.resolve(workspaceRoot);
+
+            (provider as any)._projectFilter = 'NonExistentProject';
+            (provider as any)._projectFilterNeedsValidation = true;
+            (provider as any)._currentWorkspaceRoot = workspaceRoot;
+
+            const postMessageStub = sandbox.stub();
+            (provider as any)._panel = {
+                webview: { postMessage: postMessageStub }
+            };
+
+            const mockDb = {
+                ensureReady: sandbox.stub().resolves(true),
+                getProjects: sandbox.stub().resolves(['RealProject']),
+                getBoardFilteredByProject: sandbox.stub().resolves([]),
+                getCompletedPlans: sandbox.stub().resolves([]),
+                getWorktrees: sandbox.stub().resolves([]),
+                lastInitError: null
+            };
+            sandbox.stub(provider as any, '_getKanbanDb').returns(mockDb);
+            sandbox.stub(provider as any, '_resolveWorkspaceRoot').returns(resolvedRoot);
+            sandbox.stub(provider as any, '_getCustomAgents').resolves([]);
+            sandbox.stub(provider as any, '_getCustomKanbanColumns').resolves([]);
+            sandbox.stub(provider as any, '_buildKanbanColumns').resolves([]);
+            sandbox.stub(provider as any, '_readWorkspaceId').resolves('ws-id');
+            sandbox.stub(provider as any, '_getAgentNames').resolves({});
+            sandbox.stub(provider as any, '_getVisibleAgents').resolves({});
+            sandbox.stub(provider as any, '_filterDynamicColumns').returns([]);
+            sandbox.stub(provider as any, '_columnsSignature').returns('sig');
+            sandbox.stub(provider as any, '_getWorkspaceItems').returns([]);
+            sandbox.stub(provider as any, '_getAllWorkspaceProjects').resolves({});
+            sandbox.stub(provider as any, 'getControlPlaneSelectionStatus').returns({ mode: 'none' });
+
+            const getConfigStub = sandbox.stub(vscode.workspace, 'getConfiguration');
+            getConfigStub.returns({
+                get: sandbox.stub().withArgs('kanban.completedLimit', 100).returns(100)
+            } as any);
+
+            await (provider as any)._refreshBoardImpl(workspaceRoot);
+
+            assert.strictEqual(provider.getProjectFilter(), KanbanDatabase.UNASSIGNED_PROJECT_FILTER);
+            assert.strictEqual((provider as any)._projectFilterNeedsValidation, false);
+        });
+    });
+
     suite('resolveWorkspaceRoot auto-switch bug', () => {
         test('should not auto-switch currentWorkspaceRoot when resolving a different workspace', () => {
             const allowedRoots = new Set(['/workspace1', '/workspace2']);

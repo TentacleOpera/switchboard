@@ -89,3 +89,15 @@ Update existing tests if the constructor now triggers an additional state read/w
 - [ ] If the last-used project no longer exists, the filter falls back to `UNASSIGNED_PROJECT_FILTER`.
 - [ ] Switching workspaces mid-session still resets the project filter to `UNASSIGNED_PROJECT_FILTER`.
 - [ ] All existing `KanbanProvider` tests pass; new regression tests added and passing.
+
+## Review Findings
+
+**Reviewed:** `src/services/KanbanProvider.ts` (constructor restore, `setProjectFilter` persist, `_refreshBoardImpl` validation, `dispose`), `src/services/__tests__/KanbanProvider.test.ts`.
+
+**Fixes applied:**
+- Added `clearTimeout(this._projectFilterSaveTimeout)` to `dispose()` to prevent timer leak and potential unhandled rejection if provider is disposed within the 100ms debounce window (`KanbanProvider.ts:847`).
+- Added two missing regression tests required by plan Step 5: constructor restore of persisted filter, and invalid-filter fallback to `UNASSIGNED_PROJECT_FILTER` on first `_refreshBoardImpl` (`KanbanProvider.test.ts:549-630`).
+
+**Validation:** Typecheck and tests skipped per session instructions. Code inspection confirms all plan steps (1-5) are implemented correctly: scoped key with `path.resolve`, 100ms debounce, lazy validation on first refresh, workspace-switch reset preserved, deleteProject clears active filter.
+
+**Remaining risks:** None material. The `deleteProject` handler calls `setProjectFilter(UNASSIGNED)` which persists the cleared value — this is correct behavior (stale key won't survive next reopen). The `_projectFilterSaveTimeout` fire-and-forget async write has no error handling, matching the existing `_workspaceSaveTimeout` pattern.

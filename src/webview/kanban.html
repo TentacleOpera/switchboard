@@ -4467,14 +4467,6 @@
                             ids.forEach(id => selectedCards.delete(id));
                             break;
                         }
-                        // Orphaned: button moved to sub-bar as #btn-chat-copy-prompt (board-global listener).
-                        // This case is retained for reference but will never be triggered from column headers.
-                        case 'chatCopyPrompt': {
-                            const ids = getSelectedInColumn(column);
-                            postKanbanMessage({ type: 'chatCopyPrompt', sessionIds: ids, workspaceRoot: getActiveWorkspaceRoot() });
-                            ids.forEach(id => selectedCards.delete(id));
-                            break;
-                        }
                         case 'testingFailed': {
                             const ids = getSelectedInColumn(column);
                             if (ids.length === 0) return;
