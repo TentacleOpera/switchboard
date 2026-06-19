@@ -213,3 +213,49 @@ Call `flashImportBtn('import-success')` inside the `if (msg.success)` branch and
 ---
 
 **Recommendation:** Complexity 3 (≤ 6) → **Send to Coder.** The two correctness fixes (numeric timestamp parsing in the sort; real resting-state colors in the CSS) are baked into the Proposed Changes above and must be implemented as written.
+
+---
+
+## Reviewer Pass (2026-06-19)
+
+Direct in-place reviewer-executor pass. All four planned changes verified present and matching the plan; no code fixes were required.
+
+### Stage 1 — Grumpy Principal Engineer
+
+*Cracks knuckles. Opens the diff expecting carnage.*
+
+- **"You sorted on a STRING, didn't you."** — No. They didn't. `recencyOf = doc => Date.parse(doc && doc.importedAt) || 0` ([planning.js:2517](../../src/webview/planning.js#L2517)). The one landmine this whole plan was written to avoid — `Math.max` over ISO strings yielding `NaN` — is defused. The `|| 0` swallows unparseable/missing timestamps to the floor. Begrudging nod. **NIT (none actionable).**
+- **"Then your shiny new `importedAt` field is `undefined` at the source and the sort is a placebo."** — Wrong again. `imported_at TEXT NOT NULL` ([KanbanDatabase.ts:266](../../src/services/KanbanDatabase.ts#L266)), surfaced as `importedAt: String(row.imported_at)` ([KanbanDatabase.ts:1844](../../src/services/KanbanDatabase.ts#L1844)), threaded through `allDocs.push({... importedAt: entry.importedAt})` ([PlanningPanelProvider.ts:5731](../../src/services/PlanningPanelProvider.ts#L5731)). The pipe is connected end to end. The sort has real data to chew on. **Not a finding.**
+- **"Your CSS animation ends on a color the button doesn't actually rest at — enjoy the flash-of-wrong-color."** — Checked. `.planning-button` rests at `background: var(--panel-bg2); color: var(--accent-teal)` ([planning.html:496-497](../../src/webview/planning.html#L496-L497)); both keyframes' 100% frame is exactly that ([planning.html:1714](../../src/webview/planning.html#L1714), [1719](../../src/webview/planning.html#L1719)). `forwards` holds the matching frame until `animationend` strips the class. Seamless. No `--planning-button-bg` ghost variable anywhere. **Not a finding.**
+- **"`const` in a brace-less `switch` case — classic redeclaration time bomb."** — The newly added `btnResearchClipboard` and `flashImportBtn` appear exactly once in the file; `node --check` parses clean. No collision. **NIT, non-actionable.**
+- **MINOR (observation, not a defect):** rapid back-to-back imports can leave a stale `{once:true}` `animationend` listener that removes the *same* class name idempotently — harmless, and it mirrors the sanctioned `flashIconBtn` convention. Leave it.
+- **The actual sin:** webview source was edited but `dist/` was not rebuilt in this session (compilation is barred by directive). Until `npm run compile` runs, the user sees **none** of this. That's a release-gate item, not a code defect.
+
+### Stage 2 — Balanced Synthesis
+
+- **Keep:** all four changes as implemented. The sort (`recencyOf`/`groupRecency`/`sourceRecency` → `sortedSources`/`sortedGroups`, within-group `order`-asc preserved), the additive `importedAt` backend field, the two keyframes with correct resting-state 100% frames, and the `flashImportBtn` helper scoped to `#btn-import-research-doc-clipboard` (folder-import reset left untouched). All match the plan verbatim.
+- **Fix now:** nothing. No CRITICAL/MAJOR findings survived scrutiny.
+- **Defer / out-of-band:** rebuild `dist/` (`npm run compile`) — required for the change to take effect, deferred only because compilation is disabled this session.
+
+### Fixes Applied
+
+None — implementation already satisfied every plan requirement, including both pre-identified correctness hazards.
+
+### Validation
+
+- `node --check src/webview/planning.js` → **OK** (no syntax / switch-scope errors).
+- Data-flow trace DB→webview confirmed: `imported_at` NOT NULL → `getImportedDocs` → `entry.importedAt` → `allDocs[].importedAt` → `recencyOf`.
+- CSS 100% frame ↔ `.planning-button` resting state confirmed identical (no color pop).
+- Button markup carries `class="planning-button"` ([planning.html:3220](../../src/webview/planning.html#L3220)) so the `.planning-button.import-success/.import-error` selectors apply.
+- Typecheck/tests/compile intentionally skipped per session directives (user runs separately).
+
+### Findings by Severity
+
+- **CRITICAL:** none.
+- **MAJOR:** none.
+- **NIT:** `Date.parse(doc && doc.importedAt)` ([planning.js:2517](../../src/webview/planning.js#L2517)) — robust as written; no change. Stale-but-idempotent `animationend` listener on rapid re-import ([planning.js:3278](../../src/webview/planning.js#L3278)) — harmless, matches convention.
+
+### Remaining Risks
+
+- **`dist/` not rebuilt this session** — webview edits are invisible until `npm run compile` runs. Only release-gating item.
+- Sort relies on `imported_at` being populated; old install-base rows are NOT NULL by schema, and any unparseable value floors to `0` (sorts to bottom) rather than throwing — acceptable.
