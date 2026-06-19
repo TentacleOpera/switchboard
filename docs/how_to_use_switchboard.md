@@ -1,66 +1,54 @@
-# How to Use Switchboard — Best Practices to Save Quota, Improve Quality and Increase Speed
+# How to Use Switchboard — Best Practices and Platform Guide
 
-## 1. Write a PRD or design doc first
-Switchboard has an Append Design Doc feature that attaches your overall vision to every planner prompt. This ensures every agent understands the big picture before touching a single plan.
+Switchboard is a full-lifecycle platform for managing AI agent teams. This guide covers how to set up your workflow from planning to deployment, and how to optimize execution for accuracy, speed, and cost.
 
-If you use the Google Drive desktop app, you can link a doc that syncs from GDrive automatically — so your agents are always working from the latest version without you doing anything.
+## 1. Onboarding: The Lifecycle Flow
 
-This also removes friction from your daily planning. Once your design doc is registered in Switchboard, you can write post-it note-length goals in the kanban and send them straight to the Planner to flesh out. No need to re-explain the project every session.
+To get the most out of Switchboard, follow the standard full-lifecycle pipeline:
 
-## 2. Batch tasks together
-Switchboard instructs agents to use their native subagent features for batch work. This matters because most providers don't charge extra for subagent requests.
+1. **Define your Project & Constitution**: Register a project and set its inviolate rules (Constitution) in the Project panel.
+2. **Setup your Requirements**: Set up your Design Doc / PRD and Notion links to feed design systems and specifications directly to agents.
+3. **Break into Epics & Plans**: Group tasks into Epics (supporting worktree routing) and individual plan files inside `.switchboard/plans/`.
+4. **Orchestrate via the Board**: Drag and drop plans through Kanban columns to dispatch work to your CLI or copy prompts for IDE chat agents.
+5. **Multi-Repo Execution**: Coordinate agents across multiple codebases simultaneously using the Control Plane.
+6. **Self-Review**: Run the Reviewer agent to catch bugs and verify implementations against the plans and attached Design Doc.
+7. **Sync & Archive**: Auto-sync state back to ClickUp or Linear, and archive completed plans into DuckDB.
 
-For example: if you send 10 plans to Copilot Opus in a single batch, Switchboard tells it to deploy 10 subagents — one per plan. You get the same cost and quality as working on a single plan, but for 10 tasks simultaneously. Unbatched, those same 10 plans would cost 10x as much in quota and take 10x as long.
+---
 
-Batch everything. There is no downside. Even without subagents, batching tasks means you only pay for the system prompt and context window once, rather than 10 times. 
+## 2. Setting Up Your Constitution & Requirements
 
-## 3. Use Sonnet as the Lead Coder, Opus as the Planner
+The Project Constitution is your spec-driven governance model. Instead of typing the same rules into every prompt:
+- Define rules in the Project panel. They are injected as inviolate invariants in every coding and review prompt.
+- Use the **Append Design Doc** feature to attach your product vision to all planner prompts. If you use the Google Drive desktop app, you can point to a local synced file so your agents always work from the latest requirements.
+- Set up a Notion design doc integration to fetch and cache PRDs directly.
 
-Opus is the most popular coding model, but Switchboard works best when Sonnet does the coding. Opus' real value is in the planning phase — identifying edge cases, structuring the approach, and producing the routing table. Using Opus again to write the code offers severely diminishing returns over Sonnet.
+---
 
-The most cost-effective balance for a batch of 10 plans:
+## 3. Quota-Saving and Optimization Tactics
 
-1. Send the batch to Opus in the Planner slot — it details the plans and assigns complexity
-2. Send the planned batch to Sonnet in the Lead Coder slot to implement
-3. Send the coded batch to Sonnet or Opus in the Reviewer slot for a single review pass
+While Switchboard is a full-lifecycle delivery tool, it is also designed to be highly cost-effective. Here are key tactics to maximize your premium model quotas:
 
-This workflow costs approximately 7 Copilot credits for 10 plans. Sending each plan to Opus individually for coding costs 30 credits for the same output. That's a quota saving of 69% with better code quality from the adversarially review process.
+### Task Batching
+Switchboard instructs agents to use their native subagent features for batch work. Batching tasks means you pay for system prompts and context windows once, rather than multiple times. Send columns of plans together.
 
-## 4. Use pair programming mode with IDE agents
-If you're using an IDE agent (Windsurf, Antigravity, or Cursor) as your coder, pair programming mode can extend your quota by up to 30% by offloading low-complexity work to a cheap CLI agent like Gemini CLI Flash or Qwen CLI.
+### The Opus/Sonnet Split
+Opus is extremely capable but expensive. Use Opus in the **Planner** role to write detailed plans, identify edge cases, and assign complexity. Then, use Sonnet in the **Lead Coder** role to implement the code, and Sonnet or Opus in the **Reviewer** slot. This plan-code-review split reduces primary credit costs significantly compared to running Opus for every single task.
 
-To set it up:
+### Pair Programming Mode
+When pair programming is enabled, Switchboard routes low-complexity boilerplate tasks to a cheap Coder agent (like Gemini CLI Flash) in parallel, reserving your premium IDE coder (like Windsurf, Antigravity, or Cursor) for complex architectural and logic tasks.
+- **CLI Parallel**: Both agents run automatically in terminals.
+- **Hybrid**: Clipboard prompt for IDE chat (complex), terminal dispatch for Coder (boilerplate).
+- **Full Clipboard**: Clipboard prompts for both.
 
-1. Turn on Pair Programming at the top of the AUTOBAN
-2. Make sure your plans have a complexity value set before sending them to the Coder column
-3. Use the Copy Coding Prompt buttons — either on individual cards or in the column header — to copy a prompt to your clipboard
+### Spreading Work Across Models
+IDE subscriptions often include capable models on unlimited quotas (e.g., Kimi K2.5 in Windsurf, Gemini Flash in Antigravity). Use them strategically:
+- Ask an unlimited model to walk through a bug and append its diagnostics to the plan file before routing it to a premium coder.
+- Run mixed-model cycles (Gemini plans, Sonnet reviews, Gemini implements) to save flagship model credits.
 
-Switchboard automatically sends all low-complexity work to your cheap Coder CLI agent. The copied prompt references only the complex work, which you paste into your IDE agent. Your expensive IDE quota only touches the tasks that actually need it.
-
-## 5. Spread work across IDE agents using unlimited models
-
-Most premium IDE subscriptions include access to capable models on generous or unlimited quotas alongside their expensive flagship. These models are worth using deliberately rather than defaulting to the premium model for everything.
-
-### Using unlimited models for investigation
-
-Windsurf includes unlimited access to Kimi K2.5. When you hit a hard bug, rather than burning Opus credits on diagnosis, ask Kimi to walk through the relevant code step by step and append its findings directly to the plan. Opus then receives a pre-diagnosed problem with the groundwork already done — better input, lower cost, faster resolution. This effectively uses Windsurf to extend your Opus quota across other subscriptions.
-
-### Running a mixed-model cycle within a single subscription
-
-In Antigravity, rather than sending everything to Opus, run a plan-code-review cycle across models: Gemini plans, Sonnet improves the plan and later reviews the output, Gemini implements. This cycle produces comparable quality to a single Opus pass at significantly lower quota cost — Opus in Antigravity is expensive, and the one-shot approach burns through it fast. Switchboard's pair programming mode and complexity routing make this cycle easy to set up without manual prompt switching.
-
-## 6. Use the Airlock feature to access unlimited Gemini Pro quota for planning
-
-The Airlock feature allows you to access unlimited Gemini Pro quota for planning, by bundling your code into a NotebookLM-compatible format, then providing an easy way to import plans back into Switchboard. How to use it:
-
-1. Click the Airlock tab in the sidebar
-2. Click 'Bundle Code' 
-3. Click 'Open NotebookLM'
-4. Upload all files in the .switchboard/Airlock folder as sources into a new Notebook
-5. Ask NotebookLM to write a plan according to the 'How to Plan' guide
-6. At the top of the Kanban 'New' column, there is a button labelled 'Import plan from clipboard'. Copy the Notebook output and click this button to import the plan into Switchboard.
-
-Additionally, if you want to batch plan, simply create basic plans for each task in the Kanban 'New' column. Then follow the steps above, but at step 5, instead press the 'Copy Sprint Prompt' button. This will give you a prompt that asks NotebookLM to write a plan for all tasks in the New column. 
-
-
-
+### The NotebookLM Airlock
+Access unlimited Gemini Pro planning quota:
+1. Click the **Airlock** tab and click **Bundle Code** to create docx bundles of your repo in `.switchboard/airlock/`.
+2. Upload the bundles to a Google NotebookLM notebook.
+3. Ask NotebookLM to write plans according to the generated "How to Plan" guide.
+4. Copy the output and click **Import from Clipboard** on the board.

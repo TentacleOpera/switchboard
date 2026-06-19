@@ -68,9 +68,7 @@ function run() {
         setupSource.includes('id="linear-option-enable-auto-pull"') &&
         setupSource.includes('id="btn-apply-linear-config"') &&
         setupSource.includes('id="linear-option-summary"') &&
-        setupSource.includes('id="notion-option-enable-design-doc"') &&
         setupSource.includes('id="btn-apply-notion-config"') &&
-        setupSource.includes('id="notion-option-summary"') &&
         setupSource.includes('id="clickup-mappings-section"') &&
         setupSource.includes('id="clickup-automation-section"') &&
         setupSource.includes('id="linear-automation-section"'),
@@ -79,8 +77,10 @@ function run() {
     assert.ok(
         !setupSource.includes('OPERATION MODE') &&
         !setupSource.includes('btn-setup-coding-mode') &&
-        !setupSource.includes('btn-setup-board-mgmt-mode'),
-        'Expected the standalone operation-mode setup block to be removed from setup.html.'
+        !setupSource.includes('btn-setup-board-mgmt-mode') &&
+        !setupSource.includes('id="notion-option-enable-design-doc"') &&
+        !setupSource.includes('id="notion-option-summary"'),
+        'Expected the standalone operation-mode setup block, notion design doc checkbox, and option summary to be removed from setup.html.'
     );
     assert.ok(
         setupSource.includes("type: 'getControlPlaneStatus'") &&
@@ -125,7 +125,7 @@ function run() {
     );
     assert.match(
         providerSource,
-        /type NotionSetupState = \{[\s\S]*setupComplete: boolean;[\s\S]*designDocEnabled: boolean;[\s\S]*designDocLink: string;/m,
+        /type NotionSetupState = \{[\s\S]*setupComplete: boolean;/m,
         'Expected TaskViewerProvider to expose a dedicated Notion setup state.'
     );
     assert.ok(

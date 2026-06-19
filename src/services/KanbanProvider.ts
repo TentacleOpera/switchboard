@@ -164,6 +164,22 @@ export class KanbanProvider implements vscode.Disposable {
         this._planningPanelProvider = provider;
     }
 
+    public async activatePlanInProjectPanel(planFile: string, workspaceRoot: string): Promise<void> {
+        if (!this._planningPanelProvider) { return; }
+        if (!this._planningPanelProvider.hasProjectPanel()) {
+            await this._planningPanelProvider.openProject();
+        } else if (this._planningPanelProvider.isProjectInCurrentWindow()) {
+            this._planningPanelProvider.revealProject();
+        }
+        this._planningPanelProvider.postMessageToProjectWebview({
+            type: 'activateKanbanTabAndSelectPlan',
+            planId: '',
+            sessionId: '',
+            planFile: planFile || '',
+            workspaceRoot: workspaceRoot || ''
+        });
+    }
+
     private _getCacheService(workspaceRoot: string): import('./PlanningPanelCacheService').PlanningPanelCacheService {
         const resolved = path.resolve(workspaceRoot);
         const existing = this._cacheServices.get(resolved);
@@ -656,6 +672,16 @@ export class KanbanProvider implements vscode.Disposable {
      */
     public getCurrentWorkspaceRoot(): string | null {
         return this._currentWorkspaceRoot;
+    }
+
+    public async copyGeneralChatPrompt(workspaceRootInput?: string): Promise<string | null> {
+        const workspaceRoot = this._resolveWorkspaceRoot(workspaceRootInput);
+        if (!workspaceRoot) { return null; }
+
+        const chatPlanDestinations = this._taskViewerProvider?.resolveChatPlanDestinations(workspaceRoot);
+        const prompt = buildKanbanBatchPrompt('chat', [], { workspaceRoot, chatPlanDestinations });
+        await vscode.env.clipboard.writeText(prompt);
+        return prompt;
     }
 
     public setCurrentWorkspaceRoot(workspaceRoot: string): boolean {
@@ -5308,13 +5334,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 break;
             }
             case 'copyChatWorkflow': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (!workspaceRoot) { break; }
-
-                const chatPlanDestinations = this._taskViewerProvider?.resolveChatPlanDestinations(workspaceRoot);
-                const prompt = buildKanbanBatchPrompt('chat', [], { workspaceRoot, chatPlanDestinations });
-                await vscode.env.clipboard.writeText(prompt);
-                this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'Copied planning chat prompt to clipboard.', isError: false });
+                const prompt = await this.copyGeneralChatPrompt(msg.workspaceRoot);
+                if (prompt) {
+                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'Copied planning chat prompt to clipboard.', isError: false });
+                }
                 break;
             }
             case 'promptSelected': {

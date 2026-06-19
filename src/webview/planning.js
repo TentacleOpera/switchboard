@@ -219,6 +219,44 @@
             .replace(/'/g, '&#39;');
     }
 
+    function getContrastColor(bgColor) {
+        if (!bgColor) return null;
+        const color = bgColor.trim();
+        let r, g, b;
+        if (color.startsWith('#')) {
+            const hex = color.slice(1);
+            if (hex.length === 3) {
+                r = parseInt(hex[0] + hex[0], 16);
+                g = parseInt(hex[1] + hex[1], 16);
+                b = parseInt(hex[2] + hex[2], 16);
+            } else if (hex.length === 6) {
+                r = parseInt(hex.slice(0, 2), 16);
+                g = parseInt(hex.slice(2, 4), 16);
+                b = parseInt(hex.slice(4, 6), 16);
+            } else {
+                return null;
+            }
+        } else if (color.startsWith('rgb')) {
+            const matches = color.match(/\d+/g);
+            if (matches && matches.length >= 3) {
+                r = parseInt(matches[0], 10);
+                g = parseInt(matches[1], 10);
+                b = parseInt(matches[2], 10);
+            } else {
+                return null;
+            }
+        } else {
+            return null;
+        }
+
+        if (isNaN(r) || isNaN(g) || isNaN(b)) {
+            return null;
+        }
+
+        const yiq = (r * 299 + g * 587 + b * 114) / 1000;
+        return yiq >= 128 ? '#111111' : '#e0e0e0';
+    }
+
     function renderTicketTags(tags, provider) {
         const container = document.getElementById('tickets-tags-display');
         if (!container) return;
@@ -235,9 +273,12 @@
             const pill = document.createElement('span');
             pill.className = `ticket-tag-pill ${provider}`;
             
-            if (provider === 'clickup' && tag.tagFg && tag.tagBg) {
-                pill.style.setProperty('--tag-fg', tag.tagFg);
+            if (provider === 'clickup' && tag.tagBg) {
                 pill.style.setProperty('--tag-bg', tag.tagBg);
+                const fg = getContrastColor(tag.tagBg);
+                if (fg) {
+                    pill.style.setProperty('--tag-fg', fg);
+                }
             }
             
             pill.textContent = tag.name || tag;
@@ -456,20 +497,44 @@
         rerenderUnifiedDocs();
     });
 
-    document.querySelectorAll('#docs-source-filter .filter-chip').forEach(chip => {
-        chip.addEventListener('click', () => {
-            const source = chip.dataset.source;
-            let filter = state.docsSourceFilter || ['local', 'clickup', 'linear', 'notion'];
-            if (chip.classList.contains('active')) {
-                chip.classList.remove('active');
-                filter = filter.filter(s => s !== source);
-            } else {
-                chip.classList.add('active');
-                if (!filter.includes(source)) {
-                    filter.push(source);
-                }
+    document.getElementById('docs-cache-mode')?.addEventListener('change', (e) => {
+        const mode = e.target.value;
+        vscode.postMessage({
+            type: 'setPlanningPanelSyncMode',
+            mode
+        });
+        const picker = document.getElementById('docs-sync-container-picker');
+        if (picker) {
+            picker.style.display = mode === 'sync-selected' ? 'flex' : 'none';
+        }
+        if (mode === 'sync-selected') {
+            vscode.postMessage({ type: 'fetchAvailableSyncContainers' });
+        }
+    });
+
+    const allSources = ['local', 'clickup', 'linear', 'notion'];
+    const sourceFilterSelect = document.getElementById('docs-source-filter');
+    if (sourceFilterSelect) {
+        // Set initial dropdown value based on persisted state.
+        // Clarification: if the persisted filter is not exactly one valid source
+        // (e.g. a legacy multi-select like ['local','notion']), normalize it to
+        // "All Sources" AND reset the underlying filter + persist, so the dropdown
+        // label never contradicts what the sidebar actually shows.
+        const currentFilter = state.docsSourceFilter || allSources;
+        if (currentFilter.length === 1 && allSources.includes(currentFilter[0])) {
+            sourceFilterSelect.value = currentFilter[0];
+        } else {
+            sourceFilterSelect.value = 'all';
+            if (currentFilter.length !== allSources.length) {
+                state.docsSourceFilter = allSources;
+                const persisted = vscode.getState() || {};
+                vscode.setState({ ...persisted, docsSourceFilter: state.docsSourceFilter });
             }
-            state.docsSourceFilter = filter;
+        }
+
+        sourceFilterSelect.addEventListener('change', (e) => {
+            const value = e.target.value;
+            state.docsSourceFilter = value === 'all' ? allSources : [value];
             const currentPersisted = vscode.getState() || {};
             vscode.setState({
                 ...currentPersisted,
@@ -477,7 +542,7 @@
             });
             rerenderUnifiedDocs();
         });
-    });
+    }
 
     function wireSidebarSearch(inputId, onSearch) {
         const input = document.getElementById(inputId);
@@ -596,6 +661,9 @@
         // 5. Tab-specific initialization
         if (tabName === 'kanban') {
             vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+        }
+        if (tabName === 'docs') {
+            vscode.postMessage({ type: 'getPlanningPanelSyncMode' });
         }
         if (tabName === 'tickets') {
             // Restore persisted state only once — re-running it on every tab entry
@@ -2655,6 +2723,77 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             case 'error':
                 console.error('[PlanningPanel Webview] Backend error:', msg.message);
                 break;
+            case 'planningPanelSyncModeReady': {
+                const select = document.getElementById('docs-cache-mode');
+                if (select) {
+                    select.value = msg.mode;
+                }
+                const picker = document.getElementById('docs-sync-container-picker');
+                if (picker) {
+                    picker.style.display = msg.mode === 'sync-selected' ? 'flex' : 'none';
+                }
+                if (msg.mode === 'sync-selected') {
+                    vscode.postMessage({ type: 'fetchAvailableSyncContainers' });
+                }
+                break;
+            }
+            case 'availableSyncContainersReady': {
+                const list = document.getElementById('docs-containers-list');
+                if (!list) break;
+                list.innerHTML = '';
+                
+                // Group by source
+                const bySource = {};
+                (msg.containers || []).forEach(c => {
+                    if (!bySource[c.sourceId]) bySource[c.sourceId] = [];
+                    bySource[c.sourceId].push(c);
+                });
+                
+                Object.entries(bySource).forEach(([sourceId, containers]) => {
+                    const sourceDiv = document.createElement('div');
+                    sourceDiv.style.marginRight = '16px';
+                    sourceDiv.style.marginBottom = '8px';
+                    
+                    const title = document.createElement('div');
+                    title.style.fontWeight = 'bold';
+                    title.style.color = 'var(--accent-teal)';
+                    title.style.marginBottom = '4px';
+                    title.textContent = sourceId.toUpperCase();
+                    sourceDiv.appendChild(title);
+                    
+                    containers.forEach(container => {
+                        const label = document.createElement('label');
+                        label.style.display = 'flex';
+                        label.style.alignItems = 'center';
+                        label.style.gap = '6px';
+                        label.style.cursor = 'pointer';
+                        label.style.margin = '2px 0';
+                        
+                        const checkbox = document.createElement('input');
+                        checkbox.type = 'checkbox';
+                        checkbox.value = `${sourceId}:${container.id}`;
+                        checkbox.checked = (msg.selectedContainers || []).includes(`${sourceId}:${container.id}`);
+                        
+                        checkbox.addEventListener('change', () => {
+                            const checked = Array.from(list.querySelectorAll('input[type="checkbox"]:checked')).map(el => el.value);
+                            vscode.postMessage({
+                                type: 'setPlanningPanelSelectedContainers',
+                                containers: checked
+                            });
+                        });
+                        
+                        const span = document.createElement('span');
+                        span.textContent = container.name;
+                        
+                        label.appendChild(checkbox);
+                        label.appendChild(span);
+                        sourceDiv.appendChild(label);
+                    });
+                    
+                    list.appendChild(sourceDiv);
+                });
+                break;
+            }
             case 'workspaceItemsUpdated': {
                 _workspaceItems = msg.items || [];
                 _registeredDropdowns.forEach(d => {
@@ -5989,8 +6128,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         const comments = issue.comments || [];
         const attachments = issue.attachments || [];
-        let html = `<h1 id="ticket-edit-title" contenteditable="true" spellcheck="true" style="outline:1px solid var(--accent-teal);border-radius:4px;padding:4px 8px;">${escapeHtml(task.title || task.identifier || task.id)}</h1>`;
-        html += `<textarea id="ticket-edit-description" spellcheck="true" style="width:100%;box-sizing:border-box;outline:1px solid var(--accent-teal);border:none;border-radius:4px;padding:8px;min-height:240px;line-height:1.6;font-family:var(--vscode-editor-font-family,monospace);font-size:13px;resize:vertical;background:var(--panel-bg2,#1e1e1e);color:var(--text-primary,#ddd);">${escapeHtml(descMarkdown)}</textarea>`;
+        let html = `<h1 id="ticket-edit-title" contenteditable="true" spellcheck="true" style="border:1px solid var(--border-color);outline:none;border-radius:4px;padding:4px 8px;">${escapeHtml(task.title || task.identifier || task.id)}</h1>`;
+        html += `<textarea id="ticket-edit-description" spellcheck="true" style="width:100%;box-sizing:border-box;outline:none;border:none;padding:16px;min-height:480px;line-height:1.6;font-family:var(--vscode-editor-font-family,monospace);font-size:13px;resize:vertical;background:var(--panel-bg);color:var(--text-primary,#ddd);">${escapeHtml(descMarkdown)}</textarea>`;
 
         if (comments.length > 0) {
             html += '<h3 style="user-select:none;">Comments</h3>';
@@ -7484,4 +7623,5 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
     vscode.postMessage({ type: 'fetchRoots' });
     vscode.postMessage({ type: 'refreshSource', sourceId: 'local-folder' });
+    vscode.postMessage({ type: 'getPlanningPanelSyncMode' });
 })();

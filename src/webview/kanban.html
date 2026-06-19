@@ -2224,9 +2224,6 @@
             <button class="strip-icon-btn" id="btn-scan-folders" data-tooltip="Scan all configured folders for plan files now (forces immediate pickup of anything the watchers missed)">
                 <img src="{{ICON_IMPORT_PLANS}}" alt="Scan Folders">
             </button>
-            <button class="strip-icon-btn" id="btn-chat-copy-prompt" data-tooltip="Copy chat prompt. If plans are selected, copies a multi-plan prompt and clears selection. Otherwise starts a general chat consultation.">
-                <img src="{{ICON_41}}" alt="Chat Copy Prompt">
-            </button>
             <button class="strip-icon-btn" id="btn-autoban" data-tooltip="Start or stop the automation engine">
                 <img src="{{ICON_22}}" alt="Start Automation">
             </button>
@@ -2267,6 +2264,7 @@
                 <button class="strip-icon-btn" id="btn-reset-autoban-timer" data-tooltip="Reset and restart automation timers" style="display:none;">
                     <img src="{{ICON_22}}" alt="Reset Timers" style="width: 17px; height: 17px;">
                 </button>
+                <button class="strip-btn" id="btn-chat-copy-prompt" data-tooltip="Copy chat prompt. If plans are selected, copies a multi-plan prompt and clears selection. Otherwise starts a general chat consultation.">CHAT PROMPT</button>
                 <div id="status-message" role="status" aria-live="polite" class="sub-bar-status" style="display:none;"></div>
                 <div id="wt-indicator" style="display:none; margin-left:auto; align-items:center; gap:4px; font-size:10px; color:var(--text-secondary);">
                     <span style="opacity:0.6;">⎇</span>
@@ -4271,6 +4269,17 @@
             });
 
             document.getElementById('btn-add-plan')?.addEventListener('click', () => {
+                const btn = document.getElementById('btn-add-plan');
+                if (btn) {
+                    btn.disabled = true;
+                    btn.style.opacity = '0.5';
+                    setTimeout(() => {
+                        if (btn.disabled) {
+                            btn.disabled = false;
+                            btn.style.opacity = '';
+                        }
+                    }, 3000);
+                }
                 postKanbanMessage({ type: 'createPlan' });
             });
 
@@ -6005,6 +6014,14 @@
                     if (ppSelect) {
                         ppSelect.value = msg.mode || 'off';
                         ppSelect.classList.toggle('is-off', ppSelect.value === 'off');
+                    }
+                    break;
+                }
+                case 'planCreated': {
+                    const btn = document.getElementById('btn-add-plan');
+                    if (btn) {
+                        btn.disabled = false;
+                        btn.style.opacity = '';
                     }
                     break;
                 }

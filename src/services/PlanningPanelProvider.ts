@@ -23,6 +23,7 @@ import { isValidComplexityValue, legacyToScore } from './complexityScale';
 import { formatReviewLogEntries } from './reviewLogUtils';
 import { PanelStateStore } from './PanelStateStore';
 import { buildWorkspaceItems } from './workspaceUtils';
+import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 
 export interface PlanningPanelAdapterFactories {
     getNotionService: (root: string) => NotionFetchService;
@@ -828,7 +829,8 @@ export class PlanningPanelProvider {
 
                 this._activeDocWatchDebounce = setTimeout(async () => {
                     if (gen !== this._watcherGeneration || filePath !== this._activePreviewPath) { return; }
-                    
+                    if (Date.now() - this._lastPanelWriteTimestamp < 1000) { return; }
+
                     const workspaceRoot = this._activePreviewWorkspaceRoot
                         || this._getWorkspaceRoot()
                         || (this._getWorkspaceRoots().length > 0 ? this._getWorkspaceRoots()[0] : undefined);
@@ -2000,6 +2002,11 @@ export class PlanningPanelProvider {
                 await vscode.commands.executeCommand('switchboard.importUnclaimedPlans');
                 break;
             }
+            case 'copyChatPrompt': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || undefined;
+                await vscode.commands.executeCommand('switchboard.copyChatPrompt', workspaceRoot);
+                break;
+            }
             case 'uploadPlanAttachment': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const { planFile, topic } = msg;
@@ -2084,6 +2091,10 @@ export class PlanningPanelProvider {
                         planFile
                     });
                 }
+                break;
+            }
+            case 'createPlan': {
+                await vscode.commands.executeCommand('switchboard.initiatePlan');
                 break;
             }
             case 'fetchKanbanPlans': {
@@ -2420,6 +2431,68 @@ export class PlanningPanelProvider {
                 }
                 break;
             }
+            case 'createEpic': {
+                try {
+                    const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                    if (!wsRoot) {
+                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'No workspace root resolved.' });
+                        break;
+                    }
+                    const name = String(msg.name || '').trim();
+                    if (!name) {
+                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Epic name is required.' });
+                        break;
+                    }
+                    const db = KanbanDatabase.forWorkspace(wsRoot);
+                    const workspaceId = await db.getWorkspaceId();
+                    if (!workspaceId) {
+                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Workspace ID not found. Cannot create epic.' });
+                        break;
+                    }
+                    const planId = crypto.randomUUID();
+                    const sessionId = crypto.randomUUID();
+                    const resolvedColumn = 'CREATED';
+                    const epicPlanFile = path.join('.switchboard', 'plans', `epic-${planId}.md`);
+                    const now = new Date().toISOString();
+                    await db.upsertPlan({
+                        planId,
+                        sessionId,
+                        topic: name,
+                        planFile: epicPlanFile,
+                        kanbanColumn: resolvedColumn,
+                        status: 'active',
+                        complexity: 'Unknown',
+                        tags: '',
+                        repoScope: '',
+                        workspaceId,
+                        createdAt: now,
+                        updatedAt: now,
+                        lastAction: '',
+                        sourceType: 'local',
+                        brainSourcePath: '',
+                        mirrorPath: '',
+                        routedTo: '',
+                        dispatchedAgent: '',
+                        dispatchedIde: '',
+                        isEpic: 1,
+                        epicId: ''
+                    });
+                    await db.updateEpicStatus(planId, 1, '');
+                    const epicPath = path.join(wsRoot, epicPlanFile);
+                    const yamlSafeName = name.replace(/'/g, "''");
+                    const yamlSafeDesc = (msg.description ? String(msg.description).trim() : '').replace(/'/g, "''");
+                    const epicContent = `---\ndescription: '${yamlSafeName}'\n---\n\n# ${name}\n\n${msg.description ? String(msg.description).trim() : ''}`;
+                    await fs.promises.mkdir(path.dirname(epicPath), { recursive: true });
+                    GlobalPlanWatcherService.registerPendingCreation(epicPath);
+                    await fs.promises.writeFile(epicPath, epicContent, 'utf8');
+                    const allPlans = await this._getKanbanPlans(wsRoot);
+                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, requestId: Date.now() });
+                } catch (err) {
+                    console.error('[PlanningPanelProvider] createEpic failed:', err);
+                    this._projectPanel?.webview.postMessage({ type: 'epicError', message: String(err) });
+                }
+                break;
+            }
             case 'updateEpicConfig': {
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
                 if (!wsRoot) break;
@@ -2559,7 +2632,7 @@ export class PlanningPanelProvider {
                 const originalContent = String(msg.originalContent || '');
                 const tab = String(msg.tab || '');
                 const allRoots = this._getWorkspaceRoots();
-                const saveDestPanel = (tab === 'kanban' || tab === 'constitution') ? this._projectPanel : this._panel;
+                const saveDestPanel = (tab === 'kanban' || tab === 'constitution' || tab === 'epics') ? this._projectPanel : this._panel;
                 let resolved: string;
                 if (!path.isAbsolute(filePath)) {
                     const wsRoot = this._getWorkspaceRoot() || (allRoots.length > 0 ? allRoots[0] : undefined);
@@ -4269,6 +4342,110 @@ export class PlanningPanelProvider {
                 }
                 break;
             }
+            case 'getPlanningPanelSyncMode': {
+                const { sourceRoot } = await this._resolveSyncConfig();
+                const resolvedRoot = sourceRoot || this._getWorkspaceRoot() || allRoots[0];
+                if (!resolvedRoot) {
+                    break;
+                }
+                const db = KanbanDatabase.forWorkspace(resolvedRoot);
+                const mode = await db.getConfig('planning.syncMode') || 'no-sync';
+                const selectedContainers = await db.getConfigJson<string[]>('planning.selectedContainers', []);
+                this._panel?.webview.postMessage({
+                    type: 'planningPanelSyncModeReady',
+                    mode,
+                    selectedContainers
+                });
+                break;
+            }
+            case 'setPlanningPanelSyncMode': {
+                const { sourceRoot } = await this._resolveSyncConfig();
+                const resolvedRoot = sourceRoot || this._getWorkspaceRoot() || allRoots[0];
+                if (!resolvedRoot) {
+                    break;
+                }
+                const syncMode = typeof msg.mode === 'string' ? msg.mode : 'no-sync';
+                const db = KanbanDatabase.forWorkspace(resolvedRoot);
+                await db.setConfig('planning.syncMode', syncMode);
+                this._resolvedConfigCache = null;
+                await this.triggerSync(resolvedRoot, syncMode);
+                break;
+            }
+            case 'fetchAvailableSyncContainers': {
+                const { sourceRoot } = await this._resolveSyncConfig();
+                const resolvedRoot = sourceRoot || this._getWorkspaceRoot() || allRoots[0];
+                if (!resolvedRoot) {
+                    break;
+                }
+                
+                const containers: Array<{sourceId: string, id: string, name: string}> = [];
+                
+                // ClickUp
+                try {
+                    const clickUpAdapter = this._adapterFactories.getClickUpDocsAdapter?.(resolvedRoot);
+                    if (clickUpAdapter && typeof clickUpAdapter.listContainers === 'function') {
+                        const clickUpContainers = await clickUpAdapter.listContainers();
+                        for (const c of clickUpContainers) {
+                            containers.push({ sourceId: 'clickup', id: String(c.id), name: String(c.name) });
+                        }
+                    }
+                } catch { }
+                
+                // Linear
+                try {
+                    const linearAdapter = this._adapterFactories.getLinearDocsAdapter?.(resolvedRoot);
+                    if (linearAdapter && typeof linearAdapter.listContainers === 'function') {
+                        const linearContainers = await linearAdapter.listContainers();
+                        for (const c of linearContainers) {
+                            containers.push({ sourceId: 'linear', id: String(c.id), name: String(c.name) });
+                        }
+                    }
+                } catch { }
+                
+                // Notion
+                try {
+                    const notionService = this._adapterFactories.getNotionService?.(resolvedRoot);
+                    if (notionService) {
+                        const notionConfig = await notionService.loadConfig();
+                        if (notionConfig?.setupComplete && notionConfig.pageTitle) {
+                            containers.push({ sourceId: 'notion', id: notionConfig.pageId || 'default', name: notionConfig.pageTitle });
+                        }
+                    }
+                } catch { }
+                
+                // Local folder
+                try {
+                    const localService = this._getLocalFolderService(resolvedRoot);
+                    if (localService) {
+                        const folderPath = localService.getFolderPath?.();
+                        if (folderPath) {
+                            containers.push({ sourceId: 'local-folder', id: 'root', name: path.basename(folderPath) });
+                        }
+                    }
+                } catch { }
+                
+                const db = KanbanDatabase.forWorkspace(resolvedRoot);
+                const selected = await db.getConfigJson<string[]>('planning.selectedContainers', []);
+                this._panel?.webview.postMessage({
+                    type: 'availableSyncContainersReady',
+                    containers,
+                    selectedContainers: selected
+                });
+                break;
+            }
+            case 'setPlanningPanelSelectedContainers': {
+                const { sourceRoot } = await this._resolveSyncConfig();
+                const resolvedRoot = sourceRoot || this._getWorkspaceRoot() || allRoots[0];
+                if (!resolvedRoot) {
+                    break;
+                }
+                const containers = Array.isArray(msg.containers) ? msg.containers.map((v: unknown) => String(v)) : [];
+                const db = KanbanDatabase.forWorkspace(resolvedRoot);
+                await db.setConfigJson('planning.selectedContainers', containers);
+                this._resolvedConfigCache = null;
+                await this.triggerSync(resolvedRoot, 'sync-selected');
+                break;
+            }
         }
     }
 
@@ -4909,10 +5086,16 @@ export class PlanningPanelProvider {
 
         if (!this._panel) { throw new Error('[PlanningPanel] _panel is undefined — cannot send onlineDocsReady'); }
         console.log('[PlanningPanel] Sending onlineDocsReady, roots count:', roots.length, 'roots:', roots);
+        const allRoots = this._getWorkspaceRoots();
+        const workspaceRoot = this._getWorkspaceRoot() || (allRoots.length > 0 ? allRoots[0] : undefined);
+        const folderUri = workspaceRoot ? vscode.workspace.workspaceFolders?.find(f => path.resolve(f.uri.fsPath) === path.resolve(workspaceRoot))?.uri : undefined;
+        const configScope = vscode.workspace.getConfiguration('switchboard', folderUri);
+        const enabledSourcesConfig = configScope.get<Record<string, boolean>>('planning.enabledSources') || {};
+
         const enabledSources: Record<string, boolean> = {};
         availableSources.forEach(s => {
             if (s !== 'local-folder') {
-                enabledSources[s] = true;
+                enabledSources[s] = enabledSourcesConfig[s] !== false;
             }
         });
         this._panel.webview.postMessage({

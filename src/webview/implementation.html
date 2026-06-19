@@ -1650,9 +1650,20 @@
             }, 1500);
         }
 
-        document.getElementById('btn-create-plan').addEventListener('click', () => {
-            vscode.postMessage({ type: 'createDraftPlanTicket' });
-        });
+        const btnCreatePlan = document.getElementById('btn-create-plan');
+        if (btnCreatePlan) {
+            btnCreatePlan.addEventListener('click', () => {
+                btnCreatePlan.disabled = true;
+                btnCreatePlan.innerText = 'Creating...';
+                vscode.postMessage({ type: 'createDraftPlanTicket' });
+                setTimeout(() => {
+                    if (btnCreatePlan.disabled) {
+                        btnCreatePlan.disabled = false;
+                        btnCreatePlan.innerText = 'CREATE';
+                    }
+                }, 3000);
+            });
+        }
 
 
         function escapeHtml(value) {
@@ -2235,6 +2246,14 @@
                         updatePlanActionStates();
                     }
                     break;
+ 
+                 case 'planCreated':
+                     const btnCreatePlan = document.getElementById('btn-create-plan');
+                     if (btnCreatePlan) {
+                         btnCreatePlan.disabled = false;
+                         btnCreatePlan.innerText = 'CREATE';
+                     }
+                     break;
 
                 case 'workspaceChanged': {
                     currentWorkspaceRoot = String(message.workspaceRoot || '').trim();

@@ -161,11 +161,22 @@
             overflow: hidden;
             position: relative;
         }
-        .kanban-preview-pane, .epics-preview-pane, .constitution-preview-pane {
+        .kanban-preview-pane, .epics-preview-pane {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: var(--panel-bg);
+        }
+        .constitution-preview-pane {
             flex: 1;
             overflow-y: auto;
             padding: 16px;
             background: var(--panel-bg);
+        }
+        #kanban-preview-content, #epics-preview-content {
+            padding: 16px;
+            overflow-y: auto;
+            flex: 1;
         }
         .markdown-editor {
             width: 100%;
@@ -386,11 +397,13 @@
         /* Metadata preview bar */
         #kanban-preview-meta-bar, #epic-preview-meta-bar {
             display: flex;
-            gap: 16px;
-            padding: 8px 16px;
+            gap: 12px;
+            padding: 6px 10px;
             background: var(--panel-bg2);
             border-bottom: 1px solid var(--border-color);
             font-size: 11px;
+            flex-wrap: wrap;
+            align-items: center;
         }
         .kanban-meta-group {
             display: flex;
@@ -999,9 +1012,8 @@
                     <option value="">All Columns</option>
                 </select>
                 <button id="btn-import-kanban-plans" class="strip-btn" title="Scan configured AI IDE folders and pick unclaimed plans to add">Import</button>
-                <button id="btn-edit-kanban" class="strip-btn" disabled>Edit</button>
-                <button id="btn-save-kanban" class="strip-btn" style="display:none;">Save</button>
-                <button id="btn-cancel-kanban" class="strip-btn" style="display:none;">Cancel</button>
+                <button id="btn-create-kanban-plan" class="strip-btn" title="Create a new plan">Create</button>
+                <button id="btn-chat-copy-prompt" class="strip-btn" title="Copy general chat planning prompt to clipboard">CHAT PROMPT</button>
                 <input type="text" id="kanban-search" class="sidebar-search-input" placeholder="Search plans..." />
             </div>
             <div class="content-row">
@@ -1012,8 +1024,8 @@
                 </div>
                 <div class="preview-panel-wrapper">
                     <div class="cyber-scanlines"></div>
+                    <div id="kanban-preview-meta-bar" style="display:none;"></div>
                     <div id="kanban-preview-pane" class="kanban-preview-pane">
-                        <div id="kanban-preview-meta-bar" style="display:none;"></div>
                         <div id="kanban-preview-content"></div>
                         <textarea id="kanban-editor" class="markdown-editor"></textarea>
                     </div>
@@ -1035,6 +1047,7 @@
                     <option value="">All Workspaces</option>
                 </select>
                 <button id="btn-set-active-epic" class="strip-btn" disabled>Set as Active Planning Context</button>
+                <button id="btn-new-epic" class="strip-btn">+ New Epic</button>
             </div>
             <div class="content-row">
                 <div id="epics-list-pane">
@@ -1045,11 +1058,12 @@
                 </div>
                 <div class="preview-panel-wrapper">
                     <div class="cyber-scanlines"></div>
+                    <div id="epic-preview-meta-bar" style="display:none;"></div>
                     <div id="epics-preview-pane" class="epics-preview-pane">
-                        <div id="epic-preview-meta-bar" style="display:none;"></div>
                         <div id="epics-preview-content">
                             <div class="kanban-empty-state">Select an epic to preview</div>
                         </div>
+                        <textarea id="epics-editor" class="markdown-editor"></textarea>
                     </div>
                 </div>
             </div>
@@ -1080,6 +1094,29 @@
                         <textarea id="constitution-editor" class="markdown-editor"></textarea>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- New Epic Modal -->
+    <div id="new-epic-modal" class="kanban-log-overlay" style="display: none;">
+        <div class="kanban-log-modal" style="width: 400px;">
+            <div style="padding: 12px 16px; font-weight: bold; border-bottom: 1px solid var(--border-color);">
+                Create New Epic
+            </div>
+            <div style="padding: 16px; display: flex; flex-direction: column; gap: 12px;">
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label for="new-epic-name" style="font-size: 11px; color: var(--text-secondary);">Epic Name *</label>
+                    <input type="text" id="new-epic-name" placeholder="Enter epic name" style="background: #111; border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px; border-radius: 4px; font-size: 12px;" required />
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label for="new-epic-description" style="font-size: 11px; color: var(--text-secondary);">Description</label>
+                    <textarea id="new-epic-description" placeholder="Enter description" style="background: #111; border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px; border-radius: 4px; font-size: 12px; height: 100px; resize: vertical; font-family: var(--font-family);"></textarea>
+                </div>
+            </div>
+            <div class="kanban-log-close" style="display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px;">
+                <button id="btn-new-epic-cancel" class="strip-btn">Cancel</button>
+                <button id="btn-new-epic-submit" class="strip-btn" style="border-color: var(--accent-teal);">Create</button>
             </div>
         </div>
     </div>

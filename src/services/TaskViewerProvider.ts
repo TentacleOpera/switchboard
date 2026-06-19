@@ -207,8 +207,6 @@ type LinearSetupState = {
 
 type NotionSetupState = {
     setupComplete: boolean;
-    designDocEnabled: boolean;
-    designDocLink: string;
 };
 
 type LinearImportNode = {
@@ -680,6 +678,23 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         'kanban.orderOverrides',
     ];
 
+    /**
+     * Single source of truth mapping unified `globalState` keys to their `state.json`
+     * (DB-bridged) key. Used by the write-mirror in `updateState`, the Phase 0 backfill,
+     * and `copyDbSettingsToGlobal`. Do NOT inline a duplicate of this anywhere.
+     * Note: `planIngestionFolder` and `liveSyncConfig` are intentionally excluded — they
+     * stay per-workspace (see plan User Review #1, #2).
+     */
+    private static readonly _GLOBAL_TO_STATE_KEY: ReadonlyArray<readonly [string, string]> = [
+        ['switchboard.agents.visibleAgents', 'visibleAgents'],
+        ['switchboard.agents.startupCommands', 'startupCommands'],
+        ['switchboard.agents.customAgents', 'customAgents'],
+        ['switchboard.kanban.customColumns', 'customKanbanColumns'],
+        ['switchboard.agents.promptOverrides', 'defaultPromptOverrides'],
+        ['switchboard.kanban.autoCommitOnCodeReview', 'autoCommitOnCodeReview'],
+        ['switchboard.agents.julesAutoSyncEnabled', 'julesAutoSyncEnabled'],
+    ];
+
     /** Discover all role config keys from a state object (global or workspace). */
     private _discoverRoleConfigKeys(state: vscode.Memento): string[] {
         return state.keys().filter(key => key.startsWith('switchboard.prompts.roleConfig_'));
@@ -704,23 +719,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 }
             }
 
-            const mapping: Record<string, string> = {
-                'switchboard.agents.visibleAgents': 'visibleAgents',
-                'switchboard.agents.startupCommands': 'startupCommands',
-                'switchboard.agents.customAgents': 'customAgents',
-                'switchboard.kanban.customColumns': 'customKanbanColumns',
-                'switchboard.agents.promptOverrides': 'defaultPromptOverrides',
-                'switchboard.kanban.autoCommitOnCodeReview': 'autoCommitOnCodeReview',
-                'switchboard.agents.julesAutoSyncEnabled': 'julesAutoSyncEnabled'
-            };
-
             const root = this._resolveWorkspaceRoot();
             if (root) {
                 const statePath = this._resolveStateFilePath(root);
                 if (statePath && fs.existsSync(statePath)) {
                     const content = await fs.promises.readFile(statePath, 'utf8');
                     const state = JSON.parse(content);
-                    for (const [globalKey, stateKey] of Object.entries(mapping)) {
+                    for (const [globalKey, stateKey] of TaskViewerProvider._GLOBAL_TO_STATE_KEY) {
                         if (this._context.globalState.get(globalKey) === undefined && state[stateKey] !== undefined) {
                             await this._context.globalState.update(globalKey, state[stateKey]);
                         }
@@ -748,18 +753,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         try {
             const content = await fs.promises.readFile(statePath, 'utf8');
             const state = JSON.parse(content);
-            
-            const mapping: Record<string, string> = {
-                'switchboard.agents.visibleAgents': 'visibleAgents',
-                'switchboard.agents.startupCommands': 'startupCommands',
-                'switchboard.agents.customAgents': 'customAgents',
-                'switchboard.kanban.customColumns': 'customKanbanColumns',
-                'switchboard.agents.promptOverrides': 'defaultPromptOverrides',
-                'switchboard.kanban.autoCommitOnCodeReview': 'autoCommitOnCodeReview',
-                'switchboard.agents.julesAutoSyncEnabled': 'julesAutoSyncEnabled'
-            };
 
-            for (const [globalKey, stateKey] of Object.entries(mapping)) {
+            for (const [globalKey, stateKey] of TaskViewerProvider._GLOBAL_TO_STATE_KEY) {
                 if (state[stateKey] !== undefined) {
                     await this._context.globalState.update(globalKey, state[stateKey]);
                     copied++;
@@ -1719,27 +1714,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     await updater(state);
                 }
 
-                // Unify to globalState
-                if (state.startupCommands !== undefined) {
-                    await this._context.globalState.update('switchboard.agents.startupCommands', state.startupCommands);
-                }
-                if (state.visibleAgents !== undefined) {
-                    await this._context.globalState.update('switchboard.agents.visibleAgents', state.visibleAgents);
-                }
-                if (state.customAgents !== undefined) {
-                    await this._context.globalState.update('switchboard.agents.customAgents', state.customAgents);
-                }
-                if (state.customKanbanColumns !== undefined) {
-                    await this._context.globalState.update('switchboard.kanban.customColumns', state.customKanbanColumns);
-                }
-                if (state.defaultPromptOverrides !== undefined) {
-                    await this._context.globalState.update('switchboard.agents.promptOverrides', state.defaultPromptOverrides);
-                }
-                if (state.autoCommitOnCodeReview !== undefined) {
-                    await this._context.globalState.update('switchboard.kanban.autoCommitOnCodeReview', state.autoCommitOnCodeReview);
-                }
-                if (state.julesAutoSyncEnabled !== undefined) {
-                    await this._context.globalState.update('switchboard.agents.julesAutoSyncEnabled', state.julesAutoSyncEnabled);
+                // Unify to globalState (written before the DB mirror so globalState-first reads are never stale)
+                for (const [globalKey, stateKey] of TaskViewerProvider._GLOBAL_TO_STATE_KEY) {
+                    if (state[stateKey] !== undefined) {
+                        await this._context.globalState.update(globalKey, state[stateKey]);
+                    }
                 }
 
                 // Write only if state actually changed
@@ -3879,18 +3858,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             enabled: this.handleGetJulesAutoSyncSetting()
         });
 
-        // Send planning sources configuration
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const enabledSources = config.get<any>('planning.enabledSources', {
-            clickup: true,
-            linear: true,
-            notion: true,
-            'local-folder': true
-        });
-        this._setupPanelProvider.postMessage({
-            type: 'planningSources',
-            sources: enabledSources
-        });
+
 
         this._setupPanelProvider.postMessage({
             type: 'accurateCodingSetting',
@@ -3979,7 +3947,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         linearHasToken: boolean;
         notionHasToken: boolean;
     }> {
-        const designDocSetting = this.handleGetDesignDocSetting();
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         const folderUri = resolvedRoot ? vscode.Uri.file(resolvedRoot) : undefined;
         // Read token presence from secret storage
@@ -3997,9 +3964,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 clickupState: undefined,
                 linearState: undefined,
                 notionState: {
-                    setupComplete: false,
-                    designDocEnabled: designDocSetting.enabled,
-                    designDocLink: designDocSetting.link
+                    setupComplete: false
                 },
                 clickupHasToken,
                 linearHasToken,
@@ -4021,9 +3986,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         let clickupState: ClickUpSetupState | undefined;
         let linearState: LinearSetupState | undefined;
         const notionState: NotionSetupState = {
-            setupComplete: notionConfig?.setupComplete === true,
-            designDocEnabled: designDocSetting.enabled,
-            designDocLink: designDocSetting.link
+            setupComplete: notionConfig?.setupComplete === true
         };
 
         if (clickupConfig) {
@@ -4855,8 +4818,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     public async handleApplyNotionConfig(
-        token: string,
-        options: { enableDesignDocFetching: boolean }
+        token: string
     ): Promise<{ success: boolean; error?: string }> {
         const resolvedRoot = this._resolveWorkspaceRoot();
         if (!resolvedRoot) {
@@ -4894,11 +4856,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             lastFetchAt: existingConfig?.lastFetchAt || null,
             designDocUrl: existingConfig?.designDocUrl || existingConfig?.pageUrl || ''
         });
-        await vscode.workspace.getConfiguration('switchboard').update(
-            'planner.designDocEnabled',
-            options.enableDesignDocFetching === true,
-            vscode.ConfigurationTarget.Workspace
-        );
         return { success: true };
     }
 
@@ -15472,7 +15429,6 @@ What would you like to find?`;
             ''
         ].join('\n');
     }
-
     private async _openPlanInReviewPanel(planFileAbsolute: string, _topic: string): Promise<void> {
         await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(planFileAbsolute));
     }
@@ -15491,7 +15447,14 @@ What would you like to find?`;
 
         try {
             const { planFileAbsolute } = await this._createInitiatedPlan(title, idea, false, { createdAt, projectName });
+            const workspaceRoot = this._resolveWorkspaceRoot();
+            if (workspaceRoot && this._kanbanProvider) {
+                const planFileRelative = path.relative(workspaceRoot, planFileAbsolute).replace(/\\/g, '/');
+                await this._kanbanProvider.activatePlanInProjectPanel(planFileRelative, workspaceRoot);
+            }
             await this._openPlanInReviewPanel(planFileAbsolute, title);
+            this._view?.webview.postMessage({ type: 'planCreated' });
+            this._kanbanProvider?.postMessage?.({ type: 'planCreated' });
         } catch (err: any) {
             const msg = err?.message || String(err);
             vscode.window.showErrorMessage(`Plan creation failed: ${msg}`);
@@ -16097,8 +16060,6 @@ What would you like to find?`;
                     { immediate: true }
                 );
             }
-            await this._syncFilesAndRefreshRunSheets(workspaceRoot);
-            this._view?.webview.postMessage({ type: 'selectPlanFile', planFile: planFileRelative });
 
             // Non-blocking auto-promotion: copy plan to Antigravity brain.
             // Clipboard imports opt out to avoid duplicate mirrored kanban cards.

@@ -84,10 +84,6 @@ async function run() {
         providerSource.includes("await this._openPlanInReviewPanel(planFileAbsolute, title);"),
         'draft ticket helper should open the review panel immediately'
     );
-    assert.ok(
-        providerSource.includes("initialMode: 'edit'"),
-        'direct-created tickets should still open in edit mode'
-    );
 
     const kanbanSourcePath = path.join(process.cwd(), 'src', 'services', 'KanbanProvider.ts');
     const kanbanSource = await fs.promises.readFile(kanbanSourcePath, 'utf8');
@@ -95,6 +91,19 @@ async function run() {
     assert.ok(
         kanbanSource.includes("await vscode.commands.executeCommand('switchboard.initiatePlan');"),
         'kanban create action should keep using the shared initiatePlan command'
+    );
+
+    assert.ok(
+        providerSource.includes("activatePlanInProjectPanel"),
+        'TaskViewerProvider should invoke activatePlanInProjectPanel'
+    );
+    assert.ok(
+        kanbanSource.includes("public async activatePlanInProjectPanel("),
+        'KanbanProvider should define activatePlanInProjectPanel'
+    );
+    assert.ok(
+        !providerSource.includes("await this._syncFilesAndRefreshRunSheets(workspaceRoot);\n            this._view?.webview.postMessage({ type: 'selectPlanFile'"),
+        'TaskViewerProvider _createInitiatedPlan should not block/post selectPlanFile'
     );
 
     console.log('direct create ticket regression test passed');

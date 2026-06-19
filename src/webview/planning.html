@@ -3012,32 +3012,7 @@
   border-color: var(--border-color);
   border-bottom-color: var(--panel-bg2);
 }
-.filter-chips-group {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  margin-right: 12px;
-}
-.filter-chip {
-  background: var(--panel-bg2);
-  border: 1px solid var(--border-color);
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  padding: 4px 8px;
-  cursor: pointer;
-  border-radius: 4px;
-  transition: all 0.15s;
-}
-.filter-chip:hover {
-  color: var(--text-primary);
-  border-color: var(--accent-teal-dim);
-}
-.filter-chip.active {
-  color: var(--accent-teal);
-  border-color: var(--accent-teal);
-  background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
-}
+
 .shared-tab-content {
   display: none;
   flex: 1;
@@ -3072,12 +3047,18 @@
                 <select id="docs-workspace-filter" class="workspace-filter-select">
                     <option value="">All Workspaces</option>
                 </select>
-                <div id="docs-source-filter" class="filter-chips-group">
-                    <button class="filter-chip active" data-source="local">Local</button>
-                    <button class="filter-chip active" data-source="clickup">ClickUp</button>
-                    <button class="filter-chip active" data-source="linear">Linear</button>
-                    <button class="filter-chip active" data-source="notion">Notion</button>
-                </div>
+                <select id="docs-source-filter" class="workspace-filter-select" style="margin-right: 12px;">
+                    <option value="all">All Sources</option>
+                    <option value="local">Local</option>
+                    <option value="clickup">ClickUp</option>
+                    <option value="linear">Linear</option>
+                    <option value="notion">Notion</option>
+                </select>
+                <select id="docs-cache-mode" class="workspace-filter-select" style="margin-right: 12px;" title="Document caching mode">
+                    <option value="no-sync">No Sync (Manual Only)</option>
+                    <option value="auto-sync-all">Auto Sync All</option>
+                    <option value="sync-selected">Sync Selected Containers</option>
+                </select>
                 <button id="btn-import-full-doc" class="strip-btn" disabled style="display: none;">Import</button>
                 <button id="btn-edit" class="strip-btn" disabled>Edit</button>
                 <button id="btn-save" class="strip-btn" style="display:none;">Save</button>
@@ -3085,6 +3066,10 @@
                 <button id="btn-sync-to-online" class="strip-btn" disabled>Sync to Online</button>
                 <input type="text" id="docs-search" class="sidebar-search-input" placeholder="Search docs..." />
                 <span id="status" style="margin-left: 0; display: none;"></span>
+            </div>
+            <div id="docs-sync-container-picker" style="display: none; padding: 8px 12px; background: var(--panel-bg2); border-bottom: 1px solid var(--border-dim); font-size: 11px; flex-direction: column; gap: 6px;">
+                <div style="font-weight: bold; color: var(--text-secondary); margin-bottom: 4px;">Sync Selected Containers:</div>
+                <div id="docs-containers-list" style="display: flex; flex-wrap: wrap; gap: 12px;"></div>
             </div>
             <div class="content-row">
                 <div id="tree-pane">

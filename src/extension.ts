@@ -902,6 +902,21 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(importPlansDisposable);
 
+    const copyChatPromptDisposable = vscode.commands.registerCommand('switchboard.copyChatPrompt', async (targetWorkspaceRoot?: string) => {
+        const workspaceRoot = targetWorkspaceRoot || kanbanProvider?.getCurrentWorkspaceRoot() || undefined;
+        if (!kanbanProvider) {
+            vscode.window.showErrorMessage('Switchboard extension not fully initialized.');
+            return;
+        }
+        const prompt = await kanbanProvider.copyGeneralChatPrompt(workspaceRoot);
+        if (prompt) {
+            vscode.window.showInformationMessage('Planning chat prompt copied to clipboard.');
+        } else {
+            vscode.window.showWarningMessage('No active workspace selected or found.');
+        }
+    });
+    context.subscriptions.push(copyChatPromptDisposable);
+
     // Reset Kanban Database command — deletes local DB and rebuilds from plan files
     const resetKanbanDbDisposable = vscode.commands.registerCommand('switchboard.resetKanbanDb', async (targetWorkspaceRoot?: string) => {
         const workspaceRoot = targetWorkspaceRoot || kanbanProvider!.getCurrentWorkspaceRoot();
@@ -1904,7 +1919,7 @@ export async function activate(context: vscode.ExtensionContext) {
     updateStatusBarVisibility();
 
     // Listen for configuration changes
-    context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
+    context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(async e => {
         if (e.affectsConfiguration('switchboard.preventAgentFileOpening')) {
             const value = vscode.workspace.getConfiguration('switchboard').get<boolean>('preventAgentFileOpening', false);
             void vscode.commands.executeCommand('setContext', 'switchboard.preventAgentFileOpeningEnabled', value);
@@ -1929,26 +1944,34 @@ export async function activate(context: vscode.ExtensionContext) {
             void taskViewerProvider.postSetupPanelState();
         }
         if (
-            e.affectsConfiguration('switchboard.stitch.apiKey') ||
-            e.affectsConfiguration('switchboard.stitch.authMode') ||
-            e.affectsConfiguration('switchboard.stitch.accessToken')
+            e.affectsConfiguration('switchboard.stitch.authMode')
         ) {
             invalidateStitchSdkCache();
             if (designPanelProvider && designPanelProvider.isOpen) {
                 const config = vscode.workspace.getConfiguration('switchboard');
                 const mode = config.get<string>('stitch.authMode') || 'apiKey';
-                const apiKey = config.get<string>('stitch.apiKey') || '';
+                const apiKey = (await context.secrets.get('switchboard.stitch.apiKey')) || '';
+                const accessToken = (await context.secrets.get('switchboard.stitch.accessToken')) || '';
                 const hasKey = mode === 'oauth'
-                    ? !!config.get<string>('stitch.accessToken')
+                    ? !!accessToken
                     : !!(apiKey || process.env.STITCH_API_KEY);
                 designPanelProvider.postMessage({ type: 'stitchApiKeyStatus', configured: hasKey });
                 designPanelProvider.postMessage({
                     type: 'stitchAuthStatus',
                     mode,
                     configured: hasKey,
-                    valid: hasKey
+                    valid: hasKey,
+                    apiKey,
+                    accessToken
                 });
             }
+        }
+    }));
+
+    // Listen for out-of-band secret storage changes
+    context.subscriptions.push(context.secrets.onDidChange(e => {
+        if (e.key === 'switchboard.stitch.apiKey' || e.key === 'switchboard.stitch.accessToken') {
+            invalidateStitchSdkCache();
         }
     }));
 

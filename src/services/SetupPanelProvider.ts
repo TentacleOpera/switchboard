@@ -422,8 +422,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                 }
                 case 'applyNotionConfig': {
                     const result = await this._taskViewerProvider.handleApplyNotionConfig(
-                        message.token,
-                        message.options ?? {}
+                        message.token
                     );
                     this._panel.webview.postMessage({ type: 'notionApplyResult', ...result });
                     await this._taskViewerProvider.postSetupPanelState();

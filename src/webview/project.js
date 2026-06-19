@@ -39,10 +39,10 @@
 
     // Global state
     const state = {
-        editMode: { kanban: false, constitution: false },
-        editOriginalContent: { kanban: null, constitution: null },
-        dirtyFlags: { kanban: false, constitution: false },
-        externalChangePending: { kanban: false, constitution: false },
+        editMode: { kanban: false, constitution: false, epics: false },
+        editOriginalContent: { kanban: null, constitution: null, epics: null },
+        dirtyFlags: { kanban: false, constitution: false, epics: false },
+        externalChangePending: { kanban: false, constitution: false, epics: false },
         reviewMode: { kanban: false },
         kanbanListCollapsed: false,
         epicsListCollapsed: false,
@@ -113,19 +113,28 @@
     const kanbanColumnFilter = document.getElementById('kanban-column-filter');
     const kanbanSearch = document.getElementById('kanban-search');
     const btnImportKanbanPlans = document.getElementById('btn-import-kanban-plans');
-    const btnEditKanban = document.getElementById('btn-edit-kanban');
-    const btnSaveKanban = document.getElementById('btn-save-kanban');
-    const btnCancelKanban = document.getElementById('btn-cancel-kanban');
+    const btnCreateKanbanPlan = document.getElementById('btn-create-kanban-plan');
+    const btnChatCopyPrompt = document.getElementById('btn-chat-copy-prompt');
+    const btnEditKanban = null;
+    const btnSaveKanban = null;
+    const btnCancelKanban = null;
     const kanbanListPane = document.getElementById('kanban-list-pane');
     const kanbanPreviewPane = document.getElementById('kanban-preview-pane');
     const kanbanPreviewContent = document.getElementById('kanban-preview-content');
     const kanbanEditor = document.getElementById('kanban-editor');
-
+ 
     const epicsWorkspaceFilter = document.getElementById('epics-workspace-filter');
     const btnSetActiveEpic = document.getElementById('btn-set-active-epic');
+    const btnNewEpic = document.getElementById('btn-new-epic');
+    const newEpicModal = document.getElementById('new-epic-modal');
+    const newEpicName = document.getElementById('new-epic-name');
+    const newEpicDescription = document.getElementById('new-epic-description');
+    const btnNewEpicCancel = document.getElementById('btn-new-epic-cancel');
+    const btnNewEpicSubmit = document.getElementById('btn-new-epic-submit');
     const epicsListPane = document.getElementById('epics-list-pane');
     const epicsPreviewPane = document.getElementById('epics-preview-pane');
     const epicsPreviewContent = document.getElementById('epics-preview-content');
+    const epicsEditor = document.getElementById('epics-editor');
     const activeEpicBanner = document.getElementById('active-epic-banner');
     const activeEpicNameSpan = document.getElementById('active-epic-name');
     const btnDisableEpic = document.getElementById('btn-disable-epic');
@@ -150,6 +159,10 @@
         const msg = event.data;
         switch (msg.type) {
             case 'kanbanPlansReady':
+                if (btnCreateKanbanPlan) {
+                    btnCreateKanbanPlan.disabled = false;
+                    btnCreateKanbanPlan.textContent = 'Create';
+                }
                 if (msg.error) {
                     console.error('Kanban fetch error:', msg.error);
                     return;
@@ -164,6 +177,12 @@
                 renderEpicsList();
                 tryResolvePendingKanbanSelection();
                 break;
+            case 'planCreated':
+                if (btnCreateKanbanPlan) {
+                    btnCreateKanbanPlan.disabled = false;
+                    btnCreateKanbanPlan.textContent = 'Create';
+                }
+                break;
             case 'kanbanPlanPreviewReady':
                 if (kanbanPreviewContent && _kanbanSelectedPlan && _kanbanSelectedPlan.planFile === msg.filePath) {
                     if (state.editMode.kanban) {
@@ -171,11 +190,19 @@
                     } else {
                         kanbanPreviewContent.innerHTML = msg.content || '';
                         state.editOriginalContent.kanban = msg.rawContent || '';
-                        if (btnEditKanban) btnEditKanban.disabled = false;
+                        const dynamicEditBtn = document.getElementById('btn-edit-kanban');
+                        if (dynamicEditBtn) dynamicEditBtn.disabled = false;
                     }
                 }
                 if (epicsPreviewContent && _epicSelectedPlan && _epicSelectedPlan.planFile === msg.filePath) {
-                    epicsPreviewContent.innerHTML = msg.content || '';
+                    if (state.editMode.epics) {
+                        state.externalChangePending.epics = true;
+                    } else {
+                        epicsPreviewContent.innerHTML = msg.content || '';
+                        state.editOriginalContent.epics = msg.rawContent || '';
+                        const dynamicEditEpicsBtn = document.getElementById('btn-edit-epics');
+                        if (dynamicEditEpicsBtn) dynamicEditEpicsBtn.disabled = false;
+                    }
                 }
                 break;
             case 'constitutionStatus':
@@ -232,7 +259,8 @@
                 if (msg.success) {
                     _kanbanSelectedPlan = null;
                     if (kanbanPreviewContent) kanbanPreviewContent.innerHTML = '<div class="kanban-empty-state">Select a plan to preview</div>';
-                    if (btnEditKanban) btnEditKanban.disabled = true;
+                    const dynamicEditBtn = document.getElementById('btn-edit-kanban');
+                    if (dynamicEditBtn) dynamicEditBtn.disabled = true;
                     vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
                 } else {
                     alert('Delete failed: ' + (msg.error || 'Unknown error'));
@@ -573,6 +601,9 @@
                 <span class="kanban-meta-value" id="kanban-meta-constitution">Loading...</span>
             </div>
             <div class="kanban-meta-group" style="margin-left: auto;">
+                <button class="strip-btn" id="btn-edit-kanban" style="${state.editMode.kanban ? 'display:none;' : ''}">Edit</button>
+                <button class="strip-btn" id="btn-save-kanban" style="${state.editMode.kanban ? '' : 'display:none;'}">Save</button>
+                <button class="strip-btn" id="btn-cancel-kanban" style="${state.editMode.kanban ? '' : 'display:none;'}">Cancel</button>
                 ${plan.clickupTaskId || plan.linearIssueId ? `
                     <button class="strip-btn" id="kanban-meta-upload-btn" ${uploadingPlanAttachment ? 'disabled' : ''}>
                         ${uploadingPlanAttachment ? 'Uploading...' : 'Upload'}
@@ -588,6 +619,30 @@
             workspaceRoot: plan.workspaceRoot,
             planFile: plan.planFile
         });
+
+        // Dynamic buttons listeners
+        const dynamicEditBtn = document.getElementById('btn-edit-kanban');
+        const dynamicCancelBtn = document.getElementById('btn-cancel-kanban');
+        const dynamicSaveBtn = document.getElementById('btn-save-kanban');
+
+        if (dynamicEditBtn) dynamicEditBtn.addEventListener('click', () => enterEditMode('kanban'));
+        if (dynamicCancelBtn) dynamicCancelBtn.addEventListener('click', () => exitEditMode('kanban'));
+        if (dynamicSaveBtn) {
+            dynamicSaveBtn.addEventListener('click', () => {
+                const filePath = _kanbanSelectedPlan ? _kanbanSelectedPlan.planFile : null;
+                const content = kanbanEditor ? kanbanEditor.value : '';
+                const originalContent = state.editOriginalContent.kanban;
+                if (filePath) {
+                    vscode.postMessage({
+                        type: 'saveFileContent',
+                        filePath,
+                        content,
+                        originalContent,
+                        tab: 'kanban'
+                    });
+                }
+            });
+        }
 
         // Column select toggles
         const columnToggle = document.getElementById('kanban-meta-column');
@@ -652,6 +707,28 @@
     if (btnImportKanbanPlans) {
         btnImportKanbanPlans.addEventListener('click', () => {
             vscode.postMessage({ type: 'importPlans' });
+        });
+    }
+    if (btnCreateKanbanPlan) {
+        btnCreateKanbanPlan.addEventListener('click', () => {
+            btnCreateKanbanPlan.disabled = true;
+            btnCreateKanbanPlan.textContent = 'Creating...';
+            vscode.postMessage({ type: 'createPlan' });
+            // Add safety timeout (3s) to restore the button in case creation/refresh fails
+            setTimeout(() => {
+                if (btnCreateKanbanPlan.disabled) {
+                    btnCreateKanbanPlan.disabled = false;
+                    btnCreateKanbanPlan.textContent = 'Create';
+                }
+            }, 3000);
+        });
+    }
+    if (btnChatCopyPrompt) {
+        btnChatCopyPrompt.addEventListener('click', () => {
+            vscode.postMessage({
+                type: 'copyChatPrompt',
+                workspaceRoot: kanbanWorkspaceFilter ? kanbanWorkspaceFilter.value : ''
+            });
         });
     }
     if (kanbanColumnFilter) {
@@ -736,6 +813,7 @@
 
             itemDiv.addEventListener('click', e => {
                 if (e.target.tagName === 'SUMMARY' || e.target.closest('.epic-accordion')) return;
+                if (state.dirtyFlags.epics) exitEditMode('epics');
                 document.querySelectorAll('.epic-plan-item').forEach(el => el.classList.remove('selected'));
                 itemDiv.classList.add('selected');
                 selectEpic(plan);
@@ -779,12 +857,38 @@
                 <span class="kanban-meta-value">${escapeHtml(plan.topic)}</span>
             </div>
             <div class="kanban-meta-group" style="margin-left: auto;">
+                <button class="strip-btn" id="btn-edit-epics" style="${state.editMode.epics ? 'display:none;' : ''}">Edit</button>
+                <button class="strip-btn" id="btn-save-epics" style="${state.editMode.epics ? '' : 'display:none;'}">Save</button>
+                <button class="strip-btn" id="btn-cancel-epics" style="${state.editMode.epics ? '' : 'display:none;'}">Cancel</button>
                 <button class="strip-btn" id="btn-epic-open-file">Open File</button>
             </div>
         `;
         document.getElementById('btn-epic-open-file').addEventListener('click', () => {
             vscode.postMessage({ type: 'openKanbanPlan', filePath: plan.planFile });
         });
+
+        const btnEditEpics = document.getElementById('btn-edit-epics');
+        const btnCancelEpics = document.getElementById('btn-cancel-epics');
+        const btnSaveEpics = document.getElementById('btn-save-epics');
+
+        if (btnEditEpics) btnEditEpics.addEventListener('click', () => enterEditMode('epics'));
+        if (btnCancelEpics) btnCancelEpics.addEventListener('click', () => exitEditMode('epics'));
+        if (btnSaveEpics) {
+            btnSaveEpics.addEventListener('click', () => {
+                const filePath = _epicSelectedPlan ? _epicSelectedPlan.planFile : null;
+                const content = epicsEditor ? epicsEditor.value : '';
+                const originalContent = state.editOriginalContent.epics;
+                if (filePath) {
+                    vscode.postMessage({
+                        type: 'saveFileContent',
+                        filePath,
+                        content,
+                        originalContent,
+                        tab: 'epics'
+                    });
+                }
+            });
+        }
     }
 
     function renderEpicSubtasks(epic, subtasks) {
@@ -957,22 +1061,55 @@
         state.dirtyFlags[tab] = false;
     }
 
-    if (btnEditKanban) btnEditKanban.addEventListener('click', () => enterEditMode('kanban'));
-    if (btnCancelKanban) btnCancelKanban.addEventListener('click', () => exitEditMode('kanban'));
-    if (btnSaveKanban) {
-        btnSaveKanban.addEventListener('click', () => {
-            const filePath = _kanbanSelectedPlan ? _kanbanSelectedPlan.planFile : null;
-            const content = kanbanEditor ? kanbanEditor.value : '';
-            const originalContent = state.editOriginalContent.kanban;
-            if (filePath) {
-                vscode.postMessage({
-                    type: 'saveFileContent',
-                    filePath,
-                    content,
-                    originalContent,
-                    tab: 'kanban'
-                });
+    // Wire up "+ New Epic" and Modal
+    if (btnNewEpic && newEpicModal) {
+        btnNewEpic.addEventListener('click', () => {
+            if (newEpicName) newEpicName.value = '';
+            if (newEpicDescription) newEpicDescription.value = '';
+            newEpicModal.style.display = 'flex';
+            if (newEpicName) newEpicName.focus();
+        });
+    }
+
+    if (btnNewEpicCancel && newEpicModal) {
+        btnNewEpicCancel.addEventListener('click', () => {
+            newEpicModal.style.display = 'none';
+        });
+    }
+
+    if (btnNewEpicSubmit && newEpicModal) {
+        btnNewEpicSubmit.addEventListener('click', () => {
+            const name = newEpicName ? newEpicName.value.trim() : '';
+            const description = newEpicDescription ? newEpicDescription.value.trim() : '';
+            if (!name) {
+                alert('Epic name is required.');
+                return;
             }
+            vscode.postMessage({
+                type: 'createEpic',
+                name,
+                description,
+                workspaceRoot: epicsFilters.workspaceRoot,
+                subtaskPlanIds: []
+            });
+            newEpicModal.style.display = 'none';
+        });
+    }
+
+    // Editor dirty state input listeners
+    if (kanbanEditor) {
+        kanbanEditor.addEventListener('input', () => {
+            state.dirtyFlags.kanban = true;
+        });
+    }
+    if (epicsEditor) {
+        epicsEditor.addEventListener('input', () => {
+            state.dirtyFlags.epics = true;
+        });
+    }
+    if (constitutionEditor) {
+        constitutionEditor.addEventListener('input', () => {
+            state.dirtyFlags.constitution = true;
         });
     }
 

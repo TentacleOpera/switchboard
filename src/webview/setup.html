@@ -44,7 +44,7 @@
 
         body {
             margin: 0;
-            padding: 16px;
+            padding: 0;
             background: var(--bg-color);
             color: var(--text-primary);
             font-family: var(--font-family);
@@ -102,8 +102,6 @@
         }
 
         .setup-shell {
-            max-width: 980px;
-            margin: 0 auto;
             display: flex;
             flex-direction: column;
             gap: 12px;
@@ -464,19 +462,17 @@
     </style>
 </head>
 
-<body>
+<body class="cyber-theme-enabled">
     <div class="setup-shell">
         <!-- Tab Navigation -->
         <div class="shared-tab-bar" role="tablist" aria-label="Setup sections">
             <button class="shared-tab-btn active" data-tab="setup" role="tab" aria-selected="true">Setup</button>
-            <button class="shared-tab-btn" data-tab="kanban" role="tab" aria-selected="false">Kanban</button>
             <button class="shared-tab-btn" data-tab="database" role="tab" aria-selected="false">Database</button>
             <button class="shared-tab-btn" data-tab="control-plane" role="tab" aria-selected="false">Control Plane</button>
             <button class="shared-tab-btn" data-tab="mappings" role="tab" aria-selected="false">Multi-Repo</button>
             <button class="shared-tab-btn" data-tab="clickup" role="tab" aria-selected="false">ClickUp</button>
             <button class="shared-tab-btn" data-tab="linear" role="tab" aria-selected="false">Linear</button>
             <button class="shared-tab-btn" data-tab="notion" role="tab" aria-selected="false">Notion</button>
-            <button class="shared-tab-btn" data-tab="artifacts-panel" role="tab" aria-selected="false">Artifacts Panel</button>
             <button class="shared-tab-btn" data-tab="plan-scanner" role="tab" aria-selected="false">Plan Scanner</button>
             <button class="shared-tab-btn" data-tab="theme" role="tab" aria-selected="false">Theme</button>
             <button class="shared-tab-btn" data-tab="status-bar" role="tab" aria-selected="false">Status Bar</button>
@@ -566,12 +562,7 @@
                 </div>
             </div>
 
-        <div class="shared-tab-content" id="kanban-fields" data-tab-content="kanban">
-            <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
-                Kanban setup is configured in the kanban panel.
-            </div>
-            <button id="btn-open-kanban" class="action-btn w-full">OPEN KANBAN VIEW</button>
-        </div>
+
 
         <div class="shared-tab-content" id="db-sync-fields" data-tab-content="database">
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
@@ -640,152 +631,197 @@
                     Configure ClickUp integration for plan sync, issue import, and custom field mapping.
                 </div>
 
-                <div style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
-                    <label class="startup-row" style="display:block; margin-bottom:6px;">
-                        <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">
-                            Ticket Import Location
-                        </span>
-                        <div style="display:flex; gap:8px; margin-top:4px;">
-                            <input class="ticket-import-folder-input" type="text" placeholder="e.g. /Users/me/Tickets" style="flex:1; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; border-radius:4px;">
-                            <button class="btn-browse-ticket-folder secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
-                        </div>
-                    </label>
-                    <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
-                        Where imported tickets are saved. Defaults to <code>.switchboard/plans</code> if left empty.
-                    </div>
-                    <div style="margin-top:10px;">
-                        <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                            <input class="tickets-auto-sync-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                            <span style="font-size:11px;">Enable Tickets auto-sync</span>
-                        </label>
-                        <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
-                            When on, tickets save locally whenever a list loads, and local edits auto-push to ClickUp/Linear on file save.
-                        </div>
-                    </div>
-                </div>
-
                 <div id="clickup-config-section">
-                <div class="db-subsection">
-                    <div class="subsection-header">
-                        <span>ClickUp</span>
-                        <span id="clickup-setup-status" style="margin-left:auto; font-size:9px; color:var(--text-secondary);">Not configured</span>
+                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
+                        <div class="subsection-header">
+                            <span>Artifacts Panel Visibility</span>
+                        </div>
+                        <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                            <input id="planning-source-clickup" type="checkbox" checked style="width:auto; margin:0;">
+                            <span>Show docs in Artifacts Panel</span>
+                        </label>
                     </div>
-                    <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
-                        Sync plans to ClickUp tasks and import tasks from ClickUp.
+                    <!-- Section 1: API Token -->
+                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
+                        <div class="subsection-header">
+                            <span>1. API Token</span>
+                            <span id="clickup-setup-status" style="margin-left:auto; font-size:9px; color:var(--text-secondary);">Not configured</span>
+                        </div>
+                        <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
+                            Sync plans to ClickUp tasks and import tasks from ClickUp.
+                        </div>
+                        <label class="startup-row" style="display:block; margin-top:6px;">
+                            <span style="display:block; margin-bottom:4px;">API Token</span>
+                            <input id="clickup-token-input" type="password" placeholder="Enter ClickUp API token" style="width:100%;">
+                        </label>
+                        <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3; margin-bottom:12px;">
+                            Your key is stored in VS Code's encrypted secret storage (your OS keychain) and is used only to call ClickUp directly — it's never sent to any Switchboard server or logged.
+                        </div>
+                        <button id="btn-apply-clickup-config" class="action-btn w-full" style="margin-top: 8px;">APPLY CLICKUP SETTINGS</button>
+                        <div id="clickup-option-summary" style="display:none; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
+                        <div id="clickup-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
                     </div>
-                    <label class="startup-row" style="display:block; margin-top:6px;">
-                        <span style="display:block; margin-bottom:4px;">API Token</span>
-                        <input id="clickup-token-input" type="password" placeholder="Enter ClickUp API token" style="width:100%;">
-                    </label>
-                    <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
-                        Keys are stored via the VS Code API and are not visible to the Switchboard extension.
-                    </div>
-                    <div style="display:flex; flex-direction:column; gap:10px; margin-top:8px;">
-                        <div>
-                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                                <input id="clickup-option-create-folder" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                                <span>Create or reuse the AI Agents folder</span>
-                            </label>
-                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
-                                Create a folder in ClickUp to organize your Switchboard lists
-                            </div>
+
+                    <!-- Section 2: Ticket Import -->
+                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
+                        <div class="subsection-header">
+                            <span>2. Ticket Import</span>
                         </div>
-                        <div>
-                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                                <input id="clickup-option-create-lists" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                                <span>Create or reuse mapped lists for visible Kanban columns</span>
-                            </label>
-                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
-                                Create ClickUp lists for each Kanban column (e.g., "In Progress" list) to sync plans to tasks
+                        <label class="startup-row" style="display:block; margin-bottom:6px;">
+                            <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">
+                                Ticket Import Location
+                            </span>
+                            <div style="display:flex; gap:8px; margin-top:4px;">
+                                <input class="ticket-import-folder-input" type="text" placeholder="e.g. /Users/me/Tickets" style="flex:1; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; border-radius:4px;">
+                                <button class="btn-browse-ticket-folder secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
                             </div>
+                        </label>
+                        <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
+                            Where imported tickets are saved. Defaults to <code>.switchboard/plans</code> if left empty.
                         </div>
-                        <div>
+                        <div style="margin-top:10px;">
                             <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                                <input id="clickup-option-create-custom-fields" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                                <span>Create Switchboard custom fields on the first mapped list</span>
+                                <input class="tickets-auto-sync-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                <span style="font-size:11px;">Enable Tickets auto-sync</span>
                             </label>
                             <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
-                                Add custom fields to track plan metadata like complexity, session ID, and file path
-                            </div>
-                        </div>
-                        <div>
-                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                                <input id="clickup-option-enable-realtime-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                                <span>Enable realtime ClickUp push sync for mapped plans</span>
-                            </label>
-                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
-                                Automatically push plan changes to ClickUp as you move cards between columns
-                            </div>
-                        </div>
-                        <div>
-                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                                <input id="clickup-option-delete-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                                <span>Delete ClickUp tasks when plans are deleted in Switchboard</span>
-                            </label>
-                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
-                                When enabled, deleting a plan in Switchboard will delete the corresponding task in ClickUp
-                            </div>
-                        </div>
-                        <div>
-                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                                <input id="clickup-option-complete-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                                <span>Sync completed status to ClickUp</span>
-                            </label>
-                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
-                                When enabled, moving a plan to COMPLETED in Switchboard will update the ClickUp task status
-                            </div>
-                        </div>
-                        <div>
-                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                                <input id="clickup-option-exclude-backlog" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                                <span>Exclude backlog tasks from sync</span>
-                            </label>
-                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
-                                Keep sync lightweight by excluding tasks whose status is named "backlog". Only active tasks will be imported.
+                                When on, tickets save locally whenever a list loads, and local edits auto-push to ClickUp/Linear on file save.
                             </div>
                         </div>
                     </div>
-                    <button id="btn-apply-clickup-config" class="action-btn w-full" style="margin-top: 8px;">APPLY CLICKUP SETTINGS</button>
-                    <div id="clickup-option-summary" style="display:none; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
-                    <div id="clickup-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
-                    <div id="clickup-mapping-summary" style="display:none; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
-                    <div id="clickup-mappings-section" class="hidden" style="margin-top:10px; border-top:1px solid var(--border); padding-top:10px;">
+
+                    <!-- Section 3: Kanban Board Mapping -->
+                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
                         <div class="subsection-header" style="margin-bottom:6px;">
-                            <span>Column Mappings</span>
+                            <span>3. Kanban Board Mapping</span>
                         </div>
-                        <div style="font-size:10px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
-                            Map current Switchboard columns to ClickUp lists, create missing lists, or exclude columns from sync.
-                        </div>
-                        <div class="flex gap-2" style="margin-bottom:8px;">
-                            <button id="btn-clickup-create-unmapped" class="secondary-btn w-full">CREATE LISTS FOR UNMAPPED</button>
-                            <button id="btn-clickup-save-mappings" class="action-btn w-full">SAVE MAPPINGS</button>
-                        </div>
-                        <div id="clickup-mappings-list" style="display:flex; flex-direction:column; gap:8px;"></div>
-                    </div>
-                    <div id="clickup-automation-section" class="hidden" style="margin-top:10px; border-top:1px solid var(--border); padding-top:10px;">
-                        <div class="subsection-header" style="margin-bottom:6px;">
-                            <span>ClickUp Automation</span>
-                        </div>
-                        <div style="margin-bottom:12px;">
-                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                                <input id="clickup-option-enable-auto-pull" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                                <span>Enable ClickUp auto-pull and automation polling</span>
+                        <div>
+                            <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:8px; cursor:pointer;">
+                                <input id="clickup-disclosure-kanban" type="checkbox" style="width:auto; margin:0;">
+                                <span style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">Enable Kanban sync</span>
                             </label>
-                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
-                                Periodically pull ClickUp task updates and run automation rules to create plans from tasks
+                        </div>
+                        <div id="clickup-kanban-body" class="hidden" style="margin-top:10px; margin-left:8px; display:flex; flex-direction:column; gap:10px;">
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="clickup-option-create-folder" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Create or reuse the AI Agents folder</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    Create a folder in ClickUp to organize your Switchboard lists
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="clickup-option-create-lists" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Create or reuse mapped lists for visible Kanban columns</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    Create ClickUp lists for each Kanban column (e.g., "In Progress" list) to sync plans to tasks
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="clickup-option-create-custom-fields" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Create Switchboard custom fields on the first mapped list</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    Add custom fields to track plan metadata like complexity, session ID, and file path
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="clickup-option-exclude-backlog" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Exclude backlog tasks from sync</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    Keep sync lightweight by excluding tasks whose status is named "backlog". Only active tasks will be imported.
+                                </div>
+                            </div>
+                            
+                            <div id="clickup-mapping-summary" style="display:none; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
+                            
+                            <div id="clickup-mappings-section" class="hidden" style="margin-top:10px; border-top:1px solid var(--border); padding-top:10px;">
+                                <div class="subsection-header" style="margin-bottom:6px;">
+                                    <span>Column Mappings</span>
+                                </div>
+                                <div style="font-size:10px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
+                                    Map current Switchboard columns to ClickUp lists, create missing lists, or exclude columns from sync.
+                                </div>
+                                <div class="flex gap-2" style="margin-bottom:8px;">
+                                    <button id="btn-clickup-create-unmapped" class="secondary-btn w-full">CREATE LISTS FOR UNMAPPED</button>
+                                    <button id="btn-clickup-save-mappings" class="action-btn w-full">SAVE MAPPINGS</button>
+                                </div>
+                                <div id="clickup-mappings-list" style="display:flex; flex-direction:column; gap:8px;"></div>
                             </div>
                         </div>
-                        <div style="font-size:10px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
-                            Create a normal Switchboard plan when a ClickUp task matches a tag, then write the result back when that plan reaches the configured final column.
-                        </div>
-                        <div class="flex gap-2" style="margin-bottom:8px;">
-                            <button id="btn-clickup-add-rule" class="secondary-btn w-full">ADD RULE</button>
-                            <button id="btn-clickup-save-automation" class="action-btn w-full">SAVE AUTOMATION</button>
-                        </div>
-                        <div style="font-size:9px; font-family:var(--font-mono); letter-spacing:1px; color:var(--text-secondary); margin:8px 0 4px;">RULES</div>
-                        <div id="clickup-automation-rules-list" style="display:flex; flex-direction:column; gap:8px;"></div>
                     </div>
-                </div>
+
+                    <!-- Section 4: Kanban Automation -->
+                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: none;">
+                        <div class="subsection-header" style="margin-bottom:6px;">
+                            <span>4. Kanban Automation</span>
+                        </div>
+                        <div>
+                            <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:8px; cursor:pointer;">
+                                <input id="clickup-disclosure-automation" type="checkbox" style="width:auto; margin:0;">
+                                <span style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">Enable automation</span>
+                            </label>
+                        </div>
+                        <div id="clickup-automation-body" class="hidden" style="margin-top:10px; margin-left:8px; display:flex; flex-direction:column; gap:10px;">
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="clickup-option-enable-realtime-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Enable realtime ClickUp push sync for mapped plans</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    Automatically push plan changes to ClickUp as you move cards between columns
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="clickup-option-delete-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Delete ClickUp tasks when plans are deleted in Switchboard</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    When enabled, deleting a plan in Switchboard will delete the corresponding task in ClickUp
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="clickup-option-complete-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Sync completed status to ClickUp</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    When enabled, moving a plan to COMPLETED in Switchboard will update the ClickUp task status
+                                </div>
+                            </div>
+                            
+                            <div id="clickup-automation-section" class="hidden" style="margin-top:10px; border-top:1px solid var(--border); padding-top:10px;">
+                                <div class="subsection-header" style="margin-bottom:6px;">
+                                    <span>ClickUp Automation</span>
+                                </div>
+                                <div style="margin-bottom:12px;">
+                                    <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                        <input id="clickup-option-enable-auto-pull" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                        <span>Enable ClickUp auto-pull and automation polling</span>
+                                    </label>
+                                    <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                        Periodically pull ClickUp task updates and run automation rules to create plans from tasks
+                                </div>
+                                </div>
+                                <div style="font-size:10px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
+                                    Create a normal Switchboard plan when a ClickUp task matches a tag, then write the result back when that plan reaches the configured final column.
+                                </div>
+                                <div class="flex gap-2" style="margin-bottom:8px;">
+                                    <button id="btn-clickup-add-rule" class="secondary-btn w-full">ADD RULE</button>
+                                    <button id="btn-clickup-save-automation" class="action-btn w-full">SAVE AUTOMATION</button>
+                                </div>
+                                <div style="font-size:9px; font-family:var(--font-mono); letter-spacing:1px; color:var(--text-secondary); margin:8px 0 4px;">RULES</div>
+                                <div id="clickup-automation-rules-list" style="display:flex; flex-direction:column; gap:8px;"></div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
         </div>
 
@@ -794,159 +830,212 @@
                     Configure Linear integration for plan sync, issue import, and workflow state mapping.
                 </div>
 
-                <div style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
-                    <label class="startup-row" style="display:block; margin-bottom:6px;">
-                        <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">
-                            Ticket Import Location
-                        </span>
-                        <div style="display:flex; gap:8px; margin-top:4px;">
-                            <input class="ticket-import-folder-input" type="text" placeholder="e.g. /Users/me/Tickets" style="flex:1; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; border-radius:4px;">
-                            <button class="btn-browse-ticket-folder secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
-                        </div>
-                    </label>
-                    <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
-                        Where imported tickets are saved. Defaults to <code>.switchboard/plans</code> if left empty.
-                    </div>
-                    <div style="margin-top:10px;">
-                        <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                            <input class="tickets-auto-sync-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                            <span style="font-size:11px;">Enable Tickets auto-sync</span>
-                        </label>
-                        <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
-                            When on, tickets save locally whenever a list loads, and local edits auto-push to ClickUp/Linear on file save.
-                        </div>
-                    </div>
-                </div>
-
                 <div id="linear-config-section">
-                <div class="db-subsection">
-                    <div class="subsection-header">
-                        <span>Linear</span>
-                        <span id="linear-setup-status" style="margin-left:auto; font-size:9px; color:var(--text-secondary);">Not configured</span>
+                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
+                        <div class="subsection-header">
+                            <span>Artifacts Panel Visibility</span>
+                        </div>
+                        <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                            <input id="planning-source-linear" type="checkbox" checked style="width:auto; margin:0;">
+                            <span>Show docs in Artifacts Panel</span>
+                        </label>
                     </div>
-                    <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
-                        Sync plans to Linear issues and import issues from Linear.
+                    <!-- Section 1: API Token -->
+                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
+                        <div class="subsection-header">
+                            <span>1. API Token</span>
+                            <span id="linear-setup-status" style="margin-left:auto; font-size:9px; color:var(--text-secondary);">Not configured</span>
+                        </div>
+                        <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
+                            Sync plans to Linear issues and import issues from Linear.
+                        </div>
+                        <label class="startup-row" style="display:block; margin-top:6px;">
+                            <span style="display:block; margin-bottom:4px;">API Token</span>
+                            <input id="linear-token-input" type="password" placeholder="Enter Linear API token" style="width:100%;">
+                        </label>
+                        <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3; margin-bottom:12px;">
+                            Your key is stored in VS Code's encrypted secret storage (your OS keychain) and is used only to call Linear directly — it's never sent to any Switchboard server or logged.
+                        </div>
+                        <button id="btn-apply-linear-config" class="action-btn w-full" style="margin-top: 8px;">APPLY LINEAR SETTINGS</button>
+                        <div id="linear-option-summary" style="display:none; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
+                        <div id="linear-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
                     </div>
-                    <label class="startup-row" style="display:block; margin-top:6px;">
-                        <span style="display:block; margin-bottom:4px;">API Token</span>
-                        <input id="linear-token-input" type="password" placeholder="Enter Linear API token" style="width:100%;">
-                    </label>
-                    <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
-                        Keys are stored via the VS Code API and are not visible to the Switchboard extension.
-                    </div>
-                    <div style="display:flex; flex-direction:column; gap:10px; margin-top:8px;">
-                        <div>
-                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                                <input id="linear-option-map-columns" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                                <span>Map visible Kanban columns to Linear workflow states</span>
-                            </label>
-                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
-                                Link your Kanban columns (e.g., "In Progress") to Linear states so plan movements sync to Linear issues
-                            </div>
+
+                    <!-- Section 2: Ticket Import -->
+                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
+                        <div class="subsection-header">
+                            <span>2. Ticket Import</span>
                         </div>
-                        <div>
-                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                                <input id="linear-option-create-label" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                                <span>Create or reuse the Switchboard label</span>
-                            </label>
-                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
-                                Add a "switchboard" label to Linear issues created by Switchboard for easy filtering
-                            </div>
-                        </div>
-                        <div>
-                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                                <input id="linear-option-enable-realtime-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                                <span>Enable realtime Linear push sync for mapped plans</span>
-                            </label>
-                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
-                                Automatically push plan changes to Linear as you move cards between columns
-                            </div>
-                        </div>
-                        <div>
-                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                                <input id="linear-option-enable-complete-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                                <span>Sync completed status to Linear</span>
-                            </label>
-                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
-                                When enabled, marking a plan as complete in Switchboard will move the Linear issue to your mapped completed state
-                            </div>
-                        </div>
-                        <div>
-                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                                <input id="linear-option-delete-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                                <span>Archive Linear issues when plans are deleted in Switchboard</span>
-                            </label>
-                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
-                                When enabled, deleting a plan in Switchboard will archive the corresponding issue in Linear
-                            </div>
-                        </div>
-                        <div>
-                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                                <input id="linear-option-exclude-backlog" type="checkbox" checked style="width:auto; margin:0; margin-top:2px;">
-                                <span>Exclude backlog issues from sync</span>
-                            </label>
-                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
-                                Keep the plugin sync lightweight by excluding backlog issues. Only active and planned issues will be imported.
-                            </div>
-                        </div>
-                        <div>
-                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                                <span>Include projects (comma-separated names)</span>
-                            </label>
+                        <label class="startup-row" style="display:block; margin-bottom:6px;">
+                            <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">
+                                Ticket Import Location
+                            </span>
                             <div style="display:flex; gap:8px; margin-top:4px;">
-                                <input id="linear-option-include-projects" type="text" placeholder="e.g., Frontend, Backend" style="flex:1; background: #0a0a0a;">
-                                <button id="linear-browse-include-projects" class="secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
+                                <input class="ticket-import-folder-input" type="text" placeholder="e.g. /Users/me/Tickets" style="flex:1; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; border-radius:4px;">
+                                <button class="btn-browse-ticket-folder secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
                             </div>
-                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
-                                Only sync issues from these projects. Leave empty to sync all projects in the team.
-                            </div>
+                        </label>
+                        <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
+                            Where imported tickets are saved. Defaults to <code>.switchboard/plans</code> if left empty.
                         </div>
-                        <div>
+                        <div style="margin-top:10px;">
                             <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                                <span>Exclude projects (comma-separated names)</span>
+                                <input class="tickets-auto-sync-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                <span style="font-size:11px;">Enable Tickets auto-sync</span>
                             </label>
-                            <div style="display:flex; gap:8px; margin-top:4px;">
-                                <input id="linear-option-exclude-projects" type="text" placeholder="e.g., Archived, Internal" style="flex:1; background: #0a0a0a;">
-                                <button id="linear-browse-exclude-projects" class="secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
-                            </div>
                             <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
-                                Exclude these projects from sync even if they match the include filter.
+                                When on, tickets save locally whenever a list loads, and local edits auto-push to ClickUp/Linear on file save.
                             </div>
                         </div>
                     </div>
-                    <button id="btn-apply-linear-config" class="action-btn w-full" style="margin-top: 8px;">APPLY LINEAR SETTINGS</button>
-                    <div id="linear-option-summary" style="display:none; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
-                    <div id="linear-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
-                    <div id="linear-automation-section" class="hidden" style="margin-top:10px; border-top:1px solid var(--border); padding-top:10px;">
+
+                    <!-- Section 3: Kanban Board Mapping -->
+                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
                         <div class="subsection-header" style="margin-bottom:6px;">
-                            <span>Linear Automation</span>
+                            <span>3. Kanban Board Mapping</span>
                         </div>
-                        <div style="margin-bottom:12px;">
-                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                                <input id="linear-option-enable-auto-pull" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                                <span>Enable Linear auto-pull and automation polling</span>
+                        <div>
+                            <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:8px; cursor:pointer;">
+                                <input id="linear-disclosure-kanban" type="checkbox" style="width:auto; margin:0;">
+                                <span style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">Enable Kanban sync</span>
                             </label>
-                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
-                                Periodically pull Linear issue updates and run automation rules to create plans from issues
+                        </div>
+                        <div id="linear-kanban-body" class="hidden" style="margin-top:10px; margin-left:8px; display:flex; flex-direction:column; gap:10px;">
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="linear-option-map-columns" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Map visible Kanban columns to Linear workflow states</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    Link your Kanban columns (e.g., "In Progress") to Linear states so plan movements sync to Linear issues
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="linear-option-create-label" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Create or reuse the Switchboard label</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    Add a "switchboard" label to Linear issues created by Switchboard for easy filtering
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="linear-option-exclude-backlog" type="checkbox" checked style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Exclude backlog issues from sync</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    Keep the plugin sync lightweight by excluding backlog issues. Only active and planned issues will be imported.
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <span>Include projects (comma-separated names)</span>
+                                </label>
+                                <div style="display:flex; gap:8px; margin-top:4px;">
+                                    <input id="linear-option-include-projects" type="text" placeholder="e.g., Frontend, Backend" style="flex:1; background: #0a0a0a;">
+                                    <button id="linear-browse-include-projects" class="secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
+                                </div>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    Only sync issues from these projects. Leave empty to sync all projects in the team.
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <span>Exclude projects (comma-separated names)</span>
+                                </label>
+                                <div style="display:flex; gap:8px; margin-top:4px;">
+                                    <input id="linear-option-exclude-projects" type="text" placeholder="e.g., Archived, Internal" style="flex:1; background: #0a0a0a;">
+                                    <button id="linear-browse-exclude-projects" class="secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
+                                </div>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    Exclude these projects from sync even if they match the include filter.
+                                </div>
                             </div>
                         </div>
-                        <div style="font-size:10px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
-                            Create a normal Switchboard plan when a Linear issue matches a label and state, then write the result back when that plan reaches the configured final column.
-                        </div>
-                        <div class="flex gap-2" style="margin-bottom:8px;">
-                            <button id="btn-linear-add-rule" class="secondary-btn w-full">ADD RULE</button>
-                            <button id="btn-linear-save-automation" class="action-btn w-full">SAVE AUTOMATION</button>
-                        </div>
-                        <div style="font-size:9px; font-family:var(--font-mono); letter-spacing:1px; color:var(--text-secondary); margin:8px 0 4px;">RULES</div>
-                        <div id="linear-automation-rules-list" style="display:flex; flex-direction:column; gap:8px;"></div>
                     </div>
-                </div>
+
+                    <!-- Section 4: Kanban Automation -->
+                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: none;">
+                        <div class="subsection-header" style="margin-bottom:6px;">
+                            <span>4. Kanban Automation</span>
+                        </div>
+                        <div>
+                            <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:8px; cursor:pointer;">
+                                <input id="linear-disclosure-automation" type="checkbox" style="width:auto; margin:0;">
+                                <span style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">Enable automation</span>
+                            </label>
+                        </div>
+                        <div id="linear-automation-body" class="hidden" style="margin-top:10px; margin-left:8px; display:flex; flex-direction:column; gap:10px;">
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="linear-option-enable-realtime-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Enable realtime Linear push sync for mapped plans</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    Automatically push plan changes to Linear as you move cards between columns
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="linear-option-enable-complete-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Sync completed status to Linear</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    When enabled, marking a plan as complete in Switchboard will move the Linear issue to your mapped completed state
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="linear-option-delete-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Archive Linear issues when plans are deleted in Switchboard</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    When enabled, deleting a plan in Switchboard will archive the corresponding issue in Linear
+                                </div>
+                            </div>
+
+                            <div id="linear-automation-section" class="hidden" style="margin-top:10px; border-top:1px solid var(--border); padding-top:10px;">
+                                <div class="subsection-header" style="margin-bottom:6px;">
+                                    <span>Linear Automation</span>
+                                </div>
+                                <div style="margin-bottom:12px;">
+                                    <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                        <input id="linear-option-enable-auto-pull" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                        <span>Enable Linear auto-pull and automation polling</span>
+                                    </label>
+                                    <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                        Periodically pull Linear issue updates and run automation rules to create plans from issues
+                                    </div>
+                                </div>
+                                <div style="font-size:10px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
+                                    Create a normal Switchboard plan when a Linear issue matches a label and state, then write the result back when that plan reaches the configured final column.
+                                </div>
+                                <div class="flex gap-2" style="margin-bottom:8px;">
+                                    <button id="btn-linear-add-rule" class="secondary-btn w-full">ADD RULE</button>
+                                    <button id="btn-linear-save-automation" class="action-btn w-full">SAVE AUTOMATION</button>
+                                </div>
+                                <div style="font-size:9px; font-family:var(--font-mono); letter-spacing:1px; color:var(--text-secondary); margin:8px 0 4px;">RULES</div>
+                                <div id="linear-automation-rules-list" style="display:flex; flex-direction:column; gap:8px;"></div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
         </div>
 
         <div class="shared-tab-content" id="notion-fields" data-tab-content="notion">
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     Configure Notion integration for design document fetching.
+                </div>
+
+                <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
+                    <div class="subsection-header">
+                        <span>Artifacts Panel Visibility</span>
+                    </div>
+                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                        <input id="planning-source-notion" type="checkbox" checked style="width:auto; margin:0;">
+                        <span>Show docs in Artifacts Panel</span>
+                    </label>
                 </div>
 
                 <div class="db-subsection">
@@ -962,97 +1051,14 @@
                         <input id="notion-token-input" type="password" placeholder="Enter Notion integration token (secret_... or ntn_...)" style="width:100%;">
                     </label>
                     <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
-                        Keys are stored via the VS Code API and are not visible to the Switchboard extension.
+                        Your key is stored in VS Code's encrypted secret storage (your OS keychain) and is used only to call Notion directly — it's never sent to any Switchboard server or logged.
                     </div>
-                    <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:8px;">
-                        <input id="notion-option-enable-design-doc" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                        <span>Use the existing planner design-doc setting for Notion-backed design document fetching</span>
-                    </label>
                     <button id="btn-apply-notion-config" class="action-btn w-full" style="margin-top: 8px;">APPLY NOTION SETTINGS</button>
-                    <div id="notion-option-summary" style="display:none; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
                     <div id="notion-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
                 </div>
         </div>
 
-        <div class="shared-tab-content" id="artifacts-panel-fields" data-tab-content="artifacts-panel">
-                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
-                    Select which research sources to show in the Artifacts panel.
-                </div>
-                <div class="db-subsection">
-                    <div class="subsection-header">
-                        <span>Enabled Sources</span>
-                    </div>
-                    <div style="display:flex; flex-direction:column; gap:8px; margin-top:8px;">
-                        <label class="startup-row" style="display:flex; align-items:center; gap:8px;">
-                            <input id="planning-source-clickup" type="checkbox" checked style="width:auto; margin:0;">
-                            <span>ClickUp Docs</span>
-                        </label>
-                        <label class="startup-row" style="display:flex; align-items:center; gap:8px;">
-                            <input id="planning-source-linear" type="checkbox" checked style="width:auto; margin:0;">
-                            <span>Linear Docs</span>
-                        </label>
-                        <label class="startup-row" style="display:flex; align-items:center; gap:8px;">
-                            <input id="planning-source-notion" type="checkbox" checked style="width:auto; margin:0;">
-                            <span>Notion</span>
-                        </label>
-                        <label class="startup-row" style="display:flex; align-items:center; gap:8px;">
-                            <input id="planning-source-local-folder" type="checkbox" checked style="width:auto; margin:0;">
-                            <span>Local Folder</span>
-                        </label>
-                    </div>
-                    <button id="btn-save-planning-sources" class="action-btn w-full" style="margin-top: 12px;">SAVE SOURCE SELECTIONS</button>
-                    <div id="planning-sources-status" style="min-height:16px; color: var(--accent-teal); font-size: 10px; margin-top: 6px;"></div>
-                </div>
-                <div style="border-top: 1px solid var(--border-dim); margin: 12px 0;"></div>
-                <div class="subsection-header" style="margin-top: 4px;">
-                    <span>Document Caching</span>
-                </div>
-                <div class="setup-section-description" style="margin-bottom: 12px; font-size: 11px; color: var(--text-secondary);">
-                    Choose how Artifacts Panel documents are cached locally for AI collaboration.
-                </div>
-                
-                <!-- Sync mode options -->
-                <div class="setup-option-group" style="display: flex; flex-direction: column; gap: 8px;">
-                    <label class="setup-radio-option" style="display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer;">
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <input type="radio" name="planning-sync-mode" value="no-sync" checked>
-                            <span class="setup-label-text" style="font-size: 11px; color: var(--text-primary);">No Sync (Manual Only)</span>
-                        </div>
-                        <span class="setup-label-desc" style="font-size: 10px; color: var(--text-secondary);">Only documents you view in Artifacts Panel are cached. Minimal disk usage.</span>
-                    </label>
-                    
-                    <label class="setup-radio-option" style="display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer;">
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <input type="radio" name="planning-sync-mode" value="auto-sync-all">
-                            <span class="setup-label-text" style="font-size: 11px; color: var(--text-primary);">Auto Sync All Documents</span>
-                        </div>
-                        <span class="setup-label-desc" style="font-size: 10px; color: var(--text-secondary);">Automatically fetch and cache all documents from Notion, ClickUp, Linear. "Just works" access to any doc.</span>
-                    </label>
-                    
-                    <label class="setup-radio-option" style="display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer;">
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <input type="radio" name="planning-sync-mode" value="sync-selected">
-                            <span class="setup-label-text" style="font-size: 11px; color: var(--text-primary);">Sync Selected Containers</span>
-                        </div>
-                        <span class="setup-label-desc" style="font-size: 10px; color: var(--text-secondary);">Choose specific folders/projects to cache. Balanced approach.</span>
-                    </label>
-                </div>
-                
-                <!-- Selected containers UI (hidden by default) -->
-                <div id="planning-sync-selected-containers" style="display: none; margin-top: 12px;">
-                    <div class="setup-section-description" style="margin-bottom: 12px; font-size: 11px; color: var(--text-secondary);">
-                        Select which sources and containers to sync:
-                    </div>
-                    <div id="planning-containers-list">
-                        <!-- Populated by JavaScript with checkboxes for each source/container -->
-                    </div>
-                </div>
-                
-                <!-- Sync status -->
-                <div id="planning-sync-status" style="margin-top: 12px; font-size: 11px; color: var(--text-secondary);">
-                    Status: <span id="planning-sync-status-text">Not configured</span>
-                </div>
-            </div>
+
 
         <div class="shared-tab-content" id="plan-scanner-fields" data-tab-content="plan-scanner">
             <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
@@ -1648,22 +1654,21 @@
                 },
                 'clickup': () => {
                     requestIntegrationSetupStates();
+                    vscode.postMessage({ type: 'getPlanningSources' });
                 },
                 'linear': () => {
                     requestIntegrationSetupStates();
+                    vscode.postMessage({ type: 'getPlanningSources' });
                 },
                 'notion': () => {
                     requestIntegrationSetupStates();
+                    vscode.postMessage({ type: 'getPlanningSources' });
                 },
                 'control-plane': () => {
                     vscode.postMessage({ type: 'getControlPlaneStatus' });
                 },
                 'mappings': () => {
                     vscode.postMessage({ type: 'getWorkspaceMappings' });
-                },
-                'planning-panel': () => {
-                    vscode.postMessage({ type: 'getPlanningSources' });
-                    vscode.postMessage({ type: 'getPlanningPanelSyncMode' });
                 },
                 'plan-scanner': () => {
                     vscode.postMessage({ type: 'getPlanScannerConfig' });
@@ -2399,12 +2404,6 @@
             };
         }
 
-        function collectNotionApplyOptions() {
-            return {
-                enableDesignDocFetching: document.getElementById('notion-option-enable-design-doc')?.checked === true
-            };
-        }
-
         function renderClickupOptionSummary(state) {
             const summaryEl = document.getElementById('clickup-option-summary');
             if (!summaryEl) return;
@@ -2479,23 +2478,6 @@
             ];
             summaryEl.style.display = 'block';
             summaryEl.textContent = parts.join(' · ');
-        }
-
-        function renderNotionOptionSummary(state) {
-            const summaryEl = document.getElementById('notion-option-summary');
-            if (!summaryEl) return;
-
-            setCheckboxState('notion-option-enable-design-doc', state?.designDocEnabled);
-            if (!state) {
-                summaryEl.style.display = 'none';
-                summaryEl.textContent = '';
-                return;
-            }
-
-            summaryEl.style.display = 'block';
-            summaryEl.textContent = state.designDocLink
-                ? `Planner planning epic: ${state.designDocEnabled ? 'enabled' : 'disabled'} · Source: ${state.designDocLink}`
-                : `Planner planning epic: ${state.designDocEnabled ? 'enabled' : 'disabled'} · No planning epic link configured yet.`;
         }
 
         function appendSelectOption(select, value, label) {
@@ -2752,6 +2734,58 @@
             });
         }
 
+        function syncSectionDisclosure(provider) {
+            if (provider === 'clickup') {
+                const kMaster = document.getElementById('clickup-disclosure-kanban');
+                const kBody = document.getElementById('clickup-kanban-body');
+                const aMaster = document.getElementById('clickup-disclosure-automation');
+                const aBody = document.getElementById('clickup-automation-body');
+                if (!kMaster || !kBody || !aMaster || !aBody) return;
+
+                const mappingsEditorVisible = !document.getElementById('clickup-mappings-section')?.classList.contains('hidden');
+                const createFolder = document.getElementById('clickup-option-create-folder')?.checked;
+                const createLists = document.getElementById('clickup-option-create-lists')?.checked;
+                const createFields = document.getElementById('clickup-option-create-custom-fields')?.checked;
+                const kOpen = !!(mappingsEditorVisible || createFolder || createLists || createFields);
+
+                kMaster.checked = kOpen;
+                kBody.classList.toggle('hidden', !kOpen);
+
+                const automationEditorVisible = !document.getElementById('clickup-automation-section')?.classList.contains('hidden');
+                const realtimeSync = document.getElementById('clickup-option-enable-realtime-sync')?.checked;
+                const deleteSync = document.getElementById('clickup-option-delete-sync')?.checked;
+                const autoPull = document.getElementById('clickup-option-enable-auto-pull')?.checked;
+                const aOpen = !!(automationEditorVisible || realtimeSync || deleteSync || autoPull);
+
+                aMaster.checked = aOpen;
+                aBody.classList.toggle('hidden', !aOpen);
+            } else if (provider === 'linear') {
+                const kMaster = document.getElementById('linear-disclosure-kanban');
+                const kBody = document.getElementById('linear-kanban-body');
+                const aMaster = document.getElementById('linear-disclosure-automation');
+                const aBody = document.getElementById('linear-automation-body');
+                if (!kMaster || !kBody || !aMaster || !aBody) return;
+
+                const mapColumns = document.getElementById('linear-option-map-columns')?.checked;
+                const createLabel = document.getElementById('linear-option-create-label')?.checked;
+                const includeProj = document.getElementById('linear-option-include-projects')?.value?.trim();
+                const excludeProj = document.getElementById('linear-option-exclude-projects')?.value?.trim();
+                const kOpen = !!(mapColumns || createLabel || includeProj || excludeProj);
+
+                kMaster.checked = kOpen;
+                kBody.classList.toggle('hidden', !kOpen);
+
+                const automationEditorVisible = !document.getElementById('linear-automation-section')?.classList.contains('hidden');
+                const realtimeSync = document.getElementById('linear-option-enable-realtime-sync')?.checked;
+                const deleteSync = document.getElementById('linear-option-delete-sync')?.checked;
+                const autoPull = document.getElementById('linear-option-enable-auto-pull')?.checked;
+                const aOpen = !!(automationEditorVisible || realtimeSync || deleteSync || autoPull);
+
+                aMaster.checked = aOpen;
+                aBody.classList.toggle('hidden', !aOpen);
+            }
+        }
+
         function renderClickupSetupState() {
             renderClickupOptionSummary(lastClickupSetupState);
             renderClickupMappings(lastClickupSetupState);
@@ -2762,6 +2796,7 @@
             } else if (!lastClickupSetupState) {
                 setClickupSetupMessage('');
             }
+            syncSectionDisclosure('clickup');
         }
 
         function renderLinearAutomation(state) {
@@ -2877,10 +2912,10 @@
             } else if (!lastLinearSetupState) {
                 setLinearSetupMessage('');
             }
+            syncSectionDisclosure('linear');
         }
 
         function renderNotionSetupState() {
-            renderNotionOptionSummary(lastNotionSetupState);
             setApplyButtonBusy('notion', false);
         }
 
@@ -3033,7 +3068,6 @@
 
         document.getElementById('btn-initialize')?.addEventListener('click', () => vscode.postMessage({ type: 'runSetup' }));
         document.getElementById('btn-open-docs')?.addEventListener('click', () => vscode.postMessage({ type: 'openDocs' }));
-        document.getElementById('btn-open-kanban')?.addEventListener('click', () => vscode.postMessage({ type: 'openKanban' }));
         document.getElementById('btn-export-prompts')?.addEventListener('click', () => {
             const statusEl = document.getElementById('prompt-settings-status');
             if (statusEl) {
@@ -3183,6 +3217,19 @@
         setupTokenMasking('linear-token-input');
         setupTokenMasking('notion-token-input');
 
+        document.getElementById('clickup-disclosure-kanban')?.addEventListener('change', (e) => {
+            document.getElementById('clickup-kanban-body')?.classList.toggle('hidden', !e.target.checked);
+        });
+        document.getElementById('clickup-disclosure-automation')?.addEventListener('change', (e) => {
+            document.getElementById('clickup-automation-body')?.classList.toggle('hidden', !e.target.checked);
+        });
+        document.getElementById('linear-disclosure-kanban')?.addEventListener('change', (e) => {
+            document.getElementById('linear-kanban-body')?.classList.toggle('hidden', !e.target.checked);
+        });
+        document.getElementById('linear-disclosure-automation')?.addEventListener('change', (e) => {
+            document.getElementById('linear-automation-body')?.classList.toggle('hidden', !e.target.checked);
+        });
+
         document.getElementById('btn-apply-clickup-config')?.addEventListener('click', () => {
             let token = document.getElementById('clickup-token-input')?.value.trim() || '';
             // If the value is the masked placeholder, don't send it (keep existing token)
@@ -3281,25 +3328,34 @@
             setApplyButtonBusy('notion', true);
             vscode.postMessage({
                 type: 'applyNotionConfig',
-                token,
-                options: collectNotionApplyOptions()
+                token
             });
         });
 
-        document.getElementById('btn-save-planning-sources')?.addEventListener('click', () => {
-            const clickup = document.getElementById('planning-source-clickup')?.checked === true;
-            const linear = document.getElementById('planning-source-linear')?.checked === true;
-            const notion = document.getElementById('planning-source-notion')?.checked === true;
-            const localFolder = document.getElementById('planning-source-local-folder')?.checked === true;
+        let lastPlanningSources = { clickup: true, linear: true, notion: true, 'local-folder': true };
 
+        document.getElementById('planning-source-clickup')?.addEventListener('change', (e) => {
+            lastPlanningSources.clickup = e.target.checked;
+            sendPlanningSources();
+        });
+        document.getElementById('planning-source-linear')?.addEventListener('change', (e) => {
+            lastPlanningSources.linear = e.target.checked;
+            sendPlanningSources();
+        });
+        document.getElementById('planning-source-notion')?.addEventListener('change', (e) => {
+            lastPlanningSources.notion = e.target.checked;
+            sendPlanningSources();
+        });
+
+        function sendPlanningSources() {
             vscode.postMessage({
                 type: 'savePlanningSources',
-                clickup,
-                linear,
-                notion,
-                localFolder
+                clickup: lastPlanningSources.clickup,
+                linear: lastPlanningSources.linear,
+                notion: lastPlanningSources.notion,
+                localFolder: lastPlanningSources['local-folder']
             });
-        });
+        }
 
         customPromptsModal.addEventListener('click', (event) => {
             if (event.target === customPromptsModal) closeCustomPromptsModal();
@@ -3671,29 +3727,7 @@
         setControlPlaneSetupMode(controlPlaneSetupMode);
  
  
-        // Artifacts Panel sync mode selection
-        const syncModeRadios = document.querySelectorAll('input[name="planning-sync-mode"]');
-        const selectedContainersDiv = document.getElementById('planning-sync-selected-containers');
- 
-        syncModeRadios.forEach(radio => {
-            radio.addEventListener('change', () => {
-                const mode = radio.value;
-                
-                // Show/hide selected containers UI
-                selectedContainersDiv.style.display = mode === 'sync-selected' ? 'block' : 'none';
-                
-                // Post message to setup provider
-                vscode.postMessage({
-                    type: 'setPlanningPanelSyncMode',
-                    mode: mode
-                });
-                
-                // If switching to sync-selected, load available containers
-                if (mode === 'sync-selected') {
-                    vscode.postMessage({ type: 'fetchAvailableSyncContainers' });
-                }
-            });
-        });
+
 
         // ===== Plan Scanner tab =====
         function renderPlanScannerConfig(config) {
@@ -3902,16 +3936,20 @@
                     break;
                 case 'planningSources':
                     if (message.sources) {
+                        lastPlanningSources = {
+                            clickup: message.sources.clickup !== false,
+                            linear: message.sources.linear !== false,
+                            notion: message.sources.notion !== false,
+                            'local-folder': message.sources['local-folder'] !== false
+                        };
                         runSetupHydration(() => {
                             const clickupCheckbox = document.getElementById('planning-source-clickup');
                             const linearCheckbox = document.getElementById('planning-source-linear');
                             const notionCheckbox = document.getElementById('planning-source-notion');
-                            const localFolderCheckbox = document.getElementById('planning-source-local-folder');
  
-                            if (clickupCheckbox) clickupCheckbox.checked = message.sources.clickup !== false;
-                            if (linearCheckbox) linearCheckbox.checked = message.sources.linear !== false;
-                            if (notionCheckbox) notionCheckbox.checked = message.sources.notion !== false;
-                            if (localFolderCheckbox) localFolderCheckbox.checked = message.sources['local-folder'] !== false;
+                            if (clickupCheckbox) clickupCheckbox.checked = lastPlanningSources.clickup;
+                            if (linearCheckbox) linearCheckbox.checked = lastPlanningSources.linear;
+                            if (notionCheckbox) notionCheckbox.checked = lastPlanningSources.notion;
                         });
                     }
                     break;
@@ -4226,12 +4264,6 @@
                                 ? `Source: ${lastDesignDocLink.length > 60 ? lastDesignDocLink.slice(0, 57) + '...' : lastDesignDocLink}`
                                 : 'Not configured — configure in Planning tab';
                         }
-                        lastNotionSetupState = {
-                            ...(lastNotionSetupState || { setupComplete: false }),
-                            designDocEnabled: !!message.enabled,
-                            designDocLink: message.link || ''
-                        };
-                        renderNotionSetupState();
                     });
                     break;
                 }
@@ -4388,13 +4420,7 @@
                 case 'linearAutomationSaved':
                     setLinearSetupMessage(message.success === false ? (message.error || 'Failed to save Linear automation.') : 'Linear automation saved.', message.success === false);
                     break;
-                case 'planningSourcesSaved':
-                    const statusEl = document.getElementById('planning-sources-status');
-                    if (statusEl) {
-                        statusEl.textContent = message.success ? 'Source selections saved.' : 'Failed to save source selections.';
-                        setTimeout(() => { statusEl.textContent = ''; }, 3000);
-                    }
-                    break;
+
                 case 'notionApplyResult':
                     setApplyButtonBusy('notion', false);
                     setIntegrationStatus('notion', message.success ? 'configured' : 'failed', message.error || '');
@@ -4469,80 +4495,6 @@
                         openControlPlaneSetup('fresh-setup');
                     }
                     break;
-                case 'availableSyncContainersReady': {
-                    const containersList = document.getElementById('planning-containers-list');
-                    containersList.innerHTML = '';
-                    
-                    // Group by source
-                    const bySource = {};
-                    (message.containers || []).forEach(c => {
-                        if (!bySource[c.sourceId]) bySource[c.sourceId] = [];
-                        bySource[c.sourceId].push(c);
-                    });
-                    
-                    // Render checkboxes per source
-                    Object.entries(bySource).forEach(([sourceId, containers]) => {
-                        const sourceDiv = document.createElement('div');
-                        sourceDiv.style.marginBottom = '12px';
-                        
-                        const sourceTitle = document.createElement('div');
-                        sourceTitle.style.fontSize = '10px';
-                        sourceTitle.style.fontWeight = 'bold';
-                        sourceTitle.style.color = 'var(--accent-teal)';
-                        sourceTitle.style.marginBottom = '6px';
-                        sourceTitle.textContent = sourceId.toUpperCase();
-                        sourceDiv.appendChild(sourceTitle);
-                        
-                        containers.forEach(container => {
-                            const label = document.createElement('label');
-                            label.className = 'setup-checkbox-option';
-                            label.style.marginBottom = '4px';
-                            label.style.display = 'flex';
-                            label.style.alignItems = 'center';
-                            label.style.gap = '8px';
-                            label.style.fontSize = '11px';
-                            label.style.color = 'var(--text-primary)';
-                            
-                            const checkbox = document.createElement('input');
-                            checkbox.type = 'checkbox';
-                            checkbox.value = `${sourceId}:${container.id}`;
-                            checkbox.checked = (message.selectedContainers || []).includes(`${sourceId}:${container.id}`);
-                            
-                            checkbox.addEventListener('change', () => {
-                                vscode.postMessage({
-                                    type: 'setPlanningPanelSelectedContainers',
-                                    containers: Array.from(
-                                        document.querySelectorAll('#planning-containers-list input[type="checkbox"]:checked')
-                                    ).map(el => el.value)
-                                });
-                            });
-                            
-                            const text = document.createElement('span');
-                            text.textContent = container.name;
-                            
-                            label.appendChild(checkbox);
-                            label.appendChild(text);
-                            sourceDiv.appendChild(label);
-                        });
-                        
-                        containersList.appendChild(sourceDiv);
-                    });
-                    break;
-                }
-                case 'planningPanelSyncModeReady': {
-                    // Restore radio button state from config
-                    const radio = document.querySelector(`input[name="planning-sync-mode"][value="${message.mode}"]`);
-                    if (radio) { radio.checked = true; }
-                    selectedContainersDiv.style.display = message.mode === 'sync-selected' ? 'block' : 'none';
-                    
-                    // Update status text
-                    const statusText = document.getElementById('planning-sync-status-text');
-                    if (statusText) {
-                        const modeLabels = { 'no-sync': 'Manual only', 'auto-sync-all': 'Auto sync all', 'sync-selected': 'Selected containers' };
-                        statusText.textContent = modeLabels[message.mode] || message.mode;
-                    }
-                    break;
-                }
                 default:
                     break;
             }
@@ -4552,8 +4504,8 @@
         setMultiRepoBusy(false);
         vscode.postMessage({ type: 'ready' });
 
-        // Load initial Artifacts Panel sync mode state
-        vscode.postMessage({ type: 'getPlanningPanelSyncMode' });
+        // Load initial planning sources
+        vscode.postMessage({ type: 'getPlanningSources' });
     </script>
 </body>
 
