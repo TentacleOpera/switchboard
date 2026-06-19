@@ -325,3 +325,37 @@ To avoid duplicating the upload→push→write-back sequence in two places, fact
 
 ## Recommendation
 - **Send to Coder.**
+
+---
+
+## Reviewer Pass (2026-06-19)
+
+Adversarial review of the implemented code against this plan.
+
+### Implementation as built
+The parse/upload/rewrite/write-back logic was factored into a standalone module `src/services/ImageHostingHelper.ts` (exports `escapeRegExp`, `resolveLocalImagePath`, `uploadInlineImagesAndRewrite`, and the tail helper `hostInlineImages(upload, description, sourceFilePath?)`) rather than as private methods on `TaskViewerProvider`. This matches the plan's intent (single shared tail helper, write-back only when a source file path is supplied) and is a cleaner factoring. Hosting is wired at the provider **chokepoints**:
+- Push: `TaskViewerProvider.pushTicketEdits` Linear branch (`:17782`) and ClickUp branch (`:17792`), both push with `markdown_content` / `updateIssueDescription` as specified.
+- ClickUp create: inside `ClickUpSyncService.createTask` (`:1338`) — covers `handleClickupCreateTask` and both `LocalApiServer` create routes (`:227`,`:243`) without per-call-site edits.
+- ClickUp plan-sync create: `ClickUpSyncService` (`:2243`) with plan-file write-back (sibling upload-plan feature).
+- Linear create: `LinearSyncService.createIssue` (`:1691`) and `createIssueSimple` (`:1776`), the latter reached from `PlanningPanelProvider` (`:4102`).
+
+All ClickUp writes pin `markdown_content` (the read-only `markdown_description` is only used by the unrelated `handleClickupUpdateTask`, which is outside this feature's path).
+
+### Findings
+- **CRITICAL: none.**
+- **MAJOR (FIXED) — Double-host on the ClickUp create path.** `TaskViewerProvider.handleClickupCreateTask` (`:4231`) called `hostInlineImages` *after* `ClickUpSyncService.createTask` had already hosted internally (`ClickUpSyncService.ts:1338`). Because the handler re-hosted the *original* `options.description` (still pointing at local paths), every local inline image was uploaded **twice**, producing duplicate attachments on the freshly-created task plus a redundant `updateTask` PUT. Fix: removed the handler's redundant hosting block; it now relies on the chokepoint in `createTask`, whose returned task already carries the hosted-URL description.
+- **NIT — Write-back precedes push confirmation.** `hostInlineImages` performs the local-file write-back internally, i.e. *before* the caller's `updateTask`/`updateIssueDescription` returns. The plan specified "push → on success, write back." In practice the divergence is benign: write-back only substitutes URLs for images that uploaded successfully, so if the subsequent description PUT fails the local file still references valid hosted URLs and a retry succeeds (and re-uploads nothing). Not fixed — restructuring to defer write-back adds complexity for no correctness gain.
+- **NIT — Whitespace inside `![alt]( src )` defeats rewrite.** `rawSrc` is trimmed for path resolution but the rewrite regex matches the trimmed value, so an image whose parens contain surrounding spaces would upload yet fail to rewrite. Matches the plan's specified algorithm verbatim; rare in tool-authored/hand-edited markdown. Not fixed.
+- **NIT — Create-flow image warnings are console-only.** With the duplicate hosting removed (and consistent with the Linear create paths), create-flow hosting failures `console.warn` rather than surfacing a UI notification. The push path still surfaces warnings in its return message. Accepted trade-off — eliminating duplicate uploads outweighs the lost create-time toast.
+- Edge cases #11 (literal `)` in path) and #12 (`"title"` syntax) remain documented known limitations, skip-and-warn — unchanged and acceptable per plan.
+
+### Files changed in this pass
+- `src/services/TaskViewerProvider.ts` (`handleClickupCreateTask`, ~`:4231`) — removed redundant inline-image hosting; rely on the `createTask` chokepoint. `hostInlineImages` import remains in use by the push path.
+
+### Validation
+- Compilation and tests **intentionally skipped** per this session's directives (user runs the suite separately). Static checks done by hand: `hostInlineImages` import in `TaskViewerProvider` is still referenced (push branches), no dead code introduced, no other call site double-hosts (`PlanningPanelProvider:4102` and `LocalApiServer:227/243` each route through a single hosting chokepoint).
+
+### Remaining risks
+1. Whitespace-in-parens image refs upload-but-don't-rewrite (NIT above) — low real-world incidence.
+2. Create-flow hosting failures are not surfaced in the UI (console only).
+3. Write-back occurs before push acknowledgement; benign as analyzed but a behavioral deviation from the plan's stated ordering.

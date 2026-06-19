@@ -4229,26 +4229,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             priority: options?.priority
         });
         if (task) {
-            if (options?.description) {
-                const clickUp = this._getClickUpService(resolvedRoot);
-                const { rewritten, warnings } = await hostInlineImages(
-                    (fileName, buffer) => clickUp.attachFile(task.id, fileName, buffer),
-                    options.description
-                );
-                if (rewritten !== options.description) {
-                    await clickUp.updateTask(task.id, {
-                        markdown_content: rewritten
-                    });
-                    task.description = rewritten;
-                }
-                if (warnings.length > 0) {
-                    this._showTemporaryNotification(`Created task, but image hosting failed: ${warnings.join('; ')}`);
-                } else {
-                    this._showTemporaryNotification(`Created ClickUp task: ${task.name}`);
-                }
-            } else {
-                this._showTemporaryNotification(`Created ClickUp task: ${task.name}`);
-            }
+            // Inline-image hosting is handled inside ClickUpSyncService.createTask,
+            // the shared chokepoint for every create surface (this handler plus the
+            // LocalApiServer create routes). The returned task already carries the
+            // rewritten, hosted-URL description. Do NOT host again here, or each
+            // local image would be uploaded twice and leave duplicate attachments
+            // on the new task.
+            this._showTemporaryNotification(`Created ClickUp task: ${task.name}`);
         }
         return task;
     }
