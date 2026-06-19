@@ -182,3 +182,33 @@ Once Part A lands, **Stitch qualifies for the same wording** (it will be in Secr
 ---
 
 **Recommendation: Send to Coder.** (Complexity 6 ≤ 6. The plan is now precise — corrected `loadStitch` location, enumerated call sites, and a decided cache-coherence path — and carries no strategic ambiguity, only well-scoped implementation steps.)
+
+---
+
+## Reviewer Pass — 2026-06-19
+
+**Outcome:** Implementation verified against the plan. No CRITICAL/MAJOR findings; no code fixes required. Compilation/tests deferred to user per session directive.
+
+### Verification performed (read-only)
+- **A1 (`_setupStitchAuth` async):** `DesignPanelProvider.ts:816` — signature is `async ... Promise<{ mode, valid, apiKey?, accessToken? }>`; reads both secrets (`:819`, `:820`); preserves the `STITCH_API_KEY` env fallback (`:828-830`) and the oauth-mode `delete process.env.STITCH_API_KEY` (`:823`). ✅
+- **A2 (9 callers awaited):** all of `1041, 1345, 1370, 1389, 1414, 1430, 1465, 1499, 1535` use `await this._setupStitchAuth()`. No bare calls. ✅ Note: `:1041` runs once at the top of `_handleMessage` for every message — this is load-bearing (re-arms `process.env.STITCH_API_KEY` for apiKey-mode handlers that call `loadStitch()` without first calling `_setupStitchAuth`).
+- **A3 (save handlers):** `stitchSaveApiKey` (`:1336`) and `stitchSaveAuthConfig` (`:1354`) write via `secrets.store`/`secrets.delete`, call `invalidateStitchSdkCache()`, then post `stitchApiKeyStatus`/`stitchAuthStatus` directly (authoritative path). No `config.update` of the secret keys remains. ✅
+- **A4 (`loadStitch(accessToken)`):** module-scoped at `DesignPanelProvider.ts:17`; all 14 sites (`1403, 1440, 1473, 1508, 1579, 1631, 1676, 1746, 1793, 1837, 1868, 1884, 1948, 2280`) pass a token — `auth.accessToken || ''` at auth-adjacent sites, `await secrets.get('switchboard.stitch.accessToken')` at the rest. ✅
+- **A5 (config watcher):** `extension.ts:1947` now keys only on `switchboard.stitch.authMode`; recompute block resolves apiKey/accessToken from secrets (`:1953-1954`). Status-silent `secrets.onDidChange` added at `:1972-1976` (invalidate-only). ✅
+- **A7 (package.json):** `switchboard.stitch.apiKey`/`.accessToken` removed; `authMode` + `default*` settings retained. ✅
+- **B1/B2 (wording):** approved sentence applied at `setup.html:658` (ClickUp), `:857` (Linear), `:1054` (Notion), `design.html:3744` (Google Stitch); original styling preserved (9px setup, 11px design). Plan's line numbers drifted because `setup.html` was restructured by a prior plan — content is correct. ✅
+- **Stale refs:** zero remaining `config.get/update('stitch.apiKey'|'accessToken')` in `src/`. ✅
+- **Build state:** `dist/extension.js` is newer than both source files and contains 20 secret-key references; `dist/webview/{setup,design}.html` carry the new wording — a build was run after the edits.
+
+### Findings
+- **NIT — double status-post on auth-mode flip.** `stitchSaveAuthConfig` (`DesignPanelProvider.ts:1357`) calls `config.update('stitch.authMode', ...)`, which trips the `onDidChangeConfiguration` watcher (`extension.ts:1947`) that re-posts the same `stitchApiKeyStatus`/`stitchAuthStatus` the handler already posted (`:1372-1380`). Idempotent, identical payloads, last-write-wins — and the plan (A5) explicitly wanted the authMode watcher to repost on flip. Accepted, no fix.
+- **NIT — per-message keychain reads.** `_setupStitchAuth()` at `:1041` does two `await secrets.get()` keychain hits on every dispatched message (was sync `config.get`). Correct and necessary, but now in the hot path. Revisit only if keychain latency shows up in profiling.
+- **NIT — redundant env assignment.** `stitchSaveApiKey:1343` sets `process.env.STITCH_API_KEY` immediately before `_setupStitchAuth()` sets it again. Harmless.
+
+### Fixes applied
+- None. No valid CRITICAL/MAJOR findings.
+
+### Remaining risks
+- **Webview/extension rebuild already done** (verified above), but any further `src/webview/*` or `src/*` edits require `npm run compile` before the installed panel reflects them.
+- **Tests/compile deferred** to the user per session directive; acceptance criterion #4 (suite passes) is unverified here.
+- **Single-user/no-migration assumption (User Review #1) stands** — if this build ever reaches a second user with a plaintext key in synced settings, that user is silently stranded. Revisit before wider distribution.
