@@ -4936,8 +4936,21 @@ Please format the updated output document strictly as follows:
                 const effectiveWsRoot = wsRoot || (allRoots.length > 0 ? allRoots[0] : '');
                 let planFilesList: string;
                 if (planFiles.length > 50) {
-                    const tempPath = path.join(effectiveWsRoot, '.switchboard', 'insights', `_plan_list_${Date.now()}.txt`);
-                    InsightManager.getInsightsDirectory(effectiveWsRoot);
+                    const insightsDir = InsightManager.getInsightsDirectory(effectiveWsRoot);
+                    const now = Date.now();
+                    try {
+                        for (const f of fs.readdirSync(insightsDir)) {
+                            if (!f.startsWith('_plan_list_') || !f.endsWith('.txt')) continue;
+                            const fPath = path.join(insightsDir, f);
+                            try {
+                                const stat = fs.statSync(fPath);
+                                if (now - stat.mtimeMs > 24 * 60 * 60 * 1000) {
+                                    fs.unlinkSync(fPath);
+                                }
+                            } catch {}
+                        }
+                    } catch {}
+                    const tempPath = path.join(insightsDir, `_plan_list_${now}.txt`);
                     fs.writeFileSync(tempPath, planFiles.join('\n'), 'utf8');
                     planFilesList = `Plan list written to temp file: ${tempPath}`;
                 } else {

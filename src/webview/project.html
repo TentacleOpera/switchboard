@@ -71,6 +71,15 @@
         }
         body.theme-claudify {
             --accent-primary: #D97757;
+            --kanban-bg: #1A1816;
+            --panel-bg: #24211E;
+            --panel-bg2: #2D2925;
+            --border-color: #38332E;
+            --border-bright: #5C544A;
+            --card-bg: #24211E;
+            --card-bg-hover: #2D2925;
+            --text-primary: #F0EBE6;
+            --text-secondary: #A8A095;
             --display-font: 'Poppins';
             --display-letter-spacing: normal;
             --display-font-stretch: 100%;
@@ -726,6 +735,111 @@
         /* Controls strip buttons: glow on hover */
         .cyber-theme-enabled .strip-btn:hover:not(:disabled) {
             box-shadow: var(--glow-teal);
+        }
+
+        /* ── Claudify Theme: Warm Obsidian Overrides ── */
+
+        /* Claudify: suppress scanlines */
+        body.theme-claudify .cyber-scanlines { display: none !important; }
+        body.theme-claudify:not(.cyber-animation-disabled) .cyber-scanlines::before { display: none !important; }
+
+        /* Claudify: suppress neon text-shadow glow on headings */
+        body.theme-claudify .preview-panel-wrapper h1,
+        body.theme-claudify .preview-panel-wrapper h2,
+        body.theme-claudify .preview-panel-wrapper h3 { text-shadow: none; }
+
+        /* Claudify: suppress neon box-shadow glow on inline code */
+        body.theme-claudify #kanban-preview-content code,
+        body.theme-claudify #epics-preview-content code,
+        body.theme-claudify #constitution-preview-content code,
+        body.theme-claudify #tuning-preview-content code { box-shadow: none; }
+
+        /* Claudify: suppress neon box-shadow glow on code blocks */
+        body.theme-claudify #kanban-preview-content pre,
+        body.theme-claudify #epics-preview-content pre,
+        body.theme-claudify #constitution-preview-content pre,
+        body.theme-claudify #tuning-preview-content pre { box-shadow: none; }
+
+        /* Claudify: suppress neon box-shadow glow on blockquotes */
+        body.theme-claudify #kanban-preview-content blockquote,
+        body.theme-claudify #epics-preview-content blockquote,
+        body.theme-claudify #constitution-preview-content blockquote,
+        body.theme-claudify #tuning-preview-content blockquote { box-shadow: none; }
+
+        /* Claudify: suppress neon glow on selected/hovered items */
+        body.theme-claudify .kanban-plan-item.selected,
+        body.theme-claudify .kanban-plan-item:hover,
+        body.theme-claudify .epic-plan-item.selected,
+        body.theme-claudify .epic-plan-item:hover,
+        body.theme-claudify .constitution-file-item.selected,
+        body.theme-claudify .constitution-file-item:hover { box-shadow: none; }
+
+        /* Claudify: suppress neon glow on strip buttons */
+        body.theme-claudify .strip-btn:hover:not(:disabled) { box-shadow: none; }
+
+        /* Claudify: suppress neon glow on preview panel wrapper */
+        body.theme-claudify .preview-panel-wrapper { box-shadow: none; }
+
+        /* Claudify: suppress neon glow on tab buttons */
+        body.theme-claudify .shared-tab-btn.active { box-shadow: none; }
+
+        /* Claudify: warm background for cyber grid */
+        body.theme-claudify.cyber-theme-enabled {
+            background-color: #1A1816;
+            background-image:
+                linear-gradient(color-mix(in srgb, var(--accent-primary) 4%, transparent) 1px, transparent 1px),
+                linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 4%, transparent) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+        }
+
+        /* Claudify: heading color override — h2-h6 → warm cream */
+        body.theme-claudify #kanban-preview-content h2,
+        body.theme-claudify #epics-preview-content h2,
+        body.theme-claudify #constitution-preview-content h2,
+        body.theme-claudify #tuning-preview-content h2,
+        body.theme-claudify #kanban-preview-content h3,
+        body.theme-claudify #epics-preview-content h3,
+        body.theme-claudify #constitution-preview-content h3,
+        body.theme-claudify #tuning-preview-content h3,
+        body.theme-claudify #kanban-preview-content h4,
+        body.theme-claudify #epics-preview-content h4,
+        body.theme-claudify #constitution-preview-content h4,
+        body.theme-claudify #tuning-preview-content h4,
+        body.theme-claudify #kanban-preview-content h5,
+        body.theme-claudify #epics-preview-content h5,
+        body.theme-claudify #constitution-preview-content h5,
+        body.theme-claudify #tuning-preview-content h5,
+        body.theme-claudify #kanban-preview-content h6,
+        body.theme-claudify #epics-preview-content h6,
+        body.theme-claudify #constitution-preview-content h6,
+        body.theme-claudify #tuning-preview-content h6 {
+            color: #F0EBE6;
+        }
+
+        /* Claudify: warm glass tints */
+        body.theme-claudify .controls-strip,
+        body.theme-claudify .kanban-controls-strip {
+            background: rgba(36, 33, 30, 0.65);
+        }
+        body.theme-claudify #kanban-list-pane,
+        body.theme-claudify #epics-list-pane,
+        body.theme-claudify #constitution-list-pane,
+        body.theme-claudify #tuning-list-pane {
+            background: rgba(36, 33, 30, 0.70);
+        }
+
+        /* Claudify: warm preview pane backgrounds */
+        body.theme-claudify #kanban-preview-pane,
+        body.theme-claudify #epics-preview-pane,
+        body.theme-claudify #constitution-preview-pane,
+        body.theme-claudify #tuning-preview-pane {
+            background-color: rgba(240, 235, 230, 0.015);
+            background-image:
+                linear-gradient(color-mix(in srgb, var(--accent-primary) 8%, transparent) 1px, transparent 1px),
+                linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 8%, transparent) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
         }
 
         /* Unified Markdown Preview Styling (Kanban, Epics & Constitution) */

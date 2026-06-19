@@ -253,8 +253,6 @@ No automated tests will be run as part of this session (per session directive). 
 9. **Send to Stitch with no brief selected**: Verify "Send to Stitch" button is disabled when no brief is selected
 10. **Send to Stitch during brief edit mode**: Verify "Send to Stitch" button is disabled when in brief edit mode
 
-## Recommendation
+## Review Findings
 
-**Complexity: 6** → Send to Coder
-
-This plan involves multi-file coordination across HTML, JS, and TypeScript, with moderate logic changes to the Stitch generation flow and a new cross-tab bridge. The majority of work is routine deletion + pattern-following additions, but the `stitchGenerate` modification and `stitchSendBrief` handler have enough moving parts to warrant an experienced coder.
+**Reviewed:** 2026-06-19 (second pass). Implementation matches plan across all three phases — Phase 1 removals are clean with no orphaned references, Phase 2 attach-context flow is functional, Phase 3 Briefs→Stitch bridge posts both `stitchProjectsReady` and `stitchBriefInjected` in correct order. Two MAJOR issues fixed in this pass: (1) `stitchAttachedFilesPicked` handler was replacing the files array instead of appending — fixed to dedup-by-path and concat (`design.js:2514-2522`); (2) "Send to Stitch" handler was reading stale `state.activeDocSourceFolder` (shared across all doc types) instead of looking up the tree node's `dataset.sourceFolder` — fixed to use `findTreeNode()` matching the delete button pattern (`design.js:1935-1936`). Three NITs deferred: redundant DOM lookup in `stitchBriefInjected`, lock-during-interaction in `stitchCreateProject` (pre-existing pattern), and missing path traversal guard in `stitchCreateProject` brief selection (trusted data source). No compilation or tests run per session directives. **Remaining risks:** `stitchCreateProject` holds operation lock during `showInputBox`/`showQuickPick` which blocks concurrent Stitch operations during user interaction; `stitchSendBrief` reads file and shows input box before lock check so user could waste input if lock is held.

@@ -483,39 +483,44 @@
                 break;
             }
             case 'insightContent': {
-                if (tuningPreviewContent && msg.content) {
-                    tuningPreviewContent.innerHTML = msg.renderedHtml || escapeHtml(msg.content);
-                    _tuningSelectedInsight = msg.filename;
-                    _tuningSelectedWorkspaceRoot = msg.workspaceRoot || '';
-                    const actionsDiv = document.createElement('div');
-                    actionsDiv.style.cssText = 'padding: 12px 0; display: flex; gap: 8px; border-top: 1px solid var(--border-color); margin-top: 16px;';
-                    actionsDiv.innerHTML = `
-                        <button class="strip-btn" id="btn-insight-copy-link">Copy Link</button>
-                        <button class="strip-btn" id="btn-insight-mark-applied">Mark Applied</button>
-                        <button class="strip-btn" id="btn-insight-dismiss">Dismiss</button>
-                        <button class="strip-btn" id="btn-insight-delete" style="color: #ff6b6b;">Delete</button>
-                    `;
-                    tuningPreviewContent.appendChild(actionsDiv);
-                    const btnCopyLink = document.getElementById('btn-insight-copy-link');
-                    const btnMarkApplied = document.getElementById('btn-insight-mark-applied');
-                    const btnDismiss = document.getElementById('btn-insight-dismiss');
-                    const btnDeleteInsight = document.getElementById('btn-insight-delete');
-                    if (btnCopyLink) btnCopyLink.addEventListener('click', () => {
-                        const link = `${_tuningSelectedWorkspaceRoot}/.switchboard/insights/${_tuningSelectedInsight}`;
-                        vscode.postMessage({ type: 'copyInsightLink', link });
-                    });
-                    if (btnMarkApplied) btnMarkApplied.addEventListener('click', () => {
-                        vscode.postMessage({ type: 'updateInsightStatus', filename: _tuningSelectedInsight, status: 'applied', workspaceRoot: _tuningSelectedWorkspaceRoot });
-                    });
-                    if (btnDismiss) btnDismiss.addEventListener('click', () => {
-                        vscode.postMessage({ type: 'updateInsightStatus', filename: _tuningSelectedInsight, status: 'dismissed', workspaceRoot: _tuningSelectedWorkspaceRoot });
-                    });
-                    if (btnDeleteInsight) btnDeleteInsight.addEventListener('click', () => {
-                        if (confirm('Delete this insight? This cannot be undone.')) {
-                            vscode.postMessage({ type: 'deleteInsight', filename: _tuningSelectedInsight, workspaceRoot: _tuningSelectedWorkspaceRoot });
-                        }
-                    });
+                if (!tuningPreviewContent) break;
+                if (!msg.content) {
+                    tuningPreviewContent.innerHTML = '<div class="empty-state">Select an insight to preview</div>';
+                    _tuningSelectedInsight = null;
+                    _tuningSelectedWorkspaceRoot = '';
+                    break;
                 }
+                tuningPreviewContent.innerHTML = msg.renderedHtml || escapeHtml(msg.content);
+                _tuningSelectedInsight = msg.filename;
+                _tuningSelectedWorkspaceRoot = msg.workspaceRoot || '';
+                const actionsDiv = document.createElement('div');
+                actionsDiv.style.cssText = 'padding: 12px 0; display: flex; gap: 8px; border-top: 1px solid var(--border-color); margin-top: 16px;';
+                actionsDiv.innerHTML = `
+                    <button class="strip-btn" id="btn-insight-copy-link">Copy Link</button>
+                    <button class="strip-btn" id="btn-insight-mark-applied">Mark Applied</button>
+                    <button class="strip-btn" id="btn-insight-dismiss">Dismiss</button>
+                    <button class="strip-btn" id="btn-insight-delete" style="color: #ff6b6b;">Delete</button>
+                `;
+                tuningPreviewContent.appendChild(actionsDiv);
+                const btnCopyLink = document.getElementById('btn-insight-copy-link');
+                const btnMarkApplied = document.getElementById('btn-insight-mark-applied');
+                const btnDismiss = document.getElementById('btn-insight-dismiss');
+                const btnDeleteInsight = document.getElementById('btn-insight-delete');
+                if (btnCopyLink) btnCopyLink.addEventListener('click', () => {
+                    const link = `${_tuningSelectedWorkspaceRoot}/.switchboard/insights/${_tuningSelectedInsight}`;
+                    vscode.postMessage({ type: 'copyInsightLink', link });
+                });
+                if (btnMarkApplied) btnMarkApplied.addEventListener('click', () => {
+                    vscode.postMessage({ type: 'updateInsightStatus', filename: _tuningSelectedInsight, status: 'applied', workspaceRoot: _tuningSelectedWorkspaceRoot });
+                });
+                if (btnDismiss) btnDismiss.addEventListener('click', () => {
+                    vscode.postMessage({ type: 'updateInsightStatus', filename: _tuningSelectedInsight, status: 'dismissed', workspaceRoot: _tuningSelectedWorkspaceRoot });
+                });
+                if (btnDeleteInsight) btnDeleteInsight.addEventListener('click', () => {
+                    if (confirm('Delete this insight? This cannot be undone.')) {
+                        vscode.postMessage({ type: 'deleteInsight', filename: _tuningSelectedInsight, workspaceRoot: _tuningSelectedWorkspaceRoot });
+                    }
+                });
                 break;
             }
             case 'tuningExtractComplete': {
@@ -532,10 +537,11 @@
                 break;
             }
             case 'insightLinkCopied': {
-                if (btnRunTuningExtract) {
-                    const oldText = btnRunTuningExtract.textContent;
-                    btnRunTuningExtract.textContent = 'Copied!';
-                    setTimeout(() => { btnRunTuningExtract.textContent = oldText; }, 2000);
+                const copyLinkBtn = document.getElementById('btn-insight-copy-link');
+                if (copyLinkBtn) {
+                    const oldText = copyLinkBtn.textContent;
+                    copyLinkBtn.textContent = 'Copied!';
+                    setTimeout(() => { copyLinkBtn.textContent = oldText; }, 2000);
                 }
                 break;
             }

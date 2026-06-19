@@ -92,6 +92,15 @@
 
         body.theme-claudify {
             --accent-primary: #D97757;
+            --kanban-bg: #1A1816;
+            --panel-bg: #24211E;
+            --panel-bg2: #2D2925;
+            --border-color: #38332E;
+            --border-bright: #5C544A;
+            --card-bg: #24211E;
+            --card-bg-hover: #2D2925;
+            --text-primary: #F0EBE6;
+            --text-secondary: #A8A095;
             --display-font: 'Poppins';
             --display-letter-spacing: normal;
             --display-font-stretch: 100%;
@@ -2272,6 +2281,160 @@
 
         .cyber-theme-enabled .markdown-editor {
             background: transparent;
+        }
+
+        /* ── Claudify Theme: Warm Obsidian Overrides ── */
+
+        /* Claudify: suppress scanlines */
+        body.theme-claudify .cyber-scanlines { display: none !important; }
+        body.theme-claudify:not(.cyber-animation-disabled) .cyber-scanlines::before { display: none !important; }
+
+        /* Claudify: suppress neon text-shadow glow on headings */
+        body.theme-claudify .preview-panel-wrapper h1,
+        body.theme-claudify .preview-panel-wrapper h2,
+        body.theme-claudify .preview-panel-wrapper h3 { text-shadow: none; }
+
+        /* Claudify: suppress neon box-shadow glow on inline code */
+        body.theme-claudify #markdown-preview code,
+        body.theme-claudify #markdown-preview-online code,
+        body.theme-claudify #markdown-preview-design code,
+        body.theme-claudify #kanban-preview-pane code,
+        body.theme-claudify #markdown-preview-tickets code { box-shadow: none; }
+
+        /* Claudify: suppress neon box-shadow glow on code blocks */
+        body.theme-claudify #markdown-preview pre,
+        body.theme-claudify #markdown-preview-online pre,
+        body.theme-claudify #markdown-preview-design pre,
+        body.theme-claudify #kanban-preview-pane pre,
+        body.theme-claudify #markdown-preview-tickets pre { box-shadow: none; }
+
+        /* Claudify: suppress neon box-shadow glow on blockquotes */
+        body.theme-claudify #markdown-preview blockquote,
+        body.theme-claudify #markdown-preview-online blockquote,
+        body.theme-claudify #markdown-preview-design blockquote,
+        body.theme-claudify #kanban-preview-pane blockquote,
+        body.theme-claudify #markdown-preview-tickets blockquote { box-shadow: none; }
+
+        /* Claudify: suppress neon glow on alert boxes */
+        body.theme-claudify .alert-note,
+        body.theme-claudify .alert-tip,
+        body.theme-claudify .alert-important,
+        body.theme-claudify .alert-warning,
+        body.theme-claudify .alert-caution { box-shadow: none; }
+
+        /* Claudify: suppress neon glow on selected/hovered items */
+        body.theme-claudify .kanban-plan-item.selected,
+        body.theme-claudify .kanban-plan-item:hover,
+        body.theme-claudify .tree-node.selected,
+        body.theme-claudify .tree-node:hover { box-shadow: none; }
+
+        /* Claudify: suppress neon glow on column badges */
+        body.theme-claudify .kanban-column-badge[data-column="CREATED"],
+        body.theme-claudify .kanban-column-badge[data-column="PLAN_REVIEWED"],
+        body.theme-claudify .kanban-column-badge[data-column="CODED"],
+        body.theme-claudify .kanban-column-badge[data-column="CODE_REVIEWED"],
+        body.theme-claudify .kanban-column-badge[data-column="COMPLETED"] { box-shadow: none; }
+
+        /* Claudify: suppress neon glow on strip buttons */
+        body.theme-claudify .strip-btn:hover:not(:disabled) { box-shadow: none; }
+
+        /* Claudify: suppress neon glow on planning buttons */
+        body.theme-claudify .planning-button { box-shadow: none; }
+        body.theme-claudify .planning-button:hover:not(:disabled) { box-shadow: none; }
+
+        /* Claudify: suppress neon glow on preview panel wrapper */
+        body.theme-claudify .preview-panel-wrapper { box-shadow: none; }
+
+        /* Claudify: suppress neon glow on sidebar folder buttons */
+        body.theme-claudify .sidebar-folders-btn:hover { box-shadow: none; }
+
+        /* Claudify: suppress neon glow on planning inputs */
+        body.theme-claudify .planning-select:focus,
+        body.theme-claudify .planning-input:focus { box-shadow: none; }
+
+        /* Claudify: suppress neon glow on modals */
+        body.theme-claudify .duplicate-modal .modal-content,
+        body.theme-claudify .folder-modal .modal-content { box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5); }
+
+        /* Claudify: suppress neon glow on planning cards */
+        body.theme-claudify .planning-card { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4); }
+
+        /* Claudify: warm background for cyber grid */
+        body.theme-claudify.cyber-theme-enabled {
+            background-color: #1A1816;
+            background-image:
+                linear-gradient(color-mix(in srgb, var(--accent-primary) 4%, transparent) 1px, transparent 1px),
+                linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 4%, transparent) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+        }
+
+        /* Claudify: heading color override — h2-h6 → warm cream */
+        body.theme-claudify #markdown-preview h2,
+        body.theme-claudify #markdown-preview-online h2,
+        body.theme-claudify #markdown-preview-design h2,
+        body.theme-claudify #kanban-preview-pane h2,
+        body.theme-claudify #markdown-preview-tickets h2,
+        body.theme-claudify #markdown-preview h3,
+        body.theme-claudify #markdown-preview-online h3,
+        body.theme-claudify #markdown-preview-design h3,
+        body.theme-claudify #kanban-preview-pane h3,
+        body.theme-claudify #markdown-preview-tickets h3,
+        body.theme-claudify #markdown-preview h4,
+        body.theme-claudify #markdown-preview-online h4,
+        body.theme-claudify #markdown-preview-design h4,
+        body.theme-claudify #kanban-preview-pane h4,
+        body.theme-claudify #markdown-preview-tickets h4,
+        body.theme-claudify #markdown-preview h5,
+        body.theme-claudify #markdown-preview-online h5,
+        body.theme-claudify #markdown-preview-design h5,
+        body.theme-claudify #kanban-preview-pane h5,
+        body.theme-claudify #markdown-preview-tickets h5,
+        body.theme-claudify #markdown-preview h6,
+        body.theme-claudify #markdown-preview-online h6,
+        body.theme-claudify #markdown-preview-design h6,
+        body.theme-claudify #kanban-preview-pane h6,
+        body.theme-claudify #markdown-preview-tickets h6 {
+            color: #F0EBE6;
+        }
+
+        /* Claudify: warm glass tints */
+        body.theme-claudify .controls-strip,
+        body.theme-claudify .kanban-controls-strip {
+            background: rgba(36, 33, 30, 0.65);
+        }
+        body.theme-claudify #tree-pane,
+        body.theme-claudify #tree-pane-online,
+        body.theme-claudify #tree-pane-tickets,
+        body.theme-claudify #kanban-list-pane {
+            background: rgba(36, 33, 30, 0.70);
+        }
+        body.theme-claudify .planning-card {
+            background: rgba(36, 33, 30, 0.60);
+        }
+        body.theme-claudify .planning-select,
+        body.theme-claudify .planning-input {
+            background: rgba(36, 33, 30, 0.70);
+        }
+        body.theme-claudify .planning-button.secondary {
+            background: rgba(36, 33, 30, 0.50);
+        }
+        body.theme-claudify .duplicate-modal .modal-content,
+        body.theme-claudify .folder-modal .modal-content {
+            background: rgba(26, 24, 22, 0.88);
+        }
+
+        /* Claudify: warm preview pane backgrounds */
+        body.theme-claudify #preview-pane,
+        body.theme-claudify #preview-pane-online,
+        body.theme-claudify #preview-pane-tickets,
+        body.theme-claudify #kanban-preview-pane {
+            background-color: rgba(240, 235, 230, 0.015);
+            background-image:
+                linear-gradient(color-mix(in srgb, var(--accent-primary) 8%, transparent) 1px, transparent 1px),
+                linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 8%, transparent) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
         }
 
         .preview-panel-wrapper {

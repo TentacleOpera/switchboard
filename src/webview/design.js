@@ -1932,12 +1932,14 @@
             if (state.stitchBusy) return;
             const briefNode = (state._lastBriefsDocsMsg?.nodes || []).find(n => n.id === state.activeBriefDocId);
             const briefTitle = briefNode?.title || briefNode?.name || 'Untitled';
+            const wrapper = findTreeNode(state.activeBriefSourceId, state.activeBriefDocId);
+            const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : state.activeDocSourceFolder;
             setStitchStatus('Creating Stitch project from brief…', 'busy');
             vscode.postMessage({
                 type: 'stitchSendBrief',
                 docId: state.activeBriefDocId,
                 briefTitle,
-                sourceFolder: state.activeDocSourceFolder
+                sourceFolder
             });
         });
     }
@@ -2513,7 +2515,9 @@
 
             case 'stitchAttachedFilesPicked': {
                 if (msg.files && Array.isArray(msg.files)) {
-                    state.stitchAttachedFiles = msg.files;
+                    const existingPaths = new Set(state.stitchAttachedFiles.map(f => f.path));
+                    const newFiles = msg.files.filter(f => !existingPaths.has(f.path));
+                    state.stitchAttachedFiles = [...state.stitchAttachedFiles, ...newFiles];
                     renderAttachedFileChips();
                 }
                 break;

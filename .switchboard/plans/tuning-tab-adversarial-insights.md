@@ -516,6 +516,18 @@ This is mechanical — find each grouped selector that includes constitution IDs
 7. **Large plan list in prompt**: If many plans qualify, the plan file list in the extract prompt could be very long. May need to write the list to a temp file and reference it, or batch the extraction across multiple agent invocations
 8. **Cross-workspace patterns**: When "All Workspaces" is selected, the same problem pattern may appear in different workspaces. The skill should create one insight per pattern, noting which workspaces it appeared in
 
+## Review Findings
+
+**Reviewed:** 2026-06-19. Stage 1 adversarial review found 2 MAJOR and 3 NIT issues. Stage 2 synthesis fixed 2 MAJOR + 1 NIT; deferred 2 NITs as low-risk.
+
+**Files changed:**
+- `src/webview/project.js` — Fixed `insightContent` handler to clear preview pane on empty content (delete flow); fixed `insightLinkCopied` to target Copy Link button instead of Extract button.
+- `src/services/PlanningPanelProvider.ts` — Added 24h temp file cleanup for `_plan_list_*.txt` files in `runTuningExtract` handler before creating new temp file.
+
+**Validation:** Typecheck and tests skipped per session directives. Regression analysis: traced delete/copy-link/extract execution paths, verified no double-triggers, race conditions, or orphaned references. File watcher debounce (400ms) prevents refresh storms. Temp file cleanup is wrapped in try/catch — failures don't block extract flow.
+
+**Remaining risks:** `updateInsightStatus` silently no-ops if `**Status:**` line missing from insight file (deferred — low risk since insights are template-generated). Dynamic `require('./ArchiveManager')` instead of static import (deferred — style only, no circular dependency).
+
 ---
 
 **Recommendation**: Complexity is 6 (Medium — multi-file changes, moderate logic). **Send to Coder**.
