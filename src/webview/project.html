@@ -990,6 +990,24 @@
         .cyber-theme-enabled .markdown-editor {
             background: transparent;
         }
+
+        .constitution-onboarding {
+            text-align: left;
+            padding-top: 24px;
+            max-width: 600px;
+            opacity: 1;
+            font-size: inherit;
+        }
+        .constitution-onboarding-title {
+            font-weight: 600;
+            font-size: 1.15em;
+            margin-bottom: 12px;
+            color: var(--accent-teal);
+        }
+        .constitution-onboarding p {
+            margin-bottom: 12px;
+            line-height: 1.6;
+        }
     </style>
 </head>
 <body class="cyber-theme-enabled">
@@ -1071,12 +1089,24 @@
 
         <!-- Constitution tab -->
         <div id="constitution-content" class="shared-tab-content">
+            <div class="active-doc-banner inactive" id="active-constitution-banner">
+                <div class="active-doc-info">
+                    <span class="active-doc-label">Constitution Reference:</span>
+                    <span class="active-doc-name" id="active-constitution-name">Enabled</span>
+                </div>
+                <button class="btn-disable-doc" id="btn-disable-constitution">Turn off</button>
+            </div>
             <div class="controls-strip">
-                <button id="btn-build-constitution" class="strip-btn">Build Constitution</button>
+                <button id="btn-build-via-planner" class="strip-btn" disabled>Build via Planner</button>
+                <button id="btn-copy-build-prompt" class="strip-btn" disabled>Copy Build Prompt</button>
+                <button id="btn-update-via-planner" class="strip-btn" style="display:none;" disabled>Update via Planner</button>
+                <button id="btn-copy-update-prompt" class="strip-btn" style="display:none;" disabled>Copy Update Prompt</button>
+                <button id="btn-enable-constitution" class="strip-btn" disabled>Enable as Planning Reference</button>
                 <button id="btn-edit-constitution" class="strip-btn" disabled>Edit</button>
                 <button id="btn-save-constitution" class="strip-btn" style="display:none;">Save</button>
                 <button id="btn-cancel-constitution" class="strip-btn" style="display:none;">Cancel</button>
-                <span style="margin-left: auto; font-size: 11px; opacity: 0.8;">Enable "Project Constitution Reference" in the planner addons to inject this constitution into planning prompts.</span>
+                <button id="btn-delete-constitution" class="strip-btn" style="display:none; color: #ff6b6b;">Delete</button>
+                <button id="btn-set-constitution-path" class="strip-btn" title="Change constitution file path" disabled>⚙</button>
             </div>
             <div class="content-row">
                 <div id="constitution-list-pane">

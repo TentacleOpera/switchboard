@@ -407,6 +407,20 @@
 
     function showTicketsStatus(_text, _isError) { /* intentionally silent */ }
 
+    // Surface a transient error in the tickets footer. Unlike showTicketsStatus
+    // (intentionally silent), failures during navigation must be visible so the
+    // user understands why a dropdown/list didn't populate.
+    function showTicketsError(text) {
+        const { ticketsStatusFooter } = getTicketsTabElements();
+        if (!ticketsStatusFooter) return;
+        ticketsStatusFooter.textContent = text;
+        ticketsStatusFooter.style.display = '';
+        if (window._ticketsFooterTimeout) clearTimeout(window._ticketsFooterTimeout);
+        window._ticketsFooterTimeout = setTimeout(() => {
+            ticketsStatusFooter.style.display = 'none';
+        }, 6000);
+    }
+
     function setTicketsLoadingState(isLoading) {
         const loadingState = document.getElementById('tickets-loading-state');
         const previewContent = document.getElementById('markdown-preview-tickets');
@@ -2499,12 +2513,20 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             return;
         }
 
-        // Sort docs by order field to preserve subpage order
-        const sortedDocs = [...docs].sort((a, b) => (a.order || 0) - (b.order || 0));
+        // Helper functions for recency sorting
+        const recencyOf = doc => Date.parse(doc && doc.importedAt) || 0;
+        const groupRecency = arr => arr.reduce((m, d) => Math.max(m, recencyOf(d)), 0);
+        const sourceRecency = parentGroups => {
+            let maxVal = 0;
+            parentGroups.forEach(groupDocs => {
+                maxVal = Math.max(maxVal, groupRecency(groupDocs));
+            });
+            return maxVal;
+        };
 
-        // Group docs: sourceId → parentDocName → docs[]
+        // Group docs first: sourceId → parentDocName → docs[]
         const docsBySourceAndParent = new Map();
-        sortedDocs.forEach(doc => {
+        docs.forEach(doc => {
             const sourceKey = doc.sourceId || 'unknown';
             const parentKey = doc.parentDocName || doc.docName; // Backward compat fallback
             if (!docsBySourceAndParent.has(sourceKey)) {
@@ -2516,8 +2538,18 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             docsBySourceAndParent.get(sourceKey).get(parentKey).push(doc);
         });
 
+        // Sort within each group by order field to preserve subpage order
+        docsBySourceAndParent.forEach((parentGroups) => {
+            parentGroups.forEach((groupDocs) => {
+                groupDocs.sort((a, b) => (a.order || 0) - (b.order || 0));
+            });
+        });
+
+        // Sort sources by max recency
+        const sortedSources = [...docsBySourceAndParent.entries()].sort((a, b) => sourceRecency(b[1]) - sourceRecency(a[1]));
+
         // Render docs grouped by source then by parentDocName
-        docsBySourceAndParent.forEach((parentGroups, sourceId) => {
+        sortedSources.forEach(([sourceId, parentGroups]) => {
             // Skip local-folder source - those docs appear in the main local docs tree
             if (sourceId === 'local-folder') {
                 return;
@@ -2529,7 +2561,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             sourceHeader.textContent = `IMPORTED FROM ${SOURCE_DISPLAY_NAMES[sourceId] || sourceId}`;
             importedDocsContainer.appendChild(sourceHeader);
 
-            parentGroups.forEach((groupDocs, parentDocName) => {
+            // Sort groups within each source by recency
+            const sortedGroups = [...parentGroups.entries()].sort((a, b) => groupRecency(b[1]) - groupRecency(a[1]));
+            sortedGroups.forEach(([parentDocName, groupDocs]) => {
                 // Only show doc subheader if there are multiple pages in this group
                 if (groupDocs.length > 1) {
                     const docSubheader = document.createElement('div');
@@ -3236,6 +3270,15 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
                 const btnResearchClipboard = document.getElementById('btn-import-research-doc-clipboard');
 
+                const flashImportBtn = (cls) => {
+                    if (!btnResearchClipboard) return;
+                    btnResearchClipboard.classList.remove('import-success', 'import-error');
+                    void btnResearchClipboard.offsetWidth; // reflow → restart animation
+                    btnResearchClipboard.classList.add(cls);
+                    btnResearchClipboard.addEventListener('animationend',
+                        () => btnResearchClipboard.classList.remove(cls), { once: true });
+                };
+
                 if (btnResearchClipboard) {
                     btnResearchClipboard.disabled = false;
                     btnResearchClipboard.innerText = 'IMPORT FROM CLIPBOARD';
@@ -3248,6 +3291,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 });
                 
                 if (msg.success) {
+                    flashImportBtn('import-success');
                     const successText = `Imported: ${msg.docTitle || 'Research Doc'}`;
                     if (researchStatusEl) {
                         researchStatusEl.style.color = 'var(--accent-teal)';
@@ -3268,6 +3312,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         researchStatusTimeout = null;
                     }, 4000);
                 } else {
+                    flashImportBtn('import-error');
                     // Cancel any pending success auto-clear so it doesn't wipe this error
                     if (researchStatusTimeout) { clearTimeout(researchStatusTimeout); researchStatusTimeout = null; }
                     const errorText = `Error: ${msg.error || 'Failed to import'}`;
@@ -4013,6 +4058,43 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 };
                 clickUpTaskDetailCache.set(msg.task.id, selectedClickUpIssue);
                 if (!ticketsEditMode) renderTicketsTab();
+                break;
+            }
+            case 'clickupError': {
+                // Clear the loading flag for whichever operation failed, otherwise
+                // the affected control stays stuck/disabled. The hierarchy
+                // dropdowns disable themselves while clickUpHierarchyLoading is
+                // true, so a swallowed error here is exactly what makes the
+                // Space/Folder/List selects un-selectable.
+                switch (msg.scope) {
+                    case 'hierarchy':
+                        clickUpHierarchyLoading = false;
+                        break;
+                    case 'project':
+                        clickUpProjectLoading = false;
+                        clickUpProjectStatus = 'error';
+                        clickUpProjectMessage = msg.error || 'Failed to load tasks';
+                        break;
+                    case 'task':
+                        pendingClickUpDetailIssueId = '';
+                        break;
+                }
+                setTicketsLoadingState(false);
+                showTicketsError(msg.error || 'ClickUp request failed');
+                renderTicketsTab();
+                break;
+            }
+            case 'linearError': {
+                switch (msg.scope) {
+                    case 'project':
+                        linearProjectLoading = false;
+                        linearProjectStatus = 'error';
+                        linearProjectMessage = msg.error || 'Failed to load issues';
+                        break;
+                }
+                setTicketsLoadingState(false);
+                showTicketsError(msg.error || 'Linear request failed');
+                renderTicketsTab();
                 break;
             }
             case 'ticketsDefaultRoot': {

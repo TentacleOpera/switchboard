@@ -2547,7 +2547,8 @@ export class KanbanProvider implements vscode.Disposable {
 
     private async _resolveConstitution(workspaceRoot: string, enabled: boolean = true): Promise<{ constitutionLink?: string; constitutionContent?: string }> {
         if (!enabled) return {};
-        const filePath = path.join(workspaceRoot, 'CONSTITUTION.md');
+        const { getConstitutionPath } = require('./constitutionUtils');
+        const filePath = getConstitutionPath(this._context, workspaceRoot);
         if (fs.existsSync(filePath)) {
             try {
                 const constitutionContent = await fs.promises.readFile(filePath, 'utf8');

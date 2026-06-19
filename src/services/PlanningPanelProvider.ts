@@ -791,6 +791,11 @@ export class PlanningPanelProvider {
         }
     }
 
+    private _getConstitutionPath(workspaceRoot: string): string {
+        const { getConstitutionPath } = require('./constitutionUtils');
+        return getConstitutionPath(this._context, workspaceRoot);
+    }
+
     private _setupConstitutionWatcher(): void {
         // Watch each workspace root's CONSTITUTION.md so the project panel's
         // Constitution tab live-updates when the file is created/edited/deleted
@@ -812,8 +817,12 @@ export class PlanningPanelProvider {
             if (watchedPaths.has(root)) { continue; }
             watchedPaths.add(root);
 
+            const { getConstitutionPath } = require('./constitutionUtils');
+            const targetPath = getConstitutionPath(this._context, root);
+            const relativePattern = path.relative(root, targetPath);
+
             const watcher = vscode.workspace.createFileSystemWatcher(
-                new vscode.RelativePattern(vscode.Uri.file(root), 'CONSTITUTION.md')
+                new vscode.RelativePattern(vscode.Uri.file(root), relativePattern)
             );
 
             const triggerRefresh = () => {
@@ -2566,7 +2575,7 @@ export class PlanningPanelProvider {
             case 'loadConstitutionFiles': {
                 const workspaceItems = buildWorkspaceItems(allRoots);
                 const workspaces = workspaceItems.map(ws => {
-                    const constitutionPath = path.join(ws.workspaceRoot, 'CONSTITUTION.md');
+                    const constitutionPath = this._getConstitutionPath(ws.workspaceRoot);
                     return {
                         label: ws.label,
                         workspaceRoot: ws.workspaceRoot,
@@ -2586,17 +2595,17 @@ export class PlanningPanelProvider {
                 const wr = (typeof msg.workspaceRoot === 'string' && allRoots.includes(msg.workspaceRoot))
                     ? msg.workspaceRoot
                     : workspaceRoot;
-                const filePath = path.join(wr, 'CONSTITUTION.md');
+                const filePath = this._getConstitutionPath(wr);
                 const exists = fs.existsSync(filePath);
                 const store = this._context.globalState;
                 const plannerConfig = store.get<any>('switchboard.prompts.roleConfig_planner', undefined);
                 const cfgDefault = vscode.workspace.getConfiguration('switchboard').get<boolean>('planner.constitutionEnabled', false);
                 const enabled = plannerConfig?.addons?.constitution ?? cfgDefault;
                 let status = 'None';
-                if (enabled && exists) { status = 'CONSTITUTION.md'; }
+                if (enabled && exists) { status = path.basename(filePath); }
                 else if (enabled) { status = 'File not found'; }
                 else { status = 'Disabled'; }
-                this._projectPanel?.webview.postMessage({ type: 'constitutionStatus', status, planFile: msg.planFile });
+                this._projectPanel?.webview.postMessage({ type: 'constitutionStatus', status, planFile: msg.planFile, enabled });
                 break;
             }
             case 'readConstitutionFile': {
@@ -2610,7 +2619,7 @@ export class PlanningPanelProvider {
                     });
                     break;
                 }
-                const filePath = path.join(wsRoot, 'CONSTITUTION.md');
+                const filePath = this._getConstitutionPath(wsRoot);
                 if (fs.existsSync(filePath)) {
                     try {
                         const content = fs.readFileSync(filePath, 'utf8');
@@ -2652,7 +2661,7 @@ export class PlanningPanelProvider {
                     });
                     break;
                 }
-                const filePath = path.join(wsRoot, 'CONSTITUTION.md');
+                const filePath = this._getConstitutionPath(wsRoot);
                 try {
                     fs.writeFileSync(filePath, content, 'utf8');
                     this._projectPanel?.webview.postMessage({
@@ -2660,6 +2669,7 @@ export class PlanningPanelProvider {
                         success: true,
                         tab: 'constitution'
                     });
+                    await this._handleMessage({ type: 'loadConstitutionFiles', requestId: Date.now() }, true);
                 } catch (err) {
                     this._projectPanel?.webview.postMessage({
                         type: 'fileSaved',
@@ -2668,6 +2678,98 @@ export class PlanningPanelProvider {
                         tab: 'constitution'
                     });
                 }
+                break;
+            }
+            case 'toggleConstitutionAddon': {
+                const store = this._context.globalState;
+                const plannerConfig = store.get<any>('switchboard.prompts.roleConfig_planner', {}) || {};
+                plannerConfig.addons = plannerConfig.addons || {};
+                plannerConfig.addons.constitution = !!msg.enabled;
+                await store.update('switchboard.prompts.roleConfig_planner', plannerConfig);
+                this._projectPanel?.webview.postMessage({ type: 'constitutionAddonState', enabled: !!msg.enabled });
+                break;
+            }
+            case 'copyConstitutionPrompt': {
+                const wsRoot = msg.workspaceRoot;
+                if (!allRoots.includes(wsRoot)) { break; }
+                const promptText = `Please act as a system architect. I want to build a Project Constitution for the project at workspace root ${wsRoot}.
+A project constitution is a lean, high-level intent document covering mission, target users, guiding principles, technical stack/constraints, and non-goals. It is not a coding-standards doc.
+
+Please ask me the following questions one by one or help me draft it:
+1. Mission: What is the name of this project, and in one sentence, what is its primary reason for existing?
+2. Target Users: Who are the primary users, and what is their main pain point?
+3. Guiding Principles: What are the 3-5 non-negotiable values that should govern every technical and product decision? Give each a short name and one concrete sentence explaining what it means in practice.
+4. Technical Constraints: What are the hard technical boundaries? List required languages, core frameworks, data stores, and key third-party services.
+5. Non-Goals: What are specific things this project will NOT do in its current scope?
+
+Please format the output document strictly as follows:
+# [Project Name] Constitution
+
+> **Mission:** [one sentence]
+
+## Guiding Principles
+- **[Name]:** [concrete explanation]
+
+## Target Users
+[Who they are and their main pain point]
+
+## Technical Constraints & Stack
+- Core Language & Frameworks: ...
+- Data Layer: ...
+- Key External Services: ...
+
+## Non-Goals
+- [Explicit exclusion 1]
+- [Explicit exclusion 2]
+`;
+                await vscode.env.clipboard.writeText(promptText);
+                this._projectPanel?.webview.postMessage({ type: 'constitutionPromptCopied' });
+                break;
+            }
+            case 'copyConstitutionUpdatePrompt': {
+                const wsRoot = msg.workspaceRoot;
+                if (!allRoots.includes(wsRoot)) { break; }
+                const filePath = this._getConstitutionPath(wsRoot);
+                let currentContent = '';
+                if (fs.existsSync(filePath)) {
+                    currentContent = fs.readFileSync(filePath, 'utf8');
+                }
+                const promptText = `Please act as a system architect. I want to review and update the existing Project Constitution for the project at workspace root ${wsRoot}.
+Here is the current constitution content:
+\`\`\`markdown
+${currentContent}
+\`\`\`
+
+A project constitution is a lean, high-level intent document covering mission, target users, guiding principles, technical stack/constraints, and non-goals.
+Please review it and guide me through improving and extending it based on the following questions:
+1. Mission: What is the name of this project, and in one sentence, what is its primary reason for existing?
+2. Target Users: Who are the primary users, and what is their main pain point?
+3. Guiding Principles: What are the 3-5 non-negotiable values that should govern every technical and product decision? Give each a short name and one concrete sentence explaining what it means in practice.
+4. Technical Constraints: What are the hard technical boundaries? List required languages, core frameworks, data stores, and key third-party services.
+5. Non-Goals: What are specific things this project will NOT do in its current scope?
+
+Please format the updated output document strictly as follows:
+# [Project Name] Constitution
+
+> **Mission:** [one sentence]
+
+## Guiding Principles
+- **[Name]:** [concrete explanation]
+
+## Target Users
+[Who they are and their main pain point]
+
+## Technical Constraints & Stack
+- Core Language & Frameworks: ...
+- Data Layer: ...
+- Key External Services: ...
+
+## Non-Goals
+- [Explicit exclusion 1]
+- [Explicit exclusion 2]
+`;
+                await vscode.env.clipboard.writeText(promptText);
+                this._projectPanel?.webview.postMessage({ type: 'constitutionPromptCopied' }); // reuse copied notification
                 break;
             }
             case 'invokeConstitutionBuilder': {
@@ -2681,6 +2783,72 @@ export class PlanningPanelProvider {
                 const promptText = `Follow instructions in .agent/skills/constitution_builder.md to build or improve CONSTITUTION.md in this project.`;
                 const { sendRobustText } = require('./terminalUtils');
                 await sendRobustText(terminal, promptText);
+                break;
+            }
+            case 'invokeConstitutionUpdater': {
+                const wsRoot = msg.workspaceRoot;
+                if (!allRoots.includes(wsRoot)) {
+                    break;
+                }
+                const terminal = vscode.window.terminals.find(t => t.name.toLowerCase().includes('planner') || t.name.toLowerCase().includes('lead'))
+                    || vscode.window.createTerminal({ name: 'Constitution Builder', cwd: wsRoot });
+                terminal.show();
+                const promptText = `Follow instructions in .agent/skills/constitution_builder.md to improve and update the existing CONSTITUTION.md in this project.`;
+                const { sendRobustText } = require('./terminalUtils');
+                await sendRobustText(terminal, promptText);
+                break;
+            }
+            case 'deleteConstitutionFile': {
+                const wsRoot = msg.workspaceRoot;
+                if (!allRoots.includes(wsRoot)) { break; }
+                const filePath = this._getConstitutionPath(wsRoot);
+                try {
+                    if (fs.existsSync(filePath)) { fs.unlinkSync(filePath); }
+                    this._projectPanel?.webview.postMessage({ type: 'constitutionFileDeleted', workspaceRoot: wsRoot });
+                    await this._handleMessage({ type: 'loadConstitutionFiles', requestId: Date.now() }, true);
+                } catch (err) {
+                    this._projectPanel?.webview.postMessage({ type: 'constitutionFileDeleted', workspaceRoot: wsRoot, success: false, error: String(err) });
+                }
+                break;
+            }
+            case 'openSetConstitutionPath': {
+                const wsRoot = msg.workspaceRoot;
+                if (!allRoots.includes(wsRoot)) { break; }
+                const filePath = this._getConstitutionPath(wsRoot);
+                const currentRelativePath = path.relative(wsRoot, filePath);
+                const result = await vscode.window.showInputBox({
+                    prompt: 'Enter relative path for constitution file',
+                    value: currentRelativePath,
+                    placeHolder: 'CONSTITUTION.md'
+                });
+                if (result !== undefined) {
+                    await this._handleMessage({
+                        type: 'setConstitutionPath',
+                        workspaceRoot: wsRoot,
+                        relativePath: result.trim()
+                    }, true);
+                }
+                break;
+            }
+            case 'setConstitutionPath': {
+                const wsRoot = msg.workspaceRoot;
+                if (!allRoots.includes(wsRoot)) { break; }
+                const rel = msg.relativePath;
+                if (typeof rel !== 'string' || !rel.endsWith('.md') || rel.includes('..') || path.isAbsolute(rel)) {
+                    vscode.window.showErrorMessage('Invalid constitution path. Must be relative, end in .md, and remain inside the workspace root.');
+                    break;
+                }
+                const store = this._context.globalState;
+                const paths = store.get<Record<string, string>>('switchboard.constitutionPaths', {}) || {};
+                paths[wsRoot] = rel;
+                await store.update('switchboard.constitutionPaths', paths);
+
+                // Update the file watcher
+                this._setupConstitutionWatcher();
+
+                // Re-read file and load
+                await this._handleMessage({ type: 'readConstitutionFile', workspaceRoot: wsRoot }, true);
+                await this._handleMessage({ type: 'loadConstitutionFiles', requestId: Date.now() }, true);
                 break;
             }
             case 'saveFileContent': {
@@ -5559,7 +5727,8 @@ export class PlanningPanelProvider {
                             slugPrefix: entry.slugPrefix,
                             canSync: ['clickup', 'linear', 'notion'].includes(entry.sourceId),
                             order: entry.displayOrder || 0,
-                            lastSyncedAt: entry.lastSyncedAt || entry.importedAt
+                            lastSyncedAt: entry.lastSyncedAt || entry.importedAt,
+                            importedAt: entry.importedAt
                         });
                     }
                 }

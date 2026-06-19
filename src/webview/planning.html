@@ -1708,6 +1708,24 @@
             animation: copyFlash 1.5s ease-out forwards;
             pointer-events: none;
         }
+        @keyframes importBtnSuccess {
+            0%   { background-color: var(--vscode-testing-iconPassed, #73c991); color: #000; }
+            70%  { background-color: var(--vscode-testing-iconPassed, #73c991); color: #000; }
+            100% { background-color: var(--panel-bg2); color: var(--accent-teal); }
+        }
+        @keyframes importBtnError {
+            0%   { background-color: #f14c4c; color: #fff; }
+            70%  { background-color: #f14c4c; color: #fff; }
+            100% { background-color: var(--panel-bg2); color: var(--accent-teal); }
+        }
+        .planning-button.import-success {
+            animation: importBtnSuccess 1.5s ease-out forwards;
+            pointer-events: none;
+        }
+        .planning-button.import-error {
+            animation: importBtnError 1.5s ease-out forwards;
+            pointer-events: none;
+        }
         @keyframes iconFlash {
             0%   { transform: scale(1); }
             50%  { transform: scale(1.2); opacity: 0.7; }

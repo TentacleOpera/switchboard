@@ -102,7 +102,12 @@ type SqlJsStatic = {
     Database: new (data?: Uint8Array) => SqlJsDatabase;
 };
 
-const SCHEMA_SQL = `
+// Table DDL only. Indexes live in SCHEMA_INDEX_STATEMENTS and are applied
+// separately, AFTER _ensureSchemaColumns(), so that an index on a column added in
+// a later schema version cannot fail with "no such column" on a database created
+// before that column existed (CREATE TABLE IF NOT EXISTS skips the already-present
+// table, leaving the new column to be added by reconciliation/migrations first).
+const SCHEMA_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS plans (
     plan_id       TEXT PRIMARY KEY,
     session_id    TEXT NOT NULL,
@@ -134,12 +139,6 @@ CREATE TABLE IF NOT EXISTS plans (
     workspace_name    TEXT DEFAULT '',
     project_id        INTEGER DEFAULT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_plans_column ON plans(kanban_column);
-CREATE INDEX IF NOT EXISTS idx_plans_workspace ON plans(workspace_id);
-CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
-CREATE INDEX IF NOT EXISTS idx_plans_workspace_name ON plans(workspace_name);
-CREATE INDEX IF NOT EXISTS idx_plans_project_id ON plans(project_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_plans_plan_file_workspace ON plans(plan_file, workspace_id);
 CREATE TABLE IF NOT EXISTS config (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -155,7 +154,6 @@ CREATE TABLE IF NOT EXISTS projects (
     created_at TEXT DEFAULT (datetime('now')),
     UNIQUE(name, workspace_id)
 );
-CREATE INDEX IF NOT EXISTS idx_projects_workspace ON projects(workspace_id);
 CREATE TABLE IF NOT EXISTS worktrees (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     branch      TEXT NOT NULL UNIQUE,
@@ -172,6 +170,19 @@ CREATE TABLE IF NOT EXISTS linear_issue_links (
     synced_at  TEXT
 );
 `;
+
+// Index DDL, one statement per entry so a single failure (e.g. a column not yet
+// present on an upgraded DB) can be skipped without aborting the rest. Applied via
+// _applySchemaIndexes() after columns have been reconciled.
+const SCHEMA_INDEX_STATEMENTS: string[] = [
+    `CREATE INDEX IF NOT EXISTS idx_plans_column ON plans(kanban_column)`,
+    `CREATE INDEX IF NOT EXISTS idx_plans_workspace ON plans(workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status)`,
+    `CREATE INDEX IF NOT EXISTS idx_plans_workspace_name ON plans(workspace_name)`,
+    `CREATE INDEX IF NOT EXISTS idx_plans_project_id ON plans(project_id)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_plans_plan_file_workspace ON plans(plan_file, workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_projects_workspace ON projects(workspace_id)`,
+];
 
 // Migration SQL to add new columns to existing databases
 const MIGRATION_V2_SQL = [
@@ -586,7 +597,7 @@ const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, stat
 // get the missing column added, since CREATE TABLE IF NOT EXISTS silently
 // skips tables that already exist (leaving them with the old schema).
 const SCHEMA_PLAN_COLUMN_DEFS: Array<{ name: string; def: string }> = (() => {
-    const match = SCHEMA_SQL.match(/CREATE TABLE IF NOT EXISTS plans\s*\(\s*([\s\S]*?)\s*\)\s*;/);
+    const match = SCHEMA_TABLES_SQL.match(/CREATE TABLE IF NOT EXISTS plans\s*\(\s*([\s\S]*?)\s*\)\s*;/);
     if (!match) return [];
     const body = match[1];
     return body
@@ -1171,8 +1182,10 @@ export class KanbanDatabase {
             const SQL = await KanbanDatabase._loadSqlJs();
             this._db = new SQL.Database();
 
-            // Execute schema and migrations
-            this._db.exec(SCHEMA_SQL);
+            // Execute schema and migrations (tables → columns → indexes)
+            this._safeExec('SCHEMA_TABLES (create)', SCHEMA_TABLES_SQL);
+            this._ensureSchemaColumns();
+            this._applySchemaIndexes('SCHEMA_INDEXES (create)');
             await this._runMigrations();
             this._ensureSchemaColumns();
 
@@ -3728,25 +3741,11 @@ export class KanbanDatabase {
             this._db = null;
             this._db = new SQL.Database(new Uint8Array(fileBuffer));
 
-            // Re-apply schema and migrations (idempotent — safe to re-run)
-            try {
-                this._safeExec('SCHEMA_SQL (reload)', SCHEMA_SQL);
-            } catch (schemaErr) {
-                const msg = schemaErr instanceof Error ? schemaErr.message : String(schemaErr);
-                if (msg.includes('UNIQUE constraint failed: plans.plan_file')) {
-                    console.warn('[KanbanDatabase] SCHEMA_SQL reload: duplicate plan_file rows detected, deduplicating before retry');
-                    this._db.run(
-                        `DELETE FROM plans WHERE rowid NOT IN (
-                            SELECT MAX(rowid) FROM plans
-                            WHERE plan_file IS NOT NULL AND plan_file != ''
-                            GROUP BY plan_file, workspace_id
-                        ) AND plan_file IS NOT NULL AND plan_file != ''`
-                    );
-                    this._safeExec('SCHEMA_SQL retry (reload)', SCHEMA_SQL);
-                } else {
-                    throw schemaErr;
-                }
-            }
+            // Re-apply schema and migrations (idempotent — safe to re-run).
+            // Tables → reconcile columns → indexes (see _initialize for rationale).
+            this._safeExec('SCHEMA_TABLES (reload)', SCHEMA_TABLES_SQL);
+            this._ensureSchemaColumns();
+            this._applySchemaIndexes('SCHEMA_INDEXES (reload)');
             await this._runMigrations();
             this._ensureSchemaColumns();
 
@@ -3808,24 +3807,12 @@ export class KanbanDatabase {
             if (!this._db) {
                 throw new Error('Failed to initialize SQLite database instance.');
             }
-            try {
-                this._safeExec('SCHEMA_SQL', SCHEMA_SQL);
-            } catch (schemaErr) {
-                const msg = schemaErr instanceof Error ? schemaErr.message : String(schemaErr);
-                if (msg.includes('UNIQUE constraint failed: plans.plan_file')) {
-                    console.warn('[KanbanDatabase] SCHEMA_SQL: duplicate plan_file rows detected, deduplicating before retry');
-                    this._db.run(
-                        `DELETE FROM plans WHERE rowid NOT IN (
-                            SELECT MAX(rowid) FROM plans
-                            WHERE plan_file IS NOT NULL AND plan_file != ''
-                            GROUP BY plan_file, workspace_id
-                        ) AND plan_file IS NOT NULL AND plan_file != ''`
-                    );
-                    this._safeExec('SCHEMA_SQL retry', SCHEMA_SQL);
-                } else {
-                    throw schemaErr;
-                }
-            }
+            // Tables first, then reconcile columns on pre-existing tables, then
+            // indexes — so an index on a column added in a newer schema version
+            // doesn't fail against a DB created before that column existed.
+            this._safeExec('SCHEMA_TABLES', SCHEMA_TABLES_SQL);
+            this._ensureSchemaColumns();
+            this._applySchemaIndexes('SCHEMA_INDEXES');
 
             // Run migrations for existing databases
             await this._runMigrations();
@@ -4803,6 +4790,46 @@ export class KanbanDatabase {
         } catch (err) {
             console.error(`[KanbanDatabase] ${label} FAILED: ${sql.substring(0, 200)}... Error:`, err);
             throw err;
+        }
+    }
+
+    /**
+     * Apply SCHEMA_INDEX_STATEMENTS. Must run AFTER _ensureSchemaColumns() so that
+     * indexes on columns added in a later schema version find their columns present.
+     *
+     * Each statement is applied independently:
+     *  - A UNIQUE-index failure on idx_plans_plan_file_workspace means duplicate
+     *    plan_file rows exist; dedupe and retry that one index.
+     *  - A "no such column"/"no such table" failure means the index targets a
+     *    dependency not yet present (e.g. a column a not-yet-run migration adds).
+     *    Skip it — an index is a performance aid, not correctness, and it will be
+     *    created on a later init once the dependency exists. Critically, one bad
+     *    index never aborts init (the original interleaved-DDL bug).
+     */
+    private _applySchemaIndexes(label: string): void {
+        if (!this._db) return;
+        for (const sql of SCHEMA_INDEX_STATEMENTS) {
+            try {
+                this._db.exec(sql);
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                if (msg.includes('UNIQUE constraint failed: plans.plan_file')) {
+                    console.warn(`[KanbanDatabase] ${label}: duplicate plan_file rows detected, deduplicating before retry`);
+                    this._db.run(
+                        `DELETE FROM plans WHERE rowid NOT IN (
+                            SELECT MAX(rowid) FROM plans
+                            WHERE plan_file IS NOT NULL AND plan_file != ''
+                            GROUP BY plan_file, workspace_id
+                        ) AND plan_file IS NOT NULL AND plan_file != ''`
+                    );
+                    this._db.exec(sql);
+                } else if (msg.includes('no such column') || msg.includes('no such table')) {
+                    console.warn(`[KanbanDatabase] ${label}: skipping index, dependency not yet present (${msg}): ${sql}`);
+                } else {
+                    console.error(`[KanbanDatabase] ${label} FAILED: ${sql}. Error:`, err);
+                    throw err;
+                }
+            }
         }
     }
 

@@ -139,7 +139,15 @@
     const activeEpicNameSpan = document.getElementById('active-epic-name');
     const btnDisableEpic = document.getElementById('btn-disable-epic');
 
-    const btnBuildConstitution = document.getElementById('btn-build-constitution');
+    const btnBuildViaPlanner = document.getElementById('btn-build-via-planner');
+    const btnCopyBuildPrompt = document.getElementById('btn-copy-build-prompt');
+    const btnUpdateViaPlanner = document.getElementById('btn-update-via-planner');
+    const btnCopyUpdatePrompt = document.getElementById('btn-copy-update-prompt');
+    const btnEnableConstitution = document.getElementById('btn-enable-constitution');
+    const btnDeleteConstitution = document.getElementById('btn-delete-constitution');
+    const btnSetConstitutionPath = document.getElementById('btn-set-constitution-path');
+    const activeConstitutionBanner = document.getElementById('active-constitution-banner');
+    const btnDisableConstitution = document.getElementById('btn-disable-constitution');
     const btnEditConstitution = document.getElementById('btn-edit-constitution');
     const btnSaveConstitution = document.getElementById('btn-save-constitution');
     const btnCancelConstitution = document.getElementById('btn-cancel-constitution');
@@ -269,26 +277,134 @@
                 _constitutionWorkspaces = msg.workspaces || [];
                 renderConstitutionWorkspaceList();
                 break;
+            case 'constitutionStatus':
+                if (_constitutionSelectedWorkspace && _constitutionSelectedWorkspace.workspaceRoot === msg.workspaceRoot) {
+                    const isEnabled = !!msg.enabled;
+                    const hasFile = msg.status !== 'None' && msg.status !== 'File not found' && msg.status !== 'Disabled';
+                    if (btnEnableConstitution) {
+                        btnEnableConstitution.disabled = !hasFile;
+                        btnEnableConstitution.textContent = isEnabled ? 'Disable Reference' : 'Enable as Planning Reference';
+                        btnEnableConstitution.dataset.enabled = isEnabled ? 'true' : 'false';
+                    }
+                    if (activeConstitutionBanner) {
+                        if (isEnabled) {
+                            activeConstitutionBanner.classList.remove('inactive');
+                        } else {
+                            activeConstitutionBanner.classList.add('inactive');
+                        }
+                    }
+                }
+                break;
+            case 'constitutionAddonState': {
+                const isEnabled = !!msg.enabled;
+                if (btnEnableConstitution) {
+                    btnEnableConstitution.textContent = isEnabled ? 'Disable Reference' : 'Enable as Planning Reference';
+                    btnEnableConstitution.dataset.enabled = isEnabled ? 'true' : 'false';
+                }
+                if (activeConstitutionBanner) {
+                    if (isEnabled) {
+                        activeConstitutionBanner.classList.remove('inactive');
+                    } else {
+                        activeConstitutionBanner.classList.add('inactive');
+                    }
+                }
+                break;
+            }
+            case 'constitutionPromptCopied': {
+                const isUpdate = _constitutionSelectedFile !== null;
+                const copyBtn = isUpdate ? btnCopyUpdatePrompt : btnCopyBuildPrompt;
+                if (copyBtn) {
+                    const oldText = copyBtn.textContent;
+                    copyBtn.textContent = 'Copied!';
+                    copyBtn.disabled = true;
+                    setTimeout(() => {
+                        copyBtn.textContent = oldText;
+                        copyBtn.disabled = false;
+                    }, 2000);
+                }
+                break;
+            }
+            case 'constitutionFileDeleted':
+                if (constitutionPreviewContent && _constitutionSelectedWorkspace && _constitutionSelectedWorkspace.workspaceRoot === msg.workspaceRoot) {
+                    constitutionPreviewContent.innerHTML = `
+                        <div class="constitution-onboarding">
+                            <p class="constitution-onboarding-title">No constitution found for this workspace.</p>
+                            <p>A project constitution is a concise document that defines the soul of your project: its goals, the people it serves, its key features, guiding principles, and how the team communicates. It is not a technical spec — it is the context that tells an AI planning assistant <em>why</em> the project exists and <em>who</em> it is for.</p>
+                            <p>Once created, you can enable it as a Planning Reference so it is automatically included in every planning prompt alongside your task descriptions.</p>
+                            <p>Use <strong>Build via Planner</strong> above to generate one for this workspace.</p>
+                        </div>
+                    `;
+                    state.editOriginalContent.constitution = '';
+                    _constitutionSelectedFile = null;
+                    if (btnEditConstitution) btnEditConstitution.disabled = true;
+                    if (btnBuildViaPlanner) {
+                        btnBuildViaPlanner.style.display = '';
+                        btnBuildViaPlanner.disabled = false;
+                    }
+                    if (btnCopyBuildPrompt) {
+                        btnCopyBuildPrompt.style.display = '';
+                        btnCopyBuildPrompt.disabled = false;
+                    }
+                    if (btnUpdateViaPlanner) btnUpdateViaPlanner.style.display = 'none';
+                    if (btnCopyUpdatePrompt) btnCopyUpdatePrompt.style.display = 'none';
+                    if (btnDeleteConstitution) btnDeleteConstitution.style.display = 'none';
+                    if (btnEnableConstitution) {
+                        btnEnableConstitution.disabled = true;
+                        btnEnableConstitution.textContent = 'Enable as Planning Reference';
+                        btnEnableConstitution.dataset.enabled = 'false';
+                    }
+                    if (activeConstitutionBanner) {
+                        activeConstitutionBanner.classList.add('inactive');
+                    }
+                }
+                break;
             case 'constitutionFileRead':
                 if (constitutionPreviewContent && _constitutionSelectedWorkspace && _constitutionSelectedWorkspace.workspaceRoot === msg.workspaceRoot) {
                     if (state.editMode.constitution) {
                         state.externalChangePending.constitution = true;
                     } else {
+                        vscode.postMessage({ type: 'getConstitutionStatus', workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot });
                         if (msg.exists) {
                             constitutionPreviewContent.innerHTML = msg.renderedHtml || '';
                             state.editOriginalContent.constitution = msg.content || '';
                             _constitutionSelectedFile = msg.filePath;
                             if (btnEditConstitution) btnEditConstitution.disabled = false;
+                            if (btnBuildViaPlanner) btnBuildViaPlanner.style.display = 'none';
+                            if (btnCopyBuildPrompt) btnCopyBuildPrompt.style.display = 'none';
+                            if (btnUpdateViaPlanner) {
+                                btnUpdateViaPlanner.style.display = '';
+                                btnUpdateViaPlanner.disabled = false;
+                            }
+                            if (btnCopyUpdatePrompt) {
+                                btnCopyUpdatePrompt.style.display = '';
+                                btnCopyUpdatePrompt.disabled = false;
+                            }
+                            if (btnDeleteConstitution) btnDeleteConstitution.style.display = '';
+                            if (btnSetConstitutionPath) btnSetConstitutionPath.disabled = false;
                         } else {
                             constitutionPreviewContent.innerHTML = `
-                                <div class="empty-state">
-                                    <p>No CONSTITUTION.md found in this workspace.</p>
-                                    <p style="margin-top: 10px;">Create one to define coding standards and rule invariants for the AI planner.</p>
+                                <div class="constitution-onboarding">
+                                    <p class="constitution-onboarding-title">No constitution found for this workspace.</p>
+                                    <p>A project constitution is a concise document that defines the soul of your project: its goals, the people it serves, its key features, guiding principles, and how the team communicates. It is not a technical spec — it is the context that tells an AI planning assistant <em>why</em> the project exists and <em>who</em> it is for.</p>
+                                    <p>Once created, you can enable it as a Planning Reference so it is automatically included in every planning prompt alongside your task descriptions.</p>
+                                    <p>Use <strong>Build via Planner</strong> above to generate one for this workspace.</p>
                                 </div>
                             `;
                             state.editOriginalContent.constitution = '';
                             _constitutionSelectedFile = null;
                             if (btnEditConstitution) btnEditConstitution.disabled = true;
+                            if (btnBuildViaPlanner) {
+                                btnBuildViaPlanner.style.display = '';
+                                btnBuildViaPlanner.disabled = false;
+                            }
+                            if (btnCopyBuildPrompt) {
+                                btnCopyBuildPrompt.style.display = '';
+                                btnCopyBuildPrompt.disabled = false;
+                            }
+                            if (btnUpdateViaPlanner) btnUpdateViaPlanner.style.display = 'none';
+                            if (btnCopyUpdatePrompt) btnCopyUpdatePrompt.style.display = 'none';
+                            if (btnDeleteConstitution) btnDeleteConstitution.style.display = 'none';
+                            if (btnSetConstitutionPath) btnSetConstitutionPath.disabled = false;
                         }
                     }
                 }
@@ -993,13 +1109,80 @@
         vscode.postMessage({ type: 'readConstitutionFile', workspaceRoot: ws.workspaceRoot });
     }
 
-    if (btnBuildConstitution) {
-        btnBuildConstitution.addEventListener('click', () => {
+    if (btnBuildViaPlanner) {
+        btnBuildViaPlanner.addEventListener('click', () => {
             if (!_constitutionSelectedWorkspace) {
                 alert('Please select a workspace first.');
                 return;
             }
             vscode.postMessage({ type: 'invokeConstitutionBuilder', workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot });
+        });
+    }
+
+    if (btnCopyBuildPrompt) {
+        btnCopyBuildPrompt.addEventListener('click', () => {
+            if (!_constitutionSelectedWorkspace) {
+                alert('Please select a workspace first.');
+                return;
+            }
+            vscode.postMessage({ type: 'copyConstitutionPrompt', workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot });
+        });
+    }
+
+    if (btnUpdateViaPlanner) {
+        btnUpdateViaPlanner.addEventListener('click', () => {
+            if (!_constitutionSelectedWorkspace) {
+                alert('Please select a workspace first.');
+                return;
+            }
+            vscode.postMessage({ type: 'invokeConstitutionUpdater', workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot });
+        });
+    }
+
+    if (btnCopyUpdatePrompt) {
+        btnCopyUpdatePrompt.addEventListener('click', () => {
+            if (!_constitutionSelectedWorkspace) {
+                alert('Please select a workspace first.');
+                return;
+            }
+            vscode.postMessage({ type: 'copyConstitutionUpdatePrompt', workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot });
+        });
+    }
+
+    if (btnEnableConstitution) {
+        btnEnableConstitution.addEventListener('click', () => {
+            if (!_constitutionSelectedWorkspace) {
+                alert('Please select a workspace first.');
+                return;
+            }
+            const isCurrentlyEnabled = btnEnableConstitution.dataset.enabled === 'true';
+            vscode.postMessage({ type: 'toggleConstitutionAddon', enabled: !isCurrentlyEnabled });
+        });
+    }
+
+    if (btnDisableConstitution) {
+        btnDisableConstitution.addEventListener('click', () => {
+            vscode.postMessage({ type: 'toggleConstitutionAddon', enabled: false });
+        });
+    }
+
+    if (btnDeleteConstitution) {
+        btnDeleteConstitution.addEventListener('click', () => {
+            if (!_constitutionSelectedWorkspace) {
+                alert('Please select a workspace first.');
+                return;
+            }
+            vscode.postMessage({ type: 'deleteConstitutionFile', workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot });
+        });
+    }
+
+    if (btnSetConstitutionPath) {
+        btnSetConstitutionPath.addEventListener('click', () => {
+            if (!_constitutionSelectedWorkspace) {
+                alert('Please select a workspace first.');
+                return;
+            }
+            vscode.postMessage({ type: 'openSetConstitutionPath', workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot });
         });
     }
 
