@@ -969,7 +969,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return path.isAbsolute(expanded) ? expanded : path.join(wsRoot, expanded);
     }
 
-    private _resolveWorkspaceRoot(workspaceRoot?: string): string | null {
+    // Public: KanbanProvider resolves the active workspace root through the
+    // TaskViewerProvider so both panels agree on which workspace is selected.
+    public _resolveWorkspaceRoot(workspaceRoot?: string): string | null {
         // If an explicit workspaceRoot argument is provided and valid, use it
         if (workspaceRoot) {
             const resolved = path.resolve(workspaceRoot);

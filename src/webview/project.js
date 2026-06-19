@@ -205,10 +205,6 @@
                     }
                 }
                 break;
-            case 'constitutionStatus':
-                const el = document.getElementById('kanban-meta-constitution');
-                if (el) el.textContent = msg.status;
-                break;
             case 'activateKanbanTabAndSelectPlan': {
                 _pendingKanbanSelection = {
                     planId: msg.planId || '',
@@ -318,6 +314,9 @@
                     } else if (msg.tab === 'constitution') {
                         exitEditMode('constitution');
                         if (_constitutionSelectedWorkspace) selectConstitutionWorkspace(_constitutionSelectedWorkspace);
+                    } else if (msg.tab === 'epics') {
+                        exitEditMode('epics');
+                        if (_epicSelectedPlan) selectEpic(_epicSelectedPlan);
                     }
                 } else {
                     alert('Save failed: ' + (msg.error || 'Unknown error'));
@@ -596,10 +595,6 @@
                     ${['Unknown', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10'].map(v => `<option value="${v}" ${v === plan.complexity ? 'selected' : ''}>${v}</option>`).join('')}
                 </select>
             </div>
-            <div class="kanban-meta-group">
-                <span class="kanban-meta-label">Constitution:</span>
-                <span class="kanban-meta-value" id="kanban-meta-constitution">Loading...</span>
-            </div>
             <div class="kanban-meta-group" style="margin-left: auto;">
                 <button class="strip-btn" id="btn-edit-kanban" style="${state.editMode.kanban ? 'display:none;' : ''}">Edit</button>
                 <button class="strip-btn" id="btn-save-kanban" style="${state.editMode.kanban ? '' : 'display:none;'}">Save</button>
@@ -613,12 +608,6 @@
                 <button class="strip-btn" id="kanban-meta-delete-btn">Delete</button>
             </div>
         `;
-
-        vscode.postMessage({
-            type: 'getConstitutionStatus',
-            workspaceRoot: plan.workspaceRoot,
-            planFile: plan.planFile
-        });
 
         // Dynamic buttons listeners
         const dynamicEditBtn = document.getElementById('btn-edit-kanban');
@@ -852,20 +841,12 @@
         if (!metaBar) return;
         metaBar.style.display = 'flex';
         metaBar.innerHTML = `
-            <div class="kanban-meta-group">
-                <span class="kanban-meta-label">Epic:</span>
-                <span class="kanban-meta-value">${escapeHtml(plan.topic)}</span>
-            </div>
             <div class="kanban-meta-group" style="margin-left: auto;">
                 <button class="strip-btn" id="btn-edit-epics" style="${state.editMode.epics ? 'display:none;' : ''}">Edit</button>
                 <button class="strip-btn" id="btn-save-epics" style="${state.editMode.epics ? '' : 'display:none;'}">Save</button>
                 <button class="strip-btn" id="btn-cancel-epics" style="${state.editMode.epics ? '' : 'display:none;'}">Cancel</button>
-                <button class="strip-btn" id="btn-epic-open-file">Open File</button>
             </div>
         `;
-        document.getElementById('btn-epic-open-file').addEventListener('click', () => {
-            vscode.postMessage({ type: 'openKanbanPlan', filePath: plan.planFile });
-        });
 
         const btnEditEpics = document.getElementById('btn-edit-epics');
         const btnCancelEpics = document.getElementById('btn-cancel-epics');

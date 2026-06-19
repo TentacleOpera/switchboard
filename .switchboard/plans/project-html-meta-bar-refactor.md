@@ -175,3 +175,64 @@ Key risks: (1) the original "no backend changes" assumption is false — Create-
 ---
 
 **Recommendation:** Complexity 7 → **Send to Lead Coder.** The webview restructure is routine, but the required backend port (DB + filesystem writes, watcher-ordering, panel routing) and the zero-subtask design divergence carry data-consistency and contract risk that warrant senior review.
+
+---
+
+## Reviewer Pass (2026-06-19) — Direct Reviewer-Executor
+
+Reviewed the implemented code in the working tree (frontend committed in `6f64897`, backend `createEpic` in `d364bc0`) against the requirements above. Compilation and tests deferred per session directive (SKIP COMPILATION / SKIP TESTS).
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *Pulls glasses down nose.* So we built a beautiful pinned meta bar, a shiny new editor, a whole backend port with watcher choreography worthy of a ballet… and then we **forgot to tell the webview the save succeeded.** Let me be specific, because vague rage helps no one.
+>
+> **CRITICAL — the Epics Save button is a liar.** `project.js:312` — the `fileSaved` / `saveFileContentResult` switch arm branches on `'kanban'` and `'constitution'` and then *stops*. There is no `'epics'` arm. The plan TOLD you to add one (Implementation line 112, verbatim, with the exact code). What happens at runtime? The user edits an epic, hits Save, the host dutifully writes the file and posts `saveFileContentResult{tab:'epics', success:true}` — and the webview shrugs, leaves the textarea wide open in edit mode, never refreshes the preview, never flips the buttons back. The change is on disk. The UI says nothing happened. That is the single worst kind of bug: silent success that *looks* like failure. Manual validation step 3 — "Save/Cancel appear during edit and persist changes" — **fails on its face.** Fix it.
+>
+> **MAJOR — you ignored two of your own acceptance criteria.** `renderKanbanMetaBar` (`project.js:599–602`) still proudly renders the "Constitution:" group and still fires `getConstitutionStatus`. The plan said *remove the Constitution group*. Validation step 2 demands "no 'Constitution' label." And `renderEpicMetaBar` (`project.js:855–863`) keeps the "Epic: [topic]" title AND the "Open File" button — the plan said *drop both*, validation step 3 says "no redundant 'Epic:' title." Now — I will grudgingly admit the "Open File" button is *useful* and the constitution status is *informative*, so this may be a defensible product call rather than sloppiness. But you don't get to silently overrule the spec. Flag it, get a ruling.
+>
+> **MAJOR — none of this is live.** It's all in `src/webview/*`. The extension serves from `dist/`. Until somebody runs `npm run compile`, every word above describes a file nobody is executing. Yes, the directive says skip compilation — fine — but the plan must scream this so the user doesn't "test" a stale bundle and file a phantom bug.
+>
+> **NIT —** `PlanningPanelProvider.ts:2540` computes `yamlSafeDesc` and then never uses it. Before you grab a pitchfork: the reference `KanbanProvider.ts:6767` has the *exact same* dead variable. It's a faithful port of a pre-existing wart. The body is markdown, not YAML, so no escaping is needed there. Leave it or kill it, I don't care, but know it's there.
+>
+> Everything else? *Reluctantly nods.* The CSS pane split correctly quarantines Constitution. Listeners re-attach on every render — the dynamic-button lifecycle trap was actually handled. The epics preview branch guards `editMode` so an in-flight preview can't clobber live edits. The backend honored `registerPendingCreation` *before* `writeFile`, used `_getKanbanPlans`+`kanbanPlansReady` instead of the wrong `_refreshBoard`, kept the YAML quoting, allowed zero-subtask epics with `resolvedColumn='CREATED'`, and added `|| tab === 'epics'` to the save routing. Imports are all present. Credit where due.
+
+### Stage 2 — Balanced Synthesis
+
+**Fix now (done in this pass):**
+- **C1** Missing `epics` arm in the save-result handler → epic edits silently fail to close out. Applied.
+
+**Keep (verified correct, no action):**
+- CSS pane-rule split isolating `.constitution-preview-pane` (project.html:164–180); meta-bar function-row CSS (project.html:398–407); pinned meta bar outside the scroll region (project.html:1025–1068).
+- Dynamic Edit/Save/Cancel listeners re-attached inside `renderKanbanMetaBar` (project.js:624–645) and `renderEpicMetaBar` (project.js:870–891).
+- Epics preview branch guards `state.editMode.epics` against clobber (project.js:197–206).
+- Backend `createEpic` (PlanningPanelProvider.ts:2491–2552): imports present, zero-subtask allowed, YAML escaping retained, `registerPendingCreation` before `writeFile`, refresh via `_getKanbanPlans`+`kanbanPlansReady`. Save routing fix at line 2692.
+- Client-side non-empty-name guard + modal wiring (project.js:1080–1097); `_resolveWorkspaceRoot('')` falls back to a default allowed root, so "All Workspaces" does not crash.
+- The three "User Review Required" items are all resolved by the implementation as recommended (zero-subtask epics permitted; backend modified; flat `epic-{planId}.md` path).
+
+**Fixed in follow-up (user confirmed: remove per plan):**
+- **D1** Removed the Kanban "Constitution:" status group, its `getConstitutionStatus` request, and the now-dead `constitutionStatus` message handler from project.js. (Backend `getConstitutionStatus` case at PlanningPanelProvider.ts:2582 is now orphaned but harmless — left in place to avoid an out-of-scope TS edit.)
+- **D2** Removed the Epic "Epic: [topic]" title group, the "Open File" button, and its listener from `renderEpicMetaBar`. Edit/Save/Cancel are now the only meta-bar controls, matching the plan.
+
+**Defer:**
+- **Rebuild required:** `npm run compile` before any manual validation — webview edits are not in `dist/` yet.
+
+### Fixes Applied
+- `src/webview/project.js:318–321` — added `else if (msg.tab === 'epics') { exitEditMode('epics'); if (_epicSelectedPlan) selectEpic(_epicSelectedPlan); }` to the `fileSaved`/`saveFileContentResult` handler so a successful epic save exits edit mode and refreshes the preview.
+
+### Validation Results
+- Static review only. Per session directive, did **not** run `npm run compile` or the test suite.
+- `selectEpic` (project.js:833) and `exitEditMode` (project.js:1048) confirmed to exist and to be generic over the `epics` tab; the fix uses no undefined symbols.
+
+### Remaining Risks
+- **Stale bundle**: until `npm run compile` runs, the webview behaves as the old `dist/` build. Validate only after rebuild.
+- **Spec divergence (D1/D2)**: meta bars retain elements the plan asked to remove; awaiting product confirmation.
+- **Unrelated working-tree change**: `PlanningPanelProvider.ts` has an uncommitted diff at lines ~2089/2115 (clickup/linear field cleanup) **outside this plan's scope** — left untouched; flagged so it isn't bundled into this plan's commit unintentionally.
+
+### Findings Summary
+| Sev | ID | Location | Status |
+|-----|----|----------|--------|
+| CRITICAL | C1 | project.js:312–325 (now 318–321) | **Fixed** |
+| MAJOR | D1 | project.js (Constitution group + status post/handler) | **Fixed** — removed per plan |
+| MAJOR | D2 | project.js (Epic: title + Open File) | **Fixed** — removed per plan |
+| MAJOR | B1 | webview not in dist/ | Action: run `npm run compile` |
+| NIT | N1 | PlanningPanelProvider.ts:2540 | Accepted (mirrors reference) |

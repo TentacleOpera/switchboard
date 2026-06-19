@@ -2089,7 +2089,7 @@ export class PlanningPanelProvider {
                         });
                         break;
                     }
-                    if (!plan.clickupTaskId && !plan.linearIssueId && !plan.clickup_task_id && !plan.linear_issue_id) {
+                    if (!plan.clickupTaskId && !plan.linearIssueId) {
                         this._panel?.webview.postMessage({
                             type: 'uploadPlanAttachmentResult',
                             success: false,
@@ -2115,8 +2115,8 @@ export class PlanningPanelProvider {
                     }
                     const buffer = await fs.promises.readFile(planFileAbsolute);
                     const fileName = path.basename(planFileAbsolute);
-                    const clickupTaskId = plan.clickupTaskId || plan.clickup_task_id;
-                    const linearIssueId = plan.linearIssueId || plan.linear_issue_id;
+                    const clickupTaskId = plan.clickupTaskId;
+                    const linearIssueId = plan.linearIssueId;
 
                     if (clickupTaskId) {
                         const clickup = this._adapterFactories.getClickUpSyncService(workspaceRoot);

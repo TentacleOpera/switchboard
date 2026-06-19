@@ -2523,7 +2523,8 @@ export class KanbanProvider implements vscode.Disposable {
             if (typeof msg.julesAutoSyncEnabled === 'boolean') state.julesAutoSyncEnabled = msg.julesAutoSyncEnabled;
             if (typeof msg.autoCommitOnCodeReview === 'boolean') state.autoCommitOnCodeReview = msg.autoCommitOnCodeReview;
             await fs.promises.writeFile(statePath, JSON.stringify(state, null, 2), 'utf8');
-            this._taskViewerProvider?.notifyStateChanged();
+            // No notifyStateChanged() here: this legacy state.json branch only runs when
+            // there is no TaskViewerProvider to notify (the provider path returned above).
         } catch (err) {
             console.error('[KanbanProvider] Failed to save startup commands:', err);
         }
