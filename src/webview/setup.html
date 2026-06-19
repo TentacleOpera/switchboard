@@ -3059,7 +3059,7 @@
         }
 
         document.getElementById('btn-copy-tutorial-prompt')?.addEventListener('click', () => {
-            const prompt = 'Please read the Switchboard README.md (located at the extension root) — specifically the "Getting started" section covering Install, Set up your agent team, Create your first plans, and Run your pipeline — and guide me through my Switchboard setup options. Present the setup steps as a numbered list and ask which one I\'d like help with first.';
+            const prompt = 'Please read the Switchboard Comprehensive User Manual at docs/switchboard_user_manual.md (located at the extension root) — specifically sections 2 (Installation & First-Time Setup), 3 (Agent Roles & Configuration), and 5 (Planning Tools & Workflows) — and guide me through my Switchboard setup options. Present the setup steps as a numbered list and ask which one I\'d like help with first.';
             const btn = document.getElementById('btn-copy-tutorial-prompt');
             navigator.clipboard.writeText(prompt).then(() => {
                 if (btn) {

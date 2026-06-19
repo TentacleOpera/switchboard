@@ -257,4 +257,5 @@ The built-in Reviewer agent features a Grumpy Principal Engineer persona. It tur
 ## Links
 
 - [GitHub Repository](https://github.com/TentacleOpera/switchboard/)
+- [Comprehensive User Manual](docs/switchboard_user_manual.md)
 - [How to Use Switchboard (Detailed Guide)](docs/how_to_use_switchboard.md)
