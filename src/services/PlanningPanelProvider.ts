@@ -483,6 +483,7 @@ export class PlanningPanelProvider {
                 this._ensureAdaptersRegistered();
                 this._setupKanbanPlansWatcher();
                 this._setupConstitutionWatcher();
+                this._setupInsightsWatcher();
                 this._panel?.webview.postMessage({
                     type: 'workspaceItemsUpdated',
                     items: buildWorkspaceItems(this._getWorkspaceRoots())
@@ -497,6 +498,7 @@ export class PlanningPanelProvider {
         this._setupAntigravityWatcher();
         this._setupKanbanPlansWatcher();
         this._setupConstitutionWatcher();
+        this._setupInsightsWatcher();
 
         // Send initial active design doc state
         await this._sendActiveDesignDocState();
@@ -598,6 +600,7 @@ export class PlanningPanelProvider {
                     this._ensureAdaptersRegistered();
                     this._setupKanbanPlansWatcher();
                     this._setupConstitutionWatcher();
+                    this._setupInsightsWatcher();
                     this._panel?.webview.postMessage({
                         type: 'workspaceItemsUpdated',
                         items: buildWorkspaceItems(this._getWorkspaceRoots())
@@ -612,6 +615,7 @@ export class PlanningPanelProvider {
             this._setupAntigravityWatcher();
             this._setupKanbanPlansWatcher();
             this._setupConstitutionWatcher();
+            this._setupInsightsWatcher();
         }
 
         await this._sendActiveDesignDocState();
@@ -906,6 +910,119 @@ export class PlanningPanelProvider {
             this._constitutionWatchers.push(watcher);
             this._disposables.push(watcher);
         }
+    }
+
+    private _setupInsightsWatcher(): void {
+        for (const w of this._insightsWatchers) {
+            w.dispose();
+            const idx = this._disposables.indexOf(w);
+            if (idx !== -1) { this._disposables.splice(idx, 1); }
+        }
+        this._insightsWatchers = [];
+
+        const allRoots = this._getWorkspaceRoots();
+        const watchedPaths = new Set<string>();
+
+        for (const root of allRoots) {
+            if (watchedPaths.has(root)) { continue; }
+            watchedPaths.add(root);
+
+            const insightsDir = path.join(root, '.switchboard', 'insights');
+            const relativePattern = path.relative(root, insightsDir);
+
+            try {
+                const watcher = vscode.workspace.createFileSystemWatcher(
+                    new vscode.RelativePattern(vscode.Uri.file(root), `${relativePattern}/*.md`)
+                );
+
+                const triggerRefresh = () => {
+                    if (!this._projectPanel) { return; }
+                    if (this._insightsWatchDebounce) {
+                        clearTimeout(this._insightsWatchDebounce);
+                    }
+                    this._insightsWatchDebounce = setTimeout(() => {
+                        this._insightsWatchDebounce = undefined;
+                        if (!this._projectPanel) { return; }
+                        this._handleMessage({
+                            type: 'loadInsights',
+                            workspaceRoot: ''
+                        }, true).catch(err => {
+                            console.error('[PlanningPanel] Error auto-refreshing insights:', err);
+                        });
+                    }, 400);
+                };
+
+                watcher.onDidCreate(triggerRefresh);
+                watcher.onDidChange(triggerRefresh);
+                watcher.onDidDelete(triggerRefresh);
+
+                this._insightsWatchers.push(watcher);
+                this._disposables.push(watcher);
+            } catch (err) {
+                console.warn('[PlanningPanel] Failed to create insights watcher for', root, err);
+            }
+        }
+    }
+
+    private async _resolveTuningPlanFiles(workspaceRoot: string, allRoots: string[]): Promise<string[]> {
+        const REVIEW_COLUMNS = new Set(['PLAN REVIEWED', 'CODE REVIEWED', 'CODED', 'COMPLETED']);
+        const planFiles: string[] = [];
+        const seenFiles = new Set<string>();
+
+        const rootsToScan = workspaceRoot ? [workspaceRoot] : buildWorkspaceItems(allRoots).map(ws => ws.workspaceRoot);
+
+        for (const root of rootsToScan) {
+            try {
+                const db = KanbanDatabase.forWorkspace(root);
+                const workspaceId = await this._getWorkspaceId(root);
+                const records = await db.getBoard(workspaceId);
+                const completedLimit = 100;
+                const completedRecords = await db.getCompletedPlans(workspaceId, completedLimit);
+                const allRecords = [...records, ...completedRecords];
+
+                for (const record of allRecords) {
+                    if (record.kanban_column && REVIEW_COLUMNS.has(record.kanban_column)) {
+                        if (record.plan_file) {
+                            const filePath = path.isAbsolute(record.plan_file)
+                                ? record.plan_file
+                                : path.resolve(root, record.plan_file);
+                            if (fs.existsSync(filePath) && !seenFiles.has(filePath)) {
+                                seenFiles.add(filePath);
+                                planFiles.push(filePath);
+                            }
+                        }
+                    }
+                }
+            } catch (err) {
+                console.warn('[PlanningPanel] Failed to query Kanban DB for tuning plans:', root, err);
+            }
+
+            try {
+                const { ArchiveManager } = require('./ArchiveManager');
+                const archive = new ArchiveManager(root);
+                if (archive.isConfigured) {
+                    const archivedPlans = await archive.queryArchive(
+                        `SELECT plan_file FROM plans WHERE kanban_column IN ('PLAN REVIEWED', 'CODE REVIEWED', 'CODED', 'COMPLETED') OR status = 'completed'`,
+                        500
+                    );
+                    for (const row of archivedPlans as any[]) {
+                        if (row.plan_file) {
+                            const filePath = path.isAbsolute(row.plan_file)
+                                ? row.plan_file
+                                : path.resolve(root, row.plan_file);
+                            if (fs.existsSync(filePath) && !seenFiles.has(filePath)) {
+                                seenFiles.add(filePath);
+                                planFiles.push(filePath);
+                            }
+                        }
+                    }
+                }
+            } catch (err) {
+                console.warn('[PlanningPanel] Failed to query archive DB for tuning plans:', root, err);
+            }
+        }
+
+        return planFiles;
     }
 
     private _setupActiveDocWatcher(filePath: string | null): void {
@@ -4767,6 +4884,116 @@ Please format the updated output document strictly as follows:
                 await this.triggerSync(resolvedRoot, 'sync-selected');
                 break;
             }
+            case 'loadInsights': {
+                const wsRoot = String(msg.workspaceRoot || '');
+                if (wsRoot) {
+                    const insights = InsightManager.listInsights(wsRoot);
+                    this._projectPanel?.webview.postMessage({ type: 'insightsLoaded', insights });
+                } else {
+                    const workspaceItems = buildWorkspaceItems(allRoots);
+                    const allInsights: any[] = [];
+                    for (const ws of workspaceItems) {
+                        try {
+                            const wsInsights = InsightManager.listInsights(ws.workspaceRoot);
+                            allInsights.push(...wsInsights);
+                        } catch (err) {
+                            console.warn('[PlanningPanel] Failed to list insights for', ws.workspaceRoot, err);
+                        }
+                    }
+                    this._projectPanel?.webview.postMessage({ type: 'insightsLoaded', insights: allInsights });
+                }
+                break;
+            }
+            case 'readInsight': {
+                const wsRoot = String(msg.workspaceRoot || '');
+                const filename = String(msg.filename || '');
+                if (!wsRoot || !filename) { break; }
+                try {
+                    const content = InsightManager.readInsight(wsRoot, filename);
+                    if (content) {
+                        const renderedHtml = await vscode.commands.executeCommand<string>('markdown.api.render', content);
+                        this._projectPanel?.webview.postMessage({
+                            type: 'insightContent',
+                            filename,
+                            workspaceRoot: wsRoot,
+                            content,
+                            renderedHtml
+                        });
+                    }
+                } catch (err) {
+                    console.error('[PlanningPanel] Failed to read insight:', err);
+                }
+                break;
+            }
+            case 'runTuningExtract': {
+                const wsRoot = String(msg.workspaceRoot || '');
+                const planFiles = await this._resolveTuningPlanFiles(wsRoot, allRoots);
+                if (planFiles.length === 0) {
+                    vscode.window.showInformationMessage('No plans with adversarial review sections found.');
+                    this._projectPanel?.webview.postMessage({ type: 'tuningExtractComplete', planCount: 0 });
+                    break;
+                }
+                const effectiveWsRoot = wsRoot || (allRoots.length > 0 ? allRoots[0] : '');
+                let planFilesList: string;
+                if (planFiles.length > 50) {
+                    const tempPath = path.join(effectiveWsRoot, '.switchboard', 'insights', `_plan_list_${Date.now()}.txt`);
+                    InsightManager.getInsightsDirectory(effectiveWsRoot);
+                    fs.writeFileSync(tempPath, planFiles.join('\n'), 'utf8');
+                    planFilesList = `Plan list written to temp file: ${tempPath}`;
+                } else {
+                    planFilesList = planFiles.join('\n');
+                }
+                const extractPrompt = `Run the tuning skill in extract mode for workspace: ${effectiveWsRoot}\n\nScan the following plan files for adversarial review sections ("Stage 1 — Grumpy Adversarial Findings" and "Stage 2 — Balanced Synthesis"):\n${planFilesList}\n\nFor each plan, extract the review findings. Then cluster recurring problem patterns across plans using these criteria:\n  - Same problem category (e.g., missing error handling, race conditions, prompt-design flaws, unvalidated assumptions)\n  - Same severity level (recurring vs critical vs minor)\n  - Same governance target (CONSTITUTION.md vs AGENTS.md vs CLAUDE.md)\nFor each distinct pattern, create an insight .md file in ${effectiveWsRoot}/.switchboard/insights/ using the insight template. If an existing insight covers the same pattern (same category AND similar description), append new evidence to it instead of creating a duplicate. When appending, update the Source Plans list and add new evidence entries.`;
+                await vscode.env.clipboard.writeText(extractPrompt);
+                vscode.window.showInformationMessage('Tuning extract prompt copied to clipboard. Paste it into your agent chat.');
+                this._projectPanel?.webview.postMessage({ type: 'tuningExtractComplete', planCount: planFiles.length });
+                break;
+            }
+            case 'runTuningGovernance': {
+                const wsRoot = String(msg.workspaceRoot || '');
+                const effectiveWsRoot = wsRoot || (allRoots.length > 0 ? allRoots[0] : '');
+                const governancePrompt = `Run the tuning skill in governance mode for workspace: ${effectiveWsRoot}\n\nRead all insight files in ${effectiveWsRoot}/.switchboard/insights/ with status 'open'. Review the insights and propose specific edits to governance files (CONSTITUTION.md, AGENTS.md, CLAUDE.md) to address the recurring patterns. Present proposed changes as diffs.`;
+                await vscode.env.clipboard.writeText(governancePrompt);
+                vscode.window.showInformationMessage('Tuning governance prompt copied to clipboard. Paste it into your agent chat.');
+                this._projectPanel?.webview.postMessage({ type: 'tuningGovernanceComplete' });
+                break;
+            }
+            case 'updateInsightStatus': {
+                const wsRoot = String(msg.workspaceRoot || '');
+                const filename = String(msg.filename || '');
+                const newStatus = String(msg.status || '');
+                if (!wsRoot || !filename || !newStatus) { break; }
+                try {
+                    InsightManager.updateInsightStatus(wsRoot, filename, newStatus);
+                    const insights = InsightManager.listInsights(wsRoot);
+                    this._projectPanel?.webview.postMessage({ type: 'insightsLoaded', insights });
+                } catch (err) {
+                    console.error('[PlanningPanel] Failed to update insight status:', err);
+                }
+                break;
+            }
+            case 'deleteInsight': {
+                const wsRoot = String(msg.workspaceRoot || '');
+                const filename = String(msg.filename || '');
+                if (!wsRoot || !filename) { break; }
+                try {
+                    InsightManager.deleteInsight(wsRoot, filename);
+                    const insights = InsightManager.listInsights(wsRoot);
+                    this._projectPanel?.webview.postMessage({ type: 'insightsLoaded', insights });
+                    this._projectPanel?.webview.postMessage({ type: 'insightContent', filename: '', workspaceRoot: wsRoot, content: '' });
+                } catch (err) {
+                    console.error('[PlanningPanel] Failed to delete insight:', err);
+                }
+                break;
+            }
+            case 'copyInsightLink': {
+                const link = String(msg.link || '');
+                if (link) {
+                    await vscode.env.clipboard.writeText(link);
+                    this._projectPanel?.webview.postMessage({ type: 'insightLinkCopied' });
+                }
+                break;
+            }
         }
     }
 
@@ -6744,6 +6971,14 @@ Please format the updated output document strictly as follows:
             try { watcher.dispose(); } catch (e) {}
         }
         this._kanbanPlansWatchers = [];
+        if (this._insightsWatchDebounce) {
+            clearTimeout(this._insightsWatchDebounce);
+            this._insightsWatchDebounce = undefined;
+        }
+        for (const watcher of this._insightsWatchers) {
+            try { watcher.dispose(); } catch (e) {}
+        }
+        this._insightsWatchers = [];
         for (const watcher of this._ticketsAutoSyncWatchers.values()) {
             try { watcher.dispose(); } catch (e) {}
         }
