@@ -169,3 +169,7 @@ No automated test is added for this change (per session directive: tests run sep
 ---
 
 **Recommendation:** Complexity 3 → **Send to Intern.**
+
+## Review Findings
+
+Reviewed implementation against plan requirements: both changes are correctly applied. Backend (`PlanningPanelProvider.ts:6345-6350`) forwards `savedPath: writeResult.savedPath` on the success postMessage. Frontend (`planning.js:3316-3330`) adds the `if (msg.savedPath)` guard, node-search, `loadDocumentPreview` call, and `_pendingImportDocName` fallback — verbatim mirror of the `importFullDocResult` pattern, with tab-switch correctly omitted. Dist files (`dist/webview/planning.js`) are in sync. No CRITICAL or MAJOR findings; one NIT (pre-existing `const statusEl` shadowing at line 3270, not introduced by this change). No code fixes applied. No remaining risks beyond those already documented in the plan's Edge-Case audit.

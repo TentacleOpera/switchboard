@@ -80,3 +80,7 @@ The docs tab uses the `.markdown-editor` CSS class (`src/webview/planning.html:2
 ---
 
 **Recommendation:** Complexity 2 → **Send to Coder.**
+
+## Review Findings
+
+**Reviewed:** `src/webview/planning.js:6240-6241` (`enterTicketsEditMode()`). Implementation matches plan exactly — title H1 uses `border:1px solid var(--border-color);outline:none`, textarea uses `background:var(--panel-bg);outline:none;min-height:480px;padding:16px` with no `border-radius`. No teal outlines or `panel-bg2` remain in the edit mode. Save handler reads by element ID (`ticket-edit-description`, `ticket-edit-title`), not styling — no breakage risk. Both Linear and ClickUp providers share the same function. `escapeHtml()` preserved on all interpolated content. CSS variables `--border-color` and `--panel-bg` confirmed defined in `:root` (planning.html:52-54). No `.markdown-editor` class added — soft-wrap preserved. **No files changed. No fixes needed. Zero remaining risks.**
