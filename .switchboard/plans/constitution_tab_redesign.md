@@ -1,10 +1,78 @@
 # Project Constitution Tab: UX Overhaul and Reliability Fixes
 
-## Metadata
-**Complexity:** 6
-**Tags:** frontend, backend, feature, bugfix, ui, ux
+## Goal
+
+Overhaul the Project panel's Constitution tab so it is reliable and complete: refresh the sidebar status synchronously after creation, add an enable/disable Planning-Reference toggle, split the single Build button into "Build via Planner" and "Copy Build Prompt", rewrite the builder skill to produce an intent-level constitution (not a coding-standards doc), add Update/Delete buttons, support a per-workspace custom file path, and fix the broken onboarding empty state — across four files (`src/webview/project.html`, `src/webview/project.js`, `src/services/PlanningPanelProvider.ts`, `.agent/skills/constitution_builder.md`) plus the one consumption site in `src/services/KanbanProvider.ts`.
+
+**Core problem:** The Constitution tab shipped as a minimal viewer with a single planner-only Build action, a hard-coded path, a stale-on-create sidebar, and an empty state that renders garbled. It also produces the wrong *kind* of document. This plan addresses all eight problems in one coordinated change while preserving the existing multi-root (`allRoots` / `buildWorkspaceItems`) architecture.
 
 ---
+
+## Metadata
+**Tags:** frontend, backend, ui, ux, feature, bugfix, reliability
+**Complexity:** 7
+
+---
+
+## User Review Required
+
+- **None.** All eight issues have a decided implementation below. The one design ambiguity (global vs. per-workspace toggle, Issue 2) is resolved in this plan: the addon flag stays global and the UI copy is corrected to reflect that — no product decision is outstanding.
+
+---
+
+## Complexity Audit
+
+### Routine
+- Issue 8 — onboarding empty-state CSS/copy (isolated, new `.constitution-onboarding` class).
+- Issue 1 — synchronous workspace-list refresh after save (one added internal `_handleMessage` call).
+- Issue 3 / Issue 5 button HTML and click wiring (mirrors existing strip-btn patterns).
+- Skill rewrite (Issue 4) — documentation-only file, no code paths.
+
+### Complex / Risky
+- **Issue 7 path propagation across providers.** A custom path must reach *every* read site, including `getConstitutionStatus` (PlanningPanelProvider line ~2589) and `KanbanProvider._resolveConstitution` (line ~2550). A `_getConstitutionPath` helper private to `PlanningPanelProvider` does not cover the KanbanProvider consumption path; without that, a custom-path constitution displays but is never injected into planning prompts.
+- **Issue 7 watcher reconfiguration.** `_setupConstitutionWatcher` hard-codes `RelativePattern(root, 'CONSTITUTION.md')` and dedupes by root; supporting per-root custom paths requires rebuilding watchers from the resolved path on `setConstitutionPath`.
+- **Issue 2 global state write.** Writes to the shared global `switchboard.prompts.roleConfig_planner` key via async `globalState.update` (not `.set`), with `addons` initialization — same key consumed by KanbanProvider planning prompts.
+- **Issue 6 delete semantics.** Must delete immediately with no confirmation dialog (hard project rule); resolve the path via the same helper so custom-path files are deletable.
+
+---
+
+## Edge-Case & Dependency Audit
+
+**Race Conditions**
+- `globalState.update` and `vscode.env.clipboard.writeText` are async — `await` them before posting `constitutionAddonState` / `constitutionPromptCopied`, or the UI flips state before the write succeeds.
+- Issue 1's synchronous refresh and the 400 ms debounced watcher refresh can both fire for one save; both call `loadConstitutionFiles` and are idempotent, so the redundant post is harmless (note it, don't add suppression).
+- `setConstitutionPath` rebuilds watchers while the old watcher's debounce timer may be pending; the existing `_constitutionWatchDebounce` clear handles this, but verify disposal order.
+
+**Security**
+- `setConstitutionPath` must validate `msg.relativePath` is a *relative* `.md` path with no `..` traversal escaping the workspace root before storing or resolving — otherwise the helper can read/write/delete arbitrary files.
+- All handlers already gate on `allRoots.includes(wsRoot)`; preserve that guard in every new handler (`deleteConstitutionFile`, `setConstitutionPath`, updater handlers).
+
+**Side Effects**
+- Changing the custom path **orphans** the old `CONSTITUTION.md` at the root. Leave it on disk — do not auto-delete (data loss + a silent delete the user never asked for).
+- `invokeConstitutionUpdater` inherits the existing `invokeConstitutionBuilder` behavior of reusing any terminal whose name contains `planner`/`lead`; this can target an unrelated busy terminal. Pre-existing behavior — keep parity, do not expand scope here.
+- Enabling the global addon affects planning for **all** workspaces, not just the selected one (see Issue 2 correction).
+
+**Dependencies & Conflicts**
+- The addon flag key `switchboard.prompts.roleConfig_planner` is shared with `KanbanProvider` (line ~2763) and `getConstitutionStatus`. The toggle, status, and prompt injection must agree on resolution: `plannerConfig?.addons?.constitution ?? config('planner.constitutionEnabled', false)`.
+- New store key `switchboard.constitutionPaths` is net-new (never shipped) → no migration required. Preserve unknown keys in `roleConfig_planner` when writing `addons.constitution` (read-modify-write the whole object).
+
+---
+
+## Dependencies
+
+- None (self-contained within this plan; no upstream session work required).
+
+---
+
+## Adversarial Synthesis
+
+**Risk Summary:** Three findings would crash or silently no-op in production: (1) Issue 6's `showWarningMessage({modal:true})` confirm violates the repo's hard no-confirm-dialog rule and is a webview no-op — delete must be immediate; (2) Issue 7's custom path never reaches `getConstitutionStatus` and `KanbanProvider._resolveConstitution`, so a custom-path constitution shows "File not found" and is never injected into prompts; (3) Issue 2 calls a non-existent `store.set()` (the API is async `globalState.update`) and writes to `addons` without initializing it. Mitigations: remove the confirm and unlink immediately; route every read site through one shared path resolver (reachable from KanbanProvider); use `await store.update(...)` with `plannerConfig.addons = plannerConfig.addons || {}`. Secondary risks (global-vs-per-workspace toggle copy, watcher rebuild, async clipboard) are resolved in the issue corrections below.
+
+---
+
+## Proposed Changes
+
+> The eight issue sections below are the proposed changes, organized by problem (each crosses files); the File Change Summary table and Implementation Order map them to targets. **Corrections & Clarifications** subsections (labeled) refine the original issues per the adversarial review without removing original intent.
 
 ## Overview
 
@@ -19,6 +87,8 @@ The Constitution tab has eight distinct problems: a stale sidebar status, no ena
 **Fix:** In `PlanningPanelProvider.ts`, after the successful `fs.writeFileSync` in `case 'saveConstitutionFile'`, immediately call the same `_handleMessage({ type: 'loadConstitutionFiles' })` path used by the watcher. This ensures the sidebar re-renders synchronously with the `fileSaved` confirmation instead of relying on the debounced watcher.
 
 No change to `project.js` or the watcher is needed.
+
+**Clarification (signature):** The watcher invokes `this._handleMessage({ type: 'loadConstitutionFiles', requestId: Date.now() }, true)` — the second positional `true` flag marks the call internal. Mirror that exact call (including the `true`) from the save handler so the message is treated as internal, and `await` it. The redundant debounced watcher refresh that may also fire is idempotent and harmless.
 
 ---
 
@@ -58,6 +128,23 @@ Also extend the existing `case 'getConstitutionStatus'` response to include `ena
 - `btn-disable-constitution` click → `postMessage({ type: 'toggleConstitutionAddon', enabled: false })`.
 - On workspace select, re-evaluate whether `btn-enable-constitution` should be enabled (requires a constitution to exist AND addon currently off).
 
+### Correction (CRITICAL — API + scope)
+
+1. **`store` is `this._context.globalState`; its write API is async `.update()`, not `.set()`.** The handler body must be:
+   ```ts
+   const store = this._context.globalState;
+   const plannerConfig = store.get<any>('switchboard.prompts.roleConfig_planner', {}) || {};
+   plannerConfig.addons = plannerConfig.addons || {};   // addons may be undefined → guard
+   plannerConfig.addons.constitution = !!msg.enabled;
+   await store.update('switchboard.prompts.roleConfig_planner', plannerConfig);
+   this._projectPanel?.webview.postMessage({ type: 'constitutionAddonState', enabled: !!msg.enabled });
+   ```
+   Read-modify-write the whole `plannerConfig` object so unknown/legacy keys are preserved. Calling `store.set(...)` as originally written throws `TypeError: store.set is not a function`.
+
+2. **The addon flag is GLOBAL, not per-workspace.** `roleConfig_planner.addons.constitution` is consumed for every workspace by `KanbanProvider` (line ~2763) and `getConstitutionStatus`. Enabling it while viewing workspace A turns the reference on for **all** workspaces; a workspace lacking a constitution then yields `status: 'File not found'`. Therefore:
+   - Banner/button copy must read as a global switch (the banner label "Constitution Reference: Enabled" is acceptable; do **not** add per-workspace wording implying it only affects the selected repo).
+   - Derive enable/disable button state from the **global** addon flag (`constitutionAddonState` / the `enabled` field now added to `constitutionStatus`); derive file-existence from the **per-workspace** `getConstitutionStatus` `status` value. Reuse the existing three-state result (`<filename>` / `File not found` / `Disabled`) — do not invent a parallel per-workspace addon state.
+
 ---
 
 ## Issue 3 — Build Button: Two Variants (Send to Planner / Copy Prompt)
@@ -83,6 +170,10 @@ Replace the single `btn-build-constitution` with two buttons:
 <button id="btn-copy-build-prompt" class="strip-btn">Copy Build Prompt</button>
 ```
 Both disabled when no workspace is selected.
+
+### Clarification (async)
+
+`vscode.env.clipboard.writeText(...)` is async — `await` it before posting `constitutionPromptCopied`, so the "Copied!" flash only appears after the clipboard write actually succeeds. The existing `btn-build-constitution` references in `project.js` (the `btnBuildConstitution` const and its click handler, ~lines 142, 996–1004) must be retargeted to the two new ids.
 
 ---
 
@@ -127,6 +218,10 @@ Both disabled when no workspace is selected.
 
 **The standalone prompt** (used by "Copy Build Prompt" in Issue 3) is a self-contained version of this skill with the interview questions inlined, usable in any AI chat interface without access to the skills file.
 
+### Clarification (existing invocation text)
+
+`invokeConstitutionBuilder` currently sends `Follow instructions in .agent/skills/constitution_builder.md to build or improve CONSTITUTION.md in this project.` (line ~2681). Keep this terminal-invocation text; the rewrite changes only the skill file's *content*, which the planner reads when it follows that instruction. The "Copy Build Prompt" standalone string is a separate, self-contained inlining of the new interview — it does not reference the skill file.
+
 ---
 
 ## Issue 5 — No "Update Constitution" Button
@@ -143,6 +238,10 @@ Both disabled when no workspace is selected.
   - No file: show Build buttons, hide Update buttons.
 - `case 'invokeConstitutionUpdater'` in `PlanningPanelProvider.ts`: sends `Follow instructions in .agent/skills/constitution_builder.md to improve and update the existing CONSTITUTION.md in this project.` to the terminal (same mechanism as Build).
 - `case 'copyConstitutionUpdatePrompt'`: copies a standalone update prompt with the instruction to review the existing document and improve/extend it based on the same interview framework.
+
+### Clarification (visibility source of truth)
+
+Drive Build-vs-Update visibility off the `constitutionFileRead` `exists` flag (and `_constitutionSelectedFile`), which is already maintained at project.js lines ~277–291. When `exists === false`, also reset Update/Delete to hidden and Build to shown — keep this in one place so Issues 5/6 stay consistent. The updater invocation reuses the same terminal-selection behavior as `invokeConstitutionBuilder` (inherited; see Side Effects).
 
 ---
 
@@ -164,6 +263,28 @@ Add `case 'deleteConstitutionFile'`:
 - Add `<button id="btn-delete-constitution" class="strip-btn" style="color: var(--accent-red);">Delete</button>` in the controls strip, hidden by default.
 - Show/hide alongside the Update buttons (visible only when a constitution exists).
 - On `constitutionFileDeleted`: reset the preview pane to the onboarding empty state, disable Edit/Update/Delete buttons, re-enable Build buttons.
+
+### Correction (CRITICAL — NO confirmation dialog)
+
+**Step 2 above is forbidden and must be removed.** The repo has a hard, repeatedly-stated rule (CLAUDE.md, memory): delete buttons delete immediately — no `confirm()`, no `window.confirm()`, no modal `showWarningMessage`, no two-click pattern. Additionally, modal dialogs in this flow are unreliable (the webview-confirm class of silent no-op the user has been burned by). The delete button is deliberately styled distinctly (red) and is hard to misclick.
+
+Corrected handler:
+```ts
+case 'deleteConstitutionFile': {
+    const wsRoot = msg.workspaceRoot;
+    if (!allRoots.includes(wsRoot)) { break; }
+    const filePath = this._getConstitutionPath(wsRoot);   // custom-path aware (Issue 7)
+    try {
+        if (fs.existsSync(filePath)) { fs.unlinkSync(filePath); }
+        this._projectPanel?.webview.postMessage({ type: 'constitutionFileDeleted', workspaceRoot: wsRoot });
+        await this._handleMessage({ type: 'loadConstitutionFiles', requestId: Date.now() }, true);
+    } catch (err) {
+        this._projectPanel?.webview.postMessage({ type: 'constitutionFileDeleted', workspaceRoot: wsRoot, success: false, error: String(err) });
+    }
+    break;
+}
+```
+No multi-choice prompt is involved here, so no dialog of any kind is permitted. (Multi-choice resolution dialogs are allowed elsewhere; a plain delete confirm is not.)
 
 ---
 
@@ -199,6 +320,22 @@ On click: `postMessage({ type: 'openSetConstitutionPath', workspaceRoot: ... })`
 
 Backend handles `case 'openSetConstitutionPath'` by calling `vscode.window.showInputBox({ prompt: 'Enter relative path for constitution file', value: currentRelativePath, placeHolder: 'CONSTITUTION.md' })` and, on a non-empty result, dispatching `setConstitutionPath` internally.
 
+### Correction (CRITICAL — propagate the path to ALL read sites)
+
+The helper list above omits two read sites that will silently break the feature:
+
+1. **`getConstitutionStatus` (PlanningPanelProvider line ~2589)** hard-codes `path.join(wr, 'CONSTITUTION.md')`. After a custom path is set, the sidebar/meta-bar status reports `File not found`. Route it through `_getConstitutionPath(wr)`.
+
+2. **`KanbanProvider._resolveConstitution` (KanbanProvider line ~2550)** hard-codes `path.join(workspaceRoot, 'CONSTITUTION.md')`. This is the function that injects the constitution into the planning prompt. Without the custom path here, enabling a custom-path constitution as a Planning Reference injects **nothing** — defeating the entire feature.
+
+Because `_getConstitutionPath` is private to `PlanningPanelProvider`, the resolution logic (read `switchboard.constitutionPaths[workspaceRoot]` from `globalState`, fall back to `<root>/CONSTITUTION.md`) must be reachable from `KanbanProvider`. Implement once and share — e.g. a small exported util `getConstitutionPath(context, workspaceRoot)` in a shared module that both providers call, with the private method delegating to it. **(`src/services/KanbanProvider.ts` is therefore a fifth touched file — add it to the change summary.)**
+
+**Watcher reconfiguration detail:** `_setupConstitutionWatcher` currently builds `new vscode.RelativePattern(vscode.Uri.file(root), 'CONSTITUTION.md')` and dedupes purely by root via the `watchedPaths` Set. To watch custom paths, derive the relative pattern from `_getConstitutionPath(root)` (relative-ize against root) per workspace, and have `setConstitutionPath` call `_setupConstitutionWatcher()` to rebuild after storing. Keep the existing dispose-then-recreate flow and the `_constitutionWatchDebounce` clear.
+
+**Validation:** reject `relativePath` containing `..` segments or resolving outside the workspace root, and require a `.md` extension, before storing.
+
+**No migration:** `switchboard.constitutionPaths` is net-new and has never shipped — no migration needed. Setting a custom path leaves any pre-existing root `CONSTITUTION.md` on disk; do not delete it.
+
 ---
 
 ## Issue 8 — Onboarding Empty State is Broken and Uninformative
@@ -222,6 +359,10 @@ Add `.constitution-onboarding` CSS: left-aligned, top-padding (~24px), `max-widt
 
 The initial state (no workspace selected yet) keeps the existing single-line `<div class="empty-state">Select a workspace to view its Constitution</div>` — no change needed there, that single-node centered state is fine.
 
+### Clarification (exact offending selector)
+
+The base `.empty-state` rule (project.html line ~229) is `text-align: center` block — not the culprit. The garbling comes from the **scoped** rule `#kanban-preview-content .empty-state, #epics-preview-content .empty-state, #constitution-preview-content .empty-state { display: flex; align-items: center; justify-content: center; ... }` at **project.html lines ~973–983**, which has no `flex-direction: column`, so the two `<p>` children lay out as flex items in a row. The proposed fix (a separate `.constitution-onboarding` class outside that selector) correctly sidesteps it; do not add `flex-direction: column` to the shared scoped rule (it would alter kanban/epics empty states too). Also update the build-button reference in the onboarding copy to "Build via Planner" per Issue 3.
+
 ---
 
 ## File Change Summary
@@ -230,7 +371,8 @@ The initial state (no workspace selected yet) keeps the existing single-line `<d
 |---|---|
 | `src/webview/project.html` | Issue 2 banner, Issues 3/5/6/7 buttons, Issue 8 CSS for `.constitution-onboarding` |
 | `src/webview/project.js` | Issue 1 implicit (no JS change needed), Issue 2 toggle handlers, Issues 3/5/6/7/8 button wiring and message handlers |
-| `src/services/PlanningPanelProvider.ts` | Issue 1 sync refresh after save, Issue 2 `toggleConstitutionAddon`, Issue 3 `copyConstitutionPrompt`, Issue 5 `invokeConstitutionUpdater`+`copyConstitutionUpdatePrompt`, Issue 6 `deleteConstitutionFile`, Issue 7 `_getConstitutionPath` helper + `setConstitutionPath` + `openSetConstitutionPath` |
+| `src/services/PlanningPanelProvider.ts` | Issue 1 sync refresh after save, Issue 2 `toggleConstitutionAddon` (async `globalState.update`), Issue 3 `copyConstitutionPrompt`, Issue 5 `invokeConstitutionUpdater`+`copyConstitutionUpdatePrompt`, Issue 6 `deleteConstitutionFile` (NO confirm), Issue 7 `_getConstitutionPath` helper + `setConstitutionPath` + `openSetConstitutionPath` + route `getConstitutionStatus` through helper |
+| `src/services/KanbanProvider.ts` | **(added)** Issue 7 — route `_resolveConstitution` (line ~2550) through the shared custom-path resolver so custom-path constitutions are injected into planning prompts |
 | `.agent/skills/constitution_builder.md` | Issue 4 full rewrite |
 
 ---
@@ -239,8 +381,35 @@ The initial state (no workspace selected yet) keeps the existing single-line `<d
 
 1. Issue 8 — onboarding CSS and copy (isolated, zero risk)
 2. Issue 1 — sync refresh after save (one-line backend addition)
-3. Issue 6 — delete button (self-contained, tests the backend pattern)
-4. Issue 7 — `_getConstitutionPath` helper (refactor first, then add `setConstitutionPath` UI)
+3. Issue 7 — shared `getConstitutionPath` resolver FIRST (refactor all read sites incl. `getConstitutionStatus` and `KanbanProvider._resolveConstitution`, plus watcher), then add `setConstitutionPath`/`openSetConstitutionPath` UI. *(Moved earlier than the original order because Issues 6 and the status logic depend on the shared resolver.)*
+4. Issue 6 — delete button (immediate unlink, no confirm; uses the resolver from step 3)
 5. Issue 4 — rewrite `constitution_builder.md`
 6. Issues 3 & 5 — Build/Update/Copy buttons (share the same prompt content from Issue 4)
 7. Issue 2 — enable/disable toggle (last, because it depends on stable workspace selection logic from 3 & 5)
+
+---
+
+## Verification Plan
+
+> Per session directives, automated tests and compilation are run **separately by the user** and are not executed as part of this plan. The items below define what to verify.
+
+### Automated Tests
+- Unit-test the shared `getConstitutionPath(context, workspaceRoot)` resolver: returns custom path when `switchboard.constitutionPaths[root]` is set, falls back to `<root>/CONSTITUTION.md` otherwise, and rejects `..`/non-`.md` inputs in `setConstitutionPath` validation.
+- Verify `toggleConstitutionAddon` read-modify-writes `roleConfig_planner` without dropping unknown keys and initializes `addons`.
+- Verify `getConstitutionStatus` returns `<filename>` / `File not found` / `Disabled` correctly for default and custom paths.
+
+### Manual QA Checklist
+1. **Issue 1:** Save a constitution in-panel → sidebar status flips to "✓ Has Constitution" immediately (no ~400 ms lag).
+2. **Issue 2:** Toggle enable/disable → banner appears/disappears; reopen panel → state persists; confirm planning prompt reflects the global flag across two workspaces.
+3. **Issue 3:** "Copy Build Prompt" → clipboard contains the self-contained prompt; "Copied!" flashes only after copy. "Build via Planner" sends to terminal.
+4. **Issue 4:** Run the builder → output is an intent-level constitution (mission/users/principles/constraints/non-goals), under ~150 lines, no coding-standards sections.
+5. **Issue 5:** With a constitution present, Build buttons hide and Update buttons show; Update via Planner sends the update instruction.
+6. **Issue 6:** Click Delete → file is removed **immediately with no dialog**; preview resets to onboarding state; sidebar updates.
+7. **Issue 7:** Set a custom path (e.g. `docs/CONSTITUTION.md`) → status shows the file (not "File not found"), watcher tracks the new path, AND enabling the reference injects the custom-path content into the planning prompt (verify via KanbanProvider path). Old root `CONSTITUTION.md` remains on disk.
+8. **Issue 8:** Select a workspace with no constitution → onboarding text renders as a single left-aligned block (not split left/right).
+
+---
+
+## Recommendation
+
+**Complexity: 7 → Send to Lead Coder.** Multi-file coordination across two providers, a path-resolution refactor touching 6+ call sites, a shared global-state write, file-watcher reconfiguration, and a cross-provider consistency requirement (custom path must reach the prompt-injection layer) put this above routine. The three blocking corrections (no-confirm delete, custom-path propagation, `globalState.update` API) must land or the feature ships broken.

@@ -17928,6 +17928,16 @@ What would you like to find?`;
 
             if (provider === 'clickup' && listId) {
                 const clickup = this._getClickUpService(resolvedRoot);
+                // Bug 2 (double-click refresh): this provider owns a PlanningPanelCacheService
+                // instance distinct from the extension-singleton cache that the webview's
+                // `invalidateClickUpCache` / `clickupLoadProject` handlers clear. Without
+                // clearing it here, a refresh re-reads the stale 5-min list cache and writes
+                // stale data to disk, forcing a second refresh. Invalidate on the first page
+                // only (start of a fresh import/refresh) so the import pulls live data; later
+                // pages reuse the freshly-populated cache to avoid re-fetching the full list.
+                if (page === 1 && !append) {
+                    this._getCacheService(resolvedRoot).invalidateTaskCache('clickup', listId);
+                }
                 const tasks = await clickup.getListTasks(listId);
                 const pageSize = 100;
                 const startIndex = (page - 1) * pageSize;

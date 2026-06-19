@@ -215,4 +215,55 @@ cacheService.invalidateTaskCache('clickup', listId);
 
 ---
 
+## Code Review (Reviewer Pass — 2026-06-19)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *Gather round, children. The build is "complete," they said. Let me put on my reading glasses and discover, as I always do, that "complete" is a word people use the way toddlers use "finished" about a plate of vegetables — most of it is fixed, one bite is hidden in the napkin.*
+>
+> **CRITICAL — The cache invalidation is shouting into the wrong room.** The plan, with the unearned confidence of a junior who has never been paged at 3am, asserts (lines 179 & 190) that `_adapterFactories.getCacheService` returns "the canonical cache service **which `TaskViewerProvider` also uses**." It does NOT. `TaskViewerProvider` builds its *own* `PlanningPanelCacheService` from its *own* private `_cacheServices` Map (`TaskViewerProvider.ts:5205`) and injects *that* instance into its ClickUp service (`5118–5119`). The extension factory's singleton (`extension.ts:746`) is a **different object** with a **different in-memory `_taskCache` Map** (`PlanningPanelCacheService.ts:35`, 5-min TTL, in-memory only — no shared disk read-back). So when the refresh handler dutifully calls `invalidateTaskCache('clickup', listId)` on the *singleton*, and then the auto-import (`importAllTasks` → `getListTasks`, `TaskViewerProvider.ts:17931`) reads from the *other* cache, the stale entry is sitting right there, untouched, smug. The import writes stale `.md` files to disk. Bug 2 — the entire reason we are here — is **not fixed for the imported file content.** You moved the furniture in the room nobody was standing in.
+>
+> **MAJOR — Two of the three invalidation calls are theatre.** The display path uses `KanbanProvider._getClickUpService` (`KanbanProvider.ts:1338`) which **never** calls `setCacheService`, so its `_cacheService` is `null` and `getListTasks` *always* hits live API. Fine — but that means the `invalidateTaskCache` call in `clickupLoadProject` (`PlanningPanelProvider.ts:3107`) protects a cache nobody reads, and `clearTaskListIndex()` in the `invalidateClickUpCache` handler (`3062`) clears an index that service never populated (guarded at `ClickUpSyncService.ts:1175`). Harmless. Also pointless. The plan dresses them up as the fix; they are decoration.
+>
+> **NIT — The slow path was left holding the same stale bag.** `importAllTasks`' plan-mode branch (`TaskViewerProvider.ts:17999`) reads the very same cached list. A task created on the remote a minute ago won't appear in a refresh-into-plan-mode. Per-item fetches are live, so the blast radius is "you don't import the brand-new ticket," not "you import garbage." Survivable. Note it and move on.
+>
+> *The good news, grudgingly: Bug 1 is actually fixed. I checked. Twice. Don't let it go to your heads.*
+
+### Stage 2 — Balanced Synthesis
+
+**Keep (correctly implemented, verified end-to-end):**
+- DB injection into both constructors — `KanbanProvider.ts:188`, `TaskViewerProvider.ts:5211`. This is the real Bug 1 fix.
+- `registerImportedTicket` → `upsertImportedTicket` writes `last_synced_at = now` (`KanbanDatabase.ts:1893–1894`); `_writeTaskDocument` calls it on every bulk import (`TaskViewerProvider.ts:17889`); `_ticketSyncStatusFromTimestamps` 1s grace then yields `synced` (`PlanningPanelProvider.ts:6298`). Chain is sound.
+- `KanbanDatabase.forWorkspace` is a per-root **singleton** (`KanbanDatabase.ts:725–730`), so the import's DB write and the `getTicketSyncStatuses` read (`PlanningPanelProvider.ts:3732`) see the same rows despite distinct cache-service instances. Bug 1 closed.
+- Cache-key matching is precise: simple queries key on `normalizedListId` (`ClickUpSyncService.ts:1132`) → stored as `clickup:{listId}` → matched exactly by `invalidateTaskCache('clickup', listId)` (`PlanningPanelCacheService.ts:656`).
+- `planning.js` refresh handler posts `invalidateClickUpCache` before `loadClickUpProject(true)` (`planning.js:5910`). Fine.
+
+**Fix now (done in this pass):**
+- The CRITICAL instance-mismatch. The clean, minimal fix lives at the layer that *owns* the import's cache: `TaskViewerProvider.importAllTasks` invalidates its own list entry **on the first page only** (`page === 1 && !append`) before `getListTasks`, so a refresh pulls live data while paginated imports still reuse the freshly-populated cache. Applied at `TaskViewerProvider.ts:~17931` (document fast-path, which is the `importMode: 'document'` route the refresh auto-import actually takes).
+
+**Defer:**
+- The plan-mode slow-path stale-ID edge (`17999`) — low impact, not the reported bug.
+- Leaving the singleton-cache invalidation calls in place: they're defensive no-ops today but harmless and future-proof if wiring converges later. No change.
+
+### Fixes Applied
+- **`src/services/TaskViewerProvider.ts`** (`importAllTasks`, ClickUp document fast-path, ~L17931): added `if (page === 1 && !append) { this._getCacheService(resolvedRoot).invalidateTaskCache('clickup', listId); }` before `getListTasks(listId)`, with an explaining comment. This is the actual fix for the double-click refresh writing stale files — it clears the *correct* (this-provider-owned) cache instance.
+
+### Validation Results
+- **Compilation:** SKIPPED per session directive. ⚠️ The extension runs from `dist/` (webpack) — **all** of this plan's changes, including this fix, are inert until `npm run compile` is run.
+- **Automated tests:** SKIPPED per session directive (user will run separately).
+- **Static trace (manual):** Verified the import read path (`importAllTasks` → `_getClickUpService` → `_getCacheService` = own instance) vs. the handler invalidation path (extension singleton) are distinct instances; confirmed `forWorkspace` DB singleton makes Bug 1's write/read coherent; confirmed cache-key shape matches the invalidation pattern.
+
+### Remaining Risks
+- **Rebuild required.** Changes do not take effect until `npm run compile` rebuilds `dist/extension.js`.
+- **One extra live list fetch per auto-sync load.** With autoSync on, the import's first page now always fetches live instead of from its own 5-min cache. This is the correct tradeoff (correctness over one cached call) and mirrors the pre-existing display-vs-import double-fetch divergence.
+- **Plan-mode slow path** (`17999`) can still serve a stale ID list on refresh-into-plan-mode; brand-new remote tickets may be skipped until TTL/next refresh. Deferred (NIT).
+
+### Summary by Severity
+- **CRITICAL** — Cache invalidation targeted the extension-singleton cache, but the refresh auto-import reads `TaskViewerProvider`'s own distinct `PlanningPanelCacheService` instance (`TaskViewerProvider.ts:5205` / `5118` vs `extension.ts:746`); Bug 2's stale-file-on-single-refresh was not actually fixed. **FIXED** at `TaskViewerProvider.ts:~17931`.
+- **MAJOR** — `clickupLoadProject` (`PlanningPanelProvider.ts:3107`) and `invalidateClickUpCache` (`3060`/`3062`) invalidate caches/indexes that the active read paths don't use (display = no-cache `KanbanProvider` service; import = the other instance). Harmless defensive no-ops; **kept**.
+- **NIT** — Plan-mode slow path (`TaskViewerProvider.ts:17999`) shares the same stale list cache; **deferred**.
+- **VERIFIED OK** — Bug 1 (DB injection → `last_synced_at` populated → `synced` status) fully fixed and traced end-to-end.
+
+---
+
 **Send to Coder**
