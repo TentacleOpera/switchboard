@@ -1099,6 +1099,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 }
                 case 'browseTicketsFolder': {
+                    const provider = message.provider;
                     const folderUri = await vscode.window.showOpenDialog({
                         canSelectFolders: true,
                         canSelectFiles: false,
@@ -1108,49 +1109,48 @@ export class SetupPanelProvider implements vscode.Disposable {
                     if (folderUri?.[0]) {
                         this._panel?.webview.postMessage({
                             type: 'browseTicketsFolderResult',
+                            provider,
                             path: folderUri[0].fsPath
                         });
                     }
                     break;
                 }
                 case 'saveTicketsFolder': {
-                    const workspaceRoot = this._getCurrentWorkspaceRoot();
-                    if (workspaceRoot && this._taskViewerProvider) {
-                        const localService = this._taskViewerProvider.getLocalFolderService(workspaceRoot);
-                        const config = await localService.loadFolderPathsConfig();
-                        const folderPath = String(message.folderPath || '').trim();
-                        if (folderPath) {
-                            config.ticketsFolderPaths = [folderPath];
-                        } else {
-                            config.ticketsFolderPaths = [];
-                        }
-                        await localService.saveFolderPathsConfig(config);
+                    const provider = message.provider;
+                    const folderPath = String(message.folderPath || '').trim();
+                    if (provider === 'clickup' || provider === 'linear') {
+                        const config = await GlobalIntegrationConfigService.loadConfig(provider) || {};
+                        config.ticketSaveLocation = folderPath;
+                        await GlobalIntegrationConfigService.saveConfig(provider, config);
                         this._panel?.webview.postMessage({
                             type: 'ticketsFoldersListed',
-                            paths: localService.getTicketsFolderPaths(),
-                            ticketsAutoSync: localService.getTicketsAutoSync()
+                            provider,
+                            path: folderPath,
+                            ticketsAutoSync: await GlobalIntegrationConfigService.getTicketsAutoSync()
                         });
                     }
                     break;
                 }
                 case 'saveTicketsAutoSync': {
-                    const workspaceRoot = this._getCurrentWorkspaceRoot();
-                    if (workspaceRoot && this._taskViewerProvider) {
-                        const localService = this._taskViewerProvider.getLocalFolderService(workspaceRoot);
-                        await localService.setTicketsAutoSync(message.enabled === true);
-                    }
+                    await GlobalIntegrationConfigService.setTicketsAutoSync(message.enabled === true);
                     break;
                 }
                 case 'listTicketsFolders': {
-                    const workspaceRoot = this._getCurrentWorkspaceRoot();
-                    if (workspaceRoot && this._taskViewerProvider) {
-                        const localService = this._taskViewerProvider.getLocalFolderService(workspaceRoot);
-                        this._panel?.webview.postMessage({
-                            type: 'ticketsFoldersListed',
-                            paths: localService.getTicketsFolderPaths(),
-                            ticketsAutoSync: localService.getTicketsAutoSync()
-                        });
-                    }
+                    const clickupConfig = await GlobalIntegrationConfigService.loadConfig('clickup');
+                    const linearConfig = await GlobalIntegrationConfigService.loadConfig('linear');
+                    const ticketsAutoSync = await GlobalIntegrationConfigService.getTicketsAutoSync();
+                    this._panel?.webview.postMessage({
+                        type: 'ticketsFoldersListed',
+                        provider: 'clickup',
+                        path: clickupConfig?.ticketSaveLocation || '',
+                        ticketsAutoSync
+                    });
+                    this._panel?.webview.postMessage({
+                        type: 'ticketsFoldersListed',
+                        provider: 'linear',
+                        path: linearConfig?.ticketSaveLocation || '',
+                        ticketsAutoSync
+                    });
                     break;
                 }
                 default:

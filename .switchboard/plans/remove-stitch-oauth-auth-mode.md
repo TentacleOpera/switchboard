@@ -270,3 +270,55 @@ This migration is idempotent and safe to run on every activation.
 ## Recommendation
 
 Complexity is 4 (multi-file changes with moderate logic, but all changes are removals/simplifications of existing patterns — no new architecture). **Send to Coder.**
+
+---
+
+## Reviewer Pass (2026-06-20)
+
+### Stage 1: Grumpy Principal Engineer Review
+
+**CRITICAL — `extension.ts:2005` — You deleted the closing `}));` along with the authMode block, you absolute walnut.**
+
+The `onDidChangeConfiguration` listener at line 1982 opens `context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(async e => {`. The original code had the `}));` that closed this listener *after* the `stitch.authMode` if-block. When the implementer deleted the authMode block, they also deleted the `}));` that closed the entire config-change listener. The result: the `onDidChangeSecrets` listener registration (and every command registration after it) was swallowed into the `onDidChangeConfiguration` callback body. This is a **syntax error** — the `activate` function's closing brace gets consumed by the arrow function, leaving `push(` and `onDidChangeConfiguration(` unclosed. The extension would not compile, and if it somehow did, nothing after line 2005 would execute at activation time. This is the kind of bug that makes me question whether anyone even looked at the diff before committing.
+
+**NIT — `package.json:178` — Orphaned blank line.**
+
+Deleting the `switchboard.stitch.authMode` schema entry left a blank line between the `defaultMode` entry and the `defaultProjectId` entry. Valid JSON, but untidy.
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Severity | Verdict |
+|---------|----------|---------|
+| Missing `}));` closing `onDidChangeConfiguration` listener | CRITICAL | **Fix now** — extension cannot compile/run without it |
+| Orphaned blank line in `package.json` | NIT | **Fix now** — trivial, one-line edit |
+
+Everything else in the implementation is correct and matches the plan:
+- `loadStitch` simplified, `_accessToken` param retained as unused (call-site stability). ✓
+- `_setupStitchAuth` return type narrowed to `{ valid: boolean; apiKey: string }`. ✓
+- All 6 `stitchAuthStatus` posts in `DesignPanelProvider.ts` stripped of `mode`/`accessToken`. ✓
+- All 15 `loadStitch(...)` call sites updated to `loadStitch('')`, 10 dead secret reads removed. ✓
+- Batch-download `StitchToolClient` collapsed to no-arg. ✓
+- `design.html` radio group + token group removed, copy updated. ✓
+- `design.js` radio wiring, `accessToken` save field, `updateStitchAuthUI` oauth branch, `stitchAuthMode` state all removed. ✓
+- `extension.ts` config-change `authMode` branch removed, secret listener narrowed to `apiKey` only. ✓
+- Migration block placed correctly after `designPanelProvider` construction. ✓
+- `package.json` schema entry removed. ✓
+
+### Fixes Applied
+
+1. **`src/extension.ts:2006`** — Added back `}));` to close the `onDidChangeConfiguration` listener. Without this, the entire `activate` function is structurally broken.
+2. **`package.json:178`** — Removed orphaned blank line left by schema entry deletion.
+
+### Validation Results
+
+- **Grep sweep**: `rg "stitch-auth-mode|stitch-access-token|stitch\.authMode|switchboard\.stitch\.accessToken|authMode.*oauth" src/` — zero matches outside the migration block in `extension.ts` (lines 817, 819, 821), which is correct (the migration must read/update these to clean them up). ✓
+- **`loadStitch` call-site audit**: 15 call sites all pass `''`, plus the function definition. ✓
+- **`stitchAuthStatus` post audit**: 6 posts in `DesignPanelProvider.ts`, all send only `configured`/`valid`/`apiKey`/`error`. No `mode`/`accessToken`. ✓
+- **`_setupStitchAuth` return type**: `{ valid: boolean; apiKey: string }` — no `auth.mode`/`auth.accessToken` destructuring remains. ✓
+- **Compilation/tests**: Skipped per session directives. **The CRITICAL fix (missing `}));`) must be verified by a compile pass before shipping.**
+
+### Remaining Risks
+
+1. **Compile pass required.** The CRITICAL `}));` fix was applied but not compile-verified (per session directives). A `npm run compile` must be run before shipping to confirm no other syntax issues lurk.
+2. **`dist/` rebuild required.** The webview files (`design.html`, `design.js`) were edited but `dist/` has not been rebuilt. The extension serves webviews from `dist/webview/` — a rebuild is needed for the UI changes to take effect.
+3. **No functional risks** beyond the above. The OAuth removal is complete and clean across all 5 files.

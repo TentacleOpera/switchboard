@@ -3304,20 +3304,47 @@
         document.getElementById('linear-browse-exclude-projects')?.addEventListener('click', () => {
             vscode.postMessage({ type: 'linearBrowseProjects', target: 'exclude' });
         });
-        document.querySelectorAll('.btn-browse-ticket-folder').forEach(el => {
-            el.addEventListener('click', () => {
-                vscode.postMessage({ type: 'browseTicketsFolder' });
-            });
+        function updateApplyButtonsState() {
+            // ClickUp
+            const clickupToken = document.getElementById('clickup-token-input')?.value.trim() || '';
+            const clickupFolder = document.getElementById('clickup-ticket-import-folder')?.value.trim() || '';
+            const clickupApplyBtn = document.getElementById('btn-apply-clickup-config');
+            if (clickupApplyBtn) {
+                clickupApplyBtn.disabled = !clickupToken || !clickupFolder;
+            }
+
+            // Linear
+            const linearToken = document.getElementById('linear-token-input')?.value.trim() || '';
+            const linearFolder = document.getElementById('linear-ticket-import-folder')?.value.trim() || '';
+            const linearApplyBtn = document.getElementById('btn-apply-linear-config');
+            if (linearApplyBtn) {
+                linearApplyBtn.disabled = !linearToken || !linearFolder;
+            }
+        }
+
+        document.getElementById('clickup-token-input')?.addEventListener('input', updateApplyButtonsState);
+        document.getElementById('linear-token-input')?.addEventListener('input', updateApplyButtonsState);
+        document.getElementById('clickup-ticket-import-folder')?.addEventListener('input', updateApplyButtonsState);
+        document.getElementById('linear-ticket-import-folder')?.addEventListener('input', updateApplyButtonsState);
+
+        document.getElementById('btn-browse-clickup-ticket-folder')?.addEventListener('click', () => {
+            vscode.postMessage({ type: 'browseTicketsFolder', provider: 'clickup' });
         });
-        document.querySelectorAll('.ticket-import-folder-input').forEach(el => {
-            el.addEventListener('blur', (e) => {
-                const val = e.target.value.trim();
-                document.querySelectorAll('.ticket-import-folder-input').forEach(input => {
-                    input.value = val;
-                });
-                vscode.postMessage({ type: 'saveTicketsFolder', folderPath: val });
-            });
+        document.getElementById('btn-browse-linear-ticket-folder')?.addEventListener('click', () => {
+            vscode.postMessage({ type: 'browseTicketsFolder', provider: 'linear' });
         });
+
+        document.getElementById('clickup-ticket-import-folder')?.addEventListener('blur', (e) => {
+            const val = e.target.value.trim();
+            vscode.postMessage({ type: 'saveTicketsFolder', provider: 'clickup', folderPath: val });
+            updateApplyButtonsState();
+        });
+        document.getElementById('linear-ticket-import-folder')?.addEventListener('blur', (e) => {
+            const val = e.target.value.trim();
+            vscode.postMessage({ type: 'saveTicketsFolder', provider: 'linear', folderPath: val });
+            updateApplyButtonsState();
+        });
+
         document.querySelectorAll('.tickets-auto-sync-toggle').forEach(el => {
             el.addEventListener('change', (e) => {
                 const checked = e.target.checked === true;
@@ -3892,25 +3919,55 @@
             const message = event.data;
             switch (message.type) {
                 case 'ticketsFoldersListed': {
-                    document.querySelectorAll('.ticket-import-folder-input').forEach(input => {
-                        input.value = message.paths && message.paths.length > 0 ? message.paths[0] : '';
-                    });
+                    if (message.provider === 'clickup') {
+                        const input = document.getElementById('clickup-ticket-import-folder');
+                        if (input) input.value = message.path || '';
+                    } else if (message.provider === 'linear') {
+                        const input = document.getElementById('linear-ticket-import-folder');
+                        if (input) input.value = message.path || '';
+                    } else {
+                        // fallback
+                        document.querySelectorAll('.ticket-import-folder-input').forEach(input => {
+                            input.value = message.path || (message.paths && message.paths.length > 0 ? message.paths[0] : '');
+                        });
+                    }
                     document.querySelectorAll('.tickets-auto-sync-toggle').forEach(toggle => {
                         toggle.checked = message.ticketsAutoSync === true;
                     });
+                    updateApplyButtonsState();
                     break;
                 }
                 case 'ticketsFolderPathResult': {
-                    document.querySelectorAll('.ticket-import-folder-input').forEach(input => {
-                        input.value = message.path || '';
-                    });
+                    if (message.provider === 'clickup') {
+                        const input = document.getElementById('clickup-ticket-import-folder');
+                        if (input) input.value = message.path || '';
+                    } else if (message.provider === 'linear') {
+                        const input = document.getElementById('linear-ticket-import-folder');
+                        if (input) input.value = message.path || '';
+                    } else {
+                        document.querySelectorAll('.ticket-import-folder-input').forEach(input => {
+                            input.value = message.path || '';
+                        });
+                    }
+                    updateApplyButtonsState();
                     break;
                 }
                 case 'browseTicketsFolderResult': {
-                    document.querySelectorAll('.ticket-import-folder-input').forEach(input => {
-                        input.value = message.path || '';
-                    });
-                    vscode.postMessage({ type: 'saveTicketsFolder', folderPath: message.path || '' });
+                    if (message.provider === 'clickup') {
+                        const input = document.getElementById('clickup-ticket-import-folder');
+                        if (input) input.value = message.path || '';
+                        vscode.postMessage({ type: 'saveTicketsFolder', provider: 'clickup', folderPath: message.path || '' });
+                    } else if (message.provider === 'linear') {
+                        const input = document.getElementById('linear-ticket-import-folder');
+                        if (input) input.value = message.path || '';
+                        vscode.postMessage({ type: 'saveTicketsFolder', provider: 'linear', folderPath: message.path || '' });
+                    } else {
+                        document.querySelectorAll('.ticket-import-folder-input').forEach(input => {
+                            input.value = message.path || '';
+                        });
+                        vscode.postMessage({ type: 'saveTicketsFolder', folderPath: message.path || '' });
+                    }
+                    updateApplyButtonsState();
                     break;
                 }
                 case 'switchboardThemeNameSetting':
@@ -4396,6 +4453,7 @@
                         renderClickupSetupState();
                         renderLinearSetupState();
                         renderNotionSetupState();
+                        updateApplyButtonsState();
                     });
 
                     break;

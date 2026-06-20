@@ -175,7 +175,6 @@
           "default": "action",
           "description": "Default mode for switchboard commands"
         },
-
         "switchboard.stitch.defaultProjectId": {
           "type": "string",
           "default": "",

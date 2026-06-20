@@ -41,6 +41,25 @@ export class GlobalIntegrationConfigService {
         }
     }
 
+    public static loadGlobalSync(): GlobalConfig {
+        const filePath = this.getFilePath();
+        if (!fs.existsSync(filePath)) {
+            return {};
+        }
+        try {
+            const content = fs.readFileSync(filePath, 'utf8');
+            return JSON.parse(content) as GlobalConfig;
+        } catch (err) {
+            console.error('[GlobalIntegrationConfigService] Failed to load global config sync:', err);
+            return {};
+        }
+    }
+
+    public static loadConfigSync(provider: 'clickup' | 'linear' | 'notion'): any {
+        const globalConfig = this.loadGlobalSync();
+        return globalConfig[provider] || null;
+    }
+
     public static async saveGlobal(config: GlobalConfig): Promise<void> {
         const filePath = this.getFilePath();
         const dir = path.dirname(filePath);

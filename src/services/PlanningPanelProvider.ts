@@ -18,6 +18,7 @@ import { LocalFolderService } from './LocalFolderService';
 import { LinearDocsAdapter } from './LinearDocsAdapter';
 import { ClickUpDocsAdapter } from './ClickUpDocsAdapter';
 import { PlanningPanelCacheService } from './PlanningPanelCacheService';
+import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { buildKanbanColumns, KanbanColumnDefinition, CustomKanbanColumnConfig, CustomAgentConfig, parseCustomAgents } from './agentConfig';
 import { ReviewCommentRequest, ReviewCommentResult } from './reviewTypes';
 import { isValidComplexityValue, legacyToScore } from './complexityScale';
@@ -145,48 +146,47 @@ export class PlanningPanelProvider {
             return;
         }
 
-        console.log('[PlanningPanel] Registering adapters for roots:', allRoots);
+        console.log('[PlanningPanel] Registering adapters globally...');
 
         // Clear existing adapters to avoid duplicates from previous registrations
         this._researchImportService.clearAdapters();
 
-        for (const workspaceRoot of allRoots) {
-            // Notion
-            try {
-                const notionService = this._adapterFactories.getNotionService?.(workspaceRoot);
-                const notionBrowseService = this._adapterFactories.getNotionBrowseService?.(workspaceRoot);
-                if (notionService && notionBrowseService) {
-                    this._researchImportService.registerAdapter(
-                        new NotionResearchAdapter(workspaceRoot, notionService, notionBrowseService)
-                    );
-                    console.log('[PlanningPanel] Registered Notion adapter for:', workspaceRoot);
-                }
-            } catch (err) {
-                // Clarification: Log at debug level for visibility without console spam
-                console.debug('[PlanningPanel] Notion config not found or invalid for root:', workspaceRoot, err);
-            }
+        const workspaceRoot = allRoots[0];
 
-            // Linear
-            try {
-                const linearAdapter = this._adapterFactories.getLinearDocsAdapter?.(workspaceRoot);
-                if (linearAdapter) {
-                    this._researchImportService.registerAdapter(linearAdapter);
-                    console.log('[PlanningPanel] Registered Linear adapter for:', workspaceRoot);
-                }
-            } catch (err) {
-                console.debug('[PlanningPanel] Linear config not found or invalid for root:', workspaceRoot, err);
+        // Notion
+        try {
+            const notionService = this._adapterFactories.getNotionService?.(workspaceRoot);
+            const notionBrowseService = this._adapterFactories.getNotionBrowseService?.(workspaceRoot);
+            if (notionService && notionBrowseService) {
+                this._researchImportService.registerAdapter(
+                    new NotionResearchAdapter(workspaceRoot, notionService, notionBrowseService)
+                );
+                console.log('[PlanningPanel] Registered Notion adapter globally');
             }
+        } catch (err) {
+            console.debug('[PlanningPanel] Notion adapter registration failed:', err);
+        }
 
-            // ClickUp
-            try {
-                const clickUpAdapter = this._adapterFactories.getClickUpDocsAdapter?.(workspaceRoot);
-                if (clickUpAdapter) {
-                    this._researchImportService.registerAdapter(clickUpAdapter);
-                    console.log('[PlanningPanel] Registered ClickUp adapter for:', workspaceRoot);
-                }
-            } catch (err) {
-                console.debug('[PlanningPanel] ClickUp config not found or invalid for root:', workspaceRoot, err);
+        // Linear
+        try {
+            const linearAdapter = this._adapterFactories.getLinearDocsAdapter?.(workspaceRoot);
+            if (linearAdapter) {
+                this._researchImportService.registerAdapter(linearAdapter);
+                console.log('[PlanningPanel] Registered Linear adapter globally');
             }
+        } catch (err) {
+            console.debug('[PlanningPanel] Linear adapter registration failed:', err);
+        }
+
+        // ClickUp
+        try {
+            const clickUpAdapter = this._adapterFactories.getClickUpDocsAdapter?.(workspaceRoot);
+            if (clickUpAdapter) {
+                this._researchImportService.registerAdapter(clickUpAdapter);
+                console.log('[PlanningPanel] Registered ClickUp adapter globally');
+            }
+        } catch (err) {
+            console.debug('[PlanningPanel] ClickUp adapter registration failed:', err);
         }
 
         this._registeredRootsKey = rootsKey;
@@ -1398,40 +1398,75 @@ export class PlanningPanelProvider {
 
     // Same locations importTaskAsDocument writes to (TaskViewerProvider).
     private _getTicketDocumentDirs(resolvedRoot: string, provider?: 'clickup' | 'linear'): string[] {
-        let baseDir = path.join(resolvedRoot, '.switchboard', 'tickets');
-        try {
-            const localFolderService = new LocalFolderService(resolvedRoot);
-            const ticketsFolders = localFolderService.getTicketsFolderPaths();
-            if (ticketsFolders.length > 0 && ticketsFolders[0]) {
-                baseDir = ticketsFolders[0];
-            }
-        } catch { /* use default baseDir */ }
+        const dirs: string[] = [];
+        const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
 
+        // 1. Configured global directory
+        let globalBaseDir = '';
+        if (provider) {
+            try {
+                const config = GlobalIntegrationConfigService.loadConfigSync(provider);
+                if (config && config.ticketSaveLocation) {
+                    globalBaseDir = config.ticketSaveLocation;
+                }
+            } catch {}
+        }
+
+        if (globalBaseDir) {
+            try {
+                if (provider === 'clickup') {
+                    const clickUp = this._adapterFactories.getClickUpSyncService(resolvedRoot);
+                    const h = clickUp.getSelectedHierarchy();
+                    const parts = [globalBaseDir, 'clickup', this._slugify(h.spaceName).slice(0, 60)];
+                    if (h.folderName) {
+                        parts.push(this._slugify(h.folderName).slice(0, 60));
+                    }
+                    parts.push(this._slugify(h.listName).slice(0, 60));
+                    dirs.push(path.join(...parts));
+                } else if (provider === 'linear') {
+                    const linear = this._adapterFactories.getLinearSyncService(resolvedRoot);
+                    const teamName = linear.getTeamName();
+                    const projectName = linear.getSelectedProjectName() || '_no-project';
+                    dirs.push(path.join(
+                        globalBaseDir,
+                        'linear',
+                        this._slugify(teamName).slice(0, 60),
+                        this._slugify(projectName).slice(0, 60)
+                    ));
+                }
+            } catch {
+                dirs.push(path.join(globalBaseDir, providerDir));
+            }
+        }
+
+        // 2. Fallback read-only search directory inside the workspace (.switchboard/tickets)
+        let fallbackBaseDir = path.join(resolvedRoot, '.switchboard', 'tickets');
         try {
             if (provider === 'clickup') {
                 const clickUp = this._adapterFactories.getClickUpSyncService(resolvedRoot);
                 const h = clickUp.getSelectedHierarchy();
-                const parts = [baseDir, 'clickup', this._slugify(h.spaceName).slice(0, 60)];
+                const parts = [fallbackBaseDir, 'clickup', this._slugify(h.spaceName).slice(0, 60)];
                 if (h.folderName) {
                     parts.push(this._slugify(h.folderName).slice(0, 60));
                 }
                 parts.push(this._slugify(h.listName).slice(0, 60));
-                return [path.join(...parts)];
+                dirs.push(path.join(...parts));
             } else if (provider === 'linear') {
                 const linear = this._adapterFactories.getLinearSyncService(resolvedRoot);
                 const teamName = linear.getTeamName();
                 const projectName = linear.getSelectedProjectName() || '_no-project';
-                return [path.join(
-                    baseDir,
+                dirs.push(path.join(
+                    fallbackBaseDir,
                     'linear',
                     this._slugify(teamName).slice(0, 60),
                     this._slugify(projectName).slice(0, 60)
-                )];
+                ));
             }
-        } catch { /* use flat provider dir */ }
+        } catch {
+            dirs.push(path.join(fallbackBaseDir, providerDir));
+        }
 
-        const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
-        return [path.join(baseDir, providerDir)];
+        return dirs;
     }
 
     // Resolve a ticket's real on-disk file path by scanning for its
@@ -1442,9 +1477,9 @@ export class PlanningPanelProvider {
         const prefix = `${provider}_${id}_`;
         const baseDirs: string[] = [];
         try {
-            const localFolderService = new LocalFolderService(resolvedRoot);
-            for (const f of localFolderService.getTicketsFolderPaths()) {
-                if (f) { baseDirs.push(path.join(f, provider)); }
+            const config = GlobalIntegrationConfigService.loadConfigSync(provider as any);
+            if (config && config.ticketSaveLocation) {
+                baseDirs.push(path.join(config.ticketSaveLocation, provider));
             }
         } catch { /* ignore */ }
         baseDirs.push(path.join(resolvedRoot, '.switchboard', 'tickets', provider));
@@ -5792,7 +5827,12 @@ Read the existing ticket content from the local file if it exists. Determine wha
                     const localFolderService = this._getLocalFolderService(root);
                     const folderPaths = localFolderService.getFolderPaths();
                     configuredFolderPathsByRoot[root] = folderPaths;
-                    ticketsFolderPathsByRoot[root] = localFolderService.getTicketsFolderPaths();
+                    const clickup = GlobalIntegrationConfigService.loadConfigSync('clickup');
+                    const linear = GlobalIntegrationConfigService.loadConfigSync('linear');
+                    const paths: string[] = [];
+                    if (clickup?.ticketSaveLocation) paths.push(clickup.ticketSaveLocation);
+                    if (linear?.ticketSaveLocation) paths.push(linear.ticketSaveLocation);
+                    ticketsFolderPathsByRoot[root] = paths;
 
                     // Skip this root entirely if all its folder paths have already been scanned
                     const allAlreadyScanned = folderPaths.length > 0 && folderPaths.every(p => p && scannedPaths.has(p));
@@ -5899,7 +5939,7 @@ Read the existing ticket content from the local file if it exists. Determine wha
         const adapters = this._researchImportService.getAdapters();
         const roots = adapters
             .filter(a => a.sourceId !== 'local-folder')
-            .map(a => ({ sourceId: a.sourceId, workspaceRoot: a.workspaceRoot || '', nodes: [] as TreeNode[] }));
+            .map(a => ({ sourceId: a.sourceId, nodes: [] as TreeNode[] }));
 
         // Load saved browse filter containers from unified config
         const { config } = await this._resolveSyncConfig();
@@ -7119,17 +7159,17 @@ Read the existing ticket content from the local file if it exists. Determine wha
         for (const t of this._ticketsViewWatcherDebounces.values()) { clearTimeout(t); }
         this._ticketsViewWatcherDebounces.clear();
 
-        const localService = this._getLocalFolderService(workspaceRoot);
-        const ticketsFolder = localService.getTicketsFolderPath?.() || undefined;
-        const watchGlob = ticketsFolder
-            ? new vscode.RelativePattern(ticketsFolder, '**/*.md')
-            : new vscode.RelativePattern(workspaceRoot, '.switchboard/tickets/**/*.md');
+        const watchPaths: string[] = [];
+        const clickup = GlobalIntegrationConfigService.loadConfigSync('clickup');
+        if (clickup?.ticketSaveLocation) {
+            watchPaths.push(path.join(clickup.ticketSaveLocation, '**/*.md'));
+        }
+        const linear = GlobalIntegrationConfigService.loadConfigSync('linear');
+        if (linear?.ticketSaveLocation) {
+            watchPaths.push(path.join(linear.ticketSaveLocation, '**/*.md'));
+        }
+        watchPaths.push(path.join(workspaceRoot, '.switchboard/tickets/**/*.md'));
 
-        // Watch all events (create + change + delete) rather than change-only.
-        // External/atomic writes (write-temp-then-rename) surface as create+delete
-        // rather than an in-place change, so a change-only watcher silently misses
-        // them — the same issue previously fixed for the kanban plans and docs watchers.
-        const watcher = vscode.workspace.createFileSystemWatcher(watchGlob);
         const handleTicketFileEvent = (uri: vscode.Uri) => {
             const fileName = path.basename(uri.fsPath);
             const match = fileName.match(/^(linear|clickup)_([^_]+)_.*\.md$/);
@@ -7151,12 +7191,18 @@ Read the existing ticket content from the local file if it exists. Determine wha
                 } catch { }
             }, 300));
         };
-        watcher.onDidCreate(handleTicketFileEvent);
-        watcher.onDidChange(handleTicketFileEvent);
-        watcher.onDidDelete(handleTicketFileEvent);
 
-        this._ticketsViewWatcher = watcher;
-        this._disposables.push(watcher);
+        const watchers = watchPaths.map(pattern => {
+            const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+            watcher.onDidCreate(handleTicketFileEvent);
+            watcher.onDidChange(handleTicketFileEvent);
+            watcher.onDidDelete(handleTicketFileEvent);
+            return watcher;
+        });
+
+        const combined = vscode.Disposable.from(...watchers);
+        this._ticketsViewWatcher = combined;
+        this._disposables.push(combined);
     }
 
     private _updateTicketsAutoSyncWatcher(workspaceRoot: string, enabled: boolean): void {
@@ -7170,48 +7216,58 @@ Read the existing ticket content from the local file if it exists. Determine wha
         }
         if (existing) { return; } // already watching
 
-        const localService = this._getLocalFolderService(workspaceRoot);
-        const ticketsFolder = localService.getTicketsFolderPath();
-        const watchGlob = ticketsFolder
-            ? new vscode.RelativePattern(ticketsFolder, '**/*.md')
-            : new vscode.RelativePattern(workspaceRoot, '.switchboard/tickets/**/*.md');
+        const watchPaths: string[] = [];
+        const clickup = GlobalIntegrationConfigService.loadConfigSync('clickup');
+        if (clickup?.ticketSaveLocation) {
+            watchPaths.push(path.join(clickup.ticketSaveLocation, '**/*.md'));
+        }
+        const linear = GlobalIntegrationConfigService.loadConfigSync('linear');
+        if (linear?.ticketSaveLocation) {
+            watchPaths.push(path.join(linear.ticketSaveLocation, '**/*.md'));
+        }
+        watchPaths.push(path.join(workspaceRoot, '.switchboard/tickets/**/*.md'));
 
-        const watcher = vscode.workspace.createFileSystemWatcher(watchGlob, true, false, true);
-        watcher.onDidChange(async (uri) => {
-            const fileName = path.basename(uri.fsPath);
-            const match = fileName.match(/^(linear|clickup)_([^_]+)_.*\.md$/);
-            if (!match) { return; }
-            const [, provider, id] = match;
+        const watchers = watchPaths.map(pattern => {
+            const watcher = vscode.workspace.createFileSystemWatcher(pattern, true, false, true);
+            watcher.onDidChange(async (uri) => {
+                const fileName = path.basename(uri.fsPath);
+                const match = fileName.match(/^(linear|clickup)_([^_]+)_.*\.md$/);
+                if (!match) { return; }
+                const [, provider, id] = match;
 
-            const debounceKey = uri.fsPath;
-            const existing = this._ticketsAutoSyncDebounces.get(debounceKey);
-            if (existing) { clearTimeout(existing); }
-            this._ticketsAutoSyncDebounces.set(debounceKey, setTimeout(async () => {
-                this._ticketsAutoSyncDebounces.delete(debounceKey);
-                try {
-                    const result: any = await vscode.commands.executeCommand(
-                        'switchboard.pushTicketEdits',
-                        { workspaceRoot, provider: provider as 'linear' | 'clickup', id }
-                    );
-                    this._panel?.webview.postMessage({
-                        type: 'pushTicketResult',
-                        success: result?.success ?? false,
-                        id,
-                        error: result?.error,
-                        autoSync: true
-                    });
-                } catch (e) {
-                    this._panel?.webview.postMessage({
-                        type: 'pushTicketResult',
-                        success: false,
-                        id,
-                        error: e instanceof Error ? e.message : String(e),
-                        autoSync: true
-                    });
-                }
-            }, 2000));
+                const debounceKey = uri.fsPath;
+                const existing = this._ticketsAutoSyncDebounces.get(debounceKey);
+                if (existing) { clearTimeout(existing); }
+                this._ticketsAutoSyncDebounces.set(debounceKey, setTimeout(async () => {
+                    this._ticketsAutoSyncDebounces.delete(debounceKey);
+                    try {
+                        const result: any = await vscode.commands.executeCommand(
+                            'switchboard.pushTicketEdits',
+                            { workspaceRoot, provider: provider as 'linear' | 'clickup', id }
+                        );
+                        this._panel?.webview.postMessage({
+                            type: 'pushTicketResult',
+                            success: result?.success ?? false,
+                            id,
+                            error: result?.error,
+                            autoSync: true
+                        });
+                    } catch (e) {
+                        this._panel?.webview.postMessage({
+                            type: 'pushTicketResult',
+                            success: false,
+                            id,
+                            error: e instanceof Error ? e.message : String(e),
+                            autoSync: true
+                        });
+                    }
+                }, 2000));
+            });
+            return watcher;
         });
-        this._ticketsAutoSyncWatchers.set(workspaceRoot, watcher);
+
+        const combined = vscode.Disposable.from(...watchers);
+        this._ticketsAutoSyncWatchers.set(workspaceRoot, combined);
     }
 
     public dispose(): void {

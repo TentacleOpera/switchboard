@@ -58,6 +58,7 @@ let LinearDocsAdapterClass: any;
 import { LocalFolderService } from './LocalFolderService';
 import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 import { LocalApiServer } from './LocalApiServer';
+import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { MultiRepoScaffoldingService } from './MultiRepoScaffoldingService';
 import { KanbanDatabase, KanbanPlanRecord, WorkspaceDatabaseMapping } from './KanbanDatabase';
 import { KanbanMigration } from './KanbanMigration';
@@ -17643,8 +17644,10 @@ What would you like to find?`;
 
             let targetDir = this._buildTicketDir(resolvedRoot, provider, segments);
             if (!targetDir) {
-                const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
-                targetDir = path.join(resolvedRoot, '.switchboard', 'tickets', providerDir, ...segments.map(s => this._slugify(s).slice(0, 60)));
+                return {
+                    success: false,
+                    error: `Ticket save location not configured. Open Setup → ${provider === 'clickup' ? 'ClickUp' : 'Linear'} to configure.`
+                };
             }
 
             fs.mkdirSync(targetDir, { recursive: true });
@@ -17684,10 +17687,9 @@ What would you like to find?`;
     }
 
     private _buildTicketDir(resolvedRoot: string, provider: string, segments: string[]): string | null {
-        const localFolderService = new LocalFolderService(resolvedRoot);
-        const ticketsFolders = localFolderService.getTicketsFolderPaths();
-        if (ticketsFolders.length > 0 && ticketsFolders[0]) {
-            return path.join(ticketsFolders[0], provider, ...segments.map(s => this._slugify(s).slice(0, 60)));
+        const config = GlobalIntegrationConfigService.loadConfigSync(provider as any);
+        if (config && config.ticketSaveLocation) {
+            return path.join(config.ticketSaveLocation, provider, ...segments.map(s => this._slugify(s).slice(0, 60)));
         }
         return null;
     }
@@ -17715,9 +17717,9 @@ What would you like to find?`;
         const prefix = `${provider}_${id}_`;
         const baseDirs: string[] = [];
         try {
-            const localFolderService = new LocalFolderService(resolvedRoot);
-            for (const f of localFolderService.getTicketsFolderPaths()) {
-                if (f) { baseDirs.push(path.join(f, provider)); }
+            const config = await GlobalIntegrationConfigService.loadConfig(provider as any);
+            if (config && config.ticketSaveLocation) {
+                baseDirs.push(path.join(config.ticketSaveLocation, provider));
             }
         } catch { /* ignore */ }
         baseDirs.push(path.join(resolvedRoot, '.switchboard', 'tickets', provider));
@@ -17941,10 +17943,9 @@ What would you like to find?`;
                 }
                 segments.push(h.listName);
 
-                const localFolderService = new LocalFolderService(resolvedRoot);
-                const ticketsFolders = localFolderService.getTicketsFolderPaths();
-                if (ticketsFolders.length > 0 && ticketsFolders[0]) {
-                    const parts = [ticketsFolders[0], 'clickup', this._slugify(h.spaceName).slice(0, 60)];
+                const clickupConfig = GlobalIntegrationConfigService.loadConfigSync('clickup');
+                if (clickupConfig && clickupConfig.ticketSaveLocation) {
+                    const parts = [clickupConfig.ticketSaveLocation, 'clickup', this._slugify(h.spaceName).slice(0, 60)];
                     if (h.folderName) {
                         parts.push(this._slugify(h.folderName).slice(0, 60));
                     }
@@ -17962,11 +17963,10 @@ What would you like to find?`;
                 const projectName = items[0]?.project?.name || '_no-project';
                 segments.push(teamName, projectName);
 
-                const localFolderService = new LocalFolderService(resolvedRoot);
-                const ticketsFolders = localFolderService.getTicketsFolderPaths();
-                if (ticketsFolders.length > 0 && ticketsFolders[0]) {
+                const linearConfig = GlobalIntegrationConfigService.loadConfigSync('linear');
+                if (linearConfig && linearConfig.ticketSaveLocation) {
                     targetDir = path.join(
-                        ticketsFolders[0],
+                        linearConfig.ticketSaveLocation,
                         'linear',
                         this._slugify(teamName).slice(0, 60),
                         this._slugify(projectName).slice(0, 60)

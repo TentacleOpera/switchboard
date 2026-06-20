@@ -2003,6 +2003,8 @@ export async function activate(context: vscode.ExtensionContext) {
             updateStatusBarVisibility();
             void taskViewerProvider.postSetupPanelState();
         }
+    }));
+
     // Listen for out-of-band secret storage changes
     context.subscriptions.push(context.secrets.onDidChange(e => {
         if (e.key === 'switchboard.stitch.apiKey') {
