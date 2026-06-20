@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { stateFs as fs } from './stateConfigBridge';
+import { applyThemeBodyClass } from './themeBodyClass';
 import { KanbanDatabase } from './KanbanDatabase';
 import * as http from 'http';
 import {
@@ -77,6 +78,8 @@ export class PlanningPanelProvider {
     private _activeDocWatchDebounce: NodeJS.Timeout | undefined;
     private _kanbanPlansWatchers: vscode.FileSystemWatcher[] = [];
     private _kanbanPlansWatchDebounce: NodeJS.Timeout | undefined;
+    private _epicDocsWatchers: vscode.FileSystemWatcher[] = [];
+    private _epicDocsWatchDebounce: NodeJS.Timeout | undefined;
     private _constitutionWatchers: vscode.FileSystemWatcher[] = [];
     private _constitutionWatchDebounce: NodeJS.Timeout | undefined;
     private _insightsWatchers: vscode.FileSystemWatcher[] = [];
@@ -315,6 +318,21 @@ export class PlanningPanelProvider {
             this._disposables
         );
 
+        // Hot-swap the theme on the Project panel when the setting changes (it previously
+        // only learned the theme on init, so it needed a reload to update).
+        this._disposables.push(
+            vscode.workspace.onDidChangeConfiguration(e => {
+                if (e.affectsConfiguration('switchboard.theme.name')) {
+                    const t = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
+                    this._projectPanel?.webview.postMessage({ type: 'switchboardThemeChanged', theme: t });
+                }
+                if (e.affectsConfiguration('switchboard.theme.disableCyberAnimation')) {
+                    const d = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
+                    this._projectPanel?.webview.postMessage({ type: 'cyberAnimationSetting', disabled: d });
+                }
+            })
+        );
+
         const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
         this._projectPanel.webview.postMessage({ type: 'switchboardThemeChanged', theme });
         const disabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
@@ -388,6 +406,7 @@ export class PlanningPanelProvider {
         );
         htmlContent = htmlContent.replace(/\{\{POPPINS_BOLD_FONT_URI\}\}/g, poppinsBoldFontUri.toString());
 
+        htmlContent = applyThemeBodyClass(htmlContent);
         return htmlContent;
     }
 
@@ -482,6 +501,7 @@ export class PlanningPanelProvider {
                 console.log('[PlanningPanel] Workspace folders changed, re-registering adapters');
                 this._ensureAdaptersRegistered();
                 this._setupKanbanPlansWatcher();
+                this._setupEpicDocsWatcher();
                 this._setupConstitutionWatcher();
                 this._setupInsightsWatcher();
                 this._panel?.webview.postMessage({
@@ -497,6 +517,7 @@ export class PlanningPanelProvider {
 
         this._setupAntigravityWatcher();
         this._setupKanbanPlansWatcher();
+        this._setupEpicDocsWatcher();
         this._setupConstitutionWatcher();
         this._setupInsightsWatcher();
 
@@ -599,6 +620,7 @@ export class PlanningPanelProvider {
                     console.log('[PlanningPanel] Workspace folders changed, re-registering adapters');
                     this._ensureAdaptersRegistered();
                     this._setupKanbanPlansWatcher();
+                    this._setupEpicDocsWatcher();
                     this._setupConstitutionWatcher();
                     this._setupInsightsWatcher();
                     this._panel?.webview.postMessage({
@@ -614,6 +636,7 @@ export class PlanningPanelProvider {
             this._setupLocalFolderWatchers();
             this._setupAntigravityWatcher();
             this._setupKanbanPlansWatcher();
+            this._setupEpicDocsWatcher();
             this._setupConstitutionWatcher();
             this._setupInsightsWatcher();
         }
@@ -846,6 +869,48 @@ export class PlanningPanelProvider {
             watcher.onDidDelete(triggerRefresh);
 
             this._kanbanPlansWatchers.push(watcher);
+            this._disposables.push(watcher);
+        }
+    }
+
+    private _setupEpicDocsWatcher(): void {
+        for (const w of this._epicDocsWatchers) {
+            w.dispose();
+            const idx = this._disposables.indexOf(w);
+            if (idx !== -1) { this._disposables.splice(idx, 1); }
+        }
+        this._epicDocsWatchers = [];
+
+        const allRoots = this._getWorkspaceRoots();
+        const watchedPaths = new Set<string>();
+
+        for (const root of allRoots) {
+            if (watchedPaths.has(root)) { continue; }
+            watchedPaths.add(root);
+
+            const watcher = vscode.workspace.createFileSystemWatcher(
+                new vscode.RelativePattern(vscode.Uri.file(root), '.switchboard/epics/**/*.md')
+            );
+
+            const triggerRefresh = () => {
+                if (!this._projectPanel) { return; }
+                if (this._epicDocsWatchDebounce) {
+                    clearTimeout(this._epicDocsWatchDebounce);
+                }
+                this._epicDocsWatchDebounce = setTimeout(() => {
+                    this._epicDocsWatchDebounce = undefined;
+                    if (!this._projectPanel) { return; }
+                    this._handleMessage({ type: 'fetchEpicDocuments' }, true).catch(err => {
+                        console.error('[PlanningPanel] Error auto-refreshing epic documents:', err);
+                    });
+                }, 400);
+            };
+
+            watcher.onDidCreate(triggerRefresh);
+            watcher.onDidChange(triggerRefresh);
+            watcher.onDidDelete(triggerRefresh);
+
+            this._epicDocsWatchers.push(watcher);
             this._disposables.push(watcher);
         }
     }
@@ -1222,6 +1287,7 @@ export class PlanningPanelProvider {
         );
         htmlContent = htmlContent.replace(/\{\{POPPINS_BOLD_FONT_URI\}\}/g, poppinsBoldFontUri.toString());
 
+        htmlContent = applyThemeBodyClass(htmlContent);
         return htmlContent;
     }
 
@@ -2244,7 +2310,8 @@ export class PlanningPanelProvider {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || undefined;
                 const prompt = await vscode.commands.executeCommand<string | undefined>('switchboard.copyChatPrompt', workspaceRoot);
                 if (prompt) {
-                    this._panel?.webview.postMessage({ type: 'chatPromptCopied' });
+                    const targetPanel = isProject ? this._projectPanel : this._panel;
+                    targetPanel?.webview.postMessage({ type: 'chatPromptCopied' });
                 }
                 break;
             }
@@ -2672,6 +2739,55 @@ export class PlanningPanelProvider {
                 }
                 break;
             }
+            case 'fetchEpicDocuments': {
+                try {
+                    const allRoots = Array.from(this._getAllowedRoots());
+                    const workspaceItems = this._buildKanbanWorkspaceItems();
+                    const documents: any[] = [];
+                    for (const root of allRoots) {
+                        const epicDir = path.join(root, '.switchboard', 'epics');
+                        let files: string[] = [];
+                        try { files = await fs.promises.readdir(epicDir); } catch { /* dir doesn't exist */ }
+                        for (const file of files) {
+                            if (!file.endsWith('.md')) continue;
+                            const fullPath = path.join(epicDir, file);
+                            try {
+                                const stat = await fs.promises.stat(fullPath);
+                                const content = await fs.promises.readFile(fullPath, 'utf8');
+                                // Extract title from first H1 or frontmatter description, fallback to filename
+                                let title = file.replace(/\.md$/, '');
+                                const h1Match = content.match(/^#\s+(.+)$/m);
+                                if (h1Match) { title = h1Match[1].trim(); }
+                                else {
+                                    const descMatch = content.match(/^description:\s*'(.+)'/m);
+                                    if (descMatch) { title = descMatch[1].trim(); }
+                                }
+                                const effectiveRoot = this._resolveEffectiveWorkspaceRoot(root);
+                                const wsLabel = workspaceItems.find(
+                                    item => item.workspaceRoot === effectiveRoot
+                                )?.label || path.basename(effectiveRoot);
+                                documents.push({
+                                    planId: `epic-doc:${fullPath}`,
+                                    topic: title,
+                                    planFile: fullPath,
+                                    workspaceRoot: effectiveRoot,
+                                    workspaceLabel: wsLabel,
+                                    mtime: stat.mtime.getTime(),
+                                    isEpic: true,
+                                    isEpicDocument: true,
+                                    subtaskCount: 0
+                                });
+                            } catch { /* skip unreadable files */ }
+                        }
+                    }
+                    documents.sort((a, b) => b.mtime - a.mtime);
+                    this._projectPanel?.webview.postMessage({ type: 'epicDocumentsReady', documents });
+                } catch (err) {
+                    console.error('[PlanningPanelProvider] fetchEpicDocuments failed:', err);
+                    this._projectPanel?.webview.postMessage({ type: 'epicDocumentsReady', documents: [] });
+                }
+                break;
+            }
             case 'createEpic': {
                 try {
                     const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
@@ -2684,6 +2800,28 @@ export class PlanningPanelProvider {
                         this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Epic name is required.' });
                         break;
                     }
+                    const addToKanbanBoard = !!msg.addToKanbanBoard;
+                    const description = msg.description ? String(msg.description).trim() : '';
+                    const yamlSafeName = name.replace(/'/g, "''");
+                    const yamlSafeDesc = description.replace(/'/g, "''");
+                    const epicContent = `---\ndescription: '${yamlSafeName}'\n---\n\n# ${name}\n\n${description}`;
+
+                    if (!addToKanbanBoard) {
+                        // Epic-only: just a document in .switchboard/epics/. No DB record,
+                        // no kanban board entry. The user can set it as active planning
+                        // context from the Epics tab to inject it into planner prompts.
+                        const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'epic';
+                        const epicDocPath = path.join(wsRoot, '.switchboard', 'epics', `${slug}.md`);
+                        await fs.promises.mkdir(path.dirname(epicDocPath), { recursive: true });
+                        await fs.promises.writeFile(epicDocPath, epicContent, 'utf8');
+                        // Refresh the epics list so the new document appears.
+                        this._handleMessage({ type: 'fetchEpicDocuments' }, true).catch(err => {
+                            console.error('[PlanningPanelProvider] createEpic fetchEpicDocuments failed:', err);
+                        });
+                        break;
+                    }
+
+                    // Add to kanban board: create a DB plan record + file in plans/
                     const db = KanbanDatabase.forWorkspace(wsRoot);
                     const workspaceId = await db.getWorkspaceId();
                     if (!workspaceId) {
@@ -2692,7 +2830,6 @@ export class PlanningPanelProvider {
                     }
                     const planId = crypto.randomUUID();
                     const sessionId = crypto.randomUUID();
-                    const resolvedColumn = 'CREATED';
                     const epicPlanFile = path.join('.switchboard', 'plans', `epic-${planId}.md`);
                     const now = new Date().toISOString();
                     await db.upsertPlan({
@@ -2700,7 +2837,7 @@ export class PlanningPanelProvider {
                         sessionId,
                         topic: name,
                         planFile: epicPlanFile,
-                        kanbanColumn: resolvedColumn,
+                        kanbanColumn: 'CREATED',
                         status: 'active',
                         complexity: 'Unknown',
                         tags: '',
@@ -2720,14 +2857,17 @@ export class PlanningPanelProvider {
                     });
                     await db.updateEpicStatus(planId, 1, '');
                     const epicPath = path.join(wsRoot, epicPlanFile);
-                    const yamlSafeName = name.replace(/'/g, "''");
-                    const yamlSafeDesc = (msg.description ? String(msg.description).trim() : '').replace(/'/g, "''");
-                    const epicContent = `---\ndescription: '${yamlSafeName}'\n---\n\n# ${name}\n\n${msg.description ? String(msg.description).trim() : ''}`;
                     await fs.promises.mkdir(path.dirname(epicPath), { recursive: true });
                     GlobalPlanWatcherService.registerPendingCreation(epicPath);
                     await fs.promises.writeFile(epicPath, epicContent, 'utf8');
-                    const allPlans = await this._getKanbanPlans(wsRoot);
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, requestId: Date.now() });
+                    // Trigger a full fetchKanbanPlans so the webview receives a complete
+                    // kanbanPlansReady message (with workspaceItems, columns, etc.).
+                    this._handleMessage({
+                        type: 'fetchKanbanPlans',
+                        requestId: Date.now()
+                    }, true).catch(err => {
+                        console.error('[PlanningPanelProvider] createEpic post-fetch failed:', err);
+                    });
                 } catch (err) {
                     console.error('[PlanningPanelProvider] createEpic failed:', err);
                     this._projectPanel?.webview.postMessage({ type: 'epicError', message: String(err) });
@@ -7104,6 +7244,14 @@ Read the existing ticket content from the local file if it exists. Determine wha
             try { watcher.dispose(); } catch (e) {}
         }
         this._kanbanPlansWatchers = [];
+        if (this._epicDocsWatchDebounce) {
+            clearTimeout(this._epicDocsWatchDebounce);
+            this._epicDocsWatchDebounce = undefined;
+        }
+        for (const watcher of this._epicDocsWatchers) {
+            try { watcher.dispose(); } catch (e) {}
+        }
+        this._epicDocsWatchers = [];
         if (this._insightsWatchDebounce) {
             clearTimeout(this._insightsWatchDebounce);
             this._insightsWatchDebounce = undefined;

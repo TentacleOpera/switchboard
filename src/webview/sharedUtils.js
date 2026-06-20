@@ -333,3 +333,29 @@ function renderJsonTree(data, depth, maxDepth, seen) {
     details.appendChild(children);
     return details;
 }
+
+// Shared click-flash feedback: gives every button a brief press pulse on click so actions
+// don't fire silently. Self-contained (injects its own CSS); loaded in every panel via the
+// shared scripts. Guarded so it only initialises once per webview.
+(function initSbClickFlash() {
+    if (typeof document === 'undefined' || window.__sbClickFlashInit) { return; }
+    window.__sbClickFlashInit = true;
+
+    const style = document.createElement('style');
+    style.textContent =
+        '@keyframes sbClickFlash{0%{transform:scale(1)}38%{transform:scale(0.94)}100%{transform:scale(1)}}' +
+        '.sb-click-flash{animation:sbClickFlash 0.18s ease-out}';
+    // Insert FIRST so any panel-specific click animation (e.g. kanban's richer flash)
+    // wins the cascade on conflict, while this still applies everywhere else.
+    const head = document.head || document.documentElement;
+    head.insertBefore(style, head.firstChild);
+
+    document.addEventListener('click', e => {
+        const btn = e.target.closest && e.target.closest('button, [role="button"], [class*="btn"]');
+        if (!btn || btn.disabled) { return; }
+        btn.classList.remove('sb-click-flash');
+        void btn.offsetWidth; // restart the animation if clicked again mid-play
+        btn.classList.add('sb-click-flash');
+        btn.addEventListener('animationend', () => btn.classList.remove('sb-click-flash'), { once: true });
+    }, true);
+})();

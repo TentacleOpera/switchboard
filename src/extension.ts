@@ -807,6 +807,17 @@ export async function activate(context: vscode.ExtensionContext) {
     );
     context.subscriptions.push(designPanelProvider);
 
+    // Migration: Remove dead Stitch OAuth auth mode (shipped in prior releases).
+    // Reset any stale 'oauth' authMode to 'apiKey' and delete the dead accessToken secret.
+    {
+        const stitchConfig = vscode.workspace.getConfiguration('switchboard');
+        const staleAuthMode = stitchConfig.get<string>('stitch.authMode');
+        if (staleAuthMode === 'oauth') {
+            await stitchConfig.update('stitch.authMode', 'apiKey', vscode.ConfigurationTarget.Global);
+        }
+        await context.secrets.delete('switchboard.stitch.accessToken');
+    }
+
     const openPlanningPanelDisposable = vscode.commands.registerCommand(
         'switchboard.openPlanningPanel',
         async () => { await planningPanelProvider.open(); }
@@ -1989,34 +2000,9 @@ export async function activate(context: vscode.ExtensionContext) {
             updateStatusBarVisibility();
             void taskViewerProvider.postSetupPanelState();
         }
-        if (
-            e.affectsConfiguration('switchboard.stitch.authMode')
-        ) {
-            invalidateStitchSdkCache();
-            if (designPanelProvider && designPanelProvider.isOpen) {
-                const config = vscode.workspace.getConfiguration('switchboard');
-                const mode = config.get<string>('stitch.authMode') || 'apiKey';
-                const apiKey = (await context.secrets.get('switchboard.stitch.apiKey')) || '';
-                const accessToken = (await context.secrets.get('switchboard.stitch.accessToken')) || '';
-                const hasKey = mode === 'oauth'
-                    ? !!accessToken
-                    : !!(apiKey || process.env.STITCH_API_KEY);
-                designPanelProvider.postMessage({ type: 'stitchApiKeyStatus', configured: hasKey });
-                designPanelProvider.postMessage({
-                    type: 'stitchAuthStatus',
-                    mode,
-                    configured: hasKey,
-                    valid: hasKey,
-                    apiKey,
-                    accessToken
-                });
-            }
-        }
-    }));
-
     // Listen for out-of-band secret storage changes
     context.subscriptions.push(context.secrets.onDidChange(e => {
-        if (e.key === 'switchboard.stitch.apiKey' || e.key === 'switchboard.stitch.accessToken') {
+        if (e.key === 'switchboard.stitch.apiKey') {
             invalidateStitchSdkCache();
         }
     }));

@@ -421,3 +421,77 @@ Manual, across **all** panels — Planning (docs/notebook/research/tickets), Des
 ## Recommendation
 
 Complexity 5 → **Send to Coder.** The JS handler in `project.js` is the highest-value fix and must not be skipped; the CSS is mostly deletion plus one re-added heading block per file. The corrected selector ID lists are essential — the coder must use only the verified IDs listed in each CSS section and must not re-introduce the ghost IDs from the prior plan.
+
+---
+
+## Reviewer Pass (In-Place, 2026-06-20)
+
+### Stage 1 — Grumpy Principal Engineer
+
+Listen up. I went through every file this plan touches and traced every selector back to a real element id. Here's what I found.
+
+**CRITICAL:** None. I know, I'm as surprised as you. The thing actually got built the way the plan said.
+
+**MAJOR:** None. The decoupling is real — `cyber-theme-enabled` is added for `afterburner` only in all three JS handlers (`planning.js:2220`, `design.js:3036`, `project.js:107`). The net-new `project.js` handler exists, is wired into the message switch at `project.js:204-207`, and the listener is registered synchronously at script load (`project.js:201`) — no race. The hardcoded `<body class="cyber-theme-enabled">` in `project.html` is gone (now `<body>` at `project.html:1102`), so the one-frame cyber flash is dead. The prior suppression/glass/translucent claudify blocks are fully deleted in all three main webviews — I grepped for `theme-claudify.cyber-theme-enabled`, `theme-claudify...box-shadow: none`, and `theme-claudify...backdrop-filter` and got zero hits in `planning.html`, `design.html`, and `project.html`. The `--accent-teal-bright` override is present in all six HTML variable blocks. The two `shared-tabs.css` claudify overrides are gone. This is the plan, executed.
+
+**NIT-1 (verification, not code):** The grid is painted on the *wrapper* panes (`#preview-pane`, `#kanban-preview-pane`, etc.) while the markdown content lives in *child* elements (`#markdown-preview`, `#kanban-preview-content`). I verified those children have **no opaque background** in base CSS (`#markdown-preview` has no `background` rule; `#kanban-preview-content` at `project.html:776-789` sets no `background`), so the grid shows through. Good — but this is exactly the kind of thing that only eyes-on verification can confirm. If anyone later adds a background to those children, the grid vanishes silently. Flag it.
+
+**NIT-2 (pre-existing, out of scope):** `design.js` handles `themeChanged` + `switchboardThemeChanged` but NOT `switchboardThemeNameSetting`. I checked the providers: no `DesignPanelProvider` posts `switchboardThemeNameSetting` to the design panel (only planning/task-viewer/setup/kanban panels send it). So this is consistent, not a gap. Don't "fix" it by adding a dead case.
+
+**NIT-3 (aesthetic, deferred):** `project.html` applies `text-transform: uppercase` to preview headings in base CSS. With GeistPixel on h1 this may read as pixel-art caps. The plan already lists this as a tuning knob (`text-transform: none` on the claudify h1 rule). Defer to manual verification — do not pre-emptively add it.
+
+### Stage 2 — Balanced Synthesis
+
+- **Keep as-is:** All JS handlers (planning.js, design.js, project.js) — correct and race-safe. All six HTML variable blocks — backgrounds dropped, `--accent-teal-bright` added, `implementation.html` keeps `--accent-cyan`. All three grid blocks — verified IDs only, no ghost IDs re-introduced, non-markdown surfaces (`#html-preview-content`, `#images-content`) correctly excluded in `design.html`. All three heading blocks — correct specificity `(0,2,1)` beats base `(0,1,1)`. `shared-tabs.css` cleanup. Hardcoded body class removal in `project.html`.
+- **Fix now:** Nothing. No valid CRITICAL/MAJOR findings to fix.
+- **Defer:** NIT-1 (grid visibility — manual verification), NIT-2 (design.js case — not a gap), NIT-3 (h1 uppercase — aesthetic tuning knob).
+
+### Code Fixes Applied
+
+None. The implementation is faithful to the plan; no code changes were required.
+
+### Verification Results
+
+Per session directives, compilation and automated tests were skipped (the project is in a pre-compiled state; the user runs the build/test suite separately). The following read-only static checks were performed instead:
+
+- **JS handler agreement:** All three handlers enable `cyber-theme-enabled` for `afterburner` only and add `theme-claudify` for `claudify` only. Verified at `planning.js:2213-2229`, `design.js:3030-3044`, `project.js:104-115`.
+- **project.js wiring:** `switchboardThemeNameSetting` + `switchboardThemeChanged` cases present at `project.js:204-207`; listener registered synchronously at `project.js:201`. No race.
+- **Ghost-ID audit:** Every id referenced in the new claudify CSS selectors resolves to a real element — `planning.html` (8/8), `design.html` (7/7), `project.html` (12/12). No ghost IDs.
+- **Prior-block deletion audit:** Zero matches for `theme-claudify.cyber-theme-enabled`, claudify `box-shadow: none`, or claudify `backdrop-filter`/`rgba` across all three main webviews.
+- **`--accent-teal-bright` coverage:** Override present in all 6 HTML variable blocks (`planning.html:95`, `design.html:96`, `project.html:74`, `kanban.html:37`, `implementation.html:50`, `setup.html:40`).
+- **`--accent-teal-dim` cascade:** Base `:root` defines `--accent-teal: var(--accent-primary)` (`planning.html:59`) and `--accent-teal-dim` derived from it (`planning.html:60`); claudify overrides `--accent-primary` → terracotta, so the cascade holds. h1 borders will render terracotta, not cyan.
+- **shared-tabs.css:** No `theme-claudify` references remain.
+- **Hardcoded body class:** `project.html:1102` is now `<body>` — one-frame cyber flash eliminated.
+
+### Files Changed (by the implementation under review)
+
+| File | Status |
+|---|---|
+| `src/webview/planning.js` | Verified — cyber for afterburner only |
+| `src/webview/design.js` | Verified — cyber for afterburner only |
+| `src/webview/project.js` | Verified — new handler + wiring added |
+| `src/webview/planning.html` | Verified — var block, grid, headings; prior block deleted |
+| `src/webview/design.html` | Verified — var block, grid, headings; prior block deleted |
+| `src/webview/project.html` | Verified — var block, grid, headings; prior block deleted; `<body>` class removed |
+| `src/webview/kanban.html` | Verified — var block corrected |
+| `src/webview/implementation.html` | Verified — var block corrected (keeps `--accent-cyan`) |
+| `src/webview/setup.html` | Verified — var block corrected |
+| `src/webview/shared-tabs.css` | Verified — both claudify overrides removed |
+
+### Remaining Risks
+
+1. **Grid visibility (NIT-1):** Grid is painted on wrapper panes; child content elements are transparent today, so the grid shows. If a future change adds an opaque background to `#markdown-preview` / `#kanban-preview-content` / siblings, the grid disappears silently. Manual verification must confirm the grid reads as a crisp grid, not a film.
+2. **h1 uppercase in project.html (NIT-3):** GeistPixel + `text-transform: uppercase` may look wrong. Tuning knob documented; apply `text-transform: none` to the claudify h1 rule only if visual verification flags it.
+3. **Manual verification still required:** No automated visual regression exists. The user must confirm all three themes across all panels (Planning docs/notebook/research/tickets, Design briefs/design/html/images/stitch, Project kanban/epics/constitution/tuning), per the plan's Manual Verification section.
+4. **Afterburner byte-for-byte unchanged:** Statically confirmed (no afterburner/cyber rules were edited, only claudify's coupling to them was removed). Visual confirmation still owed.
+
+### Summary
+
+| Severity | Count | Findings |
+|---|---|---|
+| CRITICAL | 0 | — |
+| MAJOR | 0 | — |
+| NIT | 3 | NIT-1 grid-on-wrapper visibility (verification); NIT-2 design.js missing `switchboardThemeNameSetting` case (not a gap — provider doesn't send it); NIT-3 project.html h1 uppercase (aesthetic tuning knob) |
+
+**Fixes applied:** None — implementation is faithful to the plan.
+**Remaining risks:** Grid visibility depends on child elements staying transparent; h1 uppercase aesthetic; manual visual verification across all panels/themes still owed.

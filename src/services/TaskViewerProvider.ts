@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { stateFs as fs, stateLockfile as lockfile, getWorkspaceRootFromStatePath } from './stateConfigBridge';
+import { applyThemeBodyClass } from './themeBodyClass';
 import type { FSWatcher, Dirent, Stats } from 'fs';
 import * as os from 'os';
 import * as crypto from 'crypto';
@@ -17303,6 +17304,7 @@ What would you like to find?`;
             );
             content = content.replace(/\{\{HANKEN_FONT_URI\}\}/g, hankenFontUri.toString());
 
+            content = applyThemeBodyClass(content);
             return content;
         } catch (e) {
             console.error('Error loading webview HTML:', e);

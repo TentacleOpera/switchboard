@@ -1518,13 +1518,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     labelSpan.textContent = `${folderName} (${docCount})`;
                     labelSpan.prepend(chevronSpan);
                     labelWrapper.appendChild(labelSpan);
-                    
-                    const pathSpan = document.createElement('span');
-                    pathSpan.className = 'source-folder-path';
-                    pathSpan.style.cssText = 'font-size: 10px; color: var(--text-secondary); font-weight: 400; text-transform: none; letter-spacing: 0;';
-                    pathSpan.textContent = sourceFolder;
-                    labelWrapper.appendChild(pathSpan);
-                    
+
                     sourceHeader.appendChild(labelWrapper);
                     
                     const actionsDiv = document.createElement('div');
@@ -1840,11 +1834,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             error: state._lastLocalDocsMsg.error
         } : null;
         
-        const onlineRoots = state._lastOnlineDocsMsg ? (
-            state.docsWorkspaceRootFilter
-                ? (state._lastOnlineDocsMsg.roots || []).filter(r => r.workspaceRoot === state.docsWorkspaceRootFilter)
-                : (state._lastOnlineDocsMsg.roots || [])
-        ) : null;
+        const onlineRoots = state._lastOnlineDocsMsg
+            ? (state._lastOnlineDocsMsg.roots || [])
+            : null;
         
         renderUnifiedDocs(localRoots, onlineRoots, state.enabledSources);
     }

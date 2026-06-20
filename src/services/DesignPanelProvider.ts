@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { applyThemeBodyClass } from './themeBodyClass';
 import { KanbanDatabase } from './KanbanDatabase';
 import { LocalFolderService } from './LocalFolderService';
 import { TaskViewerProvider } from './TaskViewerProvider';
@@ -341,6 +342,7 @@ export class DesignPanelProvider implements vscode.Disposable {
         );
         htmlContent = htmlContent.replace(/\{\{POPPINS_BOLD_FONT_URI\}\}/g, poppinsBoldFontUri.toString());
 
+        htmlContent = applyThemeBodyClass(htmlContent);
         return htmlContent;
     }
 
@@ -693,10 +695,9 @@ export class DesignPanelProvider implements vscode.Disposable {
                 for (const p of service.getBriefsFolderPaths()) {
                     folderUris.push(vscode.Uri.file(p));
                 }
-                // Include the Stitch image cache directory in resource roots
-                const stitchCacheDir = path.join(r, '.switchboard', 'stitch');
+                // Include the Stitch assets directory (where screen PNGs live) in resource roots
                 try {
-                    folderUris.push(vscode.Uri.file(stitchCacheDir));
+                    folderUris.push(vscode.Uri.file(this._getImageCacheDir(r)));
                 } catch {}
             } catch {}
         }
@@ -737,9 +738,11 @@ export class DesignPanelProvider implements vscode.Disposable {
             path.join(this._getImageCacheDir(workspaceRoot), `${path.basename(cached.id)}.png`)
         );
         let imageUrl = '';
+        let imagePath = '';
         try {
             await vscode.workspace.fs.stat(fileUri);
             imageUrl = this._panel?.webview.asWebviewUri(fileUri).toString() || '';
+            imagePath = fileUri.fsPath;
         } catch {}
         return {
             id: cached.id,
@@ -747,7 +750,9 @@ export class DesignPanelProvider implements vscode.Disposable {
             name: cached.name,
             deviceType: cached.deviceType,
             imageUrl,
+            imagePath,
             htmlUrl: '',
+            htmlPath: await this._getStitchHtmlPath(cached.id, workspaceRoot),
             status: cached.status,
             statusMessage: cached.statusMessage
         };
@@ -766,6 +771,19 @@ export class DesignPanelProvider implements vscode.Disposable {
                 throw new Error(`Request timed out after ${timeoutMs}ms`);
             }
             throw err;
+        }
+    }
+
+    // Returns the on-disk path of a screen's downloaded HTML, or '' if it hasn't been
+    // downloaded yet. HTML (unlike the PNG) is fetched on demand, not auto-cached.
+    private async _getStitchHtmlPath(screenId: string, workspaceRoot: string): Promise<string> {
+        if (!workspaceRoot) return '';
+        const htmlPath = path.join(this._getImageCacheDir(workspaceRoot), `${path.basename(screenId)}.html`);
+        try {
+            await vscode.workspace.fs.stat(vscode.Uri.file(htmlPath));
+            return htmlPath;
+        } catch {
+            return '';
         }
     }
 
@@ -816,13 +834,23 @@ export class DesignPanelProvider implements vscode.Disposable {
 
     private async _formatScreen(screen: any, workspaceRoot: string): Promise<any> {
         const imageUrl = await this._getCachedImageUri(screen, workspaceRoot);
+        let imagePath = '';
+        if (workspaceRoot) {
+            const candidate = path.join(this._getImageCacheDir(workspaceRoot), `${path.basename(screen.id)}.png`);
+            try {
+                await vscode.workspace.fs.stat(vscode.Uri.file(candidate));
+                imagePath = candidate;
+            } catch {}
+        }
         return {
             id: screen.id,
             projectId: screen.projectId,
             name: screen.data?.title || screen.data?.displayName || screen.id,
             deviceType: screen.data?.deviceType,
             imageUrl,
+            imagePath,
             htmlUrl: await screen.getHtml(),
+            htmlPath: await this._getStitchHtmlPath(screen.id, workspaceRoot),
             status: screen.data?.screenMetadata?.status || null,
             statusMessage: screen.data?.screenMetadata?.statusMessage || null
         };
@@ -1225,7 +1253,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                         ? rawDocId.substring(rawDocId.indexOf(':') + 1)
                         : rawDocId;
 
-                    // Only configured design/html/briefs folders may be read from.
+                    // Only configured design/html/briefs/images folders may be read from.
                     const allowedFolders = new Set<string>();
                     for (const root of this._getWorkspaceRoots()) {
                         try {
@@ -1233,11 +1261,12 @@ export class DesignPanelProvider implements vscode.Disposable {
                             svc.getDesignFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
                             svc.getHtmlFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
                             svc.getBriefsFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
+                            svc.getImagesFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
                         } catch {}
                     }
                     const resolvedFolder = path.resolve(sourceFolder);
                     if (!allowedFolders.has(resolvedFolder)) {
-                        throw new Error('sourceFolder is not a configured design/html/briefs folder');
+                        throw new Error('sourceFolder is not a configured design/html/briefs/images folder');
                     }
                     const absPath = path.resolve(resolvedFolder, relativePath);
                     if (absPath !== resolvedFolder && !absPath.startsWith(resolvedFolder + path.sep)) {
@@ -2098,6 +2127,22 @@ export class DesignPanelProvider implements vscode.Disposable {
                 this.postMessage({ type: 'htmlFoldersListed', paths: service.getHtmlFolderPaths(), workspaceRoot: root });
                 break;
             }
+            // Convenience toggle: register (or unregister) the hidden Stitch assets folder as an
+            // HTML preview source, so downloaded screen HTML shows up in the HTML Previews tab.
+            case 'toggleStitchHtmlPreview': {
+                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                const service = this._getLocalFolderService(root);
+                const stitchDir = this._getImageCacheDir(root);
+                if (message.enabled) {
+                    await service.addHtmlFolderPath(stitchDir);
+                } else {
+                    await service.removeHtmlFolderPath(stitchDir);
+                }
+                this._setupHtmlFolderWatchers();
+                await this._sendHtmlDocsReady();
+                this.postMessage({ type: 'htmlFoldersListed', paths: service.getHtmlFolderPaths(), workspaceRoot: root });
+                break;
+            }
 
             case 'listImagesFolders': {
                 const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
@@ -2482,8 +2527,10 @@ export class DesignPanelProvider implements vscode.Disposable {
                     // basename() so a webview-supplied filename can't traverse out of the output dir
                     const safeFilename = path.basename(String(message.filename));
                     const isPng = safeFilename.endsWith('.png');
-                    
-                    let outputDir = this._getStitchOutputDir(workspaceRoot);
+
+                    // Default to the same folder the screen PNGs already live in, so a screen's
+                    // assets stay together in one place. A caller can still override via destination.
+                    let outputDir = this._getImageCacheDir(workspaceRoot);
                     if (message.destination) {
                         const resolvedDest = path.resolve(message.destination);
                         const allRoots = this._getWorkspaceRoots();
@@ -2514,6 +2561,14 @@ export class DesignPanelProvider implements vscode.Disposable {
                     }
 
                     vscode.window.showInformationMessage(`Downloaded ${safeFilename} to ${path.basename(outputDir)}/`);
+                    // Tell the webview where the file landed so it can offer "Open on web"
+                    // (for HTML) without re-deriving the path.
+                    this.postMessage({
+                        type: 'stitchAssetDownloaded',
+                        kind: isPng ? 'png' : 'html',
+                        screenId: message.screenId,
+                        path: targetPath
+                    });
                 } catch (err: any) {
                     vscode.window.showErrorMessage('Download failed: ' + err.message);
                 }

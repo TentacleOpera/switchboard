@@ -37,12 +37,18 @@
         body.theme-claudify {
             --accent-primary: #D97757;
             --accent-teal: #D97757;
-            --accent-teal-bright: #E2A188;  /* NEW — was #5ce8e6 cyan in base :root */
+            --accent-teal-dim: color-mix(in srgb, #D97757 40%, transparent);
+            --accent-teal-bright: #E2A188;
+            --glow-green: none;
+            --glow-red: none;
             --text-primary: #F0EBE6;
             --text-secondary: #A8A095;
             --border-color: #38332E;
             --border-bright: #5C544A;
         }
+
+        /* Claudify: remove neon glow from base (non-cyber) interactive states */
+        body.theme-claudify .setup-mode-btn.is-active { box-shadow: none; }
 
         * {
             box-sizing: border-box;

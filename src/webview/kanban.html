@@ -34,11 +34,75 @@
         body.theme-claudify {
             --accent-primary: #D97757;
             --accent-teal: #D97757;
-            --accent-teal-bright: #E2A188;  /* NEW — was #5ce8e6 cyan in base :root */
+            --accent-teal-dim: color-mix(in srgb, #D97757 40%, transparent);
+            --accent-teal-bright: #E2A188;
+            --glow-teal: none;           /* kill all variable-routed neon glow */
             --text-primary: #F0EBE6;
             --text-secondary: #A8A095;
             --border-color: #38332E;
             --border-bright: #5C544A;
+        }
+
+        /* Claudify: remove neon glow from base (non-cyber) interactive states */
+        body.theme-claudify .btn-batch:hover,
+        body.theme-claudify .kanban-card.selected,
+        body.theme-claudify .kanban-mode-dropdown.is-off:focus,
+        body.theme-claudify .kanban-structure-item.drag-over,
+        body.theme-claudify .modal-textarea:focus,
+        body.theme-claudify .plan-node.blocking,
+        body.theme-claudify .routing-map-active-dot,
+        body.theme-claudify .toggle-switch input:checked + .toggle-slider::before,
+        body.theme-claudify .worktree-primary-btn:focus { box-shadow: none; }
+
+        /* Claudify: recolor hardcoded teal (#00ad9f) that no variable controls */
+        body.theme-claudify .worktree-primary-btn { background: color-mix(in srgb, #D97757 12%, transparent); }
+        body.theme-claudify .worktree-primary-btn:hover:not(:disabled) { background: color-mix(in srgb, #D97757 25%, transparent); }
+
+        /* Claudify: the toolbar icons are teal-tinted PNGs (base rules only set brightness).
+           Hue-shift them from cyan (~190deg) to terracotta. Tune the hue-rotate value to taste. */
+        body.theme-claudify .strip-icon-btn img,
+        body.theme-claudify .kanban-sub-bar .strip-icon-btn img,
+        body.theme-claudify .controls-strip .strip-icon-btn img,
+        body.theme-claudify .column-icon-btn img,
+        body.theme-claudify .column-header-btn img,
+        body.theme-claudify .mode-toggle img,
+        body.theme-claudify .complexity-routing-btn img,
+        body.theme-claudify .btn-add-plan img {
+            filter: hue-rotate(185deg) saturate(0.8) brightness(0.95);
+        }
+        body.theme-claudify .strip-icon-btn.is-active img,
+        body.theme-claudify .kanban-sub-bar .strip-icon-btn.is-active img,
+        body.theme-claudify .column-icon-btn:hover img,
+        body.theme-claudify .column-header-btn:hover img,
+        body.theme-claudify .mode-toggle:hover img,
+        body.theme-claudify .complexity-routing-btn:hover img,
+        body.theme-claudify .btn-add-plan:hover img {
+            filter: hue-rotate(185deg) saturate(0.8) brightness(1.15);
+        }
+        /* Off states stay greyed-out (no teal to recolor) */
+        body.theme-claudify .strip-icon-btn.is-off img,
+        body.theme-claudify .kanban-sub-bar .strip-icon-btn.is-off img,
+        body.theme-claudify .complexity-routing-btn.is-off img {
+            filter: grayscale(1) brightness(0.7);
+        }
+
+        /* Claudify: kanban cards = an exact copy of implementation.html's .action-btn —
+           10% accent fill (offsets from bg), 30% accent border, buff accent text. !important so
+           it beats the more specific base rules. Keep the green 'completed' bar. */
+        body.theme-claudify .kanban-card {
+            background: color-mix(in srgb, var(--accent-primary) 10%, transparent) !important;
+            border: 1px solid color-mix(in srgb, var(--accent-primary) 30%, transparent) !important;
+            color: color-mix(in srgb, var(--accent-primary) 80%, var(--text-secondary)) !important;
+            box-shadow: none !important;
+        }
+        body.theme-claudify .kanban-card.completed {
+            border-left: 3px solid var(--vscode-testing-iconPassed, #73c991) !important;
+        }
+        body.theme-claudify .kanban-card:hover,
+        body.theme-claudify .kanban-card.selected {
+            background: color-mix(in srgb, var(--accent-primary) 15%, transparent) !important;
+            border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent) !important;
+            box-shadow: none !important;
         }
 
         * {
@@ -5603,10 +5667,17 @@
             switch (msg.type) {
                 case 'switchboardThemeNameSetting':
                 case 'switchboardThemeChanged': {
-                    // Only remove Switchboard visual theme classes — preserve other body classes
-                    document.body.classList.remove('theme-claudify');
-                    if (msg.theme && msg.theme !== 'afterburner') {
-                        document.body.classList.add(`theme-${msg.theme}`);
+                    if (msg.theme) {
+                        document.body.classList.remove('theme-claudify');
+                        // Cyber CRT effects belong to Afterburner ONLY (matches the other panels).
+                        if (msg.theme === 'afterburner') {
+                            document.body.classList.add('cyber-theme-enabled');
+                        } else {
+                            document.body.classList.remove('cyber-theme-enabled');
+                        }
+                        if (msg.theme === 'claudify') {
+                            document.body.classList.add('theme-claudify');
+                        }
                     }
                     break;
                 }

@@ -175,16 +175,7 @@
           "default": "action",
           "description": "Default mode for switchboard commands"
         },
-        "switchboard.stitch.authMode": {
-          "type": "string",
-          "enum": [
-            "apiKey",
-            "oauth"
-          ],
-          "default": "apiKey",
-          "description": "Stitch authentication mode. Use API key or OAuth.",
-          "scope": "application"
-        },
+
         "switchboard.stitch.defaultProjectId": {
           "type": "string",
           "default": "",

@@ -32,6 +32,7 @@
                 vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
             } else if (activeTab === 'epics') {
                 vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+                vscode.postMessage({ type: 'fetchEpicDocuments' });
                 updateActiveEpicBanner();
             } else if (activeTab === 'constitution') {
                 vscode.postMessage({ type: 'loadConstitutionFiles' });
@@ -123,6 +124,7 @@
     let uploadingPlanAttachment = false;
 
     let _epicSelectedPlan = null;
+    let _epicDocumentsCache = [];
     let _pendingKanbanSelection = null;
     let _activeEpicName = 'None';
     let _activeEpicFilePath = '';
@@ -153,6 +155,7 @@
     const newEpicModal = document.getElementById('new-epic-modal');
     const newEpicName = document.getElementById('new-epic-name');
     const newEpicDescription = document.getElementById('new-epic-description');
+    const newEpicAddToKanban = document.getElementById('new-epic-add-to-kanban');
     const btnNewEpicCancel = document.getElementById('btn-new-epic-cancel');
     const btnNewEpicSubmit = document.getElementById('btn-new-epic-submit');
     const epicsListPane = document.getElementById('epics-list-pane');
@@ -277,6 +280,10 @@
             case 'epicDetails':
                 renderEpicSubtasks(msg.epic, msg.subtasks);
                 break;
+            case 'epicDocumentsReady':
+                _epicDocumentsCache = msg.documents || [];
+                renderEpicsList();
+                break;
             case 'epicError':
                 alert(msg.message || 'Error occurred');
                 break;
@@ -362,6 +369,21 @@
                     setTimeout(() => {
                         btnChatCopyPrompt.textContent = oldText;
                         btnChatCopyPrompt.disabled = false;
+                    }, 2000);
+                }
+                break;
+            }
+            case 'kanbanPlanPromptCopied': {
+                const btn = msg.sessionId
+                    ? document.querySelector(`.kanban-plan-copy-prompt[data-session-id="${msg.sessionId}"]`)
+                    : null;
+                if (btn) {
+                    const oldText = btn.textContent;
+                    btn.textContent = msg.success ? 'Copied!' : 'Failed';
+                    btn.disabled = true;
+                    setTimeout(() => {
+                        btn.textContent = oldText;
+                        btn.disabled = false;
                     }, 2000);
                 }
                 break;
@@ -999,7 +1021,11 @@
     function renderEpicsList() {
         if (!epicsListPane) return;
 
-        let filtered = _kanbanPlansCache.filter(plan => plan.isEpic);
+        // Merge DB epics (from kanban cache) with standalone epic documents (.switchboard/epics/)
+        let filtered = [
+            ..._kanbanPlansCache.filter(plan => plan.isEpic),
+            ..._epicDocumentsCache
+        ];
         if (epicsFilters.workspaceRoot) {
             filtered = filtered.filter(plan => plan.workspaceRoot === epicsFilters.workspaceRoot);
         }
@@ -1020,7 +1046,7 @@
         if (filtered.length === 0) {
             const emptyState = document.createElement('div');
             emptyState.className = 'empty-state';
-            emptyState.textContent = 'No epics found. Create a plan and toggle its Epic status on the board.';
+            emptyState.textContent = 'No epics found. Use "+ New Epic" to create one.';
             epicsListPane.appendChild(emptyState);
             return;
         }
@@ -1053,7 +1079,12 @@
             const accordion = itemDiv.querySelector('.epic-accordion');
             accordion.addEventListener('toggle', () => {
                 if (accordion.open) {
-                    vscode.postMessage({ type: 'getEpicDetails', sessionId: plan.sessionId || plan.planId, workspaceRoot: plan.workspaceRoot });
+                    if (plan.isEpicDocument) {
+                        // Standalone epic documents have no subtasks in the DB
+                        document.getElementById(`subtasks-${escapeHtml(plan.planId)}`).innerHTML = '<div style="padding: 4px 0; color: var(--text-secondary);">No subtasks (standalone epic document).</div>';
+                    } else {
+                        vscode.postMessage({ type: 'getEpicDetails', sessionId: plan.sessionId || plan.planId, workspaceRoot: plan.workspaceRoot });
+                    }
                 }
             });
 
@@ -1356,6 +1387,7 @@
         btnNewEpic.addEventListener('click', () => {
             if (newEpicName) newEpicName.value = '';
             if (newEpicDescription) newEpicDescription.value = '';
+            if (newEpicAddToKanban) newEpicAddToKanban.checked = false;
             newEpicModal.style.display = 'flex';
             if (newEpicName) newEpicName.focus();
         });
@@ -1380,7 +1412,8 @@
                 name,
                 description,
                 workspaceRoot: epicsFilters.workspaceRoot,
-                subtaskPlanIds: []
+                subtaskPlanIds: [],
+                addToKanbanBoard: !!(newEpicAddToKanban && newEpicAddToKanban.checked)
             });
             newEpicModal.style.display = 'none';
         });

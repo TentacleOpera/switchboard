@@ -47,12 +47,40 @@
             --accent-primary: #D97757;
             --accent-teal: #D97757;
             --accent-cyan: #D97757;
-            --accent-teal-bright: #E2A188;  /* NEW — was #5ce8e6 cyan in base :root */
+            --accent-teal-dim: color-mix(in srgb, #D97757 40%, transparent);
+            --accent-teal-bright: #E2A188;
+            /* Kill every variable-routed glow (status colours stay; only their glow goes) */
+            --glow-teal: none;
+            --glow-cyan: none;
+            --glow-green: none;
+            --glow-red: none;
+            --glow-green-btn: none;
             --text-primary: #F0EBE6;
             --text-secondary: #A8A095;
             --border-color: #38332E;
             --border-bright: #5C544A;
         }
+
+        /* Claudify: remove neon glow from base (non-cyber) interactive states */
+        body.theme-claudify .action-btn:hover:not(:disabled),
+        body.theme-claudify .activity-row.summary,
+        body.theme-claudify .icon-btn.delete:hover:not(:disabled),
+        body.theme-claudify .icon-btn.error,
+        body.theme-claudify .icon-btn.mode-active:hover,
+        body.theme-claudify .icon-btn.mode-completed:hover,
+        body.theme-claudify .icon-btn.recover:hover:not(:disabled),
+        body.theme-claudify .icon-btn.success,
+        body.theme-claudify .mini-action-btn.is-active,
+        body.theme-claudify .orchestrator-controls .action-btn.stop-btn:hover:not(:disabled),
+        body.theme-claudify .secondary-btn.is-cyan:hover,
+        body.theme-claudify .secondary-btn.is-orange:hover:not(:disabled),
+        body.theme-claudify .secondary-btn.is-teal:hover,
+        body.theme-claudify .tiny-dot.green { box-shadow: none; }
+
+        /* Claudify: stop the pulsing/sweep glow animations (animations outrank static box-shadow) */
+        body.theme-claudify .status-dot.green-pulse,
+        body.theme-claudify .secondary-btn.success.feedback,
+        body.theme-claudify .action-btn.success { animation: none; }
 
         * {
             box-sizing: border-box;

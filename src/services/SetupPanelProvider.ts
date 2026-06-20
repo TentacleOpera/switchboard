@@ -5,6 +5,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { ControlPlaneMigrationService } from './ControlPlaneMigrationService';
 import { MultiRepoScaffoldingService } from './MultiRepoScaffoldingService';
+import { applyThemeBodyClass } from './themeBodyClass';
 import type { TaskViewerProvider } from './TaskViewerProvider';
 import { KanbanDatabase, type WorkspaceDatabaseMapping } from './KanbanDatabase';
 import type { KanbanProvider } from './KanbanProvider';
@@ -1453,6 +1454,7 @@ export class SetupPanelProvider implements vscode.Disposable {
         );
         content = content.replace(/\{\{HANKEN_FONT_URI\}\}/g, hankenFontUri.toString());
 
+        content = applyThemeBodyClass(content);
         return content;
     }
 }

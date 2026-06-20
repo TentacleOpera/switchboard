@@ -70,14 +70,50 @@
             --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25);
         }
         body.theme-claudify {
+            /* The teal family derives from --accent-primary ON :root, so it resolves to cyan
+               there and inherits cyan everywhere. Each must be redeclared here to go terracotta. */
             --accent-primary: #D97757;
-            --accent-teal-bright: #E2A188;   /* was #5ce8e6 cyan — warm terracotta-tint */
+            --accent-teal: #D97757;
+            --accent-teal-dim: color-mix(in srgb, #D97757 40%, transparent);
+            --accent-teal-bright: #E2A188;
+            --accent-neon: #D97757;
+            --glow-teal: none;           /* kill all variable-routed neon glow */
             --text-primary: #F0EBE6;
             --text-secondary: #A8A095;
             --border-color: #38332E;
             --border-bright: #5C544A;
             /* Backgrounds NOT set here — the grid block below provides a solid near-black surface. */
             /* Display-font vars NOT overridden — keep base GeistPixel (pixel font). */
+        }
+
+        /* Claudify: remove neon glow from base (non-cyber) interactive states */
+        body.theme-claudify .kanban-plan-item.selected,
+        body.theme-claudify .epic-plan-item.selected,
+        body.theme-claudify .constitution-file-item.selected { box-shadow: none; }
+
+        /* Claudify: cards/sidebar items = an exact copy of implementation.html's .action-btn —
+           10% accent fill (offsets from bg), 30% accent border, buff accent text. !important so
+           it beats the more specific base rules; text inherits down to .kanban-plan-topic etc. */
+        body.theme-claudify .kanban-plan-item,
+        body.theme-claudify .epic-plan-item,
+        body.theme-claudify .constitution-file-item,
+        body.theme-claudify .insight-item {
+            background: color-mix(in srgb, var(--accent-primary) 10%, transparent) !important;
+            border: 1px solid color-mix(in srgb, var(--accent-primary) 30%, transparent) !important;
+            color: color-mix(in srgb, var(--accent-primary) 80%, var(--text-secondary)) !important;
+            box-shadow: none !important;
+        }
+        body.theme-claudify .kanban-plan-item:hover,
+        body.theme-claudify .epic-plan-item:hover,
+        body.theme-claudify .constitution-file-item:hover,
+        body.theme-claudify .insight-item:hover,
+        body.theme-claudify .kanban-plan-item.selected,
+        body.theme-claudify .epic-plan-item.selected,
+        body.theme-claudify .constitution-file-item.selected,
+        body.theme-claudify .insight-item.selected {
+            background: color-mix(in srgb, var(--accent-primary) 15%, transparent) !important;
+            border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent) !important;
+            box-shadow: none !important;
         }
         * {
             box-sizing: border-box;
@@ -1267,6 +1303,10 @@
                 <div style="display: flex; flex-direction: column; gap: 4px;">
                     <label for="new-epic-description" style="font-size: 11px; color: var(--text-secondary);">Description</label>
                     <textarea id="new-epic-description" placeholder="Enter description" style="background: #111; border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px; border-radius: 4px; font-size: 12px; height: 100px; resize: vertical; font-family: var(--font-family);"></textarea>
+                </div>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <input type="checkbox" id="new-epic-add-to-kanban" style="margin: 0;" />
+                    <label for="new-epic-add-to-kanban" style="font-size: 11px; color: var(--text-secondary); cursor: pointer;">Add to Kanban board</label>
                 </div>
             </div>
             <div class="kanban-log-close" style="display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px;">

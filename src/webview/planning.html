@@ -91,14 +91,48 @@
         }
 
         body.theme-claudify {
+            /* The teal family derives from --accent-primary ON :root, so it resolves to cyan
+               there and inherits cyan everywhere. Each must be redeclared here to go terracotta. */
             --accent-primary: #D97757;
-            --accent-teal-bright: #E2A188;   /* was #5ce8e6 cyan — warm terracotta-tint */
+            --accent-teal: #D97757;
+            --accent-teal-dim: color-mix(in srgb, #D97757 40%, transparent);
+            --accent-teal-bright: #E2A188;
+            --accent-neon: #D97757;
+            --glow-teal: none;           /* kill all variable-routed neon glow */
             --text-primary: #F0EBE6;
             --text-secondary: #A8A095;
             --border-color: #38332E;
             --border-bright: #5C544A;
             /* Backgrounds NOT set here — the grid block below provides a solid near-black surface. */
             /* Display-font vars NOT overridden — keep base GeistPixel (pixel font). */
+        }
+
+        /* Claudify: remove neon glow from base (non-cyber) interactive states */
+        body.theme-claudify .tree-node.selected,
+        body.theme-claudify .kanban-plan-item.selected,
+        body.theme-claudify .ticket-node.selected,
+        body.theme-claudify .ticket-status-light { box-shadow: none; }
+
+        /* Claudify: cards/sidebar items = an exact copy of implementation.html's .action-btn —
+           10% accent fill (offsets from bg), 30% accent border, buff accent text. !important so
+           it beats the more specific base rules; text inherits down to .kanban-plan-topic etc. */
+        body.theme-claudify .tree-node:not(.folder-subheader),
+        body.theme-claudify .ticket-node,
+        body.theme-claudify .kanban-plan-item {
+            background: color-mix(in srgb, var(--accent-primary) 10%, transparent) !important;
+            border: 1px solid color-mix(in srgb, var(--accent-primary) 30%, transparent) !important;
+            color: color-mix(in srgb, var(--accent-primary) 80%, var(--text-secondary)) !important;
+            box-shadow: none !important;
+        }
+        body.theme-claudify .tree-node:not(.folder-subheader):hover,
+        body.theme-claudify .ticket-node:hover,
+        body.theme-claudify .kanban-plan-item:hover,
+        body.theme-claudify .tree-node.selected,
+        body.theme-claudify .ticket-node.selected,
+        body.theme-claudify .kanban-plan-item.selected {
+            background: color-mix(in srgb, var(--accent-primary) 15%, transparent) !important;
+            border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent) !important;
+            box-shadow: none !important;
         }
 
         * {

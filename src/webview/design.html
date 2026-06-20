@@ -92,14 +92,47 @@
         }
 
         body.theme-claudify {
+            /* The teal family derives from --accent-primary ON :root, so it resolves to cyan
+               there and inherits cyan everywhere. Each must be redeclared here to go terracotta. */
             --accent-primary: #D97757;
-            --accent-teal-bright: #E2A188;   /* was #5ce8e6 cyan — warm terracotta-tint */
+            --accent-teal: #D97757;
+            --accent-teal-dim: color-mix(in srgb, #D97757 40%, transparent);
+            --accent-teal-bright: #E2A188;
+            --accent-neon: #D97757;
+            --glow-teal: none;           /* kill all variable-routed neon glow */
             --text-primary: #F0EBE6;
             --text-secondary: #A8A095;
             --border-color: #38332E;
             --border-bright: #5C544A;
             /* Backgrounds NOT set here — the grid block below provides a solid near-black surface. */
             /* Display-font vars NOT overridden — keep base GeistPixel (pixel font). */
+        }
+
+        /* Claudify: remove neon glow from base (non-cyber) interactive states */
+        body.theme-claudify .tree-node.selected,
+        body.theme-claudify .kanban-plan-item.selected,
+        body.theme-claudify .ticket-node.selected { box-shadow: none; }
+
+        /* Claudify: cards/sidebar items = an exact copy of implementation.html's .action-btn —
+           10% accent fill (offsets from bg), 30% accent border, buff accent text. !important so
+           it beats the more specific base rules; text inherits down to .kanban-plan-topic etc. */
+        body.theme-claudify .tree-node:not(.folder-subheader),
+        body.theme-claudify .ticket-node,
+        body.theme-claudify .kanban-plan-item {
+            background: color-mix(in srgb, var(--accent-primary) 10%, transparent) !important;
+            border: 1px solid color-mix(in srgb, var(--accent-primary) 30%, transparent) !important;
+            color: color-mix(in srgb, var(--accent-primary) 80%, var(--text-secondary)) !important;
+            box-shadow: none !important;
+        }
+        body.theme-claudify .tree-node:not(.folder-subheader):hover,
+        body.theme-claudify .ticket-node:hover,
+        body.theme-claudify .kanban-plan-item:hover,
+        body.theme-claudify .tree-node.selected,
+        body.theme-claudify .ticket-node.selected,
+        body.theme-claudify .kanban-plan-item.selected {
+            background: color-mix(in srgb, var(--accent-primary) 15%, transparent) !important;
+            border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent) !important;
+            box-shadow: none !important;
         }
 
         * {
@@ -3763,22 +3796,10 @@
                     <h3 style="margin: 0; font-size: 13px;">Stitch Authentication Configuration</h3>
                     <span id="stitch-auth-status-indicator" style="font-size: 10px; padding: 2px 6px; border-radius: 3px; font-weight: bold; background: #333; color: #ccc;">Checking...</span>
                 </div>
-                <p style="margin: 0; font-size: 11px; color: var(--text-secondary);">Choose authentication mode. Your key is stored in VS Code's encrypted secret storage (your OS keychain) and is used only to call Google Stitch directly — it's never sent to any Switchboard server or logged.</p>
-                <div style="display: flex; gap: 16px; align-items: center; font-size: 11px;">
-                    <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
-                        <input type="radio" name="stitch-auth-mode" value="apiKey" checked /> API Key
-                    </label>
-                    <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
-                        <input type="radio" name="stitch-auth-mode" value="oauth" /> OAuth Token
-                    </label>
-                </div>
+                <p style="margin: 0; font-size: 11px; color: var(--text-secondary);">Your API key is stored in VS Code's encrypted secret storage (your OS keychain) and is used only to call Google Stitch directly — it's never sent to any Switchboard server or logged.</p>
                 <div id="stitch-api-key-group" style="display: flex; flex-direction: column; gap: 4px;">
                     <label for="stitch-api-key-input" style="font-size: 10px; color: var(--text-secondary);">API Key</label>
                     <input type="password" id="stitch-api-key-input" class="stitch-input" style="max-width: 100%;" placeholder="AIzaSy..." />
-                </div>
-                <div id="stitch-access-token-group" style="display: none; flex-direction: column; gap: 4px;">
-                    <label for="stitch-access-token-input" style="font-size: 10px; color: var(--text-secondary);">OAuth Access Token</label>
-                    <input type="password" id="stitch-access-token-input" class="stitch-input" style="max-width: 100%;" placeholder="ya29.a0..." />
                 </div>
                 <div style="display: flex; gap: 8px;">
                     <button id="btn-save-stitch-auth" class="strip-btn stitch-btn-primary">Save Settings</button>
@@ -3842,8 +3863,9 @@
                                     <option value="">Default (.stitch)</option>
                                 </select>
                             </div>
-                            <button id="preview-btn-html" class="preview-overlay-btn">DL HTML</button>
-                            <button id="preview-btn-png" class="preview-overlay-btn">DL PNG</button>
+                            <button id="preview-btn-png" class="preview-overlay-btn" title="Copy the image file path to the clipboard">Copy Link</button>
+                            <button id="preview-btn-html" class="preview-overlay-btn" title="Download this screen's HTML into your stitch folder">DL HTML</button>
+                            <button id="preview-btn-open-web" class="preview-overlay-btn" style="display: none;" title="Serve the downloaded HTML on localhost and open it in your browser">Open in Browser</button>
                             <button id="btn-close-preview" class="preview-overlay-btn close-btn">✕ Close</button>
                         </div>
                     </div>
@@ -3914,6 +3936,10 @@
                     <button class="modal-close-btn" id="btn-close-folder-modal" aria-label="Close">&times;</button>
                 </div>
                 <div class="modal-body">
+                    <label id="stitch-html-preview-toggle-row" for="stitch-html-preview-toggle" style="display: none; align-items: center; gap: 8px; padding: 8px 10px; margin-bottom: 12px; border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer; font-size: 12px;">
+                        <input type="checkbox" id="stitch-html-preview-toggle" />
+                        <span>Include Stitch screen HTML <span style="color: var(--text-secondary); font-family: var(--font-mono); font-size: 11px;">(.switchboard/stitch)</span></span>
+                    </label>
                     <div class="modal-section">
                         <div class="section-header">
                             <span class="section-title">Configured Folders</span>

@@ -1444,6 +1444,7 @@
     const btnClosePreview = document.getElementById('btn-close-preview');
     let previewBtnHtml = document.getElementById('preview-btn-html');
     let previewBtnPng = document.getElementById('preview-btn-png');
+    let previewBtnOpenWeb = document.getElementById('preview-btn-open-web');
     const previewRefineInput = document.getElementById('preview-refine-input');
     let previewBtnEdit = document.getElementById('preview-btn-edit');
     let previewBtnVariants = document.getElementById('preview-btn-variants');
@@ -1543,6 +1544,18 @@
             chip.appendChild(name);
             chip.appendChild(removeBtn);
             container.appendChild(chip);
+        });
+    }
+
+    // Copy an on-disk asset path to the clipboard via the same linkToDocument handler the
+    // "Copy Link" buttons in the other tabs use (sourceFolder + filename → resolved + copied).
+    function copyStitchAssetLink(absPath) {
+        if (!absPath) return;
+        const idx = Math.max(absPath.lastIndexOf('/'), absPath.lastIndexOf('\\'));
+        vscode.postMessage({
+            type: 'linkToDocument',
+            sourceFolder: idx >= 0 ? absPath.slice(0, idx) : '',
+            docId: idx >= 0 ? absPath.slice(idx + 1) : absPath
         });
     }
 
@@ -1765,24 +1778,33 @@
                     type: 'stitchDownloadAsset',
                     url: screen.htmlUrl,
                     filename: `${screen.id}.html`,
+                    screenId: screen.id,
                     destination,
                     workspaceRoot: state.stitchWorkspaceRoot
                 });
             });
         }
+        // The PNG is already saved on disk (one-and-done). Copy its path to the clipboard,
+        // same as the "Copy Link" buttons in the HTML Previews / Images tabs.
         if (previewBtnPng) {
             const newPngBtn = previewBtnPng.cloneNode(true);
             previewBtnPng.parentNode.replaceChild(newPngBtn, previewBtnPng);
             previewBtnPng = newPngBtn;
-            previewBtnPng.addEventListener('click', () => {
-                const destSelect = document.getElementById('preview-destination-select');
-                const destination = destSelect ? destSelect.value : '';
+            previewBtnPng.disabled = !screen.imagePath;
+            previewBtnPng.addEventListener('click', () => copyStitchAssetLink(screen.imagePath));
+        }
+        // "Open on Web" appears once the HTML has been downloaded (this session or a prior one).
+        if (previewBtnOpenWeb) {
+            const newOpenWebBtn = previewBtnOpenWeb.cloneNode(true);
+            previewBtnOpenWeb.parentNode.replaceChild(newOpenWebBtn, previewBtnOpenWeb);
+            previewBtnOpenWeb = newOpenWebBtn;
+            previewBtnOpenWeb.style.display = screen.htmlPath ? '' : 'none';
+            previewBtnOpenWeb.addEventListener('click', () => {
+                if (!screen.htmlPath) return;
                 vscode.postMessage({
-                    type: 'stitchDownloadAsset',
-                    url: screen.imageUrl,
-                    filename: `${screen.id}.png`,
-                    destination,
-                    workspaceRoot: state.stitchWorkspaceRoot
+                    type: 'serveAndOpenHtml',
+                    docName: `${screen.name || screen.id}.html`,
+                    absolutePath: screen.htmlPath
                 });
             });
         }
@@ -2205,31 +2227,30 @@
             const actions = document.createElement('div');
             actions.className = 'stitch-screen-actions';
 
+            // The PNG is already saved on disk — copy its path to the clipboard, same as the
+            // "Copy Link" buttons in the HTML Previews / Images tabs.
+            const btnPng = document.createElement('button');
+            btnPng.className = 'strip-btn';
+            btnPng.textContent = 'Copy Link';
+            btnPng.disabled = !screen.imagePath;
+            btnPng.title = 'Copy the image file path to the clipboard';
+            btnPng.addEventListener('click', () => copyStitchAssetLink(screen.imagePath));
+            actions.appendChild(btnPng);
+
             const btnHtml = document.createElement('button');
             btnHtml.className = 'strip-btn';
             btnHtml.textContent = 'DL HTML';
+            btnHtml.title = "Download this screen's HTML into your stitch folder";
             btnHtml.addEventListener('click', () => {
                 vscode.postMessage({
                     type: 'stitchDownloadAsset',
                     url: screen.htmlUrl,
                     filename: `${screen.id}.html`,
+                    screenId: screen.id,
                     workspaceRoot: state.stitchWorkspaceRoot
                 });
             });
             actions.appendChild(btnHtml);
-
-            const btnPng = document.createElement('button');
-            btnPng.className = 'strip-btn';
-            btnPng.textContent = 'DL PNG';
-            btnPng.addEventListener('click', () => {
-                vscode.postMessage({
-                    type: 'stitchDownloadAsset',
-                    url: screen.imageUrl,
-                    filename: `${screen.id}.png`,
-                    workspaceRoot: state.stitchWorkspaceRoot
-                });
-            });
-            actions.appendChild(btnPng);
 
             card.appendChild(actions);
 
@@ -2823,7 +2844,6 @@
                 break;
 
             case 'stitchAuthStatus':
-                state.stitchAuthMode = msg.mode;
                 state.stitchApiKeyConfigured = msg.configured;
                 state.stitchAuthValid = msg.valid;
                 if (stitchApiBanner) {
@@ -2916,6 +2936,23 @@
                     setStitchStatus(`${screens.length} screen${screens.length === 1 ? '' : 's'} loaded — waiting for ${missing.length} preview(s)`, 'busy');
                 } else {
                     setStitchStatus(`${screens.length} screen${screens.length === 1 ? '' : 's'} loaded`, 'success');
+                }
+                break;
+            }
+
+            case 'stitchAssetDownloaded': {
+                const sid = msg.screenId;
+                if (sid) {
+                    // Record the on-disk path on the screen so the toolbar can offer to open it.
+                    const scr = (state.stitchScreens || []).find(s => s.id === sid);
+                    if (scr) {
+                        if (msg.kind === 'html') scr.htmlPath = msg.path;
+                        else if (msg.kind === 'png') scr.imagePath = msg.path;
+                    }
+                    if (state.activePreviewScreenId === sid) {
+                        if (msg.kind === 'html' && previewBtnOpenWeb) previewBtnOpenWeb.style.display = '';
+                        if (msg.kind === 'png' && previewBtnPng) previewBtnPng.disabled = false;
+                    }
                 }
                 break;
             }
@@ -3193,6 +3230,28 @@
         if (modal) {
             modal.style.display = 'flex';
             renderFolderListModal();
+            syncStitchHtmlPreviewToggle();
+        }
+    }
+
+    // The Stitch assets folder (.switchboard/stitch) is "included" in HTML previews when its
+    // path is present in the HTML folder list — no separate persisted flag needed.
+    function getHtmlModalRoot() {
+        return state.htmlWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+    }
+    function isStitchHtmlPreviewEnabled(root) {
+        const paths = (state.htmlFolderPathsByRoot && state.htmlFolderPathsByRoot[root]) || [];
+        return paths.some(p => String(p).replace(/\\/g, '/').replace(/\/+$/, '').endsWith('/.switchboard/stitch'));
+    }
+    function syncStitchHtmlPreviewToggle() {
+        const row = document.getElementById('stitch-html-preview-toggle-row');
+        const checkbox = document.getElementById('stitch-html-preview-toggle');
+        if (!row || !checkbox) return;
+        if (folderModalScope === 'html') {
+            row.style.display = 'flex';
+            checkbox.checked = isStitchHtmlPreviewEnabled(getHtmlModalRoot());
+        } else {
+            row.style.display = 'none';
         }
     }
 
@@ -3225,6 +3284,7 @@
             empty.className = 'folder-list-empty';
             empty.textContent = 'No folders configured. Click Add Folder to get started.';
             folderListModal.appendChild(empty);
+            syncStitchHtmlPreviewToggle();
             return;
         }
 
@@ -3267,6 +3327,8 @@
             row.appendChild(removeBtn);
             folderListModal.appendChild(row);
         });
+
+        syncStitchHtmlPreviewToggle();
     }
 
     // Event delegation on the split button container for dropdown toggle
@@ -3362,6 +3424,12 @@
         }
     });
 
+    document.getElementById('stitch-html-preview-toggle')?.addEventListener('change', (e) => {
+        const root = getHtmlModalRoot();
+        if (!root) return;
+        vscode.postMessage({ type: 'toggleStitchHtmlPreview', enabled: e.target.checked, workspaceRoot: root });
+    });
+
     registerWorkspaceDropdown('briefs-workspace-filter', 'briefs.root');
 
     initStitchControls();
@@ -3381,33 +3449,13 @@
             if (panel) panel.style.display = 'none';
         });
 
-        // Wire auth mode radios
-        document.getElementsByName('stitch-auth-mode').forEach(radio => {
-            radio.addEventListener('change', (e) => {
-                const mode = e.target.value;
-                const keyGroup = document.getElementById('stitch-api-key-group');
-                const tokenGroup = document.getElementById('stitch-access-token-group');
-                if (mode === 'oauth') {
-                    if (keyGroup) keyGroup.style.display = 'none';
-                    if (tokenGroup) tokenGroup.style.display = 'flex';
-                } else {
-                    if (keyGroup) keyGroup.style.display = 'flex';
-                    if (tokenGroup) tokenGroup.style.display = 'none';
-                }
-            });
-        });
-
         // Save auth config
         document.getElementById('btn-save-stitch-auth')?.addEventListener('click', () => {
-            const mode = document.querySelector('input[name="stitch-auth-mode"]:checked')?.value || 'apiKey';
             const apiKey = document.getElementById('stitch-api-key-input')?.value.trim() || '';
-            const accessToken = document.getElementById('stitch-access-token-input')?.value.trim() || '';
             
             vscode.postMessage({
                 type: 'stitchSaveAuthConfig',
-                mode,
-                apiKey,
-                accessToken
+                apiKey
             });
         });
 
@@ -3549,31 +3597,11 @@
     }
 
     function updateStitchAuthUI(msg) {
-        const mode = msg.mode || 'apiKey';
         const apiKey = msg.apiKey || '';
-        const accessToken = msg.accessToken || '';
         
-        // Update radios
-        const radio = document.querySelector(`input[name="stitch-auth-mode"][value="${mode}"]`);
-        if (radio) {
-            radio.checked = true;
-            const keyGroup = document.getElementById('stitch-api-key-group');
-            const tokenGroup = document.getElementById('stitch-access-token-group');
-            if (mode === 'oauth') {
-                if (keyGroup) keyGroup.style.display = 'none';
-                if (tokenGroup) tokenGroup.style.display = 'flex';
-            } else {
-                if (keyGroup) keyGroup.style.display = 'flex';
-                if (tokenGroup) tokenGroup.style.display = 'none';
-            }
-        }
-
         // Update inputs
         const keyInput = document.getElementById('stitch-api-key-input');
         if (keyInput) keyInput.value = apiKey;
-
-        const tokenInput = document.getElementById('stitch-access-token-input');
-        if (tokenInput) tokenInput.value = accessToken;
 
         // Update status indicator
         const indicator = document.getElementById('stitch-auth-status-indicator');
