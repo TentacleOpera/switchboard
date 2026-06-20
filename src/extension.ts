@@ -735,6 +735,9 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.workspace.onDidChangeWorkspaceFolders(() => {
             void kanbanProvider!.initializeIntegrationAutoPull();
+            // Deferred migration: if activation happened with no workspace folders,
+            // run the global integration config migration now that a workspace is open.
+            void MigrationService.runMigration();
         })
     );
     if (workspaceRoot) {

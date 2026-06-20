@@ -86,24 +86,47 @@
             filter: grayscale(1) brightness(0.7);
         }
 
-        /* Claudify: kanban cards = an exact copy of implementation.html's .action-btn —
-           10% accent fill (offsets from bg), 30% accent border, buff accent text. !important so
-           it beats the more specific base rules. Keep the green 'completed' bar. */
+        /* Claudify: kanban cards = an exact copy of implementation.html's .secondary-btn
+           (the COMPLETE/COPY/CREATE buttons): solid --panel-bg2 fill, --border-color border,
+           --text-secondary text. NO terracotta — the accent is not in these buttons.
+           Keep the green 'completed' bar. */
         body.theme-claudify .kanban-card {
-            background: color-mix(in srgb, var(--accent-primary) 10%, transparent) !important;
-            border: 1px solid color-mix(in srgb, var(--accent-primary) 30%, transparent) !important;
-            color: color-mix(in srgb, var(--accent-primary) 80%, var(--text-secondary)) !important;
+            background: var(--panel-bg2) !important;
+            border: 1px solid var(--border-color) !important;
+            color: var(--text-secondary) !important;
             box-shadow: none !important;
         }
         body.theme-claudify .kanban-card.completed {
             border-left: 3px solid var(--vscode-testing-iconPassed, #73c991) !important;
         }
-        body.theme-claudify .kanban-card:hover,
-        body.theme-claudify .kanban-card.selected {
-            background: color-mix(in srgb, var(--accent-primary) 15%, transparent) !important;
-            border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent) !important;
+        body.theme-claudify .kanban-card:hover {
+            background: color-mix(in srgb, var(--border-bright) 10%, transparent) !important;
+            border-color: var(--border-bright) !important;
+            color: var(--text-primary) !important;
             box-shadow: none !important;
         }
+        /* Selected: clear terracotta highlight so the selection is obvious (keep green completed bar). */
+        body.theme-claudify .kanban-card.selected {
+            background: color-mix(in srgb, var(--accent-primary) 12%, transparent) !important;
+            border-color: var(--accent-primary) !important;
+            color: var(--text-primary) !important;
+            box-shadow: none !important;
+        }
+        body.theme-claudify .kanban-card.selected:not(.completed) {
+            border-left: 3px solid var(--accent-primary) !important;
+        }
+        /* Card titles hardcode harsh white (.card-topic) or inherit the muted subtitle colour.
+           Give them a mid-tone — brighter than the subtitle (--text-secondary), softer than
+           the harsh cream (--text-primary). */
+        body.theme-claudify .card-topic,
+        body.theme-claudify .plan-title {
+            color: color-mix(in srgb, var(--text-primary) 60%, var(--text-secondary)) !important;
+        }
+        /* Complexity label + timestamp: grey (the only labels asked to be grey). Literal grey
+           because --text-secondary is warm again for everything else. */
+        body.theme-claudify .card-meta { color: #8a8a8a !important; }
+        /* Column titles: neutral grey chrome (the content stays warm). */
+        body.theme-claudify .column-name { color: #8a8a8a; }
 
         * {
             box-sizing: border-box;
@@ -797,11 +820,13 @@
             font-weight: 600;
             letter-spacing: 0.3px;
         }
+        /* Complexity is a fixed severity scale — must be identical in every theme, so use
+           literals (not theme vars, which shift the scale when a theme overrides the accent). */
         .complexity-indicator.very-high { color: #ff00ff; }
-        .complexity-indicator.high { color: var(--accent-red); }
-        .complexity-indicator.medium { color: var(--accent-orange); }
+        .complexity-indicator.high { color: #da3633; }
+        .complexity-indicator.medium { color: #d29922; }
         .complexity-indicator.low { color: #98c379; }
-        .complexity-indicator.very-low { color: var(--accent-teal); }
+        .complexity-indicator.very-low { color: #00e5ff; }
         .complexity-indicator.unknown { color: #7f848e; }
 
         .card-actions {
@@ -2264,6 +2289,14 @@
   background: rgba(10, 10, 10, 0.65);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
+}
+
+/* Claudify: neutral-grey tab nav (active tab keeps the terracotta accent). kanban.html has its
+   own inline copy of these tab styles, so the override must live here too. */
+body.theme-claudify .shared-tab-btn { color: #8a8a8a; }
+body.theme-claudify .shared-tab-btn:hover {
+  color: #c8c8c8;
+  background: color-mix(in srgb, #ffffff 5%, transparent);
 }
     </style>
 </head>

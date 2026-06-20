@@ -85,8 +85,8 @@ export class PlanningPanelProvider {
     private _constitutionWatchDebounce: NodeJS.Timeout | undefined;
     private _insightsWatchers: vscode.FileSystemWatcher[] = [];
     private _insightsWatchDebounce: NodeJS.Timeout | undefined;
-    private _ticketsAutoSyncWatchers: Map<string, vscode.FileSystemWatcher> = new Map();
-    private _ticketsViewWatcher: vscode.FileSystemWatcher | undefined;
+    private _ticketsAutoSyncWatchers: Map<string, vscode.Disposable> = new Map();
+    private _ticketsViewWatcher: vscode.Disposable | undefined;
     private _ticketsViewWatcherDebounces: Map<string, NodeJS.Timeout> = new Map();
     private _ticketsAutoSyncDebounces: Map<string, NodeJS.Timeout> = new Map();
     private _lastPanelWriteTimestamp: number = 0;
@@ -4048,13 +4048,7 @@ Please format the updated output document strictly as follows:
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const { provider, id, content } = msg;
                 if (!workspaceRoot || !id || typeof content !== 'string') break;
-                let baseDir = path.join(workspaceRoot, '.switchboard', 'tickets');
-                try {
-                    const lfs = new LocalFolderService(workspaceRoot);
-                    const folders = lfs.getTicketsFolderPaths();
-                    if (folders.length > 0 && folders[0]) { baseDir = folders[0]; }
-                } catch { }
-                const filePath = this._findLocalTicketFile(path.join(baseDir, provider), provider, id);
+                const filePath = this._findTicketFilePath(workspaceRoot, provider, id);
                 if (!filePath) break;
                 try {
                     const nfs = require('fs') as typeof import('fs');
@@ -4158,13 +4152,7 @@ Please format the updated output document strictly as follows:
                     this._panel?.webview.postMessage({ type: 'localTicketFilesListed', provider, tickets: [] });
                     break;
                 }
-                let baseDir = path.join(workspaceRoot, '.switchboard', 'tickets');
-                try {
-                    const lfs = new LocalFolderService(workspaceRoot);
-                    const folders = lfs.getTicketsFolderPaths();
-                    if (folders.length > 0 && folders[0]) { baseDir = folders[0]; }
-                } catch { }
-                const providerDir = path.join(baseDir, provider);
+                const ticketDirs = this._getTicketDocumentDirs(workspaceRoot, provider);
                 const tickets: any[] = [];
 
                 if (!this._cacheService && workspaceRoot) {
@@ -4188,7 +4176,9 @@ Please format the updated output document strictly as follows:
                             // If DB has no entries OR throttle expired, perform backfill scan
                             if (dbTickets.length === 0 || (now - lastHeal > twentyFourHours)) {
                                 const scannedTickets: any[] = [];
-                                this._scanLocalTicketFiles(providerDir, provider, scannedTickets);
+                                for (const dir of ticketDirs) {
+                                    this._scanLocalTicketFiles(dir, provider, scannedTickets);
+                                }
 
                                 // Upsert missing tickets to DB
                                 for (const t of scannedTickets) {
@@ -4254,7 +4244,9 @@ Please format the updated output document strictly as follows:
 
                 // Fallback to live file scan if still empty (e.g. database not ready or no entries found)
                 if (tickets.length === 0) {
-                    this._scanLocalTicketFiles(providerDir, provider, tickets);
+                    for (const dir of ticketDirs) {
+                        this._scanLocalTicketFiles(dir, provider, tickets);
+                    }
                 }
 
                 this._panel?.webview.postMessage({ type: 'localTicketFilesListed', provider, tickets });
@@ -4293,13 +4285,7 @@ Please format the updated output document strictly as follows:
                     this._panel?.webview.postMessage({ type: 'localTicketFileRead', provider, id, success: false });
                     break;
                 }
-                let baseDir = path.join(workspaceRoot, '.switchboard', 'tickets');
-                try {
-                    const lfs = new LocalFolderService(workspaceRoot);
-                    const folders = lfs.getTicketsFolderPaths();
-                    if (folders.length > 0 && folders[0]) { baseDir = folders[0]; }
-                } catch { }
-                const filePath = this._findLocalTicketFile(path.join(baseDir, provider), provider, id);
+                const filePath = this._findTicketFilePath(workspaceRoot, provider, id);
                 if (!filePath) {
                     this._panel?.webview.postMessage({ type: 'localTicketFileRead', provider, id, success: false });
                     break;
@@ -4443,11 +4429,7 @@ Please format the updated output document strictly as follows:
                     // Resolve local ticket file path
                     let localFilePath = '';
                     try {
-                        let baseDir = path.join(workspaceRoot, '.switchboard', 'tickets');
-                        const lfs = new LocalFolderService(workspaceRoot);
-                        const folders = lfs.getTicketsFolderPaths();
-                        if (folders.length > 0 && folders[0]) { baseDir = folders[0]; }
-                        localFilePath = this._findLocalTicketFile(path.join(baseDir, provider), provider, id) || '';
+                        localFilePath = this._findTicketFilePath(workspaceRoot, provider, id) || '';
                     } catch { }
 
                     const prompt = `You are refining a ${provider} ticket into a complete, agent-actionable specification.

@@ -2099,8 +2099,7 @@ export class ClickUpSyncService {
       return;
     }
     try {
-      const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
-      await db.setConfigJson('clickup.config', null);
+      await GlobalIntegrationConfigService.clearConfig('clickup');
       this._config = null;
     } catch { /* ignore */ }
   }

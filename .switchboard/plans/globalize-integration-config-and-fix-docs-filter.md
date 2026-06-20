@@ -381,3 +381,63 @@ When the setup tab loads, it should populate the ticket import location inputs f
 **Complexity: 8 → Send to Lead Coder.**
 
 This plan involves multi-file coordination across 8+ service files, a mandatory data migration for ~4,000 installs, architectural decoupling of config from workspace identity, and a kanban column-mapping scope decision that requires user confirmation. The docs filter fix (Phase 3) is routine and could be split off as a separate low-complexity task, but the config globalization and migration are high-risk and require a lead coder's judgment.
+
+## Code Review Results
+
+### Stage 1: Grumpy Principal Engineer Review
+
+**CRITICAL — "Did you even TEST this?!"**
+
+1. **`saveLocalTicketFile` still reads from the dead per-workspace DB** (PlanningPanelProvider.ts:4047-4057) — Four call sites in PlanningPanelProvider still use `LocalFolderService.getTicketsFolderPaths()` to find ticket files. The entire point of this plan was to move ticket storage to the global config. Tickets saved to the new global `ticketSaveLocation` are INVISIBLE to `saveLocalTicketFile`, `listLocalTicketFiles`, `readLocalTicketFile`, and the refine-ticket handler. The user imports a ticket, it saves to the global location, and then the planning panel shows an empty list. Silent data disappearance. Unacceptable.
+
+2. **`listLocalTicketFiles` scans the wrong directory** (PlanningPanelProvider.ts:4161-4166) — Same root cause. The ticket list in the planning panel will be empty because it scans old per-workspace `LocalFolderService` paths instead of the global `ticketSaveLocation`. Users will think their tickets vanished after upgrading.
+
+3. **`readLocalTicketFile` can't find tickets in the global location** (PlanningPanelProvider.ts:4296-4301) — Same pattern. Reading a ticket file from the planning panel fails silently.
+
+4. **Refine ticket handler can't resolve the local file** (PlanningPanelProvider.ts:4446-4450) — The refine-ticket feature can't find the local ticket file to include in the prompt because it looks in the old per-workspace paths.
+
+**MAJOR — "How did you miss this?"**
+
+5. **`ClickUpSyncService._cleanup()` writes to a dead DB key** (ClickUpSyncService.ts:2101-2103) — The cleanup path still calls `KanbanDatabase.forWorkspace(this._workspaceRoot).setConfigJson('clickup.config', null)` instead of `GlobalIntegrationConfigService.clearConfig('clickup')`. So when a user's ClickUp setup fails and rolls back, the global config is NOT cleared — it persists with the failed config. The DB write is a no-op on the dead key.
+
+6. **Deferred migration is not implemented** (extension.ts:736) — The plan explicitly says: "If `workspaceFolders` is empty, defer migration until the first workspace is opened. The `onDidChangeWorkspaceFolders` handler should check `migrationComplete` and run if needed." The handler only calls `initializeIntegrationAutoPull()`. If the extension activates with no workspace folders, migration is skipped and NEVER runs. Users who open a workspace folder after activation will have their per-workspace config permanently ignored.
+
+**NIT — "Clean up your mess"**
+
+7. **`WorkspaceExcludeService.ts:20`** — Still references `.switchboard/notion-cache.md` as an excluded path. The cache moved to `~/.switchboard/cache/`. Dead entry, harmless but misleading.
+
+8. **PlanningPanelProvider legacy ticket folder management handlers** (lines 1954-2012) — `addTicketsFolderPath`, `removeTicketsFolderPath`, `listTicketsFolders`, `saveTicketsFolder`, `browseTicketsFolder` in PlanningPanelProvider still use `LocalFolderService` per-workspace. These appear to be legacy UI in the planning panel. The plan doesn't explicitly mention them, and the setup tab handlers were correctly updated. Low risk since the setup tab takes precedence for ticket folder management.
+
+### Stage 2: Balanced Synthesis
+
+**Fix Now (CRITICAL/MAJOR — all 6 fixed):**
+
+1. ✅ `saveLocalTicketFile` → replaced `LocalFolderService` lookup with `_findTicketFilePath()` which searches global config + `.switchboard/tickets` fallback
+2. ✅ `listLocalTicketFiles` → replaced `LocalFolderService` lookup with `_getTicketDocumentDirs()` which returns global + fallback dirs; updated `_scanLocalTicketFiles` calls to iterate all dirs
+3. ✅ `readLocalTicketFile` → replaced `LocalFolderService` lookup with `_findTicketFilePath()`
+4. ✅ Refine ticket handler → replaced `LocalFolderService` lookup with `_findTicketFilePath()`
+5. ✅ `ClickUpSyncService._cleanup()` → replaced `KanbanDatabase.setConfigJson('clickup.config', null)` with `GlobalIntegrationConfigService.clearConfig('clickup')`
+6. ✅ Deferred migration → added `MigrationService.runMigration()` call in `onDidChangeWorkspaceFolders` handler (idempotent due to `migrationComplete` sentinel)
+
+**Can Defer (NIT — not fixed):**
+
+7. `WorkspaceExcludeService.ts:20` dead exclude entry — harmless, cosmetic cleanup
+8. PlanningPanelProvider legacy ticket folder management handlers — may be dead UI, separate concern from the plan's scope
+
+### Files Changed (Review Fixes)
+
+- `src/services/PlanningPanelProvider.ts` — 4 call sites fixed (saveLocalTicketFile, listLocalTicketFiles, readLocalTicketFile, copyRefinePrompt)
+- `src/services/ClickUpSyncService.ts` — _cleanup() fixed to use GlobalIntegrationConfigService.clearConfig()
+- `src/extension.ts` — added deferred migration call in onDidChangeWorkspaceFolders
+
+### Validation Results
+
+- **Compilation**: Skipped per session directives (pre-compiled state assumed)
+- **Automated tests**: Skipped per session directives (user will run separately)
+- **Code review verification**: All 6 CRITICAL/MAJOR fixes verified by reading final code state; `_findTicketFilePath` and `_getTicketDocumentDirs` methods confirmed to search both global `ticketSaveLocation` and `.switchboard/tickets` fallback; `MigrationService.runMigration()` confirmed idempotent via `migrationComplete` sentinel
+
+### Remaining Risks
+
+1. **PlanningPanelProvider legacy ticket folder handlers** (NIT #8) — If the planning panel still has active UI for adding/removing ticket folders, those operations write to the dead per-workspace `LocalFolderService` instead of the global config. This is a separate concern from the plan's scope and may be dead UI.
+2. **Kanban column mappings scope** — The plan's User Review Required #1 (per-workspace vs global column mappings) was not explicitly resolved. The implementation moves column mappings to global config as the plan specifies, but if users have different kanban structures across workspaces, sync will silently use the global mappings for all workspaces.
+3. **Migration concurrency** — The `MigrationService.runMigration()` uses atomic writes via `GlobalIntegrationConfigService.saveGlobal()` (write-temp-then-rename), but there's no file-level lock. If two VS Code windows activate simultaneously, both could read `migrationComplete: false`, both could migrate, and the second write wins. The `migrationComplete` sentinel prevents re-running after the first successful write, but a race between two concurrent migrations could merge different workspace configs. Low probability for ~4,000 installs.
