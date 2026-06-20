@@ -9,6 +9,7 @@ import { applyThemeBodyClass } from './themeBodyClass';
 import type { TaskViewerProvider } from './TaskViewerProvider';
 import { KanbanDatabase, type WorkspaceDatabaseMapping } from './KanbanDatabase';
 import type { KanbanProvider } from './KanbanProvider';
+import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 
 type ControlPlaneTaskViewerProvider = TaskViewerProvider & {
     handleGetControlPlaneStatus?: (workspaceRoot?: string) => Promise<any>;

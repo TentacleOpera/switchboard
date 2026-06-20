@@ -7,6 +7,7 @@ import { LocalFolderService } from './LocalFolderService';
 import { LinearDocsAdapter } from './LinearDocsAdapter';
 import { ClickUpDocsAdapter } from './ClickUpDocsAdapter';
 import { PlanningPanelCacheService } from './PlanningPanelCacheService';
+import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 
 export interface PlannerPromptWriterOptions {
     getNotionService: (workspaceRoot: string) => NotionFetchService;
@@ -254,7 +255,7 @@ export class PlannerPromptWriter {
                         if (!notionContent) {
                             return { error: 'No content available. Please fetch content first.' };
                         }
-                        cachePath = path.join(workspaceRoot, '.switchboard', 'notion-cache.md');
+                        cachePath = GlobalIntegrationConfigService.getGlobalCachePath('notion-cache.md');
                         const notionCfg = await notionService.loadConfig();
                         docTitle = notionCfg?.pageTitle || notionCfg?.designDocUrl || 'notion';
                         break;
@@ -276,7 +277,7 @@ export class PlannerPromptWriter {
                         if (!linearContent) {
                             return { error: 'No content available. Please fetch content first.' };
                         }
-                        cachePath = path.join(workspaceRoot, '.switchboard', 'linear-docs-cache.md');
+                        cachePath = GlobalIntegrationConfigService.getGlobalCachePath('linear-docs-cache.md');
                         const linearCfg = await linearAdapter.loadConfig();
                         docTitle = linearCfg?.docTitle || 'linear-docs';
                         break;
@@ -287,7 +288,7 @@ export class PlannerPromptWriter {
                         if (!clickUpContent) {
                             return { error: 'No content available. Please fetch content first.' };
                         }
-                        cachePath = path.join(workspaceRoot, '.switchboard', 'clickup-docs-cache.md');
+                        cachePath = GlobalIntegrationConfigService.getGlobalCachePath('clickup-docs-cache.md');
                         const clickUpCfg = await clickUpAdapter.loadConfig();
                         docTitle = clickUpCfg?.docTitle || 'clickup-docs';
                         break;

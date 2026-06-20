@@ -171,3 +171,54 @@ Surface a webview failure signal when workspace resolution fails. This was the f
 ## Recommendation
 
 **Complexity 2 → Send to Intern.** Single-line, single-file change that reuses an idiom already proven elsewhere in the same file. No new state, no migration, no architectural risk.
+
+---
+
+## Reviewer Pass (executed 2026-06-20)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*"Alright, let's see what we've got. A one-line fix. The kind of thing that should be beneath my dignity, yet here we are, because somebody shipped a button that whispers its success into the wrong room. Let me tear this apart anyway, because 'one-line fix' is exactly the phrase that precedes every regression.*
+
+*The change at `PlanningPanelProvider.ts:2313-2314` — `const targetPanel = isProject ? this._projectPanel : this._panel;` then `targetPanel?.webview.postMessage(...)`. Correct. `isProject` is a parameter of `_handleMessage` (line 1529), captured per-dispatch, so no shared-state race. The ternary mirrors the `errorPanel` idiom at line 1532 verbatim. The listener in `project.js:364-375` exists and does the 'Copied!' swap. The upstream command at `extension.ts:927` returns the prompt, so the `if (prompt)` gate is satisfiable. Optional chaining guards a torn-down panel. So far, so boring-correct.*
+
+*Now — the evidence section. It claims, with theatrical certainty, 'The CHAT PROMPT button **only exists in `project.html`**.' Liar. There's a `btn-chat-copy-prompt` in `kanban.html:2337` too. Did nobody grep? I did. BUT — and this is the saving grace — that `kanban.html` button posts a **different message type**, `chatCopyPrompt` (capital C in 'Copy'), handled by `KanbanProvider.ts:5325`, a completely separate provider and flow. It is not the `copyChatPrompt` (lowercase) message this plan touches. So the imprecise claim doesn't contaminate the fix — the fix targets `copyChatPrompt` and only `copyChatPrompt`, and that message is only ever posted from `project.js:982`. The diagnosis holds; the evidence prose is just sloppy. NIT.*
+
+*Anything else? The deferred failure-feedback enhancement — fine, scoped out deliberately, the `showWarningMessage` at `extension.ts:924` covers the null path. No CRITICAL, no MAJOR. The fix is correct. My only complaint is the documentation overclaimed, and that's not worth a code change."*
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Severity | Verdict |
+|---|---|---|
+| Fix routes `chatPromptCopied` to `this._projectPanel` via `isProject` ternary — correct, idiom-conforming | — | **Keep.** Verified against lines 1529, 1532, 2313-2314. |
+| `isProject` parameter in scope and per-dispatch — no race | — | **Keep.** Verified line 1529, 566. |
+| Upstream command returns prompt string — `if (prompt)` gate satisfiable | — | **Keep.** Verified `extension.ts:927`. |
+| Listener exists only in `project.js` (line 364); `planning.js` has none | — | **Keep.** Confirms routing requirement. |
+| Plan claims button "only exists in `project.html`" but `kanban.html:2337` also has `btn-chat-copy-prompt` | **NIT** | **No code fix.** The `kanban.html` button posts a different message type (`chatCopyPrompt`, capital C) handled by `KanbanProvider.ts:5325` — a separate flow. The imprecision is in the plan's evidence prose, not the code. Diagnosis and fix remain correct because `copyChatPrompt` (lowercase) is only posted from `project.js:982`. |
+
+**Fixes applied:** None. The implementation already matches the plan specification exactly; no CRITICAL or MAJOR findings exist.
+
+### Verification Results
+
+- **Code inspection (performed this session):**
+  - `PlanningPanelProvider.ts:2309-2317` — `copyChatPrompt` case confirmed to use `isProject ? this._projectPanel : this._panel` and post to `targetPanel?.webview`. ✅
+  - `PlanningPanelProvider.ts:1529` — `_handleMessage(msg, isProject: boolean = false)` signature confirmed; `isProject` in scope. ✅
+  - `PlanningPanelProvider.ts:1532` — `errorPanel` idiom confirmed identical to the new `targetPanel` pattern. ✅
+  - `project.js:364-375` — `chatPromptCopied` listener confirmed (Copied! swap + 2s revert). ✅
+  - `project.js:979-986` — button click posts `{ type: 'copyChatPrompt', workspaceRoot }`. ✅
+  - `planning.js` — no `chatPromptCopied` listener (confirms feedback must route to Project panel). ✅
+  - `extension.ts:916-928` — `switchboard.copyChatPrompt` command returns `prompt` on success, `showWarningMessage` on null. ✅
+  - Sibling kanban handlers (lines 2463-2627) all post to `this._projectPanel?.webview` — fix now conforms. ✅
+- **Compilation:** Skipped per session directive (user-run).
+- **Automated tests:** Skipped per session directive (user-run).
+- **Manual verification:** Not executable this session (requires running extension host); steps documented in Verification Plan above.
+
+### Files Changed (by this review)
+
+- None. Implementation was already correct; no code edits applied.
+
+### Remaining Risks
+
+1. **(NIT, documentation-only)** Plan's evidence section overstates button uniqueness — `kanban.html:2337` also has a `btn-chat-copy-prompt`, but it posts a distinct message (`chatCopyPrompt`) routed through `KanbanProvider.ts`, so it does not interact with this fix. No code impact.
+2. **(Deferred, by design)** No webview-level failure signal when workspace resolution returns null; relies on VS Code `showWarningMessage` (`extension.ts:924`). Documented under Deferred enhancement; intentionally out of scope.
+3. **(Verification gap)** Manual click-through and webpack rebuild not run this session; user must execute Verification Plan steps 1-7 before shipping.

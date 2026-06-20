@@ -10,6 +10,7 @@ import {
   normalizeClickUpAutomationRules,
   type ClickUpAutomationRule
 } from '../models/PipelineDefinition';
+import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 
 export interface ClickUpConfig {
   workspaceId: string;
@@ -514,8 +515,7 @@ export class ClickUpSyncService {
 
   async loadConfig(): Promise<ClickUpConfig | null> {
     try {
-      const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
-      const raw = await db.getConfigJson<ClickUpConfig | null>('clickup.config', null);
+      const raw = await GlobalIntegrationConfigService.loadConfig('clickup');
       if (!raw) return null;
       const normalized = this._normalizeConfig(raw);
       this._config = normalized;
@@ -539,8 +539,7 @@ export class ClickUpSyncService {
     if (!normalized) {
       throw new Error('ClickUp config normalization failed');
     }
-    const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
-    await db.setConfigJson('clickup.config', normalized);
+    await GlobalIntegrationConfigService.saveConfig('clickup', normalized);
     this._config = normalized;
   }
 

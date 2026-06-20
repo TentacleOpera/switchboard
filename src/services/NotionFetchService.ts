@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as https from 'https';
 import { KanbanDatabase } from './KanbanDatabase';
+import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 
 export interface NotionConfig {
   pageUrl: string;
@@ -23,7 +24,7 @@ export class NotionFetchService {
   constructor(workspaceRoot: string, secretStorage: vscode.SecretStorage) {
     this._workspaceRoot = workspaceRoot;
     this._configPath = path.join(workspaceRoot, '.switchboard', 'notion-config.json');
-    this._cachePath = path.join(workspaceRoot, '.switchboard', 'notion-cache.md');
+    this._cachePath = GlobalIntegrationConfigService.getGlobalCachePath('notion-cache.md');
     this._secretStorage = secretStorage;
   }
 
@@ -31,14 +32,12 @@ export class NotionFetchService {
 
   async loadConfig(): Promise<NotionConfig | null> {
     try {
-      const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
-      return await db.getConfigJson<NotionConfig | null>('notion.config', null);
+      return await GlobalIntegrationConfigService.loadConfig('notion');
     } catch { return null; }
   }
 
   async saveConfig(config: NotionConfig): Promise<void> {
-    const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
-    await db.setConfigJson('notion.config', config);
+    await GlobalIntegrationConfigService.saveConfig('notion', config);
   }
 
   // ── Cache I/O ───────────────────────────────────────────────

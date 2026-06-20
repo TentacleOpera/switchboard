@@ -3,6 +3,7 @@ import { ResearchSourceAdapter, ResearchFile, TreeNode } from './ResearchImportS
 import { PlanningPanelCacheService } from './PlanningPanelCacheService';
 import * as path from 'path';
 import * as fs from 'fs';
+import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 
 export interface ClickUpDocConfig {
     docId: string;
@@ -25,7 +26,7 @@ export class ClickUpDocsAdapter implements ResearchSourceAdapter {
     constructor(workspaceRoot: string, clickUpService: ClickUpSyncService, cacheService?: PlanningPanelCacheService) {
         this.workspaceRoot = workspaceRoot;
         this._configPath = path.join(workspaceRoot, '.switchboard', 'clickup-docs-config.json');
-        this._cachePath = path.join(workspaceRoot, '.switchboard', 'clickup-docs-cache.md');
+        this._cachePath = GlobalIntegrationConfigService.getGlobalCachePath('clickup-docs-cache.md');
         this._clickUpService = clickUpService;
         this._cacheService = cacheService;
     }

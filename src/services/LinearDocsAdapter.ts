@@ -2,6 +2,7 @@ import { LinearSyncService } from './LinearSyncService';
 import { ResearchSourceAdapter, ResearchFile, TreeNode } from './ResearchImportService';
 import * as path from 'path';
 import * as fs from 'fs';
+import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 
 export interface LinearDocConfig {
     docId: string;
@@ -22,7 +23,7 @@ export class LinearDocsAdapter implements ResearchSourceAdapter {
     constructor(workspaceRoot: string, linearService: LinearSyncService) {
         this.workspaceRoot = workspaceRoot;
         this._configPath = path.join(workspaceRoot, '.switchboard', 'linear-docs-config.json');
-        this._cachePath = path.join(workspaceRoot, '.switchboard', 'linear-docs-cache.md');
+        this._cachePath = GlobalIntegrationConfigService.getGlobalCachePath('linear-docs-cache.md');
         this._linearService = linearService;
     }
 

@@ -11,6 +11,7 @@ import {
   type LinearAutomationRule,
   normalizeLinearAutomationRules
 } from '../models/PipelineDefinition';
+import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 
 export interface LinearConfig {
   teamId: string;
@@ -232,10 +233,7 @@ export class LinearSyncService {
 
   async loadConfig(): Promise<LinearConfig | null> {
     try {
-      const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
-      // projectId is a legacy field from shipped versions, migrated to
-      // includeProjectNames below — not part of the current LinearConfig shape.
-      const raw = await db.getConfigJson<(LinearConfig & { projectId?: string }) | null>('linear.config', null);
+      const raw = await GlobalIntegrationConfigService.loadConfig('linear') as (LinearConfig & { projectId?: string }) | null;
       if (!raw) return null;
 
       // Migration: legacy projectId → includeProjectNames
@@ -247,7 +245,7 @@ export class LinearSyncService {
             raw.includeProjectNames = [resolvedName];
             delete raw.projectId;
             // Save migrated config
-            await db.setConfigJson('linear.config', raw);
+            await GlobalIntegrationConfigService.saveConfig('linear', raw);
           } else {
             console.warn(`[LinearSync] Failed to resolve legacy projectId to name, deferring migration. API may be unavailable.`);
           }
@@ -275,8 +273,7 @@ export class LinearSyncService {
     if (!normalized) {
       throw new Error('Linear config normalization failed');
     }
-    const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
-    await db.setConfigJson('linear.config', normalized);
+    await GlobalIntegrationConfigService.saveConfig('linear', normalized);
     this._config = normalized;
     this._cachedProjects = null;
   }

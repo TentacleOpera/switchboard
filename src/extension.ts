@@ -29,6 +29,7 @@ import { PlannerPromptWriter } from './services/PlannerPromptWriter';
 import { PlanningPanelCacheService } from './services/PlanningPanelCacheService';
 import { ResearchImportService } from './services/ResearchImportService';
 import { showTemporaryNotification } from './utils/showTemporaryNotification';
+import { MigrationService } from './services/MigrationService';
 
 // Status bar item for setup notification
 let setupStatusBarItem: vscode.StatusBarItem;
@@ -410,9 +411,11 @@ export async function activate(context: vscode.ExtensionContext) {
         await bootstrapMappingsToDb(context);
         await initializeMappingIndex(outputChannel ?? undefined);
         outputChannel?.appendLine('[Switchboard] Mapping index initialization completed successfully');
+        await MigrationService.runMigration();
+        outputChannel?.appendLine('[Switchboard] Global integration config migration completed');
     } catch (err) {
-        console.error('[Switchboard] Mapping index initialization failed, continuing activation:', err);
-        outputChannel?.appendLine(`[Switchboard] Mapping index initialization FAILED: ${err}`);
+        console.error('[Switchboard] Mapping index initialization or migration failed, continuing activation:', err);
+        outputChannel?.appendLine(`[Switchboard] Mapping index/migration FAILED: ${err}`);
     }
 
     kanbanProvider = new KanbanProvider(context.extensionUri, context, outputChannel);

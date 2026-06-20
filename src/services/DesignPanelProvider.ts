@@ -15,17 +15,9 @@ import { buildWorkspaceItems } from './workspaceUtils';
 // the "import" condition, and webpackMode: "eager" inlines the SDK into the main
 // bundle — required because the installed extension ships dist/ without node_modules.
 let _stitchSdkPromise: Promise<any> | undefined;
-function loadStitch(accessToken: string): Promise<any> {
+function loadStitch(_accessToken: string): Promise<any> {
     if (!_stitchSdkPromise) {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const authMode = config.get<string>('stitch.authMode') || 'apiKey';
-        _stitchSdkPromise = import(/* webpackMode: "eager" */ '@google/stitch-sdk').then(m => {
-            if (authMode === 'oauth') {
-                return new m.Stitch(new m.StitchToolClient({ accessToken }));
-            } else {
-                return m.stitch;
-            }
-        });
+        _stitchSdkPromise = import(/* webpackMode: "eager" */ '@google/stitch-sdk').then(m => m.stitch);
     }
     return _stitchSdkPromise;
 }
@@ -856,25 +848,14 @@ export class DesignPanelProvider implements vscode.Disposable {
         };
     }
 
-    private async _setupStitchAuth(): Promise<{ mode: 'apiKey' | 'oauth'; valid: boolean; apiKey?: string; accessToken?: string }> {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const mode = config.get<'apiKey' | 'oauth'>('stitch.authMode') || 'apiKey';
+    private async _setupStitchAuth(): Promise<{ valid: boolean; apiKey: string }> {
         const apiKey = (await this._context.secrets.get('switchboard.stitch.apiKey')) || '';
-        const accessToken = (await this._context.secrets.get('switchboard.stitch.accessToken')) || '';
-        if (mode === 'oauth') {
-            if (accessToken) {
-                delete process.env.STITCH_API_KEY;
-                return { mode, valid: true, apiKey, accessToken };
-            }
-            return { mode, valid: false, apiKey, accessToken };
-        } else {
-            const finalKey = apiKey || process.env.STITCH_API_KEY || '';
-            if (finalKey) {
-                process.env.STITCH_API_KEY = finalKey;
-                return { mode, valid: true, apiKey: finalKey, accessToken };
-            }
-            return { mode, valid: false, apiKey: finalKey, accessToken };
+        const finalKey = apiKey || process.env.STITCH_API_KEY || '';
+        if (finalKey) {
+            process.env.STITCH_API_KEY = finalKey;
+            return { valid: true, apiKey: finalKey };
         }
+        return { valid: false, apiKey: finalKey };
     }
 
     // The kanban "Design Doc Reference" planner add-on (roleConfig_planner.addons.designSystemDoc)
@@ -1103,11 +1084,9 @@ export class DesignPanelProvider implements vscode.Disposable {
                 this.postMessage({ type: 'stitchApiKeyStatus', configured: hasKey });
                 this.postMessage({
                     type: 'stitchAuthStatus',
-                    mode: authInfo.mode,
                     configured: hasKey,
                     valid: hasKey,
-                    apiKey: authInfo.apiKey,
-                    accessToken: authInfo.accessToken
+                    apiKey: authInfo.apiKey
                 });
                 const themeConfig = vscode.workspace.getConfiguration('switchboard');
                 this.postMessage({ type: 'switchboardThemeChanged', theme: themeConfig.get<string>('theme.name', 'afterburner') });
@@ -1388,7 +1367,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                     invalidateStitchSdkCache();
                     const auth = await this._setupStitchAuth();
                     this.postMessage({ type: 'stitchApiKeyStatus', configured: auth.valid });
-                    this.postMessage({ type: 'stitchAuthStatus', mode: auth.mode, configured: auth.valid, valid: auth.valid });
+                    this.postMessage({ type: 'stitchAuthStatus', configured: auth.valid, valid: auth.valid });
                     vscode.window.showInformationMessage('Stitch API Key saved successfully.');
                 } catch (err: any) {
                     vscode.window.showErrorMessage('Failed to save API key: ' + err.message);
@@ -1397,17 +1376,10 @@ export class DesignPanelProvider implements vscode.Disposable {
 
             case 'stitchSaveAuthConfig':
                 try {
-                    const config = vscode.workspace.getConfiguration('switchboard');
-                    await config.update('stitch.authMode', message.mode, vscode.ConfigurationTarget.Global);
                     if (message.apiKey) {
                         await this._context.secrets.store('switchboard.stitch.apiKey', message.apiKey);
                     } else {
                         await this._context.secrets.delete('switchboard.stitch.apiKey');
-                    }
-                    if (message.accessToken) {
-                        await this._context.secrets.store('switchboard.stitch.accessToken', message.accessToken);
-                    } else {
-                        await this._context.secrets.delete('switchboard.stitch.accessToken');
                     }
                     
                     invalidateStitchSdkCache();
@@ -1416,11 +1388,9 @@ export class DesignPanelProvider implements vscode.Disposable {
                     this.postMessage({ type: 'stitchApiKeyStatus', configured: auth.valid });
                     this.postMessage({ 
                         type: 'stitchAuthStatus', 
-                        mode: auth.mode, 
                         configured: auth.valid, 
                         valid: auth.valid,
-                        apiKey: auth.apiKey,
-                        accessToken: auth.accessToken
+                        apiKey: auth.apiKey
                     });
                     vscode.window.showInformationMessage('Stitch Authentication settings saved successfully.');
                 } catch (err: any) {
@@ -1434,36 +1404,30 @@ export class DesignPanelProvider implements vscode.Disposable {
                     if (!auth.valid) {
                         this.postMessage({ 
                             type: 'stitchAuthStatus', 
-                            mode: auth.mode, 
                             configured: false, 
                             valid: false,
                             error: 'Credentials not configured',
-                            apiKey: auth.apiKey,
-                            accessToken: auth.accessToken
+                            apiKey: auth.apiKey
                         });
                         return;
                     }
                     invalidateStitchSdkCache();
-                    const stitch = await loadStitch(auth.accessToken || '');
+                    const stitch = await loadStitch('');
                     await stitch.projects();
                     this.postMessage({ 
                         type: 'stitchAuthStatus', 
-                        mode: auth.mode, 
                         configured: true, 
                         valid: true,
-                        apiKey: auth.apiKey,
-                        accessToken: auth.accessToken
+                        apiKey: auth.apiKey
                     });
                 } catch (err: any) {
                     const auth = await this._setupStitchAuth();
                     this.postMessage({ 
                         type: 'stitchAuthStatus', 
-                        mode: auth.mode, 
                         configured: true, 
                         valid: false,
                         error: err.message || String(err),
-                        apiKey: auth.apiKey,
-                        accessToken: auth.accessToken
+                        apiKey: auth.apiKey
                     });
                 }
                 break;
@@ -1481,7 +1445,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                         this.postMessage({ type: 'stitchError', error: 'No project selected.', workspaceRoot });
                         return;
                     }
-                    const stitch = await loadStitch(auth.accessToken || '');
+                    const stitch = await loadStitch('');
                     const project = stitch.project(projectId);
                     const list = await project.listDesignSystems();
                     const designSystems = list.map((ds: any) => ({
@@ -1514,7 +1478,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                     if (!projectId) {
                         throw new Error('No project selected.');
                     }
-                    const stitch = await loadStitch(auth.accessToken || '');
+                    const stitch = await loadStitch('');
                     const project = stitch.project(projectId);
                     
                     const input = {
@@ -1549,7 +1513,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                     if (!projectId || !assetId) {
                         throw new Error('Project or design system asset ID is missing.');
                     }
-                    const stitch = await loadStitch(auth.accessToken || '');
+                    const stitch = await loadStitch('');
                     const project = stitch.project(projectId);
                     const ds = project.designSystem(assetId);
                     
@@ -1591,16 +1555,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                     }
 
                     const { StitchToolClient } = await import('@google/stitch-sdk');
-                    const config = vscode.workspace.getConfiguration('switchboard');
-                    const mode = config.get<string>('stitch.authMode') || 'apiKey';
-                    const accessToken = auth.accessToken || '';
-                    
-                    let dedicatedClient;
-                    if (mode === 'oauth') {
-                        dedicatedClient = new StitchToolClient({ accessToken });
-                    } else {
-                        dedicatedClient = new StitchToolClient();
-                    }
+                    const dedicatedClient = new StitchToolClient();
 
                     const projectData: any = await dedicatedClient.callTool("get_project", { name: "projects/" + projectId });
                     const rawInstances = projectData.screenInstances || [];
@@ -1620,7 +1575,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                         throw new Error('No applicable screens found in the project.');
                     }
 
-                    const stitch = await loadStitch(auth.accessToken || '');
+                    const stitch = await loadStitch('');
                     const project = stitch.project(projectId);
                     const ds = project.designSystem(assetId);
                     
@@ -1671,8 +1626,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                     }
 
                     // Otherwise fetch from API
-                    const accessToken = (await this._context.secrets.get('switchboard.stitch.accessToken')) || '';
-                    const stitch = await loadStitch(accessToken);
+                    const stitch = await loadStitch('');
                     const list = await stitch.projects();
                     const projects = list.map((p: any) => ({
                         id: p.id,
@@ -1716,8 +1670,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                     }
 
                     // --- Phase 2: fetch from API ---
-                    const accessToken = (await this._context.secrets.get('switchboard.stitch.accessToken')) || '';
-                    const stitch = await loadStitch(accessToken);
+                    const stitch = await loadStitch('');
                     const allAssets = await stitch.project(projectId).screens();
                     // project.screens() returns ALL assets including reference uploads (images,
                     // documents, specs). Generated screens always have both a deviceType AND
@@ -1786,8 +1739,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                             }
                         }
 
-                        const accessToken = (await this._context.secrets.get('switchboard.stitch.accessToken')) || '';
-                        const stitch = await loadStitch(accessToken);
+                        const stitch = await loadStitch('');
                         const formatted = await Promise.all(cached.map(async (s) => {
                             let screen = this._activeScreens.get(s.id);
                             if (!screen) {
@@ -1833,8 +1785,7 @@ export class DesignPanelProvider implements vscode.Disposable {
 
                         this._activeScreens.clear();
 
-                        const accessToken = (await this._context.secrets.get('switchboard.stitch.accessToken')) || '';
-                        const stitch = await loadStitch(accessToken);
+                        const stitch = await loadStitch('');
                         const allAssets = await stitch.project(projectId).screens();
                         const list = allAssets.filter((s: any) => !!s.data?.deviceType && s.data?.screenMetadata !== undefined && s.data?.screenMetadata !== null);
                         for (const screen of list) {
@@ -1909,8 +1860,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                             }
                         }
 
-                        const accessToken = (await this._context.secrets.get('switchboard.stitch.accessToken')) || '';
-                        const stitch = await loadStitch(accessToken);
+                        const stitch = await loadStitch('');
                         const project = await stitch.createProject(title);
                         const list = await stitch.projects();
                         const projects = list.map((p: any) => ({
@@ -1943,8 +1893,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                 try {
                     const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
                     if (!message.projectId || !message.screenId) throw new Error('Missing project or screen id');
-                    const accessToken = (await this._context.secrets.get('switchboard.stitch.accessToken')) || '';
-                    const stitch = await loadStitch(accessToken);
+                    const stitch = await loadStitch('');
                     const fresh = await stitch.project(message.projectId).getScreen(message.screenId);
                     this._activeScreens.set(fresh.id, fresh);
                     this.postMessage({ type: 'stitchScreenReady', screen: await this._formatScreen(fresh, workspaceRoot), workspaceRoot });
@@ -1959,8 +1908,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                     const manifestPath = path.join(this._getStitchOutputDir(workspaceRoot), 'DESIGN.md');
                     if (!fs.existsSync(manifestPath)) {
                         if (!message.projectId) throw new Error('No project selected to generate DESIGN.md');
-                        const accessToken = (await this._context.secrets.get('switchboard.stitch.accessToken')) || '';
-                        const stitch = await loadStitch(accessToken);
+                        const stitch = await loadStitch('');
                         const projectInstance = stitch.project(message.projectId);
                         const screens = await projectInstance.screens();
 
@@ -2023,8 +1971,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                     if (!workspaceRoot) throw new Error('No active workspace root found');
                     if (!message.projectId) throw new Error('No project selected');
 
-                    const accessToken = (await this._context.secrets.get('switchboard.stitch.accessToken')) || '';
-                    const stitch = await loadStitch(accessToken);
+                    const stitch = await loadStitch('');
                     const projectInstance = stitch.project(message.projectId);
                     const designSystems = await projectInstance.listDesignSystems();
 
@@ -2388,8 +2335,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                     }
                     this._stitchOperationLock = true;
                     try {
-                        const accessToken = (await this._context.secrets.get('switchboard.stitch.accessToken')) || '';
-                        const stitch = await loadStitch(accessToken);
+                        const stitch = await loadStitch('');
                         const project = await stitch.createProject(title);
                         const list = await stitch.projects();
                         const projects = list.map((p: any) => ({
@@ -2428,8 +2374,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                             this.postMessage({ type: 'stitchError', error: 'Select a Stitch project before generating a screen.', workspaceRoot });
                             return;
                         }
-                        const accessToken = (await this._context.secrets.get('switchboard.stitch.accessToken')) || '';
-                        const stitch = await loadStitch(accessToken);
+                        const stitch = await loadStitch('');
                         const projectInstance = stitch.project(message.projectId);
 
                         // Upload reference files and augment prompt with markdown context

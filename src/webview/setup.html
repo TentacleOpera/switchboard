@@ -684,12 +684,12 @@
                                 Ticket Import Location
                             </span>
                             <div style="display:flex; gap:8px; margin-top:4px;">
-                                <input class="ticket-import-folder-input" type="text" placeholder="e.g. /Users/me/Tickets" style="flex:1; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; border-radius:4px;">
-                                <button class="btn-browse-ticket-folder secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
+                                <input id="clickup-ticket-import-folder" class="ticket-import-folder-input" type="text" placeholder="e.g. /Users/me/Tickets" style="flex:1; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; border-radius:4px;">
+                                <button id="btn-browse-clickup-ticket-folder" class="secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
                             </div>
                         </label>
                         <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
-                            Where imported tickets are saved. Defaults to <code>.switchboard/plans</code> if left empty.
+                            Required. Choose where imported tickets are saved locally. Tickets are kept separate from your Kanban plans — use 'Add to Kanban' to promote a ticket to the board.
                         </div>
                         <div style="margin-top:10px;">
                             <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
@@ -883,12 +883,12 @@
                                 Ticket Import Location
                             </span>
                             <div style="display:flex; gap:8px; margin-top:4px;">
-                                <input class="ticket-import-folder-input" type="text" placeholder="e.g. /Users/me/Tickets" style="flex:1; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; border-radius:4px;">
-                                <button class="btn-browse-ticket-folder secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
+                                <input id="linear-ticket-import-folder" class="ticket-import-folder-input" type="text" placeholder="e.g. /Users/me/Tickets" style="flex:1; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; border-radius:4px;">
+                                <button id="btn-browse-linear-ticket-folder" class="secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
                             </div>
                         </label>
                         <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
-                            Where imported tickets are saved. Defaults to <code>.switchboard/plans</code> if left empty.
+                            Required. Choose where imported tickets are saved locally. Tickets are kept separate from your Kanban plans — use 'Add to Kanban' to promote a ticket to the board.
                         </div>
                         <div style="margin-top:10px;">
                             <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
