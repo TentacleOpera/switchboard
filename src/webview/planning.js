@@ -210,6 +210,12 @@
     let _lastTicketsClickUpIssuesContainerHtml = '';
     let _lastTicketsClickUpDetailContentHtml = '';
     let _lastTicketsClickUpStateFilterHtml = '';
+    let _lastTicketsClickUpStatusSelectHtml = '';
+    let _lastTicketsClickUpSubtasksNavHtml = '';
+    let _lastTicketsLinearStatusSelectHtml = '';
+    let _lastTicketsLinearSubtasksNavHtml = '';
+    let _lastTicketsTagsKey = '';
+    let _lastTicketsTagsProvider = '';
 
     // Full detail caches for tickets that have been expanded
     let linearIssueDetailCache = new Map(); // issueId -> { issue, subtasks, comments, attachments, renderedDescriptionHtml }
@@ -267,6 +273,20 @@
         const container = document.getElementById('tickets-tags-display');
         if (!container) return;
         
+        const tagsKey = (tags || []).map(tag => {
+            if (typeof tag === 'object' && tag !== null) {
+                return `${tag.id || ''}:${tag.name || ''}:${tag.tagBg || ''}:${tag.color || ''}`;
+            }
+            return String(tag);
+        }).join('|');
+
+        if (_lastTicketsTagsKey === tagsKey && _lastTicketsTagsProvider === provider) {
+            return;
+        }
+
+        _lastTicketsTagsKey = tagsKey;
+        _lastTicketsTagsProvider = provider;
+
         container.innerHTML = '';
         container.style.display = 'flex';
         
@@ -3506,14 +3526,23 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 const changedBodyMarkdown = (msg.content || '').replace(/^#[^\n]*\n?/, '').trim();
                 if (isCurrentClickUp || isCurrentLinear) {
                     const rendered = renderMarkdown(changedBodyMarkdown);
+                    let hasChanged = false;
                     if (isCurrentClickUp) {
-                        selectedClickUpIssue = { ...selectedClickUpIssue, renderedDescriptionHtml: rendered, descriptionMarkdown: changedBodyMarkdown };
-                        clickUpTaskDetailCache.set(changedId, selectedClickUpIssue);
+                        if (selectedClickUpIssue?.renderedDescriptionHtml !== rendered) {
+                            selectedClickUpIssue = { ...selectedClickUpIssue, renderedDescriptionHtml: rendered, descriptionMarkdown: changedBodyMarkdown };
+                            clickUpTaskDetailCache.set(changedId, selectedClickUpIssue);
+                            hasChanged = true;
+                        }
                     } else {
-                        selectedLinearIssue = { ...selectedLinearIssue, renderedDescriptionHtml: rendered, descriptionMarkdown: changedBodyMarkdown };
-                        linearIssueDetailCache.set(changedId, selectedLinearIssue);
+                        if (selectedLinearIssue?.renderedDescriptionHtml !== rendered) {
+                            selectedLinearIssue = { ...selectedLinearIssue, renderedDescriptionHtml: rendered, descriptionMarkdown: changedBodyMarkdown };
+                            linearIssueDetailCache.set(changedId, selectedLinearIssue);
+                            hasChanged = true;
+                        }
                     }
-                    renderTicketsTab();
+                    if (hasChanged) {
+                        renderTicketsTab();
+                    }
                 }
                 // Always update cache so next click shows fresh content
                 const changedRendered = renderMarkdown(changedBodyMarkdown);
@@ -6869,8 +6898,19 @@ Instructions:
         if (!detailContent) return;
 
         if (!selectedLinearIssue) {
-            if (subtasksNav) { subtasksNav.innerHTML = ''; subtasksNav.style.display = 'none'; }
+            if (subtasksNav) {
+                if (_lastTicketsLinearSubtasksNavHtml !== '') {
+                    subtasksNav.innerHTML = '';
+                    _lastTicketsLinearSubtasksNavHtml = '';
+                }
+                subtasksNav.style.display = 'none';
+            }
             if (_lastTicketsDetailContentHtml !== '') { detailContent.innerHTML = ''; _lastTicketsDetailContentHtml = ''; }
+            if (_lastTicketsLinearStatusSelectHtml !== '') {
+                const statusSelect = document.getElementById('select-status-ticket');
+                if (statusSelect) statusSelect.innerHTML = '';
+                _lastTicketsLinearStatusSelectHtml = '';
+            }
             if (previewMetaBar) previewMetaBar.style.display = 'none';
             if (deleteConfirmBanner) deleteConfirmBanner.style.display = 'none';
             if (commentInputArea) commentInputArea.style.display = 'none';
@@ -6903,10 +6943,29 @@ Instructions:
             }
             const statusSelect = document.getElementById('select-status-ticket');
             if (statusSelect) {
+                let newHtml = '';
                 if (availableLinearStates.length > 0) {
-                    statusSelect.innerHTML = availableLinearStates
+                    newHtml = availableLinearStates
                         .map(s => `<option value="${escapeAttr(s.id)}">${escapeHtml(s.name)}</option>`)
                         .join('');
+                } else {
+                    const stateMap = new Map();
+                    linearProjectIssues.forEach(i => {
+                        if (i.state && i.state.id && i.state.name) {
+                            stateMap.set(i.state.name, i.state.id);
+                        }
+                    });
+                    newHtml = Array.from(stateMap.entries())
+                        .map(([name, id]) => `<option value="${escapeAttr(id)}">${escapeHtml(name)}</option>`)
+                        .join('');
+                }
+
+                if (_lastTicketsLinearStatusSelectHtml !== newHtml) {
+                    statusSelect.innerHTML = newHtml;
+                    _lastTicketsLinearStatusSelectHtml = newHtml;
+                }
+
+                if (availableLinearStates.length > 0) {
                     if (issue.state && issue.state.id) {
                         statusSelect.value = issue.state.id;
                     } else if (issue.state && issue.state.name) {
@@ -6920,9 +6979,6 @@ Instructions:
                             stateMap.set(i.state.name, i.state.id);
                         }
                     });
-                    statusSelect.innerHTML = Array.from(stateMap.entries())
-                        .map(([name, id]) => `<option value="${escapeAttr(id)}">${escapeHtml(name)}</option>`)
-                        .join('');
                     if (issue.state && issue.state.id) {
                         statusSelect.value = issue.state.id;
                     } else if (issue.state && issue.state.name) {
@@ -6945,10 +7001,16 @@ Instructions:
                     </div>`;
                 });
                 navHtml += '</div>';
-                subtasksNav.innerHTML = navHtml;
+                if (_lastTicketsLinearSubtasksNavHtml !== navHtml) {
+                    subtasksNav.innerHTML = navHtml;
+                    _lastTicketsLinearSubtasksNavHtml = navHtml;
+                }
                 subtasksNav.style.display = '';
             } else {
-                subtasksNav.innerHTML = '';
+                if (_lastTicketsLinearSubtasksNavHtml !== '') {
+                    subtasksNav.innerHTML = '';
+                    _lastTicketsLinearSubtasksNavHtml = '';
+                }
                 subtasksNav.style.display = 'none';
             }
         }
@@ -7340,8 +7402,19 @@ Instructions:
         if (!detailContent) return;
 
         if (!selectedClickUpIssue) {
-            if (subtasksNav) { subtasksNav.innerHTML = ''; subtasksNav.style.display = 'none'; }
+            if (subtasksNav) {
+                if (_lastTicketsClickUpSubtasksNavHtml !== '') {
+                    subtasksNav.innerHTML = '';
+                    _lastTicketsClickUpSubtasksNavHtml = '';
+                }
+                subtasksNav.style.display = 'none';
+            }
             if (_lastTicketsClickUpDetailContentHtml !== '') { detailContent.innerHTML = ''; _lastTicketsClickUpDetailContentHtml = ''; }
+            if (_lastTicketsClickUpStatusSelectHtml !== '') {
+                const statusSelect = document.getElementById('select-status-ticket');
+                if (statusSelect) statusSelect.innerHTML = '';
+                _lastTicketsClickUpStatusSelectHtml = '';
+            }
             if (previewMetaBar) previewMetaBar.style.display = 'none';
             if (deleteConfirmBanner) deleteConfirmBanner.style.display = 'none';
             if (commentInputArea) commentInputArea.style.display = 'none';
@@ -7377,9 +7450,13 @@ Instructions:
                 const statuses = availableClickUpStatuses.length > 0
                     ? availableClickUpStatuses.map(s => s.status)
                     : Array.from(new Set(clickUpProjectIssues.map(t => t.status || 'Unknown'))).sort();
-                statusSelect.innerHTML = statuses
+                const newStatusHtml = statuses
                     .map(status => `<option value="${escapeAttr(status)}">${escapeHtml(status)}</option>`)
                     .join('');
+                if (_lastTicketsClickUpStatusSelectHtml !== newStatusHtml) {
+                    statusSelect.innerHTML = newStatusHtml;
+                    _lastTicketsClickUpStatusSelectHtml = newStatusHtml;
+                }
                 if (task.status) {
                     statusSelect.value = task.status;
                 }
@@ -7398,10 +7475,16 @@ Instructions:
                     </div>`;
                 });
                 navHtml += '</div>';
-                subtasksNav.innerHTML = navHtml;
+                if (_lastTicketsClickUpSubtasksNavHtml !== navHtml) {
+                    subtasksNav.innerHTML = navHtml;
+                    _lastTicketsClickUpSubtasksNavHtml = navHtml;
+                }
                 subtasksNav.style.display = '';
             } else {
-                subtasksNav.innerHTML = '';
+                if (_lastTicketsClickUpSubtasksNavHtml !== '') {
+                    subtasksNav.innerHTML = '';
+                    _lastTicketsClickUpSubtasksNavHtml = '';
+                }
                 subtasksNav.style.display = 'none';
             }
         }
@@ -7708,6 +7791,12 @@ Instructions:
         _lastTicketsClickUpIssuesContainerHtml = '';
         _lastTicketsClickUpDetailContentHtml = '';
         _lastTicketsClickUpStateFilterHtml = '';
+        _lastTicketsClickUpStatusSelectHtml = '';
+        _lastTicketsClickUpSubtasksNavHtml = '';
+        _lastTicketsLinearStatusSelectHtml = '';
+        _lastTicketsLinearSubtasksNavHtml = '';
+        _lastTicketsTagsKey = '';
+        _lastTicketsTagsProvider = '';
 
         const elements = getTicketsTabElements();
         if (elements.issuesContainer) elements.issuesContainer.innerHTML = '';

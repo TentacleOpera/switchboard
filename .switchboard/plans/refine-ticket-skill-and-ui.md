@@ -273,3 +273,64 @@ Skipped per session directive — the test suite will be run separately by the u
 **Complexity: 4** — One new skill file (markdown), one new backend handler (clipboard copy + file read, following existing `copyDiagramPrompt` pattern), two card button additions, one click delegation block. No new architectural patterns. File watcher already handles preview refresh.
 
 **Send to Coder.**
+
+---
+
+## Reviewer Pass (2026-06-20)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *Adjusts reading glasses. Stares at the diff. Stares harder.*
+
+**[CRITICAL] Missing closing brace — `PlanningPanelProvider.ts:4243-4244`**
+
+Are you KIDDING me? The `copyDiagramPrompt` case opens a block scope `{` at line 4231 and you just... forgot to close it before jamming in `copyRefinePrompt`. The original code had a perfectly good `}` sitting between `break;` and `case 'changeTicketStatus'`. You inserted your new case between `break;` and that `}`, so the `}` that used to close `copyDiagramPrompt` now closes `copyRefinePrompt`. Now `copyDiagramPrompt`'s block is wide open, swallowing every subsequent case in the switch into its scope. This is the kind of brace mismatch that makes TypeScript throw its hands up and refuse to compile. You literally had ONE JOB — copy the `copyDiagramPrompt` pattern — and you dropped the closing brace. Unbelievable.
+
+**[MAJOR] Skill file is git-excluded — `.agent/skills/refine_ticket.md`**
+
+The file exists on disk. Great. Beautiful. It even has nice content. But `.git/info/exclude` has `.agent/*` on line 10, which means this file is **invisible to git**. Every other skill file (`archive.md`, `complexity_scoring.md`) is tracked because they were committed BEFORE the exclude rule existed. Your shiny new file? Not tracked. Not committed. Not shipped. Users install the extension and get the fallback template forever because the skill file is nowhere to be found in the VSIX. The `.vscodeignore` explicitly says `!.agent/**` (keep it!), but that's meaningless if git won't track the file in the first place. You need `git add -f .agent/skills/refine_ticket.md` to force it past the exclude rule.
+
+**[NIT] Description format inconsistency — inherited, not introduced**
+
+Linear gives you raw HTML for `description`, ClickUp gives you `markdownDescription`. The plan acknowledges this. It's a pre-existing mess from `handleTicketsAskAgent`. Not your fault, but the external agent is going to see HTML tags in the prompt for Linear tickets. The plan correctly identifies this as inherited. I'll let it slide. *This time.*
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Severity | Verdict | Action |
+|---------|----------|---------|--------|
+| Missing `}` for `copyDiagramPrompt` block | CRITICAL | **Fix now** | Added closing `}` at line 4244 before `case 'copyRefinePrompt'` |
+| Skill file git-excluded | MAJOR | **Fix now (manual)** | Requires `git add -f .agent/skills/refine_ticket.md` — cannot be fixed by reviewer per git policy; user must force-add |
+| Description format inconsistency | NIT | **Defer** | Pre-existing, inherited from `handleTicketsAskAgent` pattern; not introduced by this plan |
+
+### Fixes Applied
+
+1. **`src/services/PlanningPanelProvider.ts:4244`** — Added missing `}` to close the `copyDiagramPrompt` case block before `case 'copyRefinePrompt'`. The brace structure is now:
+   - `copyDiagramPrompt: { ... }` (lines 4231-4244) — properly closed
+   - `copyRefinePrompt: { ... }` (lines 4245-4298) — properly closed
+   - `changeTicketStatus: { ... }` (line 4299+) — at correct switch-body level
+
+### Verification Results
+
+- **Compilation:** Skipped per session directive (SKIP COMPILATION). Brace structure verified manually by tracing `{`/`}` pairs in the switch statement — all blocks now properly balanced.
+- **Tests:** Skipped per session directive (SKIP TESTS).
+- **Artifact verification:** All four plan artifacts confirmed present:
+  - `.agent/skills/refine_ticket.md` — 44 lines, frontmatter + template sections + agent instructions + gold standard reference ✓
+  - `PlanningPanelProvider.ts:4245-4298` — `copyRefinePrompt` handler with skill file read, fallback template, local file path resolution, prompt construction, clipboard write ✓
+  - `planning.js:6853,7320` — "Refine" buttons in Linear and ClickUp card templates, inside `.card-actions`, after "Link to ticket" ✓
+  - `planning.js:6180-6205` — Click delegation block, after `linkTicketBtn` block, before generic card-click handler, with `return;` to prevent fall-through ✓
+  - `AGENTS.md:90` — Skill table row, annotated as backend-consumed ✓
+- **Dependency verification:** `path` (import line 2), `LocalFolderService` (import line 16), `_findLocalTicketFile` (line 6957), `flashCopyBtn` (planning.js:7578), `escapeAttr` (planning.js:410), `linearProjectIssues` (planning.js:155), `clickUpProjectIssues` (planning.js:169), `ticketsWorkspaceRoot` (planning.js:123) — all in scope and available ✓
+- **`require('fs')` pattern:** Consistent with codebase (used at lines 3885, 6917, 6931, 6958, 7004) — `fs` from `stateConfigBridge` is not Node's `fs`, so inline `require('fs')` is the correct pattern ✓
+
+### Files Changed (Reviewer)
+
+| File | Change |
+|------|--------|
+| `src/services/PlanningPanelProvider.ts` | Added missing `}` at line 4244 to close `copyDiagramPrompt` case block (CRITICAL fix) |
+| `.switchboard/plans/refine-ticket-skill-and-ui.md` | Appended reviewer pass findings, fixes, and verification results |
+
+### Remaining Risks
+
+1. **Skill file not git-tracked (MAJOR, user action required):** `.agent/skills/refine_ticket.md` is excluded by `.git/info/exclude` (`.agent/*` rule). User must run `git add -f .agent/skills/refine_ticket.md` before committing, or the file won't ship in the VSIX and users will always get the fallback template. The `.vscodeignore` already keeps `.agent/**` — the issue is purely git tracking.
+2. **Description format inconsistency (NIT, deferred):** Linear `description` may be raw HTML in the clipboard prompt. Pre-existing inherited issue from `handleTicketsAskAgent` pattern. External agents can handle mixed formats.
+3. **No compilation/test verification:** Per session directives, compilation and tests were skipped. The brace fix was verified by manual tracing. Full verification requires `npm run compile` and the test suite.

@@ -4241,6 +4241,7 @@ Please format the updated output document strictly as follows:
                     vscode.window.showErrorMessage(`Failed to copy diagram prompt: ${String(err)}`);
                 }
                 break;
+            }
             case 'copyRefinePrompt': {
                 try {
                     const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
