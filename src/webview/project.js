@@ -51,7 +51,8 @@
         kanbanListCollapsed: false,
         epicsListCollapsed: false,
         constitutionListCollapsed: false,
-        tuningListCollapsed: false
+        tuningListCollapsed: false,
+        switchboardTheme: 'afterburner'
     };
 
     // Initialize from persisted state
@@ -98,6 +99,19 @@
             constitutionListCollapsed: state.constitutionListCollapsed,
             tuningListCollapsed: state.tuningListCollapsed
         });
+    }
+
+    function handleThemeChanged(theme) {
+        if (theme) { state.switchboardTheme = theme; }
+        document.body.classList.remove('theme-claudify');
+        if (state.switchboardTheme === 'afterburner') {
+            document.body.classList.add('cyber-theme-enabled');
+        } else {
+            document.body.classList.remove('cyber-theme-enabled');
+        }
+        if (state.switchboardTheme === 'claudify') {
+            document.body.classList.add('theme-claudify');
+        }
     }
 
     let _kanbanPlansCache = [];
@@ -187,6 +201,10 @@
     window.addEventListener('message', async event => {
         const msg = event.data;
         switch (msg.type) {
+            case 'switchboardThemeNameSetting':
+            case 'switchboardThemeChanged':
+                handleThemeChanged(msg.theme);
+                break;
             case 'kanbanPlansReady':
                 if (btnCreateKanbanPlan) {
                     btnCreateKanbanPlan.disabled = false;

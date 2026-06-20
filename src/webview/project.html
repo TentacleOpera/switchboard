@@ -71,18 +71,13 @@
         }
         body.theme-claudify {
             --accent-primary: #D97757;
-            --kanban-bg: #1A1816;
-            --panel-bg: #24211E;
-            --panel-bg2: #2D2925;
-            --border-color: #38332E;
-            --border-bright: #5C544A;
-            --card-bg: #24211E;
-            --card-bg-hover: #2D2925;
+            --accent-teal-bright: #E2A188;   /* was #5ce8e6 cyan — warm terracotta-tint */
             --text-primary: #F0EBE6;
             --text-secondary: #A8A095;
-            --display-font: 'Poppins';
-            --display-letter-spacing: normal;
-            --display-font-stretch: 100%;
+            --border-color: #38332E;
+            --border-bright: #5C544A;
+            /* Backgrounds NOT set here — the grid block below provides a solid near-black surface. */
+            /* Display-font vars NOT overridden — keep base GeistPixel (pixel font). */
         }
         * {
             box-sizing: border-box;
@@ -739,83 +734,42 @@
 
         /* ── Claudify Theme: Warm Obsidian Overrides ── */
 
-        /* Claudify: suppress scanlines */
-        body.theme-claudify .cyber-scanlines { display: none !important; }
-        body.theme-claudify:not(.cyber-animation-disabled) .cyber-scanlines::before { display: none !important; }
-
-        /* Claudify: suppress neon text-shadow glow on headings */
-        body.theme-claudify .preview-panel-wrapper h1,
-        body.theme-claudify .preview-panel-wrapper h2,
-        body.theme-claudify .preview-panel-wrapper h3 { text-shadow: none; }
-
-        /* Claudify: suppress neon box-shadow glow on inline code */
-        body.theme-claudify #kanban-preview-content code,
-        body.theme-claudify #epics-preview-content code,
-        body.theme-claudify #constitution-preview-content code,
-        body.theme-claudify #tuning-preview-content code { box-shadow: none; }
-
-        /* Claudify: suppress neon box-shadow glow on code blocks */
-        body.theme-claudify #kanban-preview-content pre,
-        body.theme-claudify #epics-preview-content pre,
-        body.theme-claudify #constitution-preview-content pre,
-        body.theme-claudify #tuning-preview-content pre { box-shadow: none; }
-
-        /* Claudify: suppress neon box-shadow glow on blockquotes */
-        body.theme-claudify #kanban-preview-content blockquote,
-        body.theme-claudify #epics-preview-content blockquote,
-        body.theme-claudify #constitution-preview-content blockquote,
-        body.theme-claudify #tuning-preview-content blockquote { box-shadow: none; }
-
-        /* Claudify: suppress neon glow on selected/hovered items */
-        body.theme-claudify .kanban-plan-item.selected,
-        body.theme-claudify .kanban-plan-item:hover,
-        body.theme-claudify .epic-plan-item.selected,
-        body.theme-claudify .epic-plan-item:hover,
-        body.theme-claudify .constitution-file-item.selected,
-        body.theme-claudify .constitution-file-item:hover { box-shadow: none; }
-
-        /* Claudify: suppress neon glow on strip buttons */
-        body.theme-claudify .strip-btn:hover:not(:disabled) { box-shadow: none; }
-
-        /* Claudify: suppress neon glow on preview panel wrapper */
-        body.theme-claudify .preview-panel-wrapper { box-shadow: none; }
-
-        /* Claudify: suppress neon glow on tab buttons */
-        body.theme-claudify .shared-tab-btn.active { box-shadow: none; }
-
-        /* Claudify: warm background for cyber grid */
-        body.theme-claudify.cyber-theme-enabled {
-            background-color: #1A1816;
-            background-image:
-                linear-gradient(color-mix(in srgb, var(--accent-primary) 4%, transparent) 1px, transparent 1px),
-                linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 4%, transparent) 1px, transparent 1px);
-            background-size: 40px 40px, 40px 40px;
-        }
-
-        /* Claudify: warm glass tints */
-        body.theme-claudify .controls-strip,
-        body.theme-claudify .kanban-controls-strip {
-            background: rgba(36, 33, 30, 0.65);
-        }
-        body.theme-claudify #kanban-list-pane,
-        body.theme-claudify #epics-list-pane,
-        body.theme-claudify #constitution-list-pane,
-        body.theme-claudify #tuning-list-pane {
-            background: rgba(36, 33, 30, 0.70);
-        }
-
-        /* Claudify: warm preview pane backgrounds */
+        /* Claudify: solid near-black surface + subtle warm grid (no translucency, no blur) */
+        body.theme-claudify #kanban-content,
+        body.theme-claudify #epics-content,
+        body.theme-claudify #constitution-content,
+        body.theme-claudify #tuning-content,
         body.theme-claudify #kanban-preview-pane,
         body.theme-claudify #epics-preview-pane,
         body.theme-claudify #constitution-preview-pane,
         body.theme-claudify #tuning-preview-pane {
-            background-color: rgba(240, 235, 230, 0.015);
+            background-color: #14110F;
             background-image:
-                linear-gradient(color-mix(in srgb, var(--accent-primary) 8%, transparent) 1px, transparent 1px),
-                linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 8%, transparent) 1px, transparent 1px);
+                linear-gradient(color-mix(in srgb, var(--accent-primary) 5%, transparent) 1px, transparent 1px),
+                linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 5%, transparent) 1px, transparent 1px);
             background-size: 40px 40px, 40px 40px;
-            backdrop-filter: blur(6px);
-            -webkit-backdrop-filter: blur(6px);
+        }
+
+        /* Claudify: h1 — pixel font, terracotta */
+        body.theme-claudify #kanban-preview-content h1,
+        body.theme-claudify #epics-preview-content h1,
+        body.theme-claudify #constitution-preview-content h1,
+        body.theme-claudify #tuning-preview-content h1 {
+            font-family: 'GeistPixel', var(--font-family);
+            letter-spacing: -0.05em;
+            font-stretch: 90%;
+            color: #D97757;
+        }
+
+        /* Claudify: h2-h6 — Poppins, warm cream */
+        body.theme-claudify #kanban-preview-content h2, body.theme-claudify #kanban-preview-content h3, body.theme-claudify #kanban-preview-content h4, body.theme-claudify #kanban-preview-content h5, body.theme-claudify #kanban-preview-content h6,
+        body.theme-claudify #epics-preview-content h2, body.theme-claudify #epics-preview-content h3, body.theme-claudify #epics-preview-content h4, body.theme-claudify #epics-preview-content h5, body.theme-claudify #epics-preview-content h6,
+        body.theme-claudify #constitution-preview-content h2, body.theme-claudify #constitution-preview-content h3, body.theme-claudify #constitution-preview-content h4, body.theme-claudify #constitution-preview-content h5, body.theme-claudify #constitution-preview-content h6,
+        body.theme-claudify #tuning-preview-content h2, body.theme-claudify #tuning-preview-content h3, body.theme-claudify #tuning-preview-content h4, body.theme-claudify #tuning-preview-content h5, body.theme-claudify #tuning-preview-content h6 {
+            font-family: 'Poppins', var(--font-family);
+            letter-spacing: normal;
+            font-stretch: 100%;
+            color: #F0EBE6;
         }
 
         /* Unified Markdown Preview Styling (Kanban, Epics & Constitution) */
@@ -861,31 +815,6 @@
         body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6,
         body.cyber-theme-enabled #tuning-preview-content h2, body.cyber-theme-enabled #tuning-preview-content h3, body.cyber-theme-enabled #tuning-preview-content h4, body.cyber-theme-enabled #tuning-preview-content h5, body.cyber-theme-enabled #tuning-preview-content h6 {
             color: var(--accent-primary);
-        }
-
-        /* Claudify: heading color override — h2-h6 → warm cream
-           (placed after cyber heading color rule to win specificity tie) */
-        body.theme-claudify #kanban-preview-content h2,
-        body.theme-claudify #epics-preview-content h2,
-        body.theme-claudify #constitution-preview-content h2,
-        body.theme-claudify #tuning-preview-content h2,
-        body.theme-claudify #kanban-preview-content h3,
-        body.theme-claudify #epics-preview-content h3,
-        body.theme-claudify #constitution-preview-content h3,
-        body.theme-claudify #tuning-preview-content h3,
-        body.theme-claudify #kanban-preview-content h4,
-        body.theme-claudify #epics-preview-content h4,
-        body.theme-claudify #constitution-preview-content h4,
-        body.theme-claudify #tuning-preview-content h4,
-        body.theme-claudify #kanban-preview-content h5,
-        body.theme-claudify #epics-preview-content h5,
-        body.theme-claudify #constitution-preview-content h5,
-        body.theme-claudify #tuning-preview-content h5,
-        body.theme-claudify #kanban-preview-content h6,
-        body.theme-claudify #epics-preview-content h6,
-        body.theme-claudify #constitution-preview-content h6,
-        body.theme-claudify #tuning-preview-content h6 {
-            color: #F0EBE6;
         }
 
         #kanban-preview-content h1,
@@ -1170,7 +1099,7 @@
         }
     </style>
 </head>
-<body class="cyber-theme-enabled">
+<body>
     <div class="shared-tab-bar">
         <button class="shared-tab-btn active" data-tab="kanban">KANBAN PLANS</button>
         <button class="shared-tab-btn" data-tab="epics">EPICS</button>

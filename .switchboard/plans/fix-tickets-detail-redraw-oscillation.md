@@ -229,3 +229,57 @@ These make the detail pane resilient to churn and are worth doing even after Pha
 ---
 
 **Recommendation:** Complexity 4 → **Send to Coder.** The permanent changes are confined to `src/webview/planning.js` (one file), reusing the existing equality-guard pattern already proven in the codebase. The diagnostic phase (Phase 1) is temporary and straightforward. The `renderTicketTags` guard has one moderate edge case (display-state transition) but is well-scoped. A coder can execute this plan with the reordered phases (Phase 3 first, Phase 1 only if needed).
+
+---
+
+## Reviewer Pass — Completed 2026-06-20
+
+### Implementation Status
+
+**Phase 3 (Defensive render hardening):** IMPLEMENTED. All permanent changes are in `src/webview/planning.js`.
+- Early-exit equality guard in `ticketFileChanged` handler (`:3529-3546`): compares `renderedDescriptionHtml` before calling `renderTicketsTab()`. ✓
+- `statusSelect.innerHTML` guard in `renderTicketsClickUpTaskDetail` (`:7456-7459`): `_lastTicketsClickUpStatusSelectHtml` cache. ✓
+- `subtasksNav.innerHTML` guard in `renderTicketsClickUpTaskDetail` (`:7478-7481`): `_lastTicketsClickUpSubtasksNavHtml` cache. ✓
+- `renderTicketTags` guard (`:283-285`): `_lastTicketsTagsKey` + `_lastTicketsTagsProvider` cache. ✓
+- Linear parity: `statusSelect.innerHTML` guard (`:6963-6966`), `subtasksNav.innerHTML` guard (`:7004-7007`). ✓ (Linear's two status writes were consolidated into one guarded write — better than plan specified.)
+- All 6 new cache variables reset in `resetTicketsInMemoryState` (`:7794-7799`). ✓
+
+**Phase 1 (Diagnostic):** NOT IMPLEMENTED — acceptable per reordered plan (Phase 3 first, Phase 1 only if symptom persists).
+
+**Phase 2 (Root-cause fix):** NOT IMPLEMENTED — acceptable per plan (conditional on Phase 1 findings).
+
+**Phase 3 Step 6 (rAF coalesce):** NOT IMPLEMENTED — plan marks as "(optional, secondary)". Acceptable.
+
+### Reviewer Findings (Grumpy → Balanced)
+
+| # | Severity | File:Line | Finding | Disposition |
+|---|----------|-----------|---------|-------------|
+| 1 | NIT | `planning.js:291` | `renderTicketTags` set `container.style.display='flex'` unconditionally before empty-tags check, then set `'none'` — redundant style write | **Fixed** — moved `display='flex'` after empty check |
+| 2 | NIT | `planning.js:3528,3548` | `ticketFileChanged` called `renderMarkdown()` twice with identical input when changed ticket was current; cache overwrite broke object identity with `selectedClickUpIssue` | **Fixed** — skip cache update block when ticket is current (cache already handled above) |
+| 3 | NIT | `planning.js:6952-6960,6976-6981` | Linear fallback `stateMap` constructed twice (once for HTML, once for `.value`) | **Deferred** — fallback path, minor, consolidating hurts readability |
+| 4 | NIT | N/A | rAF coalesce (Phase 3 step 6) not implemented | **Deferred** — plan explicitly marks optional |
+
+### Fixes Applied by Reviewer
+
+1. **`renderTicketTags` (`planning.js:290-297`):** Moved `container.style.display = 'flex'` after the empty-tags early-return. Empty-tags path now sets `display='none'` directly without a redundant `'flex'` write first.
+2. **`ticketFileChanged` handler (`planning.js:3548-3570`):** Wrapped the "always update cache" block in `if (!isCurrentClickUp && !isCurrentLinear)` guard. When the changed ticket IS the current selected one, the cache was already updated at `:3534`/`:3540` (if `hasChanged`) or doesn't need updating (content identical). This eliminates the double `renderMarkdown` call and the object-identity divergence between `selectedClickUpIssue` and the cache entry.
+
+### Verification
+
+Per session directives: **compilation skipped** (`npm run compile` / webpack), **automated tests skipped**. Verification is manual-only (see ## Verification Plan above). The test suite will be run separately by the user.
+
+**Static verification performed:**
+- Confirmed all 6 new cache variables declared at module scope (`:213-218`) and reset in `resetTicketsInMemoryState` (`:7794-7799`). ✓
+- Confirmed body normalization is consistent between `localTicketFileRead` (`:3489`) and `ticketFileChanged` (`:3527`) — both strip H1 + trim. ✓
+- Confirmed `localDescription` guard in `clickupTaskDetailsLoaded` (`:4119-4127`) is preserved. ✓
+- Confirmed no leftover Phase 1 diagnostic instrumentation in `PlanningPanelProvider.ts` or `planning.js`. ✓
+- Confirmed `renderTicketTags` guard handles empty→non-empty, non-empty→empty, and provider-switch transitions correctly. ✓
+- Confirmed no confirm dialogs added (project rule respected). ✓
+- Confirmed `ImageHostingHelper.ts` unchanged (Phase 2 not needed). ✓
+
+### Remaining Risks
+
+1. **Root cause not confirmed:** Phase 1 diagnostics were not run. If the oscillation persists after Phase 3 hardening, Phase 1 should be executed to identify the actual writer of the `.md` file. The auto-sync watcher (`_updateTicketsAutoSyncWatcher`) and `hostInlineImages` writeback remain primary suspects.
+2. **`ticketSyncStatusesLoaded` still triggers `renderTicketsTab()`:** When auto-sync is on, the `pushTicketResult` → `_requestTicketSyncStatuses()` → `ticketSyncStatusesLoaded` → `renderTicketsTab()` cascade still fires. The Phase 3 guards prevent the unguarded DOM writes from causing reflow, but the function call overhead remains. If this path contributes to residual oscillation, consider guarding it as well.
+3. **rAF coalesce not implemented:** If rapid back-to-back file events cause multiple `renderTicketsTab()` calls within the same frame, the rAF coalesce (Phase 3 step 6) would batch them. Currently each event triggers a separate render pass (though the guards prevent unnecessary DOM writes).
+4. **Linear fallback double `stateMap`:** Minor performance waste in a rarely-hit fallback path. No functional impact.

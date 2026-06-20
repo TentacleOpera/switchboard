@@ -62,10 +62,3 @@
   -webkit-backdrop-filter: blur(10px);
 }
 
-body.theme-claudify .shared-tab-btn.active {
-  box-shadow: none;
-}
-
-body.theme-claudify .shared-tab-bar {
-  background: rgba(36, 33, 30, 0.65);
-}

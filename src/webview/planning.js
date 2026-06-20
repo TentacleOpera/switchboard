@@ -288,12 +288,13 @@
         _lastTicketsTagsProvider = provider;
 
         container.innerHTML = '';
-        container.style.display = 'flex';
-        
+
         if (!tags || tags.length === 0) {
             container.style.display = 'none';
             return;
         }
+
+        container.style.display = 'flex';
         
         tags.forEach(tag => {
             const pill = document.createElement('span');
@@ -2215,8 +2216,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         // Remove Switchboard visual theme classes
         document.body.classList.remove('theme-claudify');
         // Cyberpunk CRT effects (scanlines, grid, glow, sweep) are part of the Afterburner aesthetic.
-        // Toggle cyber-theme-enabled: on for afterburner or claudify, off for any other theme.
-        if (state.switchboardTheme === 'afterburner' || state.switchboardTheme === 'claudify') {
+        // Toggle cyber-theme-enabled: on for afterburner ONLY.
+        if (state.switchboardTheme === 'afterburner') {
             document.body.classList.add('cyber-theme-enabled');
         } else {
             document.body.classList.remove('cyber-theme-enabled');
@@ -3544,22 +3545,28 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         renderTicketsTab();
                     }
                 }
-                // Always update cache so next click shows fresh content
-                const changedRendered = renderMarkdown(changedBodyMarkdown);
-                if (changedProvider === 'clickup') {
-                    const existing = clickUpTaskDetailCache.get(changedId);
-                    clickUpTaskDetailCache.set(changedId, {
-                        ...(existing || { task: { id: changedId, title: msg.title, name: msg.title, status: '', assignees: [] }, subtasks: [], comments: [], attachments: [] }),
-                        renderedDescriptionHtml: changedRendered,
-                        descriptionMarkdown: changedBodyMarkdown
-                    });
-                } else {
-                    const existing = linearIssueDetailCache.get(changedId);
-                    linearIssueDetailCache.set(changedId, {
-                        ...(existing || { issue: { id: changedId, title: msg.title, state: { name: '' }, assignee: null }, subtasks: [], comments: [], attachments: [] }),
-                        renderedDescriptionHtml: changedRendered,
-                        descriptionMarkdown: changedBodyMarkdown
-                    });
+                // Always update cache so next click shows fresh content.
+                // Skip when the changed ticket is the current selected one — the cache
+                // was already updated above (if hasChanged) or doesn't need updating
+                // (content identical), and re-setting breaks object identity with
+                // selectedClickUpIssue / selectedLinearIssue.
+                if (!isCurrentClickUp && !isCurrentLinear) {
+                    const changedRendered = renderMarkdown(changedBodyMarkdown);
+                    if (changedProvider === 'clickup') {
+                        const existing = clickUpTaskDetailCache.get(changedId);
+                        clickUpTaskDetailCache.set(changedId, {
+                            ...(existing || { task: { id: changedId, title: msg.title, name: msg.title, status: '', assignees: [] }, subtasks: [], comments: [], attachments: [] }),
+                            renderedDescriptionHtml: changedRendered,
+                            descriptionMarkdown: changedBodyMarkdown
+                        });
+                    } else {
+                        const existing = linearIssueDetailCache.get(changedId);
+                        linearIssueDetailCache.set(changedId, {
+                            ...(existing || { issue: { id: changedId, title: msg.title, state: { name: '' }, assignee: null }, subtasks: [], comments: [], attachments: [] }),
+                            renderedDescriptionHtml: changedRendered,
+                            descriptionMarkdown: changedBodyMarkdown
+                        });
+                    }
                 }
                 break;
             }
