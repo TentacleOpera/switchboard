@@ -453,3 +453,49 @@ No automated tests required — this is a UI flow change involving webview state
 ## Recommendation
 
 **Send to Coder** — Complexity 4: changes span 4 files (TaskViewerProvider.ts, KanbanProvider.ts, PlanningPanelProvider.ts, project.js) but all are small, localized edits. The rename-on-save reuses an existing codebase pattern (`fs.rename` + `db.updatePlanFile`) and the title prompt is a standard `vscode.window.showInputBox` call. The risk is low — all affected methods have limited callers, the `autoEdit` flag is opt-in with a falsy default, and the rename is guarded by collision checks and try/catch.
+
+---
+
+## Reviewer Pass — 2026-06-21
+
+### Stage 1: Adversarial Findings (Grumpy Principal Engineer)
+
+**NIT-1 — Dead `validateInput` with misleading comment** (`src/services/TaskViewerProvider.ts:15436-15439`): The `validateInput` callback always returns `null` regardless of input — both the empty and non-empty branches return `null`. The comment says "Reject titles that would produce an empty slug" but it rejects nothing. Functionally harmless because `|| 'Untitled Plan'` catches empties, but the comment is actively misleading to future maintainers.
+
+**NIT-2 — Stale `dist/` build** (`dist/extension.js`, `dist/webview/project.js`): The compiled output does NOT contain any of these changes (`grep -c` returns 0 for `_pendingAutoEdit` and `renamedFilePath` in both files). `dist/` was built Jun 21 15:00; the implementation commit (02be1fa) is 17:18. The extension runs from `dist/`, so the fix is not deployed until `npm run compile` is run. Source is correct; deployment is absent. (Compilation skipped per review session constraints.)
+
+**NIT-3 — Double-underscore on non-standard filenames** (`src/services/PlanningPanelProvider.ts:3303-3304`): If a plan file lacks the `feature_plan_YYYYMMDD_HHMMSS_` prefix, the timestamp regex returns `''` and `newBasename` becomes `feature_plan__${newSlug}.md` (double underscore). Only affects manually-renamed files outside the standard naming convention. Edge case, non-fatal, cosmetic.
+
+**NIT-4 — `hasPlanningPanelProvider()` is a proxy, not a guarantee** (`src/services/TaskViewerProvider.ts:15459`): `hasPlanningPanelProvider()` returns `!!this._planningPanelProvider` — it checks that the provider *exists*, not that the activation *succeeded*. If the provider exists but the webview isn't ready and `postMessageToProjectWebview` silently drops the message, `activatedInProjectPanel` is `true`, the fallback doesn't fire, and the user sees nothing. Low probability in practice; the plan documents this as a known edge case (verification step 11).
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Severity | Verdict |
+|---------|----------|---------|
+| Dead `validateInput` + misleading comment | NIT | **Defer** — functionally harmless; `|| 'Untitled Plan'` handles the edge. Not worth a code change that deviates from the plan spec. |
+| Stale `dist/` build | NIT (deployment) | **Defer** — compilation skipped per session constraints. User must run `npm run compile` before testing. |
+| Double-underscore on non-standard filenames | NIT | **Defer** — only affects files outside the standard naming convention, which shouldn't exist in normal flow. |
+| `hasPlanningPanelProvider()` proxy gap | NIT | **Defer** — low probability; the plan explicitly documents this as a known edge case. |
+
+**No CRITICAL or MAJOR findings.** No code fixes applied — the implementation is a faithful, line-by-line match to the plan across all four files.
+
+### Files Changed (Implementation)
+
+- `src/services/TaskViewerProvider.ts` — `showInputBox` title prompt (line 15432-15441), simplified `_buildDraftPlanContent` (line 15414-15426), `autoEdit: true` + degraded fallback (line 15452-15466)
+- `src/services/KanbanProvider.ts` — `hasPlanningPanelProvider()` (line 168-170), `autoEdit` parameter on `activatePlanInProjectPanel` (line 172-187)
+- `src/services/PlanningPanelProvider.ts` — rename-on-save logic with slug fallback, try/catch rename, `renameWsRoot` relative path (line 3286-3343)
+- `src/webview/project.js` — `_pendingAutoEdit` variable + auto-enter edit mode (line 129, 246-249, 270), `renamedFilePath` handling in save result (line 513-514, 523-524), `fetchKanbanPlans` refresh (line 517, 527), clear `_pendingAutoEdit` on manual click (line 751)
+
+### Validation Results
+
+- **Typecheck/compilation:** Skipped per session constraints. `dist/` is stale — `npm run compile` required before manual verification.
+- **Tests:** Skipped per session constraints.
+- **Code trace verification:** All four files traced against plan requirements. `allRoots` scope confirmed (declared line 3209, used line 3311). `getPlanByPlanFile(planFile, workspaceId)` signature confirmed (KanbanDatabase.ts:2511). `getWorkspaceId()` confirmed async (KanbanDatabase.ts:3195). `enterEditMode('kanban')` target elements confirmed present in project.html (line 1191-1193) and dynamically rendered meta bar (project.js:878-880). `tryResolvePendingKanbanSelection` calls `loadKanbanPlanPreview` directly (not via click handler), so `_pendingAutoEdit` survives — flow confirmed correct.
+- **Create button routing confirmed:** Both `project.js:984` (project panel) and `kanban.html:4481` (kanban board) send `createPlan` → `switchboard.initiatePlan` (extension.ts:676) → `createDraftPlanTicket()` (TaskViewerProvider.ts:15431).
+
+### Remaining Risks
+
+1. **`dist/` is stale** — The running extension does NOT have these changes. `npm run compile` must be run before manual verification steps 1-11 can be executed.
+2. **Dead `validateInput`** — Misleading comment at TaskViewerProvider.ts:15436-15439. No functional impact. Could be cleaned up in a future pass by removing the `validateInput` callback entirely or fixing the comment.
+3. **Fallback gate narrowness** — `hasPlanningPanelProvider()` checks provider existence, not activation success. If the webview isn't ready, the user may see nothing (no fallback fires). Low probability; documented as known edge case.
+4. **Double-underscore on non-standard filenames** — Cosmetic only; standard `feature_plan_<timestamp>_<slug>.md` names are unaffected.
