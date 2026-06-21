@@ -173,3 +173,74 @@ Note: Per session directives, automated tests are NOT run as part of this plan's
 ## Recommendation
 
 **Send to Coder** — Complexity 2: a single one-line sandbox attribute fix (the core fix) plus an optional trivial unit test. The change is low-risk — it makes the primary preview path consistent with the existing srcdoc fallback. The original Change 2 diagnostic was dropped during adversarial review (self-admitted dead code + timer leak), leaving a clean, minimal fix.
+
+---
+
+## Code Review Pass (Reviewer-Executor, 2026-06-21)
+
+### Stage 1 — Grumpy Principal Engineer
+
+Listen to me very carefully. I was told this was "implemented." I went and looked. Let me walk you through what I actually found, because what was shipped is not what runs.
+
+**CRITICAL — `dist/webview/design.js` is stale and still contains the bug.** The plan's own Constraints section (line 48) says, in bold: *"Must rebuild after editing `src/webview/*` (`npm run compile`)."* CLAUDE.md repeats it: *"the extension runs from `dist/extension.js` and serves webviews from `dist/webview/`. Always rebuild after editing `src/webview/*`."* So what did I find?
+
+- `src/webview/design.js:1013` — correct: `iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');` (iframeSrc branch, fixed).
+- `src/webview/design.js:1025` — correct: same value (srcdoc branch, unchanged).
+- `dist/webview/design.js` (the file the **extension actually executes**) — minified, contains `setAttribute("sandbox","allow-scripts")` in the iframeSrc branch and `setAttribute("sandbox","allow-scripts allow-same-origin")` in the srcdoc branch. **That is the pre-fix state.** The bug is literally still live in the running extension.
+- Timestamps confirm it: `dist/webview/design.js` mtime `1782018023` (15:00), `src/webview/design.js` mtime `1782025678` (17:07). The dist was built ~2 hours before the src fix landed. Nobody ran `npm run compile` after the edit.
+- And don't kid yourself that the HTML default attribute saves you: `src/webview/design.html:3747` (and its dist twin) correctly ship `sandbox="allow-scripts allow-same-origin"` on the `<iframe>` element — but `handlePreviewReady` **overwrites** that attribute at runtime via `setAttribute`. So in the running extension, the iframeSrc branch clobbers the correct default with the broken `allow-scripts`-only value every single preview. The fix is invisible to users.
+
+This is the single most important finding. The source change is correct; the deployed artifact is not. The plan was marked "implementation complete" without rebuilding. Unacceptable.
+
+**NIT — Optional unit test was not added.** The plan (line 127-136) called the test "optional but recommended" and provided a ready-to-paste assertion. No test file referencing `handlePreviewReady` or `html-preview-frame` exists under `src/test/` or `out/test/`. Since the plan explicitly marked it optional, this is a NIT, not a blocker — but the trivial assertion would have caught the stale-dist regression above if it had been wired to run against src.
+
+**NIT — Commit hygiene: mislabeled auto-commit.** The commit titled "Fix: HTML Previews Built from Scripts Do Not Display" (`a00242c`) does **not** touch `design.js` for the sandbox fix at all — it touches `DesignPanelProvider.ts` folder-signature logic (which belongs to the "Live External-File Pickup" plan, `24bf016`). The actual sandbox edit landed in the *prior* commit `02be1fa` ("Memo — Bug Report Jot-It Modal"). The fix is in the tree, but the commit message named after this plan describes unrelated work. Cosmetic, but it'll confuse archaeology later.
+
+**What is correct (so I'm not just yelling):** The src change itself is exactly what the plan specified — one line, iframeSrc branch, `allow-scripts` → `allow-scripts allow-same-origin`, matching the existing srcdoc fallback. The dropped Change 2 diagnostic was correctly *not* implemented (no orphaned timer, no `iframe.onload =` clobber, no dead cross-origin `contentDocument` access). No `confirm()` dialogs introduced (CLAUDE.md compliant). The security reasoning holds — localhost server with path-traversal protection + user-configured folders, same trust model as the existing srcdoc fallback. The src fix is genuinely a clean, minimal, correct one-liner. It just isn't compiled.
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| `dist/webview/design.js` stale — running extension still has the bug | CRITICAL | **Fix now:** rebuild via `npm run compile`. **Blocked by session directive:** the parent prompt forbids compilation (`SKIP COMPILATION`). Therefore cannot be applied in this pass — must be handed back to the user/parent agent as a required follow-up. |
+| Optional unit test not added | NIT | Defer — plan marked it optional. Recommend adding the trivial assertion in a future pass; would guard against this exact stale-dist regression. |
+| Mislabeled auto-commit (`a00242c`) | NIT | Defer — cosmetic, no functional impact, git policy forbids history rewrite. |
+
+**Keep:** The `src/webview/design.js:1013` one-line fix — correct, minimal, matches the plan and the srcdoc fallback.
+**Fix now:** None applicable under the `SKIP COMPILATION` directive. The one valid CRITICAL fix (rebuild dist) is a build step, which the prompt explicitly forbids. Per git policy I also cannot commit.
+**Defer:** Unit test addition; commit-message hygiene.
+
+### Code Fixes Applied This Pass
+
+None. The only valid CRITICAL finding is a stale build artifact requiring `npm run compile`, which the session directives (`SKIP COMPILATION`, `GIT POLICY`) forbid me from executing. The source-level fix itself was already correct and required no further edits. No code-level edits were warranted.
+
+### Verification Results
+
+- **Source inspection (src/webview/design.js):** PASS. Line 1013 (iframeSrc branch) and line 1025 (srcdoc branch) both set `sandbox='allow-scripts allow-same-origin'`. Matches plan Change 1 exactly.
+- **Default attribute (src/webview/design.html:3747):** PASS. `<iframe ... sandbox="allow-scripts allow-same-origin">`.
+- **Dropped Change 2 verification:** PASS. No `_blankCheckTimer`, no `iframe.onload =` diagnostic, no `contentDocument` blank-check present in `handlePreviewReady` (lines 976-1034). The dead-code diagnostic was correctly omitted.
+- **CLAUDE.md confirm-dialog scan:** PASS. No `confirm(`/`window.confirm` introduced.
+- **Build artifact inspection (dist/webview/design.js):** **FAIL.** Minified dist still contains `setAttribute("sandbox","allow-scripts")` in the iframeSrc branch — the pre-fix value. dist mtime predates the src fix. The running extension does NOT contain the fix.
+- **Compilation:** SKIPPED per session directive (`SKIP COMPILATION`).
+- **Automated tests:** SKIPPED per session directive (`SKIP TESTS`).
+
+### Files Changed This Pass
+
+None (no code edits warranted; build/commit forbidden by session directives).
+
+### Remaining Risks
+
+1. **CRITICAL — Stale `dist/webview/design.js`.** The fix exists only in `src/`. The extension runs from `dist/`. **The user/parent agent MUST run `npm run compile` before this bug is actually fixed for end users.** Until then, the reported symptom (blank script-built HTML previews) will persist in the running extension despite the source being correct.
+2. **LOW — No regression test.** The optional unit test was not added. A future stale-dist regression would not be caught automatically.
+3. **INFO — Commit `a00242c` is mislabeled** (contains folder-signature changes, not the sandbox fix). No action required; noted for provenance.
+
+### Summary
+
+| Severity | Finding | Location |
+|---|---|---|
+| CRITICAL | Stale dist — running extension still has the bug; rebuild required | `dist/webview/design.js` (minified iframeSrc branch) vs `src/webview/design.js:1013` |
+| NIT | Optional unit test not added | (no test file under `src/test/` or `out/test/`) |
+| NIT | Mislabeled auto-commit | commit `a00242c` |
+
+**Fixes applied:** None (the one valid CRITICAL fix is a `npm run compile` build step, forbidden by `SKIP COMPILATION`; source fix was already correct and needed no edits).
+**Remaining risks:** User MUST run `npm run compile` to deploy the fix to `dist/`. Until then the bug is not actually fixed in the running extension.
