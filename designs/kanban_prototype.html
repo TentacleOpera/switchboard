@@ -1,0 +1,2616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kanban Mockup - Claudify</title>
+    <style>
+        @font-face {
+            font-family: 'Hanken Grotesk';
+            src: url('HankenGrotesk-Variable.woff2') format('woff2');
+            font-weight: 100 900;
+            font-display: swap;
+        }
+        :root {
+            --bg-color: #1a1a1a;
+            --panel-bg: #000000;
+            --panel-bg2: #0a0a0a;
+            --border-color: #333333;
+            --border-bright: #555555;
+            --text-primary: #e0e0e0;
+            --text-secondary: #888888;
+
+            --accent-primary: #00e5ff;
+            --accent-teal: var(--accent-primary);
+            --accent-teal-dim: color-mix(in srgb, var(--accent-teal) 40%, transparent);
+            --glow-teal: 0 0 10px color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            --accent-red: #da3633;
+            --accent-orange: #d29922;
+            --font-family: 'Hanken Grotesk', var(--vscode-font-family, 'Segoe UI', 'Roboto', sans-serif);
+            --font-mono: var(--vscode-editor-font-family, 'Consolas', 'Courier New', monospace);
+        }
+        body.theme-claudify {
+            --accent-primary: #D97757;
+            --accent-teal: #D97757;
+            --accent-teal-dim: color-mix(in srgb, #D97757 40%, transparent);
+            --accent-teal-bright: #E2A188;
+            --glow-teal: none;           /* kill all variable-routed neon glow */
+            --text-primary: #F0EBE6;
+            --text-secondary: #8C8C8C;
+            --border-color: #38332E;
+            --border-bright: #5C544A;
+        }
+
+        /* Claudify: remove neon glow from base (non-cyber) interactive states */
+        body.theme-claudify .btn-batch:hover,
+        body.theme-claudify .kanban-card.selected,
+        body.theme-claudify .kanban-mode-dropdown.is-off:focus,
+        body.theme-claudify .kanban-structure-item.drag-over,
+        body.theme-claudify .modal-textarea:focus,
+        body.theme-claudify .plan-node.blocking,
+        body.theme-claudify .routing-map-active-dot,
+        body.theme-claudify .toggle-switch input:checked + .toggle-slider::before,
+        body.theme-claudify .worktree-primary-btn:focus { box-shadow: none; }
+
+        /* Claudify: recolor hardcoded teal (#00ad9f) that no variable controls */
+        body.theme-claudify .worktree-primary-btn { background: color-mix(in srgb, #D97757 12%, transparent); }
+        body.theme-claudify .worktree-primary-btn:hover:not(:disabled) { background: color-mix(in srgb, #D97757 25%, transparent); }
+
+        /* Claudify: the toolbar icons are teal-tinted PNGs (base rules only set brightness).
+           Hue-shift them from cyan (~190deg) to terracotta. Tune the hue-rotate value to taste. */
+        body.theme-claudify .strip-icon-btn img,
+        body.theme-claudify .kanban-sub-bar .strip-icon-btn img,
+        body.theme-claudify .controls-strip .strip-icon-btn img,
+        body.theme-claudify .column-icon-btn img,
+        body.theme-claudify .column-header-btn img,
+        body.theme-claudify .mode-toggle img,
+        body.theme-claudify .complexity-routing-btn img,
+        body.theme-claudify .btn-add-plan img {
+            filter: hue-rotate(185deg) saturate(0.8) brightness(0.95);
+        }
+        body.theme-claudify .strip-icon-btn.is-active img,
+        body.theme-claudify .kanban-sub-bar .strip-icon-btn.is-active img,
+        body.theme-claudify .column-icon-btn:hover img,
+        body.theme-claudify .column-header-btn:hover img,
+        body.theme-claudify .mode-toggle:hover img,
+        body.theme-claudify .complexity-routing-btn:hover img,
+        body.theme-claudify .btn-add-plan:hover img {
+            filter: hue-rotate(185deg) saturate(0.8) brightness(1.15);
+        }
+        /* Off states stay greyed-out (no teal to recolor) */
+        body.theme-claudify .strip-icon-btn.is-off img,
+        body.theme-claudify .kanban-sub-bar .strip-icon-btn.is-off img,
+        body.theme-claudify .complexity-routing-btn.is-off img {
+            filter: grayscale(1) brightness(0.7);
+        }
+
+        /* Claudify: kanban cards = an exact copy of implementation.html's .secondary-btn
+           (the COMPLETE/COPY/CREATE buttons): solid --panel-bg2 fill, --border-color border,
+           --text-secondary text. NO terracotta — the accent is not in these buttons.
+           Keep the green 'completed' bar. */
+        body.theme-claudify .kanban-card {
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
+            border: 1px solid var(--border-color) !important;
+            color: var(--text-secondary) !important;
+            box-shadow: none !important;
+        }
+        body.theme-claudify .kanban-card.completed {
+            border-left: 3px solid var(--vscode-testing-iconPassed, #73c991) !important;
+        }
+        body.theme-claudify .kanban-card:hover {
+            background: color-mix(in srgb, var(--border-bright) 10%, transparent) !important;
+            border-color: var(--border-bright) !important;
+            color: var(--text-primary) !important;
+            box-shadow: none !important;
+        }
+        /* Selected: clear terracotta highlight so the selection is obvious (keep green completed bar). */
+        body.theme-claudify .kanban-card.selected {
+            background: color-mix(in srgb, var(--accent-primary) 12%, transparent) !important;
+            border-color: var(--accent-primary) !important;
+            color: var(--text-primary) !important;
+            box-shadow: inset 3px 0 0 var(--accent-primary) !important;
+        }
+        /* Card titles hardcode harsh white (.card-topic) or inherit the muted subtitle colour.
+           Give them a mid-tone — brighter than the subtitle (--text-secondary), softer than
+           the harsh cream (--text-primary). */
+        body.theme-claudify .card-topic,
+        body.theme-claudify .plan-title {
+            color: color-mix(in srgb, var(--text-primary) 60%, var(--text-secondary)) !important;
+        }
+        /* Complexity label + timestamp: grey (the only labels asked to be grey). Literal grey
+           because --text-secondary is warm again for everything else. */
+        body.theme-claudify .card-meta { color: #8a8a8a !important; }
+        /* Column titles: neutral grey chrome (the content stays warm). */
+        body.theme-claudify .column-name { color: #8a8a8a; }
+        /* Warm text lives only on the kanban card buttons + the agent name under the column
+           header (everything else is neutral grey). Resting state only, so hover colours stay. */
+        body.theme-claudify .card-btn:not(:hover) { color: #A8A095; }
+        body.theme-claudify .column-agent { color: #A8A095; }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: var(--font-family);
+            background: var(--bg-color);
+            color: var(--text-primary);
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .kanban-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 12px 20px;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--panel-bg);
+        }
+
+        .kanban-title {
+            flex: 1;
+            min-width: 0;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            color: var(--accent-teal);
+            text-shadow: var(--glow-teal);
+        }
+
+        .header-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .workspace-project-select {
+            background: #0a0a0a;
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: var(--font-mono);
+            font-size: 10px;
+            letter-spacing: 0.5px;
+            padding: 2px 8px;
+            min-width: 280px;
+            min-height: 24px;
+        }
+
+        .workspace-project-select:focus {
+            outline: none;
+            border-color: var(--accent-teal-dim);
+        }
+
+
+
+        .workspace-filter-badge {
+            font-family: var(--font-mono);
+            font-size: 9px;
+            letter-spacing: 0.6px;
+            color: var(--accent-teal);
+            border: 1px solid color-mix(in srgb, var(--accent-teal) 35%, transparent);
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            padding: 3px 6px;
+            border-radius: 2px;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+
+        .controls-strip {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 16px;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+        }
+
+        .kanban-sub-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 4px 16px;
+            background: var(--panel-bg);
+            border-bottom: 1px solid var(--border-color);
+            min-height: 28px;
+            box-sizing: border-box;
+        }
+        .kanban-sub-bar .strip-icon-btn {
+            padding: 2px;
+            height: 20px;
+            width: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: 1px solid transparent;
+            cursor: pointer;
+            border-radius: 2px;
+            flex-shrink: 0;
+        }
+        .kanban-sub-bar .strip-icon-btn img {
+            width: 14px;
+            height: 14px;
+        }
+        .kanban-sub-bar .strip-icon-btn:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+        }
+        .kanban-sub-bar .strip-icon-btn.is-active {
+            background: transparent;
+            box-shadow: none;
+        }
+        .kanban-sub-bar .strip-icon-btn.is-active:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            box-shadow: var(--glow-teal);
+        }
+        .kanban-sub-bar .strip-icon-btn.is-active img {
+            filter: brightness(1.2);
+        }
+        .kanban-sub-bar .strip-icon-btn.is-off {
+            opacity: 0.5;
+        }
+        .kanban-sub-bar .strip-icon-btn.is-off img {
+            filter: grayscale(0.5) brightness(0.7);
+        }
+        .kanban-sub-bar .strip-icon-btn.is-paused {
+            border-color: transparent;
+            background: color-mix(in srgb, var(--accent-orange) 10%, transparent);
+        }
+        .kanban-sub-bar .strip-icon-btn.is-paused svg {
+            color: var(--accent-orange);
+        }
+        .sub-bar-status {
+            font-size: 11px;
+            font-weight: 500;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: var(--accent-teal);
+        }
+        #status-message.sub-bar-status {
+            min-width: 0;
+            overflow: hidden;
+        }
+        #status-message.sub-bar-status.flashing {
+            animation: statusFlash 3s ease-in-out forwards;
+        }
+
+        .settings-strip {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 16px;
+            border-bottom: 1px solid var(--border-color);
+            background: color-mix(in srgb, var(--panel-bg2) 85%, transparent);
+            flex-wrap: wrap;
+        }
+
+        .cli-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-family: var(--font-mono);
+            font-size: 10px;
+            letter-spacing: 0.6px;
+            color: var(--accent-teal);
+            user-select: none;
+            cursor: pointer;
+            text-transform: uppercase;
+        }
+
+        .cli-toggle input[type="checkbox"] {
+            width: 12px;
+            height: 12px;
+            accent-color: var(--accent-teal);
+            cursor: pointer;
+        }
+
+        .cli-toggle.is-off .toggle-label {
+            color: var(--accent-orange);
+        }
+
+        .strip-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-size: 10px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            padding: 4px 10px;
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+        }
+        
+        .controls-strip .strip-btn {
+            height: 24px;
+            display: inline-flex;
+            align-items: center;
+        }
+
+        .strip-btn:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+            border-color: var(--accent-teal-dim);
+            color: var(--accent-teal);
+        }
+
+        .cyber-theme-enabled .strip-btn:hover:not(:disabled) {
+            box-shadow: var(--glow-teal);
+        }
+
+        .strip-btn.is-active {
+            color: var(--accent-teal);
+            border-color: var(--accent-teal-dim);
+            box-shadow: var(--glow-teal);
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+
+        .strip-btn.is-teal {
+            color: var(--accent-teal);
+            border-color: var(--accent-teal-dim);
+            background: color-mix(in srgb, var(--accent-teal) 6%, transparent);
+        }
+
+        .strip-btn.is-teal:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 14%, transparent);
+            box-shadow: var(--glow-teal);
+        }
+
+        .strip-btn:disabled,
+        .strip-btn.is-teal:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .btn-add-plan {
+            background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
+            border: 1px solid color-mix(in srgb, var(--accent-teal) 30%, transparent);
+            color: var(--accent-teal);
+            font-family: var(--font-mono);
+            font-size: 14px;
+            font-weight: bold;
+            width: 18px;
+            height: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+            flex-shrink: 0;
+        }
+
+        .btn-add-plan:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+        }
+
+        .btn-add-plan img {
+            filter: sepia(1) saturate(3) hue-rotate(140deg) brightness(0.9);
+            transition: filter 0.15s;
+        }
+
+        .btn-add-plan:hover img {
+            filter: sepia(1) saturate(3) hue-rotate(140deg) brightness(1.2);
+        }
+
+        .controls-strip .btn-add-plan {
+            width: 24px;
+            height: 24px;
+            font-size: 16px;
+        }
+
+        .strip-icon-btn {
+            width: 28px;
+            height: 28px;
+            padding: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid transparent;
+            background: var(--panel-bg2);
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.15s;
+            flex-shrink: 0;
+        }
+
+        .strip-icon-btn:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+            border-color: transparent;
+            box-shadow: var(--glow-teal);
+        }
+
+        .strip-icon-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .controls-strip .strip-icon-btn {
+            width: 24px;
+            height: 24px;
+            padding: 0;
+            border: 1px solid transparent;
+            background: var(--panel-bg2);
+            border-radius: 3px;
+        }
+        .controls-strip .strip-icon-btn img {
+            width: 22px;
+            height: 22px;
+        }
+        .controls-strip .kanban-mode-dropdown {
+            min-height: 24px;
+            padding: 2px 6px;
+        }
+
+        .strip-icon-btn img {
+            width: 18px;
+            height: 18px;
+            object-fit: contain;
+            pointer-events: none;
+        }
+
+        .strip-icon-btn.is-active {
+            border-color: transparent;
+            background: transparent;
+            box-shadow: none;
+            opacity: 1;
+        }
+        .strip-icon-btn.is-active:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            box-shadow: var(--glow-teal);
+        }
+
+        .strip-icon-btn.is-active img {
+            filter: brightness(1.2);
+        }
+
+        .strip-icon-btn.is-off {
+            border-color: transparent;
+            opacity: 0.5;
+        }
+
+        .strip-icon-btn.is-off img {
+            filter: grayscale(0.5) brightness(0.7);
+        }
+
+        .backlog-toggle-btn {
+            background: color-mix(in srgb, var(--panel-bg2) 80%, transparent);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-size: 9px;
+            letter-spacing: 0.5px;
+            padding: 2px 6px;
+            cursor: pointer;
+            border-radius: 3px;
+            transition: all 0.15s;
+            text-transform: uppercase;
+            line-height: 1;
+        }
+        .backlog-toggle-btn:hover {
+            border-color: var(--accent-teal-dim);
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            color: var(--accent-teal);
+        }
+        .backlog-toggle-btn.is-active {
+            color: var(--accent-orange);
+            border-color: color-mix(in srgb, var(--accent-orange) 45%, transparent);
+            background: color-mix(in srgb, var(--accent-orange) 10%, transparent);
+        }
+
+        .btn-batch {
+            background: color-mix(in srgb, var(--accent-teal) 12%, transparent);
+            border: 1px solid color-mix(in srgb, var(--accent-teal) 28%, transparent);
+            color: var(--accent-teal);
+            font-family: var(--font-mono);
+            font-size: 9px;
+            font-weight: bold;
+            letter-spacing: 0.6px;
+            line-height: 1;
+            min-height: 18px;
+            padding: 3px 6px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+        }
+
+        .btn-batch:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+            box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 60%, transparent);
+        }
+
+        .kanban-board {
+            display: flex;
+            gap: 12px;
+            padding: 16px;
+            padding-top: 12px;
+            flex: 1;
+            min-height: 0;
+            overflow-x: auto;
+        }
+
+        .kanban-column {
+            flex: 1;
+            min-width: 220px;
+            max-width: 320px;
+            display: flex;
+            flex-direction: column;
+            background: var(--panel-bg);
+            border: 1px solid var(--vscode-contrastBorder, var(--border-color));
+            border-radius: 4px;
+            /* overflow: visible allows tooltips to escape the column without clipping */
+            overflow: visible;
+            position: relative;
+            transition: z-index 0s;
+        }
+
+        .kanban-column:hover {
+            /* Elevate hovered column to ensure tooltips appear above neighboring columns */
+            z-index: 100;
+        }
+
+        .column-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+            min-height: 52px;
+            /* Add radii here since parent no longer clips overflow */
+            border-top-left-radius: 4px;
+            border-top-right-radius: 4px;
+            z-index: 20;
+        }
+
+        .column-name {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+        }
+
+        .column-agent {
+            font-family: var(--font-mono);
+            font-size: 9px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+            text-transform: uppercase;
+            opacity: 0.8;
+            letter-spacing: 0.5px;
+            height: 13px;
+        }
+
+        .column-subline-spacer {
+            height: 13px;
+            margin-top: 2px;
+        }
+
+        .column-count {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
+            border: 1px solid color-mix(in srgb, var(--accent-teal) 30%, transparent);
+            padding: 1px 6px;
+            border-radius: 8px;
+            min-width: 20px;
+            text-align: center;
+            box-shadow: var(--glow-teal);
+        }
+
+        .column-select {
+            background: #0a0a0a;
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: var(--font-mono);
+            font-size: 9px;
+            padding: 2px 4px;
+            outline: none;
+            margin-right: 8px;
+            margin-left: auto;
+        }
+
+        .column-select:hover,
+        .column-select:focus {
+            border-color: var(--border-bright);
+            outline: none;
+        }
+
+        .column-button-area {
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 4px;
+            padding: 6px 12px;
+            background: color-mix(in srgb, var(--panel-bg2) 60%, var(--panel-bg));
+            border-bottom: 1px solid var(--border-color);
+            z-index: 10;
+        }
+
+        .column-icon-btn {
+            background: color-mix(in srgb, var(--panel-bg2) 80%, transparent);
+            border: 1px solid transparent;
+            color: var(--accent-teal);
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 3px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s;
+        }
+
+        .column-icon-btn img {
+            width: 22px;
+            height: 22px;
+            filter: brightness(1);
+            transition: all 0.15s;
+        }
+
+        .column-icon-btn:hover {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+
+        .column-icon-btn:hover img {
+            filter: brightness(1.2);
+        }
+
+        .column-header-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            border: 1px solid transparent;
+            border-radius: 3px;
+            background: transparent;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .column-header-btn:focus {
+            outline: none;
+        }
+        .column-header-btn:hover {
+            border-color: transparent;
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+        .column-header-btn img {
+            width: 20px;
+            height: 20px;
+            filter: brightness(0.9);
+            transition: all 0.15s;
+            pointer-events: none;
+        }
+        .column-header-btn:hover img {
+            filter: brightness(1.2);
+        }
+
+        #btn-add-plan {
+            color: var(--accent-teal);
+            font-family: var(--font-mono);
+            font-size: 18px;
+            font-weight: bold;
+        }
+
+
+
+        .column-body {
+            flex: 1;
+            padding: 8px;
+            overflow-y: auto;
+            min-height: 120px;
+            transition: background 0.15s;
+            /* Ensure body is below header/button area for tooltip stacking */
+            z-index: 1;
+        }
+
+        .column-body.drag-over {
+            background: color-mix(in srgb, var(--accent-teal) 6%, transparent);
+            outline: 1px dashed var(--accent-teal-dim);
+            outline-offset: -4px;
+        }
+
+        .kanban-card {
+            /* Mix 12% teal into the top, fading to 4% teal at the bottom */
+            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            border: 1px solid var(--vscode-contrastBorder, var(--border-color));
+            border-left: 3px solid var(--accent-teal-dim);
+            /* Persistent teal edge */
+            border-radius: 3px;
+            padding: 10px 12px;
+            margin-bottom: 8px;
+            cursor: grab;
+            transition: all 0.15s;
+            position: relative;
+        }
+
+        .kanban-card:active {
+            cursor: grabbing;
+        }
+
+        .kanban-card:hover {
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            border-left-color: var(--accent-teal);
+            /* Replace black shadow with a glowing teal bloom */
+            box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
+            /* Elevate hovered card so its tooltip is above other cards */
+            z-index: 50;
+        }
+
+        .kanban-card.dragging {
+            opacity: 0.4;
+            border-color: var(--accent-teal-dim);
+        }
+
+        .kanban-card.completed {
+            opacity: 0.7;
+            border-left: 3px solid var(--vscode-testing-iconPassed, #73c991);
+        }
+        .kanban-card.completed:hover {
+            opacity: 0.85;
+        }
+        .card-done-badge {
+            font-size: 10px;
+            color: var(--vscode-testing-iconPassed, #73c991);
+            padding: 2px 6px;
+            border: 1px solid var(--vscode-testing-iconPassed, #73c991);
+            border-radius: 3px;
+            white-space: nowrap;
+        }
+        .epic-card {
+            border-left: 4px solid #7c3aed;
+            background: rgba(124, 58, 237, 0.06);
+        }
+        .epic-badge {
+            display: inline-block;
+            font-size: 0.7em;
+            font-weight: 700;
+            text-transform: uppercase;
+            background: #7c3aed;
+            color: white;
+            padding: 1px 6px;
+            border-radius: 3px;
+            margin-right: 4px;
+        }
+
+        /* During drag, prevent child elements from interfering with drop targets */
+        .column-body.drag-over .kanban-card,
+        .column-body.drag-over .empty-state {
+            pointer-events: none;
+        }
+
+        .card-topic {
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .card-meta {
+            font-family: var(--font-mono);
+            font-size: 9px;
+            color: color-mix(in srgb, var(--text-secondary) 50%, var(--accent-teal-dim));
+            letter-spacing: 0.5px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .complexity-indicator {
+            font-weight: 600;
+            letter-spacing: 0.3px;
+        }
+        /* Complexity is a fixed severity scale — must be identical in every theme, so use
+           literals (not theme vars, which shift the scale when a theme overrides the accent). */
+        .complexity-indicator.very-high { color: #ff00ff; }
+        .complexity-indicator.high { color: #da3633; }
+        .complexity-indicator.medium { color: #d29922; }
+        .complexity-indicator.low { color: #98c379; }
+        .complexity-indicator.very-low { color: #00e5ff; }
+        .complexity-indicator.unknown { color: #7f848e; }
+
+        .card-actions {
+            display: flex;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        .card-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-size: 9px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            padding: 2px 6px;
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+        }
+
+        .card-btn:hover {
+            background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+            border-color: var(--border-bright);
+            color: var(--text-primary);
+        }
+
+        .card-btn.complete:hover {
+            border-color: var(--accent-teal-dim);
+            color: var(--accent-teal);
+        }
+
+        .card-btn.recover:hover {
+            border-color: var(--vscode-testing-iconPassed, #73c991);
+            color: var(--vscode-testing-iconPassed, #73c991);
+        }
+
+        .card-btn.icon-btn {
+            padding: 4px;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Card Copy Button Success Animation */
+        @keyframes copyFlash {
+            0% { background-color: var(--vscode-testing-iconPassed, #73c991); color: #ffffff; }
+            70% { background-color: var(--vscode-testing-iconPassed, #73c991); color: #ffffff; }
+            100% { background-color: transparent; color: var(--text-secondary); }
+        }
+        .card-btn.copy.copied {
+            animation: copyFlash 1.5s ease-out forwards;
+            pointer-events: none;
+        }
+
+        /* Column Icon Button Flash (was missing — flashIconBtn() was a no-op) */
+        @keyframes iconFlash {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.2); opacity: 0.7; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .flash {
+            animation: iconFlash 0.3s ease-out forwards;
+        }
+
+        /* Column Highlight Animation for Advance Operations */
+        @keyframes columnHighlight {
+            0% { background: color-mix(in srgb, var(--accent-teal) 20%, transparent); }
+            50% { background: color-mix(in srgb, var(--accent-teal) 30%, transparent); }
+            100% { background: transparent; }
+        }
+        .column-body.highlight {
+            animation: columnHighlight 0.8s ease-out forwards;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 20px 10px;
+            font-family: var(--font-mono);
+            font-size: 10px;
+            color: var(--text-secondary);
+            letter-spacing: 0.5px;
+        }
+
+        /* Scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--vscode-scrollbarSlider-background, var(--border-bright));
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--vscode-scrollbarSlider-hoverBackground, var(--text-secondary));
+        }
+
+        /* Card Drop Animation */
+        @keyframes dropPulse {
+            0% { transform: scale(1.05); box-shadow: 0 4px 20px var(--accent-teal); }
+            100% { transform: scale(1); box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent); }
+        }
+        .card-dropped {
+            animation: dropPulse 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+        }
+
+        /* Card Complete / Delete Animation */
+        @keyframes cardComplete {
+            0% { transform: scale(1); opacity: 1; }
+            40% { transform: scale(1.05); opacity: 0.9; }
+            100% { transform: scale(0.8) translateX(40px); opacity: 0; padding-top: 0; padding-bottom: 0; margin: 0; height: 0; border-width: 0; }
+        }
+        .card-completing {
+            animation: cardComplete 0.4s ease-out forwards;
+            pointer-events: none;
+            overflow: hidden;
+        }
+
+        /* Autoban Read-Only Status Bar */
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Shared Subsection Styles */
+        .subsection-header {
+          display:flex; align-items:center; gap:8px;
+          font-family:var(--font-mono); font-size:10px; font-weight:600;
+          color:var(--accent-teal); text-transform:uppercase;
+          letter-spacing:1px; margin-bottom:8px;
+        }
+        .db-subsection { border-top:1px solid var(--border-color); padding:10px 0; }
+        .subsection-actions { display:flex; gap:10px; margin-bottom:8px; }
+        .startup-row { display:flex; align-items:center; gap:6px; margin-bottom:6px; font-size:11px; }
+        .startup-row input[type="text"] {
+          background:#0a0a0a; color:var(--text-primary);
+          border:1px solid var(--border-color); border-radius:3px;
+          padding:3px 6px; font-size:10px; font-family:var(--font-mono);
+        }
+        .prompts-role-tab {
+          font-family:var(--font-mono); font-size:10px; padding:3px 8px;
+          border:1px solid var(--border-color); border-radius:3px;
+          background:transparent; color:var(--text-secondary); cursor:pointer; transition:all 0.15s;
+        }
+        .prompts-role-tab.active {
+          border-color:var(--accent-teal-dim); color:var(--accent-teal);
+          background:color-mix(in srgb,var(--accent-teal) 8%,transparent);
+        }
+        .prompts-role-tab.has-override::after { content:' ●'; color:var(--accent-teal); }
+
+        /* Custom Agents List Styles */
+        .agents-tab-custom-agent-item {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 8px 10px;
+          border: 1px solid var(--border-color);
+          background: var(--panel-bg2);
+          border-radius: 4px;
+          font-size: 11px;
+        }
+
+        .agents-tab-custom-agent-item-name {
+          flex: 1;
+          font-family: var(--font-mono);
+          color: var(--text-primary);
+        }
+
+        .agents-tab-custom-agent-item-command {
+          flex: 1;
+          font-family: var(--font-mono);
+          color: var(--text-secondary);
+          font-size: 10px;
+        }
+
+        .agents-tab-custom-agent-item-actions {
+          display: flex;
+          gap: 4px;
+        }
+
+        .agents-tab-custom-agent-item-btn {
+          background: transparent;
+          border: 1px solid var(--border-color);
+          color: var(--text-secondary);
+          font-family: var(--font-mono);
+          font-size: 9px;
+          padding: 2px 6px;
+          cursor: pointer;
+          border-radius: 2px;
+        }
+
+        .agents-tab-custom-agent-item-btn:hover {
+          background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+          border-color: var(--accent-teal-dim);
+          color: var(--accent-teal);
+        }
+
+        .agents-tab-custom-agent-item-btn.delete:hover {
+          border-color: var(--accent-red);
+          color: var(--accent-red);
+        }
+
+        .hidden { display: none !important; }
+
+        /* Inline Custom Agent Form */
+        .agents-tab-inline-form {
+          border: 1px solid var(--border-bright);
+          border-radius: 4px;
+          padding: 12px;
+          margin-bottom: 8px;
+          background: var(--panel-bg2);
+        }
+        .agents-tab-inline-form-title {
+          font-size: 12px;
+          font-weight: 600;
+          color: var(--text-primary);
+          margin-bottom: 10px;
+          padding-bottom: 6px;
+          border-bottom: 1px solid var(--border-color);
+        }
+        .agents-tab-inline-form .modal-input,
+        .agents-tab-inline-form .modal-textarea {
+          margin-bottom: 8px;
+        }
+        .agents-tab-inline-form .modal-label {
+          margin-bottom: 3px;
+        }
+
+        .agent-description {
+          font-size: 10px;
+          color: var(--text-secondary);
+          margin-left: 22px;
+          margin-bottom: 8px;
+          opacity: 0.85;
+          line-height: 1.3;
+        }
+        #agents-tab-content .startup-row {
+          margin-bottom: 2px !important; /* Clarification: Scoped explicitly to prevent regressions */
+        }
+
+        /* Drag-Drop Mode Toggle Styles */
+        .mode-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            border: 1px solid transparent;
+            border-radius: 3px;
+            background: transparent;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .mode-toggle:focus {
+            outline: none;
+        }
+
+        .mode-toggle:hover {
+            border-color: transparent;
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+
+        .mode-toggle img {
+            width: 20px;
+            height: 20px;
+            filter: brightness(0.9);
+            transition: all 0.15s;
+            pointer-events: none;
+        }
+
+        .mode-toggle:hover img {
+            filter: brightness(1.2);
+        }
+
+        /* Complexity Routing Button Styles */
+        .complexity-routing-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            border: 1px solid transparent;
+            border-radius: 3px;
+            background: transparent;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .complexity-routing-btn:focus {
+            outline: none;
+        }
+
+        .complexity-routing-btn:hover {
+            border-color: transparent;
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            box-shadow: var(--glow-teal);
+        }
+
+        .complexity-routing-btn.is-active {
+            border-color: transparent;
+            background: transparent;
+            box-shadow: none;
+            opacity: 1;
+        }
+        .complexity-routing-btn.is-active:hover {
+            background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
+            box-shadow: var(--glow-teal);
+        }
+        .complexity-routing-btn.is-off {
+            opacity: 0.5;
+        }
+        .complexity-routing-btn.is-off img {
+            filter: grayscale(0.5) brightness(0.7);
+        }
+
+        .complexity-routing-btn img {
+            width: 20px;
+            height: 20px;
+            filter: brightness(0.9);
+            transition: all 0.15s;
+            pointer-events: none;
+        }
+
+        .complexity-routing-btn:hover img {
+            filter: brightness(1.2);
+        }
+
+        /* Worktree tab primary button */
+        .worktree-primary-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 8px 14px;
+            border: 1px solid var(--accent-teal, #00ad9f);
+            border-radius: 4px;
+            background: rgba(0, 173, 159, 0.12);
+            color: var(--text-primary, #e8e8e8);
+            font-size: 14px;
+            font-weight: 600;
+            line-height: 1.3;
+            cursor: pointer;
+            transition: all 0.15s;
+            width: 100%;
+        }
+        .worktree-primary-btn:focus {
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(0, 173, 159, 0.3);
+        }
+        .worktree-primary-btn:hover:not(:disabled) {
+            background: rgba(0, 173, 159, 0.25);
+            border-color: var(--accent-teal, #00ad9f);
+        }
+        .worktree-primary-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        .worktree-primary-btn.danger {
+            border-color: var(--accent-red, #e55);
+            background: rgba(229, 85, 85, 0.12);
+            color: var(--accent-red, #e55);
+        }
+        .worktree-primary-btn.danger:hover:not(:disabled) {
+            background: rgba(229, 85, 85, 0.25);
+        }
+
+        /* Selected card highlight */
+        .kanban-card.selected {
+            border-color: var(--accent-teal);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 35%, transparent),
+                        inset 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+
+        /* Recover buttons in Completed column */
+        .recover-selected-btn,
+        .recover-all-btn {
+            font-family: var(--font-mono);
+            font-size: 9px;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary, #888888);
+            padding: 3px 8px !important;
+        }
+        .recover-selected-btn:hover,
+        .recover-all-btn:hover {
+            color: var(--accent-teal);
+        }
+
+        /* Autoban status bar */
+        .autoban-status-bar {
+            display: flex;
+            align-items: center;
+            padding: 4px 8px;
+            background: var(--panel-bg2);
+            border-bottom: 1px solid var(--border-color);
+            font-family: var(--font-mono);
+            font-size: 9px;
+            min-height: 22px;
+        }
+
+        .autoban-indicator {
+            color: var(--text-secondary);
+            white-space: nowrap;
+            letter-spacing: 0.5px;
+        }
+
+        .autoban-indicator.is-active {
+            color: var(--accent-teal);
+        }
+
+        @keyframes autobanPulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .autoban-indicator.is-active::before {
+            content: '⚡ ';
+            animation: autobanPulse 2s ease-in-out infinite;
+        }
+
+        /* Modal overlay */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        }
+        .modal-overlay.hidden {
+            display: none;
+        }
+        .modal-content {
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            width: 480px;
+            max-width: 90vw;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+        }
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px 12px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .modal-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--accent-red);
+            margin: 0;
+        }
+        .modal-close-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 20px;
+            cursor: pointer;
+            padding: 0;
+            width: 28px;
+            height: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            line-height: 1;
+        }
+        .modal-close-btn:hover {
+            color: var(--text-primary);
+        }
+        .modal-body {
+            padding: 16px 20px;
+        }
+        .modal-body label {
+            display: block;
+            color: var(--text-secondary);
+            font-size: 12px;
+            margin-bottom: 8px;
+        }
+        .modal-plan-count {
+            color: var(--text-primary);
+            font-size: 13px;
+            margin-bottom: 12px;
+        }
+        .modal-plan-list {
+            list-style: none;
+            padding: 0;
+            margin: 0 0 12px 0;
+            max-height: 120px;
+            overflow-y: auto;
+        }
+        .modal-plan-list li {
+            font-size: 12px;
+            color: var(--text-primary);
+            padding: 4px 8px;
+            border-left: 2px solid var(--accent-red);
+            margin-bottom: 4px;
+            background: color-mix(in srgb, var(--accent-red) 5%, transparent);
+            border-radius: 0 3px 3px 0;
+        }
+        .modal-textarea {
+            width: 100%;
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            color: var(--text-primary);
+            font-family: var(--font-family);
+            font-size: 13px;
+            padding: 10px;
+            resize: vertical;
+            min-height: 100px;
+        }
+        .modal-textarea:focus {
+            outline: none;
+            border-color: var(--accent-teal);
+            box-shadow: 0 0 4px var(--accent-teal-dim);
+        }
+        .modal-textarea::placeholder {
+            color: var(--text-secondary);
+        }
+        .modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            padding: 12px 20px 16px;
+            border-top: 1px solid var(--border-color);
+        }
+        .modal-btn {
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-size: 13px;
+            cursor: pointer;
+            border: 1px solid transparent;
+            font-family: var(--font-family);
+            transition: all 0.15s;
+        }
+        .modal-btn-primary {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border: 1px solid color-mix(in srgb, var(--accent-teal) 30%, transparent);
+            color: color-mix(in srgb, var(--accent-teal) 80%, var(--text-secondary));
+            font-family: var(--font-mono);
+            font-size: 11px;
+            letter-spacing: 1px;
+            padding: 8px 12px;
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            flex: 1;
+        }
+        .modal-btn-primary:hover {
+            background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
+            color: var(--accent-teal);
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+        }
+
+        /* Custom Agent Modal Styles */
+        .modal-card {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-bright);
+            box-shadow: 0 24px 48px rgba(0, 0, 0, 0.45);
+            width: min(100%, 640px);
+            max-height: calc(100vh - 40px);
+            overflow-y: auto;
+            padding: 16px;
+        }
+
+        .modal-label {
+            display: block;
+            margin-bottom: 4px;
+            color: var(--text-secondary);
+            font-size: 10px;
+            font-family: var(--font-mono);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            user-select: none;
+            margin-bottom: 4px;
+        }
+        .checkbox-label:hover {
+            color: var(--text-primary);
+        }
+
+        .modal-input,
+        .modal-textarea {
+            width: 100%;
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 8px 10px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            margin-bottom: 10px;
+        }
+
+        .modal-input:hover,
+        .modal-input:focus,
+        .modal-textarea:hover,
+        .modal-textarea:focus {
+            border-color: var(--border-bright);
+            outline: none;
+        }
+
+        .modal-textarea {
+            min-height: 120px;
+            resize: vertical;
+        }
+
+        /* Flex utility classes */
+        .flex {
+            display: flex;
+        }
+
+        .gap-2 {
+            gap: 8px;
+        }
+
+        /* Modal secondary button */
+        .modal-btn-secondary {
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-size: 10px;
+            letter-spacing: 1px;
+            padding: 8px 12px;
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            flex: 1;
+        }
+
+        .modal-btn-secondary:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--border-bright) 10%, transparent);
+            border-color: var(--border-bright);
+            color: var(--text-primary);
+        }
+
+        /* CSS Toggle Switch */
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 32px;
+            height: 16px;
+            flex-shrink: 0;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            inset: 0;
+            background: var(--border-color);
+            border-radius: 16px;
+            transition: background 0.2s;
+        }
+
+        .toggle-slider::before {
+            content: '';
+            position: absolute;
+            height: 12px;
+            width: 12px;
+            left: 2px;
+            bottom: 2px;
+            background: var(--text-secondary);
+            border-radius: 50%;
+            transition: all 0.2s;
+        }
+
+        .toggle-switch input:checked + .toggle-slider {
+            background: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+        }
+
+        .toggle-switch input:checked + .toggle-slider::before {
+            transform: translateX(16px);
+            background: var(--accent-teal);
+            box-shadow: 0 0 4px var(--accent-teal);
+        }
+
+        /* Inline autoban timers in controls strip */
+        .autoban-timers-inline {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        .autoban-timers-inline.is-empty {
+            display: none;
+        }
+
+        .autoban-timer-badge {
+            font-family: var(--font-mono);
+            font-size: 9px;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+            background: color-mix(in srgb, var(--accent-teal) 6%, transparent);
+            border: 1px solid color-mix(in srgb, var(--accent-teal) 15%, transparent);
+            padding: 2px 6px;
+            border-radius: 2px;
+            white-space: nowrap;
+        }
+
+        .autoban-timer-badge.is-active {
+            color: var(--accent-teal);
+            border-color: color-mix(in srgb, var(--accent-teal) 35%, transparent);
+        }
+
+        /* CLI toggle inline label */
+        .cli-toggle-inline {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-family: var(--font-mono);
+            font-size: 9px;
+            letter-spacing: 0.6px;
+            color: var(--accent-teal);
+            text-transform: uppercase;
+            user-select: none;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .cli-toggle-inline.is-off {
+            color: var(--accent-orange);
+        }
+
+        /* Kanban mode dropdown */
+        .kanban-mode-dropdown {
+            font-family: var(--font-mono);
+            font-size: 9px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            background: var(--panel-bg);
+            color: var(--accent-teal);
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            padding: 3px 6px;
+            cursor: pointer;
+            outline: none;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .kanban-mode-dropdown:hover,
+        .kanban-mode-dropdown:focus {
+            border-color: var(--accent-teal-dim);
+            box-shadow: var(--glow-teal);
+        }
+        .kanban-mode-dropdown.is-off {
+            color: var(--accent-orange);
+            border-color: color-mix(in srgb, var(--accent-orange) 45%, transparent);
+        }
+        .kanban-mode-dropdown.is-off:hover,
+        .kanban-mode-dropdown.is-off:focus {
+            border-color: var(--accent-orange);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-orange) 30%, transparent);
+        }
+        .kanban-mode-dropdown option {
+            background: var(--bg-color);
+            color: var(--text-primary);
+        }
+
+        /* Routing map modal styles */
+        .routing-map-content {
+            width: 900px;
+            max-width: 95vw;
+        }
+
+        .routing-map-columns {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            padding: 20px;
+            min-height: 400px;
+        }
+
+        .routing-column {
+            background: var(--vscode-panel-background, #1e1e1e);
+            border: 1px solid var(--vscode-panel-border, #444);
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .routing-column-header {
+            padding: 12px;
+            border-bottom: 1px solid var(--vscode-panel-border, #444);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .role-badge {
+            font-weight: 600;
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+
+        .role-badge.lead { background: #ff6b6b; color: white; }
+        .role-badge.coder { background: #4ecdc4; color: white; }
+        .role-badge.intern { background: #45b7d1; color: white; }
+
+        .routing-drop-zone {
+            flex: 1;
+            padding: 12px;
+            min-height: 300px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .routing-drop-zone.drag-over {
+            background: var(--vscode-list-dropBackground, rgba(255,255,255,0.05));
+            border: 2px dashed var(--vscode-focusBorder, #007fd4);
+            border-radius: 6px;
+        }
+
+        .complexity-card {
+            background: var(--vscode-button-background, #0e639c);
+            color: var(--vscode-button-foreground, #fff);
+            padding: 12px 16px;
+            border-radius: 6px;
+            cursor: grab;
+            text-align: center;
+            font-weight: 600;
+            font-size: 14px;
+            transition: transform 0.15s, box-shadow 0.15s;
+            user-select: none;
+            border: none;
+        }
+
+        .complexity-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+
+        .complexity-card.dragging {
+            opacity: 0.4;
+            cursor: grabbing;
+        }
+
+        .complexity-card.complexity-high { background: #c0392b; }
+        .complexity-card.complexity-medium { background: #16a085; }
+        .complexity-card.complexity-low { background: #2980b9; }
+
+        .routing-map-active-dot {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            background: var(--accent-teal);
+            border-radius: 50%;
+            margin-left: 4px;
+            box-shadow: 0 0 4px var(--accent-teal);
+        }
+
+        /* Body-level tooltip overlay */
+        #tooltip-overlay {
+            position: fixed;
+            z-index: 9999;
+            pointer-events: none;
+            background: var(--bg-tertiary, #1a1a2e);
+            color: var(--text-primary, #e0e0e0);
+            font-size: 10px;
+            font-family: var(--font-mono);
+            padding: 3px 8px;
+            border-radius: 3px;
+            white-space: pre-line;
+            text-align: left;
+            max-width: 320px;
+            border: 1px solid var(--border-color, #2a2a4a);
+            opacity: 0;
+            visibility: hidden;
+            transition: none;
+        }
+        #tooltip-overlay.visible {
+            opacity: 1;
+            visibility: visible;
+            animation: tooltipFadeIn 0.1s ease-out forwards;
+        }
+
+        @keyframes tooltipFadeIn {
+            to { opacity: 1; }
+        }
+
+        /* Kanban Structure Styles */
+        .kanban-structure-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .kanban-structure-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            border: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+            border-radius: 4px;
+        }
+
+        .kanban-structure-item.is-fixed {
+            opacity: 0.8;
+        }
+
+        .kanban-structure-item.drag-over {
+            border-color: var(--accent-teal);
+            box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-teal) 40%, transparent);
+        }
+
+        .kanban-structure-handle,
+        .kanban-structure-lock {
+            width: 18px;
+            flex-shrink: 0;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            text-align: center;
+            color: var(--text-secondary);
+        }
+
+        .kanban-structure-item-label {
+            flex: 1;
+            min-width: 0;
+            font-size: 11px;
+            color: var(--text-primary);
+        }
+
+        .kanban-structure-item-kind {
+            flex-shrink: 0;
+            font-family: var(--font-mono);
+            font-size: 9px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+        }
+
+        /* Setup Tab Styles - matching setup.html */
+        #setup-tab-content {
+            overflow-y: auto;
+            background: var(--bg-color);
+        }
+
+        .setup-section {
+            border: 1px solid var(--border-color);
+            background: var(--panel-bg);
+            margin-bottom: 12px;
+        }
+
+        .setup-field {
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .flex {
+            display: flex;
+        }
+
+        .flex.gap-2 {
+            gap: 8px;
+        }
+
+        .w-full {
+            width: 100%;
+        }
+
+        .hint-text {
+            font-size: 10px;
+            color: var(--text-secondary);
+            margin-top: 10px;
+            font-family: var(--font-mono);
+            letter-spacing: 0.5px;
+        }
+
+
+        /* UAT Styles */
+        #uat-tab-content {
+            overflow: hidden;
+        }
+
+        .uat-plan-section {
+            margin-bottom: 16px;
+        }
+
+        .uat-plan-title {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--accent-teal);
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .uat-step {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            padding: 4px 0;
+            font-size: 12px;
+        }
+
+        .uat-step input[type="checkbox"] {
+            accent-color: var(--accent-teal);
+            margin-top: 2px;
+            cursor: pointer;
+        }
+
+        .uat-step.checked .uat-step-text {
+            text-decoration: line-through;
+            color: var(--text-secondary);
+        }
+
+        .uat-step-text {
+            color: var(--text-primary);
+        }
+
+        .uat-no-steps {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            color: var(--text-secondary);
+            font-style: italic;
+            padding: 4px 0;
+        }
+
+        .dep-tree-container {
+            flex: 1;
+            overflow: auto;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 20px;
+            position: relative;
+        }
+
+        .dep-tree {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .plan-node {
+            display: flex;
+            flex-direction: column;
+            padding: 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--panel-bg2);
+            min-width: 200px;
+            max-width: 400px;
+            cursor: pointer;
+            transition: transform 0.2s, border-color 0.2s;
+        }
+
+        .plan-node:hover {
+            border-color: var(--accent-teal);
+            transform: translateY(-2px);
+        }
+
+        .plan-node.created {
+            border-left: 4px solid var(--accent-orange);
+        }
+
+        .plan-node.planned {
+            border-left: 4px solid #2ea043; /* Green */
+        }
+
+        .plan-node.blocking {
+            border: 1px solid var(--accent-red);
+            box-shadow: 0 0 5px rgba(218, 54, 51, 0.3);
+        }
+
+        .plan-id {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+
+        .plan-title {
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 6px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .plan-status-tag {
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 2px 6px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            width: fit-content;
+        }
+
+        .dep-connector {
+            margin-left: 30px;
+            padding-left: 20px;
+            border-left: 1px solid var(--border-bright);
+            position: relative;
+            margin-bottom: 10px;
+        }
+
+        .dep-connector::before {
+            content: '└─';
+            position: absolute;
+            left: 0;
+            top: 0;
+            color: var(--border-bright);
+            font-size: 10px;
+            font-family: var(--font-mono);
+        }
+
+        .dep-link {
+            cursor: pointer;
+            text-decoration: underline;
+            text-decoration-style: dotted;
+            transition: color 0.15s, text-decoration-style 0.15s;
+        }
+
+        .dep-link:hover {
+            text-decoration-style: solid;
+            color: var(--text-primary) !important;
+        }
+
+        .dep-legend {
+            display: flex;
+            gap: 15px;
+            margin-top: 20px;
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .legend-box {
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+        }
+
+        .legend-box.created { background: var(--accent-orange); }
+        .legend-box.planned { background: #2ea043; }
+        .legend-box.blocking { border: 1px solid var(--accent-red); background: rgba(218, 54, 51, 0.2); }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-secondary);
+            font-style: italic;
+        }
+
+        /* Role-based Prompts Tab UI */
+        .prompts-tab {
+            padding: 20px;
+            max-width: 800px;
+            overflow-y: auto;
+            height: 100%;
+        }
+
+        .role-selector-section {
+            margin-bottom: 24px;
+            padding: 12px;
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border-radius: 8px;
+            border: 1px solid var(--accent-teal-dim);
+        }
+
+        .role-selector-section label {
+            font-weight: 600;
+            font-size: 13px;
+            margin-right: 8px;
+            color: var(--text-primary);
+        }
+
+        .role-selector-section select {
+            padding: 6px 12px;
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 4px;
+            font-size: 13px;
+            min-width: 200px;
+            background: #0a0a0a;
+            color: var(--text-primary);
+        }
+
+        .role-config {
+            margin-bottom: 24px;
+        }
+
+        .config-section {
+            margin-bottom: 16px;
+            padding: 16px;
+            background: #0a0a0a;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+
+        .section-desc {
+            margin: 0 0 12px 0;
+            font-size: 12px;
+            color: var(--text-secondary);
+            line-height: 1.4;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .input-group label {
+            font-weight: 600;
+            font-size: 12px;
+            align-self: center;
+            white-space: nowrap;
+            color: var(--text-primary);
+        }
+
+        .input-group input[type="text"] {
+            flex: 1;
+            padding: 6px 8px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-size: 13px;
+            background: #111;
+            color: var(--text-primary);
+        }
+
+        .example-paths {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .example-paths strong {
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .example-paths code {
+            display: block;
+            background: #1a1a1a;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: var(--font-mono);
+            margin-top: 4px;
+            color: var(--accent-teal);
+        }
+
+
+        .checkbox-group {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 8px;
+        }
+
+        .radio-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .radio-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            color: var(--text-primary);
+        }
+
+        .radio-option input[type="radio"] {
+            cursor: pointer;
+            accent-color: var(--accent-teal);
+        }
+
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            cursor: pointer;
+            padding: 8px;
+            background: #0d0d0d;
+            border-radius: 4px;
+            border: 1px solid var(--border-color);
+        }
+
+        .checkbox-item:hover {
+            background: #1a1a1a;
+        }
+
+        .checkbox-item input[type="checkbox"] {
+            margin: 0;
+        }
+
+        .addon-radio-group {
+            margin-bottom: 8px;
+            padding: 4px 0;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .addon-radio-group .checkbox-item {
+            padding-left: 4px;
+        }
+
+        .tooltip {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-left: auto;
+        }
+
+        #promptPreview {
+            width: 100%;
+            min-height: 200px;
+            padding: 8px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            background: #0d0d0d;
+            color: var(--text-primary);
+            resize: vertical;
+        }
+
+        /* CSS for worktrees tab */
+        .btn-secondary {
+            background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+            border: 1px solid color-mix(in srgb, var(--text-secondary) 30%, transparent);
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-size: 11px;
+            letter-spacing: 1px;
+            padding: 8px 12px;
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .btn-secondary:hover {
+            background: color-mix(in srgb, var(--text-secondary) 20%, transparent);
+            color: var(--text-primary);
+        }
+        .btn-danger {
+            background: color-mix(in srgb, var(--accent-red) 10%, transparent);
+            border: 1px solid color-mix(in srgb, var(--accent-red) 30%, transparent);
+            color: var(--accent-red);
+            font-family: var(--font-mono);
+            font-size: 11px;
+            letter-spacing: 1px;
+            padding: 8px 12px;
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .btn-danger:hover {
+            background: color-mix(in srgb, var(--accent-red) 20%, transparent);
+            color: var(--text-primary);
+            border-color: var(--accent-red);
+        }
+
+        /* Add flash animation — 3 seconds total: 0.3s fade-in, ~2.4s hold, 0.3s fade-out */
+        @keyframes statusFlash {
+            0% { opacity: 0; }
+            10% { opacity: 1; }
+            90% { opacity: 1; }
+            100% { opacity: 0; }
+        }
+
+    </style>
+    <style>
+.shared-tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 16px 0;
+  background: var(--panel-bg);
+  border-bottom: 1px solid var(--border-color);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.shared-tab-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 8px 16px;
+  cursor: pointer;
+  border-radius: 3px 3px 0 0;
+  transition: all 0.15s;
+  position: relative;
+  top: 1px;
+}
+.shared-tab-btn:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent-teal) 5%, transparent);
+}
+.shared-tab-btn.active {
+  color: var(--accent-teal);
+  background: var(--panel-bg2);
+  border-color: var(--border-color);
+  border-bottom-color: var(--panel-bg2);
+}
+.shared-tab-content {
+  display: none;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+.shared-tab-content.active {
+  display: flex;
+  overflow-y: auto;
+}
+.cyber-theme-enabled .shared-tab-btn.active {
+  box-shadow: 0 -2px 8px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+}
+.cyber-theme-enabled .shared-tab-bar {
+  background: rgba(10, 10, 10, 0.65);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* Claudify: neutral-grey tab nav (active tab keeps the terracotta accent). kanban.html has its
+   own inline copy of these tab styles, so the override must live here too. */
+body.theme-claudify .shared-tab-btn:not(.active) { color: #8a8a8a; }
+body.theme-claudify .shared-tab-btn:hover {
+  color: #c8c8c8;
+  background: color-mix(in srgb, #ffffff 5%, transparent);
+}
+    </style>
+
+<body class="theme-claudify">
+
+<!-- ===== DEV-ONLY theme toggle (not part of the design) ===== -->
+<div id="dev-theme-toggle" style="position:fixed; top:6px; right:8px; z-index:9999; display:flex; gap:6px; font-family:monospace; font-size:10px;">
+    <button onclick="document.body.className='theme-claudify'" style="cursor:pointer; padding:3px 8px; background:#1a1a1a; color:#D97757; border:1px solid #38332E; border-radius:4px;">claudify</button>
+    <button onclick="document.body.className='cyber-theme-enabled'" style="cursor:pointer; padding:3px 8px; background:#1a1a1a; color:#00e5ff; border:1px solid #333; border-radius:4px;">afterburner</button>
+</div>
+
+<div class="shared-tab-bar">
+    <button class="shared-tab-btn active" data-tab="kanban">KANBAN</button>
+    <button class="shared-tab-btn" data-tab="agents">AGENTS</button>
+    <button class="shared-tab-btn" data-tab="prompts">PROMPTS</button>
+    <button class="shared-tab-btn" data-tab="automation">AUTOMATION</button>
+    <button class="shared-tab-btn" data-tab="worktrees">WORKTREES</button>
+    <button class="shared-tab-btn" data-tab="uat">UAT</button>
+    <button class="shared-tab-btn" data-tab="setup">SETUP</button>
+</div>
+
+<!-- Kanban Tab Content -->
+<div id="kanban-tab-content" class="shared-tab-content active">
+    <div class="controls-strip">
+        <select class="workspace-project-select" style="min-width:280px;">
+            <option>switchboard / via-app</option>
+        </select>
+        <button class="strip-btn is-teal">ASSIGN</button>
+        <button class="strip-btn is-teal">EPIC</button>
+        <button class="btn-add-plan">+</button>
+        <button class="strip-icon-btn"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5h6v2"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/></svg></button>
+        <button class="strip-icon-btn"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v3"/><circle cx="11" cy="15" r="3"/><path d="M16 20l-2.5-2.5"/></svg></button>
+        <button class="strip-icon-btn"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5l11 7-11 7z"/></svg></button>
+
+        <div style="flex: 1;"></div>
+
+        <button class="strip-icon-btn is-active"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 10l3 2-3 2M13 14h4"/></svg></button>
+        <button class="strip-icon-btn is-off"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/></svg></button>
+        <select class="kanban-mode-dropdown">
+            <option value="off">Pair Programming: Off</option>
+            <option value="cli-cli">CLI Lead + CLI Coder</option>
+        </select>
+    </div>
+
+    <div style="position: relative; display: flex; flex-direction: column; flex: 1; overflow: hidden;">
+        <div id="kanban-sub-bar" class="kanban-sub-bar">
+            <div class="autoban-timers-inline is-empty"></div>
+            <button class="strip-btn">CHAT PROMPT</button>
+        </div>
+        <div class="kanban-board" id="kanban-board">
+
+            <!-- ============ NEW ============ -->
+            <div class="kanban-column" data-column="CREATED">
+                <div class="column-header">
+                    <div style="display:flex; flex-direction:column;">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span class="column-name">New</span>
+                            <button class="backlog-toggle-btn">BACKLOG</button>
+                        </div>
+                        <div class="column-subline-spacer" aria-hidden="true"></div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 4px; line-height: 1;">
+                        <button class="column-header-btn">+</button>
+                        <button class="column-header-btn"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="3" width="12" height="14" rx="2"/><path d="M12 9v8M9 14l3 3 3-3"/></svg></button>
+                        <span class="column-count">2</span>
+                    </div>
+                </div>
+                <div class="column-button-area">
+                    <button class="column-icon-btn" data-tooltip="Move selected"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h12"/><path d="M13 6l6 6-6 6"/></svg></button>
+                    <button class="column-icon-btn" data-tooltip="Move all"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l6 6-6 6"/><path d="M12 6l6 6-6 6"/></svg></button>
+                    <button class="column-icon-btn" data-tooltip="Prompt selected"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="12" height="16" rx="2"/><path d="M9 4V3h6v1"/><path d="M9 11h6M9 15h4"/></svg></button>
+                    <button class="column-icon-btn" data-tooltip="Prompt all"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="5" width="11" height="14" rx="2"/><path d="M4 8v10a2 2 0 0 0 2 2h8"/></svg></button>
+                    <button class="column-icon-btn" data-tooltip="Code map"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4 4 6v14l5-2 6 2 5-2V4l-5 2-6-2z"/><path d="M9 4v14M15 6v14"/></svg></button>
+                </div>
+                <div class="column-body">
+                    <div class="kanban-card" draggable="true">
+                        <div class="card-topic">Add platform segmentation toggle to analytics dashboard</div>
+                        <div class="card-meta">Complexity: <span class="complexity-indicator medium">Medium</span> · 14m ago</div>
+                        <div class="card-actions" style="display:flex; justify-content:space-between; align-items:center;">
+                            <div style="display:flex; gap:4px;">
+                                <button class="card-btn copy">Copy advance prompt</button>
+                                <button class="card-btn send-to-backlog-btn">&rarr; Backlog</button>
+                            </div>
+                            <div style="display:flex; gap:4px;">
+                                <button class="card-btn icon-btn review"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z"/></svg></button>
+                                <button class="card-btn icon-btn complete"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-6"/></svg></button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="kanban-card epic-card" draggable="true">
+                        <div class="card-topic"><span class="epic-badge">EPIC &middot; 4 subtasks</span>V5 onboarding funnel rebuild <button class="card-btn icon-btn create-wt-chip" style="opacity:0.6; font-size:10px; background:none; border:none; color:inherit; padding:2px 4px; margin-left:5px;">&#9095;</button></div>
+                        <div class="card-meta">Complexity: <span class="complexity-indicator high">High</span> · 1h ago</div>
+                        <div class="card-actions" style="display:flex; justify-content:space-between; align-items:center;">
+                            <div style="display:flex; gap:4px;">
+                                <button class="card-btn copy">Copy advance prompt</button>
+                            </div>
+                            <div style="display:flex; gap:4px;">
+                                <button class="card-btn icon-btn review"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z"/></svg></button>
+                                <button class="card-btn icon-btn complete"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-6"/></svg></button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ============ PLANNED ============ -->
+            <div class="kanban-column" data-column="PLAN REVIEWED">
+                <div class="column-header">
+                    <div style="display:flex; flex-direction:column;">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span class="column-name">Planned</span>
+                        </div>
+                        <div class="column-agent">claude · planner</div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 4px;">
+                        <div class="complexity-routing-btn is-active" data-tooltip="Toggle complexity routing"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h4l4 12h4"/><path d="M4 18h4l2-6"/><path d="M16 4l4 2-4 2"/><path d="M16 14l4 2-4 2"/></svg></div>
+                        <div class="mode-toggle mode-cli" data-tooltip="CLI dispatch"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 10l3 2-3 2M13 14h4"/></svg></div>
+                        <span class="column-count">3</span>
+                    </div>
+                </div>
+                <div class="column-button-area">
+                    <button class="column-icon-btn" data-tooltip="Move selected"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h12"/><path d="M13 6l6 6-6 6"/></svg></button>
+                    <button class="column-icon-btn" data-tooltip="Move all"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l6 6-6 6"/><path d="M12 6l6 6-6 6"/></svg></button>
+                    <button class="column-icon-btn" data-tooltip="Prompt selected"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="12" height="16" rx="2"/><path d="M9 4V3h6v1"/><path d="M9 11h6M9 15h4"/></svg></button>
+                    <button class="column-icon-btn" data-tooltip="Prompt all"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="5" width="11" height="14" rx="2"/><path d="M4 8v10a2 2 0 0 0 2 2h8"/></svg></button>
+                    <button class="column-icon-btn" data-tooltip="Re-plan"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0 1 14-5l2 2"/><path d="M20 4v5h-5"/><path d="M20 12a8 8 0 0 1-14 5l-2-2"/><path d="M4 20v-5h5"/></svg></button>
+                    <button class="column-icon-btn" data-tooltip="Split"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4v6a4 4 0 0 0 4 4h8"/><path d="M6 20v-6"/><path d="M15 11l4 3-4 3"/></svg></button>
+                </div>
+                <div class="column-body">
+                    <div class="kanban-card selected" draggable="true">
+                        <div class="card-topic">Fix worktree sibling placement on dispatch</div>
+                        <div class="card-meta">Complexity: <span class="complexity-indicator very-low">Very Low</span> · 3m ago</div>
+                        <div class="card-actions" style="display:flex; justify-content:space-between; align-items:center;">
+                            <div style="display:flex; gap:4px;">
+                                <button class="card-btn copy">Copy advance prompt</button>
+                            </div>
+                            <div style="display:flex; gap:4px;">
+                                <button class="card-btn icon-btn review"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z"/></svg></button>
+                                <button class="card-btn icon-btn complete"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-6"/></svg></button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="kanban-card" draggable="true">
+                        <div class="card-topic">Refactor session-note access control for coach reassignment</div>
+                        <div class="card-meta">Complexity: <span class="complexity-indicator low">Low</span> · 22m ago</div>
+                        <div class="card-actions" style="display:flex; justify-content:space-between; align-items:center;">
+                            <div style="display:flex; gap:4px;">
+                                <button class="card-btn pair-program-btn">Pair</button>
+                                <button class="card-btn copy">Copy advance prompt</button>
+                            </div>
+                            <div style="display:flex; gap:4px;">
+                                <button class="card-btn icon-btn review"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z"/></svg></button>
+                                <button class="card-btn icon-btn complete"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-6"/></svg></button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="kanban-card" draggable="true">
+                        <div class="card-topic">Migrate PII Member.js guard to shared middleware</div>
+                        <div class="card-meta">Complexity: <span class="complexity-indicator very-high">Very High</span> · 2h ago</div>
+                        <div class="card-actions" style="display:flex; justify-content:space-between; align-items:center;">
+                            <div style="display:flex; gap:4px;">
+                                <button class="card-btn pair-program-btn">Pair</button>
+                                <button class="card-btn copy">Copy advance prompt</button>
+                            </div>
+                            <div style="display:flex; gap:4px;">
+                                <button class="card-btn icon-btn review"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z"/></svg></button>
+                                <button class="card-btn icon-btn complete"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-6"/></svg></button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ============ LEAD CODER ============ -->
+            <div class="kanban-column" data-column="LEAD CODED">
+                <div class="column-header">
+                    <div style="display:flex; flex-direction:column;">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span class="column-name">Lead Coder</span>
+                        </div>
+                        <div class="column-agent">claude-opus · lead</div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 4px;">
+                        <div class="mode-toggle mode-cli" data-tooltip="CLI dispatch"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 10l3 2-3 2M13 14h4"/></svg></div>
+                        <span class="column-count">1</span>
+                    </div>
+                </div>
+                <div class="column-button-area">
+                    <button class="column-icon-btn" data-tooltip="Move selected"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h12"/><path d="M13 6l6 6-6 6"/></svg></button>
+                    <button class="column-icon-btn" data-tooltip="Move all"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l6 6-6 6"/><path d="M12 6l6 6-6 6"/></svg></button>
+                    <button class="column-icon-btn" data-tooltip="Prompt selected"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="12" height="16" rx="2"/><path d="M9 4V3h6v1"/><path d="M9 11h6M9 15h4"/></svg></button>
+                    <button class="column-icon-btn" data-tooltip="Prompt all"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="5" width="11" height="14" rx="2"/><path d="M4 8v10a2 2 0 0 0 2 2h8"/></svg></button>
+                    <button class="column-icon-btn testing-fail-btn" data-tooltip="Testing failed"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20L12 3z"/><path d="M12 9v5M12 17h.01"/></svg></button>
+                </div>
+                <div class="column-body">
+                    <div class="kanban-card" draggable="true">
+                        <div class="card-topic">Implement claudify theme variable decoupling</div>
+                        <div class="card-meta">Complexity: <span class="complexity-indicator unknown">Unknown</span> · 41m ago</div>
+                        <div class="card-actions" style="display:flex; justify-content:space-between; align-items:center;">
+                            <div style="display:flex; gap:4px;">
+                                <button class="card-btn copy">Copy advance prompt</button>
+                            </div>
+                            <div style="display:flex; gap:4px;">
+                                <button class="card-btn icon-btn review"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z"/></svg></button>
+                                <button class="card-btn icon-btn complete"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-6"/></svg></button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ============ REVIEWED ============ -->
+            <div class="kanban-column" data-column="CODE REVIEWED">
+                <div class="column-header">
+                    <div style="display:flex; flex-direction:column;">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span class="column-name">Reviewed</span>
+                        </div>
+                        <div class="column-agent">claude · reviewer</div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 4px;">
+                        <div class="mode-toggle mode-prompt" data-tooltip="Copy prompt"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="12" height="16" rx="2"/><path d="M9 4V3h6v1"/><path d="M9 11h6M9 15h4"/></svg></div>
+                        <span class="column-count">2</span>
+                    </div>
+                </div>
+                <div class="column-button-area">
+                    <button class="column-icon-btn" data-tooltip="Complete selected"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h12"/><path d="M13 6l6 6-6 6"/></svg></button>
+                    <button class="column-icon-btn" data-tooltip="Complete all"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l6 6-6 6"/><path d="M12 6l6 6-6 6"/></svg></button>
+                    <button class="column-icon-btn testing-fail-btn" data-tooltip="Testing failed"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20L12 3z"/><path d="M12 9v5M12 17h.01"/></svg></button>
+                </div>
+                <div class="column-body">
+                    <div class="kanban-card" draggable="true">
+                        <div class="card-topic">Grey tab navigation while keeping warm content</div>
+                        <div class="card-meta">Complexity: <span class="complexity-indicator low">Low</span> · 5h ago</div>
+                        <div class="card-actions" style="display:flex; justify-content:space-between; align-items:center;">
+                            <div style="display:flex; gap:4px;">
+                                <button class="card-btn copy">Complete</button>
+                            </div>
+                            <div style="display:flex; gap:4px;">
+                                <button class="card-btn icon-btn review"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z"/></svg></button>
+                                <button class="card-btn icon-btn complete"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-6"/></svg></button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="kanban-card" draggable="true">
+                        <div class="card-topic">Recolor teal-tinted kanban PNG icons</div>
+                        <div class="card-meta">Complexity: <span class="complexity-indicator medium">Medium</span> · 6h ago</div>
+                        <div class="card-actions" style="display:flex; justify-content:space-between; align-items:center;">
+                            <div style="display:flex; gap:4px;">
+                                <button class="card-btn copy">Complete</button>
+                            </div>
+                            <div style="display:flex; gap:4px;">
+                                <button class="card-btn icon-btn review"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z"/></svg></button>
+                                <button class="card-btn icon-btn complete"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-6"/></svg></button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ============ COMPLETED ============ -->
+            <div class="kanban-column" data-column="COMPLETED">
+                <div class="column-header">
+                    <div style="display:flex; flex-direction:column;">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span class="column-name">Completed</span>
+                        </div>
+                        <div class="column-subline-spacer" aria-hidden="true"></div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 4px;">
+                        <span class="column-count">2</span>
+                    </div>
+                </div>
+                <div class="column-button-area">
+                    <button class="column-icon-btn recover-selected-btn" data-tooltip="Recover selected"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h11a5 5 0 0 1 0 10H9"/><path d="M8 6 4 10l4 4"/></svg></button>
+                    <button class="column-icon-btn archive-selected-btn" data-tooltip="Archive selected"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9"/><path d="M10 13h4"/></svg></button>
+                </div>
+                <div class="column-body">
+                    <div class="kanban-card completed" draggable="true">
+                        <div class="card-topic">Add click-feedback animation to shared button layer</div>
+                        <div class="card-meta">Complexity: <span class="complexity-indicator low">Low</span> · 1d ago</div>
+                        <div class="card-actions" style="display:flex; justify-content:space-between; align-items:center;">
+                            <div style="display:flex; gap:4px;"></div>
+                            <div style="display:flex; gap:4px;">
+                                <button class="card-btn icon-btn review"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z"/></svg></button>
+                                <span class="card-done-badge">&#10003; Done</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="kanban-card completed" draggable="true">
+                        <div class="card-topic">Fix theme flash of afterburner on initial load</div>
+                        <div class="card-meta">Complexity: <span class="complexity-indicator high">High</span> · 2d ago</div>
+                        <div class="card-actions" style="display:flex; justify-content:space-between; align-items:center;">
+                            <div style="display:flex; gap:4px;"></div>
+                            <div style="display:flex; gap:4px;">
+                                <button class="card-btn icon-btn review"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z"/></svg></button>
+                                <span class="card-done-badge">&#10003; Done</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+
+<script>
+    // Mockup-only: click a card to toggle selection (hover is pure CSS).
+    document.querySelectorAll('.kanban-card').forEach(card => {
+        card.addEventListener('click', (e) => {
+            if (e.target.closest('button')) return; // buttons are inert in the mockup
+            card.classList.toggle('selected');
+        });
+    });
+</script>
+</body>
+</html>

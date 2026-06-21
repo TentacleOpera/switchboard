@@ -161,6 +161,18 @@
       {
         "command": "switchboard.openHub",
         "title": "Switchboard: Open Status Bar Hub"
+      },
+      {
+        "command": "switchboard.openMemo",
+        "title": "Switchboard: Open Memo"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "switchboard.openMemo",
+        "key": "ctrl+shift+alt+m",
+        "mac": "cmd+shift+alt+m",
+        "when": "editorTextFocus || editorFocus || workbenchFocus"
       }
     ],
     "configuration": {
@@ -665,6 +677,24 @@
           ],
           "default": "afterburner",
           "description": "Visual theme for Switchboard webviews. Applies to Setup, Kanban, and Planning panels.",
+          "scope": "window"
+        },
+        "switchboard.design.externalFilePollMs": {
+          "type": "number",
+          "default": 4000,
+          "minimum": 0,
+          "description": "Poll interval (ms) for detecting externally-created files in Design panel folder tabs (HTML Previews, Images, Briefs) while the panel is visible. 0 disables polling (falls back to watcher + tab-reenter only).",
+          "scope": "window"
+        },
+        "switchboard.memo.hotkey": {
+          "type": "string",
+          "default": "cmd+shift+alt+m",
+          "description": "Hotkey to open the memo. Use VS Code keybinding format (e.g. 'ctrl+shift+alt+m'). Note: changing this requires a window reload to take effect."
+        },
+        "switchboard.statusBar.showMemoButton": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show a dedicated memo button in the status bar.",
           "scope": "window"
         }
       }

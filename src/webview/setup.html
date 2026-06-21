@@ -42,7 +42,7 @@
             --glow-green: none;
             --glow-red: none;
             --text-primary: #F0EBE6;
-            --text-secondary: #A8A095;
+            --text-secondary: #8C8C8C;  /* setup is a settings panel — keep its body text grey, headings warm */
             --border-color: #38332E;
             --border-bright: #5C544A;
         }
@@ -1219,6 +1219,26 @@
                     <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Show the project button on the status bar to open the Project Management Panel.</span>
                 </div>
             </label>
+
+            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
+                <input id="status-show-memo-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Show Memo Button</span>
+                    <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Show the memo button on the status bar for quick capture.</span>
+                </div>
+            </label>
+
+            <div style="font-size: 10px; color: var(--text-secondary); margin: 14px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                MEMO HOTKEY
+            </div>
+            <div class="hint-text" style="margin-bottom: 8px; font-size: 10px; color: var(--text-secondary); line-height: 1.4;">
+                Hotkey to open the memo modal. Default: Cmd+Shift+Alt+M (Mac) / Ctrl+Shift+Alt+M (Windows/Linux).
+                Note: VS Code requires keybindings to be set in keybindings.json. Use the button below to open it.
+            </div>
+            <div class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                <input type="text" id="memo-hotkey-input" placeholder="cmd+shift+alt+m" style="flex:1; min-width: 120px;" />
+                <button id="memo-open-keybindings" class="secondary-btn" style="white-space:nowrap;">Open Keybindings</button>
+            </div>
         </div>
     </div>
 
@@ -1690,6 +1710,16 @@
                     const savedTheme = currentSwitchboardTheme || 'afterburner';
                     const themeRadio = document.querySelector(`input[name="theme-selection"][value="${savedTheme}"]`);
                     if (themeRadio) themeRadio.checked = true;
+                },
+                'status-bar': () => {
+                    vscode.postMessage({ type: 'getStatusShowAgentOpenSetting' });
+                    vscode.postMessage({ type: 'getStatusShowTerminalsSetting' });
+                    vscode.postMessage({ type: 'getStatusShowKanbanSetting' });
+                    vscode.postMessage({ type: 'getStatusShowArtifactsSetting' });
+                    vscode.postMessage({ type: 'getStatusShowDesignSetting' });
+                    vscode.postMessage({ type: 'getStatusShowProjectSetting' });
+                    vscode.postMessage({ type: 'getStatusShowMemoSetting' });
+                    vscode.postMessage({ type: 'getMemoHotkey' });
                 }
             };
 
@@ -3683,6 +3713,18 @@
             vscode.postMessage({ type: 'setStatusShowProjectSetting', enabled: e.target.checked });
         });
 
+        document.getElementById('status-show-memo-toggle')?.addEventListener('change', (e) => {
+            vscode.postMessage({ type: 'setStatusShowMemoSetting', enabled: e.target.checked });
+        });
+
+        document.getElementById('memo-hotkey-input')?.addEventListener('change', (e) => {
+            vscode.postMessage({ type: 'saveMemoHotkey', value: e.target.value });
+        });
+
+        document.getElementById('memo-open-keybindings')?.addEventListener('click', () => {
+            vscode.postMessage({ type: 'openKeybindings' });
+        });
+
         document.getElementById('cyber-animation-toggle')?.addEventListener('change', (e) => {
             const isDisabled = !e.target.checked;
             vscode.postMessage({ type: 'setCyberAnimationDisabledSetting', enabled: isDisabled });
@@ -4313,6 +4355,30 @@
                         const toggle = document.getElementById('status-show-project-toggle');
                         if (toggle) toggle.checked = message.enabled === true;
                     });
+                    break;
+                }
+                case 'statusShowMemoSetting': {
+                    runSetupHydration(() => {
+                        const toggle = document.getElementById('status-show-memo-toggle');
+                        if (toggle) toggle.checked = message.enabled === true;
+                    });
+                    break;
+                }
+                case 'memoHotkey': {
+                    runSetupHydration(() => {
+                        const input = document.getElementById('memo-hotkey-input');
+                        if (input) input.value = message.value || '';
+                    });
+                    break;
+                }
+                case 'memoHotkeySaved': {
+                    const input = document.getElementById('memo-hotkey-input');
+                    if (input) {
+                        input.style.borderColor = 'var(--accent-teal)';
+                        setTimeout(() => {
+                            input.style.borderColor = '';
+                        }, 1000);
+                    }
                     break;
                 }
                 case 'cyberAnimationDisabledSetting': {

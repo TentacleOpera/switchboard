@@ -126,6 +126,7 @@
     let _epicSelectedPlan = null;
     let _epicDocumentsCache = [];
     let _pendingKanbanSelection = null;
+    let _pendingAutoEdit = false;
     let _activeEpicName = 'None';
     let _activeEpicFilePath = '';
 
@@ -242,6 +243,10 @@
                         state.editOriginalContent.kanban = msg.rawContent || '';
                         const dynamicEditBtn = document.getElementById('btn-edit-kanban');
                         if (dynamicEditBtn) dynamicEditBtn.disabled = false;
+                        if (_pendingAutoEdit) {
+                            _pendingAutoEdit = false;
+                            enterEditMode('kanban');
+                        }
                     }
                 }
                 if (epicsPreviewContent && _epicSelectedPlan && _epicSelectedPlan.planFile === msg.filePath) {
@@ -262,6 +267,7 @@
                     planFile: msg.planFile || '',
                     workspaceRoot: msg.workspaceRoot || ''
                 };
+                _pendingAutoEdit = msg.autoEdit === true;
                 // Point the filters at the target plan's workspace and clear the column/
                 // project filters so the plan is guaranteed to be in the rendered list.
                 kanbanFilters.workspaceRoot = msg.workspaceRoot || '';
@@ -504,13 +510,21 @@
                 if (msg.success) {
                     if (msg.tab === 'kanban') {
                         exitEditMode('kanban');
+                        if (msg.renamedFilePath && _kanbanSelectedPlan) {
+                            _kanbanSelectedPlan.planFile = msg.renamedFilePath;
+                        }
                         if (_kanbanSelectedPlan) loadKanbanPlanPreview(_kanbanSelectedPlan);
+                        vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
                     } else if (msg.tab === 'constitution') {
                         exitEditMode('constitution');
                         if (_constitutionSelectedWorkspace) selectConstitutionWorkspace(_constitutionSelectedWorkspace);
                     } else if (msg.tab === 'epics') {
                         exitEditMode('epics');
+                        if (msg.renamedFilePath && _epicSelectedPlan) {
+                            _epicSelectedPlan.planFile = msg.renamedFilePath;
+                        }
                         if (_epicSelectedPlan) selectEpic(_epicSelectedPlan);
+                        vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
                     }
                 } else {
                     alert('Save failed: ' + (msg.error || 'Unknown error'));
@@ -734,6 +748,7 @@
             `;
 
             itemDiv.addEventListener('click', () => {
+                _pendingAutoEdit = false;
                 if (state.dirtyFlags.kanban) exitEditMode('kanban');
                 document.querySelectorAll('.kanban-plan-item').forEach(el => el.classList.remove('selected'));
                 itemDiv.classList.add('selected');

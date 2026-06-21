@@ -3282,7 +3282,65 @@ Please format the updated output document strictly as follows:
 
                     this._lastPanelWriteTimestamp = Date.now();
                     await fs.promises.writeFile(resolved, content, 'utf8');
-                    saveDestPanel?.webview.postMessage({ type: 'saveFileContentResult', success: true, tab });
+
+                    // Rename plan file if the H1 has changed and produces a different slug
+                    let renamedTo: string | undefined;
+                    let renameWsRoot: string | undefined;  // track which workspace root was used for the rename
+                    if (tab === 'kanban' || tab === 'epics') {
+                        try {
+                            const h1Match = content.match(/^#\s+(.+)$/m);
+                            const h1Title = h1Match ? h1Match[1].trim() : '';
+                            if (h1Title) {
+                                // Generate the slug the file *should* have
+                                // TODO: extract to shared PlanSlug utility — duplicated from _toPlanSlug() in TaskViewerProvider.ts:15387
+                                const newSlug = h1Title
+                                    .toLowerCase()
+                                    .replace(/[^a-z0-9]+/g, '_')
+                                    .replace(/^_+|_+$/g, '') || 'new_plan';
+                                const currentBasename = path.basename(resolved);
+                                const currentSlug = currentBasename.replace(/^feature_plan_\d{8}_\d{6}_/, '').replace(/\.md$/, '');
+                                if (newSlug !== currentSlug) {
+                                    const timestamp = currentBasename.match(/^feature_plan_(\d{8}_\d{6})_/)?.[1] || '';
+                                    const newBasename = `feature_plan_${timestamp}_${newSlug}.md`;
+                                    const newPath = path.join(path.dirname(resolved), newBasename);
+                                    // Try rename directly — if target exists (collision), rename throws and is caught.
+                                    // This matches the established pattern in extension.ts:3068 (no existsSync pre-check).
+                                    await fs.promises.rename(resolved, newPath);
+                                    renamedTo = newPath;
+                                    // Update kanban DB if available
+                                    const wsRoot = this._getWorkspaceRoot() || (allRoots.length > 0 ? allRoots[0] : undefined);
+                                    renameWsRoot = wsRoot;
+                                    if (wsRoot) {
+                                        const db = KanbanDatabase.forWorkspace(wsRoot);
+                                        if (await db.ensureReady()) {
+                                            const oldRelative = path.relative(wsRoot, resolved).replace(/\\/g, '/');
+                                            const newRelative = path.relative(wsRoot, newPath).replace(/\\/g, '/');
+                                            const plan = await db.getPlanByPlanFile(oldRelative, await db.getWorkspaceId() || '');
+                                            if (plan) {
+                                                await db.updatePlanFile(plan.sessionId, newRelative);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (renameErr) {
+                            // Rename failure is non-fatal — the content was already saved to the original path.
+                            // Common causes: target file exists (collision), cross-device rename, file locked.
+                            renamedTo = undefined;  // ensure we don't report a rename that didn't happen
+                            console.error('[PlanningPanelProvider] Plan rename on save failed:', renameErr);
+                        }
+                    }
+
+                    saveDestPanel?.webview.postMessage({
+                        type: 'saveFileContentResult',
+                        success: true,
+                        tab,
+                        // Use renameWsRoot (the root used for the DB lookup), NOT this._getWorkspaceRoot().
+                        // In multi-root workspaces _getWorkspaceRoot() can be undefined → absolute path → DB mismatch.
+                        renamedFilePath: renamedTo && renameWsRoot
+                            ? path.relative(renameWsRoot, renamedTo).replace(/\\/g, '/')
+                            : undefined
+                    });
                 } catch (err) {
                     saveDestPanel?.webview.postMessage({ type: 'saveFileContentResult', success: false, error: String(err), tab });
                 }

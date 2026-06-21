@@ -44,6 +44,7 @@ let artifactsStatusBarItem: vscode.StatusBarItem;
 let projectStatusBarItem: vscode.StatusBarItem;
 let designStatusBarItem: vscode.StatusBarItem;
 let switchboardHubStatusBarItem: vscode.StatusBarItem;
+let memoStatusBarItem: vscode.StatusBarItem;
 
 // Global references
 let outputChannel: vscode.OutputChannel | null = null;
@@ -747,6 +748,12 @@ export async function activate(context: vscode.ExtensionContext) {
         await kanbanProvider!.open(tab);
     });
     context.subscriptions.push(openKanbanDisposable);
+
+    const openMemoDisposable = vscode.commands.registerCommand('switchboard.openMemo', async () => {
+        await kanbanProvider!.open();
+        kanbanProvider!.postMessage({ type: 'openMemoModal' });
+    });
+    context.subscriptions.push(openMemoDisposable);
 
     // Shared cache service factory — one instance per workspace root
     const _cacheServiceInstances = new Map<string, PlanningPanelCacheService>();
@@ -1842,6 +1849,13 @@ export async function activate(context: vscode.ExtensionContext) {
     switchboardHubStatusBarItem.command = 'switchboard.openHub';
     context.subscriptions.push(switchboardHubStatusBarItem);
 
+    memoStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 94);
+    memoStatusBarItem.command = 'switchboard.openMemo';
+    memoStatusBarItem.text = '$(comment-discussion)';
+    memoStatusBarItem.tooltip = 'Open Memo';
+    memoStatusBarItem.show();
+    context.subscriptions.push(memoStatusBarItem);
+
     function updateStatusBarVisibility() {
         const config = vscode.workspace.getConfiguration('switchboard');
         const showAgentOpenToggle = config.get<boolean>('statusBar.showAgentOpenToggle', false);
@@ -1850,6 +1864,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const showArtifactsButton = config.get<boolean>('statusBar.showArtifactsButton', false);
         const showDesignButton = config.get<boolean>('statusBar.showDesignButton', false);
         const showProjectButton = config.get<boolean>('statusBar.showProjectButton', false);
+        const showMemoButton = config.get<boolean>('statusBar.showMemoButton', false);
         const compactMode = config.get<boolean>('statusBar.compactMode', true);
 
         if (compactMode) {
@@ -1861,6 +1876,7 @@ export async function activate(context: vscode.ExtensionContext) {
             projectStatusBarItem.hide();
             artifactsStatusBarItem.hide();
             designStatusBarItem.hide();
+            memoStatusBarItem.hide();
 
             let enabledCount = 0;
             if (showAgentOpenToggle) {
@@ -1879,6 +1895,9 @@ export async function activate(context: vscode.ExtensionContext) {
                 enabledCount++;
             }
             if (showDesignButton) {
+                enabledCount++;
+            }
+            if (showMemoButton) {
                 enabledCount++;
             }
 
@@ -1929,6 +1948,12 @@ export async function activate(context: vscode.ExtensionContext) {
             } else {
                 designStatusBarItem.hide();
             }
+
+            if (showMemoButton) {
+                memoStatusBarItem.show();
+            } else {
+                memoStatusBarItem.hide();
+            }
         }
 
         updateHubTooltip();
@@ -1947,6 +1972,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const showArtifactsButton = config.get<boolean>('statusBar.showArtifactsButton', false);
         const showDesignButton = config.get<boolean>('statusBar.showDesignButton', false);
         const showProjectButton = config.get<boolean>('statusBar.showProjectButton', false);
+        const showMemoButton = config.get<boolean>('statusBar.showMemoButton', false);
 
         const lines: string[] = ['**Switchboard Actions**', ''];
 
@@ -1969,6 +1995,11 @@ export async function activate(context: vscode.ExtensionContext) {
             if (showArtifactsButton) lines.push(`[$(notebook) Artifacts](command:switchboard.openPlanningPanel)`);
             if (showProjectButton) lines.push(`[$(project) Project](command:switchboard.openProjectPanel)`);
             if (showDesignButton) lines.push(`[$(symbol-color) Design](command:switchboard.openDesignPanel)`);
+        }
+
+        if (showMemoButton) {
+            if (lines.length > 2) lines.push('---');
+            lines.push(`[$(comment-discussion) Memo](command:switchboard.openMemo)`);
         }
 
         if (lines.length <= 2) {
@@ -2001,6 +2032,7 @@ export async function activate(context: vscode.ExtensionContext) {
             e.affectsConfiguration('switchboard.statusBar.showArtifactsButton') ||
             e.affectsConfiguration('switchboard.statusBar.showDesignButton') ||
             e.affectsConfiguration('switchboard.statusBar.showProjectButton') ||
+            e.affectsConfiguration('switchboard.statusBar.showMemoButton') ||
             e.affectsConfiguration('switchboard.statusBar.compactMode')
         ) {
             updateStatusBarVisibility();
@@ -2029,6 +2061,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const showArtifactsButton = config.get<boolean>('statusBar.showArtifactsButton', false);
         const showDesignButton = config.get<boolean>('statusBar.showDesignButton', false);
         const showProjectButton = config.get<boolean>('statusBar.showProjectButton', false);
+        const showMemoButton = config.get<boolean>('statusBar.showMemoButton', false);
 
         interface CommandQuickPickItem extends vscode.QuickPickItem {
             command?: string;
@@ -2066,7 +2099,7 @@ export async function activate(context: vscode.ExtensionContext) {
             });
         }
 
-        const hasPanelItems = showKanbanButton || showArtifactsButton || showProjectButton || showDesignButton;
+        const hasPanelItems = showKanbanButton || showArtifactsButton || showProjectButton || showDesignButton || showMemoButton;
         if (hasPanelItems) {
             if (items.length > 0) {
                 items.push({ label: 'Panels', kind: vscode.QuickPickItemKind.Separator });
@@ -2097,6 +2130,13 @@ export async function activate(context: vscode.ExtensionContext) {
                     label: '$(symbol-color) Design',
                     description: 'Open Design Panel',
                     command: 'switchboard.openDesignPanel'
+                });
+            }
+            if (showMemoButton) {
+                items.push({
+                    label: '$(comment-discussion) Memo',
+                    description: 'Open Memo',
+                    command: 'switchboard.openMemo'
                 });
             }
         }

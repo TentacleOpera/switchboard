@@ -100,7 +100,7 @@
             --accent-neon: #D97757;
             --glow-teal: none;           /* kill all variable-routed neon glow */
             --text-primary: #F0EBE6;
-            --text-secondary: #A8A095;
+            --text-secondary: #8C8C8C;
             --border-color: #38332E;
             --border-bright: #5C544A;
             /* Backgrounds NOT set here — the grid block below provides a solid near-black surface. */
@@ -119,7 +119,7 @@
         body.theme-claudify .tree-node:not(.folder-subheader),
         body.theme-claudify .ticket-node,
         body.theme-claudify .kanban-plan-item {
-            background: var(--panel-bg2) !important;
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
             border: 1px solid var(--border-color) !important;
             color: var(--text-secondary) !important;
             box-shadow: none !important;
@@ -138,9 +138,8 @@
         body.theme-claudify .kanban-plan-item.selected {
             background: color-mix(in srgb, var(--accent-primary) 12%, transparent) !important;
             border-color: var(--accent-primary) !important;
-            border-left: 3px solid var(--accent-primary) !important;
             color: var(--text-primary) !important;
-            box-shadow: none !important;
+            box-shadow: inset 3px 0 0 var(--accent-primary) !important;
         }
         /* Card titles (tree, tickets, kanban) hardcode/inherit either harsh white or the muted
            subtitle colour. Give them a mid-tone so the title is brighter than the subtitle
@@ -150,6 +149,8 @@
         body.theme-claudify .kanban-plan-topic {
             color: color-mix(in srgb, var(--text-primary) 60%, var(--text-secondary)) !important;
         }
+        /* Warm exception: doc filenames in the docs panel cards (everything else neutral grey). */
+        body.theme-claudify .file-item .file-name { color: #A8A095; }
 
         * {
             box-sizing: border-box;
@@ -3134,6 +3135,13 @@
   background: rgba(10, 10, 10, 0.65);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
+}
+
+/* Claudify: neutral-grey tab nav (active tab keeps the terracotta accent). */
+body.theme-claudify .shared-tab-btn:not(.active) { color: #8a8a8a; }
+body.theme-claudify .shared-tab-btn:hover {
+  color: #c8c8c8;
+  background: color-mix(in srgb, #ffffff 5%, transparent);
 }
     </style>
 </head>

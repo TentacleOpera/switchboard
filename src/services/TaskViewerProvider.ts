@@ -377,7 +377,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         'task.md', 'walkthrough.md', 'readme.md',
         'grumpy_critique.md', 'balanced_review.md', 'post_mortem.md',
         'review_response.md', 'meeting_notes.md', 'scratchpad.md',
-        'analysis_results.md', 'research_notes.md', 'experiment_results.md'
+        'analysis_results.md', 'research_notes.md', 'experiment_results.md',
+        'memo.md'
     ]);
 
     constructor(
@@ -3511,6 +3512,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         await config.update('statusBar.showProjectButton', enabled, vscode.ConfigurationTarget.Workspace);
     }
 
+    public handleGetStatusShowMemoSetting(): boolean {
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('statusBar.showMemoButton', false);
+    }
+
+    public async handleSetStatusShowMemoSetting(enabled: boolean): Promise<void> {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        await config.update('statusBar.showMemoButton', enabled, vscode.ConfigurationTarget.Workspace);
+    }
+
     public handleGetCyberAnimationDisabledSetting(): boolean {
         return vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
     }
@@ -3911,6 +3921,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._setupPanelProvider.postMessage({
             type: 'statusShowProjectSetting',
             enabled: this.handleGetStatusShowProjectSetting()
+        });
+        this._setupPanelProvider.postMessage({
+            type: 'statusShowMemoSetting',
+            enabled: this.handleGetStatusShowMemoSetting()
         });
 
         this._setupPanelProvider.postMessage({
@@ -15407,18 +15421,6 @@ What would you like to find?`;
         return [
             yamlFrontmatter,
             `# ${title}`,
-            '',
-            '## Goal',
-            '- TODO',
-            '',
-            '## Proposed Changes',
-            '- TODO',
-            '',
-            '## Verification Plan',
-            '- TODO',
-            '',
-            '## Open Questions',
-            '- TODO',
             ''
         ].join('\n');
     }
@@ -15427,7 +15429,16 @@ What would you like to find?`;
     }
 
     public async createDraftPlanTicket(): Promise<void> {
-        const title = 'Untitled Plan';
+        const title = await vscode.window.showInputBox({
+            prompt: 'Plan title (used for filename and H1 header)',
+            placeHolder: 'Untitled Plan',
+            value: 'Untitled Plan',
+            validateInput: (v) => {
+                // Reject titles that would produce an empty slug
+                if (!v || !v.trim()) return null; // allow empty (falls back to Untitled Plan)
+                return null;
+            }
+        }) || 'Untitled Plan';
         const createdAt = new Date().toISOString();
         const idea = this._buildDraftPlanContent(title);
 
@@ -15441,11 +15452,18 @@ What would you like to find?`;
         try {
             const { planFileAbsolute } = await this._createInitiatedPlan(title, idea, false, { createdAt, projectName });
             const workspaceRoot = this._resolveWorkspaceRoot();
+            let activatedInProjectPanel = false;
             if (workspaceRoot && this._kanbanProvider) {
                 const planFileRelative = path.relative(workspaceRoot, planFileAbsolute).replace(/\\/g, '/');
-                await this._kanbanProvider.activatePlanInProjectPanel(planFileRelative, workspaceRoot);
+                await this._kanbanProvider.activatePlanInProjectPanel(planFileRelative, workspaceRoot, true);
+                activatedInProjectPanel = this._kanbanProvider.hasPlanningPanelProvider();
             }
-            await this._openPlanInReviewPanel(planFileAbsolute, title);
+            // Fallback: if the project panel couldn't be activated (no planning panel provider,
+            // no workspace root), open the raw file so the user at least sees something.
+            // This preserves the old behavior as a degraded fallback rather than dropping it entirely.
+            if (!activatedInProjectPanel) {
+                await this._openPlanInReviewPanel(planFileAbsolute, title);
+            }
             this._view?.webview.postMessage({ type: 'planCreated' });
             this._kanbanProvider?.postMessage?.({ type: 'planCreated' });
         } catch (err: any) {

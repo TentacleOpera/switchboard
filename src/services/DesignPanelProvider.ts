@@ -50,6 +50,9 @@ export class DesignPanelProvider implements vscode.Disposable {
     private _designDocsDebounce?: NodeJS.Timeout;
     private _imagesDocsDebounce?: NodeJS.Timeout;
     private _briefsDocsDebounce?: NodeJS.Timeout;
+    private _activeTab: string = '';
+    private _externalFilePollTimer?: NodeJS.Timeout;
+    private _lastFolderSignature: Record<string, string> = {}; // keyed by tab name
     private _activeScreens = new Map<string, any>(); // Key: screen.id, Value: SDK Screen instance
     private _stitchOperationLock = false;
     private _activeDesignSystemDocSourceId: string | null = null;
@@ -117,7 +120,10 @@ export class DesignPanelProvider implements vscode.Disposable {
         this._panel.onDidDispose(() => {
             this._panel = undefined;
             this.disposeWatchers();
+            this._stopExternalFilePoll();
         }, null, this._disposables);
+
+        this._panel.onDidChangeViewState(e => this._onVisibilityChanged(e.webviewPanel.visible), null, this._disposables);
 
         this._setupHtmlFolderWatchers();
         this._setupDesignFolderWatchers();
@@ -159,6 +165,12 @@ export class DesignPanelProvider implements vscode.Disposable {
                         const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
                         this._panel?.webview.postMessage({ type: 'switchboardThemeChanged', theme });
                     }
+                    if (e.affectsConfiguration('switchboard.design.externalFilePollMs')) {
+                        this._stopExternalFilePoll();
+                        if (this._panel?.visible && this._isPolledTab(this._activeTab)) {
+                            this._startExternalFilePoll();
+                        }
+                    }
                 })
             );
         }
@@ -196,7 +208,10 @@ export class DesignPanelProvider implements vscode.Disposable {
         this._panel.onDidDispose(() => {
             this._panel = undefined;
             this.disposeWatchers();
+            this._stopExternalFilePoll();
         }, null, this._disposables);
+
+        this._panel.onDidChangeViewState(e => this._onVisibilityChanged(e.webviewPanel.visible), null, this._disposables);
 
         this._setupHtmlFolderWatchers();
         this._setupDesignFolderWatchers();
@@ -239,6 +254,12 @@ export class DesignPanelProvider implements vscode.Disposable {
                     if (e.affectsConfiguration('switchboard.theme.name')) {
                         const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
                         this._panel?.webview.postMessage({ type: 'switchboardThemeChanged', theme });
+                    }
+                    if (e.affectsConfiguration('switchboard.design.externalFilePollMs')) {
+                        this._stopExternalFilePoll();
+                        if (this._panel?.visible && this._isPolledTab(this._activeTab)) {
+                            this._startExternalFilePoll();
+                        }
                     }
                 })
             );
@@ -694,7 +715,7 @@ export class DesignPanelProvider implements vscode.Disposable {
             } catch {}
         }
 
-        const localResourceRoots = [
+        const rawRoots = [
             vscode.Uri.joinPath(this._extensionUri, 'dist'),
             vscode.Uri.joinPath(this._extensionUri, 'webview'),
             vscode.Uri.joinPath(this._extensionUri, 'designs'),
@@ -702,6 +723,16 @@ export class DesignPanelProvider implements vscode.Disposable {
             ...(vscode.workspace.workspaceFolders || []).map(folder => folder.uri),
             ...folderUris
         ];
+
+        // Deduplicate by stringified URI — prevents spurious signature changes when
+        // the same path is pushed by multiple sources (e.g. getHtmlFolderPaths + _getImageCacheDir).
+        const seenRoots = new Set<string>();
+        const localResourceRoots = rawRoots.filter(u => {
+            const key = u.toString();
+            if (seenRoots.has(key)) return false;
+            seenRoots.add(key);
+            return true;
+        });
 
         const signature = JSON.stringify(localResourceRoots.map(u => u.toString()));
         if (signature === this._lastWebviewRootsSignature) return;
@@ -1069,7 +1100,7 @@ export class DesignPanelProvider implements vscode.Disposable {
             case 'ready': {
                 const allRoots = this._getWorkspaceRoots();
                 const items = buildWorkspaceItems(allRoots);
-                const tabKeys = ['stitch', 'html-preview', 'images', 'design', 'html.root', 'design.root', 'briefs', 'briefs.root', 'stitch.root', 'images.root'];
+                const tabKeys = ['stitch', 'html-preview', 'images', 'design', 'html.root', 'design.root', 'briefs', 'briefs.root', 'stitch.root', 'images.root', 'activeTab'];
                 const statePayload = this._stateStore.getAllStates(tabKeys, allRoots);
                 this.postMessage({
                     type: 'workspaceItemsUpdated',
@@ -1107,6 +1138,15 @@ export class DesignPanelProvider implements vscode.Disposable {
                     } else {
                         await this._stateStore.setPanelState(tabKey, state);
                     }
+                }
+                break;
+            }
+            case 'activeTabChanged': {
+                this._activeTab = message.tab;
+                if (this._isPolledTab(message.tab) && this._panel?.visible) {
+                    this._startExternalFilePoll();
+                } else {
+                    this._stopExternalFilePoll();
                 }
                 break;
             }
@@ -2091,6 +2131,26 @@ export class DesignPanelProvider implements vscode.Disposable {
                 break;
             }
 
+            // Re-scan the source folders for a tab on demand. The webview posts this when
+            // the user activates a tab, mirroring planning.js's fetch-on-tab-activation.
+            // VS Code's FileSystemWatcher misses files created outside the editor (e.g. by
+            // an external script or agent write), so the watcher-driven list can go stale;
+            // a fresh readdir on tab entry guarantees the list is current.
+            case 'refreshDocsForTab': {
+                switch (message.tab) {
+                    case 'html-preview':
+                        await this._sendHtmlDocsReady();
+                        break;
+                    case 'images':
+                        await this._sendImagesDocsReady();
+                        break;
+                    case 'briefs':
+                        await this._sendBriefsDocsReady();
+                        break;
+                }
+                break;
+            }
+
             case 'listImagesFolders': {
                 const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
                 const service = this._getLocalFolderService(root);
@@ -2519,5 +2579,164 @@ export class DesignPanelProvider implements vscode.Disposable {
                 }
                 break;
         }
+    }
+
+    private _isHtmlOrImageFile(filename: string): boolean {
+        const ext = path.extname(filename).toLowerCase();
+        return ['.html', '.htm', '.png', '.jpg', '.jpeg', '.gif', '.svg'].includes(ext);
+    }
+
+    private _isImageFile(filename: string): boolean {
+        const ext = path.extname(filename).toLowerCase();
+        return ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico'].includes(ext);
+    }
+
+    private _isTextFile(filename: string): boolean {
+        const ext = path.extname(filename).toLowerCase();
+        return ['.md', '.txt', '.markdown', '.rst', '.adoc'].includes(ext);
+    }
+
+    private _isPolledTab(tab: string): boolean {
+        return tab === 'html-preview' || tab === 'images' || tab === 'briefs';
+    }
+
+    private _onVisibilityChanged(visible: boolean): void {
+        if (visible && this._isPolledTab(this._activeTab)) {
+            this._startExternalFilePoll();
+        } else {
+            this._stopExternalFilePoll();
+        }
+    }
+
+    private _startExternalFilePoll(): void {
+        if (this._externalFilePollTimer) return;
+        const config = vscode.workspace.getConfiguration('switchboard');
+        const ms = config.get<number>('design.externalFilePollMs', 4000);
+        if (ms <= 0) return;
+        this._externalFilePollTimer = setInterval(() => this._pollTick(), ms);
+    }
+
+    private _stopExternalFilePoll(): void {
+        if (this._externalFilePollTimer) {
+            clearInterval(this._externalFilePollTimer);
+            this._externalFilePollTimer = undefined;
+        }
+    }
+
+    private async _pollTick(): Promise<void> {
+        const tab = this._activeTab;
+        const visible = !!this._panel?.visible;
+        if (!visible || !this._isPolledTab(tab) || !this._panel) {
+            return;
+        }
+
+        try {
+            const allRoots = this._getWorkspaceRoots();
+            const signatures: string[] = [];
+
+            for (const root of allRoots) {
+                const service = this._getLocalFolderService(root);
+                let folders: string[] = [];
+                if (tab === 'html-preview') {
+                    folders = service.getHtmlFolderPaths();
+                } else if (tab === 'images') {
+                    folders = service.getImagesFolderPaths();
+                } else if (tab === 'briefs') {
+                    folders = service.getBriefsFolderPaths();
+                }
+
+                for (const dir of folders) {
+                    if (fs.existsSync(dir)) {
+                        const sigs = await this._getFolderSignature(dir, tab);
+                        signatures.push(...sigs);
+                    }
+                }
+            }
+
+            signatures.sort();
+            const combined = signatures.join('\n');
+            const hash = crypto.createHash('md5').update(combined).digest('hex');
+
+            if (this._activeTab !== tab || !this._panel?.visible) {
+                return;
+            }
+
+            if (this._lastFolderSignature[tab] !== hash) {
+                this._lastFolderSignature[tab] = hash;
+                if (tab === 'html-preview') {
+                    await this._sendHtmlDocsReady();
+                } else if (tab === 'images') {
+                    await this._sendImagesDocsReady();
+                } else if (tab === 'briefs') {
+                    await this._sendBriefsDocsReady();
+                }
+            }
+        } catch (err) {
+            // swallow to survive tick
+        }
+    }
+
+    private async _getFolderSignature(dir: string, tab: string, depth: number = 0, seen: Set<string> = new Set()): Promise<string[]> {
+        if (depth >= 10) return [];
+        const resolved = path.resolve(dir);
+        if (seen.has(resolved)) return [];
+        seen.add(resolved);
+
+        let entries: fs.Dirent[];
+        try {
+            entries = await Promise.race([
+                fs.promises.readdir(dir, { withFileTypes: true }),
+                new Promise<never>((_, reject) => setTimeout(() => reject(new Error('readdir timeout')), 5000))
+            ]);
+        } catch {
+            return [];
+        }
+
+        const filterFn = (name: string): boolean => {
+            if (tab === 'html-preview') {
+                return this._isHtmlOrImageFile(name);
+            } else if (tab === 'images') {
+                return this._isImageFile(name);
+            } else if (tab === 'briefs') {
+                return this._isTextFile(name);
+            }
+            return false;
+        };
+
+        const filePromises: Promise<string>[] = [];
+        const subfolderPromises: Promise<string[]>[] = [];
+
+        for (const entry of entries) {
+            if (entry.name.startsWith('.')) continue;
+            if (entry.isSymbolicLink()) continue;
+            const fullPath = path.join(dir, entry.name);
+
+            if (entry.isDirectory()) {
+                if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === '.switchboard') continue;
+                subfolderPromises.push(this._getFolderSignature(fullPath, tab, depth + 1, seen));
+            } else if (entry.isFile() && filterFn(entry.name)) {
+                filePromises.push(
+                    Promise.race([
+                        fs.promises.stat(fullPath),
+                        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('stat timeout')), 5000))
+                    ]).then(stat => {
+                        return `${entry.name}|${stat.size}|${stat.mtimeMs}`;
+                    }).catch(() => {
+                        return `${entry.name}|error|error`;
+                    })
+                );
+            }
+        }
+
+        const [files, subfolders] = await Promise.all([
+            Promise.all(filePromises),
+            Promise.all(subfolderPromises)
+        ]);
+
+        const results = [...files];
+        for (const sf of subfolders) {
+            results.push(...sf);
+        }
+        return results;
     }
 }

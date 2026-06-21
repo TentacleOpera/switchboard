@@ -165,7 +165,11 @@ export class KanbanProvider implements vscode.Disposable {
         this._planningPanelProvider = provider;
     }
 
-    public async activatePlanInProjectPanel(planFile: string, workspaceRoot: string): Promise<void> {
+    public hasPlanningPanelProvider(): boolean {
+        return !!this._planningPanelProvider;
+    }
+
+    public async activatePlanInProjectPanel(planFile: string, workspaceRoot: string, autoEdit?: boolean): Promise<void> {
         if (!this._planningPanelProvider) { return; }
         if (!this._planningPanelProvider.hasProjectPanel()) {
             await this._planningPanelProvider.openProject();
@@ -177,7 +181,8 @@ export class KanbanProvider implements vscode.Disposable {
             planId: '',
             sessionId: '',
             planFile: planFile || '',
-            workspaceRoot: workspaceRoot || ''
+            workspaceRoot: workspaceRoot || '',
+            autoEdit: autoEdit === true
         });
     }
 
@@ -6858,6 +6863,148 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 vscode.window.showInformationMessage('Epic configuration updated.');
                 break;
             }
+            case 'memoLoad': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const memoPath = this._getMemoPath(workspaceRoot);
+                let content = '';
+                try {
+                    content = await fs.promises.readFile(memoPath, 'utf8');
+                } catch { /* file doesn't exist yet — that's fine */ }
+                this._panel?.webview.postMessage({ type: 'memoContent', content });
+                break;
+            }
+            case 'memoSave': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const memoPath = this._getMemoPath(workspaceRoot);
+                const dir = path.dirname(memoPath);
+                await fs.promises.mkdir(dir, { recursive: true });
+                await fs.promises.writeFile(memoPath, typeof msg.content === 'string' ? msg.content : '', 'utf8');
+                break;
+            }
+            case 'memoClear': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const memoPath = this._getMemoPath(workspaceRoot);
+                await fs.promises.writeFile(memoPath, '', 'utf8');
+                break;
+            }
+            case 'memoGeneratePrompt': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const content = typeof msg.content === 'string' ? msg.content : '';
+                const action = msg.action === 'send' ? 'send' : 'copy';
+                const issues = this._parseMemoEntries(content);
+                if (issues.length === 0) {
+                    this._panel?.webview.postMessage({
+                        type: 'memoPromptResult',
+                        message: 'No entries to process.'
+                    });
+                    break;
+                }
+                const prompt = this._buildMemoPlannerPrompt(issues, workspaceRoot);
+                await vscode.env.clipboard.writeText(prompt);
+                if (action === 'send') {
+                    await this._dispatchMemoToPlanner(prompt, workspaceRoot);
+                }
+                this._panel?.webview.postMessage({
+                    type: 'memoPromptResult',
+                    message: action === 'send'
+                        ? `Sent ${issues.length} issue(s) to planner. Prompt copied to clipboard.`
+                        : `Prompt for ${issues.length} issue(s) copied to clipboard.`
+                });
+                break;
+            }
+            case 'openMemoModal': {
+                this._panel?.webview.postMessage({ type: 'openMemoModal' });
+                break;
+            }
+        }
+    }
+
+    private _getMemoPath(workspaceRoot: string): string {
+        return path.join(workspaceRoot, '.switchboard', 'memo.md');
+    }
+
+    private _parseMemoEntries(content: string): string[] {
+        const trimmed = content.trim();
+        if (!trimmed) return [];
+
+        const paragraphSplit = trimmed.split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);
+        if (paragraphSplit.length > 1) {
+            return paragraphSplit;
+        }
+
+        const ENTRY_PREFIXES = /^(bug|thought|issue|todo|note|fix|idea)[:\s]/i;
+        const lines = trimmed.split('\n').map(s => s.trim()).filter(Boolean);
+        const entries: string[] = [];
+        for (const line of lines) {
+            const isNewEntry = ENTRY_PREFIXES.test(line) ||
+                (line.length > 0 && line[0] === line[0].toUpperCase() && line[0] !== line[0].toLowerCase());
+            if (entries.length === 0 || isNewEntry) {
+                entries.push(line);
+            } else {
+                entries[entries.length - 1] += '\n' + line;
+            }
+        }
+        return entries;
+    }
+
+    private _buildMemoPlannerPrompt(issues: string[], workspaceRoot: string): string {
+        const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
+        const issueList = issues.map((issue, i) => `### Issue ${i + 1}\n${issue}`).join('\n\n');
+
+        return `You are a planner agent. The user has captured the following issues in their memo during testing. Your task is to refine EACH issue into a separate, complete plan file — one plan per issue. Do not combine issues.
+
+## Issues to Refine
+
+${issueList}
+
+## Instructions
+
+For EACH issue above:
+1. Create a separate plan file in \`${plansDir}\` using the naming convention \`feature_plan_<timestamp>_<slug>.md\`
+2. Follow the standard Switchboard plan format (Goal, Metadata, Complexity Audit, Edge-Case & Dependency Audit, Proposed Changes, Verification Plan)
+3. Investigate the codebase to understand the root cause and write an actionable plan
+4. Each plan must be self-contained — do not reference other memo issues
+
+## Plan File Format
+
+Each plan file must include:
+- # Title (derived from the issue)
+- ## Goal (with problem analysis and root cause)
+- ## Metadata (tags, complexity 1-10)
+- ## Complexity Audit (Routine vs Complex/Risky)
+- ## Edge-Case & Dependency Audit
+- ## Proposed Changes (per-file breakdown with code snippets)
+- ## Verification Plan
+
+## Important
+- Create ${issues.length} plan file(s) total — one per issue
+- Write each plan to: ${plansDir}/feature_plan_<YYYYMMDDHHMMSS>_<slug>.md
+- Do NOT skip the investigation step — read the relevant code before writing each plan
+- After creating all plans, run a full sync so they appear on the kanban board`;
+    }
+
+    private async _dispatchMemoToPlanner(prompt: string, workspaceRoot: string): Promise<void> {
+        if (!this._taskViewerProvider) {
+            vscode.window.showInformationMessage(
+                'Memo prompt copied to clipboard. No planner terminal available — paste it manually.'
+            );
+            return;
+        }
+        try {
+            const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole('planner', prompt, workspaceRoot);
+            if (!dispatched) {
+                vscode.window.showWarningMessage(
+                    'Memo prompt copied to clipboard but could not dispatch to planner. Paste manually.'
+                );
+            }
+        } catch (err) {
+            vscode.window.showInformationMessage(
+                'Memo prompt copied to clipboard. No planner terminal available — paste it manually.'
+            );
         }
     }
 

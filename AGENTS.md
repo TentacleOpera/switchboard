@@ -87,6 +87,7 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | `linear_api` | Direct Linear API access via LocalApiServer proxy (replaces call_linear_api) |
 | `web_research` | User asks to "research X", "investigate Y", or needs authoritative sources |
 | `deep_planning` | User requests complex code changes requiring architecture understanding |
+| `memo` | User invokes `/memo` to enter progressive capture mode — agent appends each user message to `.switchboard/memo.md` without analysis until user says "investigate memo" or similar |
 | `refine_ticket` | User clicks "Refine" on a ticket card to copy a prompt that produces a complete, agent-actionable specification (backend-consumed skill — not invocable via `skill: "refine_ticket"`) |
 
 **Usage**: Call `skill: "archive"` before performing archive operations to access detailed tool documentation and examples.

@@ -56,7 +56,7 @@
             --glow-red: none;
             --glow-green-btn: none;
             --text-primary: #F0EBE6;
-            --text-secondary: #A8A095;
+            --text-secondary: #8C8C8C;
             --border-color: #38332E;
             --border-bright: #5C544A;
         }
@@ -378,6 +378,12 @@
             border-color: color-mix(in srgb, var(--accent-green) 35%, transparent);
             box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--accent-green) 20%, transparent);
         }
+
+        /* Claudify: neutral-grey tab nav (active tab keeps its accent). */
+        body.theme-claudify .tab-btn:not(.is-active),
+        body.theme-claudify .sub-tab-btn:not(.is-active) { color: #8a8a8a; }
+        body.theme-claudify .tab-btn:hover,
+        body.theme-claudify .sub-tab-btn:hover { color: #c8c8c8; }
 
         .tab-panel {
             flex: 1;

@@ -163,6 +163,17 @@
                 workspaceRoot: state.stitchWorkspaceRoot
             });
         }
+
+        // Re-scan source folders on tab entry. VS Code's file watcher misses
+        // externally-created files, so the list can be stale; this forces a fresh
+        // server-side readdir every time the tab is activated (mirrors planning.js).
+        if (tabName === 'html-preview' || tabName === 'images' || tabName === 'briefs') {
+            vscode.postMessage({ type: 'refreshDocsForTab', tab: tabName });
+        }
+
+        vscode.postMessage({ type: 'activeTabChanged', tab: tabName });
+
+        persistTab('activeTab', tabName);
     }
 
     tabBtns.forEach(btn => {
@@ -999,7 +1010,7 @@
                 if (iframeWrapper) iframeWrapper.style.display = 'flex';
                 if (htmlWrapper) htmlWrapper.classList.add('scanlines-suppressed');
                 if (iframe) {
-                    iframe.setAttribute('sandbox', 'allow-scripts');
+                    iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
                     iframe.removeAttribute('srcdoc');
                     iframe.src = isAutoRefreshed ? msg.iframeSrc + '?t=' + Date.now() : msg.iframeSrc;
                 }
@@ -2506,6 +2517,16 @@
                 }
                 const imagesSelect = document.getElementById('images-workspace-filter');
                 if (imagesSelect) imagesSelect.value = state.imagesWorkspaceRootFilter;
+
+                // Override active tab with persisted value if it differs from the HTML default
+                const restoredTab = (msg.panel || {})['activeTab'];
+                const validTabs = ['stitch', 'briefs', 'html-preview', 'images', 'design'];
+                if (restoredTab && validTabs.includes(restoredTab)) {
+                    const currentTab = document.querySelector('.shared-tab-btn.active')?.dataset.tab;
+                    if (currentTab !== restoredTab) {
+                        switchTab(restoredTab);
+                    }
+                }
                 break;
             }
             case 'briefsDocsReady':
@@ -3232,6 +3253,11 @@
             renderFolderListModal();
             syncStitchHtmlPreviewToggle();
         }
+        vscode.setState({
+            ...vscode.getState(),
+            folderModalOpen: true,
+            folderModalScope: scope
+        });
     }
 
     // The Stitch assets folder (.switchboard/stitch) is "included" in HTML previews when its
@@ -3360,6 +3386,11 @@
             const modal = document.getElementById('folder-modal');
             if (modal && modal.style.display !== 'none') {
                 modal.style.display = 'none';
+                vscode.setState({
+                    ...vscode.getState(),
+                    folderModalOpen: false,
+                    folderModalScope: null
+                });
             }
             const menu = document.getElementById('stitch-variants-dropdown-menu');
             if (menu) {
@@ -3376,11 +3407,21 @@
     document.getElementById('btn-close-folder-modal')?.addEventListener('click', () => {
         const modal = document.getElementById('folder-modal');
         if (modal) modal.style.display = 'none';
+        vscode.setState({
+            ...vscode.getState(),
+            folderModalOpen: false,
+            folderModalScope: null
+        });
     });
 
     document.getElementById('folder-modal')?.addEventListener('click', (e) => {
         if (e.target.id === 'folder-modal') {
             e.target.style.display = 'none';
+            vscode.setState({
+                ...vscode.getState(),
+                folderModalOpen: false,
+                folderModalScope: null
+            });
         }
     });
 
@@ -3846,5 +3887,12 @@
     vscode.postMessage({ type: 'ready' });
 
     applySidebarState();
+
+    // Restore folder modal state if it was open before a reload
+    const persistedModalState = vscode.getState();
+    if (persistedModalState?.folderModalOpen && persistedModalState?.folderModalScope) {
+        openFoldersModal(persistedModalState.folderModalScope);
+    }
+
     updateDesignDocControls();
 })();

@@ -38,7 +38,7 @@
             --accent-teal-bright: #E2A188;
             --glow-teal: none;           /* kill all variable-routed neon glow */
             --text-primary: #F0EBE6;
-            --text-secondary: #A8A095;
+            --text-secondary: #8C8C8C;
             --border-color: #38332E;
             --border-bright: #5C544A;
         }
@@ -91,7 +91,7 @@
            --text-secondary text. NO terracotta — the accent is not in these buttons.
            Keep the green 'completed' bar. */
         body.theme-claudify .kanban-card {
-            background: var(--panel-bg2) !important;
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
             border: 1px solid var(--border-color) !important;
             color: var(--text-secondary) !important;
             box-shadow: none !important;
@@ -110,10 +110,7 @@
             background: color-mix(in srgb, var(--accent-primary) 12%, transparent) !important;
             border-color: var(--accent-primary) !important;
             color: var(--text-primary) !important;
-            box-shadow: none !important;
-        }
-        body.theme-claudify .kanban-card.selected:not(.completed) {
-            border-left: 3px solid var(--accent-primary) !important;
+            box-shadow: inset 3px 0 0 var(--accent-primary) !important;
         }
         /* Card titles hardcode harsh white (.card-topic) or inherit the muted subtitle colour.
            Give them a mid-tone — brighter than the subtitle (--text-secondary), softer than
@@ -127,6 +124,10 @@
         body.theme-claudify .card-meta { color: #8a8a8a !important; }
         /* Column titles: neutral grey chrome (the content stays warm). */
         body.theme-claudify .column-name { color: #8a8a8a; }
+        /* Warm text lives only on the kanban card buttons + the agent name under the column
+           header (everything else is neutral grey). Resting state only, so hover colours stay. */
+        body.theme-claudify .card-btn:not(:hover) { color: #A8A095; }
+        body.theme-claudify .column-agent { color: #A8A095; }
 
         * {
             box-sizing: border-box;
@@ -2293,7 +2294,7 @@
 
 /* Claudify: neutral-grey tab nav (active tab keeps the terracotta accent). kanban.html has its
    own inline copy of these tab styles, so the override must live here too. */
-body.theme-claudify .shared-tab-btn { color: #8a8a8a; }
+body.theme-claudify .shared-tab-btn:not(.active) { color: #8a8a8a; }
 body.theme-claudify .shared-tab-btn:hover {
   color: #c8c8c8;
   background: color-mix(in srgb, #ffffff 5%, transparent);
@@ -2340,6 +2341,11 @@ body.theme-claudify .shared-tab-btn:hover {
             </button>
             <button class="strip-icon-btn is-off" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">
                 <img src="{{ICON_COLLAPSE_CODERS}}" alt="Collapse Coders">
+            </button>
+            <button class="strip-icon-btn" id="btn-open-memo" data-tooltip="Open Memo (Cmd+Shift+Alt+M)">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" width="16" height="16" style="color: var(--text-primary);">
+                    <path d="M1 2.75C1 1.784 1.784 1 2.75 1h10.5c.966 0 1.75.784 1.75 1.75v7.5A1.75 1.75 0 0 1 13.25 12H9.12l-2.873 2.563A.75.75 0 0 1 5 14.25V12H2.75A1.75 1.75 0 0 1 1 10.25v-7.5z"/>
+                </svg>
             </button>
             <select id="pairProgrammingModeSelect" class="kanban-mode-dropdown" data-tooltip="Pair Programming mode: controls how Lead and Coder prompts are dispatched">
                 <option value="off">Pair Programming: Off</option>
@@ -2921,6 +2927,31 @@ body.theme-claudify .shared-tab-btn:hover {
                 <button class="modal-btn modal-btn-secondary" id="epic-manage-close-btn">Close</button>
                 <button class="modal-btn modal-btn-secondary" id="epic-manage-save-config">Save Config</button>
                 <button class="modal-btn modal-btn-secondary" id="epic-manage-delete" style="color:var(--accent-red); border-color:var(--accent-red);">Delete Epic</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Memo Modal -->
+    <div id="memo-modal" class="modal-overlay hidden">
+        <div class="modal-content" style="width: 640px; max-width: 90vw;">
+            <div class="modal-header">
+                <h3 class="modal-title">Memo</h3>
+                <button class="modal-close-btn" id="memo-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">
+                    Jot down bugs, thoughts, or issues. Each line/paragraph is treated as a separate issue when sent to the planner.
+                </p>
+                <textarea id="memo-textarea"
+                          class="modal-textarea"
+                          placeholder="Bug: login button overlaps on mobile&#10;Thought: maybe cache the user profile&#10;Issue: API returns 500 on empty payload..."
+                          style="width: 100%; min-height: 300px; resize: vertical; font-family: var(--font-mono, monospace); font-size: 13px;"></textarea>
+            </div>
+            <div class="modal-footer">
+                <span id="memo-status" style="font-size: 11px; color: var(--text-secondary); margin-right: auto;"></span>
+                <button class="modal-btn modal-btn-secondary" id="memo-clear-btn">Clear</button>
+                <button class="modal-btn modal-btn-secondary" id="memo-copy-btn">Copy Prompt</button>
+                <button class="modal-btn modal-btn-primary" id="memo-send-btn">Send to Planner</button>
             </div>
         </div>
     </div>
@@ -3558,6 +3589,68 @@ body.theme-claudify .shared-tab-btn:hover {
 
         document.getElementById('btn-scan-folders')?.addEventListener('click', () => {
             postKanbanMessage({ type: 'scanFoldersNow' });
+        });
+
+        // === Memo ===
+        let memoSaveTimer = null;
+
+        function openMemoModal() {
+            const modal = document.getElementById('memo-modal');
+            const textarea = document.getElementById('memo-textarea');
+            postKanbanMessage({ type: 'memoLoad' });
+            modal?.classList.remove('hidden');
+            textarea?.focus();
+        }
+
+        function closeMemoModal() {
+            document.getElementById('memo-modal')?.classList.add('hidden');
+        }
+
+        function debouncedMemoSave() {
+            if (memoSaveTimer) clearTimeout(memoSaveTimer);
+            memoSaveTimer = setTimeout(() => {
+                const content = document.getElementById('memo-textarea')?.value || '';
+                postKanbanMessage({ type: 'memoSave', content });
+                const statusEl = document.getElementById('memo-status');
+                if (statusEl) statusEl.textContent = 'Saved ' + new Date().toLocaleTimeString();
+            }, 800);
+        }
+
+        document.getElementById('btn-open-memo')?.addEventListener('click', openMemoModal);
+        document.getElementById('memo-close-btn')?.addEventListener('click', closeMemoModal);
+        document.getElementById('memo-textarea')?.addEventListener('input', debouncedMemoSave);
+
+        document.getElementById('memo-modal')?.addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) closeMemoModal();
+        });
+
+        document.getElementById('memo-clear-btn')?.addEventListener('click', () => {
+            const textarea = document.getElementById('memo-textarea');
+            if (textarea) textarea.value = '';
+            postKanbanMessage({ type: 'memoClear' });
+            const statusEl = document.getElementById('memo-status');
+            if (statusEl) statusEl.textContent = 'Cleared';
+        });
+
+        document.getElementById('memo-copy-btn')?.addEventListener('click', () => {
+            const content = document.getElementById('memo-textarea')?.value || '';
+            postKanbanMessage({ type: 'memoGeneratePrompt', content, action: 'copy' });
+        });
+
+        document.getElementById('memo-send-btn')?.addEventListener('click', () => {
+            const content = document.getElementById('memo-textarea')?.value || '';
+            postKanbanMessage({ type: 'memoGeneratePrompt', content, action: 'send' });
+        });
+
+        document.getElementById('memo-modal')?.addEventListener('focusin', () => {
+            postKanbanMessage({ type: 'memoLoad' });
+        });
+
+        document.addEventListener('keydown', (e) => {
+            const modal = document.getElementById('memo-modal');
+            if (e.key === 'Escape' && modal && !modal.classList.contains('hidden')) {
+                closeMemoModal();
+            }
         });
 
         btnDeleteProject?.addEventListener('click', () => {
@@ -6243,6 +6336,20 @@ body.theme-claudify .shared-tab-btn:hover {
                 }
                 case 'kanbanEpicDetails': {
                     populateEpicManageModal(msg.epic, msg.subtasks, { epicLockColumns: msg.epicLockColumns, epicPromptTemplate: msg.epicPromptTemplate, epicMaxSubtasks: msg.epicMaxSubtasks });
+                    break;
+                }
+                case 'memoContent': {
+                    const textarea = document.getElementById('memo-textarea');
+                    if (textarea) textarea.value = msg.content || '';
+                    break;
+                }
+                case 'memoPromptResult': {
+                    const statusEl = document.getElementById('memo-status');
+                    if (statusEl) statusEl.textContent = msg.message || '';
+                    break;
+                }
+                case 'openMemoModal': {
+                    openMemoModal();
                     break;
                 }
             }

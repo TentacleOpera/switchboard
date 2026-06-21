@@ -79,7 +79,7 @@
             --accent-neon: #D97757;
             --glow-teal: none;           /* kill all variable-routed neon glow */
             --text-primary: #F0EBE6;
-            --text-secondary: #A8A095;
+            --text-secondary: #8C8C8C;
             --border-color: #38332E;
             --border-bright: #5C544A;
             /* Backgrounds NOT set here — the grid block below provides a solid near-black surface. */
@@ -98,7 +98,7 @@
         body.theme-claudify .epic-plan-item,
         body.theme-claudify .constitution-file-item,
         body.theme-claudify .insight-item {
-            background: var(--panel-bg2) !important;
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
             border: 1px solid var(--border-color) !important;
             color: var(--text-secondary) !important;
             box-shadow: none !important;
@@ -119,9 +119,8 @@
         body.theme-claudify .insight-item.selected {
             background: color-mix(in srgb, var(--accent-primary) 12%, transparent) !important;
             border-color: var(--accent-primary) !important;
-            border-left: 3px solid var(--accent-primary) !important;
             color: var(--text-primary) !important;
-            box-shadow: none !important;
+            box-shadow: inset 3px 0 0 var(--accent-primary) !important;
         }
         /* Card title: mid-tone so it's brighter than the subtitle (--text-secondary) without
            being the harsh cream (--text-primary) — consistent with the other panels. */
@@ -639,6 +638,13 @@
             background: rgba(10, 10, 10, 0.65);
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
+        }
+
+        /* Claudify: neutral-grey tab nav (active tab keeps the terracotta accent). */
+        body.theme-claudify .shared-tab-btn:not(.active) { color: #8a8a8a; }
+        body.theme-claudify .shared-tab-btn:hover {
+            color: #c8c8c8;
+            background: color-mix(in srgb, #ffffff 5%, transparent);
         }
 
         /* --- Cyber Theme Styles --- */

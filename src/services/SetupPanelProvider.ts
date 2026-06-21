@@ -633,6 +633,31 @@ export class SetupPanelProvider implements vscode.Disposable {
                     await this._taskViewerProvider.handleSetStatusShowProjectSetting(message.enabled);
                     await vscode.commands.executeCommand('switchboard.refreshUI');
                     break;
+                case 'getStatusShowMemoSetting':
+                    this._panel.webview.postMessage({
+                        type: 'statusShowMemoSetting',
+                        enabled: this._taskViewerProvider.handleGetStatusShowMemoSetting()
+                    });
+                    break;
+                case 'setStatusShowMemoSetting':
+                    await this._taskViewerProvider.handleSetStatusShowMemoSetting(message.enabled);
+                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    break;
+                case 'getMemoHotkey': {
+                    const config = vscode.workspace.getConfiguration('switchboard');
+                    const hotkey = config.get<string>('memo.hotkey', 'cmd+shift+alt+m');
+                    this._panel?.webview.postMessage({ type: 'memoHotkey', value: hotkey });
+                    break;
+                }
+                case 'saveMemoHotkey': {
+                    const config = vscode.workspace.getConfiguration('switchboard');
+                    await config.update('memo.hotkey', message.value, vscode.ConfigurationTarget.Global);
+                    this._panel?.webview.postMessage({ type: 'memoHotkeySaved' });
+                    break;
+                }
+                case 'openKeybindings':
+                    await vscode.commands.executeCommand('workbench.action.openGlobalKeybindings');
+                    break;
                 case 'getCyberAnimationDisabledSetting':
                     this._panel.webview.postMessage({
                         type: 'cyberAnimationDisabledSetting',
