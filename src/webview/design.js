@@ -1006,6 +1006,25 @@
                         if (container && viewport) fitToContainer('html', container, viewport);
                     };
                 }
+            } else if (webviewUri) {
+                // Use the vscode-webview: URI directly as the iframe src — this is
+                // the same approach the planning panel used (and it worked). The
+                // iframe gets its own browsing context with the vscode-webview:
+                // protocol, external scripts load normally, and relative asset
+                // paths resolve relative to the file's location. The localhost
+                // server approach (iframeSrc) was introduced later and broke
+                // external script loading by changing the iframe's origin.
+                if (iframeWrapper) iframeWrapper.style.display = 'flex';
+                if (htmlWrapper) htmlWrapper.classList.add('scanlines-suppressed');
+                if (iframe) {
+                    iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+                    iframe.removeAttribute('srcdoc');
+                    iframe.src = isAutoRefreshed ? webviewUri + '?t=' + Date.now() : webviewUri;
+                }
+                if (imageContainer) imageContainer.style.display = 'none';
+                if (imageImg) imageImg.removeAttribute('src');
+                const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
+                if (iframeViewport) applyZoom('html', iframeViewport);
             } else if (msg.iframeSrc) {
                 if (iframeWrapper) iframeWrapper.style.display = 'flex';
                 if (htmlWrapper) htmlWrapper.classList.add('scanlines-suppressed');

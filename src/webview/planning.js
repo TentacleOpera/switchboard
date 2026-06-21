@@ -2750,18 +2750,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
         // Race protection for tickets messages
         const ticketsMsgTypes = [
-            'clickupSpacesLoaded', 'clickupFoldersLoaded', 'clickupListsLoaded', 
-            'clickupProjectLoaded', 'clickupTaskDetailsLoaded', 
-            'linearProjectLoaded', 'linearTaskDetailsLoaded', 
-            'localTicketsListed', 'clickupTaskCreated', 'linearIssueCreated',
-            'ticketCommentPosted', 'ticketStatusChanged', 'ticketAttachmentDownloaded',
-            'ticketDeleted', 'ticketEditsSaved', 'changeTicketStatusResult',
-            'postTicketCommentResult', 'attachmentDownloaded', 'clickupTaskImported',
-            'attachmentsListResult', 'attachmentOpened', 'attachmentRevealed',
-            'linearTaskImported', 'editTicketResult', 'pushTicketResult',
-            'importAllTicketsComplete', 'ticketsAskAgentResult', 'linearError', 'clickupError',
-            'ticketSyncStatusesLoaded', 'linearLabelsUpdated', 'clickupTagsUpdated',
-            'linearAutomationCatalogLoaded', 'clickupSpaceTagsLoaded', 'clickupListStatusesLoaded'
+            'localTicketFilesListed',
+            'ticketSyncStatusesLoaded'
         ];
         if (ticketsMsgTypes.includes(msg.type)) {
             if (msg.workspaceRoot && msg.workspaceRoot !== ticketsWorkspaceRoot) {
@@ -4200,7 +4190,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 break;
             }
             case 'integrationProviderStates':
-                if (msg.workspaceRoot === ticketsWorkspaceRoot) {
+                {
                     const clickupSetup = msg.clickupSetupComplete === true;
                     const linearSetup = msg.linearSetupComplete === true;
                     const tabBtn = document.getElementById('tickets-tab-btn');
@@ -5827,20 +5817,20 @@ Return ONLY the drafted prompt with no additional commentary.`;
             // 1. Save outgoing root's nav state
             saveTicketsState();
 
-            // 2. Reset ALL in-memory ClickUp/Linear state
-            resetTicketsInMemoryState();
-
-            // 3. Set ticketsWorkspaceRoot, request that root's provider preference
+            // 2. Set ticketsWorkspaceRoot
             ticketsWorkspaceRoot = newRoot;
             persistTab('tickets.root', ticketsWorkspaceRoot);
             vscode.postMessage({ type: 'ticketsRootChanged', workspaceRoot: ticketsWorkspaceRoot });
 
-            // 4. Load the new root's persisted nav
+            // 3. Load the new root's persisted nav
             const rootState = (_restoredPanelState.byRoot['tickets'] || {})[newRoot];
             if (rootState) {
                 restoreTicketsStateForRoot(rootState);
-            } else {
-                ticketsLoadedOnce = false;
+            }
+
+            // 4. Refresh local files if not auto-syncing
+            if (!ticketsAutoSync) {
+                loadLocalTicketFiles();
             }
         });
 

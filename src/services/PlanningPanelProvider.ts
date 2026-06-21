@@ -100,7 +100,7 @@ export class PlanningPanelProvider {
     private _watcherGeneration: number = 0;
     private _activeDesignDocSourceId: string | null = null;
     private _activeDesignDocId: string | null = null;
-    private _activeTicketsProvider = new Map<string, 'clickup' | 'linear'>();
+    private _activeTicketsProvider: 'clickup' | 'linear' | null = null;
     private readonly _SERVER_DENY_LIST: readonly string[] = [
         '.switchboard',
         '.git',
@@ -1322,27 +1322,38 @@ export class PlanningPanelProvider {
     private async _getIntegrationWorkspaces(): Promise<Array<{ workspaceRoot: string; provider: 'clickup' | 'linear' }>> {
         const allRoots = this._getWorkspaceRoots();
         const allowedRoots = new Set(buildWorkspaceItems(allRoots).map(item => item.workspaceRoot));
-        const results: Array<{ workspaceRoot: string; provider: 'clickup' | 'linear' }> = [];
-        for (const root of allRoots) {
-            if (!allowedRoots.has(root)) {
-                continue;
-            }
-            try {
-                const [clickUpConfig, linearConfig] = await Promise.all([
-                    this._adapterFactories.getClickUpSyncService(root).loadConfig(),
-                    this._adapterFactories.getLinearSyncService(root).loadConfig()
-                ]);
-                const provider = (clickUpConfig?.setupComplete) ? 'clickup'
-                    : (linearConfig?.setupComplete) ? 'linear'
-                    : null;
-                if (provider) {
-                    results.push({ workspaceRoot: root, provider });
-                }
-            } catch {
-                // Config unreadable — skip this root
-            }
+        if (allRoots.length === 0 || allowedRoots.size === 0) return [];
+        try {
+            // Config is global — check once using any allowed root, not per-root.
+            const probeRoot = allRoots.find(r => allowedRoots.has(r)) || allRoots[0];
+            const [clickUpConfig, linearConfig] = await Promise.all([
+                this._adapterFactories.getClickUpSyncService(probeRoot).loadConfig(),
+                this._adapterFactories.getLinearSyncService(probeRoot).loadConfig()
+            ]);
+            const provider = (clickUpConfig?.setupComplete) ? 'clickup'
+                : (linearConfig?.setupComplete) ? 'linear'
+                : null;
+            if (!provider) return [];
+            // Tag every allowed root with the global provider so the dropdown can
+            // still show workspace names for file-save context.
+            return Array.from(allowedRoots).map(root => ({ workspaceRoot: root, provider }));
+        } catch {
+            return [];
         }
-        return results;
+    }
+
+    private async _getTicketsAutoSync(root: string): Promise<boolean> {
+        const globalConfig = await GlobalIntegrationConfigService.loadGlobal();
+        if (globalConfig.ticketsAutoSync === undefined) {
+            const localService = this._getLocalFolderService(root);
+            const localValue = localService.getTicketsAutoSync();
+            if (localValue) {
+                await GlobalIntegrationConfigService.setTicketsAutoSync(true);
+                return true;
+            }
+            return false;
+        }
+        return globalConfig.ticketsAutoSync === true;
     }
 
 
@@ -1611,7 +1622,7 @@ export class PlanningPanelProvider {
                     ]);
                     const clickupSetupComplete = clickUpConfig?.setupComplete === true;
                     const linearSetupComplete = linearConfig?.setupComplete === true;
-                    let activeProvider = this._activeTicketsProvider.get(workspaceRoot);
+                    let activeProvider = this._activeTicketsProvider;
                     if (!activeProvider) {
                         if (clickupSetupComplete && linearSetupComplete) {
                             activeProvider = 'clickup';
@@ -1621,19 +1632,17 @@ export class PlanningPanelProvider {
                             activeProvider = 'linear';
                         }
                         if (activeProvider) {
-                            this._activeTicketsProvider.set(workspaceRoot, activeProvider);
+                            this._activeTicketsProvider = activeProvider;
                         }
                     }
                     const provider = activeProvider || null;
-                    const localService = this._getLocalFolderService(workspaceRoot);
-                    const ticketsAutoSync = localService.getTicketsAutoSync();
+                    const ticketsAutoSync = await this._getTicketsAutoSync(workspaceRoot);
                     if (provider) { this._updateTicketsAutoSyncWatcher(workspaceRoot, ticketsAutoSync); }
                     this._panel?.webview.postMessage({
                         type: 'integrationProviderStates',
                         clickupSetupComplete,
                         linearSetupComplete,
                         provider,
-                        workspaceRoot,
                         ticketsAutoSync
                     });
                 } catch (err) {
@@ -1659,26 +1668,31 @@ export class PlanningPanelProvider {
             }
             case 'ticketsDefaultRoot': {
                 const restoredRoot = this._stateStore.getPanelState<string>('tickets.root');
-                const integrationWorkspaces = await this._getIntegrationWorkspaces();
+                const allowedRoots = buildWorkspaceItems(allRoots).map(item => item.workspaceRoot);
                 let defaultRoot: string | undefined;
-                let defaultProvider: 'clickup' | 'linear' | null = null;
 
-                // Prefer restored root if it still has a valid integration
-                if (restoredRoot && integrationWorkspaces.some(w => w.workspaceRoot === restoredRoot)) {
+                if (restoredRoot && allowedRoots.includes(restoredRoot)) {
                     defaultRoot = restoredRoot;
-                    defaultProvider = integrationWorkspaces.find(w => w.workspaceRoot === restoredRoot)!.provider;
+                } else if (allowedRoots.length > 0) {
+                    defaultRoot = allowedRoots[0];
+                } else {
+                    defaultRoot = allRoots[0];
                 }
 
-                // Fall back to first integration workspace
-                if (!defaultRoot && integrationWorkspaces.length > 0) {
-                    defaultRoot = integrationWorkspaces[0].workspaceRoot;
-                    defaultProvider = integrationWorkspaces[0].provider;
-                }
-
-                // Final fallback: restored root or first root (provider null)
-                if (!defaultRoot) {
-                    defaultRoot = (restoredRoot && allRoots.includes(restoredRoot)) ? restoredRoot : allRoots[0];
-                }
+                // Determine provider globally
+                let defaultProvider: 'clickup' | 'linear' | null = null;
+                try {
+                    const probeRoot = defaultRoot || allRoots[0];
+                    if (probeRoot) {
+                        const [clickUpConfig, linearConfig] = await Promise.all([
+                            this._adapterFactories.getClickUpSyncService(probeRoot).loadConfig(),
+                            this._adapterFactories.getLinearSyncService(probeRoot).loadConfig()
+                        ]);
+                        defaultProvider = (clickUpConfig?.setupComplete) ? 'clickup'
+                            : (linearConfig?.setupComplete) ? 'linear'
+                            : null;
+                    }
+                } catch {}
 
                 this._panel?.webview.postMessage({
                     type: 'ticketsDefaultRoot',
@@ -1697,7 +1711,7 @@ export class PlanningPanelProvider {
                         ]);
                         const clickupSetupComplete = clickUpConfig?.setupComplete === true;
                         const linearSetupComplete = linearConfig?.setupComplete === true;
-                        let activeProvider = this._activeTicketsProvider.get(root);
+                        let activeProvider = this._activeTicketsProvider;
                         if (!activeProvider) {
                             if (clickupSetupComplete && linearSetupComplete) {
                                 activeProvider = 'clickup';
@@ -1707,12 +1721,11 @@ export class PlanningPanelProvider {
                                 activeProvider = 'linear';
                             }
                             if (activeProvider) {
-                                this._activeTicketsProvider.set(root, activeProvider);
+                                this._activeTicketsProvider = activeProvider;
                             }
                         }
                         const provider = activeProvider || null;
-                        const localService = this._getLocalFolderService(root);
-                        const ticketsAutoSync = localService.getTicketsAutoSync();
+                        const ticketsAutoSync = await this._getTicketsAutoSync(root);
                         if (provider) { this._updateTicketsAutoSyncWatcher(root, ticketsAutoSync); }
                         this._setupTicketsViewWatcher(root);
                         this._panel?.webview.postMessage({
@@ -1720,7 +1733,6 @@ export class PlanningPanelProvider {
                             clickupSetupComplete,
                             linearSetupComplete,
                             provider,
-                            workspaceRoot: root,
                             ticketsAutoSync
                         });
                     } catch (err) {
@@ -1732,7 +1744,7 @@ export class PlanningPanelProvider {
             case 'switchTicketsProvider': {
                 const { provider, workspaceRoot } = msg;
                 if (workspaceRoot && (provider === 'clickup' || provider === 'linear')) {
-                    this._activeTicketsProvider.set(workspaceRoot, provider);
+                    this._activeTicketsProvider = provider;
                     try {
                         const [clickUpConfig, linearConfig] = await Promise.all([
                             this._adapterFactories.getClickUpSyncService(workspaceRoot).loadConfig(),
@@ -1740,15 +1752,13 @@ export class PlanningPanelProvider {
                         ]);
                         const clickupSetupComplete = clickUpConfig?.setupComplete === true;
                         const linearSetupComplete = linearConfig?.setupComplete === true;
-                        const localService = this._getLocalFolderService(workspaceRoot);
-                        const ticketsAutoSync = localService.getTicketsAutoSync();
+                        const ticketsAutoSync = await this._getTicketsAutoSync(workspaceRoot);
                         if (provider) { this._updateTicketsAutoSyncWatcher(workspaceRoot, ticketsAutoSync); }
                         this._panel?.webview.postMessage({
                             type: 'integrationProviderStates',
                             clickupSetupComplete,
                             linearSetupComplete,
                             provider,
-                            workspaceRoot,
                             ticketsAutoSync
                         });
                     } catch (err) {

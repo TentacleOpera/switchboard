@@ -285,3 +285,70 @@ No automated tests required — this is a UI-state bugfix involving webview recr
 ## Recommendation
 
 **Send to Coder** — Complexity 4: multi-file changes across `DesignPanelProvider.ts` and `design.js`, but all changes reuse existing patterns (`persistTab`, `restoredTabState`, `vscode.getState`) with no new architectural patterns or data consistency risks.
+
+---
+
+## Code Review (Reviewer Pass — 2026-06-21)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*Slams coffee mug down. Squints at the diff. Breathes in through the nose.*
+
+**CRITICAL — `dist/` is stale. The entire fix is a ghost.** `dist/webview/design.js` (built 15:00) contains ZERO occurrences of `folderModalOpen` or `persistTab('activeTab')`. `dist/extension.js` (built 15:00) contains ZERO occurrences of `seenRoots`. Source files were modified at 17:07 and 18:14. The extension runs from `dist/`. So congratulations — you wrote a beautiful fix that **literally does not exist at runtime**. The user toggles that checkbox and gets booted to STITCH exactly as before. This is the kind of "implementation complete" that makes me question whether "complete" means what I think it means. `DesignPanelProvider.ts:718-737` (Layer 1), `design.js:176` (Layer 2b), `design.js:3256-3260` (Layer 3a) — all stranded in source, never compiled.
+
+**NIT — Layer 3c ordering vs. `updateDesignDocControls()`.** `design.js:3891-3895` restores the modal *before* `updateDesignDocControls()` at line 3897. The plan said "after `applySidebarState()`, before the closing `})();`". Fine, it's between those. But `openFoldersModal()` calls `renderFolderListModal()` which may touch design-doc controls. Harmless because `updateDesignDocControls()` runs after and re-asserts state. Not a bug, just sloppy ordering. I'll allow it.
+
+**NIT — `validTabs` duplicated as a magic array.** `design.js:2523` hardcodes `['stitch', 'briefs', 'html-preview', 'images', 'design']`. These same values live in `design.html:3582-3586` as `data-tab` attributes. If someone adds a tab to the HTML and forgets this array, the new tab won't restore. The plan acknowledges this as a known risk. Acceptable for a bugfix, but a future `Array.from(document.querySelectorAll('.shared-tab-btn')).map(b => b.dataset.tab)` would be self-healing. Defer.
+
+**NIT — Init `switchTab('stitch')` sends `stitchListProjects` then override `switchTab('design')` throws it away.** `design.js:187` then `design.js:2527`. One wasted `stitchListProjects` round-trip on every restore-to-non-stitch. The 300ms debounce on `persistTab` coalesces the double-persist. Negligible. Not worth fixing.
+
+*Exhales. The source-level implementation is actually correct and clean. The dedup is properly placed on the full array, not just `folderUris`. The modal close paths are all three covered (Escape `3389`, close-btn `3410`, backdrop `3420`). The `foldersListed` handlers re-render the modal when open (`2582`, `2691`, `2701`, `2710`, `2719`), so the restored modal populates as data streams in. The `validTabs` whitelist matches the actual `data-tab` values exactly. The `PanelStateStore` key round-trip is consistent (`activeTab.panel` read/write). I have no MAJOR code defect to point at — only the build.*
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is:**
+- Layer 1 dedup (`DesignPanelProvider.ts:718-737`) — correct, robust, no-op when no duplicates.
+- Layer 2a `tabKeys` addition (`DesignPanelProvider.ts:1103`) — correct.
+- Layer 2b `persistTab('activeTab', tabName)` (`design.js:176`) — correct, idempotent, debounced.
+- Layer 2c override (`design.js:2521-2529`) — correct, `validTabs` matches HTML, race window negligible.
+- Layer 3a/3b/3c modal state save/clear/restore (`design.js:3256-3260`, `3389-3393`, `3410-3414`, `3420-3424`, `3891-3895`) — all three close paths covered, restore re-populates via `foldersListed` handlers.
+
+**Fix now:**
+- None in code. The source is correct.
+
+**Fix required (build, not code):**
+- **CRITICAL:** Run `npm run compile` to propagate source changes into `dist/extension.js` and `dist/webview/design.js`. Without this, **zero** plan layers are active at runtime. (Per session constraints, compilation was not run during this review — this must be run before manual verification.)
+
+**Defer:**
+- Replace hardcoded `validTabs` array with a DOM-derived list (NIT).
+- Reorder modal restore after `updateDesignDocControls()` (NIT, cosmetic).
+
+### Code Fixes Applied
+
+None — no code-level defects found. All seven layers match the plan specification exactly.
+
+### Validation Results
+
+- **Typecheck/compile:** SKIPPED per session constraints. ⚠️ `dist/` confirmed stale (built 15:00, source modified 17:07–18:14) — `npm run compile` MUST be run before manual verification.
+- **Tests:** SKIPPED per session constraints.
+- **Static verification performed:**
+  - Layer 1: `seenRoots` Set-based dedup present at `DesignPanelProvider.ts:729-735`, signature computed on deduped array at `737`. ✓
+  - Layer 2a: `'activeTab'` present in `tabKeys` at `DesignPanelProvider.ts:1103`. ✓
+  - Layer 2b: `persistTab('activeTab', tabName)` present at `design.js:176`, inside `switchTab()` after `activeTabChanged` post. ✓
+  - Layer 2c: Override block present at `design.js:2521-2529`, `validTabs` matches `design.html:3582-3586` `data-tab` values exactly. ✓
+  - Layer 3a: `vscode.setState` save present at `design.js:3256-3260` in `openFoldersModal()`. ✓
+  - Layer 3b: Clear-on-close present at all three paths — Escape (`3389-3393`), close button (`3410-3414`), backdrop (`3420-3424`). No other close path exists. ✓
+  - Layer 3c: Restore-on-init present at `design.js:3891-3895`, after `applySidebarState()` and `ready` post. `foldersListed` handlers re-render modal when open (`2582`, `2691`, `2701`, `2710`, `2719`). ✓
+  - `PanelStateStore` key consistency: `getPanelState('activeTab')` reads `switchboard.panelState.<panelKey>.activeTab.panel` (`PanelStateStore.ts:21`); `setPanelState('activeTab', ...)` writes same key (`PanelStateStore.ts:24`). Round-trip consistent. ✓
+  - No confirmation dialogs introduced (per CLAUDE.md). ✓
+
+### Files Changed (Source — by prior implementation)
+
+- `src/services/DesignPanelProvider.ts` — Layer 1 (lines 718-737), Layer 2a (line 1103)
+- `src/webview/design.js` — Layer 2b (line 176), Layer 2c (lines 2521-2529), Layer 3a (lines 3256-3260), Layer 3b (lines 3389-3393, 3410-3414, 3420-3424), Layer 3c (lines 3891-3895)
+
+### Remaining Risks
+
+1. **CRITICAL — Stale build:** `dist/` does not contain any of the plan's changes. `npm run compile` is mandatory before the fix is live or manually verifiable.
+2. **LOW — `validTabs` hardcoded:** Future tab additions require updating the whitelist at `design.js:2523` or the new tab won't restore (falls back to STITCH — safe failure mode).
+3. **LOW — Init race window:** ~milliseconds between `switchTab(initialTab)` and `restoredTabState` override. User click in that window is overridden by stale persisted value; next click re-persists. Acceptable per plan analysis.

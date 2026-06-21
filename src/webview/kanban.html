@@ -37,10 +37,10 @@
             --accent-teal-dim: color-mix(in srgb, #D97757 40%, transparent);
             --accent-teal-bright: #E2A188;
             --glow-teal: none;           /* kill all variable-routed neon glow */
-            --text-primary: #F0EBE6;
+            --text-primary: #E0E0E0;
             --text-secondary: #8C8C8C;
-            --border-color: #38332E;
-            --border-bright: #5C544A;
+            --border-color: #333333;
+            --border-bright: #555555;
         }
 
         /* Claudify: remove neon glow from base (non-cyber) interactive states */
@@ -58,8 +58,10 @@
         body.theme-claudify .worktree-primary-btn { background: color-mix(in srgb, #D97757 12%, transparent); }
         body.theme-claudify .worktree-primary-btn:hover:not(:disabled) { background: color-mix(in srgb, #D97757 25%, transparent); }
 
-        /* Claudify: the toolbar icons are teal-tinted PNGs (base rules only set brightness).
-           Hue-shift them from cyan (~190deg) to terracotta. Tune the hue-rotate value to taste. */
+        /* Claudify: avoid afterburner's glowing coloured icons. The teal-tinted PNGs are knocked
+           to black (brightness(0)) then inverted to a flat neutral GREY at rest and on hover.
+           Terracotta appears ONLY during the click flash (.flash is added for 0.3s by flashIconBtn
+           on every button click) — the single accent moment, no resting glow. */
         body.theme-claudify .strip-icon-btn img,
         body.theme-claudify .kanban-sub-bar .strip-icon-btn img,
         body.theme-claudify .controls-strip .strip-icon-btn img,
@@ -68,7 +70,7 @@
         body.theme-claudify .mode-toggle img,
         body.theme-claudify .complexity-routing-btn img,
         body.theme-claudify .btn-add-plan img {
-            filter: hue-rotate(185deg) saturate(0.8) brightness(0.95);
+            filter: brightness(0) invert(55%);   /* ~#8c8c8c flat grey */
         }
         body.theme-claudify .strip-icon-btn.is-active img,
         body.theme-claudify .kanban-sub-bar .strip-icon-btn.is-active img,
@@ -77,7 +79,18 @@
         body.theme-claudify .mode-toggle:hover img,
         body.theme-claudify .complexity-routing-btn:hover img,
         body.theme-claudify .btn-add-plan:hover img {
-            filter: hue-rotate(185deg) saturate(0.8) brightness(1.15);
+            filter: brightness(0) invert(72%);   /* brighter grey on hover / active toggle */
+        }
+        /* The ONLY terracotta: the 0.3s click flash. */
+        body.theme-claudify .strip-icon-btn.flash img,
+        body.theme-claudify .kanban-sub-bar .strip-icon-btn.flash img,
+        body.theme-claudify .controls-strip .strip-icon-btn.flash img,
+        body.theme-claudify .column-icon-btn.flash img,
+        body.theme-claudify .column-header-btn.flash img,
+        body.theme-claudify .mode-toggle.flash img,
+        body.theme-claudify .complexity-routing-btn.flash img,
+        body.theme-claudify .btn-add-plan.flash img {
+            filter: brightness(0) saturate(100%) invert(54%) sepia(48%) saturate(560%) hue-rotate(330deg) brightness(108%) contrast(87%);
         }
         /* Off states stay greyed-out (no teal to recolor) */
         body.theme-claudify .strip-icon-btn.is-off img,
@@ -100,7 +113,7 @@
             border-left: 3px solid var(--vscode-testing-iconPassed, #73c991) !important;
         }
         body.theme-claudify .kanban-card:hover {
-            background: color-mix(in srgb, var(--border-bright) 10%, transparent) !important;
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 9%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
             border-color: var(--border-bright) !important;
             color: var(--text-primary) !important;
             box-shadow: none !important;
@@ -122,12 +135,51 @@
         /* Complexity label + timestamp: grey (the only labels asked to be grey). Literal grey
            because --text-secondary is warm again for everything else. */
         body.theme-claudify .card-meta { color: #8a8a8a !important; }
-        /* Column titles: neutral grey chrome (the content stays warm). */
+        /* Column titles: neutral grey chrome. */
         body.theme-claudify .column-name { color: #8a8a8a; }
-        /* Warm text lives only on the kanban card buttons + the agent name under the column
-           header (everything else is neutral grey). Resting state only, so hover colours stay. */
-        body.theme-claudify .card-btn:not(:hover) { color: #A8A095; }
-        body.theme-claudify .column-agent { color: #A8A095; }
+        /* No warm text — card buttons and agent names fall back to the neutral greys
+           (--text-secondary resting, --text-primary on hover) from the base rules. */
+        /* Grey the remaining terracotta chrome: column count badges + the is-teal strip
+           buttons (ASSIGN/EPIC). Neutral at rest, no glow. */
+        body.theme-claudify .column-count {
+            color: #8c8c8c;
+            background: color-mix(in srgb, #8c8c8c 12%, transparent);
+            border-color: color-mix(in srgb, #8c8c8c 28%, transparent);
+            box-shadow: none;
+        }
+        body.theme-claudify .strip-btn.is-teal {
+            color: #b8b8b8;
+            border-color: var(--border-color);
+            background: color-mix(in srgb, #ffffff 4%, transparent);
+        }
+        body.theme-claudify .strip-btn.is-teal:hover:not(:disabled) {
+            background: color-mix(in srgb, #ffffff 8%, transparent);
+            border-color: var(--border-bright);
+            color: #e0e0e0;
+        }
+        /* The "+" create-plan / create-project buttons: grey at rest & hover, terracotta only on
+           the click flash (matches the icon buttons). */
+        body.theme-claudify .btn-add-plan {
+            background: color-mix(in srgb, #ffffff 4%, transparent);
+            border-color: var(--border-color);
+            color: #b8b8b8;
+        }
+        body.theme-claudify .btn-add-plan:hover:not(:disabled) {
+            background: color-mix(in srgb, #ffffff 8%, transparent);
+            border-color: var(--border-bright);
+            color: #e0e0e0;
+        }
+        body.theme-claudify #btn-add-plan { color: #b8b8b8; }
+        body.theme-claudify #btn-add-plan:hover {
+            color: #e0e0e0;
+            background: color-mix(in srgb, #ffffff 6%, transparent);
+        }
+        body.theme-claudify .btn-add-plan.flash,
+        body.theme-claudify #btn-add-plan.flash {
+            background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+            border-color: var(--accent-primary);
+            color: var(--accent-primary);
+        }
 
         * {
             box-sizing: border-box;
@@ -2940,7 +2992,10 @@ body.theme-claudify .shared-tab-btn:hover {
             </div>
             <div class="modal-body">
                 <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">
-                    Jot down bugs, thoughts, or issues. Each line/paragraph is treated as a separate issue when sent to the planner.
+                    Jot down bugs, thoughts, or issues. Entries are <strong>saved automatically</strong>
+                    and persist until you press <strong>Send to Planner</strong> or <strong>Copy Prompt</strong>
+                    (which clears the memo) or <strong>Clear</strong>. Each line/paragraph is treated as a
+                    separate issue when sent to the planner.
                 </p>
                 <textarea id="memo-textarea"
                           class="modal-textarea"
@@ -3633,11 +3688,13 @@ body.theme-claudify .shared-tab-btn:hover {
         });
 
         document.getElementById('memo-copy-btn')?.addEventListener('click', () => {
+            if (memoSaveTimer) clearTimeout(memoSaveTimer);
             const content = document.getElementById('memo-textarea')?.value || '';
             postKanbanMessage({ type: 'memoGeneratePrompt', content, action: 'copy' });
         });
 
         document.getElementById('memo-send-btn')?.addEventListener('click', () => {
+            if (memoSaveTimer) clearTimeout(memoSaveTimer);
             const content = document.getElementById('memo-textarea')?.value || '';
             postKanbanMessage({ type: 'memoGeneratePrompt', content, action: 'send' });
         });

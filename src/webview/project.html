@@ -78,7 +78,7 @@
             --accent-teal-bright: #E2A188;
             --accent-neon: #D97757;
             --glow-teal: none;           /* kill all variable-routed neon glow */
-            --text-primary: #F0EBE6;
+            --text-primary: #E0E0E0;
             --text-secondary: #8C8C8C;
             --border-color: #38332E;
             --border-bright: #5C544A;
@@ -99,7 +99,7 @@
         body.theme-claudify .constitution-file-item,
         body.theme-claudify .insight-item {
             background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
-            border: 1px solid var(--border-color) !important;
+            border: 1px solid #333333 !important;
             color: var(--text-secondary) !important;
             box-shadow: none !important;
         }
@@ -107,16 +107,21 @@
         body.theme-claudify .epic-plan-item:hover,
         body.theme-claudify .constitution-file-item:hover,
         body.theme-claudify .insight-item:hover {
-            background: color-mix(in srgb, var(--border-bright) 10%, transparent) !important;
-            border-color: var(--border-bright) !important;
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 9%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
+            border-color: #555555 !important;
             color: var(--text-primary) !important;
             box-shadow: none !important;
         }
-        /* Selected: clear terracotta highlight (border + left bar) so the selection is obvious. */
+        /* Selected: clear terracotta highlight (border + left bar) so the selection is obvious.
+           The :hover variants keep the terracotta when a selected card is hovered. */
         body.theme-claudify .kanban-plan-item.selected,
+        body.theme-claudify .kanban-plan-item.selected:hover,
         body.theme-claudify .epic-plan-item.selected,
+        body.theme-claudify .epic-plan-item.selected:hover,
         body.theme-claudify .constitution-file-item.selected,
-        body.theme-claudify .insight-item.selected {
+        body.theme-claudify .constitution-file-item.selected:hover,
+        body.theme-claudify .insight-item.selected,
+        body.theme-claudify .insight-item.selected:hover {
             background: color-mix(in srgb, var(--accent-primary) 12%, transparent) !important;
             border-color: var(--accent-primary) !important;
             color: var(--text-primary) !important;
@@ -1152,6 +1157,11 @@
             margin-bottom: 12px;
             line-height: 1.6;
         }
+    </style>
+    <!-- Poppins via Google Fonts CDN (online, temporary — bundled local @font-face also exists above).
+         Declared last so this definition wins for the markdown-preview headings. -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap');
     </style>
 </head>
 <body>

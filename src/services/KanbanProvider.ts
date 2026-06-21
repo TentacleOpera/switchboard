@@ -6905,14 +6905,25 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 }
                 const prompt = this._buildMemoPlannerPrompt(issues, workspaceRoot);
                 await vscode.env.clipboard.writeText(prompt);
+                
+                let sendSucceeded = action !== 'send';
                 if (action === 'send') {
-                    await this._dispatchMemoToPlanner(prompt, workspaceRoot);
+                    sendSucceeded = await this._dispatchMemoToPlanner(prompt, workspaceRoot);
                 }
+
+                if (sendSucceeded) {
+                    const memoPath = this._getMemoPath(workspaceRoot);
+                    await fs.promises.writeFile(memoPath, '', 'utf8');
+                    this._panel?.webview.postMessage({ type: 'memoContent', content: '' });
+                }
+
                 this._panel?.webview.postMessage({
                     type: 'memoPromptResult',
-                    message: action === 'send'
-                        ? `Sent ${issues.length} issue(s) to planner. Prompt copied to clipboard.`
-                        : `Prompt for ${issues.length} issue(s) copied to clipboard.`
+                    message: sendSucceeded
+                        ? (action === 'send'
+                            ? `Sent ${issues.length} issue(s) to planner. Memo cleared.`
+                            : `Prompt for ${issues.length} issue(s) copied to clipboard. Memo cleared.`)
+                        : `Failed to send to planner. Prompt copied to clipboard. Memo preserved for retry.`
                 });
                 break;
             }
@@ -6987,12 +6998,12 @@ Each plan file must include:
 - After creating all plans, run a full sync so they appear on the kanban board`;
     }
 
-    private async _dispatchMemoToPlanner(prompt: string, workspaceRoot: string): Promise<void> {
+    private async _dispatchMemoToPlanner(prompt: string, workspaceRoot: string): Promise<boolean> {
         if (!this._taskViewerProvider) {
             vscode.window.showInformationMessage(
                 'Memo prompt copied to clipboard. No planner terminal available — paste it manually.'
             );
-            return;
+            return false;
         }
         try {
             const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole('planner', prompt, workspaceRoot);
@@ -7000,11 +7011,14 @@ Each plan file must include:
                 vscode.window.showWarningMessage(
                     'Memo prompt copied to clipboard but could not dispatch to planner. Paste manually.'
                 );
+                return false;
             }
+            return true;
         } catch (err) {
             vscode.window.showInformationMessage(
                 'Memo prompt copied to clipboard. No planner terminal available — paste it manually.'
             );
+            return false;
         }
     }
 

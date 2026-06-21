@@ -35,10 +35,10 @@
             --accent-teal-dim: color-mix(in srgb, #D97757 40%, transparent);
             --accent-teal-bright: #E2A188;
             --glow-teal: none;           /* kill all variable-routed neon glow */
-            --text-primary: #F0EBE6;
+            --text-primary: #E0E0E0;     /* neutral light grey — no warmth (matches afterburner's neutral) */
             --text-secondary: #8C8C8C;
-            --border-color: #38332E;
-            --border-bright: #5C544A;
+            --border-color: #333333;
+            --border-bright: #555555;
         }
 
         /* Claudify: remove neon glow from base (non-cyber) interactive states */
@@ -97,8 +97,11 @@
         body.theme-claudify .kanban-card.completed {
             border-left: 3px solid var(--vscode-testing-iconPassed, #73c991) !important;
         }
+        /* Hover: keep the gradient (afterburner keeps its card background on hover too) —
+           just lift it slightly and brighten the border/text. Don't flatten to a solid fill
+           or the texture vanishes on hover. */
         body.theme-claudify .kanban-card:hover {
-            background: color-mix(in srgb, var(--border-bright) 10%, transparent) !important;
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 9%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
             border-color: var(--border-bright) !important;
             color: var(--text-primary) !important;
             box-shadow: none !important;
@@ -110,22 +113,18 @@
             color: var(--text-primary) !important;
             box-shadow: inset 3px 0 0 var(--accent-primary) !important;
         }
-        /* Card titles hardcode harsh white (.card-topic) or inherit the muted subtitle colour.
-           Give them a mid-tone — brighter than the subtitle (--text-secondary), softer than
-           the harsh cream (--text-primary). */
+        /* Card titles: a neutral mid-tone — brighter than the subtitle (--text-secondary),
+           softer than the primary text (--text-primary). No warmth. */
         body.theme-claudify .card-topic,
         body.theme-claudify .plan-title {
             color: color-mix(in srgb, var(--text-primary) 60%, var(--text-secondary)) !important;
         }
-        /* Complexity label + timestamp: grey (the only labels asked to be grey). Literal grey
-           because --text-secondary is warm again for everything else. */
+        /* Complexity label + timestamp: grey. */
         body.theme-claudify .card-meta { color: #8a8a8a !important; }
-        /* Column titles: neutral grey chrome (the content stays warm). */
+        /* Column titles: neutral grey chrome. */
         body.theme-claudify .column-name { color: #8a8a8a; }
-        /* Warm text lives only on the kanban card buttons + the agent name under the column
-           header (everything else is neutral grey). Resting state only, so hover colours stay. */
-        body.theme-claudify .card-btn:not(:hover) { color: #A8A095; }
-        body.theme-claudify .column-agent { color: #A8A095; }
+        /* No warm text anywhere — buttons and agent names fall back to the neutral greys
+           (--text-secondary resting, --text-primary on hover) from the base rules. */
 
         * {
             box-sizing: border-box;
