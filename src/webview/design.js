@@ -1006,25 +1006,6 @@
                         if (container && viewport) fitToContainer('html', container, viewport);
                     };
                 }
-            } else if (webviewUri) {
-                // Use the vscode-webview: URI directly as the iframe src — this is
-                // the same approach the planning panel used (and it worked). The
-                // iframe gets its own browsing context with the vscode-webview:
-                // protocol, external scripts load normally, and relative asset
-                // paths resolve relative to the file's location. The localhost
-                // server approach (iframeSrc) was introduced later and broke
-                // external script loading by changing the iframe's origin.
-                if (iframeWrapper) iframeWrapper.style.display = 'flex';
-                if (htmlWrapper) htmlWrapper.classList.add('scanlines-suppressed');
-                if (iframe) {
-                    iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
-                    iframe.removeAttribute('srcdoc');
-                    iframe.src = isAutoRefreshed ? webviewUri + '?t=' + Date.now() : webviewUri;
-                }
-                if (imageContainer) imageContainer.style.display = 'none';
-                if (imageImg) imageImg.removeAttribute('src');
-                const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
-                if (iframeViewport) applyZoom('html', iframeViewport);
             } else if (msg.iframeSrc) {
                 if (iframeWrapper) iframeWrapper.style.display = 'flex';
                 if (htmlWrapper) htmlWrapper.classList.add('scanlines-suppressed');
@@ -2764,6 +2745,30 @@
                     statusEl.style.color = '#ff6b6b';
                 }
                 break;
+
+            case 'previewRenderStatus': {
+                // Diagnostic messages from the iframe — shows script load failures,
+                // JS errors, and render status so we can see why previews are blank.
+                console.log('[DesignPanel Webview] Iframe render status:', msg);
+                const statusHtml = document.getElementById('status-html');
+                if (statusHtml) {
+                    if (msg.errors && msg.errors.length > 0) {
+                        const e = msg.errors[msg.errors.length - 1];
+                        statusHtml.textContent = 'JS error: ' + (e.message || e.reason || 'unknown');
+                        statusHtml.style.color = '#ff6b6b';
+                    } else if (msg.failedScripts && msg.failedScripts.length > 0) {
+                        statusHtml.textContent = 'Script failed: ' + msg.failedScripts[msg.failedScripts.length - 1].split('/').pop();
+                        statusHtml.style.color = '#ff6b6b';
+                    } else if (msg.rootChildren !== undefined && msg.rootChildren > 0) {
+                        statusHtml.textContent = (state.activeDocName || 'Loaded') + ' — rendered (' + msg.rootChildren + ' elements)';
+                        statusHtml.style.color = 'var(--accent-teal)';
+                    } else if (msg.loadedScripts && msg.loadedScripts.length > 0) {
+                        statusHtml.textContent = (state.activeDocName || 'Loaded') + ' — ' + msg.loadedScripts.length + ' scripts loaded';
+                        statusHtml.style.color = 'var(--accent-teal)';
+                    }
+                }
+                break;
+            }
 
             case 'activeDesignDocUpdated': {
                 const ds = msg.designSystemDoc || {};

@@ -718,10 +718,11 @@
                 ticketsInitialized = true;
             }
             if (lastIntegrationProvider && !ticketsLoadedOnce) {
-                if (ticketsAutoSync) {
-                    if (lastIntegrationProvider === 'clickup') loadClickUpSpaces();
-                    else loadLinearProject();
-                } else {
+                // Always load hierarchy for navigation; ticketsAutoSync only
+                // controls task content source (API vs local files).
+                if (lastIntegrationProvider === 'clickup') loadClickUpSpaces();
+                else if (lastIntegrationProvider === 'linear') loadLinearProject();
+                if (!ticketsAutoSync) {
                     loadLocalTicketFiles();
                 }
             } else {
@@ -4162,7 +4163,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     break;
                 }
                 ticketsWorkspaceRoot = msg.workspaceRoot || '';
-                lastIntegrationProvider = msg.provider || null;
+                // Don't overwrite a provider preference already restored from saved state
+                if (!lastIntegrationProvider) {
+                    lastIntegrationProvider = msg.provider || null;
+                }
                 const select = document.getElementById('tickets-workspace-filter');
                 if (select) {
                     select.value = ticketsWorkspaceRoot;
@@ -4171,16 +4175,21 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     const restoredState = getRestoredState('tickets', ticketsWorkspaceRoot);
                     if (restoredState) {
                         restoreTicketsStateForRoot(restoredState);
+                        // Always load hierarchy for navigation; ticketsAutoSync only
+                        // controls task content source (API vs local files).
+                        if (isTicketsTabActive() && lastIntegrationProvider && !ticketsLoadedOnce) {
+                            if (lastIntegrationProvider === 'clickup') loadClickUpSpaces();
+                            else if (lastIntegrationProvider === 'linear') loadLinearProject();
+                            if (!ticketsAutoSync) loadLocalTicketFiles();
+                        }
                     } else if (Object.keys(_restoredPanelState.byRoot).length > 0) {
                         // restoredTabState already arrived but no persisted state for this
                         // root — load directly (first-time user / no saved hierarchy).
                         ticketsLoadedOnce = false;
-                        if (isTicketsTabActive()) {
-                            if (lastIntegrationProvider === 'clickup') {
-                                loadClickUpSpaces();
-                            } else if (lastIntegrationProvider === 'linear') {
-                                loadLinearProject();
-                            }
+                        if (isTicketsTabActive() && lastIntegrationProvider) {
+                            if (lastIntegrationProvider === 'clickup') loadClickUpSpaces();
+                            else if (lastIntegrationProvider === 'linear') loadLinearProject();
+                            if (!ticketsAutoSync) loadLocalTicketFiles();
                         }
                     } else {
                         // restoredTabState hasn't arrived yet — defer until it does
@@ -4210,16 +4219,28 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         if (tabBtn) tabBtn.textContent = 'TICKETS';
                     }
 
-                    lastIntegrationProvider = msg.provider || null;
+                    // Only set lastIntegrationProvider if not already restored from
+                    // saved state — the backend's default ('clickup' when both are
+                    // configured) should not overwrite the user's persisted preference.
+                    if (!lastIntegrationProvider) {
+                        lastIntegrationProvider = msg.provider || null;
+                    }
                     if (providerSelector && lastIntegrationProvider) {
                         providerSelector.value = lastIntegrationProvider;
                     }
                     ticketsAutoSync = msg.ticketsAutoSync === true;
-                    if (isTicketsTabActive() && lastIntegrationProvider) {
-                        if (ticketsAutoSync) {
-                            if (lastIntegrationProvider === 'clickup' && !_restoringClickUpHierarchy && !ticketsLoadedOnce) loadClickUpSpaces();
-                            else if (lastIntegrationProvider === 'linear' && !ticketsLoadedOnce) loadLinearProject();
-                        } else if (!ticketsLoadedOnce) {
+                    if (isTicketsTabActive() && lastIntegrationProvider && !ticketsLoadedOnce) {
+                        // Always load the hierarchy (spaces/folders/lists for ClickUp,
+                        // projects for Linear) — these are navigation, not task content.
+                        // ticketsAutoSync only controls whether task content comes from
+                        // the API (true) or local files (false).
+                        if (lastIntegrationProvider === 'clickup') {
+                            loadClickUpSpaces();
+                        } else if (lastIntegrationProvider === 'linear') {
+                            loadLinearProject();
+                        }
+                        // If not auto-syncing, also load local ticket files
+                        if (!ticketsAutoSync) {
                             loadLocalTicketFiles();
                         }
                     }
@@ -5744,42 +5765,15 @@ Return ONLY the drafted prompt with no additional commentary.`;
             return;
         }
 
-        if (count === 1) {
-            // Exactly one integration — hide picker, show workspace name
-            select.style.display = 'none';
-            staticLabel.style.display = '';
-            const single = _integrationWorkspaces[0];
-            const item = _workspaceItems.find(i => i.workspaceRoot === single.workspaceRoot);
-            staticLabel.textContent = item ? item.label : (single.workspaceRoot ? single.workspaceRoot.split('/').pop() : '');
-            // Auto-select the single workspace if not already set
-            if (ticketsWorkspaceRoot !== single.workspaceRoot) {
-                ticketsWorkspaceRoot = single.workspaceRoot;
-                persistTab('tickets.root', ticketsWorkspaceRoot);
-                vscode.postMessage({ type: 'ticketsRootChanged', workspaceRoot: ticketsWorkspaceRoot });
-            }
-            return;
-        }
-
-        // Two or more — show filtered dropdown
-        select.style.display = '';
+        // Tickets are global — hide the workspace picker entirely.
+        // ticketsWorkspaceRoot is only used internally for file-save context.
+        select.style.display = 'none';
         staticLabel.style.display = 'none';
-        const current = ticketsWorkspaceRoot || '';
-        select.innerHTML = '';
-        for (const ws of _integrationWorkspaces) {
-            const item = _workspaceItems.find(i => i.workspaceRoot === ws.workspaceRoot);
-            const option = document.createElement('option');
-            option.value = ws.workspaceRoot;
-            option.textContent = item ? item.label : (ws.workspaceRoot ? ws.workspaceRoot.split('/').pop() : '');
-            select.appendChild(option);
-        }
-        // Preserve current selection if still valid, otherwise select first
-        if (_integrationWorkspaces.some(w => w.workspaceRoot === current)) {
-            select.value = current;
-        } else {
-            select.value = _integrationWorkspaces[0].workspaceRoot;
-            ticketsWorkspaceRoot = select.value;
+
+        // Ensure ticketsWorkspaceRoot is set for internal file-save context
+        if (!ticketsWorkspaceRoot && _integrationWorkspaces.length > 0) {
+            ticketsWorkspaceRoot = _integrationWorkspaces[0].workspaceRoot;
             persistTab('tickets.root', ticketsWorkspaceRoot);
-            vscode.postMessage({ type: 'ticketsRootChanged', workspaceRoot: ticketsWorkspaceRoot });
         }
     }
 
@@ -7828,8 +7822,11 @@ Instructions:
 
         if (clickUpSelectedSpaceId) {
             _restoringClickUpHierarchy = true;
-            ticketsLoadedOnce = true;
-            loadClickUpSpaces();
+            // Don't set ticketsLoadedOnce or call loadClickUpSpaces() here —
+            // the integrationProviderStates handler will trigger the correct
+            // load based on ticketsAutoSync (remote if true, local files if false).
+            // _restoringClickUpHierarchy tells the clickupSpacesLoaded handler
+            // to auto-select the saved space/folder/list.
         } else {
             _restoringClickUpHierarchy = false;
         }

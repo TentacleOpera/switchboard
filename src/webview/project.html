@@ -122,10 +122,10 @@
         body.theme-claudify .constitution-file-item.selected:hover,
         body.theme-claudify .insight-item.selected,
         body.theme-claudify .insight-item.selected:hover {
-            background: color-mix(in srgb, var(--accent-primary) 12%, transparent) !important;
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
             border-color: var(--accent-primary) !important;
             color: var(--text-primary) !important;
-            box-shadow: inset 3px 0 0 var(--accent-primary) !important;
+            box-shadow: inset 0 0 0 1px var(--accent-primary) !important;
         }
         /* Card title: mid-tone so it's brighter than the subtitle (--text-secondary) without
            being the harsh cream (--text-primary) — consistent with the other panels. */
@@ -647,7 +647,7 @@
 
         /* Claudify: neutral-grey tab nav (active tab keeps the terracotta accent). */
         body.theme-claudify .shared-tab-btn:not(.active) { color: #8a8a8a; }
-        body.theme-claudify .shared-tab-btn:hover {
+        body.theme-claudify .shared-tab-btn:hover:not(.active) {
             color: #c8c8c8;
             background: color-mix(in srgb, #ffffff 5%, transparent);
         }
@@ -803,7 +803,7 @@
         body.theme-claudify #epics-preview-pane,
         body.theme-claudify #constitution-preview-pane,
         body.theme-claudify #tuning-preview-pane {
-            background-color: #14110F;
+            background-color: #1F1C1A;   /* lifted from near-black (#14110F) to soften text/background contrast (claudify has no glass overlay) */
             background-image:
                 linear-gradient(color-mix(in srgb, var(--accent-primary) 5%, transparent) 1px, transparent 1px),
                 linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 5%, transparent) 1px, transparent 1px);

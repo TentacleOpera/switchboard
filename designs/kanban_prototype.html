@@ -106,12 +106,14 @@
             color: var(--text-primary) !important;
             box-shadow: none !important;
         }
-        /* Selected: clear terracotta highlight so the selection is obvious (keep green completed bar). */
+        /* Selected: keep the neutral gradient (like afterburner keeps its card background) and
+           ring the card in terracotta as an OUTLINE — not a fill tint. Border + inset 1px ring
+           give a crisp 2px outline with no glow and no layout shift. */
         body.theme-claudify .kanban-card.selected {
-            background: color-mix(in srgb, var(--accent-primary) 12%, transparent) !important;
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
             border-color: var(--accent-primary) !important;
             color: var(--text-primary) !important;
-            box-shadow: inset 3px 0 0 var(--accent-primary) !important;
+            box-shadow: inset 0 0 0 1px var(--accent-primary) !important;
         }
         /* Card titles: a neutral mid-tone — brighter than the subtitle (--text-secondary),
            softer than the primary text (--text-primary). No warmth. */

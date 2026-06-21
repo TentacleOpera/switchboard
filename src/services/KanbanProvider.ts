@@ -2339,6 +2339,13 @@ export class KanbanProvider implements vscode.Disposable {
     private async _getDefaultPromptOverrides(
         workspaceRoot: string
     ): Promise<Partial<Record<string, import('./agentConfig').DefaultPromptOverride>>> {
+        // Route through TaskViewerProvider so globalState (global scope) is the primary
+        // source of truth, with DB as fallback. This prevents prompt overrides from
+        // switching on workspace change.
+        if (this._taskViewerProvider) {
+            return this._taskViewerProvider.handleGetDefaultPromptOverrides(workspaceRoot);
+        }
+
         const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
         let overrides: Partial<Record<string, import('./agentConfig').DefaultPromptOverride>> = {};
         try {
@@ -2365,6 +2372,14 @@ export class KanbanProvider implements vscode.Disposable {
         workspaceRoot: string,
         overrides: Partial<Record<string, import('./agentConfig').DefaultPromptOverride>>
     ): Promise<void> {
+        // Route through TaskViewerProvider so the write goes to globalState first
+        // (global scope), then mirrors to DB. This prevents prompt overrides from
+        // being per-workspace only.
+        if (this._taskViewerProvider) {
+            await this._taskViewerProvider.handleSaveDefaultPromptOverrides({ overrides });
+            return;
+        }
+
         const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
         try {
             let state: any = {};
@@ -2374,7 +2389,6 @@ export class KanbanProvider implements vscode.Disposable {
             } catch { /* file may not exist */ }
             state.defaultPromptOverrides = overrides;
             await fs.promises.writeFile(statePath, JSON.stringify(state, null, 2), 'utf8');
-            this._taskViewerProvider?.notifyStateChanged();
             this._panel?.webview.postMessage({ type: 'saveDefaultPromptOverridesResult', success: true });
         } catch (err) {
             console.error('[KanbanProvider] Failed to save default prompt overrides:', err);
@@ -3563,35 +3577,45 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
     private async _getAgentNames(workspaceRoot: string): Promise<Record<string, string>> {
         const configuredNames: Record<string, string> = {};
-        const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
         const builtInRoles = buildKanbanColumns([])
             .map(column => column.role)
             .filter((role): role is string => Boolean(role));
         const fallbackRoles = [...new Set([...builtInRoles, 'analyst'])];
 
         try {
-            if (fs.existsSync(statePath)) {
-                const content = await fs.promises.readFile(statePath, 'utf8');
-                const state = JSON.parse(content);
-                const commands = { ...(state.startupCommands || {}) };
-                const customAgents = parseCustomAgents(state.customAgents);
-                const roles = [...new Set([...fallbackRoles, ...customAgents.map(agent => agent.role)])];
-                for (const agent of customAgents) {
-                    commands[agent.role] = agent.startupCommand;
-                }
-
-                for (const role of roles) {
-                    const cmd = (commands[role] || '').trim();
-                    if (cmd) {
-                        const binary = cmd.split(/\s+/)[0];
-                        const name = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase();
-                        configuredNames[role] = `${name} CLI`;
-                    } else {
-                        configuredNames[role] = 'No agent assigned';
+            // Read from globalState-aware getters (via TaskViewerProvider) so agent
+            // names stay consistent across workspace switches.
+            const [commands, customAgents] = this._taskViewerProvider
+                ? await Promise.all([
+                    this._taskViewerProvider.getStartupCommands(workspaceRoot),
+                    this._taskViewerProvider.getCustomAgents(workspaceRoot)
+                ])
+                : await (async () => {
+                    const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
+                    if (!fs.existsSync(statePath)) {
+                        return [{}, []] as const;
                     }
-                }
-            } else {
-                for (const role of fallbackRoles) {
+                    const content = await fs.promises.readFile(statePath, 'utf8');
+                    const state = JSON.parse(content);
+                    return [
+                        { ...(state.startupCommands || {}) },
+                        parseCustomAgents(state.customAgents)
+                    ] as const;
+                })();
+
+            const roles = [...new Set([...fallbackRoles, ...customAgents.map(agent => agent.role)])];
+            const mergedCommands = { ...commands };
+            for (const agent of customAgents) {
+                mergedCommands[agent.role] = agent.startupCommand;
+            }
+
+            for (const role of roles) {
+                const cmd = (mergedCommands[role] || '').trim();
+                if (cmd) {
+                    const binary = cmd.split(/\s+/)[0];
+                    const name = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase();
+                    configuredNames[role] = `${name} CLI`;
+                } else {
                     configuredNames[role] = 'No agent assigned';
                 }
             }

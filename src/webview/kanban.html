@@ -120,10 +120,10 @@
         }
         /* Selected: clear terracotta highlight so the selection is obvious (keep green completed bar). */
         body.theme-claudify .kanban-card.selected {
-            background: color-mix(in srgb, var(--accent-primary) 12%, transparent) !important;
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
             border-color: var(--accent-primary) !important;
             color: var(--text-primary) !important;
-            box-shadow: inset 3px 0 0 var(--accent-primary) !important;
+            box-shadow: inset 0 0 0 1px var(--accent-primary) !important;
         }
         /* Card titles hardcode harsh white (.card-topic) or inherit the muted subtitle colour.
            Give them a mid-tone — brighter than the subtitle (--text-secondary), softer than
@@ -1650,13 +1650,13 @@
             box-shadow: var(--glow-teal);
         }
         .kanban-mode-dropdown.is-off {
-            color: var(--accent-orange);
-            border-color: color-mix(in srgb, var(--accent-orange) 45%, transparent);
+            color: var(--text-secondary);
+            border-color: color-mix(in srgb, var(--text-secondary) 45%, transparent);
         }
         .kanban-mode-dropdown.is-off:hover,
         .kanban-mode-dropdown.is-off:focus {
-            border-color: var(--accent-orange);
-            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-orange) 30%, transparent);
+            border-color: var(--text-secondary);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--text-secondary) 30%, transparent);
         }
         .kanban-mode-dropdown option {
             background: var(--bg-color);
@@ -2347,7 +2347,7 @@
 /* Claudify: neutral-grey tab nav (active tab keeps the terracotta accent). kanban.html has its
    own inline copy of these tab styles, so the override must live here too. */
 body.theme-claudify .shared-tab-btn:not(.active) { color: #8a8a8a; }
-body.theme-claudify .shared-tab-btn:hover {
+body.theme-claudify .shared-tab-btn:hover:not(.active) {
   color: #c8c8c8;
   background: color-mix(in srgb, #ffffff 5%, transparent);
 }

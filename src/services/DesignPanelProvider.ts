@@ -1033,8 +1033,171 @@ export class DesignPanelProvider implements vscode.Disposable {
                 res.end('Not Found');
                 return;
             }
-            res.writeHead(200, { 'Content-Type': this._getMimeType(resolvedPath) });
-            res.end(data);
+            const mimeType = this._getMimeType(resolvedPath);
+            // For HTML files, inject:
+            // 1. A script that intercepts Node.prototype.appendChild/insertBefore
+            //    to rewrite Babel-compiled output. Recent @babel/standalone
+            //    defaults to preset-react runtime:'automatic', which generates
+            //    `import { jsx } from "react/jsx-runtime"` in compiled output.
+            //    Babel creates a <script> element with that code and appends it
+            //    to the DOM — the browser parses the script during appendChild
+            //    and rejects the import statement ("Cannot use import statement
+            //    outside a module"). The intercept rewrites the import to use
+            //    the already-loaded React global before the script is inserted.
+            // 2. A diagnostic script that captures load errors and reports
+            //    them back to the parent webview via postMessage.
+            if (mimeType.startsWith('text/html')) {
+                let html = data.toString('utf8');
+                const babelPatch = `<script>(function(){
+'use strict';
+// Babel standalone compiles <script type="text/babel"> blocks and injects
+// the compiled code as a new <script> element. Recent @babel/standalone
+// defaults to preset-react runtime:'automatic', which generates
+//   import { jsx as _jsx } from "react/jsx-runtime";
+// at the top of the compiled output. The browser rejects this because
+// the script is not type="module". We intercept ALL DOM insertion methods
+// and rewrite the import into var declarations using the React global.
+function rewriteScriptContent(el){
+if(!el||!el.textContent)return;
+var c=el.textContent;
+if(c.indexOf('import')===-1)return;
+// Rewrite import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime"
+c=c.replace(
+/import\\s*\\{([^}]+)\\}\\s*from\\s*["']react\\/jsx-runtime["'];?/g,
+function(match,imports){
+var parts=imports.split(',').map(function(s){return s.trim();});
+var decls=[];
+parts.forEach(function(part){
+// Handle "jsx as _jsx" aliasing
+var m=part.match(/^(\\w+)(?:\\s+as\\s+(\\w+))?$/);
+if(!m)return;
+var name=m[1],alias=m[2]||name;
+if(name==='jsx'||name==='jsxs')decls.push('var '+alias+'=React.createElement');
+else if(name==='Fragment')decls.push('var '+alias+'=React.Fragment');
+});
+return decls.join(';');
+}
+);
+// Also rewrite import { ... } from "react/jsx-dev-runtime" (dev mode)
+c=c.replace(
+/import\\s*\\{([^}]+)\\}\\s*from\\s*["']react\\/jsx-dev-runtime["'];?/g,
+function(match,imports){
+var parts=imports.split(',').map(function(s){return s.trim();});
+var decls=[];
+parts.forEach(function(part){
+var m=part.match(/^(\\w+)(?:\\s+as\\s+(\\w+))?$/);
+if(!m)return;
+var name=m[1],alias=m[2]||name;
+if(name==='jsx'||name==='jsxs'||name==='jsxDEV')decls.push('var '+alias+'=React.createElement');
+else if(name==='Fragment')decls.push('var '+alias+'=React.Fragment');
+});
+return decls.join(';');
+}
+);
+// Strip any remaining import/export statements that would cause SyntaxError
+c=c.replace(/import\\s*\\{[^}]+\\}\\s*from\\s*["'][^"']+["'];?/g,function(match){
+var nameMatch=match.match(/\\{([^}]+)\\}/);
+if(!nameMatch)return'';
+var names=nameMatch[1].split(',').map(function(s){return s.trim().replace(/^\\w+\\s+as\\s+/,'');});
+return names.map(function(n){return'var '+n+'=undefined;';}).join('');
+});
+c=c.replace(/import\\s+[^;]+;/g,function(m){
+var nm=m.match(/import\\s+(\\w+)/);
+return nm?'var '+nm[1]+'=undefined;':'';
+});
+c=c.replace(/export\\s+(default\\s+)?/g,function(m,def){
+return def?'':'';
+});
+el.textContent=c;
+}
+// Intercept ALL DOM insertion methods that Babel might use
+var origAppend=Node.prototype.appendChild;
+Node.prototype.appendChild=function(child){
+if(child&&child.tagName==='SCRIPT')rewriteScriptContent(child);
+return origAppend.call(this,child);
+};
+var origInsert=Node.prototype.insertBefore;
+Node.prototype.insertBefore=function(child,ref){
+if(child&&child.tagName==='SCRIPT')rewriteScriptContent(child);
+return origInsert.call(this,child,ref);
+};
+// Element.prototype.append() — newer API, used by some libraries
+if(Element.prototype.append){
+var origElAppend=Element.prototype.append;
+Element.prototype.append=function(){
+for(var i=0;i<arguments.length;i++){
+if(arguments[i]&&arguments[i].tagName==='SCRIPT')rewriteScriptContent(arguments[i]);
+}
+return origElAppend.apply(this,arguments);
+};
+}
+// Also intercept textContent setter on script elements — Babel may set
+// content after the script is already in the DOM via innerHTML/textContent
+var origTextDesc=Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype,'textContent');
+if(origTextDesc&&origTextDesc.set){
+Object.defineProperty(HTMLScriptElement.prototype,'textContent',{
+get:origTextDesc.get,
+set:function(v){
+if(typeof v==='string'&&v.indexOf('import')!==-1){
+var fake={textContent:v};
+rewriteScriptContent(fake);
+v=fake.textContent;
+}
+origTextDesc.set.call(this,v);
+},
+configurable:true
+});
+}
+})();</script>`;
+
+                const diag = `<script>(function(){
+'use strict';
+var errors=[],loaded=[],failed=[];
+window.addEventListener('error',function(e){
+errors.push({message:e.message,filename:e.filename,lineno:e.lineno,colno:e.colno,
+stack:e.error&&e.error.stack?e.error.stack:null});
+report();
+});
+window.addEventListener('unhandledrejection',function(e){
+errors.push({type:'unhandledrejection',reason:e.reason?(e.reason.stack||String(e.reason)):String(e.reason)});
+report();
+});
+document.addEventListener('DOMContentLoaded',function(){
+document.querySelectorAll('script[src]').forEach(function(s){
+s.addEventListener('load',function(){loaded.push(s.src);report();});
+s.addEventListener('error',function(){failed.push(s.src);report();});
+});
+});
+function report(){
+try{
+window.parent.postMessage({
+type:'previewRenderStatus',
+errors:errors,loadedScripts:loaded,failedScripts:failed,
+readyState:document.readyState,
+rootChildren:document.getElementById('root')?document.getElementById('root').children.length:-1,
+location:String(document.location)
+},'*');
+}catch(e){}
+}
+window.addEventListener('load',function(){
+setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
+});
+})();</script>`;
+
+                const injected = babelPatch + diag;
+                if (/<head\b[^>]*>/i.test(html)) {
+                    html = html.replace(/<head\b[^>]*>/i, m => m + injected);
+                } else if (/<html\b[^>]*>/i.test(html)) {
+                    html = html.replace(/<html\b[^>]*>/i, m => m + injected);
+                } else {
+                    html = injected + html;
+                }
+                res.writeHead(200, { 'Content-Type': mimeType });
+                res.end(Buffer.from(html, 'utf8'));
+            } else {
+                res.writeHead(200, { 'Content-Type': mimeType });
+                res.end(data);
+            }
         });
 
         const entry = this._htmlServers.get(sourceFolder);

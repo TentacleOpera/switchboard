@@ -290,3 +290,58 @@ The per-root navigation state (ClickUp space/folder/list selections, Linear proj
 ## Recommendation
 
 Complexity is 6 (mixed: majority routine mechanical edits, with two moderate well-scoped risks — the `buildWorkspaceItems` filter preservation and the race-guard narrowing). **Send to Coder.**
+
+## Reviewer Pass (2026-06-22)
+
+### Stage 1: Adversarial Findings
+
+| # | Severity | Finding | File:Line |
+|---|----------|---------|-----------|
+| 1 | NIT | `_getTicketsAutoSync()` migration uses passed `root` instead of plan's "active root, else first root alphabetically" — first call site (fetchRoots) uses active root, so migration works in practice; missing fallback only matters in multi-root edge case | `PlanningPanelProvider.ts:1345-1357` |
+| 2 | NIT | `ticketsRootChanged` backend handler still sends `integrationProviderStates` round-trip — plan Phase 2.6 said to skip it; harmless because webview won't re-fetch (ticketsLoadedOnce stays true) | `PlanningPanelProvider.ts:1731-1737` |
+| 3 | NIT | HTML dropdown not relabeled (Phase 2.4 marked Optional) | `planning.html:3336` |
+| 4 | NIT (justified) | Dropdown change handler dropped `resetTicketsInMemoryState()` — plan Phase 2.6 said to keep it, but plan's own Complexity Audit (line 57) called the reset "wasteful UX"; implementer chose better UX | `planning.js:5813-5835` |
+
+**No CRITICAL findings. No MAJOR findings.**
+
+### Stage 2: Balanced Synthesis
+
+All four findings are NITs. No code fixes required. The implementation faithfully follows the plan:
+- `_getIntegrationWorkspaces()` preserves `buildWorkspaceItems` filter ✓
+- `_activeTicketsProvider` converted from Map to scalar, all 6 sites updated ✓
+- `integrationProviderStates` Option A applied (no `workspaceRoot` field) across all 3 send sites ✓
+- Race guard narrowed to Option B (only `localTicketFilesListed`, `ticketSyncStatusesLoaded`) ✓
+- `_getTicketsAutoSync()` migration with `=== undefined` check for key-absent vs explicitly-false ✓
+- `ticketsDefaultRoot` handler simplified with global provider check ✓
+- All `ticketsAutoSync` call sites properly `await` the async result ✓
+- Watcher type widened from `FileSystemWatcher` to `Disposable` (matches `vscode.Disposable.from()` return type) ✓
+
+### Stage 3: Code Fixes Applied
+
+None — no CRITICAL or MAJOR findings.
+
+### Stage 4: Verification Results
+
+**Static Checks (all pass):**
+1. `grep "msg.workspaceRoot !== ticketsWorkspaceRoot" planning.js` → 1 result at line 2757, inside narrowed guard covering only `localTicketFilesListed` / `ticketSyncStatusesLoaded` ✓
+2. `grep "if (msg.workspaceRoot === ticketsWorkspaceRoot)" planning.js` → 0 results (provider-states guard removed) ✓
+3. `grep "_activeTicketsProvider" PlanningPanelProvider.ts` → 6 matches: 1 scalar declaration, 5 usage sites, no `.get(` / `.set(` Map calls ✓
+
+**Build:** Deferred per session directives. User should run `npm run compile`.
+**Tests:** Deferred per session directives. User should run `kanban-linear-project-tab-regression.test.js`.
+
+### Files Changed (Implementation)
+
+| File | Changes Verified |
+|------|-----------------|
+| `src/services/PlanningPanelProvider.ts` | `_getIntegrationWorkspaces()` global check with `buildWorkspaceItems` filter (1322-1343); `_getTicketsAutoSync()` new async method with migration (1345-1357); `_activeTicketsProvider` → scalar (103); `ticketsDefaultRoot` simplified (1669-1702); `ticketsRootChanged` uses scalar + async autoSync (1704-1742); `switchTicketsProvider` uses scalar + async autoSync (1744-1768); `fetchRoots` `integrationProviderStates` without `workspaceRoot` (1641-1647); watcher types widened to `Disposable` (88-89) |
+| `src/webview/planning.js` | Race guard narrowed to 2 per-root messages (2752-2761); `integrationProviderStates` root gate removed, replaced with block scope (4192-4227); dropdown change handler dropped `resetTicketsInMemoryState()`, added local file refresh (5813-5835) |
+| `src/webview/planning.html` | No plan-relevant changes (theme-only changes from other commits) |
+| `src/services/GlobalIntegrationConfigService.ts` | No changes (already global) ✓ |
+| `src/services/LocalFolderService.ts` | No changes — `getTicketsAutoSync` / `setTicketsAutoSync` kept for migration reads ✓ |
+
+### Remaining Risks
+
+1. **Migration source ambiguity (NIT):** If multiple workspace roots have conflicting per-workspace `ticketsAutoSync` values, the migration picks the active root's value (via `fetchRoots` handler). If the active root has `false` and another has `true`, the `true` value is lost. One-time, edge-case-only.
+2. **Redundant `integrationProviderStates` round-trip on dropdown switch (NIT):** Backend sends `integrationProviderStates` in response to `ticketsRootChanged`; webview processes it but doesn't re-fetch (ticketsLoadedOnce guard). Harmless noise.
+3. **`ticketsLoadedOnce` not reset on dropdown switch (by design):** If a user switches roots and the new root has no saved nav state, the previous root's ClickUp/Linear data remains in memory. This is correct for global data but means the user's hierarchy selections (space/folder/list) are preserved across root switches, not reset. Matches the "save-location picker" UX intent.
