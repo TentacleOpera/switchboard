@@ -807,3 +807,75 @@ Key risks: (1) the original plan referenced a non-existent dispatch method (`dis
 **Complexity: 5** (Mixed — majority routine modal/UI/file-IO work, with two moderate well-scoped risks: the dispatch integration via `dispatchCustomPromptToRole` and the status bar config wiring across 3 locations + `onDidChangeConfiguration`).
 
 **Send to Coder.**
+
+---
+
+## Reviewer Pass — Completed
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+#### CRITICAL
+None. The implementation is structurally sound — all 8 plan sections are present and wired correctly.
+
+#### MAJOR
+1. **`focusin` reload destroys unsaved textarea content** (`src/webview/kanban.html:3645-3647`): The `focusin` listener on `#memo-modal` fires on EVERY internal focus shift (textarea → button, button → textarea), not just "window regained focus" as the plan intended. If the user types text and then clicks a button within the 800ms debounce window, the reload reads stale disk content and overwrites the textarea via the `memoContent` handler. The user's unsaved typing is silently destroyed. This is an active data-loss bug during normal single-user usage — far worse than the concurrent `/memo` skill clobber it was meant to mitigate.
+
+#### NIT
+1. **Double error messaging on dispatch failure** (`src/services/KanbanProvider.ts:6998-7002`): When no planner terminal is assigned, `dispatchCustomPromptToRole` internally shows `showErrorMessage("No agent assigned to role 'planner'...")` AND `_dispatchMemoToPlanner` then shows `showWarningMessage("...could not dispatch...")`. Two messages for one failure. Redundant, not incorrect.
+2. **Entry parser digit-line heuristic** (`src/services/KanbanProvider.ts:6943-6944`): Lines starting with digits (e.g., "1. Fix the login bug") are treated as continuations, not new entries. Documented as v1-acceptable.
+3. **`dispatchCustomPromptToRole` line reference**: Plan says line 2494, actual is 2495. Cosmetic.
+
+### Stage 2: Balanced Synthesis
+
+**Keep (verified correct):**
+- Modal HTML/CSS/JS — matches existing modal patterns, all CSS classes exist (`modal-overlay`, `modal-content`, `modal-textarea`, `modal-btn-*`)
+- Kanban button — uses `strip-icon-btn` (correct class), placed in control strip
+- Backend handlers — all 5 cases present, proper `if (!workspaceRoot) break` guards, correct `stateFs` bridge usage (passes through for non-`state.json` paths)
+- Entry parser — reasonable prefix-based merge heuristic for v1
+- Prompt builder — clear, standalone, specifies plan format and directory
+- Dispatch integration — correct method (`dispatchCustomPromptToRole` at `TaskViewerProvider.ts:2495`), correct call pattern matching existing `sendToLead` usage
+- Status bar wiring — all 3 config-read locations (lines 1867, 1975, 2064) + `onDidChangeConfiguration` filter (line 2035) + hub tooltip (line 2000) + hub quick pick (line 2135) all correct
+- `extension.ts` command — `open()` with no tab arg + `postMessage({ type: 'openMemoModal' })` correct
+- `package.json` — command, keybinding, and both config keys present
+- `setup.html` — hotkey UI uses valid `secondary-btn` class (better than plan's `strip-btn`), toggle + input + open-keybindings button all wired, load-on-tab-open via `getMemoHotkey` at line 1722
+- `SetupPanelProvider.ts` — all 3 handlers (`getMemoHotkey`, `saveMemoHotkey`, `openKeybindings`) present
+- `TaskViewerProvider.ts` — `memo.md` added to `EXCLUDED_BRAIN_FILENAMES` (line 381); `handleGetStatusShowMemoSetting`/`handleSetStatusShowMemoSetting` present (lines 3515-3522)
+- `AGENTS.md` — memo skill entry in skills table (line 90)
+- `.agent/skills/memo/SKILL.md` — exists, follows same directory pattern as other skills
+- Gitignore — `.switchboard/*` covers `memo.md` (not in exception list)
+- `.vscodeignore` — `!.agent/**` ensures skill file ships with extension
+
+**Fix now:**
+- MAJOR #1: Removed the `focusin` reload handler. The modal already loads from disk on open via `openMemoModal()`. The concurrent `/memo` skill access remains a documented v1 last-write-wins limitation.
+
+**Defer:**
+- NIT #1 (double error messaging) — cosmetic, future UX pass
+- NIT #2 (digit-line heuristic) — documented v1-acceptable
+
+### Fixes Applied
+
+| File | Change | Severity |
+|------|--------|----------|
+| `src/webview/kanban.html:3645-3649` | Removed `focusin` reload listener that caused data loss during typing; replaced with explanatory comment | MAJOR |
+
+### Verification Results
+
+- **Compilation**: Skipped per session directives
+- **Tests**: Skipped per session directives
+- **Static verification (manual)**:
+  - All plan sections (1-8) verified present in codebase ✓
+  - `postKanbanMessage` hoisted function declaration — available to memo code ✓
+  - `postMessage` public method exists at `KanbanProvider.ts:1322` ✓
+  - `open(tab?)` accepts no args at `KanbanProvider.ts:865` ✓
+  - `dispatchCustomPromptToRole(role, prompt, workspaceRoot)` signature matches at `TaskViewerProvider.ts:2495` ✓
+  - `stateFs.promises` passes through `memo.md` paths (only intercepts `state.json`) ✓
+  - `_resolveWorkspaceRoot(undefined)` falls back to `_currentWorkspaceRoot` ✓
+  - All CSS classes (`modal-textarea`, `modal-btn-secondary`, `modal-btn-primary`, `strip-icon-btn`, `secondary-btn`) exist ✓
+  - `memo.md` gitignored by `.switchboard/*` (not in exception list) ✓
+  - Skill file ships via `!.agent/**` in `.vscodeignore` ✓
+
+### Remaining Risks
+
+1. **Concurrent `/memo` skill + modal access**: Last-write-wins. If both are active simultaneously, the modal's debounced save can clobber skill-appended entries. Documented as v1-acceptable. The removed `focusin` mitigation was worse than the problem (caused active data loss during normal typing). A proper fix would require file-watching or a merge strategy — deferred to v2.
+2. **Double error messaging on dispatch failure**: Two VS Code messages shown when no planner terminal is assigned. Cosmetic, deferred.
+3. **Hotkey redefinition limitation**: VS Code doesn't support runtime keybinding changes. The `setup.html` field stores a preference only; the functional keybinding is the one in `package.json`. This is a platform limitation, documented in the plan.

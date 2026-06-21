@@ -3642,9 +3642,11 @@ body.theme-claudify .shared-tab-btn:hover {
             postKanbanMessage({ type: 'memoGeneratePrompt', content, action: 'send' });
         });
 
-        document.getElementById('memo-modal')?.addEventListener('focusin', () => {
-            postKanbanMessage({ type: 'memoLoad' });
-        });
+        // NOTE: Reload-on-focusin was removed — it fired on every internal focus
+        // shift (e.g. textarea → button click), clobbering unsaved textarea content
+        // within the 800ms debounce window. The modal loads from disk on open via
+        // openMemoModal(), which is sufficient. Concurrent /memo skill access is a
+        // documented v1 last-write-wins limitation.
 
         document.addEventListener('keydown', (e) => {
             const modal = document.getElementById('memo-modal');
