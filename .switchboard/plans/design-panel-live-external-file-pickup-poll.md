@@ -133,3 +133,56 @@ Key risks: (1) the plan originally cited a pre-existing NFS/SMB readdir timeout 
 ---
 
 **Recommendation:** Complexity is 5 (Mixed: mostly routine wiring + one moderate, well-scoped risk in timer-lifecycle correctness across the dual open/restore paths, plus the net-new readdir timeout wrapper). **Send to Coder.**
+
+## Reviewer Pass (2026-06-21)
+
+### Stage 1 — Adversarial Findings
+
+| ID | Severity | File:Line | Finding |
+|---|---|---|---|
+| C1 | CRITICAL | `DesignPanelProvider.ts:2649` | `fs.existsSync(dir)` is a **synchronous** stat that runs *before* the raced `readdir`. On a hung NFS/SMB mount it blocks the event loop indefinitely, defeating the 5s `Promise.race` deadline the plan mandated as the #1 adversarial risk. The verification plan's "hung mount" line item would fail. |
+| M1 | MAJOR | `DesignPanelProvider.ts:2718` | Signature only collected file entries (`entry.isFile() && filterFn`), not directory entries. The list methods (`_scanHtmlFolder` etc.) render folder nodes, so an externally-created **empty subfolder** would change the rendered list but not the signature → no re-render → missed by both watcher (missed event) and poll (no signature delta). |
+| N1 | NIT | `DesignPanelProvider.ts:2729` | Per-stat `Promise.race` against `setTimeout(5000)` leaves orphaned timers when `stat` resolves first. ~500 orphaned timers per tick at 500-file scale. Not a correctness issue (re-check guards prevent stale posts); Node handles it. Deferred. |
+| N2 | NIT | `DesignPanelProvider.ts:274` | Public `dispose()` doesn't call `_stopExternalFilePoll()` directly. Transitively safe (`dispose()` → `_panel.dispose()` → `onDidDispose` → stop), but asymmetric with `disposeWatchers()` on the next line. Deferred. |
+
+### Stage 2 — Balanced Synthesis
+
+- **C1 → Fix now.** The `existsSync` guard is both redundant (the raced `readdir` in `_getFolderSignature` already catches non-existent dirs and returns `[]`) and dangerous (synchronous, unraced). Removed.
+- **M1 → Fix now.** Added directory entries (`${name}|dir|dir`) to the signature so empty-subfolder creation is detected. Cheap, aligns with rendered output.
+- **N1 → Defer.** Not a correctness bug; Node tolerates the timer volume.
+- **N2 → Defer.** Transitively covered by `onDidDispose`.
+
+### Verified Correct (no changes needed)
+
+- `_lastFolderSignature` is **poll-exclusive** (only written at `_pollTick` lines 2668-2669); watcher path (`_send*DocsReady`) never reads/writes it — committed invariant holds.
+- `onDidChangeViewState` wired in both `open()` (line 126) and `deserializeWebviewPanel` (line 214).
+- `onDidDispose` calls `_stopExternalFilePoll()` in both paths (lines 123, 211).
+- Config handler reacts to `externalFilePollMs` in both paths (lines 168-173, 258-263).
+- `activeTabChanged` is a separate message from `refreshDocsForTab`; the latter is unchanged.
+- `switchTab` posts `activeTabChanged` unconditionally (design.js:174), including the initial `switchTab(initialTab)` at line 187 — provider learns the starting tab on ready/restore.
+- `_isPolledTab` correctly excludes `design` and `stitch`.
+- `_startExternalFilePoll` is idempotent and honors `ms <= 0`.
+- Tick re-checks `visible` and `activeTab` before posting (line 2664).
+- `package.json` entry matches spec (default 4000, minimum 0, scope window).
+- Extension filters match `LocalFolderService` list methods exactly (byte-for-byte).
+- Excluded dirs match `_EXCLUDED_DIRS` = `['node_modules', '.git', '.switchboard']`.
+- Recursion depth cap matches `_MAX_DEPTH = 10`.
+- Symlink and dotfile skipping match the list methods.
+
+### Fixes Applied
+
+1. **`src/services/DesignPanelProvider.ts:2648-2657`** — Removed `fs.existsSync(dir)` gate; `_getFolderSignature` is now called directly. The raced `readdir` inside it handles non-existent dirs (reject → caught → `[]`). Added an explanatory comment documenting why `existsSync` must not be reintroduced.
+2. **`src/services/DesignPanelProvider.ts:2718-2725`** — Directory entries now emit a `${entry.name}|dir|dir` signature string, so externally-created empty subfolders are detected by the poll.
+
+### Validation Results
+
+- **Typecheck (`tsc --noEmit`):** 2 pre-existing errors in unrelated files (`ClickUpSyncService.ts:2419`, `KanbanProvider.ts:4866` — relative import extension issues). **Zero new errors** introduced by this review's edits.
+- **Compilation:** Skipped per session instructions.
+- **Automated tests:** Skipped per session instructions (to be run separately by user).
+
+### Remaining Risks
+
+- **N1 (orphaned stat timers):** At very large folder counts (500+ files) the per-stat `setTimeout` orphans accumulate. Not a correctness issue; if it becomes a perf concern, switch to a single per-folder `AbortController`-based timeout or clear timers on stat resolution.
+- **N2 (`dispose()` symmetry):** Safe today via `onDidDispose` cascade; add `_stopExternalFilePoll()` to `dispose()` if the disposal path is ever restructured.
+- **Tick overlap:** `setInterval` does not absorb overlapping ticks. If a tick exceeds the interval (multiple hung folders × 5s timeout), the next tick fires concurrently. The re-check guards (`this._activeTab !== tab`, `this._panel?.visible`) prevent stale posts, and signature writes are last-writer-wins idempotent. Acceptable for the 4s default + 5s worst-case-per-folder math.
+- **Manual verification items** in the plan's Verification Plan section remain to be executed by the user (hung-mount simulation, rapid tab switching, large-folder cost, restore-after-hide).

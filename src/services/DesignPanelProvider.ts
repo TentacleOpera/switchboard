@@ -2646,10 +2646,14 @@ export class DesignPanelProvider implements vscode.Disposable {
                 }
 
                 for (const dir of folders) {
-                    if (fs.existsSync(dir)) {
-                        const sigs = await this._getFolderSignature(dir, tab);
-                        signatures.push(...sigs);
-                    }
+                    // Do NOT use fs.existsSync here — it is a synchronous stat that
+                    // blocks the event loop and bypasses the per-readdir 5s deadline
+                    // in _getFolderSignature. On a hung NFS/SMB mount existsSync would
+                    // wedge the tick exactly where the plan mandated a timeout. The
+                    // raced readdir inside _getFolderSignature already handles
+                    // non-existent dirs (rejects → caught → returns []).
+                    const sigs = await this._getFolderSignature(dir, tab);
+                    signatures.push(...sigs);
                 }
             }
 
@@ -2713,6 +2717,11 @@ export class DesignPanelProvider implements vscode.Disposable {
 
             if (entry.isDirectory()) {
                 if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === '.switchboard') continue;
+                // Include the directory itself in the signature so that an
+                // externally-created empty subfolder (which the list methods render
+                // as a folder node) is detected even when it contains no matching
+                // files yet.
+                filePromises.push(Promise.resolve(`${entry.name}|dir|dir`));
                 subfolderPromises.push(this._getFolderSignature(fullPath, tab, depth + 1, seen));
             } else if (entry.isFile() && filterFn(entry.name)) {
                 filePromises.push(
