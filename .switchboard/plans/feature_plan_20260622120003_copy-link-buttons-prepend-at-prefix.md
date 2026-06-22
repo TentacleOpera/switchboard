@@ -150,3 +150,51 @@ vscode.window.showInformationMessage(`Document path copied to clipboard: ${docRe
 ## Recommendation
 
 Complexity is 3 (routine, but the missed-site discovery shows it needs an exhaustive, careful pass). **Send to Intern.**
+
+---
+
+## Code Review (Reviewer-Executor Pass — 2026-06-22)
+
+### Stage 1 — Grumpy Principal Engineer
+
+Oh, *wonderful*. The plan spends three paragraphs congratulating itself on discovering a "fifth" missed site (`copyInsightLink`) and then **promptly misses the sixth one itself**. The plan's own verification step #7 says "grep `clipboard.writeText` after edits to confirm every file-path write site is prefixed." Did anyone actually *run* that grep? Because `PlanningPanelProvider.ts` has a `copyToClipboard` handler that writes `paths.join('\n')` — a newline-joined list of **ticket document file paths** — with nary an `@` in sight. The "Link to ticket" and "Link all" buttons in the Tickets tab feed this exact handler. Same defect, same panel family, same leading-`/`-breaks-the-paste bug. The plan's adversarial synthesis *explicitly* warns that "the bug cannot reappear one site at a time" — and then it reappears one site later. Irony detected. Severity: **MAJOR**.
+
+- **MAJOR** — `src/services/PlanningPanelProvider.ts:4502` (was `paths.join('\n')`): ticket "Link to ticket" / "Link all" copy writes bare absolute file paths. Sixth missed site, same defect class. The plan's own verification grep would have caught this; apparently nobody ran it.
+- **NIT** — `src/webview/project.js:563`: the webview still constructs the insight link *without* `@` and relies on the provider (site #3, Option A) to prefix. This is fine (Option A was chosen), but it means the webview→provider contract carries a raw path. Not a bug; just a consistency observation. No fix needed.
+- **NIT** — The plan's "optional refinement" (a private `toAgentRef` method on the TS providers) was declined in favor of inline guards. Acceptable; inline guards are used consistently across sites #3, #4, #5. No action.
+- **INFO** — `_handleLinkToFolder` (`PlanningPanelProvider.ts:5617`) still writes a bare folder path. This is the plan's *explicit* out-of-scope decision. Confirmed unchanged — correct.
+
+The five enumerated sites (#0–#5) are all implemented correctly and match the plan's prescribed code. The helper in `sharedUtils.js` is idempotent and globally loaded. The TS-provider inline guards are consistent. Good work on what was in scope — the problem is what *wasn't*.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep:**
+- All five enumerated implementations (sites #0–#5) are correct and match the plan. No changes.
+- The `toAgentRef` helper in `sharedUtils.js` is well-formed, idempotent, and correctly placed.
+- The explicit out-of-scope decision on `_handleLinkToFolder` stands.
+
+**Fix now:**
+- The sixth missed site (`copyToClipboard` ticket handler, `PlanningPanelProvider.ts:4502`) — this is a real MAJOR finding validated by the plan's own verification criterion (#7). The "Link to ticket" / "Link all" buttons copy ticket document file paths for agent hand-off — identical intent to the five in-scope sites. Fix applied: prefix each path with `@` (idempotent guard) before joining.
+
+**Defer:**
+- The directory-paths branch at `PlanningPanelProvider.ts:4507` (no `ticketIds` → copies ticket *directory* paths). Left bare to respect the plan's explicit folder-link exclusion. A separate plan can address folder refs if desired.
+- The `confirm('Delete this insight?')` gate at `project.js:573` — already flagged in the plan's Edge-Case audit as a separate fix. Not touched.
+
+### Fixes Applied
+
+1. `src/services/PlanningPanelProvider.ts:4502-4503` — `copyToClipboard` handler (ticketIds branch): replaced `paths.join('\n')` with `paths.map(p => p.startsWith('@') ? p : '@' + p).join('\n')` so ticket file paths are agent-safe `@`-prefixed references. The directory-only branch (line 4507, no ticketIds) is left bare per the plan's explicit folder exclusion.
+
+### Validation Results
+
+- **Exhaustive grep audit (verification step #7):** All `clipboard.writeText` sites in `src/services/PlanningPanelProvider.ts`, `src/services/DesignPanelProvider.ts`, and `src/webview/*` reviewed. Categorization:
+  - File-path writes now `@`-prefixed: `planning.js:4895` (Kanban), `project.js:764` (Kanban), `PlanningPanelProvider.ts:5402` (Insight), `PlanningPanelProvider.ts:4503` (Tickets — fixed this pass), `PlanningPanelProvider.ts:5567` (Docs), `DesignPanelProvider.ts:1539` (Design). ✓
+  - Prompt-text writes (out of scope, correctly bare): `PlanningPanelProvider.ts:3099,3145,4518,4568,5356,5365`; webview `planning.js:796,829,934`, `kanban.html:6043`, `setup.html:3101`, `implementation.html:3289`. ✓
+  - Folder-path writes (explicitly excluded by plan): `PlanningPanelProvider.ts:4507` (ticket dirs, no ticketIds), `PlanningPanelProvider.ts:5617` (`_handleLinkToFolder`). ✓
+- **Compilation:** Skipped per session directive.
+- **Automated tests:** Skipped per session directive.
+
+### Remaining Risks
+
+1. **Folder-link copy** (`_handleLinkToFolder`, and the no-ticketIds branch of `copyToClipboard`) still emits bare `/...` paths. This is the plan's conscious exclusion; if folder refs are later pasted into agent chats, they will exhibit the original defect. A follow-up plan should decide whether `@`-prefixing folders is desired.
+2. **No automated regression test** was added (deferred per skip-tests directive). A test asserting that every file-path `clipboard.writeText` site produces an `@`-prefixed value would prevent the piecemeal re-regression this plan (and now this review) demonstrated twice.
+3. **Webview→provider contract for insights** carries a raw path (Option A chosen). If a future webview-side consumer reads `msg.link` expecting an agent ref, it will be surprised. Low risk; documented here.

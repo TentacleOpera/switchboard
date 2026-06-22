@@ -4449,6 +4449,7 @@ Please format the updated output document strictly as follows:
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const provider = msg.provider;
                 const paths: string[] = [];
+                let lastError: string | undefined;
                 if (workspaceRoot) {
                     if (Array.isArray(msg.ticketIds) && msg.ticketIds.length > 0) {
                         const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
@@ -4457,8 +4458,33 @@ Please format the updated output document strictly as follows:
                                 // Ticket files are named `${provider}_${id}_<slug>.md` and live in
                                 // nested hierarchies (team/project/sprint), so resolve the real path
                                 // by prefix scan rather than reconstructing a flat path.
-                                const filePath = this._findTicketFilePath(workspaceRoot, providerDir, id);
-                                if (filePath) { paths.push(filePath); }
+                                let filePath = this._findTicketFilePath(workspaceRoot, providerDir, id);
+                                if (!filePath) {
+                                    // Ensure-then-link: import the ticket as a local doc, then use the
+                                    // returned filePath directly (avoids a redundant re-scan race).
+                                    try {
+                                        const result: any = await vscode.commands.executeCommand('switchboard.importTaskAsDocument', {
+                                            workspaceRoot,
+                                            provider,
+                                            id,
+                                            includeSubtasks: true
+                                        });
+                                        if (result?.filePath) {
+                                            filePath = result.filePath;
+                                        } else if (result?.success === false) {
+                                            lastError = result.error || 'Could not import ticket.';
+                                            continue;
+                                        }
+                                        if (!filePath) {
+                                            filePath = this._findTicketFilePath(workspaceRoot, providerDir, id);
+                                        }
+                                    } catch (err: any) {
+                                        lastError = err?.message || String(err);
+                                    }
+                                }
+                                if (filePath) {
+                                    paths.push('@' + filePath); // agent-safe prefix
+                                }
                             }
                         }
                     } else {
@@ -4468,7 +4494,18 @@ Please format the updated output document strictly as follows:
                         }
                     }
                 }
-                await vscode.env.clipboard.writeText(paths.join('\n'));
+                if (Array.isArray(msg.ticketIds) && msg.ticketIds.length > 0) {
+                    if (paths.length === 0) {
+                        const hint = lastError || 'Could not locate or create a local file for this ticket.';
+                        this._panel?.webview.postMessage({ type: 'ticketLinkFailed', error: hint });
+                    } else {
+                        const ticketRefs = paths.map(p => p.startsWith('@') ? p : '@' + p);
+                        await vscode.env.clipboard.writeText(ticketRefs.join('\n'));
+                        this._panel?.webview.postMessage({ type: 'ticketLinkCopied', count: paths.length });
+                    }
+                } else {
+                    await vscode.env.clipboard.writeText(paths.join('\n'));
+                }
                 break;
             }
             case 'copyDiagramPrompt': {

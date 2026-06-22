@@ -216,6 +216,7 @@
     let _lastTicketsLinearSubtasksNavHtml = '';
     let _lastTicketsTagsKey = '';
     let _lastTicketsTagsProvider = '';
+    let _lastLinkTicketBtn = null;
 
     // Full detail caches for tickets that have been expanded
     let linearIssueDetailCache = new Map(); // issueId -> { issue, subtasks, comments, attachments, renderedDescriptionHtml }
@@ -3436,6 +3437,20 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     showTicketsStatus(`Synced ${msg.succeeded} succeeded, ${msg.failed} failed.`, true);
                 }
                 break;
+            case 'ticketLinkCopied':
+                showTicketsStatus(`Copied ${msg.count} ticket link${msg.count > 1 ? 's' : ''} ✓`, false);
+                if (_lastLinkTicketBtn) {
+                    flashCopyBtn(_lastLinkTicketBtn);
+                    _lastLinkTicketBtn = null;
+                }
+                break;
+            case 'ticketLinkFailed':
+                showTicketsStatus(msg.error || 'Could not locate or create a local file for this ticket.', true);
+                if (_lastLinkTicketBtn) {
+                    _lastLinkTicketBtn.disabled = false;
+                    _lastLinkTicketBtn = null;
+                }
+                break;
             case 'localTicketFilesListed': {
                 const localProvider = msg.provider || lastIntegrationProvider;
                 const tickets = msg.tickets || [];
@@ -5896,7 +5911,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 workspaceRoot: ticketsWorkspaceRoot,
                 ticketIds: ids
             });
-            flashCopyBtn(linkAllButton);
+            _lastLinkTicketBtn = linkAllButton;
         });
 
         syncAllButton?.addEventListener('click', () => {
@@ -7670,7 +7685,7 @@ Instructions:
         // Use the exact same message/handler as the "Link all" button, just scoped
         // to a single ticket id, so both buttons share one proven code path.
         vscode.postMessage({ type: 'copyToClipboard', provider, workspaceRoot: ticketsWorkspaceRoot, ticketIds: [id] });
-        if (btn) { flashCopyBtn(btn); }
+        if (btn) { _lastLinkTicketBtn = btn; }
     }
 
     function handleTicketsAskAgent(provider, id) {
