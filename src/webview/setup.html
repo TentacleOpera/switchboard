@@ -49,6 +49,10 @@
 
         /* Claudify: remove neon glow from base (non-cyber) interactive states */
         body.theme-claudify .setup-mode-btn.is-active { box-shadow: none; }
+        /* Section labels + modal titles = neutral grey chrome (afterburner uses teal-green
+           --accent-green, which claudify doesn't override — hence the stray teal headers). */
+        body.theme-claudify .section-label,
+        body.theme-claudify .modal-title { color: #8a8a8a; }
 
         * {
             box-sizing: border-box;
@@ -1707,6 +1711,7 @@
                 },
                 'theme': () => {
                     vscode.postMessage({ type: 'getCyberAnimationDisabledSetting' });
+                    vscode.postMessage({ type: 'getThemeSetting' });
                     const savedTheme = currentSwitchboardTheme || 'afterburner';
                     const themeRadio = document.querySelector(`input[name="theme-selection"][value="${savedTheme}"]`);
                     if (themeRadio) themeRadio.checked = true;
@@ -2784,20 +2789,19 @@
                 const aBody = document.getElementById('clickup-automation-body');
                 if (!kMaster || !kBody || !aMaster || !aBody) return;
 
-                const mappingsEditorVisible = !document.getElementById('clickup-mappings-section')?.classList.contains('hidden');
                 const createFolder = document.getElementById('clickup-option-create-folder')?.checked;
                 const createLists = document.getElementById('clickup-option-create-lists')?.checked;
                 const createFields = document.getElementById('clickup-option-create-custom-fields')?.checked;
-                const kOpen = !!(mappingsEditorVisible || createFolder || createLists || createFields);
+                const kOpen = !!(createFolder || createLists || createFields);
 
                 kMaster.checked = kOpen;
                 kBody.classList.toggle('hidden', !kOpen);
 
-                const automationEditorVisible = !document.getElementById('clickup-automation-section')?.classList.contains('hidden');
                 const realtimeSync = document.getElementById('clickup-option-enable-realtime-sync')?.checked;
                 const deleteSync = document.getElementById('clickup-option-delete-sync')?.checked;
                 const autoPull = document.getElementById('clickup-option-enable-auto-pull')?.checked;
-                const aOpen = !!(automationEditorVisible || realtimeSync || deleteSync || autoPull);
+                const hasAutomationRules = document.querySelectorAll('[data-clickup-rule-card="true"]').length > 0;
+                const aOpen = !!(realtimeSync || deleteSync || autoPull || hasAutomationRules);
 
                 aMaster.checked = aOpen;
                 aBody.classList.toggle('hidden', !aOpen);
@@ -2817,11 +2821,11 @@
                 kMaster.checked = kOpen;
                 kBody.classList.toggle('hidden', !kOpen);
 
-                const automationEditorVisible = !document.getElementById('linear-automation-section')?.classList.contains('hidden');
                 const realtimeSync = document.getElementById('linear-option-enable-realtime-sync')?.checked;
                 const deleteSync = document.getElementById('linear-option-delete-sync')?.checked;
                 const autoPull = document.getElementById('linear-option-enable-auto-pull')?.checked;
-                const aOpen = !!(automationEditorVisible || realtimeSync || deleteSync || autoPull);
+                const hasAutomationRules = document.querySelectorAll('[data-linear-rule-card="true"]').length > 0;
+                const aOpen = !!(realtimeSync || deleteSync || autoPull || hasAutomationRules);
 
                 aMaster.checked = aOpen;
                 aBody.classList.toggle('hidden', !aOpen);

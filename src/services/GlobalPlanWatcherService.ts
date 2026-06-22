@@ -160,7 +160,8 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
 
     private async _scanForNewFiles(workspaceRoot: string): Promise<void> {
         const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
-        if (!fs.existsSync(plansDir)) { return; }
+        const epicsDir = path.join(workspaceRoot, '.switchboard', 'epics');
+        if (!fs.existsSync(plansDir) && !fs.existsSync(epicsDir)) { return; }
 
         try {
             const currentPaths = new Set<string>();
@@ -177,7 +178,12 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 }
             };
 
-            await collectPaths(plansDir);
+            if (fs.existsSync(plansDir)) {
+                await collectPaths(plansDir);
+            }
+            if (fs.existsSync(epicsDir)) {
+                await collectPaths(epicsDir);
+            }
 
             const prevPaths = this._scanSeenPaths.get(workspaceRoot);
             this._scanSeenPaths.set(workspaceRoot, currentPaths);
@@ -324,18 +330,13 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
     }
 
     private _setupWatcherForFolder(folder: string): void {
-        const plansDir = path.join(folder, '.switchboard', 'plans');
-        
-        // We don't skip if plansDir is missing, because it might be created later.
-        // But for fs.watch we need it to exist.
-
         // VS Code watcher - works even if dir doesn't exist yet (if it's in a workspace folder)
         const workspaceFolderPaths = new Set(
             (vscode.workspace.workspaceFolders || []).map(f => path.resolve(f.uri.fsPath))
         );
 
         if (workspaceFolderPaths.has(folder)) {
-            const pattern = new vscode.RelativePattern(folder, '.switchboard/plans/**/*.md');
+            const pattern = new vscode.RelativePattern(folder, '.switchboard/{plans,epics}/**/*.md');
             const watcher = vscode.workspace.createFileSystemWatcher(pattern, false, false, false);
 
             watcher.onDidCreate((uri) => {
@@ -364,18 +365,12 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
     }
 
     private _setupNativeWatcher(folder: string): void {
-        const plansDir = path.join(folder, '.switchboard', 'plans');
-        if (!fs.existsSync(plansDir)) {
-            // Try to watch the .switchboard dir if it exists, or the root
-            const switchboardDir = path.join(folder, '.switchboard');
-            if (fs.existsSync(switchboardDir)) {
-                this._setupNativeFsWatch(switchboardDir, folder);
-            } else {
-                this._setupNativeFsWatch(folder, folder);
-            }
-            return;
+        const switchboardDir = path.join(folder, '.switchboard');
+        if (fs.existsSync(switchboardDir)) {
+            this._setupNativeFsWatch(switchboardDir, folder);
+        } else {
+            this._setupNativeFsWatch(folder, folder);
         }
-        this._setupNativeFsWatch(plansDir, folder);
     }
 
     private _setupNativeFsWatch(watchPath: string, workspaceRoot: string): void {
@@ -383,10 +378,11 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             const nativeWatcher = fs.watch(watchPath, { recursive: true }, (eventType, filename) => {
                 if (!filename || !filename.endsWith('.md')) return;
                 
-                // Ensure it's in .switchboard/plans
+                // Ensure it's in .switchboard/plans or .switchboard/epics
                 const fullPath = path.resolve(path.join(watchPath, filename));
                 const plansDir = path.resolve(path.join(workspaceRoot, '.switchboard', 'plans'));
-                if (!fullPath.startsWith(plansDir)) return;
+                const epicsDir = path.resolve(path.join(workspaceRoot, '.switchboard', 'epics'));
+                if (!fullPath.startsWith(plansDir) && !fullPath.startsWith(epicsDir)) return;
 
                 const uri = vscode.Uri.file(fullPath);
                 
@@ -408,6 +404,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             this._outputChannel?.appendLine(`[GlobalPlanWatcher] Native watch failed for ${watchPath}: ${e}`);
         }
     }
+
 
     private _debounceHandleFile(uri: vscode.Uri, workspaceRoot: string): void {
         const key = uri.fsPath;
@@ -522,7 +519,11 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     clickupTaskId: '',
                     linearIssueId: ''
                 };
-                await db.upsertPlans([newRecord]);
+                await db.insertFileDerivedPlan(newRecord);
+                if (relativePath.startsWith('.switchboard/epics/')) {
+                    await db.updateEpicStatus(newRecord.planId, 1, '');
+                    newRecord.isEpic = 1;
+                }
                 plan = newRecord;
 
                 this._outputChannel?.appendLine(`[GlobalPlanWatcher] Imported new plan: ${relativePath} in ${workspaceId}`);
@@ -535,7 +536,11 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     tags: metadata.tags,
                     updatedAt: fileMtime
                 };
-                await db.upsertPlans([updatedRecord]);
+                await db.insertFileDerivedPlan(updatedRecord);
+                if (relativePath.startsWith('.switchboard/epics/') && !plan.isEpic) {
+                    await db.updateEpicStatus(plan.planId, 1, '');
+                    updatedRecord.isEpic = 1;
+                }
                 plan = updatedRecord;
 
                 this._outputChannel?.appendLine(`[GlobalPlanWatcher] Updated plan: ${plan.planFile} in ${workspaceId}`);
@@ -604,9 +609,10 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
     public async triggerScan(workspaceRoot: string): Promise<void> {
         this._outputChannel?.appendLine(`[GlobalPlanWatcher] Manual scan triggered for ${workspaceRoot}`);
         const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
+        const epicsDir = path.join(workspaceRoot, '.switchboard', 'epics');
 
-        if (!fs.existsSync(plansDir)) {
-            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Plans directory not found: ${plansDir}`);
+        if (!fs.existsSync(plansDir) && !fs.existsSync(epicsDir)) {
+            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Switchboard directories not found in ${workspaceRoot}`);
             return;
         }
 
@@ -625,7 +631,12 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     }
                 }
             };
-            await scanDir(plansDir);
+            if (fs.existsSync(plansDir)) {
+                await scanDir(plansDir);
+            }
+            if (fs.existsSync(epicsDir)) {
+                await scanDir(epicsDir);
+            }
 
             this._outputChannel?.appendLine(`[GlobalPlanWatcher] Scanned ${processed} files in ${workspaceRoot}`);
         } catch (err) {

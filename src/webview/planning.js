@@ -4877,7 +4877,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
                     e.stopPropagation(); // Prevent triggering plan selection
                     const planFile = copyLinkBtn.dataset.planFile;
                     if (planFile) {
-                        navigator.clipboard.writeText(planFile).then(() => {
+                        navigator.clipboard.writeText(toAgentRef(planFile)).then(() => {
                             const originalText = copyLinkBtn.textContent;
                             copyLinkBtn.textContent = 'Copied';
                             setTimeout(() => {

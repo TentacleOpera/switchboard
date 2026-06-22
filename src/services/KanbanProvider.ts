@@ -6724,11 +6724,12 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     break;
                 }
                 await db.updateEpicStatus(subtask.planId, 0, epic.planId);
+                await this._regenerateEpicFile(workspaceRoot, epic.planId, db);
                 await this._refreshBoard(workspaceRoot);
                 break;
             }
             case 'promoteToEpic': {
-                // Single-plan promotion: mark the existing plan as is_epic=1 without creating a new file.
+                // Single-plan promotion: mark the existing plan as is_epic=1 and move its file to epics/
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || !msg.planId) break;
                 const db = this._getKanbanDb(workspaceRoot);
@@ -6736,8 +6737,39 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 const plan = await db.getPlanByPlanId(String(msg.planId));
                 if (!plan) { vscode.window.showWarningMessage('Plan not found.'); break; }
                 if (plan.isEpic) { vscode.window.showWarningMessage('Plan is already an epic.'); break; }
-                // Clear epic_id (plan is now an epic, not a subtask) and set is_epic=1
+
+                // Move file to epics/ directory for unified architecture
+                const slug = (plan.topic || 'epic').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'epic';
+                let uniqueSlug = slug;
+                const epicDir = path.join(workspaceRoot, '.switchboard', 'epics');
+                const oldAbsPath = path.resolve(workspaceRoot, plan.planFile);
+                await fs.promises.mkdir(epicDir, { recursive: true });
+                if (fs.existsSync(path.join(epicDir, `${slug}.md`))) {
+                    uniqueSlug = `${slug}-${plan.planId.slice(0, 8)}`;
+                }
+                const newRelPath = path.join('.switchboard', 'epics', `${uniqueSlug}.md`);
+                const newAbsPath = path.join(workspaceRoot, newRelPath);
+
+                // 1. Update DB plan_file BEFORE moving the file — so the watcher's delete
+                //    handler for the old path finds no matching record (already updated).
+                await db.updatePlanFileByPlanId(plan.planId, newRelPath);
+
+                // 2. Clear epic_id (plan is now an epic, not a subtask) and set is_epic=1
                 await db.updateEpicStatus(plan.planId, 1, '');
+
+                // 3. Register watcher suppression for both paths
+                GlobalPlanWatcherService.registerPendingCreation(newAbsPath);
+                const oldRelPath = plan.planFile.replace(/\\/g, '/');
+                this._globalPlanWatcher?.registerRename(oldRelPath);
+
+                // 4. Move the file
+                try {
+                    await fs.promises.rename(oldAbsPath, newAbsPath);
+                } catch (moveErr) {
+                    console.warn(`[KanbanProvider] promoteToEpic: file move failed, reverting DB path: ${moveErr}`);
+                    await db.updatePlanFileByPlanId(plan.planId, plan.planFile);
+                }
+
                 await this._refreshBoard(workspaceRoot);
                 break;
             }
@@ -6776,9 +6808,19 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     vscode.window.showWarningMessage('Workspace ID not found. Cannot create epic.');
                     break;
                 }
-                const epicPlanFile = path.join('.switchboard', 'plans', `epic-${planId}.md`);
+
+                const slug = (name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'epic');
+                let uniqueSlug = slug;
+                const epicDir = path.join(workspaceRoot, '.switchboard', 'epics');
+                await fs.promises.mkdir(epicDir, { recursive: true });
+                if (fs.existsSync(path.join(epicDir, `${slug}.md`))) {
+                    uniqueSlug = `${slug}-${planId.slice(0, 8)}`;
+                }
+                const epicPlanFile = path.join('.switchboard', 'epics', `${uniqueSlug}.md`);
+                const epicPath = path.join(workspaceRoot, epicPlanFile);
+
                 const now = new Date().toISOString();
-                await db.upsertPlan({
+                const upsertOk = await db.upsertPlan({
                     planId,
                     sessionId,
                     topic: name,
@@ -6801,13 +6843,18 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     isEpic: 1,
                     epicId: ''
                 });
+
+                if (!upsertOk) {
+                    vscode.window.showErrorMessage('Failed to create epic: DB upsert failed. The epic file was not written.');
+                    break;
+                }
+
                 await db.updateEpicStatus(planId, 1, '');
-                const epicPath = path.join(workspaceRoot, epicPlanFile);
                 // Quote YAML values to prevent frontmatter breakage from names containing ---, :, etc.
                 const yamlSafeName = name.replace(/'/g, "''");
                 const yamlSafeDesc = (msg.description ? String(msg.description).trim() : '').replace(/'/g, "''");
                 const epicContent = `---\ndescription: '${yamlSafeName}'\n---\n\n# ${name}\n\n${msg.description ? String(msg.description).trim() : ''}`;
-                await fs.promises.mkdir(path.dirname(epicPath), { recursive: true });
+                
                 // Register before writing so the file watcher skips this file —
                 // the DB record is already committed above with is_epic=1.
                 GlobalPlanWatcherService.registerPendingCreation(epicPath);
@@ -6817,6 +6864,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     // and getPlanBySessionId('') would find an arbitrary other plan instead.
                     await db.updateEpicStatus(st.planId || st.sessionId, 0, planId);
                 }
+                await this._regenerateEpicFile(workspaceRoot, planId, db);
                 await this._refreshBoard(workspaceRoot);
                 break;
             }
@@ -6827,7 +6875,11 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (!db || !(await db.ensureReady())) break;
                 const subtask = await db.getPlanByPlanId(msg.subtaskSessionId);
                 if (!subtask) break;
+                const epicId = subtask.epicId;
                 await db.updateEpicStatus(subtask.planId, 0, '');
+                if (epicId) {
+                    await this._regenerateEpicFile(workspaceRoot, epicId, db);
+                }
                 await this._refreshBoard(workspaceRoot);
                 break;
             }
@@ -7447,4 +7499,34 @@ Each plan file must include:
             pathExists: config.pathExists
         };
     }
+
+    private async _regenerateEpicFile(workspaceRoot: string, epicPlanId: string, db: KanbanDatabase): Promise<void> {
+        const epic = await db.getPlanByPlanId(epicPlanId);
+        if (!epic || !epic.isEpic) return;
+        const subtasks = await db.getSubtasksByEpicId(epicPlanId);
+        const epicAbsPath = path.resolve(workspaceRoot, epic.planFile);
+        let existingContent = '';
+        try {
+            existingContent = await fs.promises.readFile(epicAbsPath, 'utf8');
+        } catch { /* file may not exist yet */ }
+        const subtaskLines = subtasks.map(st => {
+            const basename = path.basename(st.planFile);
+            const topic = st.topic || basename;
+            return `- [ ] [${topic}](../plans/${basename})`;
+        });
+        const subtaskSection = `<!-- BEGIN SUBTASKS (auto-generated, do not edit) -->\n## Subtasks\n${subtaskLines.join('\n') || '- [ ] (no subtasks)'}\n<!-- END SUBTASKS -->`;
+        let newContent: string;
+        const beginMarker = '<!-- BEGIN SUBTASKS';
+        const endMarker = '<!-- END SUBTASKS -->';
+        const beginIdx = existingContent.indexOf(beginMarker);
+        const endIdx = existingContent.indexOf(endMarker);
+        if (beginIdx !== -1 && endIdx !== -1) {
+            newContent = existingContent.slice(0, beginIdx) + subtaskSection + existingContent.slice(endIdx + endMarker.length);
+        } else {
+            newContent = existingContent.replace(/\n*$/, '') + '\n\n' + subtaskSection + '\n';
+        }
+        GlobalPlanWatcherService.registerPendingCreation(epicAbsPath);
+        await fs.promises.writeFile(epicAbsPath, newContent, 'utf8');
+    }
 }
+

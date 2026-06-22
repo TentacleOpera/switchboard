@@ -2866,7 +2866,7 @@ export class PlanningPanelProvider {
                         break;
                     }
 
-                    // Add to kanban board: create a DB plan record + file in plans/
+                    // Add to kanban board: create a DB plan record + file in epics/
                     const db = KanbanDatabase.forWorkspace(wsRoot);
                     const workspaceId = await db.getWorkspaceId();
                     if (!workspaceId) {
@@ -2875,9 +2875,19 @@ export class PlanningPanelProvider {
                     }
                     const planId = crypto.randomUUID();
                     const sessionId = crypto.randomUUID();
-                    const epicPlanFile = path.join('.switchboard', 'plans', `epic-${planId}.md`);
+
+                    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'epic';
+                    let uniqueSlug = slug;
+                    const epicDir = path.join(wsRoot, '.switchboard', 'epics');
+                    await fs.promises.mkdir(epicDir, { recursive: true });
+                    if (fs.existsSync(path.join(epicDir, `${slug}.md`))) {
+                        uniqueSlug = `${slug}-${planId.slice(0, 8)}`;
+                    }
+                    const epicPlanFile = path.join('.switchboard', 'epics', `${uniqueSlug}.md`);
+                    const epicPath = path.join(wsRoot, epicPlanFile);
+
                     const now = new Date().toISOString();
-                    await db.upsertPlan({
+                    const upsertOk = await db.upsertPlan({
                         planId,
                         sessionId,
                         topic: name,
@@ -2900,9 +2910,13 @@ export class PlanningPanelProvider {
                         isEpic: 1,
                         epicId: ''
                     });
+
+                    if (!upsertOk) {
+                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Failed to create epic: DB upsert failed.' });
+                        break;
+                    }
+
                     await db.updateEpicStatus(planId, 1, '');
-                    const epicPath = path.join(wsRoot, epicPlanFile);
-                    await fs.promises.mkdir(path.dirname(epicPath), { recursive: true });
                     GlobalPlanWatcherService.registerPendingCreation(epicPath);
                     await fs.promises.writeFile(epicPath, epicContent, 'utf8');
                     // Trigger a full fetchKanbanPlans so the webview receives a complete
@@ -5347,7 +5361,8 @@ Read the existing ticket content from the local file if it exists. Determine wha
             case 'copyInsightLink': {
                 const link = String(msg.link || '');
                 if (link) {
-                    await vscode.env.clipboard.writeText(link);
+                    const linkRef = link.startsWith('@') ? link : '@' + link;
+                    await vscode.env.clipboard.writeText(linkRef);
                     this._projectPanel?.webview.postMessage({ type: 'insightLinkCopied' });
                 }
                 break;
@@ -5511,8 +5526,9 @@ Read the existing ticket content from the local file if it exists. Determine wha
                 return;
             }
 
-            await vscode.env.clipboard.writeText(docPath);
-            vscode.window.showInformationMessage(`Document path copied to clipboard: ${docPath}`);
+            const docRef = docPath.startsWith('@') ? docPath : '@' + docPath;
+            await vscode.env.clipboard.writeText(docRef);
+            vscode.window.showInformationMessage(`Document path copied to clipboard: ${docRef}`);
         } catch (err) {
             vscode.window.showErrorMessage(`Failed to link to document: ${String(err)}`);
         }
@@ -5791,10 +5807,17 @@ Read the existing ticket content from the local file if it exists. Determine wha
             };
         }
         if (this._projectPanel) {
-            this._projectPanel.webview.options = {
-                enableScripts: true,
-                localResourceRoots
-            };
+            try {
+                this._projectPanel.webview.options = {
+                    enableScripts: true,
+                    localResourceRoots
+                };
+            } catch {
+                // Panel was disposed but reference wasn't cleared (e.g. planning panel
+                // closed first, removing the onDidDispose listener that clears this).
+                // Clear the stale reference so openProject() creates a fresh panel.
+                this._projectPanel = undefined;
+            }
         }
     }
 
@@ -7378,6 +7401,16 @@ Read the existing ticket content from the local file if it exists. Determine wha
         if (this._panel) {
             this._panel.dispose();
             this._panel = undefined;
+        }
+        // If the project panel is still open, its onDidDispose listener was just
+        // removed by clearing _disposables above. Re-register it so _projectPanel
+        // is cleared when that panel is eventually closed.
+        if (this._projectPanel) {
+            this._disposables.push(
+                this._projectPanel.onDidDispose(() => {
+                    this._projectPanel = undefined;
+                })
+            );
         }
         // Reset the webview-roots dedup guard so a subsequent open() on a brand-new panel
         // reassigns webview.options (incl. enableScripts) instead of short-circuiting on a

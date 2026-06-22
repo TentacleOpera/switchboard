@@ -10479,8 +10479,8 @@ What would you like to find?`;
                 dispatchedIde: ''
             });
         }
-        if (records.length > 0) {
-            await db.upsertPlans(records);
+        for (const record of records) {
+            await db.insertFileDerivedPlan(record);
         }
     }
 
@@ -10528,8 +10528,8 @@ What would you like to find?`;
                 worktreeId: existing?.worktreeId
             });
         }
-        if (records.length > 0) {
-            await db.upsertPlans(records);
+        for (const record of records) {
+            await db.insertFileDerivedPlan(record);
         }
     }
 
@@ -10583,7 +10583,7 @@ What would you like to find?`;
                 } catch { /* Non-critical */ }
             }
 
-            await db.upsertPlans([{
+            await db.insertFileDerivedPlan({
                 planId: entry.planId,
                 sessionId: sessionId,
                 topic: entry.topic || '(untitled)',
@@ -10605,7 +10605,7 @@ What would you like to find?`;
                 dispatchedAgent: existing?.dispatchedAgent || '',
                 dispatchedIde: existing?.dispatchedIde || '',
                 worktreeId: existing?.worktreeId
-            }]);
+            });
         }
         console.log(`[TaskViewerProvider] Registered plan: ${entry.planId} (${entry.sourceType}) topic="${entry.topic}"`);
     }

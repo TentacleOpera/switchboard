@@ -1535,8 +1535,9 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 const linkPath = message.sourceFolder
                     ? path.resolve(message.sourceFolder, linkRelativePath)
                     : linkRelativePath;
-                vscode.env.clipboard.writeText(linkPath);
-                vscode.window.showInformationMessage(`Copied document path to clipboard: ${linkPath}`);
+                const linkRef = linkPath.startsWith('@') ? linkPath : '@' + linkPath;
+                vscode.env.clipboard.writeText(linkRef);
+                vscode.window.showInformationMessage(`Copied document path to clipboard: ${linkRef}`);
                 break;
             }
 

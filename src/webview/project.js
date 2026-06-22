@@ -761,7 +761,7 @@
                 copyLinkBtn.addEventListener('click', e => {
                     e.stopPropagation();
                     const path = copyLinkBtn.dataset.planFile;
-                    navigator.clipboard.writeText(path).then(() => {
+                    navigator.clipboard.writeText(toAgentRef(path)).then(() => {
                         copyLinkBtn.textContent = 'Copied';
                         setTimeout(() => copyLinkBtn.textContent = 'Copy Link', 2000);
                     });

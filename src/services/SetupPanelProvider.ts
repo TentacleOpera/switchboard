@@ -133,6 +133,11 @@ export class SetupPanelProvider implements vscode.Disposable {
                 }
                 case 'ready':
                     await this._taskViewerProvider.postSetupPanelState();
+                    {
+                        const currentTheme = vscode.workspace.getConfiguration('switchboard')
+                            .get<string>('theme.name', 'afterburner');
+                        this._panel?.webview.postMessage({ type: 'switchboardThemeNameSetting', theme: currentTheme });
+                    }
                     if (this._pendingSection) {
                         this._panel.webview.postMessage({ type: 'openSetupSection', section: this._pendingSection });
                         this._pendingSection = undefined;
@@ -658,6 +663,12 @@ export class SetupPanelProvider implements vscode.Disposable {
                 case 'openKeybindings':
                     await vscode.commands.executeCommand('workbench.action.openGlobalKeybindings');
                     break;
+                case 'getThemeSetting': {
+                    const currentTheme = vscode.workspace.getConfiguration('switchboard')
+                        .get<string>('theme.name', 'afterburner');
+                    this._panel?.webview.postMessage({ type: 'switchboardThemeNameSetting', theme: currentTheme });
+                    break;
+                }
                 case 'getCyberAnimationDisabledSetting':
                     this._panel.webview.postMessage({
                         type: 'cyberAnimationDisabledSetting',

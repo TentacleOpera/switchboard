@@ -1,6 +1,13 @@
 // Shared utilities for Switchboard webviews (Planning and Design panels)
 // Loaded globally within the webview environment
 
+// Convert an absolute filesystem path into an agent-safe file reference.
+// Idempotent: returns the input unchanged if it already starts with '@'.
+function toAgentRef(absPath) {
+    if (!absPath) return absPath;
+    return absPath.startsWith('@') ? absPath : '@' + absPath;
+}
+
 function escapeAttr(s) {
     return String(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }

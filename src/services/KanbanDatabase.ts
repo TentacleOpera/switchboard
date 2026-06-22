@@ -1284,6 +1284,55 @@ export class KanbanDatabase {
         return this.upsertPlans([record]);
     }
 
+    /**
+     * Insert a plan record using only file-derived fields.
+     * DB-owned columns (is_epic, epic_id, kanban_column, status, worktree_id, etc.)
+     * are left at their schema DEFAULT values — the file has no business setting them.
+     * Use this for file-watcher imports and registry saves that don't own DB state.
+     */
+    public async insertFileDerivedPlan(record: KanbanPlanRecord): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        const relativePlanFile = this._ensureRelativePlanFile(record.planFile);
+        const sql = `
+            INSERT INTO plans (
+                plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
+                repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
+                brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
+                clickup_task_id, linear_issue_id, workspace_name
+            ) VALUES (?, ?, ?, ?, 'CREATED', 'active', ?, ?, '', ?, ?, ?, ?, '', ?, '', '', '', '', '', '', '', ?)
+            ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
+                topic = excluded.topic,
+                complexity = excluded.complexity,
+                tags = excluded.tags,
+                project = excluded.project,
+                updated_at = excluded.updated_at
+        `;
+        try {
+            this._db.run('BEGIN');
+            this._db.run(sql, [
+                record.planId,
+                record.sessionId,
+                record.topic,
+                relativePlanFile,
+                record.complexity,
+                record.tags || '',
+                record.project || '',
+                record.workspaceId,
+                record.createdAt,
+                record.updatedAt,
+                record.sourceType,
+                record.workspaceName || ''
+            ]);
+            this._db.run('COMMIT');
+        } catch (error) {
+            try { this._db.run('ROLLBACK'); } catch { }
+            console.error('[KanbanDatabase] insertFileDerivedPlan failed:', error);
+            return false;
+        }
+        return this._persist();
+    }
+
+
     public async hasActivePlans(workspaceId: string): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
         const stmt = this._db.prepare(
@@ -1684,6 +1733,19 @@ export class KanbanDatabase {
         }
         return result;
     }
+
+    /**
+     * Update plan_file by plan_id (not sessionId). Use this instead of the deprecated
+     * updatePlanFile, which fails for watcher-imported plans with sessionId=''.
+     */
+    public async updatePlanFileByPlanId(planId: string, newPlanFile: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        const relativePlanFile = this._ensureRelativePlanFile(newPlanFile);
+        const sql = 'UPDATE plans SET plan_file = ?, updated_at = ? WHERE plan_id = ?';
+        const params = [relativePlanFile, new Date().toISOString(), planId];
+        return this._persistedUpdate(sql, params);
+    }
+
 
     public async updateSessionId(oldSessionId: string, newSessionId: string): Promise<boolean> {
         console.log(`[KanbanDatabase] updateSessionId: oldSessionId=${oldSessionId}, newSessionId=${newSessionId}`);
@@ -4734,10 +4796,54 @@ export class KanbanDatabase {
                 console.error('[KanbanDatabase] V35 backfill failed:', e);
                 // Do NOT stamp version — retry on next init
             }
+        // V36: Run the unified epic file path migration and data repair
+        const v36 = await this.getMigrationVersion();
+        if (v36 < 36) {
+            await this._runMigrationV36(this._workspaceRoot);
+        }
+    }
+
+    private async _runMigrationV36(workspaceRoot: string): Promise<void> {
+        if (!this._db) return;
+
+        // ── Data Repair: fix is_epic = NULL → 0 ──
+        try {
+            this._db.run('UPDATE plans SET is_epic = 0 WHERE is_epic IS NULL');
+            console.log('[KanbanDatabase] V36 data repair: set is_epic = 0 for NULL records');
+        } catch (repairErr) {
+            console.error('[KanbanDatabase] V36 data repair failed:', repairErr);
         }
 
-
+        // ── File Migration: move epic files from plans/ to epics/ directory ──
+        try {
+            const stmt = this._db.prepare(
+                `SELECT ${PLAN_COLUMNS} FROM plans WHERE is_epic = 1 AND plan_file LIKE '.switchboard/plans/epic-%'`
+            );
+            const epics = this._readRows(stmt);
+            const epicsDir = path.join(workspaceRoot, '.switchboard', 'epics');
+            await fs.promises.mkdir(epicsDir, { recursive: true });
+            for (const epic of epics) {
+                const oldAbs = path.resolve(workspaceRoot, epic.planFile);
+                const basename = path.basename(epic.planFile);
+                const newRel = path.join('.switchboard', 'epics', basename);
+                const newAbs = path.resolve(workspaceRoot, newRel);
+                try {
+                    if (fs.existsSync(oldAbs)) {
+                        await fs.promises.copyFile(oldAbs, oldAbs + '.migrated.bak');
+                        await fs.promises.rename(oldAbs, newAbs);
+                    }
+                    await this.updatePlanFileByPlanId(epic.planId, newRel);
+                } catch (e) {
+                    console.warn(`[KanbanDatabase] V36 migration: failed to move ${epic.planFile}: ${e}`);
+                }
+            }
+            await this.setMigrationVersion(36);
+            console.log('[KanbanDatabase] V36 migration completed.');
+        } catch (migrationErr) {
+            console.error('[KanbanDatabase] V36 migration FAILED. Error:', migrationErr);
+        }
     }
+
 
     /**
      * Schema reconciliation: ensure all columns defined in SCHEMA_SQL's plans table

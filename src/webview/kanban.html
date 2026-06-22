@@ -118,6 +118,14 @@
             color: var(--text-primary) !important;
             box-shadow: none !important;
         }
+        /* Epic cards: restore the purple identity that the !important .kanban-card rules above
+           otherwise flatten (mirrors the green .completed bar). Declared after :hover so the
+           purple survives hover, but before .selected so selection still wins. */
+        body.theme-claudify .kanban-card.epic-card,
+        body.theme-claudify .kanban-card.epic-card:hover {
+            border-left: 4px solid #7c3aed !important;
+            background: linear-gradient(180deg, color-mix(in srgb, #7c3aed 12%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
+        }
         /* Selected: clear terracotta highlight so the selection is obvious (keep green completed bar). */
         body.theme-claudify .kanban-card.selected {
             background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
@@ -1341,7 +1349,7 @@
         .modal-title {
             font-size: 15px;
             font-weight: 600;
-            color: var(--accent-red);
+            color: var(--accent-primary);
             margin: 0;
         }
         .modal-close-btn {
@@ -2347,6 +2355,7 @@
 /* Claudify: neutral-grey tab nav (active tab keeps the terracotta accent). kanban.html has its
    own inline copy of these tab styles, so the override must live here too. */
 body.theme-claudify .shared-tab-btn:not(.active) { color: #8a8a8a; }
+body.theme-claudify .shared-tab-btn.active { border-color: transparent; }
 body.theme-claudify .shared-tab-btn:hover:not(.active) {
   color: #c8c8c8;
   background: color-mix(in srgb, #ffffff 5%, transparent);
@@ -2992,10 +3001,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             </div>
             <div class="modal-body">
                 <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">
-                    Jot down bugs, thoughts, or issues. Entries are <strong>saved automatically</strong>
-                    and persist until you press <strong>Send to Planner</strong> or <strong>Copy Prompt</strong>
-                    (which clears the memo) or <strong>Clear</strong>. Each line/paragraph is treated as a
-                    separate issue when sent to the planner.
+                    Jot down bugs, thoughts, or issues — one per line or paragraph. Each entry becomes a
+                    <strong>separate issue</strong>.
+                    <br><br>
+                    <strong>Copy Prompt</strong> copies a planner prompt to your clipboard; <strong>Send to Planner</strong>
+                    copies it <em>and</em> dispatches it to your planner agent. In both cases the prompt instructs the agent to
+                    <strong>create a separate plan file for each issue</strong> in <code>.switchboard/plans/</code>.
+                    <br><br>
+                    Entries are <strong>saved automatically</strong> and the memo is <strong>cleared</strong> after Copy Prompt or
+                    Send to Planner (or when you press <strong>Clear</strong>).
                 </p>
                 <textarea id="memo-textarea"
                           class="modal-textarea"
@@ -4326,7 +4340,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         function buildBoardSignature(cards) {
             if (!Array.isArray(cards) || cards.length === 0) return '';
             return cards
-                .map(card => `${card.workspaceRoot || ''}|${card.planId || card.sessionId || ''}|${card.column}|${card.topic || ''}|${card.planFile || ''}|${card.complexity || 'Unknown'}|${card.lastActivity || ''}`)
+                .map(card => `${card.workspaceRoot || ''}|${card.planId || card.sessionId || ''}|${card.column}|${card.topic || ''}|${card.planFile || ''}|${card.complexity || 'Unknown'}|${card.lastActivity || ''}|${card.isEpic ? '1' : '0'}|${card.subtaskCount || 0}`)
                 .sort()
                 .join('||');
         }
