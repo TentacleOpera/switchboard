@@ -3172,18 +3172,19 @@ async function cleanupLegacyAgentFiles(workspaceRoot: string): Promise<void> {
         'workflows/challenge.md',
         'workflows/chat.md', // Renamed to switchboard-chat.md
     ];
-    // Check both .agents/ (current) and .agent/ (legacy) for stale files.
-    const agentDirs = ['.agents', '.agent'];
-    for (const agentDir of agentDirs) {
-        for (const relativePath of legacyFiles) {
-            const fullPath = path.join(workspaceRoot, agentDir, relativePath);
-            try {
-                await fs.promises.access(fullPath);
-                await fs.promises.unlink(fullPath);
-                outputChannel?.appendLine(`[Switchboard] Removed legacy file: ${path.join(agentDir, relativePath)}`);
-            } catch {
-                // File does not exist or cannot be removed — non-fatal
-            }
+    // Only operate on .agents/ (Switchboard's managed directory). A pre-existing
+    // .agent/ belongs to the user and must be left byte-for-byte untouched — the
+    // only sanctioned way to remove it is the guarded, opt-in Setup-tab cleanup
+    // button (see SetupPanelProvider._performAgentDirCleanup).
+    const agentDir = '.agents';
+    for (const relativePath of legacyFiles) {
+        const fullPath = path.join(workspaceRoot, agentDir, relativePath);
+        try {
+            await fs.promises.access(fullPath);
+            await fs.promises.unlink(fullPath);
+            outputChannel?.appendLine(`[Switchboard] Removed legacy file: ${path.join(agentDir, relativePath)}`);
+        } catch {
+            // File does not exist or cannot be removed — non-fatal
         }
     }
 }

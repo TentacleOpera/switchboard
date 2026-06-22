@@ -7546,7 +7546,7 @@ Instructions:
     function renderTicketsLinearTaskDetail() {
         if (!isTicketsTabActive() || ticketsEditMode) return;
 
-        const { subtasksNav, detailContent, previewMetaBar, deleteConfirmBanner, commentInputArea } = getTicketsTabElements();
+        const { subtasksNav, detailContent, previewMetaBar, commentInputArea } = getTicketsTabElements();
         if (!detailContent) return;
 
         if (!selectedLinearIssue) {
@@ -7564,7 +7564,9 @@ Instructions:
                 _lastTicketsLinearStatusSelectHtml = '';
             }
             if (previewMetaBar) previewMetaBar.style.display = 'none';
-            if (deleteConfirmBanner) deleteConfirmBanner.style.display = 'none';
+            const _delModal = document.getElementById('tickets-delete-modal');
+            if (_delModal) _delModal.style.display = 'none';
+            _pendingDeleteTicket = null;
             if (commentInputArea) commentInputArea.style.display = 'none';
             const tagsButton = document.getElementById('tickets-tags');
             if (tagsButton) tagsButton.disabled = true;
@@ -8051,7 +8053,7 @@ Instructions:
     function renderTicketsClickUpTaskDetail() {
         if (!isTicketsTabActive() || ticketsEditMode) return;
 
-        const { subtasksNav, detailContent, previewMetaBar, deleteConfirmBanner, commentInputArea } = getTicketsTabElements();
+        const { subtasksNav, detailContent, previewMetaBar, commentInputArea } = getTicketsTabElements();
         if (!detailContent) return;
 
         if (!selectedClickUpIssue) {
@@ -8069,7 +8071,9 @@ Instructions:
                 _lastTicketsClickUpStatusSelectHtml = '';
             }
             if (previewMetaBar) previewMetaBar.style.display = 'none';
-            if (deleteConfirmBanner) deleteConfirmBanner.style.display = 'none';
+            const _delModal = document.getElementById('tickets-delete-modal');
+            if (_delModal) _delModal.style.display = 'none';
+            _pendingDeleteTicket = null;
             if (commentInputArea) commentInputArea.style.display = 'none';
             const tagsButton = document.getElementById('tickets-tags');
             if (tagsButton) tagsButton.disabled = true;
@@ -8456,7 +8460,9 @@ Instructions:
         if (elements.detailContent) elements.detailContent.innerHTML = '';
         if (elements.subtasksNav) { elements.subtasksNav.innerHTML = ''; elements.subtasksNav.style.display = 'none'; }
         if (elements.previewMetaBar) elements.previewMetaBar.style.display = 'none';
-        if (elements.deleteConfirmBanner) elements.deleteConfirmBanner.style.display = 'none';
+        const _delModal = document.getElementById('tickets-delete-modal');
+        if (_delModal) _delModal.style.display = 'none';
+        _pendingDeleteTicket = null;
         if (elements.commentInputArea) elements.commentInputArea.style.display = 'none';
         
     }

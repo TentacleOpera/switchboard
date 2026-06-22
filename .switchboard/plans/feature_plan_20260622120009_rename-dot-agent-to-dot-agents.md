@@ -217,3 +217,47 @@ Add tests that: (a) scaffolding a fresh workspace creates `.agents/` with the ex
 ---
 
 **Recommendation:** Complexity is 7 → **Send to Lead Coder**. This is a multi-file coordinated rename with a destructive UI feature, CSS class collision hazards, and backward-compatibility fallback requirements. A lead coder can manage the cross-file coordination and verify the safety guards.
+
+---
+
+## Reviewer Pass — 2026-06-22
+
+### Stage 1 — Grumpy Principal Engineer
+
+Gather round, because the implementation is *95% gorgeous* and that last 5% is a loaded gun pointed straight at the one promise this plan made in blood.
+
+**CRITICAL — the "byte-for-byte untouched" oath, broken on activation.** [extension.ts:3176](src/extension.ts#L3176) — `const agentDirs = ['.agents', '.agent'];`. Oh, *splendid*. We wrote three pages — THREE PAGES — about how Switchboard shall NEVER, under pain of user review item #1, touch a user's leftover `.agent/`. We built a guarded, symlink-checked, config-sniffing, modal-confirmed opt-in cleanup button in §6a precisely because deleting from `.agent/` is sacred ground. And then `cleanupLegacyAgentFiles` — invoked *automatically, unconditionally, on every single activation* at [extension.ts:598](src/extension.ts#L598) — cheerfully loops over `['.agents', '.agent']` and `fs.promises.unlink`s eight files straight out of the user's `.agent/`. No guard. No modal. No symlink check. No consent. Verification step 5 says "byte-for-byte unchanged." Test (b) says "leaves it byte-for-byte untouched and does not delete it." This code deletes `handoff.md`, `challenge.md`, and friends from it on startup. The §6a button is theater if the activation path is already silently looting the same directory. **This is the finding.**
+
+**MAJOR — the §8 test suite is a no-show.** The plan enumerated seven new tests (a–g): scaffold-creates-`.agents/`, scaffold-leaves-`.agent/`-untouched, fallback resolution, cleanup-guard refusals (missing `.agents/`, config-references, symlink), `getAgentDirCleanupState` hides when clean, `hasSwitchboardProtocolFiles` on `.agents/`-only, and the CSS-class regression guard. None exist. The *fixture updates* were done diligently (all six listed files now read `.agents/`), but the new behavioral tests — especially the regression guard that would have *caught the CRITICAL above* — were never written.
+
+**NIT — a stray `.tmp` corpse.** [src/test/agent-prompt-builder-subagents.test.js.tmp](src/test/agent-prompt-builder-subagents.test.js.tmp) is an untracked May-14 leftover still carrying old `.agent/` strings. Not shipped, not run, not tracked — but it's litter that'll confuse the next grep.
+
+**NIT — modal reads paths back out of the DOM.** [setup.html:3264-3273](src/webview/setup.html#L3264) parses `textContent` with a regex to reconstruct deletable paths instead of keeping the last state in a JS variable. Fragile string-matching on `'deletable'`. Survives only because the *server* re-derives and re-guards everything in `_performAgentDirCleanup` — which, credit where due, is the correct authoritative design.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep (verified correct):**
+- Physical `.agent` → `.agents` rename committed; working tree clean; `.agents/` present with all five subdirs.
+- `.vscodeignore` keep-rule, `AGENTS.md`, `README.md` all updated.
+- All path literals converted in `ControlPlaneMigrationService.ts` (constant + 5 joins + warning + comment; `.agent_version.json` correctly left alone), `agentPromptBuilder.ts` (strings + comments + default), `TaskViewerProvider.ts`, `KanbanProvider.ts` fallbacks, `PlanningPanelProvider.ts`, `extension.ts` scaffold (reads/writes `.agents/`).
+- §6b fallback resolvers correctly try `.agents/` then `.agent/` in `hasSwitchboardProtocolFiles`, `TaskViewerProvider` persona/rules, `PlanningPanelProvider` skill.
+- §6a cleanup: full handler wiring (`getAgentDirCleanupState`/`performAgentDirCleanup` ↔ webview), all four guards present (sibling `.agents/`, symlink, config-reference, per-root isolation), server re-checks guards immediately before `rm` (race-safe). The `'.agents/...'.includes('.agent/')` config check correctly does **not** false-positive (`.agent` is followed by `s`, not `/`).
+- CSS classes intact: 13 `.agent-*` selectors in `implementation.html`, 1 in `kanban.html`, zero corrupted `.agents-*`.
+- All six listed test fixtures updated to `.agents/`.
+
+**Fix now (done in this pass):** the CRITICAL — restrict `cleanupLegacyAgentFiles` to `.agents/` only.
+
+**Defer (remaining risk, owner action):** the §8 new test suite. Tests are run separately per session directive, so they were not authored here, but the CSS-regression guard and the cleanup-guard tests should be added before release — the missing regression guard is exactly what let the CRITICAL slip through.
+
+### Fixes Applied
+- [extension.ts:3175-3188](src/extension.ts#L3175) — `cleanupLegacyAgentFiles` now iterates only `.agents/` (was `['.agents', '.agent']`). The user's leftover `.agent/` is no longer silently modified on activation; removal stays exclusively behind the guarded §6a opt-in button. Comment updated to record the invariant.
+
+### Validation
+- Per session directives: **no compilation and no test run** performed.
+- Static checks: `grep` confirms no stray `.agent/` path references remain in `src` outside intentional fallbacks/comments/cleanup-UI text; CSS `.agent-*` selectors unchanged; all six listed test fixtures read `.agents/`.
+- IDE diagnostics after the edit: only pre-existing `Hint`-level unused-variable warnings, none introduced by this change.
+
+### Remaining Risks
+1. **§8 test coverage gap (MAJOR, deferred):** the seven prescribed tests — particularly the CSS-class regression guard and the cleanup-guard refusals — are not implemented. Add before release.
+2. **Stray `src/test/agent-prompt-builder-subagents.test.js.tmp` (NIT):** untracked leftover with old `.agent/` strings; safe to delete.
+3. **Modal DOM path-parsing (NIT):** functional but fragile; safe only because the server re-validates. Consider storing last cleanup state in a JS variable.

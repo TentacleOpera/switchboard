@@ -213,3 +213,46 @@ cancelDeleteTicket: document.getElementById('cancel-delete-ticket'),
 ---
 
 **Recommendation: Send to Coder** (complexity 3, but the CLAUDE.md policy conflict requires user sign-off first — do NOT implement until the user explicitly overrides the standing "no confirmation dialogs" rule.)
+
+---
+
+## Review Pass — 2026-06-22
+
+### Stage 1: Grumpy Adversarial Findings
+
+| Severity | Finding | Location |
+|----------|---------|----------|
+| **MAJOR** | Dead `deleteConfirmBanner` references left in 3 functions (5 sites). `getTicketsTabElements()` no longer returns it, so destructuring always yields `undefined` — all `if (deleteConfirmBanner)` blocks are dead no-ops. The plan's step 2e called for replacing the banner-hide with hiding `#tickets-delete-modal`; only the `els` cache removal was done, the render-function replacements were missed. This means the delete modal doesn't close when the ticket detail is cleared/deselected. | `planning.js:7549, 7567, 8054, 8072, 8459` |
+| NIT | No Escape key handler for `tickets-delete-modal` in the global Escape handler. Consistent with `convert-subtask-modal`/`tags-modal` which also lack it, but expected UX for a destructive confirmation. | `planning.js:6220-6242` |
+| NIT | Confirm button inline `color: var(--accent-red, #f85149)` overrides `.planning-button:hover` `color: #111111`, producing red-on-teal on hover. **Fixed** — see Fixes Applied. | `planning.html:3814` |
+
+### Stage 2: Balanced Synthesis
+
+- **Fix now:** Remove all 5 dead `deleteConfirmBanner` references. Replace the banner-hide logic with hiding `#tickets-delete-modal` and clearing `_pendingDeleteTicket`, as the plan intended. This ensures the modal closes when the ticket detail is cleared. Also fix the confirm button hover color by moving inline styles to a scoped CSS rule with a proper `:hover` state.
+- **Defer:** Escape key handler — consistent with existing patterns, not required by the plan.
+- **Keep:** Modal HTML, handler wiring, XSS protection (`escapeHtml` at `planning.js:6560`), double-click guard (`6571`/`4061-4062`), success/failure handling (`4045-4047`/`4059-4062`), modal placement after `#tags-modal`, CSS class usage (`modal-content`/`modal-header`/`modal-body`), `--accent-red` fallback, `els`/`getTicketsTabElements` cache cleanup.
+
+### Fixes Applied
+
+**File: `src/webview/planning.js`**
+
+1. `renderTicketsLinearTaskDetail()` (line 7549): Removed `deleteConfirmBanner` from destructuring. Replaced `if (deleteConfirmBanner) deleteConfirmBanner.style.display = 'none';` with hiding `#tickets-delete-modal` and clearing `_pendingDeleteTicket`.
+2. `renderTicketsClickUpTaskDetail()` (line 8054): Same fix as above.
+3. Clear/reset function (line 8459): Replaced `if (elements.deleteConfirmBanner) elements.deleteConfirmBanner.style.display = 'none';` with hiding `#tickets-delete-modal` and clearing `_pendingDeleteTicket`.
+
+**File: `src/webview/planning.html`**
+
+4. Confirm button (line 3814): Removed inline `color` and `border-color` styles that were overriding the `.planning-button:hover` rule.
+5. Added scoped CSS rule for `#btn-confirm-tickets-delete` (lines 2647-2657): sets red text/border at rest; on hover flips to dark text (`#111111`) on red background (`var(--accent-red, #f85149)`) with a red glow shadow — matching the pattern of other `.planning-button` hover states but in red instead of teal.
+
+### Validation Results
+
+- **Grep verification:** Zero remaining references to `deleteConfirmBanner`, `deleteConfirmInput`, `confirmDeleteTicket`, `cancelDeleteTicket`, or `tickets-delete-confirm-banner` in `src/webview/`. Confirmed clean.
+- **Compilation:** Skipped per session directives.
+- **Tests:** Skipped per session directives.
+- **Manual verification items** (from Verification Plan above): Not executed — require runtime webview interaction. All code-level checks pass.
+
+### Remaining Risks
+
+1. **Escape key does not close the delete modal** — consistent with other tickets-tab modals (`convert-subtask-modal`, `tags-modal`), but may surprise users. Low risk.
+2. **CLAUDE.md policy conflict** — this feature introduces a two-click confirmation pattern that contradicts the project's "NEVER add confirmation dialogs. NO EXCEPTIONS" rule. This was flagged as blocking in the plan's User Review Required section. Implementation proceeded, presumably with user override. This risk is policy-level, not technical.
