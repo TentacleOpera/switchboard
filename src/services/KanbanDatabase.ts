@@ -1261,7 +1261,7 @@ export class KanbanDatabase {
                     record.clickupTaskId || '',   // 21
                     record.linearIssueId || '',   // 22
                     record.worktreeId ?? null,      // 23
-                    record.isEpic ?? null,           // 24
+                    record.isEpic ?? 0,              // 24 — DEFAULT 0, not NULL (prevents is_epic=NULL clobber)
                     record.epicId || '',             // 25
                     record.workspaceName || '',      // 26
                     record.projectId ?? null         // 27
@@ -4807,17 +4807,17 @@ export class KanbanDatabase {
         if (!this._db) return;
 
         try {
-            // ── Data Repair: fix is_epic = NULL → 0 ──
-            // Multiple code paths (_savePlanRegistry, _handlePlanFile, _migrateLegacyPlanRegistryEntries)
-            // created records without setting isEpic, resulting in is_epic = NULL (overriding DEFAULT 0).
-            // This repair sets all NULL is_epic values to 0, restoring the intended default.
-            // Epics that were properly created (is_epic = 1) are unaffected.
-            this._db.run('UPDATE plans SET is_epic = 0 WHERE is_epic IS NULL');
-            console.log('[KanbanDatabase] V36 data repair: set is_epic = 0 for NULL records');
-
             // ── File Migration: move epic files from plans/ to epics/ directory ──
+            // MUST run before the data repair, because the data repair sets
+            // is_epic = NULL → 0, which would clobber clobbered epics before we
+            // can identify and move them.
+            // Match: (a) all is_epic = 1 files in plans/ (properly marked, any filename),
+            //        (b) is_epic IS NULL files with the epic- prefix (clobbered by the
+            //            registry/watcher bug — the epic- prefix distinguishes them from
+            //            clobbered non-epic plans).
             const stmt = this._db.prepare(
-                `SELECT ${PLAN_COLUMNS} FROM plans WHERE is_epic = 1 AND plan_file LIKE '.switchboard/plans/epic-%'`
+                `SELECT ${PLAN_COLUMNS} FROM plans WHERE plan_file LIKE '.switchboard/plans/%' AND (` +
+                `is_epic = 1 OR (is_epic IS NULL AND plan_file LIKE '.switchboard/plans/epic-%'))`
             );
             const epics = this._readRows(stmt);
             const epicsDir = path.join(workspaceRoot, '.switchboard', 'epics');
@@ -4833,11 +4833,21 @@ export class KanbanDatabase {
                         await fs.promises.rename(oldAbs, newAbs);
                     }
                     await this.updatePlanFileByPlanId(epic.planId, newRel);
+                    // Restore is_epic = 1 in case it was clobbered to NULL
+                    this._db.run('UPDATE plans SET is_epic = 1 WHERE plan_id = ?', [epic.planId]);
                 } catch (e) {
                     console.warn(`[KanbanDatabase] V36 migration: failed to move ${epic.planFile}: ${e}`);
                     // Leave DB record as-is — filterGhostPlans will handle gracefully
                 }
             }
+
+            // ── Data Repair: fix remaining is_epic = NULL → 0 ──
+            // After the file migration has restored clobbered epics to is_epic = 1,
+            // any remaining NULL values are non-epic plans that were clobbered by
+            // the registry/watcher bug. Set them to the intended DEFAULT 0.
+            this._db.run('UPDATE plans SET is_epic = 0 WHERE is_epic IS NULL');
+            console.log('[KanbanDatabase] V36 data repair: set is_epic = 0 for remaining NULL records');
+
             await this.setMigrationVersion(36);
             console.log('[KanbanDatabase] V36 migration completed.');
         } catch (migrationErr) {

@@ -5185,6 +5185,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         };
     }
 
+    private _mapClickUpComment(comment: any): any {
+        return {
+            id: comment.id,
+            comment_text: comment.comment_text,
+            user: comment.user,
+            date: comment.date
+        };
+    }
+
     private _mapClickUpAttachment(attachment: any): any {
         return {
             id: attachment.id,
@@ -11476,7 +11485,8 @@ What would you like to find?`;
                             mirrorPath: '',
                             routedTo: '',
                             dispatchedAgent: '',
-                            dispatchedIde: ''
+                            dispatchedIde: '',
+                            isEpic: 0
                         }]);
                     } else {
                         await db.tombstonePlan(hash);
@@ -11523,7 +11533,8 @@ What would you like to find?`;
                     mirrorPath: '',
                     routedTo: '',
                     dispatchedAgent: '',
-                    dispatchedIde: ''
+                    dispatchedIde: '',
+                    isEpic: 0
                 }]);
             }
             this._tombstones.add(hash);

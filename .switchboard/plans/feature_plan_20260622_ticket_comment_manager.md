@@ -303,3 +303,62 @@ before tackling Linear's API quirks.
 ---
 
 **Recommendation:** Complexity is 7 (High) — **Send to Lead Coder**. This involves new API patterns (structured mentions, threaded replies), real notification side effects, multi-file coordination across 6 files, and a new UI panel with autocomplete. The API verification gates add uncertainty that a lead coder can navigate with fallback strategies.
+
+---
+
+## Reviewer Pass — 2026-06-22 (post-implementation)
+
+Direct adversarial review of the committed implementation (commit `0e15236`) against this plan. Compilation and automated tests were skipped per session directive (user runs tests separately); a syntax-only `node --check` was run on `planning.js`.
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *"You handed me a plan that personally instructed the coder to* ***delete*** *a method, swearing on the build's grave it was 'dead code, defined but never called.' It was called. Line 8501. `clickupTaskDetailsLoaded` reaches for `this._mapClickUpComment(c)` and grabs a fistful of air. The extension wouldn't have compiled. Read your own call graph before you sign a method's execution warrant. **CRITICAL.**"*
+>
+> *"And the refetch guard — oh, this is a beauty. You set `_pendingRefetchTicketId = msg.id` and then, in the very next breath, call `loadCommentThreads(id)` whose first act is to check `if (_pendingRefetchTicketId === id)` and bail out as 'already pending.' You built a turnstile and locked yourself on the wrong side of it. The provider refetch after a post NEVER fires. The optimistic insert is never reconciled. Worse: the flag stays jammed, so your shiny 'Refresh' button is now a decorative rectangle. Forever. **MAJOR.**"*
+>
+> *"You swore comments would stay out of the `.md` files — 'deliberately kept out,' your words. Then I find `_loadLinearImportNode` (line 4476) still slurping `getComments` and stuffing them into `_buildCommentsSection` on the epic-import path. You scoped Step 0 to two line numbers and waved the rest through as 'harmless safety nets.' Harmless until a user imports a Linear epic and watches their comments bleed into the doc you promised to keep clean. **MAJOR (out of scope, but it's a lie in the Goal section).**"*
+>
+> *"`addIssueComment` quietly changed its return type from `Promise<void>` to `{success, error}`. The callers were updated — fine — but your existing Linear test suite still pokes the old shape. You'll find out when the user runs the tests you told them to run. **NIT, deferred to test run.**"*
+>
+> *"You kept the `|| trimmed === '## Comments'` clause in `pushTicketEdits` that the plan told you to delete. For once, you were right to disobey — legacy files with old `## Comments` sections shouldn't fold into the remote description on push. But you'd better have documented it, or the next reviewer reverts your good judgement. (You did. Lines 17800-17804. Fine. NIT.)"*
+
+### Stage 2 — Balanced Synthesis
+
+**Keep (correctly implemented, no action):**
+- ClickUp `getCommentThreads` / `postComment` / `replyToComment` / `getListMembers` — verification gates (`reply_count` presence, structured-comment fallback to `comment_text`, `notify_all:false`), batch-of-5 reply fetch with `rateLimitDelay` between batches, 5-min member TTL. All present and faithful to the plan.
+- Linear `getCommentThreads` (flat→threaded rebuild with orphan bucket + `console.warn`, orphans surfaced not dropped), `addIssueComment` with `parentId`/`<@uuid>` mentions and flat-comment fallback on rejection, `getTeamMembers` with TTL, `parent { id }` added to the GraphQL query.
+- Mention token contract is consistent end-to-end: webview inserts `@{id}`, `extractMentionsFromText` parses `@{...}`, ClickUp `_buildStructuredComment` parses `@{\d+}`, Linear replaces `@{uuid}`→`<@uuid>`.
+- JSON store: `path.dirname(foundTicketFilePath)` derivation via `_findTicketDocument`, atomic temp-file-then-rename, per-directory serialized write queue. Matches the data model and write-safety spec.
+- Backend handlers + command registrations + `postTicketComment` mention pass-through — all wired per plan. HTML manager panel elements all exist and are wired.
+
+**Fixed now (this pass):**
+1. **CRITICAL** — restored `_mapClickUpComment` in `TaskViewerProvider.ts` (the plan's "dead code" claim was wrong; it is live at `TaskViewerProvider.ts:8501`).
+2. **MAJOR** — fixed the refetch-guard ordering so the in-flight marker (`_pendingRefetchTicketId`) is set *inside* `loadCommentThreads` at post time, not pre-set by the result handlers. Restores post-comment/post-reply reconciliation and unsticks the Refresh button.
+
+**Defer / accept:**
+- Linear epic-import path (`_loadLinearImportNode`) still embeds comments in `.md` — out of Step 0's stated scope; left for a follow-up decision (see Remaining Risks).
+- `addIssueComment` return-shape change vs. existing Linear tests — surfaces in the user's separate test run.
+- `## Comments` boundary clause retention — justified, documented deviation; keep as-is.
+
+### Files Changed (this pass)
+- `src/services/TaskViewerProvider.ts` — restored `_mapClickUpComment` (private mapper, placed beside `_mapClickUpAttachment`).
+- `src/webview/planning.js` — moved `_pendingRefetchTicketId = id` into `loadCommentThreads`; removed the premature `_pendingRefetchTicketId = msg.id` assignments from the `postTicketCommentResult` and `postTicketReplyResult` success branches.
+
+### Validation
+- `node --check src/webview/planning.js` → **syntax OK**.
+- Project compile (`tsc`) and automated tests **skipped per session directive**. The `_mapClickUpComment` restoration resolves the one identified TypeScript build-breaker.
+
+### Remaining Risks
+1. **Linear epic-import still embeds comments** (`TaskViewerProvider.ts:4476`, via `_loadLinearImportNode` → `_buildCommentsSection`). Contradicts the Goal's "comments kept out of `.md`" for that specific path. Decide whether to neutralize (`node.comments = []`) or accept as legacy behavior.
+2. **Live API gates remain unverified** — ClickUp `reply_count` presence and structured `comment` array acceptance; Linear `<@uuid>` mention notification delivery and `commentCreate` `parentId` support. Fallbacks (flat comments / plain `@name` text) are coded, but real-notification behavior is unconfirmed until manual testing.
+3. **Linear test suite** may assert the old `addIssueComment` `Promise<void>` shape — verify on the user's test run.
+4. **Real mention side effects** — posting still pings real provider users; the picker shows name+email to reduce mis-selection, and `notify_all:false` is preserved on ClickUp.
+
+### Findings Summary
+| Severity | Finding | Location | Status |
+|----------|---------|----------|--------|
+| CRITICAL | `_mapClickUpComment` deleted per plan but still called → build-breaker | `TaskViewerProvider.ts:8501` (call), definition restored near `:5188` | Fixed |
+| MAJOR | Refetch guard set in-flight marker before the guard check → refetch never fires, Refresh button permanently disabled | `planning.js` `loadCommentThreads` + `postTicketCommentResult`/`postTicketReplyResult` handlers | Fixed |
+| MAJOR | Linear epic-import path still embeds comments into `.md` | `TaskViewerProvider.ts:4476` | Open (out of Step 0 scope) |
+| NIT | `addIssueComment` return-type change vs. existing tests | `LinearSyncService.ts:1096` | Deferred to test run |
+| NIT | `## Comments` boundary clause retained vs. plan instruction | `TaskViewerProvider.ts:17808` | Accepted (documented, safer) |

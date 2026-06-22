@@ -81,8 +81,10 @@ export class KanbanMigration {
             const completedPlans = await db.getCompletedPlans(workspaceId, 1);
             if (completedPlans.length === 0) {
                 const rows = KanbanMigration._toKanbanPlanRecords(snapshotRows);
-                const upserted = await db.upsertPlans(rows);
-                if (!upserted) return false;
+                for (const row of rows) {
+                    const ok = await db.insertFileDerivedPlan(row);
+                    if (!ok) return false;
+                }
             }
         }
 
@@ -169,8 +171,10 @@ export class KanbanMigration {
 
             if (newRows.length > 0) {
                 const records = KanbanMigration._toKanbanPlanRecords(newRows);
-                const inserted = await db.upsertPlans(records);
-                if (!inserted) return false;
+                for (const record of records) {
+                    const ok = await db.insertFileDerivedPlan(record);
+                    if (!ok) return false;
+                }
             }
 
             if (metadataUpdates.length > 0) {

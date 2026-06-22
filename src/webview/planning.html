@@ -374,7 +374,8 @@
         }
 
         /* Hide tickets strip-btns when collapsed — !important needed because JS sets
-           inline style.display on #tickets-import-all-kanban (planning.js:6821,7078) */
+           inline style.display on #tickets-import-all-kanban in renderTicketsLinearList()
+           and renderTicketsClickUpPanel() (planning.js) */
         .content-row.collapsed #tree-pane-tickets .sidebar-toggle-row .strip-btn {
             display: none !important;
         }

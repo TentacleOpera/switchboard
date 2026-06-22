@@ -320,10 +320,10 @@ This preset turns Linear into a remote terminal for the agents on your machine. 
 **Why this matters:** The agent's answer has to get back to your phone. Status write-back exists; conversational comment write-back does not.
 
 #### `src/services/LinearSyncService.ts` (and ClickUp equivalent)
-- Add a `postComment(providerId, body)` path used by whichever column agent is replying, to write its comment back to the source issue. This wraps the same low-level `clickup_api` / `linear_api` skill the `ticket_updater` branch already invokes — it is the shared write-back primitive, decoupled from `ticket_updater`'s opinionated analyze-and-publish behavior so that *any* column agent (planner, coder, the triage-mode agent) can post a reply.
+- Add a `postComment(providerId, body)` path used by whichever column agent is replying, to write its comment back to the source issue. This wraps the same low-level `clickup_api` / `linear_api` skill the `ticket_updater` branch already invokes — it is the shared write-back primitive, available to *any* column agent (planner, coder, the simplified `ticket_updater`) so each can post a reply.
 - Prefix/suffix the body with the hidden `<!-- switchboard -->` marker (see §7) so the ingestion poller doesn't treat the agent's own reply as a new inbound instruction.
 - Truncate to the provider's comment size limit; if the agent output exceeds it, post a head + "*[truncated — see plan file]*" tail.
-- The triage-mode write-back (§6) and the triage agent's verdict comment use this same primitive — build it once and share it.
+- The triage write-back (§6) and the agent's verdict comment use this same primitive — build it once and share it.
 
 ### 9. Card-move dispatch mirror — Linear state → Switchboard column → column agent (NEW)
 
@@ -344,7 +344,7 @@ This preset turns Linear into a remote terminal for the agents on your machine. 
 #### `src/services/TaskViewerProvider.ts` (or `KanbanProvider.ts`) — handle `enableRemoteControl`
 1. **Auto-create / select a project board** named "Remote — [project name]" whose columns mirror the Linear project's workflow states (or fall back to the standard Switchboard column set if state introspection isn't available).
 2. **Build the column↔state mapping** automatically from the mirror, so moves round-trip without manual mapping.
-3. **Prompt for / assign a default agent per column** (the conversational target for comments landing in that column). A sensible default: **`ticket_updater` in `triage` mode on the inbox/early column** (a freshly-posted issue wants triage first), planner on a review column, coder/lead on in-progress columns. This is the one piece the user will most likely customize.
+3. **Prompt for / assign a default agent per column** (the conversational target for comments landing in that column). A sensible default: **the simplified `ticket_updater` (triage) on the inbox/early column** (a freshly-posted issue wants triage first), planner on a review column, coder/lead on in-progress columns. This is the one piece the user will most likely customize.
 4. **Set defaults:** `realTimeSyncEnabled: true`, `autoPullEnabled: true`, `pullIntervalMinutes: 5` (tighter than triage — remote control wants snappier comment turnaround), `completeSyncEnabled: true`, comment ingestion ON.
 5. Return success with the board name and the per-column agent assignment so the UI can confirm.
 

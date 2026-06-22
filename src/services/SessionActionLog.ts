@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { KanbanDatabase } from './KanbanDatabase';
+import { KanbanDatabase, KanbanPlanRecord } from './KanbanDatabase';
 import { parseComplexityScore } from './complexityScale';
 
 export interface ArchiveSpec { sourcePath: string; destPath: string; }
@@ -501,7 +501,7 @@ export class SessionActionLog {
             const db = await this._ensureDbReady();
             if (db) {
                 const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
-                await db.upsertPlans([{
+                await db.insertFileDerivedPlan({
                     planId: planFile,
                     sessionId: planFile,
                     topic: normalized.topic || normalized.planName || '',
@@ -524,7 +524,7 @@ export class SessionActionLog {
                     routedTo: '',
                     dispatchedAgent: '',
                     dispatchedIde: ''
-                }]);
+                } as KanbanPlanRecord);
                 if (normalized.events.length > 0) {
                     await db.migrateSessionEvents(planFile, normalized.events);
                 }

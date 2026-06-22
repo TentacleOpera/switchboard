@@ -499,6 +499,9 @@
             _refetchStale = true;
             return; // the in-flight refetch will trigger a fresh one when it arrives
         }
+        // Mark this fetch as in-flight so a concurrent optimistic insert can flag it
+        // stale and a duplicate load() short-circuits above. Cleared in ticketCommentsLoaded.
+        _pendingRefetchTicketId = id;
         vscode.postMessage({
             type: 'loadTicketComments',
             provider,
@@ -4094,9 +4097,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 setTicketsLoadingState(false);
                 if (msg.success) {
                     showTicketsStatus('Comment posted ✓', false);
-                    // Refetch threads to reconcile optimistic insert
+                    // Refetch threads to reconcile optimistic insert.
+                    // loadCommentThreads sets the in-flight marker itself.
                     if (_cmActiveTicketId === msg.id) {
-                        _pendingRefetchTicketId = msg.id;
                         loadCommentThreads(lastIntegrationProvider, msg.id);
                     }
                 } else {
@@ -4111,7 +4114,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (msg.success) {
                     showTicketsStatus('Reply posted ✓', false);
                     if (_cmActiveTicketId === msg.id) {
-                        _pendingRefetchTicketId = msg.id;
                         loadCommentThreads(lastIntegrationProvider, msg.id);
                     }
                 } else {
