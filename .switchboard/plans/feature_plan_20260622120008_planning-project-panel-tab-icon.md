@@ -99,3 +99,51 @@ No automated tests required — this is a cosmetic `iconPath` property assignmen
 ## Recommendation
 
 **Complexity: 2 → Send to Intern.** This is a trivial two-line fix copying an established pattern from three sibling providers. No architectural decisions, no data risks, no edge cases beyond standard VS Code panel lifecycle.
+
+---
+
+## Reviewer Pass (2026-06-22)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*Cracks knuckles. Pulls up the diff with the weary contempt of someone who has been burned by "trivial two-line fixes" since before this codebase had a build step.*
+
+"A tab icon. They want me to lose sleep over a TAB ICON. Fine. Let's see what fresh catastrophe lurks behind the word 'trivial'—"
+
+- **The insertion sites.** Project panel, line 296: `this._projectPanel.iconPath = vscode.Uri.joinPath(this._extensionUri, 'icon.svg');` — sitting precisely between the closing `);` of `createWebviewPanel` (line 295) and `this._updateWebviewRoots();` (line 297). Planning panel, line 442: identical incantation, wedged between line 441's `);` and line 443's `_updateWebviewRoots()`. I WANTED to find a one-liner crammed into the options object, blowing up the `enableScripts` literal into a syntax error. There is no such crime here. *Disappointing.* (NIT, and not even a real one.)
+
+- **The field name.** `this._extensionUri` — declared as a constructor param at line 123, already weaponized at lines 351-353 and the revive path. Not `_extensionURI`, not `extensionUri`, not some half-remembered casing that typechecks to `undefined` at runtime. They actually READ the surrounding code. The audacity. (No finding.)
+
+- **The asset.** `icon.svg`, 1341 bytes, sitting at the extension root where the `joinPath` points. Three sibling providers (Design ×2, Kanban ×2, Setup ×1) ship this exact path to production. If it weren't packaged, the entire extension's tab iconography would already be a smoking crater. It is not. (No finding.)
+
+- **The duplication paranoia.** Does this collide with the revive path at line 560, which ALSO sets `panel.iconPath`? No. That path operates on a passed-in `panel` during deserialization; the create paths operate on `this._panel`/`this._projectPanel`. Idempotent, non-conflicting, both correct. The plan called this and the plan was right. (No finding.)
+
+- **The reveal path.** Lines 282-284 and 425-427 short-circuit with `.reveal()` on an already-created panel that now carries the icon. No second assignment needed, none added. Restraint. In MY codebase. (No finding.)
+
+"...I've got nothing. NOTHING. Two lines, both correct, both placed exactly where the plan said, mirroring an established pattern verbatim. Get out of my office before I find something to be angry about on principle."
+
+### Stage 2 — Balanced Synthesis
+
+- **Keep:** Both `iconPath` assignments exactly as written (lines 296 and 442). They are correctly placed (after panel creation, before `_updateWebviewRoots()` and HTML assignment), use the correct field (`this._extensionUri`), and mirror the canonical sibling pattern character-for-character.
+- **Fix now:** Nothing. No CRITICAL or MAJOR findings.
+- **Defer:** Nothing.
+
+### Code Fixes Applied
+
+None required — the implementation is complete and correct as specified by the plan.
+
+### Validation Results
+
+- **Code inspection:** Both insertions confirmed present at the exact lines the plan specified.
+  - `src/services/PlanningPanelProvider.ts:442` (planning `_panel`)
+  - `src/services/PlanningPanelProvider.ts:296` (project `_projectPanel`)
+- **Field verified:** `_extensionUri` declared at `PlanningPanelProvider.ts:123`, in active use elsewhere in the file.
+- **Asset verified:** `icon.svg` present at extension root (1341 bytes).
+- **Pattern parity verified:** matches `DesignPanelProvider.ts:111/199`, `KanbanProvider.ts:891/933`, `SetupPanelProvider.ts:68` exactly.
+- **No-conflict verified:** the revive/deserialize path at `PlanningPanelProvider.ts:560` sets `iconPath` on its own passed-in `panel`; no collision with the create paths.
+- **Compilation:** skipped per session directive.
+- **Tests:** skipped per session directive (cosmetic property assignment, no testable logic).
+
+### Remaining Risks
+
+None. The fix is a self-contained, idempotent display-property assignment with no async ordering concerns, no security surface (panel-level property, not a webview resource — `localResourceRoots` unaffected), and proven packaging via three sibling providers.
