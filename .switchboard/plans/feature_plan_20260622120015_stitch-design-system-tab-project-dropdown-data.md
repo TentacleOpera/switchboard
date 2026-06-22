@@ -129,3 +129,36 @@ In `renderStitchDesignSystems()` ([3736-3819](src/webview/design.js#L3736)):
 ---
 
 **Recommendation:** Complexity 5 → **Send to Coder.**
+
+---
+
+## Reviewer Pass — 2026-06-22
+
+Direct reviewer-executor pass against the implemented code. Compilation and automated tests skipped per session directive; verification limited to static inspection + IDE diagnostics.
+
+### Findings by severity
+
+- **[MAJOR]** Temporary debug log left in place at [DesignPanelProvider.ts:1655-1656](src/services/DesignPanelProvider.ts#L1655) — `console.log('STITCH DEBUG - listDesignSystems raw output:', JSON.stringify(list))`. The plan (Proposed Changes §3 and Verification step 4) explicitly required removing it after confirming the SDK shape. It logged the full design-system payload on every list call. **FIXED** — log and its comment removed; mapping logic untouched.
+- **[NIT — not fixed]** Dead friendly-fallback branch at [design.js:3806-3810](src/webview/design.js#L3806). The backend now always returns `Design System ${ds.id}` (full id) as its own fallback, so the frontend's `displayName === ds.id` short-id branch never fires; in the true-no-name case the card shows `Design System <full-id>` plus the same id in the mono label. Cosmetic, edge-case only (does not occur when the SDK returns a real `name`). Left as-is to honor the plan's specified backend fallback string.
+- **[NIT — not fixed]** [design.js:3759](src/webview/design.js#L3759) sets `wrapper.style.display = 'block'` on an element declared `flex: 1` in HTML. Works because the inner list owns the flex column. No change.
+
+### Verified-correct against plan (kept as-is)
+
+- `design.html` — `#design-system-project-select` added in the panel header ([design.html:3726](src/webview/design.html#L3726)); empty state repurposed to "Select a project from the dropdown above" with "Go to Stitch Tab" retained as secondary ([design.html:3738-3741](src/webview/design.html#L3738)).
+- `design.js` — both dropdowns populated from the shared sorted list in `populateStitchProjects()` ([design.js:2143-2167](src/webview/design.js#L2143)); change listener sets `state.selectedStitchProjectId`, mirrors value into `stitchProjectSelect` **without** dispatching `change`, persists, and calls `refreshStitchDesignSystems()` ([design.js:2116-2128](src/webview/design.js#L2116)) — value-sync-only semantics honored.
+- `design.js` — card render resilient: friendly title fallback, raw id as secondary mono label, `'No design tokens'` for empty tokens, `'No style guidelines provided.'` retained ([design.js:3806-3846](src/webview/design.js#L3806)).
+- `DesignPanelProvider.ts` — list-handler mapping unified to `ds.data?.displayName || ds.data?.name || ds.name || 'Design System ${ds.id}'`, `guidelines` fallback added, and `''` emitted instead of `'{}'` for empty tokens ([DesignPanelProvider.ts:1657-1665](src/services/DesignPanelProvider.ts#L1657)) — consistent with the DESIGN.md ([line 2155](src/services/DesignPanelProvider.ts#L2155)) and palette ([line 2202](src/services/DesignPanelProvider.ts#L2202)) consumers.
+
+### Files changed in this pass
+
+- [src/services/DesignPanelProvider.ts](src/services/DesignPanelProvider.ts) — removed temporary debug log (lines 1655-1656).
+
+### Validation results
+
+- IDE diagnostics after edit: only one pre-existing, unrelated hint (`'state' declared but never read` at line 181) — not introduced by this change. No new errors.
+- Compilation/tests: not run (session directive). User to run the test suite separately.
+
+### Remaining risks
+
+- **SDK shape still unconfirmed for THIS deployment.** The plan's "User Review Required" gate (confirm `ds.data?.name` is the real read field via the temporary log) was the reason the log existed. Removing it satisfies the plan's cleanup step, but the defensive fallback chain is now relied upon **unverified**. If neither `displayName`, `data.name`, nor `name` is populated by the SDK, cards will fall back to `Design System <id>` and the "random numbers" symptom recurs (prefixed). Recommend confirming once via a throwaway log in a dev session, or re-add temporarily if the symptom persists.
+- Dropdown sync remains value-only by design: switching projects in Design Systems does not refresh Screens-tab data until that tab is next visited. Documented intentional behavior (Adversarial Synthesis §2).
