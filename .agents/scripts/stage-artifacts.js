@@ -43,7 +43,7 @@ function copySafe(src, dst) {
 
 const args = parseArgs(process.argv.slice(2));
 if (args.files.length === 0) {
-    console.error('Usage: node .agent/scripts/stage-artifacts.js --files <a,b,c> [--out .switchboard/specs] [--workspace <path>] [--require-all]');
+    console.error('Usage: node .agents/scripts/stage-artifacts.js --files <a,b,c> [--out .switchboard/specs] [--workspace <path>] [--require-all]');
     process.exit(1);
 }
 

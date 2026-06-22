@@ -43,6 +43,28 @@
             --border-bright: #555555;
         }
 
+        body.theme-afterburner-pro {
+            --accent-primary: #00e5ff;
+            --accent-teal: #00e5ff;
+            --accent-teal-dim: color-mix(in srgb, #00e5ff 40%, transparent);
+            --accent-teal-bright: #5ce8e6;
+            --glow-teal: none;
+        }
+
+        body.theme-afterburner-pro .worktree-primary-btn { background: color-mix(in srgb, var(--accent-primary) 12%, transparent); }
+        body.theme-afterburner-pro .worktree-primary-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
+
+        body.theme-afterburner-pro .strip-icon-btn.flash img,
+        body.theme-afterburner-pro .kanban-sub-bar .strip-icon-btn.flash img,
+        body.theme-afterburner-pro .controls-strip .strip-icon-btn.flash img,
+        body.theme-afterburner-pro .column-icon-btn.flash img,
+        body.theme-afterburner-pro .column-header-btn.flash img,
+        body.theme-afterburner-pro .mode-toggle.flash img,
+        body.theme-afterburner-pro .complexity-routing-btn.flash img,
+        body.theme-afterburner-pro .btn-add-plan.flash img {
+            filter: brightness(1.1) saturate(1.1);
+        }
+
         /* Claudify: remove neon glow from base (non-cyber) interactive states */
         body.theme-claudify .btn-batch:hover,
         body.theme-claudify .kanban-card.selected,
@@ -2650,14 +2672,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
               <div id="plannerWorkflowFilePathGroup">
                 <div class="input-group">
                   <label for="workflowFilePath">Workflow File Path:</label>
-                  <input type="text" id="workflowFilePath" value=".agent/workflows/improve-plan.md" />
+                  <input type="text" id="workflowFilePath" value=".agents/workflows/improve-plan.md" />
                   <button id="validateWorkflowPath" class="secondary-btn">Validate</button>
                 </div>
                 <div id="prompts-tab-workflow-path-status" style="font-size:11px; margin-top:4px; font-family:var(--font-mono);"></div>
                 
                 <div class="example-paths">
                   <strong>Example paths:</strong>
-                  <code>.agent/workflows/improve-plan.md</code> (Switchboard Native)
+                  <code>.agents/workflows/improve-plan.md</code> (Switchboard Native)
                   <code>.claude/get-shit-done/agents/gsd-planner.md</code> (GSD)
                   <code>.claude/superpowers/skills/writing-plans.md</code> (Superpowers)
                 </div>
@@ -2996,7 +3018,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
     <div id="memo-modal" class="modal-overlay hidden">
         <div class="modal-content" style="width: 640px; max-width: 90vw;">
             <div class="modal-header">
-                <h3 class="modal-title">Memo</h3>
+                <h3 class="modal-title" id="memo-modal-title">MEMO</h3>
                 <button class="modal-close-btn" id="memo-close-btn">&times;</button>
             </div>
             <div class="modal-body">
@@ -3109,7 +3131,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             if (currentRole === 'planner') {
                 const config = roleConfigs.planner;
-                document.getElementById('workflowFilePath').value = config.workflowFilePath || '.agent/workflows/improve-plan.md';
+                document.getElementById('workflowFilePath').value = config.workflowFilePath || '.agents/workflows/improve-plan.md';
                 const plannerWorkflowEnabled = config.addons?.workflowFilePathEnabled !== false;
                 document.getElementById('plannerWorkflowEnabled').checked = plannerWorkflowEnabled;
                 document.getElementById('plannerWorkflowFilePathGroup').style.display = plannerWorkflowEnabled ? 'block' : 'none';
@@ -3273,7 +3295,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     const textInput = document.createElement('input');
                     textInput.type = 'text';
                     textInput.id = `addon_${addon.id}_path`;
-                    textInput.placeholder = 'e.g. .agent/workflows/accuracy.md';
+                    textInput.placeholder = 'e.g. .agents/workflows/accuracy.md';
                     textInput.style.display = isEnabled ? 'block' : 'none';
                     textInput.style.marginTop = '4px';
                     textInput.style.width = '100%';
@@ -5867,15 +5889,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 case 'switchboardThemeNameSetting':
                 case 'switchboardThemeChanged': {
                     if (msg.theme) {
-                        document.body.classList.remove('theme-claudify');
+                        document.body.classList.remove('theme-claudify', 'theme-afterburner-pro', 'cyber-theme-enabled');
                         // Cyber CRT effects belong to Afterburner ONLY (matches the other panels).
                         if (msg.theme === 'afterburner') {
                             document.body.classList.add('cyber-theme-enabled');
-                        } else {
-                            document.body.classList.remove('cyber-theme-enabled');
-                        }
-                        if (msg.theme === 'claudify') {
+                        } else if (msg.theme === 'claudify') {
                             document.body.classList.add('theme-claudify');
+                        } else if (msg.theme === 'afterburner-professional') {
+                            document.body.classList.add('theme-claudify', 'theme-afterburner-pro');
                         }
                     }
                     break;
@@ -6414,6 +6435,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 case 'memoContent': {
                     const textarea = document.getElementById('memo-textarea');
                     if (textarea) textarea.value = msg.content || '';
+                    const titleEl = document.getElementById('memo-modal-title');
+                    if (titleEl) {
+                        titleEl.textContent = msg.workspaceName
+                            ? `MEMO — ${String(msg.workspaceName).toUpperCase()}`
+                            : 'MEMO';
+                    }
                     break;
                 }
                 case 'memoPromptResult': {

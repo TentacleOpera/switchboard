@@ -669,11 +669,13 @@
           "type": "string",
           "enum": [
             "afterburner",
-            "claudify"
+            "claudify",
+            "afterburner-professional"
           ],
           "enumDescriptions": [
             "Afterburner — Cyberpunk theme, brighter cyan, Hanken Grotesk, scanline effects",
-            "Claudify — Afterburner with Claude terracotta accent and Poppins headings"
+            "Claudify — Afterburner with Claude terracotta accent and Poppins headings",
+            "Afterburner Professional — Claudify layout with Afterburner cyan accent and GeistPixel headings"
           ],
           "default": "afterburner",
           "description": "Visual theme for Switchboard webviews. Applies to Setup, Kanban, and Planning panels.",

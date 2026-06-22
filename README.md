@@ -254,6 +254,21 @@ The built-in Reviewer agent features a Grumpy Principal Engineer persona. It tur
 
 ---
 
+## Migration: `.agent/` → `.agents/`
+
+Switchboard previously scaffolded its workflow, persona, rule, and skill assets into a `.agent/` directory. It now uses `.agents/` because **Antigravity only autoloads `.agents/`** — a directory named `.agent/` is invisible to it.
+
+**What happened on upgrade:**
+- Switchboard scaffolds a fresh `.agents/` directory in your workspace.
+- Your old `.agent/` directory is left untouched (it is now inert).
+
+**Cleaning up the old `.agent/` directory:**
+- Open the **Setup** tab in the Switchboard sidebar. If a stale `.agent/` folder is detected, a cleanup card will appear with a **Clean up old .agent/ directory** button.
+- The button shows a confirmation modal listing the exact path(s) to be deleted. Deletion is guarded: it will refuse if no `.agents/` sibling exists or if your configuration still references `.agent/`.
+- You can also delete `.agent/` manually — Switchboard never deletes it automatically.
+
+---
+
 ## Links
 
 - [GitHub Repository](https://github.com/TentacleOpera/switchboard/)

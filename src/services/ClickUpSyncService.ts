@@ -1493,6 +1493,317 @@ export class ClickUpSyncService {
     }
   }
 
+  // ── Comment Manager: threading + structured mentions ──────────────
+
+  /**
+   * Cached list members for the mention picker.
+   * Keyed by listId; 5-minute TTL (matches Linear _cachedProjects pattern).
+   */
+  private _cachedListMembers: Map<string, { data: Array<{ id: string; username: string; email: string; name: string }>; fetchedAt: number }> = new Map();
+  private static readonly LIST_MEMBERS_TTL_MS = 5 * 60 * 1000;
+
+  /**
+   * Fetch list members for the mention picker.
+   * GET /list/{list_id}/member — returns members with id, username, email.
+   */
+  public async getListMembers(listId: string): Promise<Array<{ id: string; username: string; email: string; name: string }>> {
+    const normalizedListId = String(listId || '').trim();
+    if (!normalizedListId) { return []; }
+
+    const cached = this._cachedListMembers.get(normalizedListId);
+    if (cached && (Date.now() - cached.fetchedAt) < ClickUpSyncService.LIST_MEMBERS_TTL_MS) {
+      return cached.data;
+    }
+
+    try {
+      const result = await this.retry(() =>
+        this.httpRequest('GET', `/list/${normalizedListId}/member`)
+      );
+      const members = Array.isArray(result.data?.members)
+        ? result.data.members.map((m: any) => ({
+            id: String(m?.id || '').trim(),
+            username: String(m?.user?.username || m?.username || '').trim(),
+            email: String(m?.user?.email || m?.email || '').trim(),
+            name: String(m?.user?.username || m?.username || m?.email || '').trim()
+          })).filter((m: { id: string }) => m.id.length > 0)
+        : [];
+      this._cachedListMembers.set(normalizedListId, { data: members, fetchedAt: Date.now() });
+      return members;
+    } catch (e) {
+      console.warn('[ClickUpSync] Failed to fetch list members:', e);
+      return [];
+    }
+  }
+
+  /**
+   * Fetch top-level comments + their reply threads for a task.
+   * GET /task/{id}/comment returns top-level comments with reply_count.
+   * For each comment with reply_count > 0, GET /comment/{commentId}/reply.
+   * Reply fetches are parallelized in batches of 5 to respect rate limits.
+   *
+   * Verification gate: if reply_count is absent on the response, falls back
+   * to flat comments (no threading) — safe degradation to current behavior.
+   */
+  public async getCommentThreads(taskId: string): Promise<{
+    threads: Array<{
+      id: string;
+      author: { id: string; name: string; email: string };
+      body: string;
+      date: string;
+      mentions: Array<{ id: string; name: string }>;
+      replies: Array<{
+        id: string;
+        author: { id: string; name: string; email: string };
+        body: string;
+        date: string;
+        mentions: Array<{ id: string; name: string }>;
+      }>;
+    }>;
+    threadingSupported: boolean;
+  }> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) { throw new Error('ClickUp not configured'); }
+    const normalizedTaskId = String(taskId || '').trim();
+    if (!normalizedTaskId) { return { threads: [], threadingSupported: false }; }
+
+    const commentsResult = await this.retry(() =>
+      this.httpRequest('GET', `/task/${normalizedTaskId}/comment`)
+    );
+    const rawComments = Array.isArray(commentsResult.data?.comments) ? commentsResult.data.comments : [];
+
+    // Verification gate: check if reply_count field exists on any comment.
+    // If absent across all comments, threading is not supported by this API version.
+    const hasReplyCount = rawComments.some((c: any) => typeof c?.reply_count === 'number');
+    const threadingSupported = hasReplyCount;
+
+    const threads = rawComments.map((comment: any) => this._normalizeClickUpComment(comment));
+
+    if (!threadingSupported) {
+      return { threads, threadingSupported: false };
+    }
+
+    // Fetch replies for comments with reply_count > 0, in batches of 5.
+    const commentsWithReplies = rawComments.filter((c: any) => Number(c?.reply_count || 0) > 0);
+    const batches = this.chunkArray(commentsWithReplies, 5);
+    for (const batch of batches) {
+      const replyResults = await Promise.all(
+        batch.map(async (comment: any) => {
+          const commentId = String(comment?.id || '').trim();
+          if (!commentId) { return null; }
+          try {
+            const replyResult = await this.httpRequest('GET', `/comment/${commentId}/reply`);
+            const rawReplies = Array.isArray(replyResult.data?.comments) ? replyResult.data.comments : [];
+            return {
+              threadId: commentId,
+              replies: rawReplies.map((r: any) => this._normalizeClickUpComment(r))
+            };
+          } catch (e) {
+            console.warn(`[ClickUpSync] Failed to fetch replies for comment ${commentId}:`, e);
+            return null;
+          }
+        })
+      );
+      for (const result of replyResults) {
+        if (result) {
+          const thread = threads.find((t: any) => t.id === result.threadId);
+          if (thread) {
+            thread.replies = result.replies;
+          }
+        }
+      }
+      // Respect rate limit between batches
+      if (batches.indexOf(batch) < batches.length - 1) {
+        await this.delay(this.rateLimitDelay);
+      }
+    }
+
+    return { threads, threadingSupported: true };
+  }
+
+  /**
+   * Normalize a raw ClickUp comment into the thread shape.
+   * ClickUp comment_text may contain structured content; we extract plain text
+   * and parse mentions from the comment array if present.
+   */
+  private _normalizeClickUpComment(comment: any): {
+    id: string;
+    author: { id: string; name: string; email: string };
+    body: string;
+    date: string;
+    mentions: Array<{ id: string; name: string }>;
+    replies: any[];
+  } {
+    const mentions: Array<{ id: string; name: string }> = [];
+    let body = '';
+
+    // ClickUp structured comment: array of { type: 'text'|'tag', text?, assignee? }
+    if (Array.isArray(comment?.comment)) {
+      for (const block of comment.comment) {
+        if (block?.type === 'text' && typeof block.text === 'string') {
+          body += block.text;
+        } else if (block?.type === 'tag' && block.assignee) {
+          const userId = String(block.assignee).trim();
+          // We don't have the name here, just the ID; the UI will resolve if needed
+          mentions.push({ id: userId, name: String(block?.text || '') });
+          body += `@${block?.text || userId}`;
+        }
+      }
+    } else {
+      body = String(comment?.comment_text || comment?.text_content || '').trim();
+    }
+
+    return {
+      id: String(comment?.id || '').trim(),
+      author: {
+        id: String(comment?.user?.id || '').trim(),
+        name: String(comment?.user?.username || '').trim(),
+        email: String(comment?.user?.email || '').trim()
+      },
+      body,
+      date: String(comment?.date || '').trim(),
+      mentions,
+      replies: []
+    };
+  }
+
+  /**
+   * Build a structured comment body from text + mentions.
+   * ClickUp v2 accepts `comment` as an array of:
+   *   { type: 'text', text: '...' }
+   *   { type: 'tag', assignee: <userIdInteger> }
+   * Falls back to plain `comment_text` with @name if structured format fails.
+   */
+  private _buildStructuredComment(commentText: string, mentions: Array<{ id: string; name: string }>): {
+    structured: { comment: Array<{ type: string; text?: string; assignee?: number }>; notify_all: boolean };
+    plain: { comment_text: string; notify_all: boolean };
+  } {
+    const blocks: Array<{ type: string; text?: string; assignee?: number }> = [];
+    // Split text by mention tokens to interleave text and tag blocks.
+    // Mentions are inserted as {@id} tokens in the UI; we split on those.
+    const mentionRegex = /@\{(\d+)\}/g;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    const mentionById = new Map(mentions.map(m => [m.id, m]));
+
+    while ((match = mentionRegex.exec(commentText)) !== null) {
+      const userId = match[1];
+      // Push preceding text block if any
+      if (match.index > lastIndex) {
+        const textSegment = commentText.slice(lastIndex, match.index);
+        if (textSegment) { blocks.push({ type: 'text', text: textSegment }); }
+      }
+      // Push the tag block
+      const mention = mentionById.get(userId);
+      blocks.push({
+        type: 'tag',
+        assignee: parseInt(userId, 10),
+        ...(mention?.name ? { text: mention.name } : {})
+      });
+      lastIndex = match.index + match[0].length;
+    }
+    // Push trailing text
+    if (lastIndex < commentText.length) {
+      const textSegment = commentText.slice(lastIndex);
+      if (textSegment) { blocks.push({ type: 'text', text: textSegment }); }
+    }
+    // If no mentions were found, just use a single text block
+    if (blocks.length === 0) {
+      blocks.push({ type: 'text', text: commentText });
+    }
+
+    // Plain-text fallback: replace @{id} tokens with @name
+    let plainText = commentText;
+    for (const m of mentions) {
+      plainText = plainText.replace(new RegExp(`@\\{${m.id}\\}`, 'g'), `@${m.name || m.id}`);
+    }
+
+    return {
+      structured: { comment: blocks, notify_all: false },
+      plain: { comment_text: plainText, notify_all: false }
+    };
+  }
+
+  /**
+   * Post a new top-level comment on a task with optional structured mentions.
+   * Tries structured `comment` array format first; on non-200, falls back to
+   * plain `comment_text` with @name text (visible but no notification).
+   */
+  public async postComment(taskId: string, params: { commentText: string; mentions?: Array<{ id: string; name: string }> }): Promise<{ success: boolean; error?: string }> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) { throw new Error('ClickUp not configured'); }
+
+    const normalizedTaskId = String(taskId || '').trim();
+    if (!normalizedTaskId) { throw new Error('ClickUp comments require a task ID.'); }
+    const normalizedComment = String(params?.commentText || '').trim();
+    if (!normalizedComment) { throw new Error('ClickUp comments require non-empty text.'); }
+
+    const mentions = Array.isArray(params?.mentions) ? params.mentions : [];
+    const { structured, plain } = this._buildStructuredComment(normalizedComment, mentions);
+
+    // Try structured format only if there are mentions; otherwise plain text is fine
+    if (mentions.length > 0) {
+      try {
+        const result = await this.retry(() =>
+          this.httpRequest('POST', `/task/${normalizedTaskId}/comment`, structured)
+        );
+        if (result.status === 200) {
+          return { success: true };
+        }
+        // Non-200: fall back to plain text
+        console.warn(`[ClickUpSync] Structured comment failed (HTTP ${result.status}), falling back to plain text.`);
+      } catch (e) {
+        console.warn('[ClickUpSync] Structured comment threw, falling back to plain text:', e);
+      }
+    }
+
+    const commentResult = await this.retry(() =>
+      this.httpRequest('POST', `/task/${normalizedTaskId}/comment`, plain)
+    );
+    if (commentResult.status !== 200) {
+      return { success: false, error: `Failed to comment on ClickUp task ${normalizedTaskId} (HTTP ${commentResult.status}).` };
+    }
+    return { success: true };
+  }
+
+  /**
+   * Reply to an existing comment with optional structured mentions.
+   * POST /comment/{commentId}/reply — same structured format as postComment.
+   */
+  public async replyToComment(commentId: string, params: { commentText: string; mentions?: Array<{ id: string; name: string }> }): Promise<{ success: boolean; error?: string }> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) { throw new Error('ClickUp not configured'); }
+
+    const normalizedCommentId = String(commentId || '').trim();
+    if (!normalizedCommentId) { throw new Error('ClickUp reply requires a comment ID.'); }
+    const normalizedComment = String(params?.commentText || '').trim();
+    if (!normalizedComment) { throw new Error('ClickUp reply requires non-empty text.'); }
+
+    const mentions = Array.isArray(params?.mentions) ? params.mentions : [];
+    const { structured, plain } = this._buildStructuredComment(normalizedComment, mentions);
+
+    if (mentions.length > 0) {
+      try {
+        const result = await this.retry(() =>
+          this.httpRequest('POST', `/comment/${normalizedCommentId}/reply`, structured)
+        );
+        if (result.status === 200) {
+          return { success: true };
+        }
+        console.warn(`[ClickUpSync] Structured reply failed (HTTP ${result.status}), falling back to plain text.`);
+      } catch (e) {
+        console.warn('[ClickUpSync] Structured reply threw, falling back to plain text:', e);
+      }
+    }
+
+    const replyResult = await this.retry(() =>
+      this.httpRequest('POST', `/comment/${normalizedCommentId}/reply`, plain)
+    );
+    if (replyResult.status !== 200) {
+      return { success: false, error: `Failed to reply to ClickUp comment ${normalizedCommentId} (HTTP ${replyResult.status}).` };
+    }
+    return { success: true };
+  }
+
   /**
    * Delete a ClickUp task via the native DELETE endpoint.
    * Used when a Switchboard plan is deleted and deleteSyncEnabled is true.

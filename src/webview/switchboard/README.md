@@ -4,6 +4,6 @@ This folder stores runtime workflow artifacts rendered or referenced by the Swit
 
 ## Notes
 
-- Core workflow definitions are maintained in `.agent/workflows/`.
+- Core workflow definitions are maintained in `.agents/workflows/`.
 - Runtime protocol state lives in workspace `.switchboard/` files.
 - The sidebar provider implementation is `src/services/TaskViewerProvider.ts`.

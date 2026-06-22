@@ -1520,10 +1520,20 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(changeTicketStatusDisposable);
 
-    const postTicketCommentDisposable = vscode.commands.registerCommand('switchboard.postTicketComment', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; id: string; comment: string }) => {
+    const postTicketCommentDisposable = vscode.commands.registerCommand('switchboard.postTicketComment', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; id: string; comment: string; mentions?: Array<{ id: string; name: string }> }) => {
         return taskViewerProvider.postTicketComment(data.workspaceRoot, data);
     });
     context.subscriptions.push(postTicketCommentDisposable);
+
+    const loadTicketCommentsDisposable = vscode.commands.registerCommand('switchboard.loadTicketComments', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; id: string }) => {
+        return taskViewerProvider.loadTicketComments(data.workspaceRoot, data);
+    });
+    context.subscriptions.push(loadTicketCommentsDisposable);
+
+    const postTicketReplyDisposable = vscode.commands.registerCommand('switchboard.postTicketReply', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; id: string; commentId: string; commentText: string; mentions?: Array<{ id: string; name: string }> }) => {
+        return taskViewerProvider.postTicketReply(data.workspaceRoot, data);
+    });
+    context.subscriptions.push(postTicketReplyDisposable);
 
     const downloadAttachmentDisposable = vscode.commands.registerCommand('switchboard.downloadAttachment', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; url: string; filename: string; ticketId: string; ticketTitle: string }) => {
         return taskViewerProvider.downloadAttachment(data.workspaceRoot, data);
@@ -2864,19 +2874,27 @@ async function fileExists(filePath: string): Promise<boolean> {
  * Check if Switchboard configurations exist (Robust check)
  */
 async function hasSwitchboardProtocolFiles(workspaceRoot: string): Promise<boolean> {
-    const agentDir = vscode.Uri.file(path.join(workspaceRoot, '.agent'));
-    const workflowsDir = vscode.Uri.file(path.join(workspaceRoot, '.agent', 'workflows'));
+    const agentsDir = vscode.Uri.file(path.join(workspaceRoot, '.agents'));
+    const agentsWorkflowsDir = vscode.Uri.file(path.join(workspaceRoot, '.agents', 'workflows'));
+    // Backward-compatible fallback: a user who kept their old .agent/ folder.
+    const legacyAgentDir = vscode.Uri.file(path.join(workspaceRoot, '.agent'));
+    const legacyWorkflowsDir = vscode.Uri.file(path.join(workspaceRoot, '.agent', 'workflows'));
     const switchboardDir = vscode.Uri.file(path.join(workspaceRoot, '.switchboard'));
 
     try {
-        // Core check: .agent/workflows must exist (contains workflow definitions)
-        const workflowsExist = await vscode.workspace.fs.stat(workflowsDir).then(() => true, () => false);
+        // Core check: .agents/workflows must exist (contains workflow definitions)
+        const workflowsExist = await vscode.workspace.fs.stat(agentsWorkflowsDir).then(() => true, () => false);
         if (workflowsExist) return true;
 
-        // Fallback: .agent dir + .switchboard runtime dir both exist
-        const agentExists = await vscode.workspace.fs.stat(agentDir).then(() => true, () => false);
+        // Legacy fallback: .agent/workflows exists (pre-rename workspace)
+        const legacyWorkflowsExist = await vscode.workspace.fs.stat(legacyWorkflowsDir).then(() => true, () => false);
+        if (legacyWorkflowsExist) return true;
+
+        // Fallback: .agents dir + .switchboard runtime dir both exist
+        const agentExists = await vscode.workspace.fs.stat(agentsDir).then(() => true, () => false);
+        const legacyAgentExists = await vscode.workspace.fs.stat(legacyAgentDir).then(() => true, () => false);
         const runtimeExists = await vscode.workspace.fs.stat(switchboardDir).then(() => true, () => false);
-        return agentExists && runtimeExists;
+        return (agentExists || legacyAgentExists) && runtimeExists;
     } catch {
         return false;
     }
@@ -3145,23 +3163,27 @@ async function migrateLegacyPlans(workspaceRoot: string): Promise<void> {
  */
 async function cleanupLegacyAgentFiles(workspaceRoot: string): Promise<void> {
     const legacyFiles = [
-        '.agent/rules/no_git_for_agents.md',
-        '.agent/rules/switchboard_modes.md',
-        '.agent/workflows/handoff.md',
-        '.agent/workflows/handoff-chat.md',
-        '.agent/workflows/handoff-lead.md',
-        '.agent/workflows/handoff-relay.md',
-        '.agent/workflows/challenge.md',
-        '.agent/workflows/chat.md', // Renamed to switchboard-chat.md
+        'rules/no_git_for_agents.md',
+        'rules/switchboard_modes.md',
+        'workflows/handoff.md',
+        'workflows/handoff-chat.md',
+        'workflows/handoff-lead.md',
+        'workflows/handoff-relay.md',
+        'workflows/challenge.md',
+        'workflows/chat.md', // Renamed to switchboard-chat.md
     ];
-    for (const relativePath of legacyFiles) {
-        const fullPath = path.join(workspaceRoot, relativePath);
-        try {
-            await fs.promises.access(fullPath);
-            await fs.promises.unlink(fullPath);
-            outputChannel?.appendLine(`[Switchboard] Removed legacy file: ${relativePath}`);
-        } catch {
-            // File does not exist or cannot be removed — non-fatal
+    // Check both .agents/ (current) and .agent/ (legacy) for stale files.
+    const agentDirs = ['.agents', '.agent'];
+    for (const agentDir of agentDirs) {
+        for (const relativePath of legacyFiles) {
+            const fullPath = path.join(workspaceRoot, agentDir, relativePath);
+            try {
+                await fs.promises.access(fullPath);
+                await fs.promises.unlink(fullPath);
+                outputChannel?.appendLine(`[Switchboard] Removed legacy file: ${path.join(agentDir, relativePath)}`);
+            } catch {
+                // File does not exist or cannot be removed — non-fatal
+            }
         }
     }
 }
@@ -3239,7 +3261,7 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
     const workspaceRoot = workspaceUri.fsPath;
     // 1. Core directories (project docs + runtime messaging)
     const dirs = [
-        '.agent',
+        '.agents',
         '.switchboard/plans',
         '.switchboard/archive'
     ];
@@ -3251,8 +3273,8 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
     // Migrate legacy plan subdirectories into unified .switchboard/plans/ root
     await migrateLegacyPlans(workspaceUri.fsPath);
 
-    // 2. Discover and Copy .agent assets (Recursive & Depth-Limited)
-    const agentSourceUri = vscode.Uri.joinPath(extensionUri, '.agent');
+    // 2. Discover and Copy .agents assets (Recursive & Depth-Limited)
+    const agentSourceUri = vscode.Uri.joinPath(extensionUri, '.agents');
     const agentFiles = await crawlDirectory(agentSourceUri);
 
     // 2a. Version-gated workflow migration
@@ -3260,7 +3282,7 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
 
     for (const relativePath of agentFiles) {
         const srcUri = vscode.Uri.joinPath(agentSourceUri, relativePath);
-        const destUri = vscode.Uri.joinPath(workspaceUri, '.agent', relativePath);
+        const destUri = vscode.Uri.joinPath(workspaceUri, '.agents', relativePath);
 
         // Ensure parent directory exists
         await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(destUri.fsPath)));
@@ -3289,14 +3311,14 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
 
     // 2b. Blocklist: remove files that should never be distributed even if present in source
     const blocklist = [
-        '.agent/rules/no_git_for_agents.md',
-        '.agent/rules/switchboard_modes.md',
-        '.agent/workflows/handoff.md',
-        '.agent/workflows/handoff-chat.md',
-        '.agent/workflows/handoff-lead.md',
-        '.agent/workflows/handoff-relay.md',
-        '.agent/workflows/challenge.md',
-        '.agent/personas/switchboard_operator.md',
+        '.agents/rules/no_git_for_agents.md',
+        '.agents/rules/switchboard_modes.md',
+        '.agents/workflows/handoff.md',
+        '.agents/workflows/handoff-chat.md',
+        '.agents/workflows/handoff-lead.md',
+        '.agents/workflows/handoff-relay.md',
+        '.agents/workflows/challenge.md',
+        '.agents/personas/switchboard_operator.md',
     ];
     for (const blockPath of blocklist) {
         const blockUri = vscode.Uri.joinPath(workspaceUri, blockPath);
@@ -3357,7 +3379,7 @@ async function showSetupWizard(context: vscode.ExtensionContext, taskViewerProvi
         if (token.isCancellationRequested) return;
         await persistTeamRigor();
 
-        // Run unified setup first (Project structure and .agent assets)
+        // Run unified setup first (Project structure and .agents assets)
         if (token.isCancellationRequested) return;
         await performSetup(vscode.Uri.file(workspaceRoot), context.extensionUri, { silent: false });
 

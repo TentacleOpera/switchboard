@@ -18,7 +18,7 @@ const DEFAULT_VISIBLE_AGENTS = {
 // CRITICAL: DO NOT CHANGE DEFAULTS UNLESS SPECIFICALLY ASKED
 const DEFAULT_ROLE_CONFIG = {
     planner: {
-        workflowFilePath: '.agent/workflows/improve-plan.md',
+        workflowFilePath: '.agents/workflows/improve-plan.md',
         addons: { switchboardSafeguards: true, designDoc: false, constitution: false, aggressivePairProgramming: false, gitProhibition: false, clearAntigravityContext: false, cavemanOutput: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: true }
     },
     lead: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, leadChallenge: false, accurateCoding: false, gitProhibition: true, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', useWorktreesPerPlan: false, workflowFilePathEnabled: false, workflowFilePath: '' } },

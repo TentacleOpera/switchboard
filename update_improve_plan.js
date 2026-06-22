@@ -1,5 +1,5 @@
 const fs = require('fs');
-const file = '.agent/workflows/improve-plan.md';
+const file = '.agents/workflows/improve-plan.md';
 let content = fs.readFileSync(file, 'utf8');
 
 const target = '- Ensure the plan has ALL required sections in order: Goal, Metadata (Tags from allowed list, Complexity 1-10, Repo if applicable), User Review Required,';

@@ -50,8 +50,8 @@ For tasks with known output files, use a file-watcher instead of polling termina
 **Protocol**:
 1. **Before Submission**: Launch background watcher targeting expected file pattern
    ```bash
-   node .agent/scripts/watch-complete.js <watch-dir> <pattern> <signal-file>
-   # Example: node .agent/scripts/watch-complete.js switchboard/handoff audit_report .switchboard/phonefriend_signal.done
+   node .agents/scripts/watch-complete.js <watch-dir> <pattern> <signal-file>
+   # Example: node .agents/scripts/watch-complete.js switchboard/handoff audit_report .switchboard/phonefriend_signal.done
    ```
    - Tool: `run_command` (async, `WaitMsBeforeAsync: 500`)
 

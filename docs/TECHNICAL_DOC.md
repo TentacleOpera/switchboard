@@ -9,7 +9,7 @@ This document describes how the plugin currently works in code, not how older do
 Switchboard is a local orchestration stack with three main layers:
 
 1. VS Code extension host (`src/extension.ts`)
-2. Workspace protocol/state surface (`.agent/` and `.switchboard/`)
+2. Workspace protocol/state surface (`.agents/` and `.switchboard/`)
 
 At runtime:
 
@@ -18,10 +18,10 @@ At runtime:
 
 ## 2) Persistent filesystem model
 
-### `.agent/`
+### `.agents/`
 
 - Workflow markdown contracts and persona files copied during setup.
-- Runtime may reference role personas from `.agent/personas/roles/*.md`.
+- Runtime may reference role personas from `.agents/personas/roles/*.md`.
 
 ### `.switchboard/` (core runtime data)
 
@@ -480,14 +480,14 @@ Agents use direct database access via skills.
 
 ### `query_switchboard_kanban` skill
 
-Located at `.agent/skills/query_switchboard_kanban.md`. Provides direct SQL access to `kanban.db` for state queries only (read-only). Kanban column transitions are system-managed.
+Located at `.agents/skills/query_switchboard_kanban.md`. Provides direct SQL access to `kanban.db` for state queries only (read-only). Kanban column transitions are system-managed.
 
 - Agents read the database path from `.switchboard/workspace-id` (line 2).
 - Example read: `sqlite3 <db_path> "SELECT session_id, topic, kanban_column FROM plans WHERE kanban_column = 'CREATED';"`
 
 ### `query_archive` skill
 
-Located at `.agent/skills/query_archive/`. Documents direct DuckDB CLI commands for archive queries.
+Located at `.agents/skills/query_archive/`. Documents direct DuckDB CLI commands for archive queries.
 
 
 ## 19) Batch prompt builder (`agentPromptBuilder.ts`)
@@ -496,9 +496,9 @@ All prompt-generation paths route through `buildKanbanBatchPrompt()` to ensure i
 
 ### Prompt structure by role
 
-- **Planner**: improve/enhance instructions referencing `.agent/workflows/improve-plan.md`, with plan file list
+- **Planner**: improve/enhance instructions referencing `.agents/workflows/improve-plan.md`, with plan file list
 - **Lead Coder**: execution payload with focus directive, batch execution rules, optional inline adversarial challenge block, plan file list
-- **Coder**: same as lead but with optional `low-complexity` instruction hint and accuracy mode workflow reference (`.agent/workflows/accuracy.md`)
+- **Coder**: same as lead but with optional `low-complexity` instruction hint and accuracy mode workflow reference (`.agents/workflows/accuracy.md`)
 - **Reviewer**: reviewer-executor payload with mode directive (no auxiliary workflow), plan file list
 
 ### Key directives included in all batch prompts
@@ -562,7 +562,7 @@ Typical maintainer checks:
 ## 23) Known runtime/documentation drift (important)
 
 1. Workflow registry drift:
-   - `.agent/workflows/enhance.md` exists but `enhance` is not in runtime `WORKFLOWS`.
+   - `.agents/workflows/enhance.md` exists but `enhance` is not in runtime `WORKFLOWS`.
 
 3. Duplicate robust terminal send implementations:
    - one in `extension.ts`

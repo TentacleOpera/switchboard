@@ -1184,6 +1184,16 @@ export class SetupPanelProvider implements vscode.Disposable {
                     });
                     break;
                 }
+                case 'getAgentDirCleanupState': {
+                    const state = await this._getAgentDirCleanupState();
+                    this._panel?.webview.postMessage({ type: 'agentDirCleanupState', ...state });
+                    break;
+                }
+                case 'performAgentDirCleanup': {
+                    const result = await this._performAgentDirCleanup();
+                    this._panel?.webview.postMessage({ type: 'agentDirCleanupResult', ...result });
+                    break;
+                }
                 default:
                     break;
             }
@@ -1488,5 +1498,145 @@ export class SetupPanelProvider implements vscode.Disposable {
 
         content = applyThemeBodyClass(content);
         return content;
+    }
+
+    /**
+     * Scan workspace root(s) for a stale `.agent/` directory that can be safely cleaned up.
+     * Returns the list of deletable roots and the list of skipped roots (with reasons).
+     */
+    private async _getAgentDirCleanupState(): Promise<{
+        hasStaleAgentDir: boolean;
+        roots: Array<{ root: string; deletable: boolean; reason?: string }>;
+    }> {
+        const workspaceRoots = this._resolveWorkspaceRoots();
+        const roots: Array<{ root: string; deletable: boolean; reason?: string }> = [];
+
+        for (const root of workspaceRoots) {
+            const legacyDir = path.join(root, '.agent');
+            const agentsDir = path.join(root, '.agents');
+
+            if (!fs.existsSync(legacyDir)) {
+                continue; // no stale dir — don't include in results
+            }
+
+            // Guard: sibling .agents/ must exist (never strand the user)
+            if (!fs.existsSync(agentsDir)) {
+                roots.push({ root, deletable: false, reason: 'No .agents/ directory found — removing .agent/ would leave you without agent assets.' });
+                continue;
+            }
+
+            // Guard: don't follow a symlinked .agent
+            try {
+                const stat = fs.lstatSync(legacyDir);
+                if (stat.isSymbolicLink()) {
+                    roots.push({ root, deletable: false, reason: '.agent/ is a symlink — refusing to delete for safety.' });
+                    continue;
+                }
+            } catch {
+                roots.push({ root, deletable: false, reason: 'Unable to inspect .agent/ directory.' });
+                continue;
+            }
+
+            // Guard: check if any agent-asset config points into .agent/
+            const configRefsLegacy = await this._configReferencesLegacyAgent(root);
+            if (configRefsLegacy) {
+                roots.push({ root, deletable: false, reason: 'Your Switchboard configuration references .agent/ — remove those references before cleaning up.' });
+                continue;
+            }
+
+            roots.push({ root, deletable: true });
+        }
+
+        return { hasStaleAgentDir: roots.length > 0, roots };
+    }
+
+    /**
+     * Perform the guarded recursive delete of stale `.agent/` directories.
+     */
+    private async _performAgentDirCleanup(): Promise<{
+        success: boolean;
+        removedRoots: string[];
+        skippedRoots: Array<{ root: string; reason: string }>;
+    }> {
+        const state = await this._getAgentDirCleanupState();
+        const removedRoots: string[] = [];
+        const skippedRoots: Array<{ root: string; reason: string }> = [];
+
+        for (const entry of state.roots) {
+            if (!entry.deletable) {
+                if (entry.reason) {
+                    skippedRoots.push({ root: entry.root, reason: entry.reason });
+                }
+                continue;
+            }
+
+            const legacyDir = path.join(entry.root, '.agent');
+            try {
+                // Re-check guards right before deletion (race safety)
+                const stat = fs.lstatSync(legacyDir);
+                if (stat.isSymbolicLink()) {
+                    skippedRoots.push({ root: entry.root, reason: '.agent/ is a symlink — refusing to delete for safety.' });
+                    continue;
+                }
+                if (!fs.existsSync(path.join(entry.root, '.agents'))) {
+                    skippedRoots.push({ root: entry.root, reason: 'No .agents/ directory found — removing .agent/ would leave you without agent assets.' });
+                    continue;
+                }
+
+                await fs.promises.rm(legacyDir, { recursive: true, force: true });
+                removedRoots.push(entry.root);
+            } catch (error) {
+                const reason = error instanceof Error ? error.message : String(error);
+                skippedRoots.push({ root: entry.root, reason: `Failed to delete: ${reason}` });
+            }
+        }
+
+        return { success: true, removedRoots, skippedRoots };
+    }
+
+    /**
+     * Check whether any Switchboard agent-asset config value points into `.agent/`.
+     */
+    private async _configReferencesLegacyAgent(workspaceRoot: string): Promise<boolean> {
+        try {
+            const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(workspaceRoot));
+            const plannerWorkflowPath = config.get<string>('planner.workflowPath', '');
+            if (plannerWorkflowPath && plannerWorkflowPath.includes('.agent/')) {
+                return true;
+            }
+
+            // Check Switchboard's internal config (stored via webview UI)
+            const internalConfigPath = path.join(workspaceRoot, '.switchboard', 'config.json');
+            if (fs.existsSync(internalConfigPath)) {
+                const raw = fs.readFileSync(internalConfigPath, 'utf8');
+                const internalConfig = JSON.parse(raw);
+                const checkValue = (val: unknown): boolean => {
+                    if (typeof val === 'string' && val.includes('.agent/')) return true;
+                    if (val && typeof val === 'object') {
+                        return Object.values(val).some(checkValue);
+                    }
+                    return false;
+                };
+                if (checkValue(internalConfig)) {
+                    return true;
+                }
+            }
+        } catch {
+            // Non-fatal — assume no legacy references if we can't read config
+        }
+        return false;
+    }
+
+    /**
+     * Resolve all workspace root paths (supports multi-root workspaces).
+     */
+    private _resolveWorkspaceRoots(): string[] {
+        const roots: string[] = [];
+        if (vscode.workspace.workspaceFolders) {
+            for (const folder of vscode.workspace.workspaceFolders) {
+                roots.push(folder.uri.fsPath);
+            }
+        }
+        return roots;
     }
 }

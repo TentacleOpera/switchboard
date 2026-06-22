@@ -3,7 +3,7 @@
 
 ## 🚨 STRICT PROTOCOL ENFORCEMENT 🚨
 
-This project relies on **Switchboard Workflows** defined in `.agent/workflows`.
+This project relies on **Switchboard Workflows** defined in `.agents/workflows`.
 
 **Rule #1**: If a user request matches a known workflow trigger, you **MUST** execute that workflow exactly as defined in the corresponding `.md` file. Do not "wing it" or use internal capability unless explicitly told to ignore the workflow.
 
@@ -27,13 +27,13 @@ Before EVERY response, you MUST:
 
 1. **Scan** the user's message for explicit workflow commands from the table above (prefer `/workflow` forms).
 2. **Do not auto-trigger on generic language** (for example: "review this", "delegate this", "quick start") unless the user explicitly asks to run that workflow.
-3. **If a command match is found**: Read the workflow file with `view_file .agent/workflows/[WORKFLOW].md` and execute it step-by-step. Do NOT improvise an alternative approach.
+3. **If a command match is found**: Read the workflow file with `view_file .agents/workflows/[WORKFLOW].md` and execute it step-by-step. Do NOT improvise an alternative approach.
 4. **Fast Kanban Resolution**: If the user asks about plans in specific Kanban columns (e.g. "update all created plans"), you MUST use the `query_switchboard_kanban` skill (read `.switchboard/workspace-id` for ID and DB path, then query with sqlite3) to instantly identify the target plans.
 5. **If no match is found**: Respond normally.
 
 ### Execution Rules
 
-1. **Read Definition**: Use `view_file .agent/workflows/[WORKFLOW].md` to read the steps.
+1. **Read Definition**: Use `view_file .agents/workflows/[WORKFLOW].md` to read the steps.
 2. **Execute Step-by-Step**: Follow the numbered steps in the workflow.
    - If a step says "Call tool X", call it.
    - If a step says "Generate artifact Y", generate it.
@@ -93,12 +93,12 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 
 **Usage**: Call `skill: "archive"` before performing archive operations to access detailed tool documentation and examples.
 
-**Skill Files Location**: `.agent/skills/` (distributed with plugin)
+**Skill Files Location**: `.agents/skills/` (distributed with plugin)
 
 ### 📌 Memo Capture Mode — Priority Rule
 
 While `/memo` capture mode is active, capture mode takes precedence over the default "analyze and act" behavior. The agent appends each user message to `.switchboard/memo.md` and does NOT analyze, plan, or write code. Every capture-mode reply begins with `[MEMO CAPTURE ACTIVE]`. There are no exit triggers — capture mode is permanent for the conversation; the user clears the conversation to leave. "clear memo" clears the file but stays in capture mode. To process captured entries into plan files, use the Memo modal in the Kanban panel (send/copy buttons). For guaranteed capture that no host system prompt can override, use the Memo modal.
-See `.agent/workflows/memo.md` and `.agent/skills/memo/SKILL.md` for the full protocol.
+See `.agents/workflows/memo.md` and `.agents/skills/memo/SKILL.md` for the full protocol.
 
 ### 📝 Plan Authoring & Problem Analysis Protocol
 

@@ -171,6 +171,18 @@
     let _subtaskParent = null;
     let _convertSelectedParentId = null;
     let _convertCurrentTicketId = null;
+    let _pendingDeleteTicket = null;
+
+    // ── Comment Manager state ──
+    let _cmThreads = [];
+    let _cmMembers = [];
+    let _cmThreadingSupported = true;
+    let _cmActiveTicketId = null;
+    let _cmActiveProvider = null;
+    let _pendingRefetchTicketId = null;
+    let _refetchStale = false;
+    let _cmDraftBackup = '';
+    let _cmMentionContext = null; // { textarea, mode, commentId, startPos, query, activeIndex }
     let clickUpProjectStatus = 'idle';
     let clickUpProjectMessage = '';
     let clickUpAvailableSpaces = [];
@@ -450,6 +462,438 @@
         showTicketsStatus(text, true);
     }
 
+    // ── Comment Manager functions ──────────────────────────────────
+
+    function openCommentManager(provider, id) {
+        _cmActiveProvider = provider;
+        _cmActiveTicketId = id;
+        _cmThreads = [];
+        _cmMembers = [];
+        _cmDraftBackup = '';
+        const manager = document.getElementById('tickets-comment-manager');
+        if (manager) {
+            manager.style.display = 'flex';
+        }
+        const threadsDiv = document.getElementById('tickets-comment-threads');
+        if (threadsDiv) {
+            threadsDiv.innerHTML = '<div class="cm-loading">Loading comments...</div>';
+        }
+        loadCommentThreads(provider, id);
+    }
+
+    function closeCommentManager() {
+        const manager = document.getElementById('tickets-comment-manager');
+        if (manager) manager.style.display = 'none';
+        _cmActiveTicketId = null;
+        _cmActiveProvider = null;
+        _cmThreads = [];
+        _cmMembers = [];
+        _cmDraftBackup = '';
+        closeMentionDropdown();
+    }
+
+    function loadCommentThreads(provider, id) {
+        // Refetch stale guard: if a refetch is already pending for this ticket,
+        // mark it as stale so the response is discarded and a fresh fetch is triggered.
+        if (_pendingRefetchTicketId === id) {
+            _refetchStale = true;
+            return; // the in-flight refetch will trigger a fresh one when it arrives
+        }
+        vscode.postMessage({
+            type: 'loadTicketComments',
+            provider,
+            id,
+            workspaceRoot: ticketsWorkspaceRoot
+        });
+    }
+
+    function renderCommentManager(threads, members) {
+        const threadsDiv = document.getElementById('tickets-comment-threads');
+        if (!threadsDiv) return;
+
+        if (!threads || threads.length === 0) {
+            threadsDiv.innerHTML = '<div class="cm-empty">No comments yet. Use the box below to add the first comment.</div>';
+            return;
+        }
+
+        let html = '';
+        for (const thread of threads) {
+            html += renderThreadHtml(thread);
+        }
+        threadsDiv.innerHTML = html;
+
+        // Wire up reply buttons
+        threadsDiv.querySelectorAll('.cm-reply-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const commentId = btn.dataset.commentId;
+                openReplyBox(commentId);
+            });
+        });
+
+        // Wire up reply submit/cancel
+        threadsDiv.querySelectorAll('.cm-reply-submit').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                const commentId = btn.dataset.commentId;
+                submitReply(commentId);
+            });
+        });
+        threadsDiv.querySelectorAll('.cm-reply-cancel').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                const commentId = btn.dataset.commentId;
+                closeReplyBox(commentId);
+            });
+        });
+
+        // Wire up mention autocomplete on reply textareas
+        threadsDiv.querySelectorAll('.cm-reply-textarea').forEach(ta => {
+            ta.addEventListener('input', (e) => handleMentionAutocomplete(e, ta, 'reply', ta.dataset.commentId));
+            ta.addEventListener('keydown', (e) => handleMentionKeydown(e, ta, 'reply', ta.dataset.commentId));
+        });
+    }
+
+    function renderThreadHtml(thread) {
+        const optimisticClass = thread._optimistic ? ' cm-optimistic' : '';
+        const authorName = escapeHtml(thread.author?.name || thread.author?.email || 'Unknown');
+        const dateStr = escapeHtml(formatCommentDate(thread.date));
+        const bodyHtml = escapeHtml(thread.body || '');
+        let html = '<div class="cm-thread' + optimisticClass + '" data-thread-id="' + escapeHtml(thread.id) + '">';
+        html += '<div class="cm-thread-header">';
+        html += '<span class="cm-thread-author">' + authorName + '</span>';
+        html += '<span class="cm-thread-date">' + dateStr + '</span>';
+        html += '</div>';
+        html += '<div class="cm-thread-body">' + bodyHtml + '</div>';
+        // Reply button (only if threading is supported)
+        if (_cmThreadingSupported) {
+            html += '<div class="cm-thread-actions">';
+            html += '<button class="cm-reply-btn" data-comment-id="' + escapeHtml(thread.id) + '">Reply</button>';
+            html += '</div>';
+        }
+        // Replies
+        if (thread.replies && thread.replies.length > 0) {
+            html += '<div class="cm-replies">';
+            for (const reply of thread.replies) {
+                html += renderReplyHtml(reply);
+            }
+            html += '</div>';
+        }
+        html += '</div>';
+        return html;
+    }
+
+    function renderReplyHtml(reply) {
+        const optimisticClass = reply._optimistic ? ' cm-optimistic' : '';
+        const authorName = escapeHtml(reply.author?.name || reply.author?.email || 'Unknown');
+        const dateStr = escapeHtml(formatCommentDate(reply.date));
+        const bodyHtml = escapeHtml(reply.body || '');
+        let html = '<div class="cm-reply' + optimisticClass + '" data-reply-id="' + escapeHtml(reply.id) + '">';
+        html += '<div class="cm-reply-header">';
+        html += '<span class="cm-reply-author">' + authorName + '</span>';
+        html += '<span class="cm-reply-date">' + dateStr + '</span>';
+        html += '</div>';
+        html += '<div class="cm-reply-body">' + bodyHtml + '</div>';
+        html += '</div>';
+        return html;
+    }
+
+    function formatCommentDate(dateStr) {
+        if (!dateStr) return '';
+        try {
+            const d = new Date(dateStr);
+            if (isNaN(d.getTime())) return dateStr;
+            return d.toLocaleString();
+        } catch {
+            return dateStr;
+        }
+    }
+
+    function openReplyBox(commentId) {
+        // Close any existing reply boxes
+        document.querySelectorAll('.cm-reply-box').forEach(el => el.remove());
+
+        const threadDiv = document.querySelector('[data-thread-id="' + CSS.escape(commentId) + '"]');
+        if (!threadDiv) return;
+
+        const replyBox = document.createElement('div');
+        replyBox.className = 'cm-reply-box';
+        replyBox.dataset.commentId = commentId;
+        replyBox.innerHTML = '<textarea class="cm-reply-textarea" data-comment-id="' + escapeHtml(commentId) + '" placeholder="Type a reply... Use @ to mention."></textarea>' +
+            '<div class="cm-reply-box-actions">' +
+            '<button class="strip-btn cm-reply-cancel" data-comment-id="' + escapeHtml(commentId) + '">Cancel</button>' +
+            '<button class="strip-btn cm-reply-submit" data-comment-id="' + escapeHtml(commentId) + '" style="background: var(--accent-teal); color: black;">Post Reply</button>' +
+            '</div>';
+        threadDiv.appendChild(replyBox);
+
+        const ta = replyBox.querySelector('.cm-reply-textarea');
+        if (ta) {
+            ta.addEventListener('input', (e) => handleMentionAutocomplete(e, ta, 'reply', commentId));
+            ta.addEventListener('keydown', (e) => handleMentionKeydown(e, ta, 'reply', commentId));
+            ta.focus();
+        }
+        // Wire up buttons for this reply box
+        replyBox.querySelector('.cm-reply-submit')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            submitReply(commentId);
+        });
+        replyBox.querySelector('.cm-reply-cancel')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            closeReplyBox(commentId);
+        });
+    }
+
+    function closeReplyBox(commentId) {
+        const box = document.querySelector('.cm-reply-box[data-comment-id="' + (commentId ? CSS.escape(commentId) : '') + '"]');
+        if (box) box.remove();
+        closeMentionDropdown();
+    }
+
+    function submitReply(commentId) {
+        const provider = lastIntegrationProvider;
+        const id = _cmActiveTicketId || (provider === 'linear' ? selectedLinearIssue?.issue.id : selectedClickUpIssue?.task.id);
+        if (!id) return;
+        const ta = document.querySelector('.cm-reply-textarea[data-comment-id="' + CSS.escape(commentId) + '"]');
+        const commentText = ta?.value?.trim();
+        if (!commentText) return;
+        const mentions = extractMentionsFromText(commentText, _cmMembers);
+        // Backup draft for rollback
+        _cmDraftBackup = commentText;
+        // Optimistic insert as a reply
+        optimisticInsertComment({
+            id: 'optimistic_reply_' + Date.now(),
+            author: { id: '', name: 'You', email: '' },
+            body: commentText,
+            date: new Date().toISOString(),
+            mentions,
+            _optimistic: true
+        }, commentId);
+        // Clear reply textarea
+        if (ta) ta.value = '';
+        vscode.postMessage({
+            type: 'postTicketReply',
+            provider,
+            id,
+            commentId,
+            commentText,
+            mentions,
+            workspaceRoot: ticketsWorkspaceRoot
+        });
+    }
+
+    function optimisticInsertComment(comment, parentId) {
+        if (parentId) {
+            // Insert as reply to the thread with parentId
+            const thread = _cmThreads.find(t => t.id === parentId);
+            if (thread) {
+                thread.replies = thread.replies || [];
+                thread.replies.push(comment);
+            } else {
+                // Parent not found — insert as top-level
+                _cmThreads.push(comment);
+            }
+        } else {
+            // Insert as top-level thread
+            _cmThreads.push(comment);
+        }
+        // If a refetch is pending, mark it stale so the optimistic insert isn't overwritten
+        if (_pendingRefetchTicketId) {
+            _refetchStale = true;
+        }
+        renderCommentManager(_cmThreads, _cmMembers);
+    }
+
+    function rollbackOptimisticComment(parentId) {
+        // Remove optimistic entries from threads
+        if (parentId) {
+            const thread = _cmThreads.find(t => t.id === parentId);
+            if (thread && thread.replies) {
+                thread.replies = thread.replies.filter(r => !r._optimistic);
+            }
+        } else {
+            _cmThreads = _cmThreads.filter(t => !t._optimistic);
+        }
+        renderCommentManager(_cmThreads, _cmMembers);
+
+        // Restore draft
+        if (_cmDraftBackup) {
+            if (parentId) {
+                // Restore reply draft — reopen reply box with text
+                openReplyBox(parentId);
+                const ta = document.querySelector('.cm-reply-textarea[data-comment-id="' + CSS.escape(parentId) + '"]');
+                if (ta) { ta.value = _cmDraftBackup; ta.focus(); }
+            } else {
+                // Restore compose draft
+                const textarea = document.getElementById('tickets-comment-textarea');
+                if (textarea) { textarea.value = _cmDraftBackup; textarea.focus(); }
+            }
+            _cmDraftBackup = '';
+        }
+    }
+
+    function showCommentManagerError(errorMsg) {
+        const threadsDiv = document.getElementById('tickets-comment-threads');
+        if (threadsDiv) {
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'cm-error';
+            errorDiv.textContent = errorMsg;
+            threadsDiv.insertBefore(errorDiv, threadsDiv.firstChild);
+            // Auto-remove after 5 seconds
+            setTimeout(() => errorDiv.remove(), 5000);
+        }
+    }
+
+    // ── Mention autocomplete ──
+
+    function extractMentionsFromText(text, members) {
+        if (!members || members.length === 0) return [];
+        const mentions = [];
+        const mentionRegex = /@\{([^}]+)\}/g;
+        let match;
+        const seen = new Set();
+        while ((match = mentionRegex.exec(text)) !== null) {
+            const memberId = match[1];
+            if (!seen.has(memberId)) {
+                seen.add(memberId);
+                const member = members.find(m => m.id === memberId);
+                mentions.push({
+                    id: memberId,
+                    name: member?.name || member?.username || memberId
+                });
+            }
+        }
+        return mentions;
+    }
+
+    function handleMentionAutocomplete(e, textarea, mode, commentId) {
+        const text = textarea.value;
+        const cursorPos = textarea.selectionStart;
+        // Find the last @ before cursor that isn't followed by a space or closing brace
+        const beforeCursor = text.substring(0, cursorPos);
+        const atMatch = beforeCursor.match(/@([^\s@{]*)$/);
+        if (!atMatch) {
+            closeMentionDropdown();
+            return;
+        }
+        const query = atMatch[1].toLowerCase();
+        const startPos = cursorPos - atMatch[0].length;
+
+        // Filter members
+        const filtered = (_cmMembers || []).filter(m => {
+            const name = (m.name || m.username || '').toLowerCase();
+            const email = (m.email || '').toLowerCase();
+            return name.includes(query) || email.includes(query);
+        });
+
+        if (filtered.length === 0) {
+            closeMentionDropdown();
+            return;
+        }
+
+        _cmMentionContext = {
+            textarea,
+            mode,
+            commentId,
+            startPos,
+            query,
+            activeIndex: 0,
+            filtered
+        };
+        renderMentionDropdown(filtered);
+    }
+
+    function renderMentionDropdown(members) {
+        const dropdown = document.getElementById('tickets-mention-dropdown');
+        if (!dropdown) return;
+        let html = '';
+        members.forEach((m, i) => {
+            const name = escapeHtml(m.name || m.username || 'Unknown');
+            const email = escapeHtml(m.email || '');
+            html += '<div class="cm-mention-item' + (i === 0 ? ' cm-mention-active' : '') + '" data-index="' + i + '" data-member-id="' + escapeHtml(m.id) + '">';
+            html += '<span class="cm-mention-item-name">' + name + '</span>';
+            if (email) html += '<span class="cm-mention-item-email">' + email + '</span>';
+            html += '</div>';
+        });
+        dropdown.innerHTML = html;
+        dropdown.style.display = 'block';
+
+        // Wire up click handlers
+        dropdown.querySelectorAll('.cm-mention-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const memberId = item.dataset.memberId;
+                insertMention(memberId);
+            });
+            item.addEventListener('mouseenter', () => {
+                dropdown.querySelectorAll('.cm-mention-item').forEach(el => el.classList.remove('cm-mention-active'));
+                item.classList.add('cm-mention-active');
+                if (_cmMentionContext) _cmMentionContext.activeIndex = parseInt(item.dataset.index, 10);
+            });
+        });
+    }
+
+    function handleMentionKeydown(e, textarea, mode, commentId) {
+        if (!_cmMentionContext) return;
+        const dropdown = document.getElementById('tickets-mention-dropdown');
+        if (!dropdown || dropdown.style.display === 'none') return;
+
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            _cmMentionContext.activeIndex = Math.min(_cmMentionContext.activeIndex + 1, _cmMentionContext.filtered.length - 1);
+            updateMentionActive();
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            _cmMentionContext.activeIndex = Math.max(_cmMentionContext.activeIndex - 1, 0);
+            updateMentionActive();
+        } else if (e.key === 'Enter' || e.key === 'Tab') {
+            e.preventDefault();
+            const member = _cmMentionContext.filtered[_cmMentionContext.activeIndex];
+            if (member) {
+                insertMention(member.id);
+            }
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            closeMentionDropdown();
+        }
+    }
+
+    function updateMentionActive() {
+        const dropdown = document.getElementById('tickets-mention-dropdown');
+        if (!dropdown || !_cmMentionContext) return;
+        dropdown.querySelectorAll('.cm-mention-item').forEach((el, i) => {
+            el.classList.toggle('cm-mention-active', i === _cmMentionContext.activeIndex);
+        });
+    }
+
+    function insertMention(memberId) {
+        if (!_cmMentionContext) return;
+        const { textarea, startPos } = _cmMentionContext;
+        const member = _cmMembers.find(m => m.id === memberId);
+        const memberName = member?.name || member?.username || memberId;
+        const before = textarea.value.substring(0, startPos);
+        const after = textarea.value.substring(textarea.selectionStart);
+        // Insert @{id} token — backend maps this to provider-specific mention format
+        const insertion = '@{' + memberId + '}';
+        textarea.value = before + insertion + ' ' + after;
+        // Position cursor after the insertion + space
+        const newPos = startPos + insertion.length + 1;
+        textarea.setSelectionRange(newPos, newPos);
+        textarea.focus();
+        closeMentionDropdown();
+    }
+
+    function closeMentionDropdown() {
+        const dropdown = document.getElementById('tickets-mention-dropdown');
+        if (dropdown) dropdown.style.display = 'none';
+        _cmMentionContext = null;
+    }
+
+    // Close mention dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+        if (_cmMentionContext && !e.target.closest('#tickets-mention-dropdown') && !e.target.closest('textarea')) {
+            closeMentionDropdown();
+        }
+    });
+
     function setTicketsLoadingState(isLoading) {
         const loadingState = document.getElementById('tickets-loading-state');
         const previewContent = document.getElementById('markdown-preview-tickets');
@@ -500,14 +944,15 @@
             attachmentsModal: document.getElementById('attachments-modal'),
             attachmentsList: document.getElementById('attachments-list'),
             ticketsStatusFooter: document.getElementById('tickets-status-footer'),
-            deleteConfirmBanner: document.getElementById('tickets-delete-confirm-banner'),
-            deleteConfirmInput: document.getElementById('delete-confirm-input'),
-            confirmDeleteTicket: document.getElementById('confirm-delete-ticket'),
-            cancelDeleteTicket: document.getElementById('cancel-delete-ticket'),
-            commentInputArea: document.getElementById('tickets-comment-input-area'),
+            commentInputArea: document.getElementById('tickets-comment-manager'),
             commentTextarea: document.getElementById('tickets-comment-textarea'),
             btnPostCommentCancel: document.getElementById('btn-post-comment-cancel'),
-            btnPostCommentSubmit: document.getElementById('btn-post-comment-submit')
+            btnPostCommentSubmit: document.getElementById('btn-post-comment-submit'),
+            ticketsSourceBtn: document.getElementById('tickets-source-btn'),
+            ticketsSourceSummary: document.getElementById('tickets-source-summary'),
+            ticketsSourceModal: document.getElementById('tickets-source-modal'),
+            btnCloseTicketsSourceModal: document.getElementById('btn-close-tickets-source-modal'),
+            btnCloseTicketsSourceModalAction: document.getElementById('btn-close-tickets-source-modal-action')
         };
     }
 
@@ -2208,7 +2653,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         // Track the active Switchboard visual theme
         if (theme) { state.switchboardTheme = theme; }
         // Remove Switchboard visual theme classes
-        document.body.classList.remove('theme-claudify');
+        document.body.classList.remove('theme-claudify', 'theme-afterburner-pro');
         // Cyberpunk CRT effects (scanlines, grid, glow, sweep) are part of the Afterburner aesthetic.
         // Toggle cyber-theme-enabled: on for afterburner ONLY.
         if (state.switchboardTheme === 'afterburner') {
@@ -2219,6 +2664,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         // Apply palette override when claudify is active
         if (state.switchboardTheme === 'claudify') {
             document.body.classList.add('theme-claudify');
+        } else if (state.switchboardTheme === 'afterburner-professional') {
+            document.body.classList.add('theme-claudify', 'theme-afterburner-pro');
         }
     }
 
@@ -3498,7 +3945,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         attachments: existing?.attachments || [],
                         renderedDescriptionHtml: rendered,
                         descriptionMarkdown: localBodyMarkdown,
-                        localDescription: true
+                        localDescription: true,
+                        detailsFetched: existing?.detailsFetched || false
                     };
                     clickUpTaskDetailCache.set(msg.id, selectedClickUpIssue);
                 } else {
@@ -3510,7 +3958,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         attachments: existing?.attachments || [],
                         renderedDescriptionHtml: rendered,
                         descriptionMarkdown: localBodyMarkdown,
-                        localDescription: true
+                        localDescription: true,
+                        detailsFetched: existing?.detailsFetched || false
                     };
                     linearIssueDetailCache.set(msg.id, selectedLinearIssue);
                 }
@@ -3590,8 +4039,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 setTicketsLoadingState(false);
                 if (msg.success) {
                     showTicketsStatus('Archived/Deleted ✓', false);
-                    const banner = document.getElementById('tickets-delete-confirm-banner');
-                    if (banner) banner.style.display = 'none';
+                    const modal = document.getElementById('tickets-delete-modal');
+                    if (modal) modal.style.display = 'none';
+                    _pendingDeleteTicket = null;
                     selectedLinearIssue = null;
                     selectedClickUpIssue = null;
                     if (lastIntegrationProvider === 'linear') {
@@ -3605,6 +4055,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     }
                 } else {
                     showTicketsStatus(msg.error || 'Failed to delete ticket', true);
+                    const confirmBtn = document.getElementById('btn-confirm-tickets-delete');
+                    if (confirmBtn) confirmBtn.disabled = false;
                 }
                 break;
             case 'changeTicketStatusResult':
@@ -3642,15 +4094,56 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 setTicketsLoadingState(false);
                 if (msg.success) {
                     showTicketsStatus('Comment posted ✓', false);
-                    const commentArea = document.getElementById('tickets-comment-input-area');
-                    if (commentArea) commentArea.style.display = 'none';
-                    if (lastIntegrationProvider === 'linear') {
-                        loadLinearTaskDetails(msg.id);
-                    } else {
-                        loadClickUpTaskDetails(msg.id);
+                    // Refetch threads to reconcile optimistic insert
+                    if (_cmActiveTicketId === msg.id) {
+                        _pendingRefetchTicketId = msg.id;
+                        loadCommentThreads(lastIntegrationProvider, msg.id);
                     }
                 } else {
+                    // Rollback optimistic insert, restore draft
+                    rollbackOptimisticComment(null);
                     showTicketsStatus(msg.error || 'Failed to post comment', true);
+                    showCommentManagerError(msg.error || 'Failed to post comment');
+                }
+                break;
+            case 'postTicketReplyResult':
+                setTicketsLoadingState(false);
+                if (msg.success) {
+                    showTicketsStatus('Reply posted ✓', false);
+                    if (_cmActiveTicketId === msg.id) {
+                        _pendingRefetchTicketId = msg.id;
+                        loadCommentThreads(lastIntegrationProvider, msg.id);
+                    }
+                } else {
+                    // Rollback optimistic reply, restore draft
+                    rollbackOptimisticComment(msg.commentId);
+                    showTicketsStatus(msg.error || 'Failed to post reply', true);
+                    showCommentManagerError(msg.error || 'Failed to post reply');
+                }
+                break;
+            case 'ticketCommentsLoaded':
+                setTicketsLoadingState(false);
+                if (msg.success) {
+                    _cmThreads = msg.threads || [];
+                    _cmMembers = msg.members || [];
+                    _cmThreadingSupported = msg.threadingSupported !== false;
+                    // Refetch stale guard: if a new optimistic insert arrived
+                    // while this refetch was pending, discard and re-fetch.
+                    if (_pendingRefetchTicketId === msg.id) {
+                        _pendingRefetchTicketId = null;
+                        if (_refetchStale) {
+                            _refetchStale = false;
+                            loadCommentThreads(msg.provider, msg.id);
+                            break;
+                        }
+                    }
+                    renderCommentManager(_cmThreads, _cmMembers);
+                } else {
+                    showTicketsStatus(msg.error || 'Failed to load comments', true);
+                    const threadsDiv = document.getElementById('tickets-comment-threads');
+                    if (threadsDiv) {
+                        threadsDiv.innerHTML = '<div class="cm-error">' + escapeHtml(msg.error || 'Failed to load comments') + '</div>';
+                    }
                 }
                 break;
             case 'attachmentDownloaded':
@@ -3996,7 +4489,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     attachments: msg.attachments || [],
                     renderedDescriptionHtml: _keepLinearDesc ? _prevLinear.renderedDescriptionHtml : msg.renderedDescriptionHtml,
                     descriptionMarkdown: _keepLinearDesc ? _prevLinear.descriptionMarkdown : (msg.issue.description || ''),
-                    localDescription: _keepLinearDesc || false
+                    localDescription: _keepLinearDesc || false,
+                    // Marks that comments/attachments came from the API. The cache-hit
+                    // shortcut on card click only skips the API fetch when this is true,
+                    // so file-change stubs (comments: []) never suppress real comments.
+                    detailsFetched: true
                 };
                 linearIssueDetailCache.set(msg.issue.id, selectedLinearIssue);
                 if (!ticketsEditMode) renderTicketsTab();
@@ -4129,7 +4626,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     attachments: msg.attachments || [],
                     renderedDescriptionHtml: _keepClickUpDesc ? _prevClickUp.renderedDescriptionHtml : msg.renderedDescriptionHtml,
                     descriptionMarkdown: _keepClickUpDesc ? _prevClickUp.descriptionMarkdown : (msg.task.markdownDescription || msg.task.description || ''),
-                    localDescription: _keepClickUpDesc || false
+                    localDescription: _keepClickUpDesc || false,
+                    // Marks that comments/attachments came from the API. The cache-hit
+                    // shortcut on card click only skips the API fetch when this is true,
+                    // so file-change stubs (comments: []) never suppress real comments.
+                    detailsFetched: true
                 };
                 clickUpTaskDetailCache.set(msg.task.id, selectedClickUpIssue);
                 if (!ticketsEditMode) renderTicketsTab();
@@ -5792,14 +6293,80 @@ Return ONLY the drafted prompt with no additional commentary.`;
         }
     }
 
+    function updateTicketsSourceSummary() {
+        const { ticketsSourceSummary } = getTicketsTabElements();
+        if (!ticketsSourceSummary) return;
+
+        const provider = lastIntegrationProvider;
+        if (!provider) {
+            ticketsSourceSummary.textContent = '';
+            return;
+        }
+
+        if (provider === 'clickup') {
+            let summary = 'ClickUp';
+            if (clickUpSelectedSpaceId) {
+                const space = clickUpAvailableSpaces.find(s => s.id === clickUpSelectedSpaceId);
+                if (space) {
+                    summary += ' ▸ ' + space.name;
+                }
+            }
+            if (clickUpSelectedFolderId && clickUpSelectedFolderId !== '_root_') {
+                const folder = clickUpAvailableFolders.find(f => f.id === clickUpSelectedFolderId);
+                if (folder) {
+                    summary += ' ▸ ' + folder.name;
+                }
+            }
+            if (clickUpSelectedListId) {
+                let list = clickUpAvailableListsInFolder.find(l => l.id === clickUpSelectedListId);
+                if (!list) {
+                    list = clickUpAvailableDirectLists.find(l => l.id === clickUpSelectedListId);
+                }
+                if (list) {
+                    summary += ' ▸ ' + list.name;
+                }
+            }
+            ticketsSourceSummary.textContent = summary;
+        } else if (provider === 'linear') {
+            ticketsSourceSummary.textContent = 'Linear';
+        } else {
+            ticketsSourceSummary.textContent = '';
+        }
+    }
+
     function initTicketsTab() {
         const {
             searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, loadMoreButton,
-            btnImportAllTickets, importAllKanbanButton, linkAllButton, syncAllButton
+            btnImportAllTickets, importAllKanbanButton, linkAllButton, syncAllButton,
+            ticketsSourceBtn, ticketsSourceModal, btnCloseTicketsSourceModal, btnCloseTicketsSourceModalAction
         } = getTicketsTabElements();
 
         // Custom update call to populate dropdown if integrations already fetched
         updateTicketsWorkspacePicker();
+
+        ticketsSourceBtn?.addEventListener('click', () => {
+            if (ticketsSourceModal) {
+                ticketsSourceModal.style.display = 'block';
+            }
+        });
+
+        btnCloseTicketsSourceModal?.addEventListener('click', () => {
+            if (ticketsSourceModal) {
+                ticketsSourceModal.style.display = 'none';
+            }
+        });
+
+        btnCloseTicketsSourceModalAction?.addEventListener('click', () => {
+            if (ticketsSourceModal) {
+                ticketsSourceModal.style.display = 'none';
+            }
+        });
+
+        ticketsSourceModal?.addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) {
+                e.currentTarget.style.display = 'none';
+            }
+        });
 
         document.getElementById('tickets-provider-selector')?.addEventListener('change', (e) => {
             const newProvider = e.target.value;
@@ -5808,6 +6375,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             resetTicketsInMemoryState();
             lastIntegrationProvider = newProvider;
             ticketsLoadedOnce = false;
+            updateTicketsSourceSummary();
             // The backend responds to switchTicketsProvider with an
             // integrationProviderStates message, whose handler drives the
             // (autoSync-aware) ticket load exactly once. Loading here too would
@@ -5975,15 +6543,51 @@ Return ONLY the drafted prompt with no additional commentary.`;
             vscode.postMessage({ type: 'pushTicket', provider, id, workspaceRoot: ticketsWorkspaceRoot });
         });
 
-        // Action bar: Delete — immediate, no confirm gate
+        // Action bar: Delete — modal confirm gate
         document.getElementById('btn-delete-ticket')?.addEventListener('click', () => {
             const provider = lastIntegrationProvider;
             const id = provider === 'linear'
                 ? selectedLinearIssue?.issue.id
                 : selectedClickUpIssue?.task.id;
             if (!id) return;
+            const title = provider === 'linear'
+                ? selectedLinearIssue?.issue.title
+                : selectedClickUpIssue?.task.title || selectedClickUpIssue?.task.name || '';
+            _pendingDeleteTicket = { provider, id, title };
+            const info = document.getElementById('tickets-delete-modal-info');
+            if (info) info.innerHTML = 'Delete <strong>' + escapeHtml(title || id) + '</strong>? This cannot be undone.';
+            const confirmBtn = document.getElementById('btn-confirm-tickets-delete');
+            if (confirmBtn) confirmBtn.disabled = false;
+            const modal = document.getElementById('tickets-delete-modal');
+            if (modal) modal.style.display = 'block';
+        });
+
+        document.getElementById('btn-confirm-tickets-delete')?.addEventListener('click', () => {
+            if (!_pendingDeleteTicket) return;
+            const { provider, id } = _pendingDeleteTicket;
+            const confirmBtn = document.getElementById('btn-confirm-tickets-delete');
+            if (confirmBtn) confirmBtn.disabled = true; // double-click guard
             setTicketsLoadingState(true);
             vscode.postMessage({ type: 'deleteTicketConfirmed', provider, id, workspaceRoot: ticketsWorkspaceRoot });
+        });
+
+        document.getElementById('btn-close-tickets-delete-modal')?.addEventListener('click', () => {
+            const modal = document.getElementById('tickets-delete-modal');
+            if (modal) modal.style.display = 'none';
+            _pendingDeleteTicket = null;
+        });
+
+        document.getElementById('btn-cancel-tickets-delete')?.addEventListener('click', () => {
+            const modal = document.getElementById('tickets-delete-modal');
+            if (modal) modal.style.display = 'none';
+            _pendingDeleteTicket = null;
+        });
+
+        document.getElementById('tickets-delete-modal')?.addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) {
+                e.currentTarget.style.display = 'none';
+                _pendingDeleteTicket = null;
+            }
         });
 
         // Action bar: Change Status
@@ -5998,17 +6602,14 @@ Return ONLY the drafted prompt with no additional commentary.`;
             vscode.postMessage({ type: 'changeTicketStatus', provider, id, statusId, workspaceRoot: ticketsWorkspaceRoot });
         });
 
-        // Action bar: Comment button toggle
+        // Action bar: Comment button → open comment manager panel
         document.getElementById('btn-comment-ticket')?.addEventListener('click', () => {
-            const commentArea = document.getElementById('tickets-comment-input-area');
-            if (commentArea) {
-                commentArea.style.display = commentArea.style.display === 'none' ? 'block' : 'none';
-                const textarea = document.getElementById('tickets-comment-textarea');
-                if (textarea) {
-                    textarea.value = '';
-                    textarea.focus();
-                }
-            }
+            const provider = lastIntegrationProvider;
+            const id = provider === 'linear'
+                ? selectedLinearIssue?.issue.id
+                : selectedClickUpIssue?.task.id;
+            if (!id) return;
+            openCommentManager(provider, id);
         });
 
         // Action bar: Open ticket in browser
@@ -6076,13 +6677,12 @@ Instructions:
             }
         });
 
-        // Comment post cancel
+        // Comment post cancel — close manager
         document.getElementById('btn-post-comment-cancel')?.addEventListener('click', () => {
-            const commentArea = document.getElementById('tickets-comment-input-area');
-            if (commentArea) commentArea.style.display = 'none';
+            closeCommentManager();
         });
 
-        // Comment post submit
+        // Comment post submit — extract mentions, post with optimistic insert
         document.getElementById('btn-post-comment-submit')?.addEventListener('click', () => {
             const provider = lastIntegrationProvider;
             const id = provider === 'linear'
@@ -6091,9 +6691,45 @@ Instructions:
             const textarea = document.getElementById('tickets-comment-textarea');
             const comment = textarea?.value?.trim();
             if (!id || !comment) return;
-            setTicketsLoadingState(true);
-            vscode.postMessage({ type: 'postTicketComment', provider, id, comment, workspaceRoot: ticketsWorkspaceRoot });
+            const mentions = extractMentionsFromText(comment, _cmMembers);
+            // Backup draft for rollback
+            _cmDraftBackup = comment;
+            // Optimistic insert
+            optimisticInsertComment({
+                id: 'optimistic_' + Date.now(),
+                author: { id: '', name: 'You', email: '' },
+                body: comment,
+                date: new Date().toISOString(),
+                mentions,
+                replies: [],
+                _optimistic: true
+            }, null);
+            // Clear textarea
+            if (textarea) textarea.value = '';
+            vscode.postMessage({ type: 'postTicketComment', provider, id, comment, mentions, workspaceRoot: ticketsWorkspaceRoot });
         });
+
+        // Comment manager: refresh button
+        document.getElementById('btn-comments-refresh')?.addEventListener('click', () => {
+            const provider = lastIntegrationProvider;
+            const id = provider === 'linear'
+                ? selectedLinearIssue?.issue.id
+                : selectedClickUpIssue?.task.id;
+            if (!id) return;
+            loadCommentThreads(provider, id);
+        });
+
+        // Comment manager: close button
+        document.getElementById('btn-comments-close')?.addEventListener('click', () => {
+            closeCommentManager();
+        });
+
+        // Mention autocomplete on textarea
+        const cmTextarea = document.getElementById('tickets-comment-textarea');
+        if (cmTextarea) {
+            cmTextarea.addEventListener('input', (e) => handleMentionAutocomplete(e, cmTextarea, 'compose'));
+            cmTextarea.addEventListener('keydown', (e) => handleMentionKeydown(e, cmTextarea, 'compose'));
+        }
 
         // Project picker (Linear)
         projectPicker?.addEventListener('change', (e) => {
@@ -6235,19 +6871,34 @@ Instructions:
                 const linearId = card.dataset.linearIssueId;
                 const clickUpId = card.dataset.clickupTaskId;
                 if (linearId) {
-                    if (linearIssueDetailCache.has(linearId)) {
-                        selectedLinearIssue = linearIssueDetailCache.get(linearId);
+                    const cachedLinear = linearIssueDetailCache.get(linearId);
+                    // Only skip the API fetch when full details were actually fetched.
+                    // A file-change stub (detailsFetched falsy, comments: []) must NOT
+                    // short-circuit, or comments/attachments would never load.
+                    if (cachedLinear && cachedLinear.detailsFetched) {
+                        selectedLinearIssue = cachedLinear;
                         renderTicketsLinearPanel();
                     } else {
+                        // Render the cached description instantly (if any) while we fetch.
+                        if (cachedLinear) {
+                            selectedLinearIssue = cachedLinear;
+                            renderTicketsLinearPanel();
+                        }
                         // Local file for fast description, API for comments/attachments
                         vscode.postMessage({ type: 'readLocalTicketFile', provider: 'linear', id: linearId, workspaceRoot: ticketsWorkspaceRoot });
                         vscode.postMessage({ type: 'linearLoadTaskDetails', issueId: linearId, workspaceRoot: ticketsWorkspaceRoot || undefined });
                     }
                 } else if (clickUpId) {
-                    if (clickUpTaskDetailCache.has(clickUpId)) {
-                        selectedClickUpIssue = clickUpTaskDetailCache.get(clickUpId);
+                    const cachedClickUp = clickUpTaskDetailCache.get(clickUpId);
+                    if (cachedClickUp && cachedClickUp.detailsFetched) {
+                        selectedClickUpIssue = cachedClickUp;
                         renderTicketsClickUpPanel();
                     } else {
+                        // Render the cached description instantly (if any) while we fetch.
+                        if (cachedClickUp) {
+                            selectedClickUpIssue = cachedClickUp;
+                            renderTicketsClickUpPanel();
+                        }
                         // Local file for fast description, API for comments/attachments
                         vscode.postMessage({ type: 'readLocalTicketFile', provider: 'clickup', id: clickUpId, workspaceRoot: ticketsWorkspaceRoot });
                         vscode.postMessage({ type: 'clickupLoadTaskDetails', taskId: clickUpId, workspaceRoot: ticketsWorkspaceRoot || undefined });
@@ -6618,6 +7269,7 @@ Instructions:
 
         renderTicketsLinearList();
         renderTicketsLinearTaskDetail();
+        updateTicketsSourceSummary();
     }
 
     function renderTicketsLinearStateFilterOptions() {
@@ -7115,6 +7767,7 @@ Instructions:
             const hasSelected = !!selectedClickUpIssue;
             if (emptyPreview) emptyPreview.style.display = hasSelected ? 'none' : '';
         }
+        updateTicketsSourceSummary();
     }
 
     function renderTicketsClickUpHierarchyNav() {

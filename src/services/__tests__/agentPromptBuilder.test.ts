@@ -14,7 +14,7 @@ suite('agentPromptBuilder', () => {
                 accurateCodingEnabled: true
             });
             assert.ok(prompt.includes('Accuracy Mode'), 'Should include Accuracy Mode header');
-            assert.ok(prompt.includes('.agent/workflows/accuracy.md'), 'Should include reference to accuracy workflow');
+            assert.ok(prompt.includes('.agents/workflows/accuracy.md'), 'Should include reference to accuracy workflow');
         });
 
         test('accurateCodingEnabled: false omits Accuracy Mode instructions', () => {

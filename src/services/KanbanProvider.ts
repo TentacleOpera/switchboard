@@ -2761,7 +2761,7 @@ export class KanbanProvider implements vscode.Disposable {
                 gatherer: gathererConfig?.addons?.workflowFilePathEnabled ?? false,
             },
             workflowFilePathByRole: {
-                planner: plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agent/workflows/improve-plan.md'),
+                planner: plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agents/workflows/improve-plan.md'),
                 lead: leadConfig?.addons?.workflowFilePath || '',
                 coder: coderConfig?.addons?.workflowFilePath || '',
                 reviewer: reviewerConfig?.addons?.workflowFilePath || '',
@@ -2794,7 +2794,7 @@ export class KanbanProvider implements vscode.Disposable {
             constitutionEnabled: plannerConfig?.addons?.constitution ?? config.get<boolean>('planner.constitutionEnabled', false),
             designSystemDocEnabled: plannerConfig?.addons?.designSystemDoc ?? config.get<boolean>('planner.designSystemDocEnabled', false),
             designSystemDocLink: config.get<string>('planner.designSystemDocLink', ''),
-            plannerWorkflowPath: plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agent/workflows/improve-plan.md'),
+            plannerWorkflowPath: plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agents/workflows/improve-plan.md'),
             skipCompilationByRole: {
                 planner: plannerConfig?.addons?.skipCompilation ?? false,
                 lead: leadConfig?.addons?.skipCompilation ?? true,
@@ -6947,7 +6947,10 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 try {
                     content = await fs.promises.readFile(memoPath, 'utf8');
                 } catch { /* file doesn't exist yet — that's fine */ }
-                this._panel?.webview.postMessage({ type: 'memoContent', content });
+                const workspaceName = this._getWorkspaceItems()
+                    .find(item => item.workspaceRoot === workspaceRoot)?.label
+                    || path.basename(workspaceRoot);
+                this._panel?.webview.postMessage({ type: 'memoContent', content, workspaceName });
                 break;
             }
             case 'memoSave': {
@@ -6990,7 +6993,10 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (sendSucceeded) {
                     const memoPath = this._getMemoPath(workspaceRoot);
                     await fs.promises.writeFile(memoPath, '', 'utf8');
-                    this._panel?.webview.postMessage({ type: 'memoContent', content: '' });
+                    const workspaceName = this._getWorkspaceItems()
+                        .find(item => item.workspaceRoot === workspaceRoot)?.label
+                        || path.basename(workspaceRoot);
+                    this._panel?.webview.postMessage({ type: 'memoContent', content: '', workspaceName });
                 }
 
                 this._panel?.webview.postMessage({
@@ -7070,8 +7076,7 @@ Each plan file must include:
 ## Important
 - Create ${issues.length} plan file(s) total — one per issue
 - Write each plan to: ${plansDir}/feature_plan_<YYYYMMDDHHMMSS>_<slug>.md
-- Do NOT skip the investigation step — read the relevant code before writing each plan
-- After creating all plans, run a full sync so they appear on the kanban board`;
+- Do NOT skip the investigation step — read the relevant code before writing each plan`;
     }
 
     private async _dispatchMemoToPlanner(prompt: string, workspaceRoot: string): Promise<boolean> {

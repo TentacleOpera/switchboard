@@ -202,16 +202,16 @@ async function run() {
             const extPath = process.cwd(); // Use current project as extension path
 
             // Create old workflow file in target
-            await fs.promises.mkdir(path.join(parentDir, '.agent', 'workflows'), { recursive: true });
+            await fs.promises.mkdir(path.join(parentDir, '.agents', 'workflows'), { recursive: true });
             await fs.promises.writeFile(
-                path.join(parentDir, '.agent', 'workflows', 'stale-workflow.md'),
+                path.join(parentDir, '.agents', 'workflows', 'stale-workflow.md'),
                 '# STALE workflow with deleted MCP tool reference',
                 'utf8'
             );
             // Create old persona file in target
-            await fs.promises.mkdir(path.join(parentDir, '.agent', 'personas'), { recursive: true });
+            await fs.promises.mkdir(path.join(parentDir, '.agents', 'personas'), { recursive: true });
             await fs.promises.writeFile(
-                path.join(parentDir, '.agent', 'personas', 'custom-persona.md'),
+                path.join(parentDir, '.agents', 'personas', 'custom-persona.md'),
                 '# My custom persona',
                 'utf8'
             );
@@ -233,14 +233,14 @@ async function run() {
             assert.strictEqual(versionData.version, packageJson.version,
                 'Version file should be updated to current extension version after bootstrap');
 
-            // Workflow files from bundled .agent/workflows/ should be overwritten
+            // Workflow files from bundled .agents/workflows/ should be overwritten
             // (if bundled workflows exist — they may not in test env, so check conditionally)
-            const bundledWorkflowsDir = path.join(extPath, '.agent', 'workflows');
+            const bundledWorkflowsDir = path.join(extPath, '.agents', 'workflows');
             if (fs.existsSync(bundledWorkflowsDir)) {
                 const bundledFiles = await fs.promises.readdir(bundledWorkflowsDir);
                 for (const file of bundledFiles) {
                     if (file.endsWith('.md')) {
-                        const targetFile = path.join(parentDir, '.agent', 'workflows', file);
+                        const targetFile = path.join(parentDir, '.agents', 'workflows', file);
                         assert.ok(fs.existsSync(targetFile),
                             `Bundled workflow ${file} should exist after bootstrap`);
                     }
@@ -249,7 +249,7 @@ async function run() {
 
             // Custom persona should NOT be overwritten
             const personaContent = await fs.promises.readFile(
-                path.join(parentDir, '.agent', 'personas', 'custom-persona.md'), 'utf8'
+                path.join(parentDir, '.agents', 'personas', 'custom-persona.md'), 'utf8'
             );
             assert.strictEqual(personaContent, '# My custom persona',
                 'Custom persona file should NOT be overwritten by bootstrap');

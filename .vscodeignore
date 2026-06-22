@@ -22,8 +22,8 @@ webpack.config.js
 .github/**
 .gemini/**
 .jules/**
-# Keep .agent/ — workflow assets are shipped with the extension
-!.agent/**
+# Keep .agents/ — workflow assets are shipped with the extension
+!.agents/**
 
 # Runtime artifacts
 .switchboard/**

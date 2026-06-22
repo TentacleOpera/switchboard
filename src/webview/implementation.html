@@ -61,6 +61,15 @@
             --border-bright: #5C544A;
         }
 
+        body.theme-afterburner-pro {
+            --accent-primary: #00e5ff;
+            --accent-teal: #00e5ff;
+            --accent-cyan: #00e5ff;
+            --accent-teal-dim: color-mix(in srgb, #00e5ff 40%, transparent);
+            --accent-teal-bright: #5ce8e6;
+            --glow-teal: none;
+        }
+
         /* Claudify: remove neon glow from base (non-cyber) interactive states */
         body.theme-claudify .action-btn:hover:not(:disabled),
         body.theme-claudify .activity-row.summary,
@@ -1421,7 +1430,7 @@
                 <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 14px; line-height: 1.5;">
                     Switchboard scaffolds configuration files inside your repository
                     (<code style="font-size:10px;">AGENTS.md</code>,
-                    <code style="font-size:10px;">.agent/</code>,
+                    <code style="font-size:10px;">.agents/</code>,
                     <code style="font-size:10px;">.switchboard/</code>).
                     If you do not want this extension to write to
                     <code style="font-size:10px;">AGENTS.md</code> or perform other scaffolding
@@ -2439,9 +2448,15 @@
                 }
                 case 'switchboardThemeNameSetting':
                 case 'switchboardThemeChanged': {
-                    document.body.classList.remove('theme-claudify');
-                    if (message.theme && message.theme !== 'afterburner') {
-                        document.body.classList.add(`theme-${message.theme}`);
+                    if (message.theme) {
+                        document.body.classList.remove('theme-claudify', 'theme-afterburner-pro', 'cyber-theme-enabled');
+                        if (message.theme === 'afterburner') {
+                            document.body.classList.add('cyber-theme-enabled');
+                        } else if (message.theme === 'claudify') {
+                            document.body.classList.add('theme-claudify');
+                        } else if (message.theme === 'afterburner-professional') {
+                            document.body.classList.add('theme-claudify', 'theme-afterburner-pro');
+                        }
                     }
                     break;
                 }

@@ -96,7 +96,7 @@ function buildPlanContent(title, sessionId, metadataLines = []) {
 async function createRepoFixture(repoDir, planFileName, sessionId, options = {}) {
     const switchboardDir = path.join(repoDir, '.switchboard');
     const plansDir = path.join(switchboardDir, 'plans');
-    const agentDir = path.join(repoDir, '.agent');
+    const agentDir = path.join(repoDir, '.agents');
 
     await fs.promises.mkdir(path.join(repoDir, '.git'), { recursive: true });
     await fs.promises.mkdir(plansDir, { recursive: true });
@@ -253,13 +253,13 @@ async function run() {
         );
 
         assert.ok(
-            fs.existsSync(path.join(parentDir, '.agent', 'personas', 'shared-persona.md')) &&
-            fs.existsSync(path.join(parentDir, '.agent', 'workflows', 'shared-workflow.md')) &&
-            fs.existsSync(path.join(parentDir, '.agent', 'skills', 'shared-skill.md')),
+            fs.existsSync(path.join(parentDir, '.agents', 'personas', 'shared-persona.md')) &&
+            fs.existsSync(path.join(parentDir, '.agents', 'workflows', 'shared-workflow.md')) &&
+            fs.existsSync(path.join(parentDir, '.agents', 'skills', 'shared-skill.md')),
             'Expected identical shared persona/workflow/skill files to be promoted into the parent control plane.'
         );
         assert.ok(
-            !fs.existsSync(path.join(parentDir, '.agent', 'rules', 'shared-rule.md')),
+            !fs.existsSync(path.join(parentDir, '.agents', 'rules', 'shared-rule.md')),
             'Expected divergent rules files not to be copied into the parent control plane.'
         );
 

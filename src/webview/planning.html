@@ -107,6 +107,14 @@
             /* Display-font vars NOT overridden — keep base GeistPixel (pixel font). */
         }
 
+        body.theme-afterburner-pro {
+            --accent-primary: #00e5ff;
+            --accent-teal: #00e5ff;
+            --accent-teal-dim: color-mix(in srgb, #00e5ff 40%, transparent);
+            --accent-teal-bright: #5ce8e6;
+            --glow-teal: none;
+        }
+
         /* Claudify: remove neon glow from base (non-cyber) interactive states */
         body.theme-claudify .tree-node.selected,
         body.theme-claudify .kanban-plan-item.selected,
@@ -362,6 +370,12 @@
         }
 
         .content-row.collapsed .sidebar-folders-btn {
+            display: none !important;
+        }
+
+        /* Hide tickets strip-btns when collapsed — !important needed because JS sets
+           inline style.display on #tickets-import-all-kanban (planning.js:6821,7078) */
+        .content-row.collapsed #tree-pane-tickets .sidebar-toggle-row .strip-btn {
             display: none !important;
         }
 
@@ -2366,6 +2380,18 @@
             color: #F0EBE6;
         }
 
+        body.theme-afterburner-pro #markdown-preview h1,
+        body.theme-afterburner-pro #markdown-preview-tickets h1 {
+            color: var(--accent-primary);
+        }
+
+        body.theme-afterburner-pro #markdown-preview h2, body.theme-afterburner-pro #markdown-preview h3, body.theme-afterburner-pro #markdown-preview h4, body.theme-afterburner-pro #markdown-preview h5, body.theme-afterburner-pro #markdown-preview h6,
+        body.theme-afterburner-pro #markdown-preview-tickets h2, body.theme-afterburner-pro #markdown-preview-tickets h3, body.theme-afterburner-pro #markdown-preview-tickets h4, body.theme-afterburner-pro #markdown-preview-tickets h5, body.theme-afterburner-pro #markdown-preview-tickets h6 {
+            font-family: var(--display-font), var(--font-family);
+            letter-spacing: var(--display-letter-spacing);
+            font-stretch: var(--display-font-stretch);
+        }
+
         .preview-panel-wrapper {
             position: relative;
             flex: 3;
@@ -2814,6 +2840,159 @@
             color: var(--text-primary);
             line-height: 1.5;
             margin-top: 4px;
+        }
+
+        /* ── Comment Manager: threads + replies + mentions ── */
+        .cm-thread {
+            margin-bottom: 12px;
+            border-left: 3px solid var(--accent-teal-dim);
+            border-radius: 0 4px 4px 0;
+            background: color-mix(in srgb, var(--accent-teal) 6%, var(--panel-bg));
+            padding: 8px 12px;
+        }
+        .cm-thread-header {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            margin-bottom: 4px;
+        }
+        .cm-thread-author {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--accent-teal);
+        }
+        .cm-thread-date {
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+        }
+        .cm-thread-body {
+            font-size: 13px;
+            color: var(--text-primary);
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .cm-thread-actions {
+            margin-top: 6px;
+            display: flex;
+            gap: 8px;
+        }
+        .cm-reply-btn {
+            font-size: 11px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            background: none;
+            border: none;
+            padding: 0;
+            text-decoration: underline;
+        }
+        .cm-reply-btn:hover {
+            color: var(--accent-teal);
+        }
+        .cm-replies {
+            margin-top: 8px;
+            margin-left: 16px;
+            border-left: 2px solid var(--border-color);
+            padding-left: 10px;
+        }
+        .cm-reply {
+            margin-bottom: 6px;
+            padding: 6px 8px;
+            background: color-mix(in srgb, var(--accent-teal) 3%, var(--panel-bg));
+            border-radius: 3px;
+        }
+        .cm-reply-header {
+            display: flex;
+            align-items: baseline;
+            gap: 6px;
+            margin-bottom: 2px;
+        }
+        .cm-reply-author {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--accent-teal);
+        }
+        .cm-reply-date {
+            font-size: 10px;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+        }
+        .cm-reply-body {
+            font-size: 12px;
+            color: var(--text-primary);
+            line-height: 1.4;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .cm-reply-box {
+            margin-top: 6px;
+            margin-left: 16px;
+        }
+        .cm-reply-box textarea {
+            width: 100%;
+            height: 50px;
+            background: var(--input-bg);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 12px;
+            padding: 4px;
+            box-sizing: border-box;
+            resize: vertical;
+        }
+        .cm-reply-box-actions {
+            margin-top: 4px;
+            display: flex;
+            justify-content: flex-end;
+            gap: 6px;
+        }
+        .cm-mention-token {
+            color: var(--accent-teal);
+            font-weight: 600;
+        }
+        .cm-mention-item {
+            padding: 6px 10px;
+            cursor: pointer;
+            font-size: 12px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+        }
+        .cm-mention-item:hover, .cm-mention-item.cm-mention-active {
+            background: color-mix(in srgb, var(--accent-teal) 15%, var(--panel-bg));
+        }
+        .cm-mention-item-name {
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+        .cm-mention-item-email {
+            color: var(--text-secondary);
+            font-size: 10px;
+        }
+        .cm-empty {
+            text-align: center;
+            padding: 24px;
+            color: var(--text-secondary);
+            font-size: 12px;
+        }
+        .cm-loading {
+            text-align: center;
+            padding: 16px;
+            color: var(--text-secondary);
+            font-size: 12px;
+        }
+        .cm-error {
+            padding: 8px 12px;
+            color: var(--vscode-errorForeground, #f48771);
+            font-size: 12px;
+            background: color-mix(in srgb, #f48771 10%, var(--panel-bg));
+            border-radius: 4px;
+            margin: 8px 0;
+        }
+        .cm-optimistic {
+            opacity: 0.6;
         }
 
         /* Attachment items — inline link style */
@@ -3336,21 +3515,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <div class="tickets-workspace-picker">
                         <select id="tickets-workspace-filter" class="workspace-filter-select" style="display:none;"></select>
                         <span id="tickets-workspace-label" class="workspace-static-label" style="display:none;"></span>
-                        <select id="tickets-provider-selector" class="workspace-filter-select" style="display:none; margin-left: 8px;">
-                            <option value="clickup">ClickUp</option>
-                            <option value="linear">Linear</option>
-                        </select>
                     </div>
-                    <select id="tickets-project-picker" style="display:none"></select>
-                    <select id="tickets-state-filter" style="display:none"></select>
-                    <select id="tickets-status-filter" style="display:none"></select>
+                    <button id="tickets-source-btn" class="strip-btn" title="Choose provider and navigate the source hierarchy">Source</button>
+                    <span id="tickets-source-summary" class="workspace-static-label"></span>
+                    <input id="tickets-search" type="text" class="sidebar-search-input" placeholder="Search tickets..." />
                     <button id="tickets-create" class="strip-btn" disabled title="Configure an integration in Setup first">+ New Ticket</button>
                     <button id="tickets-refresh" class="strip-btn" title="Re-fetch from source and save local copies">Refetch</button>
                     <button id="tickets-sync-all" class="strip-btn" title="Push all local ticket changes back to the integration">Sync changes</button>
-                </div>
-                <div class="controls-strip-row">
-                    <div id="tickets-hierarchy-nav" style="display:none; flex-wrap: wrap; gap: 8px; align-items: center;"></div>
-                    <input id="tickets-search" type="text" class="sidebar-search-input" placeholder="Search tickets..." />
                 </div>
             </div>
             <div class="content-row">
@@ -3381,16 +3552,27 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             <button id="btn-comment-ticket" class="strip-btn">Comment</button>
                             <button id="btn-view-attachments" class="strip-btn" style="display:none;">Attachments</button>
                             <button id="btn-open-ticket" class="strip-btn" style="display:none;">Open</button>
-                            <button id="btn-diagram-prompt" class="strip-btn" style="display:none;">Diagram Prompt</button>
+                            <button id="btn-diagram-prompt" class="strip-btn" style="display:none;" title="Copy a diagram prompt for this ticket">Diagram</button>
                             <button id="btn-add-subtask" class="strip-btn" title="Create a subtask under this ticket">+ Subtask</button>
-                            <button id="btn-convert-subtask" class="strip-btn" title="Convert this ticket to a subtask of another ticket">Convert to Subtask</button>
+                            <button id="btn-convert-subtask" class="strip-btn" title="Convert this ticket to a subtask of another ticket">To subtask</button>
                         </div>
 
-                        <div id="tickets-comment-input-area" style="display:none; padding: 10px; border-bottom: 1px solid var(--border-color); background: var(--panel-bg2); margin: 10px;">
-                            <textarea id="tickets-comment-textarea" placeholder="Type a comment..." style="width: 100%; height: 60px; background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-primary); font-family: inherit; font-size: 12px; padding: 4px; box-sizing: border-box; resize: vertical;"></textarea>
-                            <div style="margin-top: 6px; display: flex; justify-content: flex-end; gap: 8px;">
-                                <button id="btn-post-comment-cancel" class="strip-btn">Cancel</button>
-                                <button id="btn-post-comment-submit" class="strip-btn" style="background: var(--accent-teal); color: black;">Post Comment</button>
+                        <div id="tickets-comment-manager" style="display:none; flex: 1; flex-direction: column; overflow: hidden; border-top: 1px solid var(--border-color); background: var(--panel-bg2); margin: 0;">
+                            <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--border-color);">
+                                <span style="font-size: 12px; font-weight: 600; color: var(--text-primary);">Comments</span>
+                                <div style="display: flex; gap: 6px;">
+                                    <button id="btn-comments-refresh" class="strip-btn" title="Refresh comments from provider" style="font-size: 11px;">Refresh</button>
+                                    <button id="btn-comments-close" class="strip-btn" title="Close comment manager" style="font-size: 11px;">Close</button>
+                                </div>
+                            </div>
+                            <div id="tickets-comment-threads" style="flex: 1; overflow-y: auto; padding: 8px 12px;"></div>
+                            <div id="tickets-comment-compose-area" style="padding: 8px 12px; border-top: 1px solid var(--border-color); position: relative;">
+                                <textarea id="tickets-comment-textarea" placeholder="Type a comment... Use @ to mention someone." style="width: 100%; height: 60px; background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-primary); font-family: inherit; font-size: 12px; padding: 4px; box-sizing: border-box; resize: vertical;"></textarea>
+                                <div id="tickets-mention-dropdown" style="display:none; position: absolute; bottom: 48px; left: 12px; right: 12px; max-height: 180px; overflow-y: auto; background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 4px; z-index: 100; box-shadow: 0 -2px 8px rgba(0,0,0,0.3);"></div>
+                                <div style="margin-top: 6px; display: flex; justify-content: flex-end; gap: 8px;">
+                                    <button id="btn-post-comment-cancel" class="strip-btn">Cancel</button>
+                                    <button id="btn-post-comment-submit" class="strip-btn" style="background: var(--accent-teal); color: black;">Post Comment</button>
+                                </div>
                             </div>
                         </div>
                         <div class="preview-content-wrapper" style="flex: 1; overflow-y: auto;">
@@ -3582,6 +3764,53 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <button id="btn-cancel-tags" class="strip-btn">Cancel</button>
                         <button id="btn-save-tags" class="planning-button" style="margin: 0; padding: 4px 12px;">Save</button>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="folder-modal" id="tickets-source-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="tickets-source-modal-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="tickets-source-modal-title">Source</h3>
+                <button class="modal-close-btn" id="btn-close-tickets-source-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px;">
+                <!-- Provider selector — preserve class="workspace-filter-select" and style -->
+                <div>
+                    <label style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); display: block; margin-bottom: 4px;">Provider</label>
+                    <select id="tickets-provider-selector" class="workspace-filter-select" style="display:none; margin-left: 0;">
+                        <option value="clickup">ClickUp</option>
+                        <option value="linear">Linear</option>
+                    </select>
+                </div>
+                <!-- Hierarchy nav — preserve style="display:none; flex-wrap: wrap; gap: 8px; align-items: center;" -->
+                <div>
+                    <label style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); display: block; margin-bottom: 4px;">Hierarchy</label>
+                    <div id="tickets-hierarchy-nav" style="display:none; flex-wrap: wrap; gap: 8px; align-items: center;"></div>
+                </div>
+                <!-- Filters — preserve style="display:none"; add class="planning-select" for modal styling -->
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    <select id="tickets-project-picker" class="planning-select" style="display:none"></select>
+                    <select id="tickets-state-filter" class="planning-select" style="display:none"></select>
+                    <select id="tickets-status-filter" class="planning-select" style="display:none"></select>
+                </div>
+                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
+                    <button id="btn-close-tickets-source-modal-action" class="strip-btn">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="folder-modal" id="tickets-delete-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="tickets-delete-modal-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="tickets-delete-modal-title">Delete ticket?</h3>
+                <button class="modal-close-btn" id="btn-close-tickets-delete-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" style="margin-top: 10px;">
+                <div id="tickets-delete-modal-info" style="font-size: 12px; color: var(--text-secondary);"></div>
+                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px;">
+                    <button id="btn-cancel-tickets-delete" class="strip-btn">Cancel</button>
+                    <button id="btn-confirm-tickets-delete" class="planning-button" style="margin: 0; padding: 4px 12px; color: var(--accent-red, #f85149); border-color: var(--accent-red, #f85149);">Delete</button>
                 </div>
             </div>
         </div>

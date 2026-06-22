@@ -13,7 +13,7 @@ Query and manage the DuckDB archive of historical plans and conversations.
 ### 1. DuckDB CLI (replaces `query_plan_archive`)
 **Use when**: User wants to search/query archived plans with specific criteria
 
-**Usage** (see `.agent/skills/query_archive/SKILL.md` for full reference):
+**Usage** (see `.agents/skills/query_archive/SKILL.md` for full reference):
 ```bash
 duckdb .switchboard/archive.duckdb "<SQL_QUERY>"
 ```
@@ -112,5 +112,5 @@ duckdb .switchboard/archive.duckdb "SELECT * FROM plans WHERE topic ILIKE '%auth
 ## Related Files
 - Schema: `src/services/archiveSchema.sql`
 - Service: `src/services/ArchiveManager.ts`
-- Tools: `src/mcp-server/register-tools.js` (archive MCP tools removed; use `.agent/skills/query_archive/` instead)
+- Tools: `src/mcp-server/register-tools.js` (archive MCP tools removed; use `.agents/skills/query_archive/` instead)
 - Config: `.vscode/settings.json` → `switchboard.archive.dbPath`

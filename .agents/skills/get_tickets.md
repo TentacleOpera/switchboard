@@ -1,0 +1,95 @@
+# Local Ticket Access
+
+Use this skill to access ClickUp/Linear ticket data via the local API server (no MCP required).
+
+## When to Use
+
+- User asks about ClickUp/Linear tickets (e.g., "list all tickets this sprint", "show me task XYZ")
+- You need full task details (descriptions, comments, attachments)
+- You need to filter tickets by status, sprint, or project
+- You want faster access without MCP round-trips
+
+## How to Use
+
+### Step 1: Get API Server Port
+
+Read the port from `.switchboard/api-server-port.txt`:
+```bash
+CUR="$PWD"
+while [ "$CUR" != "/" ] && [ ! -f "$CUR/.switchboard/api-server-port.txt" ]; do CUR=$(dirname "$CUR"); done
+PORT=$(cat "$CUR/.switchboard/api-server-port.txt" 2>/dev/null)
+```
+
+### Step 2: Get Metadata (List View)
+
+**ClickUp metadata:**
+```bash
+curl http://localhost:$PORT/metadata/clickup
+```
+
+**Linear metadata:**
+```bash
+curl http://localhost:$PORT/metadata/linear
+```
+
+Response structure:
+```json
+{
+  "version": 1,
+  "sourceId": "clickup",
+  "metadata": [
+    {
+      "id": "task123",
+      "name": "Task name",
+      "status": "In Progress",
+      "listId": "list456",
+      "sprint": "Sprint 1",
+      "lastUpdated": 1234567890
+    }
+  ],
+  "writtenAt": 1234567890
+}
+```
+
+Use this metadata to:
+- Filter tickets by status, sprint, list, or project
+- Identify task IDs for full detail queries
+- Answer questions that don't require full task descriptions
+
+### Step 3: Get Full Task Details
+
+**ClickUp task with full details (description, comments, attachments):**
+```bash
+curl http://localhost:$PORT/task/clickup/TASK_ID
+```
+
+Response includes:
+- `task` - full task object with description, markdownDescription, assignees, status
+- `subtasks` - array of subtasks
+- `comments` - array of comments with user info
+- `attachments` - array of attachments with URLs
+
+**Linear issue with full details:**
+```bash
+curl http://localhost:$PORT/task/linear/ISSUE_ID
+```
+
+Response includes:
+- `issue` - full issue object with description, state, assignee
+- `subtasks` - array of sub-issues
+- `comments` - array of comments
+- `attachments` - array of attachments
+
+### Step 4: Handle Errors
+
+- **Port file doesn't exist:** Extension not running or API server not started
+- **API server not responding:** Extension may have crashed
+- **503 Service Unavailable:** ClickUp/Linear not configured in this workspace
+- **404 Not Found:** Task/issue ID doesn't exist
+- **Empty metadata:** No tickets cached — tasks may not have been synced yet
+
+## Security Notes
+
+- API server is bound to localhost only (127.0.0.1)
+- Uses the extension's existing ClickUp/Linear credentials from VS Code secret storage
+- No additional credential management needed

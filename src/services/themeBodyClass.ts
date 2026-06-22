@@ -21,6 +21,9 @@ export function getThemeBodyClass(): string {
     if (theme === 'claudify') {
         return 'theme-claudify';
     }
+    if (theme === 'afterburner-professional') {
+        return 'theme-claudify theme-afterburner-pro';
+    }
     return '';
 }
 

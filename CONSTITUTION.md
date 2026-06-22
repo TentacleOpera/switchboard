@@ -20,7 +20,7 @@ core surfaces:
   backed by a `sql.js` database (`kanban.db`).
 - **Planning, Design, Setup, Project, and Task Viewer** webview panels.
 - **Integrations** with ClickUp, Linear, and Notion for two-way ticket/doc sync.
-- An agent **workflow protocol** (`.agent/workflows`, `.switchboard/plans/`) that orchestrates
+- An agent **workflow protocol** (`.agents/workflows`, `.switchboard/plans/`) that orchestrates
   planning, review, and chat consultation.
 
 Two facts shape every decision and override most defaults:

@@ -4399,7 +4399,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         try {
-            await this._getLinearService(resolvedRoot).addIssueComment(issueId, comment);
+            const result = await this._getLinearService(resolvedRoot).addIssueComment(issueId, comment);
+            if (result && result.success === false) {
+                return { success: false, issueId, error: result.error || `Linear issue ${issueId} rejected the comment.` };
+            }
             return { success: true, issueId, message: `Added comment to Linear issue ${issueId}` };
         } catch (error) {
             return {
@@ -5179,15 +5182,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 tagFg: String(t?.tag_fg || t?.tagFg || '').trim(),
                 tagBg: String(t?.tag_bg || t?.tagBg || '').trim()
             })) : []
-        };
-    }
-
-    private _mapClickUpComment(comment: any): any {
-        return {
-            id: comment.id,
-            comment_text: comment.comment_text,
-            user: comment.user,
-            date: comment.date
         };
     }
 
@@ -14762,7 +14756,7 @@ What would you like to find?`;
             return basePayload;
         }
 
-        const accuracyInstruction = `\n\nAccuracy Mode: Before coding, read and follow the workflow at .agent/workflows/accuracy.md step-by-step while implementing this task.`;
+        const accuracyInstruction = `\n\nAccuracy Mode: Before coding, read and follow the workflow at .agents/workflows/accuracy.md step-by-step while implementing this task.`;
         return `${basePayload}${accuracyInstruction}`;
     }
 
@@ -16172,10 +16166,16 @@ What would you like to find?`;
 
         const workspaceRoot = this._resolveStateWorkspaceRoot();
         if (!workspaceRoot) return undefined;
-        const personaPath = path.join(workspaceRoot, '.agent', 'personas', personaFile);
+        const personaPath = path.join(workspaceRoot, '.agents', 'personas', personaFile);
 
         try {
-            if (!fs.existsSync(personaPath)) return undefined;
+            if (!fs.existsSync(personaPath)) {
+                // Backward-compatible fallback: a user who kept their old .agent/ folder.
+                const legacyPath = path.join(workspaceRoot, '.agent', 'personas', personaFile);
+                if (!fs.existsSync(legacyPath)) return undefined;
+                const content = await fs.promises.readFile(legacyPath, 'utf8');
+                return content.trim();
+            }
             const content = await fs.promises.readFile(personaPath, 'utf8');
             return content.trim();
         } catch {
@@ -17350,13 +17350,19 @@ What would you like to find?`;
 
             // 3. Write timestamped how_to_plan.md
             const howToPlanPath = path.join(airlockDir, `${timestamp}-how_to_plan.md`);
-            const rulePath = path.join(workspaceRoot, '.agent', 'rules', 'how_to_plan.md');
+            const rulePath = path.join(workspaceRoot, '.agents', 'rules', 'how_to_plan.md');
             let howToPlanContent: string;
             try {
                 howToPlanContent = await fs.promises.readFile(rulePath, 'utf8');
             } catch (e) {
-                // Fallback if the file is missing
-                howToPlanContent = '# How to Plan\n\nRefer to the project guidelines for planning.';
+                // Backward-compatible fallback: a user who kept their old .agent/ folder.
+                try {
+                    const legacyRulePath = path.join(workspaceRoot, '.agent', 'rules', 'how_to_plan.md');
+                    howToPlanContent = await fs.promises.readFile(legacyRulePath, 'utf8');
+                } catch {
+                    // Fallback if the file is missing
+                    howToPlanContent = '# How to Plan\n\nRefer to the project guidelines for planning.';
+                }
             }
             await fs.promises.writeFile(howToPlanPath, howToPlanContent, 'utf8');
 
@@ -17619,6 +17625,10 @@ What would you like to find?`;
                     issue,
                     subtasks: []
                 };
+                // Comments are no longer embedded in the imported doc — they are
+                // surfaced via the comment manager UI (local _comments.json cache).
+                // Setting comments to [] keeps _buildCommentsSection as a harmless no-op.
+                node.comments = [];
                 if (includeSubtasks) {
                     // Shallow fetch only — the recursive _loadLinearImportNode walk
                     // (comments + attachments per subtask, sequential) froze the UI
@@ -17637,7 +17647,10 @@ What would you like to find?`;
                     return { success: false, error: `ClickUp task ${id} not found.` };
                 }
                 title = details.task.name || id;
-                content = this._buildClickUpImportPlanContent(details.task, new Date().toISOString());
+                // Comments are no longer embedded in the imported doc — they are
+                // surfaced via the comment manager UI (local _comments.json cache).
+                // Passing undefined keeps _buildCommentsSection as a harmless no-op.
+                content = this._buildClickUpImportPlanContent(details.task, new Date().toISOString(), undefined);
                 const subtasks = includeSubtasks && details.subtasks ? details.subtasks : [];
                 if (includeSubtasks && subtasks.length > 0) {
                     content += '\n\n## Subtasks\n\n' + subtasks.map((st: any) => `- [ ] ${st.name || st.id}`).join('\n');
@@ -17784,9 +17797,15 @@ What would you like to find?`;
 
             const bodyLines = lines.slice(startIdx);
             
+            // The description is only the body up to the first appended section.
+            // `## Subtasks` is import-generated, read-only context — it must NOT be
+            // folded back into the remote description on push. (`## Comments` is no
+            // longer written to imported docs — see importTaskAsDocument — but the
+            // clause is retained defensively for legacy files that still contain it.)
             let endIdx = bodyLines.length;
             for (let i = 0; i < bodyLines.length; i++) {
-                if (bodyLines[i].trim() === '## Subtasks') {
+                const trimmed = bodyLines[i].trim();
+                if (trimmed === '## Subtasks' || trimmed === '## Comments') {
                     endIdx = i;
                     break;
                 }
@@ -18175,21 +18194,202 @@ What would you like to find?`;
 
     public async postTicketComment(
         workspaceRoot: string,
-        data: { provider: 'linear' | 'clickup'; id: string; comment: string }
+        data: { provider: 'linear' | 'clickup'; id: string; comment: string; mentions?: Array<{ id: string; name: string }> }
     ): Promise<{ success: boolean; error?: string }> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedRoot) {
             return { success: false, error: 'No workspace open.' };
         }
-        const { provider, id, comment } = data;
+        const { provider, id, comment, mentions } = data;
 
         try {
             if (provider === 'linear') {
                 const linear = this._getLinearService(resolvedRoot);
-                await linear.addIssueComment(id, comment);
+                const result = await linear.addIssueComment(id, comment, { mentions });
+                return result;
             } else {
                 const clickup = this._getClickUpService(resolvedRoot);
-                await clickup.addTaskComment(id, comment);
+                const result = await clickup.postComment(id, { commentText: comment, mentions });
+                return result;
+            }
+        } catch (error) {
+            return { success: false, error: error instanceof Error ? error.message : String(error) };
+        }
+    }
+
+    // ── Comment Manager: load threads + reply + JSON cache ───────────
+
+    /**
+     * JSON write queue per directory — serializes writes to prevent
+     * concurrent _comments.json write races.
+     */
+    private _commentsJsonWriteQueues: Map<string, Promise<void>> = new Map();
+
+    /**
+     * Resolve the directory for _comments.json.
+     * Uses path.dirname(foundTicketFilePath) — NEVER reconstructs from config.
+     * Falls back to _getTicketDocumentDirs first entry if ticket not yet imported.
+     */
+    private async _resolveCommentsJsonDir(resolvedRoot: string, provider: string, id: string): Promise<string | null> {
+        const filePath = await this._findTicketDocument(resolvedRoot, provider, id);
+        if (filePath) {
+            return path.dirname(filePath);
+        }
+        // Fallback: use the same base dirs as _findTicketDocument (expected write location).
+        // Tickets land in nested hierarchies, so we use the provider root dir —
+        // _comments.json will be written at the top level and migrated on first import.
+        try {
+            const config = await GlobalIntegrationConfigService.loadConfig(provider as any);
+            if (config && config.ticketSaveLocation) {
+                return path.join(config.ticketSaveLocation, provider);
+            }
+        } catch { /* ignore */ }
+        return path.join(resolvedRoot, '.switchboard', 'tickets', provider);
+    }
+
+    private _readCommentsJson(dir: string): any | null {
+        const jsonPath = path.join(dir, '_comments.json');
+        try {
+            if (!fs.existsSync(jsonPath)) { return null; }
+            const raw = fs.readFileSync(jsonPath, 'utf8');
+            return JSON.parse(raw);
+        } catch (e) {
+            console.warn('[TaskViewer] Failed to read _comments.json:', e);
+            return null;
+        }
+    }
+
+    /**
+     * Atomic JSON write: write to temp file, then rename.
+     * Serialized per-directory via a write queue to prevent concurrent write races.
+     */
+    private async _writeCommentsJson(dir: string, data: any): Promise<void> {
+        const jsonPath = path.join(dir, '_comments.json');
+        const tempPath = path.join(dir, '_comments.json.tmp');
+
+        // Serialize writes per directory
+        const prev = this._commentsJsonWriteQueues.get(dir) || Promise.resolve();
+        const next = prev.then(() => {
+            return new Promise<void>((resolve, reject) => {
+                try {
+                    fs.mkdirSync(dir, { recursive: true });
+                    fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf8');
+                    fs.renameSync(tempPath, jsonPath);
+                    resolve();
+                } catch (e) {
+                    // Clean up temp file on failure
+                    try { if (fs.existsSync(tempPath)) { fs.unlinkSync(tempPath); } } catch { /* ignore */ }
+                    reject(e);
+                }
+            });
+        });
+        this._commentsJsonWriteQueues.set(dir, next.catch(() => {})); // don't let one failure block the queue
+        await next;
+    }
+
+    /**
+     * Load comment threads + members for a ticket.
+     * Fetches from the provider, writes/updates _comments.json, returns threads + members.
+     * If the ticket file isn't found (not yet imported), skips JSON write.
+     */
+    public async loadTicketComments(
+        workspaceRoot: string,
+        data: { provider: 'linear' | 'clickup'; id: string }
+    ): Promise<{ success: boolean; threads?: any[]; members?: any[]; threadingSupported?: boolean; error?: string }> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) {
+            return { success: false, error: 'No workspace open.' };
+        }
+        const { provider, id } = data;
+
+        try {
+            let threads: any[] = [];
+            let members: any[] = [];
+            let threadingSupported = false;
+
+            if (provider === 'linear') {
+                const linear = this._getLinearService(resolvedRoot);
+                const threadResult = await linear.getCommentThreads(id);
+                threads = threadResult.threads;
+                threadingSupported = threadResult.threadingSupported;
+                try {
+                    members = await linear.getTeamMembers();
+                } catch (e) {
+                    console.warn('[TaskViewer] Failed to load Linear team members:', e);
+                    members = [];
+                }
+            } else {
+                const clickup = this._getClickUpService(resolvedRoot);
+                const threadResult = await clickup.getCommentThreads(id);
+                threads = threadResult.threads;
+                threadingSupported = threadResult.threadingSupported;
+                // Fetch list members — need the listId from the task
+                try {
+                    const details = await clickup.getTaskDetails(id);
+                    const listId = details?.task?.list?.id;
+                    if (listId) {
+                        members = await clickup.getListMembers(listId);
+                    }
+                } catch (e) {
+                    console.warn('[TaskViewer] Failed to load ClickUp list members:', e);
+                    members = [];
+                }
+            }
+
+            // Write/update _comments.json
+            const jsonDir = await this._resolveCommentsJsonDir(resolvedRoot, provider, id);
+            if (jsonDir) {
+                const existing = this._readCommentsJson(jsonDir) || { version: 1, provider, tickets: {} };
+                existing.provider = provider;
+                existing.tickets = existing.tickets || {};
+                existing.tickets[id] = {
+                    fetchedAt: new Date().toISOString(),
+                    threads
+                };
+                try {
+                    await this._writeCommentsJson(jsonDir, existing);
+                } catch (e) {
+                    console.warn('[TaskViewer] Failed to write _comments.json:', e);
+                }
+            }
+
+            return { success: true, threads, members, threadingSupported };
+        } catch (error) {
+            return { success: false, error: error instanceof Error ? error.message : String(error) };
+        }
+    }
+
+    /**
+     * Post a reply to an existing comment.
+     * Write-back to provider → refetch affected thread → update JSON → return result.
+     * On error, returns { success: false, error } so the webview can roll back.
+     */
+    public async postTicketReply(
+        workspaceRoot: string,
+        data: { provider: 'linear' | 'clickup'; id: string; commentId: string; commentText: string; mentions?: Array<{ id: string; name: string }> }
+    ): Promise<{ success: boolean; error?: string }> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) {
+            return { success: false, error: 'No workspace open.' };
+        }
+        const { provider, id, commentId, commentText, mentions } = data;
+
+        try {
+            if (provider === 'linear') {
+                const linear = this._getLinearService(resolvedRoot);
+                const result = await linear.replyToComment(commentId, { commentText, mentions });
+                if (!result.success) { return result; }
+            } else {
+                const clickup = this._getClickUpService(resolvedRoot);
+                const result = await clickup.replyToComment(commentId, { commentText, mentions });
+                if (!result.success) { return result; }
+            }
+
+            // Refetch threads and update JSON
+            const loadResult = await this.loadTicketComments(workspaceRoot, { provider, id });
+            if (!loadResult.success) {
+                // Reply posted but refetch failed — still report success
+                console.warn('[TaskViewer] Reply posted but refetch failed:', loadResult.error);
             }
             return { success: true };
         } catch (error) {

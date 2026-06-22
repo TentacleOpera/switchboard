@@ -70,7 +70,7 @@ Switchboard creates a `.switchboard/` directory in your workspace for runtime st
 Settings: `switchboard.workspace.ignoreStrategy`, `switchboard.workspace.ignoreRules`
 
 ### Setup Wizard
-Run `Switchboard: Setup AI Protocol Files` (`switchboard.setup`) to initialize `.agent/` workflow files and personas in your workspace. This seeds the workflow contracts and agent personas that Switchboard uses for prompt generation.
+Run `Switchboard: Setup AI Protocol Files` (`switchboard.setup`) to initialize `.agents/` workflow files and personas in your workspace. This seeds the workflow contracts and agent personas that Switchboard uses for prompt generation.
 
 ---
 
@@ -791,7 +791,7 @@ These are slash commands available in IDE chat agents (Windsurf, Cursor, Antigra
 
 ### File Protocol
 - `.switchboard/` — Core runtime data (state, sessions, plans, context maps, archives)
-- `.agent/` — Workflow markdown contracts and persona files
+- `.agents/` — Workflow markdown contracts and persona files
 - `state.json` — Lock-protected, atomically written shared state
 - `sessions/*.json` — Run sheets tracking session ID, plan file, topic, workflow timeline
 - `sessions/activity.jsonl` — Audit stream for workflow/dispatch events
@@ -1108,8 +1108,8 @@ The primary Switchboard sidebar, hosted by `TaskViewerProvider`. Provides onboar
 
 **Onboarding Wizard**
 Shown on first launch (or when setup is incomplete):
-- **Step 1: Initialize** — Seeds `.agent/` workflow files, personas, and `.switchboard/` directory.
-- **Step 2a: Control Plane Question** — Choose between in-repo setup (writes `AGENTS.md`, `.agent/`, `.switchboard/` into the current repo) or external Control Plane setup (scaffolds into a parent folder with repo cloning via PAT).
+- **Step 1: Initialize** — Seeds `.agents/` workflow files, personas, and `.switchboard/` directory.
+- **Step 2a: Control Plane Question** — Choose between in-repo setup (writes `AGENTS.md`, `.agents/`, `.switchboard/` into the current repo) or external Control Plane setup (scaffolds into a parent folder with repo cloning via PAT).
 - **Step 2: CLI Config** — Configure startup commands for each agent role (Planner, Lead Coder, Coder, Intern, Reviewer, Acceptance Tester, Analyst, Jules). Toggle agent visibility with checkboxes. Set Jules auto-sync preference.
 
 **Quick-Launch Buttons**
@@ -1167,7 +1167,7 @@ Configure agent visibility and CLI startup commands:
 Per-role prompt customization:
 - **Role Selector** — Dropdown to select agent role (includes custom agents).
 - **Planner Config** (shown for Planner role):
-  - **Workflow File** — Enable/disable, set workflow file path (e.g., `.agent/workflows/improve-plan.md`), validate path.
+  - **Workflow File** — Enable/disable, set workflow file path (e.g., `.agents/workflows/improve-plan.md`), validate path.
   - **Add-ons** — Switchboard Safeguards, Planning Epic Reference, Project Constitution Reference, Design Doc Reference, Aggressive Pair Programming, Git Prohibition, Clear Antigravity Context, Caveman Output, Skip Compilation, Skip Tests.
   - **Subagent Policy** — Not Specified / No Subagents / Use Subagents / Custom Subagent (with name input).
 - **Research Complexity** (shown for Researcher/Code Researcher): Quick / Standard / Deep / Academic. Save to Local Docs toggle.
@@ -1311,7 +1311,7 @@ Hosted by `SetupPanelProvider`. Ten tabs:
   - **Exclude Reviewed & Backlog from Sidebar** — Hide reviewed/backlog plans from sidebar dropdown.
   - **Persist Switchboard Panels Across IDE Restarts** — Reopen Kanban, Project, Planning, and Design panels on restart.
 - **Prompt Settings Export / Import** — Export prompt configurations to `.switchboard/settings.json`, import from file.
-- **Reinitialise Plugin** — Restore `.switchboard/`, `AGENTS.md`, `.agent/` if deleted.
+- **Reinitialise Plugin** — Restore `.switchboard/`, `AGENTS.md`, `.agents/` if deleted.
 
 **Database Tab**
 - **Additional plan folder** — Ingest `.md` files from an external folder.
@@ -1379,7 +1379,7 @@ Hosted by `SetupPanelProvider`. Ten tabs:
 
 ### Setup Issues
 **Q: The sidebar shows "Setup Required" — what do I do?**
-A: Click the status bar item or run `Switchboard: Setup AI Protocol Files` (`switchboard.setup`). This seeds `.agent/` workflow files and personas.
+A: Click the status bar item or run `Switchboard: Setup AI Protocol Files` (`switchboard.setup`). This seeds `.agents/` workflow files and personas.
 
 **Q: I don't see any terminals after clicking "OPEN AGENT TERMINALS"**
 A: Make sure you've configured CLI agent startup commands in the Setup panel. The command (e.g., `gemini --approval-mode yolo`) must be valid and the CLI tool must be installed.

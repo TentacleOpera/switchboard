@@ -84,7 +84,7 @@ type SharedAgentMergeSummary = {
     warnings: string[];
 };
 
-const BUNDLED_AGENT_DIR = '.agent';
+const BUNDLED_AGENT_DIR = '.agents';
 const BUNDLED_AGENTS_FILE = 'AGENTS.md';
 const MAX_AGENT_SCAN_DEPTH = 5;
 
@@ -608,7 +608,7 @@ export class ControlPlaneMigrationService {
         const switchboardDir = path.join(repoDir, '.switchboard');
         const dbPath = path.join(switchboardDir, 'kanban.db');
         const plansDir = path.join(switchboardDir, 'plans');
-        const agentDir = path.join(repoDir, '.agent');
+        const agentDir = path.join(repoDir, '.agents');
         const agentsFilePath = path.join(repoDir, 'AGENTS.md');
         const localPlanFiles = await this.listLocalPlanFiles(plansDir);
 
@@ -663,7 +663,7 @@ export class ControlPlaneMigrationService {
             return;
         }
         await Promise.all([
-            fs.promises.mkdir(path.join(parentDir, '.agent'), { recursive: true }),
+            fs.promises.mkdir(path.join(parentDir, '.agents'), { recursive: true }),
             fs.promises.mkdir(path.join(parentDir, '.switchboard', 'plans'), { recursive: true }),
             fs.promises.mkdir(path.join(parentDir, '.switchboard', 'inbox'), { recursive: true }),
             fs.promises.mkdir(path.join(parentDir, '.switchboard', 'archive'), { recursive: true }),
@@ -681,7 +681,7 @@ export class ControlPlaneMigrationService {
         if (fs.existsSync(bundledAgentDir)) {
             await this._copyDirectoryRecursive(
                 bundledAgentDir,
-                path.join(parentDir, '.agent'),
+                path.join(parentDir, '.agents'),
                 { overwrite: false, overwriteWorkflows: needsAgentMigration }
             );
         }
@@ -815,7 +815,7 @@ export class ControlPlaneMigrationService {
             if (uniqueHashes.size > 1) {
                 continue;
             }
-            await this._copySharedFile(entries[0].absolutePath, path.join(parentDir, '.agent', relativePath));
+            await this._copySharedFile(entries[0].absolutePath, path.join(parentDir, '.agents', relativePath));
         }
 
         const agentsEntries = await this._collectAgentsFileEntries(repos);
@@ -833,7 +833,7 @@ export class ControlPlaneMigrationService {
             const uniqueHashes = new Set(entries.map((entry) => entry.hash));
             const repoNames = new Set(entries.map((entry) => entry.repoName));
             if (uniqueHashes.size === 1 && repoNames.size === contributingRuleRepos.size && contributingRuleRepos.size > 0) {
-                await this._copySharedFile(entries[0].absolutePath, path.join(parentDir, '.agent', 'rules', relativePath));
+                await this._copySharedFile(entries[0].absolutePath, path.join(parentDir, '.agents', 'rules', relativePath));
             }
         }
 
@@ -877,7 +877,7 @@ export class ControlPlaneMigrationService {
         }
 
         if (rulesConflicts.length > 0) {
-            warnings.push('Divergent .agent/rules files were left in their source repositories and recorded in MIGRATION_REPORT.md.');
+            warnings.push('Divergent .agents/rules files were left in their source repositories and recorded in MIGRATION_REPORT.md.');
         }
 
         return { agentConflicts, rulesConflicts, warnings };
@@ -972,7 +972,7 @@ export class ControlPlaneMigrationService {
         return this.generateCodeWorkspace(parentDir, repoDirs);
     }
 
-    // Files that should never be copied from the bundled .agent/ directory,
+    // Files that should never be copied from the bundled .agents/ directory,
     // even if they exist in the source. Matches the blocklist used in extension.ts activation.
     private static readonly AGENT_COPY_BLOCKLIST = new Set([
         'personas/switchboard_operator.md',

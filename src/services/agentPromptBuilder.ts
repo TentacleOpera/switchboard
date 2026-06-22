@@ -92,7 +92,7 @@ export interface PromptBuilderOptions {
     /** When true, reviewer appends a brief summary to the plan file instead of reproducing full sections. */
     reviewerCompactPlanUpdateEnabled?: boolean;
 
-    /** Path to the workflow file for the planner role. Defaults to .agent/workflows/improve-plan.md */
+    /** Path to the workflow file for the planner role. Defaults to .agents/workflows/improve-plan.md */
     plannerWorkflowPath?: string;
     /** When present, appends a Design Doc / PRD link to planner prompts. */
     designDocLink?: string;
@@ -211,7 +211,7 @@ function withCoderAccuracyInstruction(basePayload: string, enabled: boolean): st
         return basePayload;
     }
 
-    const accuracyInstruction = `\n\nAccuracy Mode: Before coding, read and follow the workflow at .agent/workflows/accuracy.md step-by-step while implementing this task.`;
+    const accuracyInstruction = `\n\nAccuracy Mode: Before coding, read and follow the workflow at .agents/workflows/accuracy.md step-by-step while implementing this task.`;
     return `${basePayload}${accuracyInstruction}`;
 }
 
@@ -358,7 +358,7 @@ export const DEEP_RESEARCH_DIRECTIVE =
     `TARGET SOURCE COUNT: 50-100 sources (soft target — prioritize quality over quantity).`;
 
 /**
- * DEFAULT_CHAT_BASE_INSTRUCTIONS must be kept in sync with .agent/workflows/switchboard-chat.md.
+ * DEFAULT_CHAT_BASE_INSTRUCTIONS must be kept in sync with .agents/workflows/switchboard-chat.md.
  * If you update the workflow file, ensure this constant is updated to match.
  */
 export const DEFAULT_CHAT_BASE_INSTRUCTIONS = `You are in Consultation & Planning Mode. Your role is Product Manager and Architect: gather requirements, challenge assumptions, and draft implementation plans. You do not write or edit code.
@@ -378,7 +378,7 @@ Process:
 3. **Plan:** When the "What" and "Why" are clear, draft the implementation plan.
 4. **Gate:** Only suggest moving forward once the plan is complete and the user has explicitly approved it.`;
 
-const DEFAULT_PLANNER_WORKFLOW = '.agent/workflows/improve-plan.md';
+const DEFAULT_PLANNER_WORKFLOW = '.agents/workflows/improve-plan.md';
 
 /**
  * Canonical prompt builder.  Every UI surface that produces a prompt for an
@@ -1166,7 +1166,7 @@ Create both files in the same directory as the original plan.`;
     if (role === 'gatherer') {
         const gathererBase = `You are operating as the **Context Gatherer** — a pre-planning research specialist.
 
-Read the persona at \`.agent/personas/gatherer.md\` and follow it step-by-step.`;
+Read the persona at \`.agents/personas/gatherer.md\` and follow it step-by-step.`;
 
         let baseInstructions = resolveBaseInstructions('gatherer', gathererBase, options);
         if (cavemanOutputEnabled) {
@@ -1309,7 +1309,7 @@ export function buildCustomAgentPrompt(
             : '\n\nWORKSPACE TYPE: single-repo. Do NOT include a **Repo:** line.';
     }
     if (addons?.includeInlineChallenge) prompt += `\n\n${INLINE_CHALLENGE_DIRECTIVE}`;
-    if (addons?.accurateCodingEnabled) prompt += `\n\nAccuracy Mode: Before coding, read and follow .agent/workflows/accuracy.md step-by-step.`;
+    if (addons?.accurateCodingEnabled) prompt += `\n\nAccuracy Mode: Before coding, read and follow .agents/workflows/accuracy.md step-by-step.`;
     if (addons?.pairProgrammingEnabled) prompt += `\n\nPAIR PROGRAMMING NOTE: Focus only on Complex / Risky (Band B) implementation steps. A separate Coder agent is handling Routine (Band A) tasks.`;
     if (addons?.aggressivePairProgramming) prompt += '\n\n' + AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE;
     if (addons?.advancedReviewerEnabled) prompt += '\n\n' + ADVANCED_REVIEWER_DIRECTIVE;

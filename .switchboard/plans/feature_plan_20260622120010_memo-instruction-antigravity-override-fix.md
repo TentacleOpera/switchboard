@@ -276,3 +276,80 @@ No automated tests are applicable for this plan. The changes are instruction-tex
 ---
 
 **Recommendation:** Complexity is 4 → **Send to Coder**. The changes involve creating one new workflow file, editing the source AGENTS.md (Workflow Registry + priority subsection), and restructuring the memo SKILL.md (remove Exit Triggers, add hard rules) — all markdown, no code logic. The no-exit design actually simplifies the implementation by eliminating the exit-trigger boundary disambiguation entirely. A coder who understands the `ensureAgentsProtocol` source-template flow should handle this in one pass.
+
+---
+
+## Reviewer Pass (2026-06-22)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*"You had ONE job: make the agent stop answering in capture mode. You mostly did it. But you also shipped a self-contradicting rule that tells the agent to BOTH append 'clear memo' as content AND truncate the file. That's not a hard rule — that's a hard bug."*
+
+**MAJOR-1 — "clear memo" self-contradiction (both files).** `.agent/workflows/memo.md:13` Hard Rule 4 listed "clear memo" among phrases that "is memo content to be appended." Meanwhile the **In-Capture Commands** section (line 22) and `.agent/skills/memo/SKILL.md` **Clearing** section (lines 37-43) treat "clear memo" as a side-action command that truncates the file (NOT appended). An agent following Rule 4 literally would append "clear memo" to the file and then either skip the truncation or truncate-after-append (self-defeating — the appended line is wiped). The SKILL.md Hard Rule 4 (`:14`) had the same flaw: "Every message is memo content" with no exception clause. This is the kind of ambiguity that, in the exact host-pressure scenario this plan exists to fix, gives the agent an excuse to deviate. **Verdict:** fix now.
+
+**NIT-1 — Missing workflow→skill cross-reference.** The plan's Implementation note (line 147) states "The workflow references `.agent/skills/memo/SKILL.md` for the detailed append/clear mechanics." The implemented workflow file contained no such reference (the SKILL.md referenced the workflow, but not vice versa). An agent landing in the workflow has no signpost to the mechanics. **Verdict:** fix now (trivial).
+
+**NIT-2 — Ambiguous "memo content that triggers a side action" phrasing.** `.agent/workflows/memo.md:22` (In-Capture Commands) called "clear memo" "memo content that triggers a side action" — which reads as "append it AND truncate," the same contradiction as MAJOR-1 in milder form. **Verdict:** fix now (folded into MAJOR-1 fix).
+
+**PRE-EXISTING-1 — Duplicate `<!-- switchboard:agents-protocol:end -->` marker.** `AGENTS.md:123-124` has two end markers. This predates this plan (verified in `fce5262^`). `ensureAgentsProtocol` (`src/extension.ts:2987`) uses `indexOf` (first occurrence) and rebuilds `before + managedBlock + after`, so the second marker survives every update. Worse, the source `AGENTS.md` itself contains the markers, so `managedBlock` re-wraps an already-marked source → triple markers in target workspaces. **Verdict:** not this plan's defect; flag as pre-existing risk for a separate fix.
+
+**PRE-EXISTING-2 — `.agent/*` locally git-ignored.** `.git/info/exclude:10` excludes `.agent/*`, so the new `.agent/workflows/memo.md` and modified `.agent/skills/memo/SKILL.md` are NOT tracked by git (24 other `.agent/` files are tracked, force-added before the exclude). The files ARE packaged into the VSIX (`.vscodeignore` `!.agent/**`), so the extension ships them, but git collaborators cloning the repo get an AGENTS.md referencing `memo.md`/`memo/SKILL.md` files that aren't in the repo. **Verdict:** pre-existing config state; flag as risk. The AGENTS.md change itself IS committed (`fce5262`).
+
+**OBSERVATION — Stray unrelated change in auto-commit `54d8081`.** The commit named after this plan only touched `src/extension.ts` (icon rename `$(eraser)` → `$(clear-all)`) and unrelated plan files — it did NOT contain this plan's AGENTS.md/workflow/skill changes (those landed in the prior commit `fce5262`). Commit-hygiene note only; no code defect.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is:**
+- Workflow file structure (frontmatter, Hard Rules 1-3 & 5, Process, Processing/Guaranteed-Capture sections) — faithful to the plan spec and to the proven `switchboard-chat.md` pattern.
+- AGENTS.md changes: `/memo` Workflow Registry row (`:21`), priority subsection (`:98-101`), and the `memo` skill row update removing the stale "until user says 'investigate memo'" clause (`:91`). All correct and committed.
+- SKILL.md: Exit Triggers section fully removed, Hard Rules + Anti-Example + Clearing + Processing Entries all present and consistent with the workflow.
+- The implementer's two intentional deviations from the plan spec are both *improvements*: (a) adding `[MEMO CAPTURE ACTIVE]` to the Process step 2 acknowledgment format (the plan spec omitted it, contradicting Hard Rule 5 — the implementer fixed the plan's own inconsistency); (b) adding the Anti-Example block to SKILL.md using the issue's exact memo entry — directly targets the embedded-trigger-word ambiguity.
+
+**Fix now (applied):**
+- MAJOR-1: Reworded Hard Rule 4 in both `.agent/workflows/memo.md:13` and `.agent/skills/memo/SKILL.md:14` to remove "clear memo" from the "appended" list and add an explicit exception clause pointing to the In-Capture Commands / Clearing section.
+- NIT-1: Added a `## Detailed Mechanics` cross-reference section to `.agent/workflows/memo.md` pointing to `.agent/skills/memo/SKILL.md`.
+- NIT-2: Reworded `.agent/workflows/memo.md:22` In-Capture Commands to state plainly that "clear memo" is NOT appended; it triggers truncation.
+
+**Defer:**
+- PRE-EXISTING-1 (duplicate end marker / source-contains-markers) — separate fix needed in the source AGENTS.md and possibly `ensureAgentsProtocol`; out of scope for this plan.
+- PRE-EXISTING-2 (`.agent/*` git-ignore) — repo config decision; out of scope.
+
+### Code Fixes Applied
+
+| File | Change |
+|------|--------|
+| `.agent/workflows/memo.md:13` | Hard Rule 4: removed "clear memo" from appended-content list; added explicit exception clause referencing In-Capture Commands. |
+| `.agent/workflows/memo.md:22` | In-Capture Commands: reworded to state "clear memo" is NOT appended; it truncates the file. |
+| `.agent/workflows/memo.md:24-26` | Added `## Detailed Mechanics` cross-reference to `.agent/skills/memo/SKILL.md`. |
+| `.agent/skills/memo/SKILL.md:14` | Hard Rule 4: added explicit "clear memo" exception clause referencing Clearing section. |
+
+### Verification Results
+
+- **Compilation:** Skipped per session instructions (no `tsc`/`npm run compile`). Changes are markdown-only; no code logic affected.
+- **Tests:** Skipped per session instructions (no automated tests apply — instruction-text only).
+- **Static checks performed:**
+  - Confirmed `.agent/workflows/memo.md` exists with correct frontmatter, Hard Rules 1-5, Process, In-Capture Commands, Processing, Guaranteed Capture, and new Detailed Mechanics sections.
+  - Confirmed `AGENTS.md:21` has the `/memo` Workflow Registry row; `AGENTS.md:98-101` has the priority subsection; `AGENTS.md:91` skill row updated (exit-trigger clause removed).
+  - Confirmed `.agent/skills/memo/SKILL.md` has Hard Rules, Anti-Example, Appending Entries, Clearing (with "Stay in capture mode"), Processing Entries; Exit Triggers section absent.
+  - Confirmed no stale "investigate memo"/"analyze memo"/"refine memo"/"process memo"/"send memo to planner" exit-trigger references remain in the workflow, skill, or AGENTS.md (only in plan files and the related `feature_plan_...120011_memo-exit-trigger-exact-match.md`).
+  - Confirmed `ensureAgentsProtocol` (`src/extension.ts:2941-3017`) reads from `extensionUri/AGENTS.md`; webpack `CopyPlugin` does NOT copy AGENTS.md to `dist/` (it's packaged at extension root via `.vscodeignore` `!AGENTS.md`), so the repo-root AGENTS.md edit takes effect on next activation without a rebuild. The plan's "rebuild with `npm run compile`" instruction is harmless but unnecessary for the AGENTS.md change.
+  - Confirmed `memoGeneratePrompt` handler (`KanbanProvider.ts:6969-7004`) supports both "send" (dispatch + clear) and "copy" (clipboard + clear) actions as the plan claims — no code changes needed for the modal path.
+
+### Remaining Risks
+
+1. **PRE-EXISTING-1:** Duplicate `<!-- switchboard:agents-protocol:end -->` marker in source `AGENTS.md:123-124` + source-contains-markers anti-pattern → `ensureAgentsProtocol` may produce nested/tripled markers in target workspace AGENTS.md files. Pre-existing; needs a separate fix to strip markers from the source and/or make `ensureAgentsProtocol` marker-tolerant.
+2. **PRE-EXISTING-2:** `.agent/*` is locally git-ignored (`.git/info/exclude`), so the new/modified `.agent/workflows/memo.md` and `.agent/skills/memo/SKILL.md` are not committed to git. They ship via the VSIX but are absent for git collaborators. The AGENTS.md change IS committed (`fce5262`). Repo-config decision; out of scope.
+3. **Instruction-text limitation:** Per the plan's own honest limitation, no instruction-text mitigation can *guarantee* capture against a sufficiently strong host system prompt. The structural techniques adopted here (workflow tier, hard rules, anti-action rules, process script) are materially more effective but not a guarantee. The Memo modal remains the only guaranteed path.
+4. **Breaking change for chat-`/memo` users:** Users who relied on "investigate memo" etc. to process entries from chat will now have those phrases captured as content. The acknowledgment footer hints at the modal path, but there is no in-chat migration notice. Accepted per the no-exit design decision.
+
+### Summary
+
+| Severity | Finding | Location | Fix |
+|----------|---------|----------|-----|
+| MAJOR | "clear memo" self-contradiction (append vs. truncate) | `.agent/workflows/memo.md:13`, `.agent/skills/memo/SKILL.md:14` | Reworded Rule 4 in both files: explicit "clear memo" exception clause |
+| NIT | Missing workflow→skill cross-reference | `.agent/workflows/memo.md` | Added `## Detailed Mechanics` section |
+| NIT | Ambiguous "memo content that triggers a side action" | `.agent/workflows/memo.md:22` | Reworded: "clear memo" is NOT appended; it truncates |
+| PRE-EXISTING | Duplicate end marker / source-contains-markers | `AGENTS.md:123-124` | Deferred (separate fix) |
+| PRE-EXISTING | `.agent/*` locally git-ignored | `.git/info/exclude:10` | Deferred (repo config) |
+
+**Files changed by this review:** `.agent/workflows/memo.md`, `.agent/skills/memo/SKILL.md` (both git-ignored locally; on-disk edits are the delivery mechanism). No code (`src/`) changes were needed or made.

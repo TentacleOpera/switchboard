@@ -108,6 +108,14 @@
             /* Display-font vars NOT overridden — keep base GeistPixel (pixel font). */
         }
 
+        body.theme-afterburner-pro {
+            --accent-primary: #00e5ff;
+            --accent-teal: #00e5ff;
+            --accent-teal-dim: color-mix(in srgb, #00e5ff 40%, transparent);
+            --accent-teal-bright: #5ce8e6;
+            --glow-teal: none;
+        }
+
         /* Claudify: remove neon glow from base (non-cyber) interactive states */
         body.theme-claudify .tree-node.selected,
         body.theme-claudify .kanban-plan-item.selected,
@@ -2398,6 +2406,18 @@
             color: #F0EBE6;
         }
 
+        body.theme-afterburner-pro #markdown-preview-briefs h1,
+        body.theme-afterburner-pro #markdown-preview-design h1 {
+            color: var(--accent-primary);
+        }
+
+        body.theme-afterburner-pro #markdown-preview-briefs h2, body.theme-afterburner-pro #markdown-preview-briefs h3, body.theme-afterburner-pro #markdown-preview-briefs h4, body.theme-afterburner-pro #markdown-preview-briefs h5, body.theme-afterburner-pro #markdown-preview-briefs h6,
+        body.theme-afterburner-pro #markdown-preview-design h2, body.theme-afterburner-pro #markdown-preview-design h3, body.theme-afterburner-pro #markdown-preview-design h4, body.theme-afterburner-pro #markdown-preview-design h5, body.theme-afterburner-pro #markdown-preview-design h6 {
+            font-family: var(--display-font), var(--font-family);
+            letter-spacing: var(--display-letter-spacing);
+            font-stretch: var(--display-font-stretch);
+        }
+
         .preview-panel-wrapper {
             position: relative;
             flex: 3;
@@ -2654,6 +2674,10 @@
         }
 
         /* Tickets Tab Styles */
+        #controls-strip-tickets {
+            flex-wrap: wrap;
+        }
+
         #controls-strip-tickets input {
             flex: 1;
             min-width: 200px;
@@ -2670,7 +2694,8 @@
             border-color: var(--accent-teal);
         }
 
-        #controls-strip-tickets select {
+        #controls-strip-tickets select,
+        #tickets-source-modal select {
             padding: 6px 10px;
             background: var(--panel-bg2);
             color: var(--text-primary);

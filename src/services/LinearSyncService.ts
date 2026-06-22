@@ -63,8 +63,10 @@ export interface LinearIssue {
 export interface LinearComment {
   id: string;
   body: string;
-  user: { name: string; email?: string } | null;
+  user: { id?: string; name: string; email?: string } | null;
   createdAt: string;
+  parentId?: string | null;
+  mentions?: Array<{ id: string; name: string }>;
 }
 
 export interface LinearAttachment {
@@ -124,6 +126,12 @@ export class LinearSyncService {
   // Reverse map: issueId -> projectId for efficient cache invalidation
   private _issueProjectIndex: Map<string, string> = new Map();
   private _cachedProjects: { id: string; name: string }[] | null = null;
+  /**
+   * Cached team members for the mention picker.
+   * 5-minute TTL (matches _cachedProjects pattern).
+   */
+  private _cachedMembers: { data: Array<{ id: string; name: string; email: string }>; fetchedAt: number } | null = null;
+  private static readonly MEMBERS_TTL_MS = 5 * 60 * 1000;
 
   private static readonly _transientMarkers = [
     'socket hang up',
@@ -276,6 +284,7 @@ export class LinearSyncService {
     await GlobalIntegrationConfigService.saveConfig('linear', normalized);
     this._config = normalized;
     this._cachedProjects = null;
+    this._cachedMembers = null;
   }
 
   async saveAutomationSettings(
@@ -377,16 +386,28 @@ export class LinearSyncService {
   }
 
   private _normalizeLinearComment(raw: any): LinearComment {
+    // Parse Linear mention syntax from body: <@uuid> tokens
+    const body = String(raw?.body || '');
+    const mentions: Array<{ id: string; name: string }> = [];
+    const mentionRegex = /<@([a-f0-9-]+)>/gi;
+    let m: RegExpExecArray | null;
+    while ((m = mentionRegex.exec(body)) !== null) {
+      mentions.push({ id: m[1], name: '' });
+    }
+
     return {
       id: String(raw?.id || '').trim(),
-      body: String(raw?.body || ''),
+      body,
       user: raw?.user
         ? {
+          id: String(raw.user.id || '').trim() || undefined,
           name: String(raw.user.name || '').trim(),
           email: String(raw.user.email || '').trim() || undefined
         }
         : null,
-      createdAt: String(raw?.createdAt || '').trim()
+      createdAt: String(raw?.createdAt || '').trim(),
+      parentId: raw?.parent?.id ? String(raw.parent.id).trim() : null,
+      mentions
     };
   }
 
@@ -930,7 +951,8 @@ export class LinearSyncService {
               id
               body
               createdAt
-              user { name email }
+              user { id name email }
+              parent { id }
             }
           }
         }
@@ -1071,7 +1093,7 @@ export class LinearSyncService {
     }
   }
 
-  public async addIssueComment(issueId: string, comment: string): Promise<void> {
+  public async addIssueComment(issueId: string, comment: string, options?: { parentId?: string; mentions?: Array<{ id: string; name: string }> }): Promise<{ success: boolean; error?: string }> {
     const config = await this.loadConfig();
     if (!config?.setupComplete) {
       throw new Error('Linear not configured');
@@ -1083,16 +1105,231 @@ export class LinearSyncService {
       throw new Error('Linear comments require both an issue ID and non-empty comment text.');
     }
 
-    const result = await this.graphqlRequest(`
-      mutation($issueId: String!, $body: String!) {
-        commentCreate(input: { issueId: $issueId, body: $body }) {
-          success
+    // Encode mentions into the body using Linear's <@uuid> syntax.
+    // Verification gate: if Linear doesn't parse <@uuid>, the text is still
+    // visible (safe fallback — no notification, but readable).
+    let body = normalizedComment;
+    const mentions = Array.isArray(options?.mentions) ? options!.mentions : [];
+    if (mentions.length > 0) {
+      for (const mention of mentions) {
+        // UI inserts @{id} tokens; replace with <@uuid> for Linear
+        body = body.replace(new RegExp(`@\\{${mention.id}\\}`, 'g'), `<@${mention.id}>`);
+      }
+    }
+
+    const parentId = String(options?.parentId || '').trim() || undefined;
+    const inputFields = parentId
+      ? 'issueId: $issueId, body: $body, parentId: $parentId'
+      : 'issueId: $issueId, body: $body';
+    const vars: Record<string, string> = { issueId: normalizedIssueId, body };
+    if (parentId) { vars.parentId = parentId; }
+
+    try {
+      const result = await this.graphqlRequest(`
+        mutation($issueId: String!, $body: String!${parentId ? ', $parentId: String!' : ''}) {
+          commentCreate(input: { ${inputFields} }) {
+            success
+          }
+        }
+      `, vars);
+
+      if (!result.data?.commentCreate?.success) {
+        // If parentId was rejected, retry without it (flat comment fallback)
+        if (parentId) {
+          console.warn('[LinearSync] Linear commentCreate with parentId failed, retrying as flat comment.');
+          const fallbackResult = await this.graphqlRequest(`
+            mutation($issueId: String!, $body: String!) {
+              commentCreate(input: { issueId: $issueId, body: $body }) { success }
+            }
+          `, { issueId: normalizedIssueId, body });
+          if (!fallbackResult.data?.commentCreate?.success) {
+            return { success: false, error: `Linear issue ${normalizedIssueId} rejected the comment.` };
+          }
+          return { success: true };
+        }
+        return { success: false, error: `Linear issue ${normalizedIssueId} rejected the comment.` };
+      }
+      return { success: true };
+    } catch (e) {
+      // If parentId caused a GraphQL error, retry as flat comment
+      if (parentId) {
+        console.warn('[LinearSync] Linear commentCreate with parentId threw, retrying as flat comment:', e);
+        const fallbackResult = await this.graphqlRequest(`
+          mutation($issueId: String!, $body: String!) {
+            commentCreate(input: { issueId: $issueId, body: $body }) { success }
+          }
+        `, { issueId: normalizedIssueId, body });
+        if (!fallbackResult.data?.commentCreate?.success) {
+          return { success: false, error: `Linear issue ${normalizedIssueId} rejected the comment.` };
+        }
+        return { success: true };
+      }
+      throw e;
+    }
+  }
+
+  // ── Comment Manager: threading + members ──────────────────────────
+
+  /**
+   * Fetch comments for an issue and rebuild threads client-side.
+   * Linear returns comments flat with optional parent { id }.
+   * Replies whose parent isn't in the batch go into an orphan bucket
+   * (console.warn) — they are NOT dropped.
+   */
+  public async getCommentThreads(issueId: string): Promise<{
+    threads: Array<{
+      id: string;
+      author: { id: string; name: string; email: string };
+      body: string;
+      date: string;
+      mentions: Array<{ id: string; name: string }>;
+      replies: Array<{
+        id: string;
+        author: { id: string; name: string; email: string };
+        body: string;
+        date: string;
+        mentions: Array<{ id: string; name: string }>;
+      }>;
+    }>;
+    threadingSupported: boolean;
+  }> {
+    const comments = await this.getComments(issueId);
+
+    const topLevel = comments.filter(c => !c.parentId);
+    const repliesByParent = new Map<string, typeof comments>();
+    const orphans: typeof comments = [];
+
+    for (const comment of comments) {
+      if (comment.parentId) {
+        const hasParent = comments.some(c => c.id === comment.parentId);
+        if (hasParent) {
+          const bucket = repliesByParent.get(comment.parentId) || [];
+          bucket.push(comment);
+          repliesByParent.set(comment.parentId, bucket);
+        } else {
+          console.warn(`[LinearSync] Orphan reply ${comment.id} — parent ${comment.parentId} not in batch.`);
+          orphans.push(comment);
         }
       }
-    `, { issueId: normalizedIssueId, body: normalizedComment });
+    }
 
-    if (!result.data?.commentCreate?.success) {
-      throw new Error(`Linear issue ${normalizedIssueId} rejected the requested comment.`);
+    const toThread = (c: typeof comments[0]) => ({
+      id: c.id,
+      author: {
+        id: String(c.user?.id || '').trim(),
+        name: String(c.user?.name || '').trim(),
+        email: String(c.user?.email || '').trim()
+      },
+      body: c.body,
+      date: c.createdAt,
+      mentions: c.mentions || [],
+      replies: (repliesByParent.get(c.id) || []).map(r => ({
+        id: r.id,
+        author: {
+          id: String(r.user?.id || '').trim(),
+          name: String(r.user?.name || '').trim(),
+          email: String(r.user?.email || '').trim()
+        },
+        body: r.body,
+        date: r.createdAt,
+        mentions: r.mentions || []
+      }))
+    });
+
+    const threads = topLevel.map(toThread);
+    // Orphans (replies whose parent isn't in this batch) are surfaced as
+    // top-level threads so they're visible rather than dropped.
+    for (const orphan of orphans) {
+      threads.push(toThread(orphan));
+    }
+
+    return { threads, threadingSupported: true };
+  }
+
+  /**
+   * Reply to an existing Linear comment.
+   * Uses addIssueComment with parentId — Linear's commentCreate accepts parentId
+   * for threaded replies (verification gate — falls back to flat on failure).
+   */
+  public async replyToComment(commentId: string, params: { commentText: string; mentions?: Array<{ id: string; name: string }> }): Promise<{ success: boolean; error?: string }> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('Linear not configured');
+    }
+    const normalizedCommentId = String(commentId || '').trim();
+    if (!normalizedCommentId) { throw new Error('Linear reply requires a comment ID.'); }
+    const normalizedComment = String(params?.commentText || '').trim();
+    if (!normalizedComment) { throw new Error('Linear reply requires non-empty text.'); }
+
+    // Linear replies are created via commentCreate with parentId.
+    // We need the issueId — but replyToComment only has the commentId.
+    // Linear's commentCreate requires issueId. We'll fetch the comment's issue
+    // via a lightweight query, then call addIssueComment with parentId.
+    let issueId: string | undefined;
+    try {
+      const result = await this.graphqlRequest(`
+        query($commentId: String!) {
+          comment(id: $commentId) { issue { id } }
+        }
+      `, { commentId: normalizedCommentId });
+      issueId = String(result.data?.comment?.issue?.id || '').trim() || undefined;
+    } catch (e) {
+      console.warn('[LinearSync] Failed to resolve issueId for comment reply:', e);
+    }
+
+    if (!issueId) {
+      // Can't determine issueId — post as a flat comment on the issue is not
+      // possible without the issueId. Return error so UI can roll back.
+      return { success: false, error: 'Could not resolve the issue for this comment reply.' };
+    }
+
+    return this.addIssueComment(issueId, normalizedComment, {
+      parentId: normalizedCommentId,
+      mentions: params.mentions
+    });
+  }
+
+  /**
+   * Fetch team members for the mention picker.
+   * Uses the team's users query. Cached with 5-minute TTL.
+   */
+  public async getTeamMembers(): Promise<Array<{ id: string; name: string; email: string }>> {
+    if (this._cachedMembers && (Date.now() - this._cachedMembers.fetchedAt) < LinearSyncService.MEMBERS_TTL_MS) {
+      return this._cachedMembers.data;
+    }
+
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || !config.teamId) {
+      throw new Error('Linear not configured');
+    }
+
+    try {
+      const result = await this.graphqlRequest(`
+        query($teamId: String!) {
+          team(id: $teamId) {
+            members {
+              nodes {
+                id
+                name
+                email
+              }
+            }
+          }
+        }
+      `, { teamId: config.teamId });
+
+      const members = Array.isArray(result.data?.team?.members?.nodes)
+        ? result.data.team.members.nodes.map((m: any) => ({
+            id: String(m?.id || '').trim(),
+            name: String(m?.name || '').trim(),
+            email: String(m?.email || '').trim()
+          })).filter((m: { id: string }) => m.id.length > 0)
+        : [];
+      this._cachedMembers = { data: members, fetchedAt: Date.now() };
+      return members;
+    } catch (e) {
+      console.warn('[LinearSync] Failed to fetch team members:', e);
+      return [];
     }
   }
 

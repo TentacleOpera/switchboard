@@ -1540,11 +1540,22 @@ export class PlanningPanelProvider {
     }
 
     private _mapClickUpComment(comment: any): any {
+        // ClickUp returns `date` as a unix-ms timestamp string. The webview renders
+        // dates from `createdAt` (ISO) via `.slice(0, 10)`, so convert here — otherwise
+        // the date column stays blank (or shows raw timestamp digits).
+        let createdAt = '';
+        const rawDate = comment.date;
+        if (rawDate) {
+            const ms = Number(rawDate);
+            createdAt = Number.isFinite(ms) ? new Date(ms).toISOString() : String(rawDate);
+        }
         return {
             id: comment.id,
             body: comment.comment_text,
-            user: comment.user,
-            date: comment.date
+            // Webview reads user.name first (Linear shape); ClickUp gives username.
+            user: { ...comment.user, name: comment.user?.username || comment.user?.email || '' },
+            date: comment.date,
+            createdAt
         };
     }
 
@@ -3156,7 +3167,7 @@ Please format the updated output document strictly as follows:
                 const terminal = vscode.window.terminals.find(t => t.name.toLowerCase().includes('planner') || t.name.toLowerCase().includes('lead'))
                     || vscode.window.createTerminal({ name: 'Constitution Builder', cwd: wsRoot });
                 terminal.show();
-                const promptText = `Follow instructions in .agent/skills/constitution_builder.md to build or improve CONSTITUTION.md in this project.`;
+                const promptText = `Follow instructions in .agents/skills/constitution_builder.md to build or improve CONSTITUTION.md in this project.`;
                 const { sendRobustText } = require('./terminalUtils');
                 await sendRobustText(terminal, promptText);
                 break;
@@ -3169,7 +3180,7 @@ Please format the updated output document strictly as follows:
                 const terminal = vscode.window.terminals.find(t => t.name.toLowerCase().includes('planner') || t.name.toLowerCase().includes('lead'))
                     || vscode.window.createTerminal({ name: 'Constitution Builder', cwd: wsRoot });
                 terminal.show();
-                const promptText = `Follow instructions in .agent/skills/constitution_builder.md to improve and update the existing CONSTITUTION.md in this project.`;
+                const promptText = `Follow instructions in .agents/skills/constitution_builder.md to improve and update the existing CONSTITUTION.md in this project.`;
                 const { sendRobustText } = require('./terminalUtils');
                 await sendRobustText(terminal, promptText);
                 break;
@@ -4534,17 +4545,24 @@ Please format the updated output document strictly as follows:
                     }
 
                     // Read user-editable skill file
-                    const skillPath = path.join(workspaceRoot, '.agent', 'skills', 'refine_ticket.md');
+                    const skillPath = path.join(workspaceRoot, '.agents', 'skills', 'refine_ticket.md');
                     let skillContent = '';
                     try {
                         const nfs = require('fs') as typeof import('fs');
                         skillContent = nfs.readFileSync(skillPath, 'utf8');
                     } catch {
-                        skillContent = `Refine this ticket into a complete specification with:
+                        // Backward-compatible fallback: a user who kept their old .agent/ folder.
+                        try {
+                            const nfs = require('fs') as typeof import('fs');
+                            const legacyPath = path.join(workspaceRoot, '.agent', 'skills', 'refine_ticket.md');
+                            skillContent = nfs.readFileSync(legacyPath, 'utf8');
+                        } catch {
+                            skillContent = `Refine this ticket into a complete specification with:
 - Summary, Background/Why, User Flow, Acceptance Criteria (checkboxed, testable)
 - Assumptions challenged, Open Questions, Dependencies
 - Mermaid flow diagram rendered to PNG if the flow is non-trivial
 - Write result back to the local file path provided.`;
+                        }
                     }
 
                     // Resolve local ticket file path
@@ -4604,11 +4622,11 @@ Read the existing ticket content from the local file if it exists. Determine wha
             }
             case 'postTicketComment': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                const { provider, id, comment } = msg;
+                const { provider, id, comment, mentions } = msg;
                 try {
                     const result: any = await vscode.commands.executeCommand(
                         'switchboard.postTicketComment',
-                        { workspaceRoot, provider, id, comment }
+                        { workspaceRoot, provider, id, comment, mentions }
                     );
                     this._panel?.webview.postMessage({
                         type: 'postTicketCommentResult',
@@ -4624,6 +4642,67 @@ Read the existing ticket content from the local file if it exists. Determine wha
                         success: false,
                         id,
                         comment,
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
+                    });
+                }
+                break;
+            }
+            case 'loadTicketComments': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const { provider, id } = msg;
+                try {
+                    const result: any = await vscode.commands.executeCommand(
+                        'switchboard.loadTicketComments',
+                        { workspaceRoot, provider, id }
+                    );
+                    this._panel?.webview.postMessage({
+                        type: 'ticketCommentsLoaded',
+                        success: result.success,
+                        id,
+                        provider,
+                        threads: result.threads || [],
+                        members: result.members || [],
+                        threadingSupported: result.threadingSupported,
+                        error: result.error,
+                        workspaceRoot
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'ticketCommentsLoaded',
+                        success: false,
+                        id,
+                        provider,
+                        threads: [],
+                        members: [],
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
+                    });
+                }
+                break;
+            }
+            case 'postTicketReply': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const { provider, id, commentId, commentText, mentions } = msg;
+                try {
+                    const result: any = await vscode.commands.executeCommand(
+                        'switchboard.postTicketReply',
+                        { workspaceRoot, provider, id, commentId, commentText, mentions }
+                    );
+                    this._panel?.webview.postMessage({
+                        type: 'postTicketReplyResult',
+                        success: result.success,
+                        id,
+                        commentId,
+                        error: result.error,
+                        workspaceRoot
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'postTicketReplyResult',
+                        success: false,
+                        id,
+                        commentId,
                         error: error instanceof Error ? error.message : String(error),
                         workspaceRoot
                     });

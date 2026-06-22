@@ -3148,7 +3148,7 @@
                 // Mirrors planning.js handleThemeChanged: cyber CRT effects only for
                 // afterburner; claudify additionally gets the palette override.
                 if (msg.theme) { state.switchboardTheme = msg.theme; }
-                document.body.classList.remove('theme-claudify');
+                document.body.classList.remove('theme-claudify', 'theme-afterburner-pro');
                 if (state.switchboardTheme === 'afterburner') {
                     document.body.classList.add('cyber-theme-enabled');
                 } else {
@@ -3156,6 +3156,8 @@
                 }
                 if (state.switchboardTheme === 'claudify') {
                     document.body.classList.add('theme-claudify');
+                } else if (state.switchboardTheme === 'afterburner-professional') {
+                    document.body.classList.add('theme-claudify', 'theme-afterburner-pro');
                 }
                 break;
 
