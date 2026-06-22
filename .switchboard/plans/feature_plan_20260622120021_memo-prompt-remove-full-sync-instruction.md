@@ -93,3 +93,44 @@ None required. This is a prompt-text-only change with no behavioral code path. T
 ## Recommendation
 
 Complexity 1 → **Send to Intern**.
+
+---
+
+## Reviewer Pass — 2026-06-22
+
+### Stage 1: Grumpy Findings
+
+| Severity | Finding | Location |
+|:---------|:--------|:---------|
+| NIT | Template literal closes correctly with `` `; `` after the "investigation step" bullet — no orphaned backtick or stray comma. | `src/services/KanbanProvider.ts:7079` |
+| NIT | Plan file line citations (7041-7075, 7074, 6969) are pre-change numbers; post-edit the function starts at line 7047 and the sync line is gone. Cosmetic only. | Plan file citations |
+| NIT | Plan's "no other references" claim re-verified: `run a full sync` → 0 matches in `src/`. The 3 remaining `full sync` hits in `KanbanProvider.ts` (lines 914, 962, 4323) are unrelated "Sync Board" button comments. Claim holds. | `src/services/KanbanProvider.ts:914,962,4323` |
+
+**No CRITICAL findings. No MAJOR findings.**
+
+### Stage 2: Balanced Synthesis
+
+- **Keep**: The deletion is correct, minimal, and well-scoped. Template literal integrity verified.
+- **Fix now**: None — no code fixes required.
+- **Defer**: Plan line-citation refresh is cosmetic only (noted above).
+
+### Code Fixes Applied
+
+None. The implementation as committed matches the plan exactly.
+
+### Verification Results
+
+- **Grep — `run a full sync` in `src/`**: 0 matches. ✓
+- **Grep — `full sync` in `KanbanProvider.ts`**: 3 matches, all unrelated "Sync Board" button code comments (lines 914, 962, 4323). ✓
+- **Watcher substantiation**: `GlobalPlanWatcherService` confirmed at `KanbanProvider.ts:155,430`; `_configuredPlanWatcher` confirmed at `TaskViewerProvider.ts:260,10137-10138` (bound to `guardedScheduleSync`). ✓
+- **Template literal integrity**: Opens at `KanbanProvider.ts:7051` (`return \``), closes at `KanbanProvider.ts:7079` (`` `; ``). Well-formed, no stray characters. ✓
+- **Compilation**: Skipped per reviewer instructions.
+- **Tests**: Skipped per reviewer instructions (suite run separately by user).
+
+### Files Changed
+
+- `src/services/KanbanProvider.ts` — removed the `- After creating all plans, run a full sync so they appear on the kanban board` line from `_buildMemoPlannerPrompt`; closing backtick now follows the "investigation step" bullet (line 7079).
+
+### Remaining Risks
+
+None material. The file watcher ingests new plan files automatically, so board appearance is unaffected. The only behavioral delta is the planner agent no longer being prompted to run an extra `switchboard.fullSync` command — which is the desired outcome.

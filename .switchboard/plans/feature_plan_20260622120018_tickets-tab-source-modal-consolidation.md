@@ -174,3 +174,45 @@ Skipped per session directive. The test suite will be run separately by the user
 ## Recommendation
 
 Complexity 5 → **Send to Coder**.
+
+---
+
+## Reviewer Pass (2026-06-22)
+
+Implementation reviewed in-place against the plan. Verdict: **substantially correct**, one MAJOR layout regression fixed.
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *Adjusts monocle, glares at the diff.*
+>
+> **[MAJOR] The overflow mitigation you wrote three times in this plan is missing from the file that actually renders.** You spent an entire Edge-Case section, an Adversarial-Synthesis bullet, and Proposed-Change step 3 sermonizing about `flex-wrap` so the one-line strip wouldn't clip on a narrow panel. And then? `src/webview/design.html` dutifully got `#controls-strip-tickets { flex-wrap: wrap; }` — but `design.html` is the **Design Panel** webview (loaded by `DesignPanelProvider.ts`), not the Tickets tab. The Tickets tab lives in `planning.html` (loaded by `PlanningPanelProvider.ts`), and *there* the implementer chose a different shape entirely: `#controls-strip-tickets { flex-direction: column }` wrapping a single `.controls-strip-row { display: flex }` — with **no `flex-wrap` on the row**. So the search input (`flex:1; min-width:200px`) plus workspace picker plus Source button plus summary plus three buttons will happily overrun the panel edge with zero graceful wrapping. The mitigation landed in the wrong building. ([planning.html:2690](src/webview/planning.html#L2690))
+>
+> **[NIT] Two files, one feature, diverging CSS strategies.** `design.html` styles the modal selects via `#tickets-source-modal select`; `planning.html` styles them via `class="planning-select"`. Both are blessed by the plan, fine — but the duplication means the next person who touches one will forget the other. Not my circus today.
+>
+> **[NIT] `#controls-strip-tickets select` rule in `planning.html` ([2676](src/webview/planning.html#L2676)) is now mostly vestigial** — the selects it targeted have all decamped to the modal. Harmless, but it's a tombstone.
+>
+> Everything else? *Grudgingly,* it's clean. Ids are unique (verified, all 1×). Modal open/close: button, ×, action-button, and overlay-click all wired ([planning.js:6349-6371](src/webview/planning.js#L6349)). `updateTicketsSourceSummary()` reads `lastIntegrationProvider` — the same source-of-truth the other 75 call sites use, not some freshly-invented state — and is called from both render paths ([planning.js:7774](src/webview/planning.js#L7774), [7274](src/webview/planning.js#L7274)) **and** the provider-change handler before the backend round-trips ([planning.js:6380](src/webview/planning.js#L6380)). The double-fetch trap was even commented. I have nothing to throw.
+
+### Stage 2 — Balanced Synthesis
+
+- **Fix now (done):** Add `flex-wrap: wrap` to `.controls-strip-row` in `planning.html`. The container's `flex-direction: column` makes container-level wrap a no-op (one child); the wrap must happen *inside* the row. `.controls-strip-row` is used in exactly one place, so the change is isolated.
+- **Keep:** All id-based relocation, modal markup, modal handlers, `.planning-select` styling of modal selects, `updateTicketsSourceSummary()` and its three call sites, `lastIntegrationProvider` as summary source-of-truth.
+- **Defer / accept:** `design.html` divergence (separate webview, out of scope per this plan's focus); vestigial `#controls-strip-tickets select` rule (harmless).
+
+### Fixes Applied
+
+| Severity | Finding | File:Line | Fix |
+|---|---|---|---|
+| MAJOR | Narrow-panel overflow mitigation absent in the rendered Tickets webview; `.controls-strip-row` lacked `flex-wrap` | [planning.html:2690](src/webview/planning.html#L2690) | Added `flex-wrap: wrap;` to `.controls-strip-row` |
+
+### Files Changed (this pass)
+- `src/webview/planning.html` — added `flex-wrap: wrap` to `.controls-strip-row`.
+
+### Validation
+- Compilation: **skipped** per session directive.
+- Tests: **skipped** per session directive (user runs separately).
+- Static checks performed: all relocated element ids confirmed unique (1× each: provider-selector, hierarchy-nav, project-picker, state-filter, status-filter, search, source-btn) — no orphaned duplicates from the old two-row structure; `.planning-select` class exists ([planning.html:608](src/webview/planning.html#L608)) with cyber-theme variants ([2325](src/webview/planning.html#L2325)); modal open/close + summary call sites verified.
+
+### Remaining Risks
+- **Cross-file CSS drift:** `design.html` and `planning.html` both carry tickets-controls CSS via different strategies; future edits should touch both if the styling contract changes. (Out of scope here; the rendered Tickets tab is `planning.html`.)
+- **Manual UX confirmation still required:** items 1-9 of the Manual Verification plan (one-line layout, narrow-panel wrap, modal styling, provider switch keeps modal open, hierarchy navigation, Linear vs ClickUp visibility, search, close affordances) remain user-verifiable — the reviewer pass validated structure/wiring, not rendered behavior.
