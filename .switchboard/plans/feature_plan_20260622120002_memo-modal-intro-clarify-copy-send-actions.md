@@ -99,3 +99,46 @@ N/A — this is a text-only change to static HTML copy. No unit, integration, or
 ---
 
 **Recommendation:** Complexity 1 → **Send to Intern**
+
+## Review Pass — 2026-06-22
+
+### Stage 1: Grumpy Findings
+
+| Severity | Finding | Location |
+|----------|---------|----------|
+| NIT | Plan's line-number reference says "2995-3000" but the actual paragraph lives at 3003-3013. Doc inaccuracy, not a code issue. | Plan file line 62 vs `src/webview/kanban.html:3003-3013` |
+| NIT | The "cleared after Send" simplification omits the send-failure retry path. Already documented and accepted in the plan's Edge-Case Audit (line 47). No action needed. | `src/webview/kanban.html:3011-3012` |
+
+**No CRITICAL findings. No MAJOR findings.**
+
+### Stage 2: Balanced Synthesis
+
+**Keep (as-is):** The entire `<p>` replacement block at `src/webview/kanban.html:3003-3013`. Every factual claim verified against backend source:
+- "Copy Prompt copies a planner prompt to your clipboard" → `KanbanProvider.ts:6983` (`vscode.env.clipboard.writeText`).
+- "Send to Planner copies it *and* dispatches it" → `KanbanProvider.ts:6983` (clipboard) + `:6987` (`_dispatchMemoToPlanner`).
+- "create a separate plan file for each issue in `.switchboard/plans/`" → `KanbanProvider.ts:7045` ("one plan per issue") + `:7042` (`plansDir = .switchboard/plans`).
+- "Entries are saved automatically" → debounce `memoSaveTimer` pattern at `kanban.html:3705/3711`.
+- "memo is cleared after Copy Prompt or Send to Planner" → `KanbanProvider.ts:6990-6993` (success path); failure path preserves memo with status message (`:7002`), intentionally omitted per Edge-Case Audit.
+
+**Fix now:** None. Zero CRITICAL/MAJOR findings — no code changes required.
+
+**Defer:** Plan's internal line-number reference inaccuracy (2995-3000 → 3003-3013) corrected in this review section for accuracy; no code impact.
+
+### Code Fixes Applied
+
+None. The implementation at `src/webview/kanban.html:3003-3013` is a verbatim match of the plan's proposed text and all claims are accurate against the backend. No fixes were needed.
+
+### Files Changed by Implementation
+
+- `src/webview/kanban.html` (lines 3003-3013) — memo modal intro `<p>` rewritten. Introduced in commit `760c49c`.
+
+### Validation Results
+
+- **Compilation:** SKIPPED per session directives (`npm run compile` / webpack). User will run separately.
+- **Automated tests:** SKIPPED per session directives. User will run separately.
+- **Static verification:** Complete. Text replacement matches plan exactly; all copy claims verified against `KanbanProvider.ts` backend behavior (`_buildMemoPlannerPrompt`, `memoGeneratePrompt` handler, `_dispatchMemoToPlanner`).
+- **Manual visual verification:** Pending — to be performed by user per plan's Verification Plan (lines 93-97): open Memo modal, confirm intro text explains Copy vs Send + one-plan-per-issue, confirm no layout overflow in 640px modal.
+
+### Remaining Risks
+
+None. This is a static HTML text replacement with no behavioral, structural, or data-layer impact. The only residual item is the user's manual visual layout check (3-4 extra lines at 12px in a 640px modal with a 300px-min textarea).
