@@ -104,7 +104,7 @@ The feature was designed as "full ClickUp/Linear automation" but shipped as a ha
 
 **Resolved decisions:**
 1. **Triage preset columns** — Use the existing Switchboard kanban column constants (`CREATED` as the import-landing/inbox column → in-progress → `DONE`), not invented `INBOX`/`REVIEWING` names. The earlier draft contradicted itself (`CREATED`/`DONE` in §6 vs `INBOX`/`REVIEWING`/`DONE` in the review section); §6 now uses the real column enum so the routing rule references columns that actually exist.
-2. **Triage default automation rule** — Single rule routing the import-landing column (`CREATED`) to the existing **`ticket_updater` role set to a new `triage` mode** (NOT the planner — the planner emits full feature plans, the wrong output for a ticket comment), final column `DONE`, `writeBackOnComplete: true`. Reuses the existing role + write-back skill rather than adding a new role; triage mode enforces a hard ≤120-word verdict contract and an `auto` / `needs-human` routing decision, and never overwrites the ticket description. See "Repurpose the `ticket_updater` role" in Proposed Changes.
+2. **Triage default automation rule** — Single rule routing the import-landing column (`CREATED`) to the existing **`ticket_updater` role, simplified to do only triage** (NOT the planner — the planner emits full feature plans, the wrong output for a ticket comment), final column `DONE`, `writeBackOnComplete: true`. Reuses the existing role + write-back skill; the role is collapsed from 4 modes to a single behavior: a hard ≤120-word verdict with an `auto` / `needs-human` routing decision, comment-only, never overwriting the ticket description. See "Repurpose the `ticket_updater` role" in Proposed Changes.
 3. **`completeSyncEnabled`** — Wire it up; default ON for new presets, preserve existing config values for current installs (per migration rule). Gates automatic `syncPlan()` on DONE/COMPLETED/ARCHIVED transitions; leaves manual dispatch untouched.
 4. **Comment cap (import capture, §2)** — Max 20 most recent comments, 2000 chars each, truncation marker on overflow.
 5. **Inbound comment routing target (§7, NEW)** — Comments route to the agent assigned to the card's **current column** (no fixed agent). Self-authored comments are filtered via a hidden marker to prevent feedback loops.
@@ -120,8 +120,8 @@ The feature was designed as "full ClickUp/Linear automation" but shipped as a ha
 ### Complex / Risky
 - **Provider ID extraction in watcher (Medium):** Moving `extractClickUpTaskId` / `extractLinearIssueId` to shared utility and calling from `GlobalPlanWatcherService._handlePlanFile`. New `sourceType` logic independent of `automationRuleName`.
 - **Comment/attachment writing with truncation (Medium):** New `## Comments` / `## Attachments` sections in Linear stub writer. Must enforce size caps to prevent oversized stubs.
-- **Repurpose `ticket_updater` — add a `triage` mode (Medium):** Reuse the existing role rather than registering a new one. Add `'triage'` to the `ticketUpdateMode` union (`agentConfig.ts:19`) and the addon radio options (`sharedDefaults.js:184`), and add a `triage` arm to the `ticket_updater` prompt branch (`agentPromptBuilder.ts:862`). The risk is prompt-design — the ≤120-word verdict contract must be tight enough the agent doesn't drift into the role's existing verbose-analysis behavior, and it must never overwrite the ticket description. Migration constraint: the role shipped (it has a `ticketUpdateEnabled → ticketUpdateMode` migration), so the existing four modes and all config keys must be preserved unchanged.
-- **One-click triage setup (Medium-High):** New "Enable Triage Pipeline" flow that auto-creates a project board, sets sensible defaults, and wires up a default automation rule (dispatching to `ticket_updater` in `triage` mode). Touches `setup.html`, `TaskViewerProvider`, and `KanbanDatabase`.
+- **Repurpose `ticket_updater` — collapse to a single triage behavior (Medium):** Reuse the existing role rather than registering a new one, and **delete its 4-mode selector** (`comment-only`/`refine-ticket`/`research-and-refine`/`disabled`). Rewrite the `ticket_updater` prompt branch (`agentPromptBuilder.ts:862`) to one behavior, and remove the `ticketUpdateMode` radio group from the addon UI (`sharedDefaults.js:184`). The risk is prompt-design — the ≤120-word verdict contract must be tight, comment-only, never overwriting the description. Migration constraint: the role shipped (it has a `ticketUpdateEnabled → ticketUpdateMode` migration), so keep the `ticketUpdateMode` config key readable (value now ignored) so old configs don't error; update the existing modes test to the single behavior.
+- **One-click triage setup (Medium-High):** New "Enable Triage Pipeline" flow that auto-creates a project board, sets sensible defaults, and wires up a default automation rule (dispatching to the simplified `ticket_updater`). Touches `setup.html`, `TaskViewerProvider`, and `KanbanDatabase`.
 - **`completeSyncEnabled` wiring (Medium):** Gating `syncPlan()` when target column is DONE/completed. Must distinguish automatic sync (gate it) from manual dispatch (don't gate it).
 - **Inbound comment ingestion + routing (High — §7):** New polling path, per-card last-comment cursor, self-comment filtering, and dispatch to the current column's agent. The dispatch-to-column-agent linkage is the riskiest coupling: it reuses the automation dispatch path but is triggered by a comment rather than a card move. Per-card sequential queue needed to avoid concurrent agent runs on one plan.
 - **Comment write-back channel (Medium — §8):** `postComment` with self-marker and truncation. Shared with the triage completion summary.
@@ -232,20 +232,16 @@ The changes split into **shared plumbing** (§1–5, needed by both use cases) a
 
 ### Preset 1 — Bug Triage (§6)
 
-### Repurpose the `ticket_updater` role into the triage agent (add a `triage` mode)
+### Repurpose the `ticket_updater` role: make it do one thing — triage
 
-**Why this matters:** The triage preset must NOT dispatch to the **planner** agent (`agentPromptBuilder.ts:456`), which emits full multi-section feature plans — a wall of planning ceremony posted onto the ticket. But it also shouldn't spawn a brand-new role: the existing **`ticket_updater`** role already has every surface wired and already owns the ClickUp/Linear write-back skill. We **reuse it** by adding a focused triage mode rather than building a parallel agent.
+**Why this matters:** The triage preset must NOT dispatch to the **planner** agent (`agentPromptBuilder.ts:456`), which emits full multi-section feature plans — a wall of planning ceremony posted onto the ticket. The existing **`ticket_updater`** role already has every surface wired (UI, prompt branch, ClickUp/Linear write-back skill), so we reuse it — but we **simplify it down to a single behavior** instead of leaving it as a 4-mode relic.
 
-**Current state of `ticket_updater` (the relic to repurpose):** it has a `ticketUpdateMode` selector with modes `disabled | comment-only | refine-ticket | research-and-refine`. All current modes do the wrong thing for triage — they generate a ~500-word plan analysis (Goal Summary, Complexity Assessment, Key Dependencies, Implementation Notes, Estimated Effort) and either post it as an "AI Analysis" comment or **overwrite the ticket description**. The `refine-ticket` / `research-and-refine` description-overwrite behavior is especially unwanted for triage. It also keys off a different metadata field (`**Ticket:** CU-XXXXX/LIN-XXXXX`) than the stub pipeline (`**ClickUp Task ID:**` / `**Linear Issue ID:**`).
+**Current state of `ticket_updater` (the over-engineered relic):** it has a `ticketUpdateMode` selector with four modes — `disabled | comment-only | refine-ticket | research-and-refine` — that variously generate a ~500-word plan analysis, post it as an "AI Analysis" comment, **overwrite the ticket description**, or web-research first. This is exactly the over-engineering this overhaul targets: too many options, and most of them do the wrong thing (nobody wants an agent silently rewriting their ticket descriptions).
 
-**The change — add a fifth mode `triage`:**
-
-#### `src/services/agentConfig.ts` (line 19) + `src/webview/sharedDefaults.js` (line 184 radio options)
-- Add `'triage'` to the `ticketUpdateMode` union and to the radio-option list in the addon UI.
-- Preserve the existing four modes verbatim (migration: the role shipped, with a `ticketUpdateEnabled → ticketUpdateMode` migration — see `agent-prompt-builder-ticket-updater-modes.test.js`). Existing users' configs must keep working.
+**The change — collapse the modes; the agent only triages:**
 
 #### `src/services/agentPromptBuilder.ts` (the `ticket_updater` branch, line 862)
-- Add a `ticketUpdateMode === 'triage'` arm that **replaces** the verbose `analysisTemplate()` with a hard triage contract. It does NOT analyze a plan; it reads the imported ticket (title, description, captured comments from the stub §2) and emits a single short comment, target ≤ ~120 words, fixed shape:
+- Replace the entire mode-switch (the `comment-only` / `refine-ticket` / `research-and-refine` / `disabled` arms and the verbose `analysisTemplate()`) with **one** behavior. It reads the imported ticket (title, description, captured comments from the stub §2) and emits a single short comment, target ≤ ~120 words, fixed shape:
   - **Severity:** blocker / high / normal / low
   - **Area:** one or two tags
   - **Assessment:** 1–2 sentence root-cause hypothesis or restatement of the real problem
@@ -254,11 +250,15 @@ The changes split into **shared plumbing** (§1–5, needed by both use cases) a
 - Behavioral rules baked in: no preamble, no restating the whole ticket, no markdown section dumps, no speculative implementation detail, **never overwrite the ticket description** — comment only.
 - Reuse the existing `clickup_api` / `linear_api` write-back skill the branch already invokes. Resolve the provider ID from the stub fields (`**ClickUp Task ID:**` / `**Linear Issue ID:**`) so triage uses the same linkage as §1, not the legacy `**Ticket:**` field.
 
+#### Remove the mode selector from the UI
+- Drop the `ticketUpdateMode` radio group from the addon UI (`sharedDefaults.js:184`) — there's nothing left to choose.
+- **Migration (the role shipped):** keep the `ticketUpdateMode` config key readable so old stored configs don't error (it has a `ticketUpdateEnabled → ticketUpdateMode` migration — see `agent-prompt-builder-ticket-updater-modes.test.js`); the value is simply ignored now since the agent always triages. Update/adjust that test to the single behavior.
+
 #### `src/webview/kanban.html` (description map, line 3087)
-- Update the `ticket_updater` `roleDescriptions` entry to reflect the broadened role (e.g. *"Posts triage verdicts or analysis/status back to connected PM systems (ClickUp/Linear)."*). Optionally relabel the visible name to "Ticket Agent" — but keep the `ticket_updater` role id and all config keys unchanged for migration.
+- Update the `ticket_updater` `roleDescriptions` entry to: *"Reads a ticket and posts a short triage verdict (severity, area, recommended action, auto/needs-human) back to ClickUp/Linear."* Optionally relabel the visible name to "Ticket Triager" — but keep the `ticket_updater` role id and config keys unchanged for migration.
 
 #### Relationship to Remote Control
-- `ticket_updater` in `triage` mode is the natural **default agent for the inbox/early column** in Remote Control (§10.3), since a freshly-posted issue wants triage before deeper work.
+- This (now single-purpose) `ticket_updater` is the natural **default agent for the inbox/early column** in Remote Control (§10.3), since a freshly-posted issue wants triage before deeper work.
 
 ### 6. One-click triage pipeline setup (NEW)
 
@@ -282,7 +282,7 @@ The changes split into **shared plumbing** (§1–5, needed by both use cases) a
      - Name: `"Triage — [list/project name]"`
      - Trigger: all imported tickets (based on provider-specific trigger — tag for ClickUp, label for Linear)
      - Target column: `CREATED` (inbox)
-     - **Dispatch agent: `ticket_updater` in the new `triage` mode (NOT planner)** — see "Repurpose the `ticket_updater` role" above.
+     - **Dispatch agent: the simplified `ticket_updater` (triage-only, NOT planner)** — see "Repurpose the `ticket_updater` role" above.
      - Final column: `DONE`
      - `writeBackOnComplete: true` (posts the triage verdict back as a ticket comment via §8)
   4. **Assign all imported plans** from that list/project to the new project board.
