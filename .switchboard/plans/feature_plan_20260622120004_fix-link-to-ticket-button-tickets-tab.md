@@ -192,3 +192,44 @@ This test is the guard against the recurring breakage — any future refactor th
 ---
 
 **Recommendation:** Complexity is 5 → **Send to Coder**.
+
+---
+
+## Reviewer Pass (2026-06-22)
+
+Direct in-place reviewer-executor pass against this plan as source of truth. Compilation and test execution were skipped per session directives; the regression test's six assertions were verified by inspection instead.
+
+### Verdict: Implementation faithful. No CRITICAL/MAJOR findings. No code fixes applied.
+
+### Findings by severity
+
+- **CRITICAL:** none.
+- **MAJOR:** none.
+- **NIT** — [PlanningPanelProvider.ts:4515](../../src/services/PlanningPanelProvider.ts#L4515): `paths.map(p => p.startsWith('@') ? p : '@' + p)` is a no-op — every entry was already `@`-prefixed at [4499](../../src/services/PlanningPanelProvider.ts#L4499). Harmless defensive code; left as-is.
+- **NIT** — [tickets-link-to-ticket-regression.test.js:43-45](../../src/test/tickets-link-to-ticket-regression.test.js#L43): the `indexOf('}')` slice truncates `handleLinkBlock` at the first brace (the `postMessage({...})` object literal), so assertion (e) would not catch a `flashCopyBtn` call re-added *after* the postMessage line. Passes today for the right end-state but with a blind spot. Left as-is (changing it is churn with no current functional gain).
+- **NIT** — "Link all" with an empty filtered list posts `ticketIds: []`; backend falls into the directory-copy `else` ([PlanningPanelProvider.ts:4503](../../src/services/PlanningPanelProvider.ts#L4503)), copying provider dir paths with no feedback message and leaving `_lastLinkTicketBtn` dangling. Pre-existing edge semantics, out of scope; left as-is.
+
+### Verification of plan requirements (all confirmed present)
+
+- Ensure-then-link with `result.filePath` direct use + scan fallback — [PlanningPanelProvider.ts:4474-4497](../../src/services/PlanningPanelProvider.ts#L4474). ✓
+- `result.success === false` surfaces real `error` via `lastError`/`continue` — not swallowed. ✓
+- `@`-prefix, `ticketLinkCopied`/`ticketLinkFailed`, empty-paths guard (no silent `''` write). ✓
+- Command call shape `{ workspaceRoot, provider, id, includeSubtasks: true }` matches registration at [extension.ts:1498](../../src/extension.ts#L1498) and return shape `{ success, filePath?, error? }` at [TaskViewerProvider.ts:17612](../../src/services/TaskViewerProvider.ts#L17612). ✓
+- Deferred flash: `handleLinkToTicket` stores `_lastLinkTicketBtn`, no synchronous `flashCopyBtn` — [planning.js:8343](../../src/webview/planning.js#L8343); handlers at [planning.js:3890-3903](../../src/webview/planning.js#L3890). ✓
+- "Link all" synchronous flash removed, defers via `_lastLinkTicketBtn` — [planning.js:6484](../../src/webview/planning.js#L6484). ✓
+- Regression test all six assertions (a-f) hold by inspection — [tickets-link-to-ticket-regression.test.js](../../src/test/tickets-link-to-ticket-regression.test.js). ✓
+
+### Files changed by this reviewer pass
+
+- None (implementation already correct; only this plan file updated with review results).
+
+### Validation results
+
+- Compilation: skipped (session directive).
+- Tests: skipped (session directive). `tickets-link-to-ticket-regression.test.js` assertions verified by static inspection — all pass.
+
+### Remaining risks
+
+1. The regression test (e) has a brace-slice blind spot — a re-introduced post-message synchronous flash could slip past it.
+2. "Link all" on an empty filtered list silently copies provider directory paths with no user feedback — the very "silent copy" failure mode this plan targeted, surviving in the empty-`ids` path.
+3. Behavior change (ensure-then-link creates a local file as a side effect of clicking Link) is still pending user confirmation per the "User Review Required" section above.

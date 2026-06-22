@@ -108,6 +108,8 @@ The feature was designed as "full ClickUp/Linear automation" but shipped as a ha
 3. **`completeSyncEnabled`** — Wire it up; default ON for new presets, preserve existing config values for current installs (per migration rule). Gates automatic `syncPlan()` on DONE/COMPLETED/ARCHIVED transitions; leaves manual dispatch untouched.
 4. **Comment cap (import capture, §2)** — Max 20 most recent comments, 2000 chars each, truncation marker on overflow.
 5. **Inbound comment routing target (§7, NEW)** — Comments route to the agent assigned to the card's **current column** (no fixed agent). Self-authored comments are filtered via a hidden marker to prevent feedback loops.
+6. **Remote Control is Linear-only (§7–10)** — ClickUp is intentionally excluded from Remote Control (too heavy; wrong audience). Bug Triage (§1–6) stays dual-provider (ClickUp + Linear), ClickUp-leaning. GitHub Issues is noted as the best future second provider for Remote Control but not built now.
+7. **Remote Control transport: webhooks first, poll as fallback (§7/§9)** — Linear `Comment`/`Issue` webhooks drive the live loop; a low-frequency reconciliation poll is the safety net. Open implementation question (flagged, not blocking): how a locally-running extension receives webhooks (tunnel/relay vs. poll-only fallback). If no endpoint is configured, the feature degrades to a tighter poll.
 
 ## Complexity Audit
 
@@ -123,18 +125,20 @@ The feature was designed as "full ClickUp/Linear automation" but shipped as a ha
 - **Repurpose `ticket_updater` — collapse to a single triage behavior (Medium):** Reuse the existing role rather than registering a new one, and **delete its 4-mode selector** (`comment-only`/`refine-ticket`/`research-and-refine`/`disabled`). Rewrite the `ticket_updater` prompt branch (`agentPromptBuilder.ts:862`) to one behavior, and remove the `ticketUpdateMode` radio group from the addon UI (`sharedDefaults.js:184`). The risk is prompt-design — the ≤120-word verdict contract must be tight, comment-only, never overwriting the description. Migration constraint: the role shipped (it has a `ticketUpdateEnabled → ticketUpdateMode` migration), so keep the `ticketUpdateMode` config key readable (value now ignored) so old configs don't error; update the existing modes test to the single behavior.
 - **One-click triage setup (Medium-High):** New "Enable Triage Pipeline" flow that auto-creates a project board, sets sensible defaults, and wires up a default automation rule (dispatching to the simplified `ticket_updater`). Touches `setup.html`, `TaskViewerProvider`, and `KanbanDatabase`.
 - **`completeSyncEnabled` wiring (Medium):** Gating `syncPlan()` when target column is DONE/completed. Must distinguish automatic sync (gate it) from manual dispatch (don't gate it).
-- **Inbound comment ingestion + routing (High — §7):** New polling path, per-card last-comment cursor, self-comment filtering, and dispatch to the current column's agent. The dispatch-to-column-agent linkage is the riskiest coupling: it reuses the automation dispatch path but is triggered by a comment rather than a card move. Per-card sequential queue needed to avoid concurrent agent runs on one plan.
-- **Comment write-back channel (Medium — §8):** `postComment` with self-marker and truncation. Shared with the triage completion summary.
-- **State → column dispatch mirror (High — §9):** Inbound state-change detection must trigger the same dispatch a manual drag does, while guarding against an echo loop with outbound status write-back (§4). Getting the echo guard wrong causes infinite sync churn.
-- **One-click Remote Control setup (Medium-High — §10):** Mirrors columns↔states, builds the mapping, assigns per-column agents, tighter pull interval. Touches the same files as §6 plus the agent-assignment UI.
+- **Linear webhook transport (High — §7):** Receiving `Comment`/`Issue` webhooks for a locally-running extension needs a reachable HTTPS endpoint (tunnel/relay) or a poll-only fallback. This is the main new infra unknown — the rest of Remote Control depends on the transport decision.
+- **Inbound comment ingestion + routing (High — §7, Linear only):** Webhook receiver + reconciliation fallback poll, per-card last-comment cursor, exactly-once dedupe across both paths, self-comment filtering, and dispatch to the current column's agent. The dispatch-to-column-agent linkage is the riskiest coupling: it reuses the automation dispatch path but is triggered by a comment rather than a card move. Per-card sequential queue needed to avoid concurrent agent runs on one plan.
+- **Comment write-back channel (Medium — §8):** `postComment` with self-marker and truncation. Dual-provider (triage needs ClickUp + Linear); shared with the triage verdict write-back.
+- **State → column dispatch mirror (High — §9, Linear only):** `Issue` webhook state-change must trigger the same dispatch a manual drag does, while guarding against an echo loop with outbound status write-back (§4). Getting the echo guard wrong causes infinite sync churn.
+- **One-click Remote Control setup (Medium-High — §10, Linear only):** Mirrors columns↔states, builds the mapping, assigns per-column agents, registers webhooks. Touches the same files as §6 plus the agent-assignment UI.
 
 ## Edge-Case & Dependency Audit
 
 ### Race Conditions
 - **Stub write → watcher pickup:** `fs.promises.writeFile` is effectively atomic (write-to-temp + rename on most platforms). No risk of partial reads.
 - **Concurrent import + manual edit:** Watcher checks `!plan` for new vs existing. Second fire takes update path, preserving `sourceType`/provider IDs. Safe.
-- **Comment feedback loop (§7/§8):** The agent posts a reply comment; the next poll fetches it and would dispatch the agent again, ad infinitum. Mitigated by the hidden `<!-- switchboard -->` marker on all outbound comments — ingestion skips any comment containing it. The marker must survive the provider's markdown rendering (HTML comments are preserved by both Linear and ClickUp comment APIs; verify during implementation).
-- **State sync echo loop (§9):** A local drag pushes a state change out (§4); the next pull sees that state as "changed" and re-applies it as a column move + dispatch. Mitigated by recording the last-pushed state per card and skipping inbound moves that match a state we just wrote.
+- **Comment feedback loop (§7/§8):** The agent posts a reply comment; the next webhook (or reconciliation poll) fetches it and would dispatch the agent again, ad infinitum. Mitigated by the hidden `<!-- switchboard -->` marker on all outbound comments — ingestion skips any comment containing it. The marker must survive Linear's markdown rendering (HTML comments are preserved by the Linear comment API; verify during implementation).
+- **Webhook + poll double-delivery (§7):** The same comment/state can arrive via both the webhook and the reconciliation poll. Mitigated by the per-card last-comment cursor / last-applied-state — process exactly once regardless of path.
+- **State sync echo loop (§9):** A local drag pushes a state change out (§4); the inbound `Issue` webhook then reports that state as "changed" and would re-apply it as a column move + dispatch. Mitigated by recording the last-pushed state per card and skipping inbound moves that match a state we just wrote.
 - **Comment arrives mid-dispatch (§7):** Per-card sequential queue; a comment landing while the column agent is still running is enqueued, not dropped or run in parallel.
 
 ### Security
@@ -293,18 +297,28 @@ The changes split into **shared plumbing** (§1–5, needed by both use cases) a
 - The auto-created project board and automation rule are fully editable after creation.
 - The setup button is only enabled after a provider is connected and a list/project is selected.
 
-### Preset 2 — Remote Control (§7–10)
+### Preset 2 — Remote Control (§7–10) — **Linear only**
 
-This preset turns Linear into a remote terminal for the agents on your machine. It reuses the shared plumbing (provider IDs, status write-back, comment capture) and adds the **inbound comment loop** and a **state↔column dispatch mirror**. ClickUp gets the same treatment where its API supports comments; Linear is the primary target.
+This preset turns Linear into a remote terminal for the agents on your machine. It reuses the shared plumbing (provider IDs, status write-back, comment capture) and adds the **inbound comment loop** and a **state↔column dispatch mirror**.
 
-### 7. Inbound comment ingestion + routing to the current column's agent (NEW — core of Use Case 2)
+**Scope decision: Remote Control is Linear-only.** ClickUp is intentionally *not* supported for this feature — it's too heavy for the lightweight phone-driven workflow, and the audience for remote agent control overwhelmingly uses Linear (or GitHub; see below). Linear's clean per-team workflow-state model maps 1:1 onto kanban columns, and its **webhooks** make the inbound loop event-driven rather than polled. (The Bug Triage preset, §1–6, remains dual-provider — ClickUp + Linear — since triage is a different, ClickUp-leaning audience.)
+
+**Future provider note:** GitHub Issues is the strongest candidate for a second remote-control provider (the audience already lives on GitHub, issues sit next to the code, good mobile app + webhooks). Not built now; the dispatch/comment abstractions in §7–9 should avoid hard-coding Linear specifics where cheap, to keep that door open.
+
+**Transport: webhooks first, polling as fallback.** Linear delivers `Comment` and `Issue` (state-change) webhook events. The inbound loop (§7, §9) is driven by these events. A low-frequency reconciliation poll (e.g. every 15 min) is kept only as a safety net for missed/duplicated webhook deliveries — not the primary path.
+
+### 7. Inbound comment ingestion + routing to the current column's agent (NEW — core of Use Case 2, Linear only)
 
 **Why this matters:** This is the missing half of the loop. Without it, a comment you post from your phone never reaches the agent. This is the single most important new capability in the plan.
 
-#### `src/services/LinearSyncService.ts` (and ClickUp equivalent) — comment polling
-- Extend the existing auto-pull cycle so that, for each synced issue with a known provider ID, it fetches comments **created after the last-seen timestamp** for that card.
-- Track a per-card `lastSyncedCommentAt` (or last comment ID) in the DB so the same comment is never processed twice. Store on the plan record / `config` table — **not** a fictional state.json (see project rule).
+#### `src/services/LinearSyncService.ts` — webhook receiver for `Comment` events
+- Subscribe to Linear's `Comment` webhook (created events). On delivery, resolve the issue → the synced card via the provider ID linkage (§1).
+- **Fallback poll:** a low-frequency reconciliation pass fetches comments **created after the last-seen timestamp** per card, to recover any webhook the receiver missed. Webhooks are the primary path; the poll is the safety net.
+- Track a per-card `lastSyncedCommentAt` (or last comment ID) in the DB so a comment delivered by *both* the webhook and the reconciliation poll is processed exactly once. Store on the plan record / `config` table — **not** a fictional state.json (see project rule).
 - Ignore comments authored by Switchboard itself (tag outbound comments with a hidden marker, e.g. a trailing `<!-- switchboard -->` HTML comment, and skip any inbound comment containing it) to prevent self-feedback loops.
+
+#### Webhook transport
+- Linear webhooks need a reachable HTTPS endpoint. Since Switchboard runs locally (laptop at home), this requires either a lightweight tunnel/relay or a small hosted forwarder. **This is the main new infrastructure cost of going event-driven** — call it out for the implementer; if a tunnel isn't acceptable, the feature degrades gracefully to the reconciliation poll alone (tighter interval, e.g. 1–2 min). Decision flagged in the audit.
 
 #### Routing: comment → current column's agent
 - On a new inbound comment, look up the card's **current kanban column** and the **agent assigned to that column** (the same per-column agent the automation rules dispatch to).
@@ -315,42 +329,45 @@ This preset turns Linear into a remote terminal for the agents on your machine. 
 - Process inbound comments for a card sequentially (queue per card) so a rapid-fire "do X" then "actually do Y" can't run two agents on the same plan simultaneously.
 - A comment that arrives while the column agent is still working is queued, not dropped.
 
-### 8. Agent reply → Linear comment write-back (NEW)
+### 8. Agent reply → ticket comment write-back (NEW — shared primitive)
 
-**Why this matters:** The agent's answer has to get back to your phone. Status write-back exists; conversational comment write-back does not.
+**Why this matters:** The agent's answer has to get back to your phone (Remote Control) or onto the bug ticket (Triage). Status write-back exists; conversational comment write-back does not.
 
-#### `src/services/LinearSyncService.ts` (and ClickUp equivalent)
+**Provider scope:** `postComment` is **dual-provider** because Triage (§6) writes verdicts back to both ClickUp and Linear. The *conversational inbound loop* that consumes replies (§7/§9) is Linear-only — but the outbound comment primitive itself is shared, so build it for both providers.
+
+#### `src/services/LinearSyncService.ts` (and ClickUp equivalent — for triage write-back)
 - Add a `postComment(providerId, body)` path used by whichever column agent is replying, to write its comment back to the source issue. This wraps the same low-level `clickup_api` / `linear_api` skill the `ticket_updater` branch already invokes — it is the shared write-back primitive, available to *any* column agent (planner, coder, the simplified `ticket_updater`) so each can post a reply.
 - Prefix/suffix the body with the hidden `<!-- switchboard -->` marker (see §7) so the ingestion poller doesn't treat the agent's own reply as a new inbound instruction.
 - Truncate to the provider's comment size limit; if the agent output exceeds it, post a head + "*[truncated — see plan file]*" tail.
 - The triage write-back (§6) and the agent's verdict comment use this same primitive — build it once and share it.
 
-### 9. Card-move dispatch mirror — Linear state → Switchboard column → column agent (NEW)
+### 9. Card-move dispatch mirror — Linear state → Switchboard column → column agent (NEW, Linear only)
 
 **Why this matters:** Moving a card in Linear must move it in Switchboard *and* dispatch the destination column's agent. Switchboard never moves its own cards; the move is always driven from Linear (or by the human at the board).
 
-#### `src/services/LinearSyncService.ts` — inbound state sync
-- During auto-pull, detect when a synced issue's **state has changed** since last sync and the new state maps to a different Switchboard column (via the existing column↔state mapping).
+#### `src/services/LinearSyncService.ts` — inbound state sync via `Issue` webhook
+- Subscribe to Linear's `Issue` update webhook. On a `state` change, resolve the card and check whether the new state maps to a different Switchboard column (via the existing column↔state mapping built in §10).
 - Apply the column move to the card, then **trigger the destination column's automation/agent dispatch** — the same dispatch path a manual board drag triggers, so behavior is identical whether the move came from Linear or from a drag.
-- This is one-directional inbound (Linear → Switchboard) for *moves*. Outbound status write-back (§4) still handles Switchboard → Linear when a human drags the card locally; guard against an echo loop (don't re-push a state we just pulled).
+- The reconciliation poll (§7) also covers state drift as its safety net.
+- This is one-directional inbound (Linear → Switchboard) for *moves*. Outbound status write-back (§4) still handles Switchboard → Linear when a human drags the card locally; guard against an echo loop (don't re-apply a state we just pushed, and don't re-push a state we just pulled).
 
 ### 10. One-click Remote Control setup (NEW)
 
 **Why this matters:** Like triage, this should be one click, not 20 steps. The difference is what it configures.
 
 #### `src/webview/setup.html`
-- Add an "Enable Remote Control" button alongside "Enable Triage Pipeline", in both provider sections, enabled once connected and a project is selected.
+- Add an "Enable Remote Control" button in the **Linear section only** (not ClickUp), enabled once Linear is connected and a project is selected.
 
 #### `src/services/TaskViewerProvider.ts` (or `KanbanProvider.ts`) — handle `enableRemoteControl`
 1. **Auto-create / select a project board** named "Remote — [project name]" whose columns mirror the Linear project's workflow states (or fall back to the standard Switchboard column set if state introspection isn't available).
 2. **Build the column↔state mapping** automatically from the mirror, so moves round-trip without manual mapping.
 3. **Prompt for / assign a default agent per column** (the conversational target for comments landing in that column). A sensible default: **the simplified `ticket_updater` (triage) on the inbox/early column** (a freshly-posted issue wants triage first), planner on a review column, coder/lead on in-progress columns. This is the one piece the user will most likely customize.
-4. **Set defaults:** `realTimeSyncEnabled: true`, `autoPullEnabled: true`, `pullIntervalMinutes: 5` (tighter than triage — remote control wants snappier comment turnaround), `completeSyncEnabled: true`, comment ingestion ON.
-5. Return success with the board name and the per-column agent assignment so the UI can confirm.
+4. **Register Linear webhooks** for `Comment` and `Issue` events against the configured endpoint (see §7 transport note), and **set defaults:** `realTimeSyncEnabled: true`, comment ingestion ON, `completeSyncEnabled: true`. The reconciliation fallback poll defaults to 15 min (safety net only — webhooks carry the live path); if no webhook endpoint is configured, fall back to a tighter 1–2 min poll and surface that in the confirmation.
+5. Return success with the board name, the per-column agent assignment, and the chosen transport (webhook vs poll) so the UI can confirm.
 
 #### Design notes
-- Both presets are mutually compatible — a user can run a triage board on one list and a remote-control board on another project at the same time (consistent with the independent-workspace-per-tab behavior).
-- `pullIntervalMinutes: 5` is a battery/rate-limit tradeoff; expose it so power users can tighten it. Note any provider comment-fetch rate limits in implementation.
+- Both presets are mutually compatible — a user can run a (ClickUp or Linear) triage board on one list and a Linear remote-control board on another project at the same time (consistent with the independent-workspace-per-tab behavior).
+- Webhook delivery requires a reachable endpoint for a locally-running extension; the transport decision (tunnel/relay vs poll-only fallback) is the one real setup wrinkle — see §7.
 
 ## Verification Plan
 
@@ -369,10 +386,10 @@ This preset turns Linear into a remote terminal for the agents on your machine. 
 5. **`completeSyncEnabled` gating:** Verify `syncPlan()` skips DONE-column sync when flag is false. Verify manual `changeTicketStatus` is unaffected.
 6. **`kanbanColumn` directive:** Verify backlog-state items get `kanbanColumn: BACKLOG` in stubs and land in BACKLOG column on the board.
 7. **One-click triage setup:** Verify "Enable Triage Pipeline" creates project board, sets defaults, and creates automation rule.
-8. **Inbound comment routing (§7):** Verify a new Linear comment is fetched, routed to the agent of the card's current column, and not re-processed on the next poll. Verify a comment containing the self-marker is skipped.
-9. **Comment write-back (§8):** Verify the agent's reply posts as a Linear comment carrying the self-marker, and truncates oversized output.
-10. **State→column dispatch (§9):** Verify a Linear state change moves the card and dispatches the destination column's agent; verify a locally-dragged card does NOT echo back as an inbound move.
-11. **One-click Remote Control setup (§10):** Verify "Enable Remote Control" mirrors columns↔states, builds the mapping, assigns per-column agents, and enables comment ingestion.
+8. **Inbound comment routing (§7, Linear):** Verify a `Comment` webhook is received, routed to the agent of the card's current column, and processed exactly once even if the reconciliation poll also reports it. Verify a comment containing the self-marker is skipped.
+9. **Comment write-back (§8):** Verify the agent's reply posts as a comment carrying the self-marker, and truncates oversized output. Test both providers (triage write-back is dual-provider).
+10. **State→column dispatch (§9, Linear):** Verify an `Issue` state-change webhook moves the card and dispatches the destination column's agent; verify a locally-dragged card does NOT echo back as an inbound move.
+11. **One-click Remote Control setup (§10, Linear):** Verify "Enable Remote Control" appears only in the Linear section, mirrors columns↔states, builds the mapping, assigns per-column agents, registers webhooks (or falls back to poll with a surfaced notice), and enables comment ingestion.
 
 ### Manual Verification
 

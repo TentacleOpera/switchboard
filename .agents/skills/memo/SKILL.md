@@ -33,7 +33,7 @@ For each user message while in capture mode:
 
 1. Append the user's message text to `.switchboard/memo.md`, separated from previous entries by a blank line.
 2. Re-read `.switchboard/memo.md` and write out the FULL current memo as a numbered list
-   (each blank-line-separated entry = one numbered item), ending with
+   (each blank-line-separated entry = one numbered item), followed by
    "(N entries total) — still capturing."
 3. Do NOT analyze, investigate, plan, or write code — just capture and echo the list.
 
