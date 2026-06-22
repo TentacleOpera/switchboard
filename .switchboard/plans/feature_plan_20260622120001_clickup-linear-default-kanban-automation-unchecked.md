@@ -198,3 +198,50 @@ assert.match(setupSource, /data-linear-rule-card="true"\\]\)\.length > 0/, 'Line
 ---
 
 **Recommendation:** Complexity 3 → **Send to Intern**. Single-file, four-line change with one added DOM-query check. No backend changes, no architectural patterns, no data consistency risks.
+
+## Reviewer Pass — Completed
+
+**Reviewer:** Direct in-place reviewer pass (2026-06-22).
+**Implementation commit:** `760c49c` (diff bundled into "Unify Epic Architecture & Fix Kanban Epic Display" auto-commit; provenance nit only — no code impact).
+**Files changed by implementation:** `src/webview/setup.html` (function `syncSectionDisclosure`, lines 2784-2833).
+
+### Stage 1 — Adversarial Findings (Grumpy Principal Engineer)
+
+| # | Severity | Finding | File:Line | Verdict |
+|---|----------|---------|-----------|---------|
+| 1 | NIT | `hasAutomationRules` DOM query runs unconditionally even when `setupComplete === false` — no-op but unnecessary work | `setup.html:2803,2827` | Keep as-is (negligible cost, not a hot path) |
+| 2 | NIT | Linear `kOpen` mixes text-input `.value?.trim()` with checkbox checks — pre-existing, unchanged by this plan | `setup.html:2817-2818` | No action (pre-existing, correct behavior) |
+| 3 | SAFE | Collapsing kanban body hides `clickup-mappings-section` inside it — investigated and confirmed SAFE: `listsReady` is true whenever `mappedCount > 0`, so `kOpen = true` whenever the editor has content | `setup.html:760` inside `:720` | No regression |
+| 4 | SAFE | `hasAutomationRules` query timing — `syncSectionDisclosure` called after render functions, rule cards are in DOM | `setup.html:2845,2961` | No race |
+| 5 | SAFE | `dataset.clickupRuleCard` → `data-clickup-rule-card` attribute casing matches querySelector | `setup.html:2707` vs `:2803` | Correct |
+| 6 | NIT | Implementation diff bundled into commit `760c49c` whose message doesn't mention this plan — provenance/traceability nit | git history | Process concern, not code |
+
+**No CRITICAL or MAJOR findings.**
+
+### Stage 2 — Balanced Synthesis
+
+- **Keep (no changes):** The entire implementation matches the plan precisely. All four OR expressions are correct. The `hasAutomationRules` DOM-query addition is the right mitigation for the automation-rules edge case. HTML defaults (masters unchecked, bodies `hidden`) are correct. Change listeners only toggle body visibility — no save side-effects. No backend changes needed.
+- **Fix now:** Nothing — no CRITICAL/MAJOR findings.
+- **Defer:** (a) Out-of-scope Linear child defaults (`complete-sync` / `exclude-backlog` defaulting ON) — separate plan. (b) Commit provenance nit — process concern, not actionable in code.
+
+### Code Fixes Applied
+
+None. Implementation is correct as-shipped.
+
+### Validation Results
+
+- **Compilation:** Skipped per review instructions.
+- **Tests:** Skipped per review instructions.
+- **Static verification performed:**
+  - `mappingsEditorVisible` / `automationEditorVisible`: zero remaining references in `setup.html` (grep confirmed).
+  - `data-clickup-rule-card="true"` / `data-linear-rule-card="true"`: set on rule cards by `renderClickupAutomation` (`:2707`) and `renderLinearAutomation` (`:2869`); queried by `syncSectionDisclosure` (`:2803`, `:2827`). Attribute casing verified.
+  - `syncSectionDisclosure` called after all render functions in `renderClickupSetupState` (`:2845`) and `renderLinearSetupState` (`:2961`) — no DOM timing race.
+  - HTML defaults: all four master checkboxes unchecked (no `checked` attribute); all four bodies have `class="hidden"` (`:720`, `:787`, Linear kanban body, `:985`).
+  - Backend: `listsReady` (ClickUp, `TaskViewerProvider.ts:4012`) and `mappingsReady` (Linear, `:4071`) are true whenever mappings exist → `kOpen = true` whenever mappings editor has content → no hidden-editor regression.
+  - Change listeners (`:3266-3277`): only toggle body `hidden` class — no save side-effects.
+
+### Remaining Risks
+
+1. **Manual verification not yet performed** — the six manual verification steps in the Verification Plan above should be run by the user to confirm the UX behavior in a live webview.
+2. **Out-of-scope Linear child defaults** (`complete-sync` / `exclude-backlog` default ON) remain unchanged — if the user wants those unchecked by default on fresh integrations, a separate plan is needed.
+3. **Commit provenance** — the implementation diff is bundled in `760c49c` under an unrelated commit message. Future archaeologists may have trouble tracing this change to this plan. No code impact.
