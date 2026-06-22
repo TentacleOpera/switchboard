@@ -1332,7 +1332,6 @@ export class KanbanDatabase {
         return this._persist();
     }
 
-
     public async hasActivePlans(workspaceId: string): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
         const stmt = this._db.prepare(
@@ -1745,7 +1744,6 @@ export class KanbanDatabase {
         const params = [relativePlanFile, new Date().toISOString(), planId];
         return this._persistedUpdate(sql, params);
     }
-
 
     public async updateSessionId(oldSessionId: string, newSessionId: string): Promise<boolean> {
         console.log(`[KanbanDatabase] updateSessionId: oldSessionId=${oldSessionId}, newSessionId=${newSessionId}`);
@@ -4796,6 +4794,8 @@ export class KanbanDatabase {
                 console.error('[KanbanDatabase] V35 backfill failed:', e);
                 // Do NOT stamp version — retry on next init
             }
+        }
+
         // V36: Run the unified epic file path migration and data repair
         const v36 = await this.getMigrationVersion();
         if (v36 < 36) {
@@ -4806,16 +4806,16 @@ export class KanbanDatabase {
     private async _runMigrationV36(workspaceRoot: string): Promise<void> {
         if (!this._db) return;
 
-        // ── Data Repair: fix is_epic = NULL → 0 ──
         try {
+            // ── Data Repair: fix is_epic = NULL → 0 ──
+            // Multiple code paths (_savePlanRegistry, _handlePlanFile, _migrateLegacyPlanRegistryEntries)
+            // created records without setting isEpic, resulting in is_epic = NULL (overriding DEFAULT 0).
+            // This repair sets all NULL is_epic values to 0, restoring the intended default.
+            // Epics that were properly created (is_epic = 1) are unaffected.
             this._db.run('UPDATE plans SET is_epic = 0 WHERE is_epic IS NULL');
             console.log('[KanbanDatabase] V36 data repair: set is_epic = 0 for NULL records');
-        } catch (repairErr) {
-            console.error('[KanbanDatabase] V36 data repair failed:', repairErr);
-        }
 
-        // ── File Migration: move epic files from plans/ to epics/ directory ──
-        try {
+            // ── File Migration: move epic files from plans/ to epics/ directory ──
             const stmt = this._db.prepare(
                 `SELECT ${PLAN_COLUMNS} FROM plans WHERE is_epic = 1 AND plan_file LIKE '.switchboard/plans/epic-%'`
             );
@@ -4835,15 +4835,16 @@ export class KanbanDatabase {
                     await this.updatePlanFileByPlanId(epic.planId, newRel);
                 } catch (e) {
                     console.warn(`[KanbanDatabase] V36 migration: failed to move ${epic.planFile}: ${e}`);
+                    // Leave DB record as-is — filterGhostPlans will handle gracefully
                 }
             }
             await this.setMigrationVersion(36);
             console.log('[KanbanDatabase] V36 migration completed.');
         } catch (migrationErr) {
             console.error('[KanbanDatabase] V36 migration FAILED. Error:', migrationErr);
+            // Do NOT stamp version — retry on next init
         }
     }
-
 
     /**
      * Schema reconciliation: ensure all columns defined in SCHEMA_SQL's plans table

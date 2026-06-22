@@ -6854,7 +6854,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 const yamlSafeName = name.replace(/'/g, "''");
                 const yamlSafeDesc = (msg.description ? String(msg.description).trim() : '').replace(/'/g, "''");
                 const epicContent = `---\ndescription: '${yamlSafeName}'\n---\n\n# ${name}\n\n${msg.description ? String(msg.description).trim() : ''}`;
-                
+
                 // Register before writing so the file watcher skips this file —
                 // the DB record is already committed above with is_epic=1.
                 GlobalPlanWatcherService.registerPendingCreation(epicPath);
@@ -7529,4 +7529,3 @@ Each plan file must include:
         await fs.promises.writeFile(epicAbsPath, newContent, 'utf8');
     }
 }
-

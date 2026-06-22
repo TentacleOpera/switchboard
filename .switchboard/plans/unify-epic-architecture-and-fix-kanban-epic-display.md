@@ -779,6 +779,98 @@ The same applies to `TaskViewerProvider.ts` `filterGhostPlans` (line 14184), whi
 - [ ] **Registry: `_savePlanRegistry` does not clobber `is_epic`** — create an epic, trigger a registry save, verify `is_epic` stays `1`
 - [ ] **`createEpic` error handling: if `upsertPlan` fails, file is NOT written** — simulate DB failure, verify no orphaned file
 
+## Reviewer Pass (2026-06-22)
+
+### Stage 1 — Grumpy Principal Engineer
+
+Listen up. I've seen some careless brace placement in my time, but this one takes the cake. Let me walk you through the carnage.
+
+**CRITICAL — V36 migration entombed inside the V35 if-block (KanbanDatabase.ts:4798)**
+
+Are you KIDDING me? The V36 migration code — the entire `_runMigrationV36` call and the `if (v36 < 36)` guard — was nested INSIDE the `if (v35 < 35)` block because some genius forgot to close the V35 if-block before starting the V36 code. The `}` that was supposed to close `if (v35 < 35)` was instead closing the entire `_runMigrations` method, leaving `_runMigrationV36` as a nested method declaration with a `private` modifier inside a method body — which is INVALID TypeScript.
+
+Let me spell out the consequences:
+1. For ALL ~4,000 published installs that have already applied V35 (v35 >= 35), the V36 migration NEVER RUNS. The data repair (`is_epic = NULL → 0`) never happens. The file migration never happens. The entire plan's migration story is dead on arrival.
+2. The code wouldn't even compile — `private` is a class member modifier, not valid inside a method body. This was committed without compilation, which is the only reason it survived.
+
+This is the kind of bug that makes me question whether anyone even looked at the diff before committing. A single missing `}` invalidated the entire migration strategy.
+
+**MAJOR — V36 data repair in a separate try/catch from file migration (KanbanDatabase.ts:4810-4846)**
+
+The data repair (`UPDATE plans SET is_epic = 0 WHERE is_epic IS NULL`) was in its own try/catch block, separate from the file migration try/catch. If the data repair failed (for any reason — DB hiccup, locked DB, whatever), the error was logged and SWALLOWED. Then the file migration ran in a separate try block. If the file migration SUCCEEDED, `setMigrationVersion(36)` was called, marking the migration as complete. The data repair failure was permanently buried. The `is_epic = NULL` records — the entire reason for the data repair — would never be fixed on subsequent loads because the migration version is already 36.
+
+The plan explicitly calls out the data repair as a key part of V36. Silently swallowing its failure and marking the migration complete is a betrayal of the plan's intent.
+
+**NIT — `promoteToEpic` doesn't call `_regenerateEpicFile` (KanbanProvider.ts:6768)**
+
+After promoting a plan to epic, the file is moved to `epics/` but the managed subtask markers are never written. The epic file retains whatever content the original plan had — no `<!-- BEGIN SUBTASKS -->` markers. The markers only appear when a subtask is subsequently added or removed. This is cosmetic but inconsistent — `createEpic` writes the markers via `_regenerateEpicFile`, but `promoteToEpic` doesn't.
+
+**NIT — Extra blank lines and trailing whitespace (multiple files)**
+
+Double blank lines after `insertFileDerivedPlan`, `updatePlanFileByPlanId`, `_runMigrationV36`, and `_debounceHandleFile`. Trailing whitespace on a line in `createEpic`. These are cosmetic but sloppy.
+
+**NIT — Claudify theme epic card CSS included despite plan saying it's tracked separately (kanban.html:121-127)**
+
+The plan explicitly says "The Claudify theme epic card styling bug is tracked separately and will be handled by another agent." The implementation includes the CSS fix anyway. Not harmful, but scope creep.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is:**
+- `insertFileDerivedPlan` method — correct SQL, correct ON CONFLICT clause, correct DB-owned/file-owned boundary enforcement
+- `updatePlanFileByPlanId` method — correct, uses `_persistedUpdate` and `_ensureRelativePlanFile`
+- `createEpic` upsert error checking — correct, prevents orphaned files
+- `createEpic` file path change to `epics/` — correct, slug generation with collision handling
+- `promoteToEpic` file move + DB update ordering — correct, DB update before file move, watcher suppression registered
+- `promoteToEpic` fallback on move failure — correct, reverts DB path, leaves `is_epic=1`
+- `addSubtaskToEpic`/`removeSubtaskFromEpic` subtask listing regeneration — correct, captures `epicId` before clearing
+- `_regenerateEpicFile` helper — correct, marker-based section replacement, preserves user content
+- `buildBoardSignature` — correct, adds `isEpic` and `subtaskCount`
+- Watcher 5-location extension — correct, all 5 locations handle `epics/`
+- Watcher `_handlePlanFile` using `insertFileDerivedPlan` — correct, both branches
+- Watcher `epics/` directory auto-epic via explicit `updateEpicStatus` — correct, preserves DB-owned boundary
+- `TaskViewerProvider._savePlanRegistry`/`_registerPlan`/`_migrateLegacyPlanRegistryEntries` — correct, all use `insertFileDerivedPlan`
+- `PlanningPanelProvider.createEpic` — correct, same slug/path logic as KanbanProvider
+- V36 migration logic (file moves, `.migrated.bak` archival, idempotency) — correct
+
+**Fix now (CRITICAL):**
+1. Add missing `}` to close `if (v35 < 35)` block before V36 code — FIXED
+
+**Fix now (MAJOR):**
+2. Consolidate V36 data repair and file migration into a single try/catch so `setMigrationVersion(36)` only runs if both succeed — FIXED
+
+**Defer (NIT):**
+3. `promoteToEpic` should call `_regenerateEpicFile` after promotion for marker consistency — deferred (cosmetic, markers appear on first subtask change)
+4. Extra blank lines and trailing whitespace — FIXED (cleaned up)
+5. Claudify theme CSS scope creep — deferred (not harmful, may be intentional)
+
+### Fixes Applied
+
+1. **KanbanDatabase.ts:4798** — Added `}` to close the `if (v35 < 35)` block before the V36 code. The V36 migration now runs unconditionally (guarded by its own `if (v36 < 36)` check), regardless of whether V35 was already applied.
+2. **KanbanDatabase.ts:4810-4846** — Consolidated the V36 data repair and file migration into a single `try/catch` block. `setMigrationVersion(36)` is only called if both the data repair AND file migration succeed. If either fails, the version is not stamped, and the migration re-runs on next init.
+3. **KanbanDatabase.ts:1334, 1747, 4848** — Removed extra blank lines after `insertFileDerivedPlan`, `updatePlanFileByPlanId`, and `_runMigrationV36`.
+4. **GlobalPlanWatcherService.ts:407** — Removed extra blank line before `_debounceHandleFile`.
+5. **KanbanProvider.ts:6857** — Removed trailing whitespace on blank line in `createEpic`.
+
+### Files Changed
+
+- `src/services/KanbanDatabase.ts` — V36 brace fix, data repair consolidation, cosmetic cleanup
+- `src/services/GlobalPlanWatcherService.ts` — cosmetic cleanup
+- `src/services/KanbanProvider.ts` — trailing whitespace cleanup
+
+### Validation Results
+
+- Brace structure verified: `_runMigrations` method (lines 4079-4804) and `_runMigrationV36` method (lines 4806-4847) both have balanced braces
+- V36 migration now runs independently of V35 status
+- Data repair and file migration are atomic with respect to version stamping
+- Compilation and tests skipped per session directives
+
+### Remaining Risks
+
+1. **`promoteToEpic` missing `_regenerateEpicFile` call** — Epic files created via promotion won't have managed subtask markers until a subtask is added/removed. Low risk — cosmetic inconsistency only.
+2. **`insertFileDerivedPlan` ignores `kanbanColumn` and `status` from caller records** — Callers like `_savePlanRegistry` and `_registerPlan` pass `kanbanColumn` and `status` in the `KanbanPlanRecord`, but `insertFileDerivedPlan` hardcodes `'CREATED'` and `'active'` on INSERT. This is the intended DB-owned boundary enforcement, but could confuse developers who expect the passed values to be used. Low risk — documented behavior.
+3. **Claudify theme epic card CSS included despite plan scope** — The CSS fix for epic card styling was included in this commit despite the plan saying it's tracked separately. No functional risk, but scope creep.
+4. **`!addToKanbanBoard` path in `PlanningPanelProvider.createEpic` lacks slug collision handling** — Pre-existing issue, not introduced by this plan. If two epics with the same name are created (without kanban board), the second overwrites the first.
+
 ## Recommendation
 
 **Complexity: 7 → Send to Lead Coder**

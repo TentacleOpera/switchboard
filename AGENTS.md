@@ -18,6 +18,7 @@ This project relies on **Switchboard Workflows** defined in `.agent/workflows`.
 | `/accuracy` | **`accuracy.md`** | High accuracy mode with self-review (Standard Protocol). |
 | `/improve-plan` | **`improve-plan.md`** | Deep planning with optional dependency checks and adversarial review. |
 | `/chat` | **`chat.md`** | Activate chat consultation workflow. |
+| `/memo` | **`memo.md`** | Memo capture mode — append-only, no analysis, no exit. |
 
 
 ### ⚠️ MANDATORY PRE-FLIGHT CHECK
@@ -87,12 +88,17 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | `linear_api` | Direct Linear API access via LocalApiServer proxy (replaces call_linear_api) |
 | `web_research` | User asks to "research X", "investigate Y", or needs authoritative sources |
 | `deep_planning` | User requests complex code changes requiring architecture understanding |
-| `memo` | User invokes `/memo` to enter progressive capture mode — agent appends each user message to `.switchboard/memo.md` without analysis until user says "investigate memo" or similar |
+| `memo` | User invokes `/memo` to enter progressive capture mode — agent appends each user message to `.switchboard/memo.md` without analysis. |
 | `refine_ticket` | User clicks "Refine" on a ticket card to copy a prompt that produces a complete, agent-actionable specification (backend-consumed skill — not invocable via `skill: "refine_ticket"`) |
 
 **Usage**: Call `skill: "archive"` before performing archive operations to access detailed tool documentation and examples.
 
 **Skill Files Location**: `.agent/skills/` (distributed with plugin)
+
+### 📌 Memo Capture Mode — Priority Rule
+
+While `/memo` capture mode is active, capture mode takes precedence over the default "analyze and act" behavior. The agent appends each user message to `.switchboard/memo.md` and does NOT analyze, plan, or write code. Every capture-mode reply begins with `[MEMO CAPTURE ACTIVE]`. There are no exit triggers — capture mode is permanent for the conversation; the user clears the conversation to leave. "clear memo" clears the file but stays in capture mode. To process captured entries into plan files, use the Memo modal in the Kanban panel (send/copy buttons). For guaranteed capture that no host system prompt can override, use the Memo modal.
+See `.agent/workflows/memo.md` and `.agent/skills/memo/SKILL.md` for the full protocol.
 
 ### 📝 Plan Authoring & Problem Analysis Protocol
 

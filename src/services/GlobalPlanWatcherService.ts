@@ -405,7 +405,6 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
         }
     }
 
-
     private _debounceHandleFile(uri: vscode.Uri, workspaceRoot: string): void {
         const key = uri.fsPath;
         const existing = this._debounceTimers.get(key);
