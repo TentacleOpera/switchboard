@@ -106,3 +106,39 @@ No automated tests required — this is a cosmetic string-literal change with no
 ---
 
 **Recommendation:** Complexity 1 → **Send to Intern**
+
+---
+
+## Reviewer Pass — Results (2026-06-22)
+
+### Verification
+
+- **Grep audit:** `grep -rn 'eraser' src/` → **0 occurrences** remaining. All three `$(eraser)` literals were replaced.
+- **Replacement audit:** `grep -rn 'clear-all' src/` → exactly **3 occurrences**, one per intended surface:
+  - `src/extension.ts:1821` — `terminalClearStatusBarItem.text = '$(clear-all) Clear';` (status bar item)
+  - `src/extension.ts:1997` — `lines.push(\`[$(clear-all) Clear](command:switchboard.clearAllTerminals)\`);` (markdown hover link)
+  - `src/extension.ts:2101` — `label: '$(clear-all) Clear',` (QuickPick item; command still `switchboard.clearAllTerminals` at :2103)
+- **Codicon validity:** confirmed real — `node_modules/@vscode/codicons/dist/codicon.css:232` → `.codicon-clear-all:before { content: "\eabf" }`.
+- **Behavior unchanged:** all three `command` bindings remain `switchboard.clearAllTerminals` / surrounding commands untouched; only the glyph string changed.
+
+> **Note on line numbers:** The "Proposed Changes" section above cites lines 1811 / 1987 / 2091. The file has since drifted; the edits actually landed at **1821 / 1997 / 2101**. The semantic targets (status bar item, hover link, QuickPick label) are correct — only the cited coordinates were stale.
+
+### Findings by Severity
+
+- **CRITICAL:** none.
+- **MAJOR:** none.
+- **NIT:** Plan's "Proposed Changes" line references (1811/1987/2091) are stale; actual edits at 1821/1997/2101. Documentary only — corrected via this note.
+
+### Fixes Applied
+
+- None to code (no valid CRITICAL/MAJOR findings). Only this plan file was updated with corrected line references and review results.
+
+### Validation Run
+
+- Compilation: **skipped** per session directive.
+- Automated tests: **skipped** per session directive (to be run separately by the user).
+- Static verification: grep audits + codicon-font lookup, all passed (see above).
+
+### Remaining Risks
+
+- None material. Cosmetic change only; the chosen glyph is a confirmed codicon distinct from `$(stop-circle)` Reset and `$(table)` Kanban. Manual visual confirmation in a running extension host (Verification Plan steps 2–4) remains the only outstanding check, deferred to the user.

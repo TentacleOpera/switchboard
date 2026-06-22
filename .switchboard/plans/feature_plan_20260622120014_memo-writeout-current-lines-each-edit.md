@@ -102,6 +102,7 @@ Example output the skill should produce after each edit:
 2. Thought: maybe cache the user profile
 3. Issue: API returns 500 on empty payload
 (3 entries total) — still capturing.
+To process entries, use the Memo modal in the Kanban panel (send/copy buttons). Clear the conversation to exit.
 ```
 
 ### 2. `.agent/workflows/memo.md` — mirror the write-out and lift the read restriction
@@ -145,3 +146,50 @@ No automated tests apply — this is a prompt/skill text change with no TypeScri
 ---
 
 **Recommendation:** Complexity 2 → Send to Intern.
+
+## Review Pass — 2026-06-22
+
+### Stage 1: Adversarial Findings
+
+| # | Severity | Finding | Location |
+|---|----------|---------|----------|
+| 1 | MAJOR | Conflicting "end with" instructions — Process step 2 said "ending with '(N entries total) — still capturing.'" while Hard Rule #5 said "end with: 'Still capturing. To process entries...'" | `.agents/workflows/memo.md:14,18` |
+| 2 | MAJOR | "Still capturing" duplication — count line says "— still capturing." and Hard Rule #5 footer started with "Still capturing." producing redundant text if both are output | `.agents/workflows/memo.md:14,18` |
+| 3 | NIT | Stale `_parseMemoEntries` line reference (7017-7039 vs actual 7023-7045) | Plan file §Edge-Case Audit |
+| 4 | NIT | Stale `.agent/` paths in §Proposed Changes (rename to `.agents/` already happened) | Plan file §Proposed Changes |
+| 5 | NIT | Hard Rule #1 references undefined "acknowledgment format" — agent must cross-reference Process step 2 | `.agents/workflows/memo.md:10` (pre-existing) |
+
+### Stage 2: Balanced Synthesis
+
+- **Fix now:** Findings #1 and #2 — change "ending with" → "followed by" in both workflow and skill; remove "Still capturing." prefix from Hard Rule #5 footer (count line already says it).
+- **Fix now:** Finding #3 — update stale line reference in plan.
+- **Defer:** Finding #4 — plan is historical; implementation already targets `.agents/` correctly.
+- **Defer:** Finding #5 — pre-existing, not introduced by this plan.
+
+### Fixes Applied
+
+1. `.agents/workflows/memo.md` line 14 (Hard Rule #5): Removed "Still capturing." prefix from footer → now reads "To process entries, use the Memo modal in the Kanban panel (send/copy buttons). Clear the conversation to exit."
+2. `.agents/workflows/memo.md` line 18 (Process step 2): Changed "ending with" → "followed by" to resolve conflict with Hard Rule #5.
+3. `.agents/skills/memo/SKILL.md` lines 36-37 (Appending Entries step 2): Changed "ending with" → "followed by" for cross-file consistency with workflow.
+4. Plan file: Updated stale `_parseMemoEntries` line reference (7017-7039 → 7023-7045).
+5. Plan file: Updated example output to include the Hard Rule #5 footer line.
+
+### Files Changed
+
+- `.agents/workflows/memo.md` — Hard Rule #5 footer deduplicated; Process step 2 wording fixed
+- `.agents/skills/memo/SKILL.md` — Appending Entries step 2 wording fixed for consistency
+- `.switchboard/plans/feature_plan_20260622120014_memo-writeout-current-lines-each-edit.md` — stale line ref fixed; example updated; review section added
+
+### Validation Results
+
+- **Compilation:** Skipped per session policy (prompt/skill text change, no TypeScript logic).
+- **Tests:** Skipped per session policy (no automated tests apply — prompt/skill text only).
+- **Manual verification:** Not run in this session. The manual verification checklist in §Verification Plan remains valid and should be executed by the user.
+- **Consistency check:** Grep confirmed no remaining instances of "Still capturing. To process" or "ending with.*entries total" in `.agents/` directory. Both files now use "followed by" for the count line and the deduplicated footer.
+
+### Remaining Risks
+
+1. **Hard Rule #1 undefined "acknowledgment format" (NIT, deferred):** An agent must cross-reference Process step 2 to know the response format. Low risk since Process step 2 is in the same file, but could be made explicit.
+2. **"clear memo" response vs Hard Rule #5 footer:** The "clear memo" response specifies its own format ("Memo cleared. (0 entries total) — still capturing.") which could conflict with Hard Rule #5's footer requirement. In practice, "clear memo" is a special command and the explicit format likely takes precedence, but this is not formally reconciled.
+3. **Blank-line separator assumption:** The numbering match between agent write-out and `_parseMemoEntries` depends on blank-line separators being preserved. If a host strips blank lines, the fallback prefix-based parsing path would produce a different count. This is stated as an assumption in the plan and is out of scope.
+4. **Capture-mode dependency:** This plan's write-out only manifests if capture mode holds (dependency on `feature_plan_20260622120010_memo-instruction-antigravity-override-fix.md`).
