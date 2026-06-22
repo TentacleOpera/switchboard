@@ -39,7 +39,7 @@ No — this is a self-contained CSS variable swap with a fully enumerated blast 
 - Confirming `--accent-primary` is redeclared by each theme class (Afterburner at `:root` line 25; Claudify at `body.theme-claudify` line 35).
 
 ### Complex / Risky
-- `.modal-title` is shared by **six** modals, not four. Changing the shared rule recolors all of them. Full list of affected modals (verified via grep):
+- `.modal-title` is shared by **seven** modals, not four. Changing the shared rule recolors all of them. Full list of affected modals (verified via grep):
   1. Report Testing Failure — `<h3 class="modal-title">` ([kanban.html:2833](src/webview/kanban.html#L2833))
   2. Routing Map — `<h3 class="modal-title">` ([kanban.html:2853](src/webview/kanban.html#L2853))
   3. Integration Settings — `<h3 class="modal-title">` ([kanban.html:2889](src/webview/kanban.html#L2889))
@@ -113,3 +113,44 @@ None — this is a pure CSS variable swap with no logic surface. The test suite 
 ---
 
 **Recommendation:** Complexity 2 → **Send to Intern**.
+
+## Code Review Results (Reviewer-Executor Pass)
+
+### Stage 1 — Adversarial Findings
+
+| # | Severity | Finding | Location |
+|---|----------|---------|----------|
+| 1 | NIT | Plan doc line 42 said "shared by **six** modals" but enumerated seven items; line 50 said "seven." Actual grep count: 7 HTML elements with `class="modal-title"`. | Plan doc line 42 (fixed) |
+| 2 | NIT | The auto-commit labeled with this plan's title (`86089f2`) does not touch `kanban.html`. The actual `var(--accent-red)` → `var(--accent-primary)` swap landed in commit `760c49c` ("Unify Epic Architecture & Fix Kanban Epic Display"), confirmed via `git blame` on line 1352. Code state is correct; this is a traceability/process note only. | git history |
+
+**No CRITICAL findings. No MAJOR findings.** The implementation is a clean, correct execution of Option A.
+
+### Stage 2 — Balanced Synthesis & Disposition
+
+- **Code change (`kanban.html:1352`):** `color: var(--accent-primary)` — correct, theme-aware, matches Option A. **Keep. No code change needed.**
+- **Theme var resolution:** `--accent-primary` declared at `:root` (line 25, `#00e5ff`) and redeclared at `body.theme-claudify` (line 35, `#D97757`). **Verified.**
+- **Blast radius (7 modals):** All seven `.modal-title` HTML elements (lines 2833, 2853, 2889, 2921, 2945, 2967, 2999) now inherit the themed accent. **Verified via grep.**
+- **Destructive/error elements unaffected:** All 27 `--accent-red` references audited — none flow through `.modal-title`. Delete Epic button (line 2990) and error spans (2586, 2596, 2933) use inline `var(--accent-red)`. **Verified.**
+- **Doc fix applied:** Line 42 "six" → "seven" to resolve the internal contradiction. **Applied.**
+
+### Code Fixes Applied
+
+- **Plan doc only:** Corrected modal count on line 42 from "six" to "seven" (consistency with the 7-item enumeration and line 50).
+- **No code fixes needed** — the implementation in `src/webview/kanban.html` is correct as-is.
+
+### Verification Results
+
+- **Compilation:** Skipped per session instructions.
+- **Tests:** Skipped per session instructions (pure CSS variable swap, no logic surface).
+- **Static verification performed:**
+  - `git blame` on `kanban.html:1352` confirms the swap from `var(--accent-red)` → `var(--accent-primary)` is present in the current codebase (commit `760c49c`).
+  - `grep -c 'class="modal-title"' kanban.html` → 7 HTML elements, matching the plan's enumeration.
+  - `grep '--accent-primary'` → declared at `:root` line 25 and `body.theme-claudify` line 35; used at line 1352 (the `.modal-title` rule). Confirms theme-aware resolution.
+  - `grep '--accent-red'` → 27 references audited; none are on `.modal-title`. Destructive buttons and error text remain red-themed and unaffected.
+- **Manual visual verification (deferred to user):** Steps 1–5 in the Verification Plan above remain manual eyeball checks (theme switching, contrast confirmation under Claudify). These cannot be automated in this session.
+
+### Remaining Risks
+
+1. **Manual visual confirmation pending:** The Manage Epic contrast check under Claudify (terracotta title `#D97757` vs. red Delete button `#da3633`) has been statically verified as using distinct color values but not visually eyeballed in a running webview. Low risk — the hex values are clearly distinguishable.
+2. **Future theme authors:** Any future theme that forgets to redeclare `--accent-primary` will fall back to the `:root` Afterburner cyan (`#00e5ff`). Non-catastrophic but worth documenting for theme authors.
+3. **Commit traceability:** The plan's labeled auto-commit (`86089f2`) does not contain the `kanban.html` change. The actual change is in `760c49c`. This is a process note, not a code risk.

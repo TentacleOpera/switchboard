@@ -1808,7 +1808,7 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(terminalOpenStatusBarItem);
 
     terminalClearStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 97);
-    terminalClearStatusBarItem.text = '$(eraser) Clear';
+    terminalClearStatusBarItem.text = '$(clear-all) Clear';
     terminalClearStatusBarItem.tooltip = 'Clear Agent Terminals';
     terminalClearStatusBarItem.command = 'switchboard.clearAllTerminals';
     context.subscriptions.push(terminalClearStatusBarItem);
@@ -1984,7 +1984,7 @@ export async function activate(context: vscode.ExtensionContext) {
         if (showTerminalControls) {
             if (lines.length > 2) lines.push('---');
             lines.push(`[$(hubot) Agents](command:switchboard.createAgentGrid)`);
-            lines.push(`[$(eraser) Clear](command:switchboard.clearAllTerminals)`);
+            lines.push(`[$(clear-all) Clear](command:switchboard.clearAllTerminals)`);
             lines.push(`[$(stop-circle) Reset](command:switchboard.deregisterAllTerminals)`);
         }
 
@@ -2088,7 +2088,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 command: 'switchboard.createAgentGrid'
             });
             items.push({
-                label: '$(eraser) Clear',
+                label: '$(clear-all) Clear',
                 description: 'Clear agent terminals',
                 command: 'switchboard.clearAllTerminals'
             });
