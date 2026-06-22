@@ -133,3 +133,52 @@ None — this is a pure DOM visibility toggle with no unit-test harness coverage
 ## Recommendation
 
 Complexity 2 → **Send to Intern**.
+
+---
+
+## Reviewer Pass (2026-06-22)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *Cracks knuckles.* Right, let's see who's been playing fast and loose with my Theme tab.
+>
+> **[NIT — stale plan, not stale code]** The plan swears up and down there are exactly two themes — Afterburner and the dreaded Claudify — and that hiding "whenever theme is not `afterburner`" is the whole job. Cute. Except the actual radio group at `setup.html:1167-1177` ships **three** themes: `afterburner`, `claudify`, AND `afterburner-professional`. The plan author never laid eyes on the third option. If the implementer had blindly copy-pasted the plan's `theme === 'afterburner'` early-return logic *without* checking the real markup, I'd still be fine — but only by dumb luck. Show me you understood *why* it's fine, not that you guessed.
+>
+> **[CRITICAL — prove the third theme doesn't have the beam]** "Afterburner *Professional*." The name screams "I am an Afterburner, I have the glorious CRT sweep beam." If that's true, your `t === 'afterburner'` check just *hid a meaningful toggle* from Professional users — a regression dressed up as a feature. Where is the proof the sweep beam doesn't render under Professional? Don't wave your hands.
+>
+> **[NIT — flash of unhidden content]** Default `currentSwitchboardTheme = 'afterburner'` (`:1663`) plus a section with no inline `display:none` means on a Claudify load the Animation block is *visible* until the inbound message lands. The plan calls this "safe in practice." I call it a flicker. Document it or eat it.
+>
+> **[NIT — double-fire]** The `'theme'` tab handler calls the helper with `savedTheme` AND fires `getThemeSetting`, which round-trips and calls the helper *again* via `switchboardThemeNameSetting`. Two calls. Harmless, idempotent — but say it out loud so the next person doesn't "optimize" one away and break the cold-open path.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep:**
+- The helper `updateAnimationSectionVisibility` (`setup.html:1665-1669`) with its `if (section)` guard — clean, idempotent, early-call-safe. Matches the plan exactly.
+- All three trigger points are wired and verified: tab-open handler (`:1764`), radio `change` (`:3836`), and `switchboardThemeNameSetting`/`switchboardThemeChanged` (`:4123`).
+- The strict `t === 'afterburner'` equality (not a `!== 'claudify'` denylist). This is the *correct* shape and is what makes the third theme work for free.
+
+**Resolved during review (the CRITICAL):**
+- The CRT sweep beam is gated entirely on the `cyber-theme-enabled` body class. That class is added **only** for `afterburner` (`implementation.html:2454`, `setup.html:4117`). `afterburner-professional` applies `theme-claudify` + `theme-afterburner-pro` and **never** adds `cyber-theme-enabled` (`setup.html:4120-4121`, `implementation.html:2457-2458`). Therefore Professional has no sweep beam, and hiding its toggle is correct, not a regression. The strict-equality implementation handles all three themes correctly. **No code change required.**
+
+**Defer / accept as documented:**
+- The brief flash-of-visible on Claudify cold loads is pre-existing, cosmetic, and already acknowledged in the plan's Adversarial Synthesis. Not worth a synchronous render-blocking fix.
+- The intentional double-call on tab open is benign (idempotent helper). No change.
+
+### Fixes Applied
+None. The implementation is complete and correct as written; the only CRITICAL surfaced (Professional regression) was disproven by tracing the `cyber-theme-enabled` gating, not by a code defect.
+
+### Files Changed (by implementation, verified this pass)
+- `src/webview/setup.html`
+  - `:1665-1669` — `updateAnimationSectionVisibility` helper added.
+  - `:1764` — called in `'theme'` tab-open handler.
+  - `:3836` — called in theme radio `change` listener.
+  - `:4123` — called in `switchboardThemeNameSetting` / `switchboardThemeChanged` handler.
+
+### Validation Results
+- Compilation: **skipped** per session directive.
+- Automated tests: **skipped** per session directive (and none exist for this DOM-only path, per plan).
+- Static verification (this pass): all three entry points confirmed present and calling the helper; helper logic confirmed correct against the three-theme radio set; sweep-beam gating traced to `cyber-theme-enabled`, confirmed exclusive to `afterburner`. Manual verification steps 1-5 in the plan remain the acceptance gate.
+
+### Remaining Risks
+- **Future theme additions:** any new theme that *does* ship the CRT sweep beam must add `cyber-theme-enabled` (so the toggle re-appears) — the visibility helper keys on the theme name `=== 'afterburner'`, so a new sweep-bearing theme would need the helper's condition widened too. Low likelihood, easy to spot.
+- **Flash-of-visible** on non-Afterburner cold loads — cosmetic only, pre-existing, accepted.
