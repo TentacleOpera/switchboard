@@ -3689,6 +3689,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         function openMemoModal() {
             const modal = document.getElementById('memo-modal');
             const textarea = document.getElementById('memo-textarea');
+            const titleEl = document.getElementById('memo-modal-title');
+            if (titleEl) titleEl.textContent = 'MEMO';
             postKanbanMessage({ type: 'memoLoad' });
             modal?.classList.remove('hidden');
             textarea?.focus();

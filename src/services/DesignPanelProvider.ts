@@ -1652,8 +1652,6 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     const stitch = await loadStitch('');
                     const project = stitch.project(projectId);
                     const list = await project.listDesignSystems();
-                    // Temporary debug log to confirm Stitch design system structure
-                    console.log('STITCH DEBUG - listDesignSystems raw output:', JSON.stringify(list));
                     const designSystems = list.map((ds: any) => ({
                         id: ds.id,
                         displayName: ds.data?.displayName || ds.data?.name || ds.name || `Design System ${ds.id}`,

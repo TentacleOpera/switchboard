@@ -123,3 +123,39 @@ Skipped per session directives — the user will run the test suite separately.
 ---
 
 **Recommendation:** Complexity 3 → **Send to Intern** (single-file frontend change + one backend payload addition, all following existing patterns with no architectural risk).
+
+## Reviewer Pass — 2026-06-22
+
+### Stage 1: Adversarial Findings
+
+| # | Severity | File:Line | Finding |
+|---|----------|-----------|---------|
+| 1 | NIT | `src/webview/kanban.html:3689` | `openMemoModal` did not reset the title to `MEMO` before posting `memoLoad`. On subsequent opens after switching workspaces, the header briefly displayed the **previous** workspace's name (e.g. "MEMO — A") until the async `memoContent` response arrived — not the neutral "MEMO" default claimed in the plan's race-condition analysis (line 40). Self-corrected in milliseconds, but displayed an actively wrong workspace label during the pre-response window. |
+
+No CRITICAL or MAJOR findings. All four proposed changes were implemented correctly:
+- Title element has stable `id="memo-modal-title"` with `class="modal-title"` preserved for theme CSS.
+- `memoLoad` handler derives `workspaceName` from `_getWorkspaceItems()` (consistent with dropdown labels) with `path.basename` fallback.
+- Post-clear `memoContent` emission also carries `workspaceName`.
+- `memoContent` handler uses `textContent` (no injection) with defensive `'MEMO'` fallback.
+
+Verified: `_getWorkspaceItems()` returns `Array<{ label: string; workspaceRoot: string }>` with `workspaceRoot` as `path.resolve(root)`, matching `_resolveWorkspaceRoot`'s resolved-path output — the `===` lookup is consistent. Both `memoContent` emission sites (lines 6953, 6999) are the only two in the file.
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Verdict |
+|---------|---------|
+| NIT #1 (stale-title flash) | **Fixed now** — one-line reset in `openMemoModal` makes the plan's claimed pre-response behavior actually true and eliminates the wrong-workspace flash. |
+
+### Fixes Applied
+
+- **`src/webview/kanban.html:3689-3697`** — Added `titleEl.textContent = 'MEMO'` reset at the start of `openMemoModal`, before posting `memoLoad`. This ensures the pre-response window always shows the neutral default regardless of which workspace's memo was last viewed.
+
+### Validation Results
+
+- Compilation: Skipped per session directives.
+- Automated tests: Skipped per session directives.
+- Manual code verification: All 4 plan changes confirmed present and correct via file reads and grep. `_getWorkspaceItems()` shape and path-resolution consistency verified. No other `memoContent` emission sites exist.
+
+### Remaining Risks
+
+- None material. The stale-title flash was the only finding and is now fixed. The async title update (brief "MEMO" → "MEMO — WORKSPACE") is inherent to the message-based architecture and matches the textarea content load pattern.
