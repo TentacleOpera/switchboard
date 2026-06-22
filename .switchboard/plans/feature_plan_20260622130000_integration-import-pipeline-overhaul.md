@@ -300,7 +300,7 @@ The changes split into **shared plumbing** (§1–5, needed by both use cases) a
 
 This preset turns Linear into a remote terminal for the agents on your machine. It reuses the shared plumbing (provider IDs, status write-back, comment capture) and adds the **inbound comment loop** and a **state↔column dispatch mirror**.
 
-**Scope decision: Remote Control is Linear-only.** ClickUp is intentionally *not* supported for this feature — it's too heavy for the lightweight phone-driven workflow, and the audience for remote agent control overwhelmingly uses Linear (or GitHub; see below). Linear's clean per-team workflow-state model maps 1:1 onto kanban columns, and its **webhooks** make the inbound loop event-driven rather than polled. (The Bug Triage preset, §1–6, remains dual-provider — ClickUp + Linear — since triage is a different, ClickUp-leaning audience.)
+**Scope decision: Remote Control is Linear-only.** ClickUp is intentionally *not* supported for this feature — it's too heavy for the lightweight phone-driven workflow, and the audience for remote agent control overwhelmingly uses Linear (or GitHub; see below). Linear's clean per-team workflow-state model maps 1:1 onto kanban columns. (The Bug Triage preset, §1–6, remains dual-provider — ClickUp + Linear — since triage is a different, ClickUp-leaning audience.)
 
 **Future provider note:** GitHub Issues is the strongest candidate for a second remote-control provider (the audience already lives on GitHub, issues sit next to the code, good mobile app). Not built now; the dispatch/comment abstractions in §7–9 should avoid hard-coding Linear specifics where cheap, to keep that door open.
 

@@ -37,14 +37,6 @@ For each user message while in capture mode:
    "(N entries total) — still capturing."
 3. Do NOT analyze, investigate, plan, or write code — just capture and echo the list.
 
-### Clearing
-
-If the user says "clear memo":
-
-1. Truncate `.switchboard/memo.md` to empty.
-2. Respond with: `[MEMO CAPTURE ACTIVE] Memo cleared. (0 entries total) — still capturing.`
-3. Stay in capture mode.
-
 ### Processing Entries
 
 To process captured entries into plan files, use the Memo modal in the Kanban panel. The modal's "send" button dispatches entries to the planner and clears the memo; the "copy" button copies the planner prompt to clipboard and clears the memo. This is the only way to process entries — chat capture mode has no exit triggers.

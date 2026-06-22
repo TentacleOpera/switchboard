@@ -140,3 +140,30 @@ make it a command.
 ## Recommendation
 
 Complexity is 2 → **Send to Intern.** Documentation-only change reinforcing an existing architectural decision; no code, no migrations, no tests.
+
+## Reviewer Pass (2026-06-22)
+
+### Verdict
+Implementation complete and correct. Both anti-examples are present and match the plan's intent. No code fixes required.
+
+### Findings
+- **[MAJOR — plan text, not code] Stale `.agent/` paths.** The Edge-Case Audit states "The `.agent` → `.agents` rename ... did not occur — paths remain `.agent/`." This is wrong: the live tree uses `.agents/`. Every `.agent/` path cited in Problem Analysis and Proposed Changes is stale and should be read as `.agents/`. The implementer correctly targeted the real files regardless, so no behavioral impact — but the plan's path claims are misleading for future readers. (Reviewer left the original body intact at user request; this note is the correction of record.)
+- **[NIT] memo.md change exceeded "one line."** Proposed Change #2 asked for a one-line example after the line-13 enumeration. The shipped edit reworked rule 4 to also document the "clear memo" side-action exception with a forward-reference to In-Capture Commands. Net improvement and consistent with existing sections; kept.
+- **[NIT] Self-referential anti-example.** The hard-coded example is itself a memo-about-memo sentence. Harmless; noted only for completeness.
+- **[CRITICAL] None.**
+
+### Files Verified
+- `.agents/skills/memo/SKILL.md:17-26` — "Anti-Example — Embedded Trigger Words Are Content" subsection present, placed after rule 5. ✓
+- `.agents/workflows/memo.md:13` — anti-example sentence appended to rule 4, with "clear memo" exception documented. ✓
+- `AGENTS.md:100` — no-exit rule already correct; intentionally left unchanged per Proposed Change #3. ✓
+
+### Validation
+- Compilation: **skipped** per session directive.
+- Automated tests: **skipped** per session directive (no test surface — `.agents/` prompt text is not test-covered).
+- Manual/behavioral verification (plan steps 1–6): not executed in this reviewer pass (requires a live `/memo` session). Documentation reads correctly and unambiguously enforces the no-exit + append-verbatim behavior the steps describe.
+
+### Remaining Risks
+- Low. Plan-document path staleness could mislead a future reader who edits from the plan rather than the live tree; the appended correction above mitigates this. No runtime, security, or data risk.
+
+### Fixes Applied
+- None to code (no valid CRITICAL/MAJOR code findings). The only material finding is in the plan prose and is documented above; the user declined an in-body edit to the Edge-Case Audit line, so the correction lives in this Reviewer Pass section.
