@@ -1622,6 +1622,12 @@
         let activeTabId = 'setup';
         let currentSwitchboardTheme = 'afterburner';
 
+        function updateAnimationSectionVisibility(theme) {
+            const t = theme || currentSwitchboardTheme || 'afterburner';
+            const section = document.getElementById('theme-animation-settings');
+            if (section) section.style.display = (t === 'afterburner') ? '' : 'none';
+        }
+
         // Initialize tabs
         function initTabs() {
             const tabButtons = document.querySelectorAll('.shared-tab-btn');
@@ -1715,6 +1721,7 @@
                     const savedTheme = currentSwitchboardTheme || 'afterburner';
                     const themeRadio = document.querySelector(`input[name="theme-selection"][value="${savedTheme}"]`);
                     if (themeRadio) themeRadio.checked = true;
+                    updateAnimationSectionVisibility(savedTheme);
                 },
                 'status-bar': () => {
                     vscode.postMessage({ type: 'getStatusShowAgentOpenSetting' });
@@ -3745,6 +3752,7 @@
             radio.addEventListener('change', (e) => {
                 currentSwitchboardTheme = e.target.value;
                 vscode.postMessage({ type: 'setThemeSetting', theme: e.target.value });
+                updateAnimationSectionVisibility(e.target.value);
             });
         });
  
@@ -4027,6 +4035,7 @@
                     if (theme !== 'afterburner') {
                         document.body.classList.add(`theme-${theme}`);
                     }
+                    updateAnimationSectionVisibility(theme);
                     break;
                 }
                 case 'startupCommands': {

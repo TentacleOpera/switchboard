@@ -293,6 +293,7 @@ export class PlanningPanelProvider {
                 retainContextWhenHidden: true
             }
         );
+        this._projectPanel.iconPath = vscode.Uri.joinPath(this._extensionUri, 'icon.svg');
         this._updateWebviewRoots();
 
         this._projectPanel.webview.html = this._getProjectHtml(this._projectPanel.webview);
@@ -438,6 +439,7 @@ export class PlanningPanelProvider {
                 retainContextWhenHidden: true
             }
         );
+        this._panel.iconPath = vscode.Uri.joinPath(this._extensionUri, 'icon.svg');
         this._updateWebviewRoots();
 
         this._panel.webview.html = this._getHtml(this._panel.webview);

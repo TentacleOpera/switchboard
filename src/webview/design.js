@@ -1417,6 +1417,7 @@
 
     // ── Stitch UI Controls ──
     const stitchProjectSelect = document.getElementById('stitch-project-select');
+    const designSystemProjectSelect = document.getElementById('design-system-project-select');
     const btnDownloadPalette = document.getElementById('btn-download-palette');
     const stitchPromptInput = document.getElementById('stitch-prompt-input');
     const stitchDeviceSelect = document.getElementById('stitch-device-select');
@@ -2087,6 +2088,9 @@
         stitchProjectSelect.addEventListener('change', () => {
             const projectId = stitchProjectSelect.value;
             state.selectedStitchProjectId = projectId;
+            if (designSystemProjectSelect) {
+                designSystemProjectSelect.value = projectId;
+            }
             if (state.stitchWorkspaceRoot) {
                 persistTab('stitch.projectId', projectId, state.stitchWorkspaceRoot);
             }
@@ -2109,6 +2113,20 @@
         });
     }
 
+    if (designSystemProjectSelect) {
+        designSystemProjectSelect.addEventListener('change', () => {
+            const projectId = designSystemProjectSelect.value;
+            state.selectedStitchProjectId = projectId;
+            if (stitchProjectSelect) {
+                stitchProjectSelect.value = projectId;
+            }
+            if (state.stitchWorkspaceRoot) {
+                persistTab('stitch.projectId', projectId, state.stitchWorkspaceRoot);
+            }
+            refreshStitchDesignSystems();
+        });
+    }
+
     function populateStitchProjects(projects, defaultProjectId) {
         if (!stitchProjectSelect) return;
 
@@ -2122,16 +2140,31 @@
         // Do NOT auto-select defaultProjectId or first project
         const current = state.selectedStitchProjectId || '';
         stitchProjectSelect.innerHTML = '<option value="">Select Project...</option>';
+        if (designSystemProjectSelect) {
+            designSystemProjectSelect.innerHTML = '<option value="">Select Project...</option>';
+        }
+        
         sortedProjects.forEach(p => {
             const opt = document.createElement('option');
             opt.value = p.id;
             opt.textContent = p.name || p.id;
             if (p.id === current) opt.selected = true;
             stitchProjectSelect.appendChild(opt);
+
+            if (designSystemProjectSelect) {
+                const optDS = document.createElement('option');
+                optDS.value = p.id;
+                optDS.textContent = p.name || p.id;
+                if (p.id === current) optDS.selected = true;
+                designSystemProjectSelect.appendChild(optDS);
+            }
         });
 
         // Explicitly set value to prevent stale browser state
         stitchProjectSelect.value = current;
+        if (designSystemProjectSelect) {
+            designSystemProjectSelect.value = current;
+        }
         
         // Update selectedStitchProjectId to whatever was selected
         state.selectedStitchProjectId = stitchProjectSelect.value;
@@ -2944,6 +2977,7 @@
                 if (msg.selectProjectId) {
                     state.selectedStitchProjectId = msg.selectProjectId;
                     if (stitchProjectSelect) stitchProjectSelect.value = msg.selectProjectId;
+                    if (designSystemProjectSelect) designSystemProjectSelect.value = msg.selectProjectId;
                     if (state.stitchWorkspaceRoot) {
                         persistTab('stitch.projectId', msg.selectProjectId, state.stitchWorkspaceRoot);
                     }
@@ -3184,6 +3218,9 @@
             state.activePreviewScreenId = null;
             if (stitchProjectSelect) {
                 stitchProjectSelect.value = '';
+            }
+            if (designSystemProjectSelect) {
+                designSystemProjectSelect.value = '';
             }
             closeStitchPreview();
             
@@ -3713,7 +3750,7 @@
             return;
         }
 
-        const option = stitchProjectSelect?.querySelector(`option[value="${state.selectedStitchProjectId}"]`);
+        const option = (designSystemProjectSelect || stitchProjectSelect)?.querySelector(`option[value="${state.selectedStitchProjectId}"]`);
         if (projName) projName.textContent = option ? option.textContent : state.selectedStitchProjectId;
 
         if (noProj) noProj.style.display = 'none';
@@ -3761,11 +3798,15 @@
             headerRow.style.alignItems = 'center';
             headerRow.style.borderBottom = '1px solid var(--border-color)';
             headerRow.style.paddingBottom = '6px';
-
             const title = document.createElement('strong');
             title.style.fontSize = '13px';
             title.style.color = 'var(--text-primary)';
-            title.textContent = ds.displayName;
+            let displayTitle = ds.displayName;
+            if (!displayTitle || displayTitle === ds.id) {
+                const shortId = typeof ds.id === 'string' && ds.id.length > 8 ? ds.id.substring(0, 8) : ds.id;
+                displayTitle = `Design System (${shortId})`;
+            }
+            title.textContent = displayTitle;
 
             const idLabel = document.createElement('span');
             idLabel.style.fontSize = '10px';
@@ -3782,6 +3823,25 @@
             guidelines.style.color = 'var(--text-secondary)';
             guidelines.style.margin = '4px 0';
             guidelines.textContent = ds.styleGuidelines || 'No style guidelines provided.';
+
+            // Design Tokens summary
+            const tokens = document.createElement('div');
+            tokens.style.fontSize = '11px';
+            tokens.style.color = 'var(--text-secondary)';
+            tokens.style.margin = '4px 0';
+            let tokenText = 'No design tokens';
+            if (ds.designTokens) {
+                try {
+                    const parsed = JSON.parse(ds.designTokens);
+                    const keys = Object.keys(parsed);
+                    if (keys.length > 0) {
+                        tokenText = `${keys.length} design token(s) configured (${keys.slice(0, 5).join(', ')}${keys.length > 5 ? '...' : ''})`;
+                    }
+                } catch {
+                    tokenText = 'Design tokens configured';
+                }
+            }
+            tokens.textContent = 'Tokens: ' + tokenText;
 
             // Actions row
             const actionsRow = document.createElement('div');
@@ -3812,6 +3872,7 @@
 
             card.appendChild(headerRow);
             card.appendChild(guidelines);
+            card.appendChild(tokens);
             card.appendChild(actionsRow);
 
             listContainer.appendChild(card);

@@ -3696,9 +3696,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <!-- Stitch Design Systems Panel -->
             <div id="design-systems-panel" style="display: none; flex-direction: column; flex: 1; overflow: hidden; height: calc(100% - 75px); padding: 12px; box-sizing: border-box; gap: 12px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 8px;">
-                    <div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
                         <span style="font-size: 11px; color: var(--text-secondary);">STITCH PROJECT:</span>
-                        <strong id="design-system-project-name" style="font-size: 12px; margin-left: 6px;">None Selected</strong>
+                        <select id="design-system-project-select" class="workspace-filter-select">
+                            <option value="">Select Project...</option>
+                        </select>
+                        <strong id="design-system-project-name" style="font-size: 12px; display: none;">None Selected</strong>
                     </div>
                     <div style="display: flex; gap: 8px;">
                         <button id="btn-create-design-system" class="strip-btn stitch-btn-primary" style="font-size: 11px; padding: 4px 8px; display: none;">+ Create Design System</button>
@@ -3708,7 +3711,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 
                 <!-- If no project is selected -->
                 <div id="design-system-no-project" style="display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; gap: 8px; color: var(--text-secondary);">
-                    <p style="margin: 0; font-size: 12px;">No Stitch project selected.</p>
+                    <p style="margin: 0; font-size: 12px;">Select a project from the dropdown above.</p>
                     <button id="btn-goto-stitch-tab" class="strip-btn" style="padding: 4px 12px;">Go to Stitch Tab</button>
                 </div>
 

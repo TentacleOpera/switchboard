@@ -133,11 +133,6 @@ export class SetupPanelProvider implements vscode.Disposable {
                 }
                 case 'ready':
                     await this._taskViewerProvider.postSetupPanelState();
-                    {
-                        const currentTheme = vscode.workspace.getConfiguration('switchboard')
-                            .get<string>('theme.name', 'afterburner');
-                        this._panel?.webview.postMessage({ type: 'switchboardThemeNameSetting', theme: currentTheme });
-                    }
                     if (this._pendingSection) {
                         this._panel.webview.postMessage({ type: 'openSetupSection', section: this._pendingSection });
                         this._pendingSection = undefined;

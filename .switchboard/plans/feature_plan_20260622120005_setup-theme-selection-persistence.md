@@ -126,4 +126,42 @@ case 'getThemeSetting': {
 
 ---
 
+## Review Pass — 2026-06-22
+
+### Stage 1: Adversarial Findings
+
+| # | Severity | File:Line | Finding |
+|---|----------|-----------|---------|
+| 1 | **MAJOR** | `src/services/SetupPanelProvider.ts:136-140` (original impl) | **Redundant double-post based on wrong root cause.** The plan's root cause analysis claimed "SetupPanelProvider never sends the theme on ready." This is factually false: `postSetupPanelState()` — called on `ready` — already posts `switchboardThemeNameSetting` via `handleGetThemeSetting()` (`TaskViewerProvider.ts:3856-3859`, landed in commit `d25a692` on June 5, 17 days before this plan). The implementation added a second post of the identical message with the identical value immediately after the call that already sends it. Dead code born from a misdiagnosis. |
+| 2 | **NIT** | `src/services/SetupPanelProvider.ts:661-666`, `src/webview/setup.html:1720` | `getThemeSetting` handler + theme-tab request are redundant for initial load (since `ready`→`postSetupPanelState` already sends the theme) but provide genuine re-sync value when re-entering the Theme tab after a cross-panel theme change. **Keep.** |
+| 3 | **NIT** | `dist/webview/setup.html`, `dist/extension.js` | Compiled output does not contain `getThemeSetting` — extension runs from `dist/`, so changes are inactive at runtime until rebuild. |
+
+### Stage 2: Balanced Synthesis
+
+- **Fix now:** Remove the redundant theme post from the `ready` handler (Finding #1). `postSetupPanelState()` already sends `switchboardThemeNameSetting` with the same theme value via `handleGetThemeSetting()`, which is literally `getConfiguration('switchboard').get('theme.name', 'afterburner')` — the exact same read the redundant block performed. The double-post is harmless (idempotent webview handler) but is dead code that confuses future maintainers.
+- **Keep:** The `getThemeSetting` handler and theme-tab request (Finding #2). These provide a real re-sync mechanism when the user re-enters the Theme tab after changing the theme in another panel (Kanban/Planning) while Setup was open. Without this, `currentSwitchboardTheme` in the Setup webview would be stale on tab re-entry.
+- **Defer:** `dist/` rebuild (Finding #3) — session directive skips compilation; user will rebuild separately.
+
+### Fixes Applied
+
+1. **`src/services/SetupPanelProvider.ts`** — Removed the redundant `{ const currentTheme = ...; this._panel?.webview.postMessage(...) }` block from the `ready` case (5 lines deleted). The `ready` handler now relies solely on `postSetupPanelState()` for the theme send, which already posts `switchboardThemeNameSetting` at `TaskViewerProvider.ts:3856-3859`.
+
+### Files Changed (Review Pass)
+
+- `src/services/SetupPanelProvider.ts` — removed redundant theme double-post from `ready` handler (lines 136-140 deleted)
+
+### Validation Results
+
+- **Compilation:** Skipped per session directive.
+- **Automated tests:** Skipped per session directive.
+- **Static verification:** Confirmed `ready` handler is clean (calls `postSetupPanelState` which sends theme); `getThemeSetting` handler intact at line 661; webview theme-tab request intact at `setup.html:1720`; `switchboardThemeNameSetting` webview handler is idempotent (sets radio + body class at `setup.html:4031-4043`).
+
+### Remaining Risks
+
+1. **`dist/` is stale** — compiled output lacks all `getThemeSetting` changes. A rebuild (`npm run compile`) is required before the fix is active at runtime.
+2. **Original root cause analysis in this plan is incorrect** — the "Problem Analysis" and "Root Cause" sections (above) claim the Setup panel never sends the theme on `ready`. In reality, `postSetupPanelState()` has been sending it since June 5 (commit `d25a692`). The plan's proposed Change #1 (explicit theme post in `ready`) was redundant and has been removed. Changes #2 and #3 (`getThemeSetting` handler + theme-tab request) are retained as they provide genuine tab-re-entry re-sync value.
+3. **If the user-reported bug (radio shows Afterburner after reopen) still reproduces after rebuild**, the root cause is elsewhere — possibly in `postSetupPanelState` returning early (`if (!this._setupPanelProvider) return` at `TaskViewerProvider.ts:3846`), or in message ordering vs. DOM readiness. Further investigation would be needed.
+
+---
+
 **Recommendation:** Complexity 2 → **Send to Intern**
