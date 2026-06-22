@@ -51,20 +51,6 @@
             --glow-teal: none;
         }
 
-        body.theme-afterburner-pro .worktree-primary-btn { background: color-mix(in srgb, var(--accent-primary) 12%, transparent); }
-        body.theme-afterburner-pro .worktree-primary-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
-
-        body.theme-afterburner-pro .strip-icon-btn.flash img,
-        body.theme-afterburner-pro .kanban-sub-bar .strip-icon-btn.flash img,
-        body.theme-afterburner-pro .controls-strip .strip-icon-btn.flash img,
-        body.theme-afterburner-pro .column-icon-btn.flash img,
-        body.theme-afterburner-pro .column-header-btn.flash img,
-        body.theme-afterburner-pro .mode-toggle.flash img,
-        body.theme-afterburner-pro .complexity-routing-btn.flash img,
-        body.theme-afterburner-pro .btn-add-plan.flash img {
-            filter: brightness(1.1) saturate(1.1);
-        }
-
         /* Claudify: remove neon glow from base (non-cyber) interactive states */
         body.theme-claudify .btn-batch:hover,
         body.theme-claudify .kanban-card.selected,
@@ -79,6 +65,10 @@
         /* Claudify: recolor hardcoded teal (#00ad9f) that no variable controls */
         body.theme-claudify .worktree-primary-btn { background: color-mix(in srgb, #D97757 12%, transparent); }
         body.theme-claudify .worktree-primary-btn:hover:not(:disabled) { background: color-mix(in srgb, #D97757 25%, transparent); }
+
+        /* Afterburner Pro: recolor worktree button to cyan (MUST be after Claudify rule — equal specificity, later wins) */
+        body.theme-afterburner-pro .worktree-primary-btn { background: color-mix(in srgb, var(--accent-primary) 12%, transparent); }
+        body.theme-afterburner-pro .worktree-primary-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
 
         /* Claudify: avoid afterburner's glowing coloured icons. The teal-tinted PNGs are knocked
            to black (brightness(0)) then inverted to a flat neutral GREY at rest and on hover.
@@ -113,6 +103,17 @@
         body.theme-claudify .complexity-routing-btn.flash img,
         body.theme-claudify .btn-add-plan.flash img {
             filter: brightness(0) saturate(100%) invert(54%) sepia(48%) saturate(560%) hue-rotate(330deg) brightness(108%) contrast(87%);
+        }
+        /* Afterburner Pro: icon click-flash shows original cyan PNGs brightened (MUST be after Claudify flash rule — equal specificity, later wins) */
+        body.theme-afterburner-pro .strip-icon-btn.flash img,
+        body.theme-afterburner-pro .kanban-sub-bar .strip-icon-btn.flash img,
+        body.theme-afterburner-pro .controls-strip .strip-icon-btn.flash img,
+        body.theme-afterburner-pro .column-icon-btn.flash img,
+        body.theme-afterburner-pro .column-header-btn.flash img,
+        body.theme-afterburner-pro .mode-toggle.flash img,
+        body.theme-afterburner-pro .complexity-routing-btn.flash img,
+        body.theme-afterburner-pro .btn-add-plan.flash img {
+            filter: brightness(1.1) saturate(1.1);
         }
         /* Off states stay greyed-out (no teal to recolor) */
         body.theme-claudify .strip-icon-btn.is-off img,

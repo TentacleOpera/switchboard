@@ -346,3 +346,44 @@ Because Afterburner Pro carries `theme-claudify` (dual-class) but **not** `cyber
 ---
 
 **Recommendation:** Complexity is 5 → **Send to Coder**.
+
+## Code Review Results (Reviewer Pass — 2026-06-22)
+
+### Stage 1 — Grumpy Adversarial Findings
+
+| # | Severity | File:Line | Finding |
+|---|----------|-----------|---------|
+| 1 | **CRITICAL** | `src/webview/kanban.html:54-66` (pre-fix) | Afterburner-pro literal overrides (worktree button + icon click-flash filter) placed **before** the Claudify rules they override (worktree at 80-81, flash at 107-115). Equal specificity `(0,2,1)` → later-declared wins → Claudify terracotta overrides the cyan overrides. Worktree button and all icon click-flashes stay terracotta under afterburner-professional. The plan explicitly required placement after the Claudify rules. |
+| 2 | NIT | All 6 files | `--glow-teal: none` redeclared in every afterburner-pro var block despite being inherited from `theme-claudify`. Harmless redundancy — defensive and self-documenting. No action. |
+| 3 | NIT | `src/webview/implementation.html:70` | Afterburner-pro var block overrides `--glow-teal` but not `--glow-cyan`. Inherited from Claudify block (line 54). No issue. |
+
+### Stage 2 — Balanced Synthesis
+
+- **Finding #1 (CRITICAL):** Valid and fixed. The kanban.html worktree and flash overrides were placed immediately after the afterburner-pro var block (lines 54-66), before the Claudify rules at lines 80-81 and 107-115. Since the body carries both `theme-claudify` and `theme-afterburner-pro`, both rule sets match with equal specificity. The Claudify rules, being later in source order, won the cascade. Fix: moved the worktree override to after the Claudify worktree rules (now lines 69-71) and the flash override to after the Claudify flash rule (now lines 107-117).
+- **Findings #2-3 (NIT):** No action needed — both are harmless redundancies that serve as defensive self-documentation.
+
+### Fixes Applied
+
+1. **`src/webview/kanban.html`** — Moved `body.theme-afterburner-pro .worktree-primary-btn` override (2 rules) from lines 54-55 to lines 69-71 (after Claudify worktree rules at 66-67). Moved `body.theme-afterburner-pro …flash img` override (8-selector block) from lines 57-66 to lines 107-117 (after Claudify flash rule at 97-106). Added clarifying comments noting the ordering requirement.
+
+### Verification Results
+
+- **Blocking-gate grep (`#D97757\|#E2A188`):** CLEAN — all 33 hits across 6 files are either inside `theme-claudify` var blocks (overridden by afterburner-pro var blocks) or have afterburner-pro overrides placed after the Claudify rules.
+- **Terracotta filter recipe (`hue-rotate(330deg)`):** 1 hit at `kanban.html:105` (Claudify flash rule). Overridden by afterburner-pro flash at lines 107-117, now correctly placed after.
+- **CSS var block ordering:** All 6 files place the `body.theme-afterburner-pro { … }` var block immediately after the `body.theme-claudify { … }` var block. ✅
+- **Literal override ordering:** kanban worktree (69-71 after 66-67) ✅, kanban flash (107-117 after 97-106) ✅, planning h1/h2-h6 (2384-2394 after 2367-2382) ✅, design h1/h2-h6 (2409-2419 after 2392-2407) ✅, project h1/h2-h6 (844-858 after 823-842) ✅.
+- **Runtime handlers (6/6):** All six handlers (setup.html, planning.js, design.js, project.js, kanban.html, implementation.html) use explicit mutually-exclusive base handling with `theme-afterburner-pro` in the remove list and the dual-class add for `afterburner-professional`. implementation.html `cyber-theme-enabled` management added. Generic `theme-${theme}` lines removed from setup.html and implementation.html. ✅
+- **First-paint/runtime parity:** `getThemeBodyClass()` returns `'theme-claudify theme-afterburner-pro'` — matches the runtime handler output. ✅
+- **Setup UI:** Third radio at setup.html:1174-1177 with correct value and label. `updateAnimationSectionVisibility` hides animation section for non-afterburner. ✅
+- **package.json:** `afterburner-professional` added to enum + enumDescriptions. Default unchanged. ✅
+- **Compilation/tests:** Skipped per session instructions.
+
+### Files Changed During Review
+
+- `src/webview/kanban.html` — moved 2 literal override blocks to correct cascade position (CRITICAL fix)
+
+### Remaining Risks
+
+- **Manual visual verification not performed** — the CSS cascade ordering is now correct by source-order analysis, but live rendering in a webview should confirm: (1) worktree button is cyan under afterburner-pro, (2) icon click-flash shows brightened cyan (not terracotta), (3) no Poppins in markdown headings, (4) no `cyber-theme-enabled` leak when toggling themes in the implementation panel.
+- **h2-h6 colour** stays Claudify's warm cream `#F0EBE6` against cyan h1 — flagged in User Review Required. May need a follow-up if it reads wrong.
+- **Warm-tinted borders in implementation.html** (`#38332E`/`#5C544A`) inherited from Claudify — intentional per plan, flagged in User Review Required.
