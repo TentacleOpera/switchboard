@@ -2,9 +2,11 @@
 
 ## Goal
 
-Fully eradicate `sessionId` / `session_id` from the switchboard extension. Every plan is already uniquely identified by `(plan_file, workspace_id)` or `plan_id`. The `session_id` column is a legacy artefact from when Claude's process session ID was used as the plan primary key. It is the source of orphan-plan bugs, duplicate-row bugs, and fallback-ID generation bugs. This plan removes it completely with no compatibility shims left behind.
+Fully eradicate `sessionId` / `session_id` from the switchboard extension. Every plan is already uniquely identified by `(plan_file, workspace_id)` or `plan_id`. The `session_id` column is a legacy artefact from when Claude's process session ID was used as the plan primary key. This plan removes it completely with no compatibility shims left behind.
 
-**Root-Cause Analysis:** The `session_id` column was the original primary key for plans, derived from Claude's process session ID. When the architecture moved to `plan_id` (UUID) and `(plan_file, workspace_id)` as the natural key, `session_id` was left behind as a vestigial column. The `sess_${Date.now()}` fallback generator was added to handle cases where no Claude session ID was found in `state.json`, but this fabricated garbage primary keys that created orphan DB rows. Multiple deduplication helpers (`cleanupSpuriousMirrorPlans`, `cleanupDuplicateLocalPlans`) were added as band-aids to clean up the orphan rows, but they treat the symptom not the disease. The `session_id` column persists across `plans`, `activity_log`, and ~26 DB methods because agents migrate callers piecemeal and leave the old methods behind. This plan completes the eradication in a single coordinated pass.
+> **Scope note:** The `sess_` fallback ID generator and its deduplication helpers were originally part of this plan (Phase 2). They have been split into a separate, self-contained plan: `feature_plan_20260623_kill_sess_fallback_generator.md`. That plan should be executed **first** — it kills the bug at its source and is low-risk. This plan handles the remaining full eradication (caller migration, method deletion, schema migration, interface cleanup) and is higher-risk.
+
+**Root-Cause Analysis:** The `session_id` column was the original primary key for plans, derived from Claude's process session ID. When the architecture moved to `plan_id` (UUID) and `(plan_file, workspace_id)` as the natural key, `session_id` was left behind as a vestigial column. The `session_id` column persists across `plans`, `activity_log`, and ~26 DB methods because agents migrate callers piecemeal and leave the old methods behind. This plan completes the eradication in a single coordinated pass.
 
 ---
 

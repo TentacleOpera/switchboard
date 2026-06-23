@@ -131,3 +131,48 @@ No automated tests required for this session. The test suite will be run separat
 ---
 
 **Recommendation:** Complexity 2/10 → **Send to Intern.**
+
+## Reviewer Pass (2026-06-23)
+
+### Stage 1 — Adversarial Findings (Grumpy Principal Engineer)
+
+| Severity | Finding | Location |
+|---|---|---|
+| CRITICAL | None | — |
+| MAJOR | None | — |
+| NIT | Code change landed in commit `ccb6eb3` ("Docs Tab…" auto-commit), not in `93fcf12` (the auto-commit named after this plan). Auto-commit batching artifact — change is present and correct in the tree. No code impact. | git history |
+| NIT | All three `dispatchCustomPromptToRole` failure paths (`:2509`, `:2512`, `:2515`) correctly fall through to the clipboard fallback at `:9270`, but this coverage is implicit — a one-line comment would help future readers. Not worth a fix now. | `TaskViewerProvider.ts:9267-9271` |
+
+### Stage 2 — Balanced Synthesis
+
+- **Keep:** Clipboard write correctly scoped to `copy` branch + `send`-failure branch only. Failure-fallback copy preserved with truthful message. Success message makes no clipboard claim. Memo clear-on-success unchanged. No confirm dialogs. No webview edit needed (intro text already correct). No leftover memo handler in `KanbanProvider.ts`.
+- **Fix now:** None.
+- **Defer:** Both NITs — commit-hygiene artifact and optional failure-path comment.
+
+### Stage 3 — Code Fixes Applied
+
+None. The implementation at `src/services/TaskViewerProvider.ts:9260-9275` matches the plan's "After" block exactly. No CRITICAL/MAJOR findings to fix.
+
+### Stage 4 — Verification Results
+
+Per session directives: compilation (`npm run compile`) and automated tests skipped.
+
+**Code inspection (all passed):**
+1. ✅ `TaskViewerProvider.ts:9260` — unconditional `clipboard.writeText` removed.
+2. ✅ `TaskViewerProvider.ts:9263-9271` — `send` branch dispatches only; copies to clipboard only on `!sendSucceeded` (failure fallback).
+3. ✅ `TaskViewerProvider.ts:9272-9275` — `copy` branch (`else`) owns the clipboard write.
+4. ✅ `TaskViewerProvider.ts:9277-9280` — memo clear-on-success unchanged for both actions.
+5. ✅ `TaskViewerProvider.ts:9285-9289` — `send` success message makes no clipboard claim; failure message's "Prompt copied to clipboard" is truthful (failure branch copies at `:9270`).
+6. ✅ `dispatchCustomPromptToRole` (`:2507-2519`) performs no clipboard write — confirmed.
+7. ✅ No `confirm()` / `window.confirm()` introduced (repo rule complied with).
+8. ✅ `implementation.html:1624-1627` intro text does not describe clipboard behavior — no edit needed.
+9. ✅ No leftover `memoGeneratePrompt` / `_buildMemoPlannerPrompt` in `KanbanProvider.ts` — relocation was complete.
+
+### Files Changed (by this review)
+
+None — no code fixes were required.
+
+### Remaining Risks
+
+- **None material.** The only residual items are the two NITs (commit-hygiene artifact, optional failure-path comment), neither of which affects runtime behavior.
+- **Manual test items 2-4** (Copy Prompt, Send success, Send failure fallback) remain to be executed by the user in a live VS Code instance — these require a running extension host and cannot be verified by code inspection alone.
