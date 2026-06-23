@@ -324,3 +324,62 @@ The following corrections reflect the **current** codebase (post-implementation)
 ---
 
 **Recommendation:** Complexity 4 → **Send to Coder.** The feature is already implemented and shipped. The plan's core approach (source-aware modal, skill-name references, no `/config/token`) is architecturally sound. Remaining work: verify the implementation matches the plan via the manual smoke test, and consider adding a build-time assertion to keep `AGENT_API_CAPABILITIES` in sync with the bridge route table.
+
+---
+
+## Reviewer Pass (2026-06-23, in-place)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*Theatrical, incisive, severity-tagged. The implementation was reviewed against the plan file as the single source of truth.*
+
+**NIT (out-of-scope note) — `dist/` is stale; rebuild before shipping.**
+`src/` carries the full implementation, but `dist/webview/planning.{html,js}` do not yet reflect it (`grep` returns 0 matches). Per `CLAUDE.md`, the extension serves from `dist/`, so `npm run compile` is needed before the feature appears at runtime. This is a build-hygiene reminder, **not a code defect** — the review session was scoped to source-vs-plan (SKIP COMPILATION), so this is noted only as a pre-ship action item, not a review finding.
+
+**NIT — `/comment` endpoint is a first-class bridge capability the modal never mentions.**
+`LocalApiServer.ts:781-782` routes `POST /comment` to `_handlePostComment` (`:143`), a provider-gated (clickup|linear) comment poster backed by `service.postManagedComment`. The plan's "Capabilities must match the real bridge" audit table (lines 57-69) **omits this route entirely**, so the implementer faithfully reproduced the omission. The capability IS reachable indirectly — `clickup_api.md:37` and `linear_api.md:32` both document `/comment` and are referenced by the modal's "Raw ClickUp API call" and "Create / update / comment via GraphQL" entries — so the modal is not *wrong*, just under-advertised. A future improvement: add a "Post a comment" capability row naming the `clickup_api` / `linear_api` skill and the `/comment` route.
+
+**NIT — Copy-button setTimeout race on rapid re-click during FAILED state.**
+`planning.js:6401` guards re-entry only when `btn.textContent === 'COPIED'`. If the first click fails (→ 'FAILED'), a second click during the 2s window starts a new copy; the first click's `setTimeout` (`:6409`) then fires and resets to 'Copy prompt', potentially clobbering a fresh 'COPIED' label. This is inherited verbatim from the research-prompt pattern (`planning.js:1290-1319`) and is cosmetic — not worth diverging from the established pattern to fix.
+
+**Everything else is clean.** Button placement (`planning.html:3554`, after `Sync changes`) ✅. Modal markup (`planning.html:3833-3853`, after source modal, before delete modal) ✅. CSS (`planning.html:2647-2660`, after the folder-modal rules) ✅. `AGENT_API_CAPABILITIES` constant (`planning.js:126-176`) — ClickUp 9 items, Linear 6 items, every claimed endpoint verified against `LocalApiServer.ts:762-798` ✅. `renderAgentApiModal` (`planning.js:6365-6415`) reads `lastIntegrationProvider` on every open, handles `null` empty-state, pre-fills `{ticketId}` via `currentSelectedTicketId()` (`:6359-6363`) which mirrors the codebase's established resolution pattern (`:473-474`, `:4229`, `:6813`) ✅. Wiring inside `initTicketsTab` (`:6493-6516`) — open/close/backdrop/Close-button all present ✅. `getTicketsTabElements` destructures the four new element IDs (`:1016-1019`) ✅. No `confirm(` calls in the diff (grep: 0 matches) ✅. No `/config/token` reference in any prompt ✅.
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Severity | Verdict | Action |
+|---|---|---|---|
+| `dist/` stale — feature absent at runtime | NIT (out-of-scope) | **Defer** | Build-hygiene reminder, not a code defect. Run `npm run compile` before shipping. Out of this review's scope (SKIP COMPILATION). |
+| `/comment` endpoint not surfaced as first-class capability | NIT | **Defer** | Reachable via advertised skills; not incorrect. Future enhancement. |
+| Copy-button setTimeout race on FAILED re-click | NIT | **Defer** | Inherited from existing pattern; cosmetic only. |
+
+**No code fixes applied in this pass.** The source implementation matches the plan exactly and is architecturally sound. Zero CRITICAL, zero MAJOR findings against the source-vs-plan review scope.
+
+### Verification Results
+
+| Check | Result |
+|---|---|
+| Button present in source (`src/webview/planning.html:3554`) | ✅ Pass |
+| Modal markup present in source (`src/webview/planning.html:3833-3853`) | ✅ Pass |
+| CSS rules present (`src/webview/planning.html:2647-2660`) | ✅ Pass |
+| `AGENT_API_CAPABILITIES` constant present (`src/webview/planning.js:126-176`) | ✅ Pass |
+| `renderAgentApiModal` + `currentSelectedTicketId` present (`src/webview/planning.js:6359-6415`) | ✅ Pass |
+| Wiring inside `initTicketsTab` (`src/webview/planning.js:6493-6516`) | ✅ Pass |
+| `getTicketsTabElements` includes new IDs (`src/webview/planning.js:1016-1019`) | ✅ Pass |
+| Endpoint accuracy vs `LocalApiServer.ts:762-798` | ✅ Pass (all claimed routes exist) |
+| No `confirm(` in diff | ✅ Pass (0 matches) |
+| No `/config/token` in any prompt | ✅ Pass |
+| `dist/` reflects source | ⏭️ Out of scope (SKIP COMPILATION; build-hygiene, not a code defect) |
+| Compilation (`npm run compile`) | ⏭️ Skipped per session directive |
+| Automated tests | ⏭️ Skipped per session directive |
+
+### Files Reviewed (no changes applied)
+
+- `src/webview/planning.html` — lines 2647-2660 (CSS), 3554 (button), 3833-3853 (modal)
+- `src/webview/planning.js` — lines 126-176 (constant), 1016-1019 (elements), 6359-6415 (renderer), 6493-6516 (wiring)
+- `src/services/LocalApiServer.ts` — lines 762-798 (route table cross-check)
+
+### Remaining Risks
+
+1. **`dist/` is stale (NIT, pre-ship action).** Run `npm run compile` before shipping so the feature appears at runtime. Not a code defect — out of this review's source-vs-plan scope.
+2. **`/comment` endpoint under-advertised (NIT, defer).** The dedicated `POST /comment` route (`LocalApiServer.ts:781`) is not surfaced as a first-class modal capability; it is reachable indirectly via the `clickup_api` and `linear_api` skills, both of which document the route.
+3. **No build-time sync assertion (NIT, defer).** `AGENT_API_CAPABILITIES` is hardcoded; bridge route additions/removals will silently stale the modal. A build-time assertion against `LocalApiServer._handleRequest` is a future improvement noted in the plan's Adversarial Synthesis.

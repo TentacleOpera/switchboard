@@ -750,8 +750,7 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(openKanbanDisposable);
 
     const openMemoDisposable = vscode.commands.registerCommand('switchboard.openMemo', async () => {
-        await kanbanProvider!.open();
-        kanbanProvider!.postMessage({ type: 'openMemoModal' });
+        await taskViewerProvider!.openMemoTab();
     });
     context.subscriptions.push(openMemoDisposable);
 

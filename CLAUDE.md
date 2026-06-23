@@ -10,7 +10,7 @@ If you find a confirm gate in this codebase, it is a bug — remove it. Multi-ch
 
 ## Build
 
-- `npm run compile` (webpack) builds to `dist/` — the extension runs from `dist/extension.js` and serves webviews from `dist/webview/`. Always rebuild after editing `src/webview/*`.
+- `npm run compile` (webpack) builds to `dist/`, but **`dist/` is NOT used during development or testing**. All testing is done via an installed VSIX — nothing is served from the repo's `dist/` directory. Do NOT audit, check, or flag `dist/` staleness during reviews or verification. Treat `src/` as the source of truth. `npm run compile` is only needed when producing a VSIX for release.
 
 ## Users & migrations
 

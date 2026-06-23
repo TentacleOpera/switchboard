@@ -1602,6 +1602,7 @@
             <div class="sub-tab-bar">
                 <button class="sub-tab-btn" data-tab="agents">Agents</button>
                 <button class="sub-tab-btn is-active" data-tab="terminals">Terminals</button>
+                <button class="sub-tab-btn" data-tab="memo">Memo</button>
             </div>
             <div id="agent-list-standard" class="agent-list hidden">
                 <div style="text-align: center; padding: 20px; color: var(--text-secondary);">
@@ -1617,6 +1618,21 @@
                     <button id="btn-easter-egg" class="secondary-btn w-full" style="margin-top: 6px;">Access main program</button>
                 </div>
 
+            </div>
+            <div id="agent-list-memo" class="agent-list hidden">
+                <div class="memo-tab-content" style="padding: 10px; display: flex; flex-direction: column; gap: 8px;">
+                    <p style="font-size: 11px; color: var(--text-secondary); margin: 0 0 4px;">
+                        Jot down bugs, thoughts, or issues — one per line or paragraph. Each entry becomes a
+                        <strong>separate issue</strong>. Saved automatically; cleared after Copy Prompt / Send to Planner.
+                    </p>
+                    <textarea id="memo-textarea" class="modal-textarea"
+                              placeholder="Bug: login button overlaps on mobile&#10;Thought: maybe cache the user profile&#10;Issue: API returns 500 on empty payload..."
+                              style="width: 100%; min-height: 240px; resize: vertical; font-family: var(--font-mono, monospace); font-size: 13px;"></textarea>
+                    <span id="memo-status" style="font-size: 11px; color: var(--text-secondary); min-height: 14px;"></span>
+                    <button id="memo-clear-btn" class="secondary-btn w-full">Clear</button>
+                    <button id="memo-copy-btn" class="secondary-btn is-teal w-full">Copy Prompt</button>
+                    <button id="memo-send-btn" class="secondary-btn is-teal w-full">Send to Planner</button>
+                </div>
             </div>
         </div>
 
@@ -2203,7 +2219,7 @@
                     setActiveTab(message.activeTab || 'agents', false);
                     {
                         // Restore sub-tab selection from persisted state
-                        const validSubTabs = ['agents', 'terminals'];
+                        const validSubTabs = ['agents', 'terminals', 'memo'];
                         const restoredSubTab = (message.activeSubTab && validSubTabs.includes(message.activeSubTab)) ? message.activeSubTab : 'terminals';
                         currentAgentTab = restoredSubTab;
                         switchAgentTab(currentAgentTab);
@@ -2213,6 +2229,20 @@
                         currentWorkspaceRoot = String(message.workspaceRoot).trim();
                     }
                     break;
+                case 'memoContent': {
+                    const textarea = document.getElementById('memo-textarea');
+                    if (textarea) textarea.value = typeof message.content === 'string' ? message.content : '';
+                    break;
+                }
+                case 'memoPromptResult': {
+                    const statusEl = document.getElementById('memo-status');
+                    if (statusEl) statusEl.textContent = message.message || '';
+                    break;
+                }
+                case 'openMemoTab': {
+                    switchAgentTab('memo');
+                    break;
+                }
                 case 'setupStatus':
                     toggleOnboarding(message.needsSetup === true);
                     break;
@@ -2576,10 +2606,17 @@
         function switchAgentTab(tab) {
             currentAgentTab = tab;
             vscode.postMessage({ type: 'setActiveSubTab', tab: tab });
-            const tabs = { agents: agentListStandard, terminals: agentListTerminals };
+            const tabs = {
+                agents: agentListStandard,
+                terminals: agentListTerminals,
+                memo: document.getElementById('agent-list-memo')
+            };
             document.querySelectorAll('.sub-tab-btn').forEach(btn => {
                 btn.classList.toggle('is-active', btn.dataset.tab === tab);
             });
+            if (tab === 'memo') {
+                vscode.postMessage({ type: 'memoLoad', workspaceRoot: currentWorkspaceRoot });
+            }
             if (tab === 'terminals') {
                 vscode.postMessage({ type: 'getStartupCommands' });
                 vscode.postMessage({ type: 'getVisibleAgents' });
@@ -2621,6 +2658,36 @@
 
         document.querySelectorAll('.sub-tab-btn').forEach(btn => {
             btn.addEventListener('click', () => switchAgentTab(btn.dataset.tab));
+        });
+
+        // === Memo (sidebar tab) ===
+        let memoSaveTimer = null;
+        function debouncedMemoSave() {
+            if (memoSaveTimer) clearTimeout(memoSaveTimer);
+            memoSaveTimer = setTimeout(() => {
+                const content = document.getElementById('memo-textarea')?.value || '';
+                vscode.postMessage({ type: 'memoSave', content, workspaceRoot: currentWorkspaceRoot });
+                const statusEl = document.getElementById('memo-status');
+                if (statusEl) { statusEl.textContent = 'Saved'; setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 1500); }
+            }, 800);
+        }
+        document.getElementById('memo-textarea')?.addEventListener('input', debouncedMemoSave);
+        document.getElementById('memo-clear-btn')?.addEventListener('click', () => {
+            const textarea = document.getElementById('memo-textarea');
+            if (textarea) textarea.value = '';
+            vscode.postMessage({ type: 'memoClear', workspaceRoot: currentWorkspaceRoot });
+            const statusEl = document.getElementById('memo-status');
+            if (statusEl) statusEl.textContent = 'Cleared';
+        });
+        document.getElementById('memo-copy-btn')?.addEventListener('click', () => {
+            if (memoSaveTimer) clearTimeout(memoSaveTimer);
+            const content = document.getElementById('memo-textarea')?.value || '';
+            vscode.postMessage({ type: 'memoGeneratePrompt', content, action: 'copy', workspaceRoot: currentWorkspaceRoot });
+        });
+        document.getElementById('memo-send-btn')?.addEventListener('click', () => {
+            if (memoSaveTimer) clearTimeout(memoSaveTimer);
+            const content = document.getElementById('memo-textarea')?.value || '';
+            vscode.postMessage({ type: 'memoGeneratePrompt', content, action: 'send', workspaceRoot: currentWorkspaceRoot });
         });
 
 

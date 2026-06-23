@@ -213,7 +213,7 @@ Add:
             filter: brightness(0) saturate(100%) invert(54%) sepia(48%) saturate(560%) hue-rotate(330deg) brightness(108%) contrast(87%);
         }
 ```
-Note: the existing `.flash` rules (97-117) and the `.is-off` grey rules (119-123) are left untouched — flash still works, and OFF/disabled icons stay greyed.
+Note: the existing `.flash` rules (97-117) and the `.is-off` grey rules (119-123) are left untouched — flash still works. **Reviewer correction (2026-06-23):** the original claim that "OFF/disabled icons stay greyed" was **incorrect** — the colour resting rules (Claudify specificity 0,4,2; Pro 0,3,2 + later source order) override the theme `.is-off` rule at 119-123 (0,3,2). A `.is-off` override block was added after the colour rules (kanban.html:182-194) to restore the greyed treatment at equal-or-higher specificity. See the Reviewer Pass section at the end of this file.
 
 ### 6. `src/webview/kanban.html` — runtime handler (in the message switch, alongside the theme case at 5898-5908)
 
@@ -368,3 +368,58 @@ The following corrections reflect the **current** codebase (post-implementation)
 ---
 
 **Recommendation:** Complexity 4 → **Send to Coder.** The feature is already implemented and shipped. The CSS architecture is sound — the `:not(.theme-afterburner-pro)` guard correctly prevents Claudify terracotta rules from matching when Afterburner Pro is active (matching prevention, not just specificity). The one factual error (`setup.html:4108-4119` citation) has been corrected. Remaining work: verify the implementation via the manual smoke test, and consider adding an `onDidChangeConfiguration` listener for `switchboard.theme.colourKanbanIcons` as a future enhancement for direct `settings.json` edits.
+
+---
+
+## Reviewer Pass (2026-06-23)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*Cracks knuckles. Stares at the diff.*
+
+**[MAJOR] `kanban.html:119-123` vs colour rules — disabled icons go full disco.** You wrote at line 216 of the plan that "OFF/disabled icons stay greyed." They do NOT. The theme `.is-off` rule (`body.theme-claudify .strip-icon-btn.is-off img`) sits at specificity (0,3,2). Your shiny new Claudify colour resting rule (`body.theme-claudify.kanban-icons-colour:not(.theme-afterburner-pro) .strip-icon-btn img`) is (0,4,2) — it crushes the `.is-off` rule by specificity. The Pro colour rule is (0,3,2), same as `.is-off`, but it comes LATER in source order so it wins too. Net result: with colour mode ON, every disabled toggle icon (collapse-coders, complexity-routing when off, CLI toggle when off) renders in cyan/terracotta instead of greyed-out. The user can't tell disabled from enabled. You claimed this was handled. It wasn't. The plan's own verification step 6 would have caught it if anyone had run it.
+
+**[NIT] Claudify hover rules — undocumented scope creep.** The plan's proposed CSS (lines 204-214) only specified resting terracotta for Claudify. The implementation added hover/active brightening rules (kanban.html:169-180) with a different saturate/brightness values. It's a *positive* deviation — verification step 6 demands "hover/active still legible" — but the plan should have proposed it. Document your additions.
+
+**[NIT] Hover-on-disabled edge case.** The `.is-off` override I'm making you add is (0,4,2). The colour hover rules are (0,4,3) for Claudify and (0,3,3) for Pro. So hovering a disabled icon with colour mode ON still shows the colour hover filter, not grey. Disabled buttons are hoverable (no `pointer-events:none` on `.is-off`). Tiny edge case, not worth the selector complexity to fix — but know it exists.
+
+**What's actually solid (grudgingly acknowledged):** The `:not(.theme-afterburner-pro)` guard on the Claudify rules is the correct subtle move — it prevents *matching*, not just loses on specificity, so the Pro cyan rules are safe. The `themeBodyClass.ts` first-paint injection is correct and gated to the two themes. The `broadcastToWebviews` → `colourKanbanIconsChanged` live-update path is wired correctly (TaskViewerProvider.ts:3809-3812 → kanban.html:6019-6022). The visibility gating clones the animation pattern faithfully. The `switchboardThemeChanged` handler (kanban.html:6005-6017) correctly preserves `kanban-icons-colour` across theme switches. Good work, mostly.
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Severity | Verdict | Action |
+|---|---|---|---|
+| `.is-off` icons coloured when colour mode ON | MAJOR | Valid — contradicts plan claim & verification step 6 | **Fix now:** add `.is-off` override block after colour rules |
+| Claudify hover rules not in plan | NIT | Positive deviation, consistent with verification | Keep; document in plan |
+| Hover-on-disabled edge case | NIT | Real but trivial | Defer; acknowledged as known limitation |
+
+### Fixes Applied
+
+1. **`src/webview/kanban.html:182-194`** — Added a `.is-off` override block after the colour hover rules. Six selectors (3 Claudify + 3 Pro) targeting `.strip-icon-btn.is-off img`, `.kanban-sub-bar .strip-icon-btn.is-off img`, and `.complexity-routing-btn.is-off img`, all scoped to `.kanban-icons-colour`. Specificity (0,4,2) — beats Claudify colour resting (0,4,2) by source order, beats Pro colour resting (0,3,2) by specificity. Restores `filter: grayscale(1) brightness(0.7)` matching the existing theme `.is-off` treatment.
+
+### Verification Results
+
+- **Compilation:** Skipped per instructions.
+- **Tests:** Skipped per instructions.
+- **Static verification (specificity math):**
+  - Claudify `.is-off` override (0,4,2) ≥ Claudify colour resting (0,4,2), later source → ✅ wins
+  - Pro `.is-off` override (0,4,2) > Pro colour resting (0,3,2) → ✅ wins
+  - `.is-off` override (0,4,2) < colour hover (0,4,3 Claudify / 0,3,3 Pro) → hover-on-disabled still coloured (NIT, deferred)
+  - `:not(.theme-afterburner-pro)` guard prevents Claudify terracotta matching when Pro active → ✅
+  - `themeBodyClass.ts` injects `kanban-icons-colour` only for claudify + afterburner-professional → ✅
+  - `broadcastToWebviews` reaches kanban provider (TaskViewerProvider.ts:3811) → ✅
+  - `colourKanbanIconsChanged` handler toggles class (kanban.html:6019-6022) → ✅
+  - Visibility gating shows checkbox only for afterburner-professional + claudify (setup.html:1693-1697) → ✅
+  - Default OFF in package.json (668-673), TaskViewerProvider fallback `false` (3546, 3551) → ✅
+
+### Files Changed
+
+| File | Lines | Change |
+|---|---|---|
+| `src/webview/kanban.html` | 182-194 (new) | Added `.is-off` grey override block for colour mode |
+
+### Remaining Risks
+
+1. **Hover-on-disabled (NIT):** Hovering a `.is-off` icon with colour mode ON shows the colour hover filter (higher specificity) instead of grey. Trivial edge case; not fixed.
+2. **No `onDidChangeConfiguration` listener:** Direct `settings.json` edits to `switchboard.theme.colourKanbanIcons` won't live-update the kanban board until reload. Consistent with the existing `disableCyberAnimation` pattern. Future enhancement.
+3. **Manual smoke test pending:** Verification steps 3-10 in the Verification Plan require runtime testing by the user (build, theme switching, toggle persistence, live update).

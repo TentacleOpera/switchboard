@@ -179,6 +179,20 @@
             filter: brightness(0) saturate(100%) invert(54%) sepia(48%) saturate(700%) hue-rotate(330deg) brightness(120%) contrast(87%);
         }
 
+        /* Preserve the disabled (.is-off) greyed-out treatment when colour mode is ON.
+           The colour resting rules above would otherwise override the theme .is-off rule
+           at 119-123 by specificity (Claudify: 0,4,2 > 0,3,2) or source order (Pro: equal
+           0,3,2 but later), making disabled icons appear coloured. These restore the grey
+           treatment at equal-or-higher specificity and later source order. */
+        body.theme-claudify.kanban-icons-colour .strip-icon-btn.is-off img,
+        body.theme-claudify.kanban-icons-colour .kanban-sub-bar .strip-icon-btn.is-off img,
+        body.theme-claudify.kanban-icons-colour .complexity-routing-btn.is-off img,
+        body.theme-afterburner-pro.kanban-icons-colour .strip-icon-btn.is-off img,
+        body.theme-afterburner-pro.kanban-icons-colour .kanban-sub-bar .strip-icon-btn.is-off img,
+        body.theme-afterburner-pro.kanban-icons-colour .complexity-routing-btn.is-off img {
+            filter: grayscale(1) brightness(0.7);
+        }
+
         /* Claudify: kanban cards = an exact copy of implementation.html's .secondary-btn
            (the COMPLETE/COPY/CREATE buttons): solid --panel-bg2 fill, --border-color border,
            --text-secondary text. NO terracotta — the accent is not in these buttons.
@@ -2487,11 +2501,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <button class="strip-icon-btn is-off" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">
                 <img src="{{ICON_COLLAPSE_CODERS}}" alt="Collapse Coders">
             </button>
-            <button class="strip-icon-btn" id="btn-open-memo" data-tooltip="Open Memo (Cmd+Shift+Alt+M)">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" width="16" height="16" style="color: var(--text-primary);">
-                    <path d="M1 2.75C1 1.784 1.784 1 2.75 1h10.5c.966 0 1.75.784 1.75 1.75v7.5A1.75 1.75 0 0 1 13.25 12H9.12l-2.873 2.563A.75.75 0 0 1 5 14.25V12H2.75A1.75 1.75 0 0 1 1 10.25v-7.5z"/>
-                </svg>
-            </button>
             <select id="pairProgrammingModeSelect" class="kanban-mode-dropdown" data-tooltip="Pair Programming mode: controls how Lead and Coder prompts are dispatched">
                 <option value="off">Pair Programming: Off</option>
                 <option value="cli-cli">CLI Lead + CLI Coder</option>
@@ -3113,39 +3122,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 <button class="modal-btn modal-btn-secondary" id="epic-manage-close-btn">Close</button>
                 <button class="modal-btn modal-btn-secondary" id="epic-manage-save-config">Save Config</button>
                 <button class="modal-btn modal-btn-secondary" id="epic-manage-delete" style="color:var(--accent-red); border-color:var(--accent-red);">Delete Epic</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Memo Modal -->
-    <div id="memo-modal" class="modal-overlay hidden">
-        <div class="modal-content" style="width: 640px; max-width: 90vw;">
-            <div class="modal-header">
-                <h3 class="modal-title" id="memo-modal-title">MEMO</h3>
-                <button class="modal-close-btn" id="memo-close-btn">&times;</button>
-            </div>
-            <div class="modal-body">
-                <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">
-                    Jot down bugs, thoughts, or issues — one per line or paragraph. Each entry becomes a
-                    <strong>separate issue</strong>.
-                    <br><br>
-                    <strong>Copy Prompt</strong> copies a planner prompt to your clipboard; <strong>Send to Planner</strong>
-                    copies it <em>and</em> dispatches it to your planner agent. In both cases the prompt instructs the agent to
-                    <strong>create a separate plan file for each issue</strong> in <code>.switchboard/plans/</code>.
-                    <br><br>
-                    Entries are <strong>saved automatically</strong> and the memo is <strong>cleared</strong> after Copy Prompt or
-                    Send to Planner (or when you press <strong>Clear</strong>).
-                </p>
-                <textarea id="memo-textarea"
-                          class="modal-textarea"
-                          placeholder="Bug: login button overlaps on mobile&#10;Thought: maybe cache the user profile&#10;Issue: API returns 500 on empty payload..."
-                          style="width: 100%; min-height: 300px; resize: vertical; font-family: var(--font-mono, monospace); font-size: 13px;"></textarea>
-            </div>
-            <div class="modal-footer">
-                <span id="memo-status" style="font-size: 11px; color: var(--text-secondary); margin-right: auto;"></span>
-                <button class="modal-btn modal-btn-secondary" id="memo-clear-btn">Clear</button>
-                <button class="modal-btn modal-btn-secondary" id="memo-copy-btn">Copy Prompt</button>
-                <button class="modal-btn modal-btn-primary" id="memo-send-btn">Send to Planner</button>
             </div>
         </div>
     </div>
@@ -3783,74 +3759,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         document.getElementById('btn-scan-folders')?.addEventListener('click', () => {
             postKanbanMessage({ type: 'scanFoldersNow' });
-        });
-
-        // === Memo ===
-        let memoSaveTimer = null;
-
-        function openMemoModal() {
-            const modal = document.getElementById('memo-modal');
-            const textarea = document.getElementById('memo-textarea');
-            const titleEl = document.getElementById('memo-modal-title');
-            if (titleEl) titleEl.textContent = 'MEMO';
-            postKanbanMessage({ type: 'memoLoad' });
-            modal?.classList.remove('hidden');
-            textarea?.focus();
-        }
-
-        function closeMemoModal() {
-            document.getElementById('memo-modal')?.classList.add('hidden');
-        }
-
-        function debouncedMemoSave() {
-            if (memoSaveTimer) clearTimeout(memoSaveTimer);
-            memoSaveTimer = setTimeout(() => {
-                const content = document.getElementById('memo-textarea')?.value || '';
-                postKanbanMessage({ type: 'memoSave', content });
-                const statusEl = document.getElementById('memo-status');
-                if (statusEl) statusEl.textContent = 'Saved ' + new Date().toLocaleTimeString();
-            }, 800);
-        }
-
-        document.getElementById('btn-open-memo')?.addEventListener('click', openMemoModal);
-        document.getElementById('memo-close-btn')?.addEventListener('click', closeMemoModal);
-        document.getElementById('memo-textarea')?.addEventListener('input', debouncedMemoSave);
-
-        document.getElementById('memo-modal')?.addEventListener('click', (e) => {
-            if (e.target === e.currentTarget) closeMemoModal();
-        });
-
-        document.getElementById('memo-clear-btn')?.addEventListener('click', () => {
-            const textarea = document.getElementById('memo-textarea');
-            if (textarea) textarea.value = '';
-            postKanbanMessage({ type: 'memoClear' });
-            const statusEl = document.getElementById('memo-status');
-            if (statusEl) statusEl.textContent = 'Cleared';
-        });
-
-        document.getElementById('memo-copy-btn')?.addEventListener('click', () => {
-            if (memoSaveTimer) clearTimeout(memoSaveTimer);
-            const content = document.getElementById('memo-textarea')?.value || '';
-            postKanbanMessage({ type: 'memoGeneratePrompt', content, action: 'copy' });
-        });
-
-        document.getElementById('memo-send-btn')?.addEventListener('click', () => {
-            if (memoSaveTimer) clearTimeout(memoSaveTimer);
-            const content = document.getElementById('memo-textarea')?.value || '';
-            postKanbanMessage({ type: 'memoGeneratePrompt', content, action: 'send' });
-        });
-
-        // NOTE: Reload-on-focusin was removed — it fired on every internal focus
-        // shift (e.g. textarea → button click), clobbering unsaved textarea content
-        // within the 800ms debounce window. The modal loads from disk on open via
-        // openMemoModal(), which is sufficient. Concurrent /memo skill access is a
-        // documented v1 last-write-wins limitation.
-
-        document.addEventListener('keydown', (e) => {
-            const modal = document.getElementById('memo-modal');
-            if (e.key === 'Escape' && modal && !modal.classList.contains('hidden')) {
-                closeMemoModal();
-            }
         });
 
         btnDeleteProject?.addEventListener('click', () => {
@@ -6557,26 +6465,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
                 case 'kanbanEpicDetails': {
                     populateEpicManageModal(msg.epic, msg.subtasks, { epicLockColumns: msg.epicLockColumns, epicPromptTemplate: msg.epicPromptTemplate, epicMaxSubtasks: msg.epicMaxSubtasks });
-                    break;
-                }
-                case 'memoContent': {
-                    const textarea = document.getElementById('memo-textarea');
-                    if (textarea) textarea.value = msg.content || '';
-                    const titleEl = document.getElementById('memo-modal-title');
-                    if (titleEl) {
-                        titleEl.textContent = msg.workspaceName
-                            ? `MEMO — ${String(msg.workspaceName).toUpperCase()}`
-                            : 'MEMO';
-                    }
-                    break;
-                }
-                case 'memoPromptResult': {
-                    const statusEl = document.getElementById('memo-status');
-                    if (statusEl) statusEl.textContent = msg.message || '';
-                    break;
-                }
-                case 'openMemoModal': {
-                    openMemoModal();
                     break;
                 }
             }
