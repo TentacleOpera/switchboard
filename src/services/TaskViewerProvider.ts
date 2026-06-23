@@ -220,7 +220,7 @@ type LinearImportNode = {
 type PlanRegistryEntry = {
     planId: string;
     ownerWorkspaceId: string;
-    sourceType: 'local' | 'brain' | 'clickup-automation' | 'linear-automation';
+    sourceType: 'local' | 'brain' | 'clickup-automation' | 'linear-automation' | 'clickup-import' | 'linear-import';
     localPlanPath?: string;
     brainSourcePath?: string;
     mirrorPath?: string;
@@ -4318,6 +4318,133 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             await this._kanbanProvider?.applyLiveSyncConfig(resolvedRoot);
         }
         return result;
+    }
+
+    /**
+     * §6 — One-click "Enable Triage Pipeline". After the user has connected a provider
+     * and selected a list/project, this sets opinionated triage defaults, creates a
+     * project board named after the list/project, wires a default triage automation
+     * rule, and assigns already-imported cards to the new board. Everything it creates
+     * is fully editable afterward.
+     */
+    public async handleEnableTriagePipeline(
+        provider: 'clickup' | 'linear',
+        token: string
+    ): Promise<{ success: boolean; error?: string; projectName?: string }> {
+        const resolvedRoot = this._resolveWorkspaceRoot();
+        if (!resolvedRoot) {
+            return { success: false, error: 'No workspace open' };
+        }
+
+        try {
+            const effectiveRoot = resolveEffectiveWorkspaceRootFromMappings(resolvedRoot);
+            const db = KanbanDatabase.forWorkspace(effectiveRoot);
+            await db.ensureReady();
+            const workspaceId = await this._getWorkspaceIdForRoot(effectiveRoot);
+
+            let projectName: string;
+            let importSourceType: 'clickup-import' | 'linear-import';
+
+            if (provider === 'clickup') {
+                const trimmed = String(token || '').trim();
+                if (trimmed) {
+                    await this._context.secrets.store('switchboard.clickup.apiToken', trimmed);
+                }
+                const svc = this._getClickUpService(resolvedRoot);
+                const config = await svc.loadConfig();
+                if (!config || !config.setupComplete) {
+                    return { success: false, error: 'Connect ClickUp and select a list before enabling the triage pipeline.' };
+                }
+                const listName = config.selectedListName || 'ClickUp';
+                projectName = `Bug Triage — ${listName}`;
+                importSourceType = 'clickup-import';
+
+                config.realTimeSyncEnabled = true;
+                config.autoPullEnabled = true;
+                config.pullIntervalMinutes = 15;
+                config.completeSyncEnabled = true;
+                config.excludeBacklog = false; // redundant with list selection
+                config.deleteSyncEnabled = false;
+
+                const triggerList = config.selectedListId
+                    || Object.values(config.columnMappings || {}).find((v) => typeof v === 'string' && v.trim().length > 0)
+                    || '';
+                const ruleName = `Triage — ${listName}`;
+                config.automationRules = [
+                    ...(config.automationRules || []).filter((r) => r.name !== ruleName),
+                    {
+                        name: ruleName,
+                        enabled: true,
+                        triggerTag: 'triage',
+                        triggerLists: triggerList ? [triggerList] : [],
+                        targetColumn: 'CREATED',
+                        finalColumn: 'DONE',
+                        writeBackOnComplete: true
+                    }
+                ];
+                await svc.saveConfig(config);
+                this._invalidateClickUpConfigCache(resolvedRoot);
+            } else {
+                const trimmed = String(token || '').trim();
+                if (trimmed) {
+                    await this._context.secrets.store('switchboard.linear.apiToken', trimmed);
+                }
+                const svc = this._getLinearService(resolvedRoot);
+                const config = await svc.loadConfig();
+                if (!config || !config.setupComplete) {
+                    return { success: false, error: 'Connect Linear and select a project before enabling the triage pipeline.' };
+                }
+                const projectLabel = config.selectedProjectName || 'Linear';
+                projectName = `Bug Triage — ${projectLabel}`;
+                importSourceType = 'linear-import';
+
+                config.realTimeSyncEnabled = true;
+                config.autoPullEnabled = true;
+                config.pullIntervalMinutes = 15;
+                config.completeSyncEnabled = true;
+                config.excludeBacklog = true;
+                config.deleteSyncEnabled = false;
+
+                // The Linear rule requires real state IDs; use the state mapped to the
+                // inbox column (CREATED). If nothing is mapped yet, skip the rule rather
+                // than persist an invalid one — the user can add it after mapping columns.
+                const inboxStateId = config.columnToStateId?.['CREATED'] || '';
+                if (inboxStateId) {
+                    const ruleName = `Triage — ${projectLabel}`;
+                    config.automationRules = [
+                        ...(config.automationRules || []).filter((r) => r.name !== ruleName),
+                        {
+                            name: ruleName,
+                            enabled: true,
+                            triggerLabel: 'triage',
+                            triggerStates: [inboxStateId],
+                            targetColumn: 'CREATED',
+                            finalColumn: 'DONE',
+                            writeBackOnComplete: true
+                        }
+                    ];
+                }
+                await svc.saveConfig(config);
+            }
+
+            // Create the project board and assign already-imported cards to it.
+            await db.addProject(workspaceId, projectName);
+            const allPlans = await db.getAllPlans(workspaceId);
+            const importedIds = allPlans
+                .filter((p) => p.sourceType === importSourceType)
+                .map((p) => p.planId);
+            if (importedIds.length > 0) {
+                await db.setProjectForPlans(workspaceId, importedIds, projectName);
+            }
+
+            await this._kanbanProvider?.initializeIntegrationAutoPull();
+            await this._kanbanProvider?.applyLiveSyncConfig(resolvedRoot);
+            await vscode.commands.executeCommand('switchboard.refreshUI');
+
+            return { success: true, projectName };
+        } catch (error) {
+            return { success: false, error: error instanceof Error ? error.message : String(error) };
+        }
     }
 
     public async handleSaveLinearAutomation(

@@ -9,6 +9,22 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { DefaultPromptOverride, CustomAgentAddons } from './agentConfig';
 
+// One-time diagnostic for the ticket_updater mode collapse. Users who configured
+// 'refine-ticket' or 'research-and-refine' (modes that rewrote ticket descriptions)
+// silently lose that behavior — the role now always performs triage-only verdicts.
+// This is a console log, not a UI dialog (per the no-confirm-dialogs rule).
+let _ticketUpdateModeWarned = false;
+export function warnOnLegacyTicketUpdateMode(mode: string | undefined): void {
+    if (_ticketUpdateModeWarned) return;
+    if (mode && mode !== 'disabled' && mode !== 'comment-only') {
+        _ticketUpdateModeWarned = true;
+        console.warn(
+            `[Switchboard] ticketUpdateMode '${mode}' is no longer supported — ` +
+            `the ticket_updater role now always performs triage-only verdicts.`
+        );
+    }
+}
+
 export interface BatchPromptPlan {
     topic: string;
     absolutePath: string;
@@ -165,6 +181,8 @@ export interface PromptBuilderOptions {
     epicMaxSubtasks?: number;
     /** User-configured epic prompt template, injected after the epic directive. */
     epicPromptTemplate?: string;
+    /** §11 — when true, the dispatched card's board is under remote control; inject REMOTE_MODE_DIRECTIVE into all role prompts. */
+    remoteControlActive?: boolean;
 }
 
 export function resolveBaseInstructions(
@@ -264,6 +282,12 @@ ${perPlanDirectories}`
 
 export const GIT_PROHIBITION_DIRECTIVE = `GIT POLICY: Do NOT execute state-mutating git commands (commit, push, pull, fetch, merge, rebase, reset, checkout, branch, stash, cherry-pick, revert). Read-only commands (status, log, diff) are permitted. Return completed work to the parent agent or user for committing.`;
 export const FOCUS_DIRECTIVE = `FOCUS DIRECTIVE: Each plan file path below is the single source of truth for that plan. Ignore any complexity regarding directory mirroring, 'brain' vs 'source' directories, or path hashing.`;
+
+// §11 — injected for ALL roles when the dispatched card's board is under remote control.
+// The user is on their phone, not the terminal, so questions must go to the linked issue
+// as a comment (posted host-side through the LocalApiServer bridge via linear_api/clickup_api),
+// not to terminal input.
+export const REMOTE_MODE_DIRECTIVE = `REMOTE MODE: You are running under remote control — the user is NOT at the terminal. If you need to ask the user anything or report a blocker, post it as a comment on the linked issue using the linear_api skill (or clickup_api). Do NOT wait on terminal input. Continue with any work you can do without the answer.`;
 
 export const INLINE_CHALLENGE_DIRECTIVE = `For each plan, before implementation:
 - perform a concise adversarial review of that specific plan,
@@ -443,7 +467,11 @@ export function buildKanbanBatchPrompt(
     const dispatchContext = buildPromptDispatchContext(plans);
     let planList = dispatchContext.planList;
     const dispatchContextBlock = dispatchContext.dispatchContextBlock;
-    const dispatchContextPrefix = dispatchContextBlock ? `${dispatchContextBlock}\n\n` : '';
+    // §11 — fold the remote-mode directive into the shared dispatch prefix so it reaches
+    // every role's suffixBlock without touching each role branch individually.
+    const remoteModeBlock = options?.remoteControlActive ? REMOTE_MODE_DIRECTIVE : '';
+    const dispatchPrefixCore = [dispatchContextBlock, remoteModeBlock].filter(Boolean).join('\n\n');
+    const dispatchContextPrefix = dispatchPrefixCore ? `${dispatchPrefixCore}\n\n` : '';
     if (options?.epicMode && options?.epicTopic) {
         planList = `${EPIC_ORCHESTRATION_DIRECTIVE(options.epicTopic, options.subtaskCount || 0)}\n\n${planList}`;
         if (options?.epicPromptTemplate) {
@@ -860,105 +888,37 @@ For each plan:
     }
 
     if (role === 'ticket_updater') {
-        const ticketUpdateMode = options?.ticketUpdateMode ?? 'disabled';
+        // The role used to carry a 4-mode selector (disabled/comment-only/refine-ticket/
+        // research-and-refine). It is collapsed to a single triage-only behavior. The
+        // stored ticketUpdateMode config key is still read (so old configs don't error)
+        // but its value is ignored — see the one-time migration warning emitted by
+        // warnOnLegacyTicketUpdateMode().
+        warnOnLegacyTicketUpdateMode(options?.ticketUpdateMode);
 
-        // Shared analysis template
-        const analysisTemplate = (extraFields: string[] = []) => {
-            const fields = [
-                '- **Goal Summary**: Brief overview of what the plan aims to achieve',
-                '- **Complexity Assessment**: Overall complexity (Low/Medium/High) and key risk areas',
-                '- **Key Dependencies**: Major dependencies or blockers',
-                '- **Implementation Notes**: Any notable implementation considerations',
-                '- **Estimated Effort**: Rough effort estimate (if discernible from complexity)',
-                ...extraFields
-            ];
-            return fields.join('\n');
-        };
+        const updaterBase = `You are a Ticket Triager Agent.
 
-        let updaterBase: string;
+You read ONE imported ticket (its title, description, and any captured comments in the plan
+file) and post a single short triage verdict back to the source ticket as a comment.
 
-        if (ticketUpdateMode === 'comment-only') {
-            const ticketUpdateDirective =
-                `TICKET UPDATE MODE: You are authorized to update the associated ticket. ` +
-                `Extract the ticket number from the plan metadata field "**Ticket:**" (format: CU-XXXXX or LIN-XXXXX). ` +
-                `Analyze the plan, then use the clickup_api or linear_api skill to add an "AI Analysis" comment to the ticket. ` +
-                `Do not modify the ticket description. Only add a comment. ` +
-                `If no ticket number is found, skip the ticket update and notify the user.`;
+Resolve the provider ticket ID from the plan metadata: the "**ClickUp Task ID:**" line
+(ClickUp) or the "**Linear Issue ID:**" line (Linear). Use that ID — not the legacy
+"**Ticket:**" field. If neither ID is present, skip posting and notify the user.
 
-            updaterBase = `You are a Ticket Updater Agent.
+Post the verdict as a comment using the clickup_api skill (ClickUp) or the linear_api skill
+(Linear). These post through the Switchboard local API bridge — never call the provider API
+directly and never touch tokens. NEVER overwrite the ticket description — comment only.
 
-STEP 1: Analyze the Plan
-Generate a concise analysis covering:
-${analysisTemplate()}
+Your verdict MUST be a single short comment, target ≤ 120 words, in exactly this shape:
 
-Keep the analysis under 500 words for readability in the ticket.
+**Severity:** blocker / high / normal / low
+**Area:** one or two tags
+**Assessment:** 1–2 sentence root-cause hypothesis or restatement of the real problem
+**Recommended action:** the concrete next step
+**Routing:** auto (simple enough to action directly) OR needs-human (complex/ambiguous/
+cross-cutting → move to the planning.html Tickets tab)
 
-STEP 2: Update the Ticket
-${ticketUpdateDirective}
-
-Format the analysis as:
-## AI Analysis
-
-[Your analysis content here]`;
-        } else if (ticketUpdateMode === 'refine-ticket') {
-            const ticketUpdateDirective =
-                `TICKET UPDATE MODE: You are authorized to update the associated ticket. ` +
-                `Extract the ticket number from the plan metadata field "**Ticket:**" (format: CU-XXXXX or LIN-XXXXX). ` +
-                `Analyze the plan, then use the clickup_api or linear_api skill to refine the ticket description. ` +
-                `Update the description to reflect the plan's current state, implementation details, and any changes from the original request. ` +
-                `If no ticket number is found, skip the ticket update and notify the user.`;
-
-            updaterBase = `You are a Ticket Updater Agent.
-
-STEP 1: Analyze the Plan
-Generate a comprehensive analysis covering:
-${analysisTemplate(['- **Current Status**: What has been completed and what remains'])}
-
-STEP 2: Update the Ticket
-${ticketUpdateDirective}
-
-Format the refined description as a clear, structured ticket description that accurately reflects the plan's current state.`;
-        } else if (ticketUpdateMode === 'research-and-refine') {
-            const researchDirective =
-                `RESEARCH MODE: Before updating the ticket, use the web_research skill to gather additional context. ` +
-                `Research the technical approach, dependencies, best practices, and any relevant recent developments. ` +
-                `If the web_research skill is unavailable, proceed with codebase-only analysis and note the gap.`;
-
-            const ticketUpdateDirective =
-                `TICKET UPDATE MODE: You are authorized to update the associated ticket. ` +
-                `Extract the ticket number from the plan metadata field "**Ticket:**" (format: CU-XXXXX or LIN-XXXXX). ` +
-                `After completing research, use the clickup_api or linear_api skill to refine the ticket description. ` +
-                `Update the description to reflect the plan's current state, implementation details, research findings, and any changes from the original request. ` +
-                `If no ticket number is found, skip the ticket update and notify the user.`;
-
-            updaterBase = `You are a Ticket Updater Agent.
-
-STEP 1: Analyze the Plan
-Generate a comprehensive analysis covering:
-${analysisTemplate(['- **Current Status**: What has been completed and what remains'])}
-
-STEP 2: Research
-${researchDirective}
-
-STEP 3: Update the Ticket
-${ticketUpdateDirective}
-
-Format the refined description as a clear, structured ticket description that accurately reflects the plan's current state and incorporates your research findings.`;
-        } else {
-            // disabled mode (or unknown values) — analysis only, no ticket update
-            updaterBase = `You are a Ticket Updater Agent.
-
-STEP 1: Analyze the Plan
-Generate a concise analysis covering:
-${analysisTemplate()}
-
-Keep the analysis under 500 words for readability.
-
-Format the analysis as:
-## AI Analysis
-
-[Your analysis content here]`;
-        }
+Rules: no preamble, no restating the whole ticket, no markdown section dumps beyond the five
+fields above, no speculative implementation detail. Comment only.`;
 
         let baseInstructions = resolveBaseInstructions('ticket_updater', updaterBase, options);
         if (cavemanOutputEnabled) {

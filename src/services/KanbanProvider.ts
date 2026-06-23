@@ -19,7 +19,7 @@ import {
 } from './agentConfig';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
 import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions } from './agentPromptBuilder';
-import { KanbanDatabase, type WorkspaceDatabaseMapping } from './KanbanDatabase';
+import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord } from './KanbanDatabase';
 import { KanbanMigration } from './KanbanMigration';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
@@ -30,6 +30,7 @@ import { ClickUpSyncService, type ClickUpConfig, type ClickUpSyncResult } from '
 import { ClickUpDocsAdapter } from './ClickUpDocsAdapter';
 import { LinearAutomationService } from './LinearAutomationService';
 import { LinearSyncService, type LinearConfig } from './LinearSyncService';
+import { RemoteControlService, type RemoteConfig } from './RemoteControlService';
 import { LinearDocsAdapter } from './LinearDocsAdapter';
 import { NotionFetchService } from './NotionFetchService';
 import { type AutoPullIntegration, type AutoPullIntervalMinutes, IntegrationAutoPullService } from './IntegrationAutoPullService';
@@ -124,6 +125,9 @@ export class KanbanProvider implements vscode.Disposable {
     private _clickUpServices = new Map<string, ClickUpSyncService>();
     private _clickUpAutomationServices = new Map<string, ClickUpAutomationService>();
     private _linearServices = new Map<string, LinearSyncService>();
+    private _remoteControls = new Map<string, RemoteControlService>();
+    /** §11 — true while any board is under remote control; injects REMOTE_MODE_DIRECTIVE. */
+    private _remoteControlActive = false;
     private _linearAutomationServices = new Map<string, LinearAutomationService>();
     private _notionServices = new Map<string, NotionFetchService>();
     private _cacheServices = new Map<string, import('./PlanningPanelCacheService').PlanningPanelCacheService>();
@@ -852,6 +856,8 @@ export class KanbanProvider implements vscode.Disposable {
         }
         if (this._projectFilterSaveTimeout) clearTimeout(this._projectFilterSaveTimeout);
         this._integrationAutoPull.dispose();
+        this._remoteControls.forEach(rc => rc.dispose());
+        this._remoteControls.clear();
         this._clickUpAutomationServices.clear();
         this._linearAutomationServices.clear();
         this._clickUpSyncWarnings.clear();
@@ -1372,6 +1378,72 @@ export class KanbanProvider implements vscode.Disposable {
         );
         this._clickUpAutomationServices.set(resolved, service);
         return service;
+    }
+
+    /**
+     * §10 — lazily build the Remote Control service for a workspace root. The poll
+     * callbacks reuse the existing column-move + agent-dispatch paths so a Linear-driven
+     * move behaves identically to a manual board drag.
+     */
+    private _getRemoteControl(workspaceRoot: string): RemoteControlService {
+        const resolved = this.resolveEffectiveWorkspaceRoot(workspaceRoot);
+        const existing = this._remoteControls.get(resolved);
+        if (existing) { return existing; }
+        const service = new RemoteControlService({
+            getDb: () => this._getKanbanDb(resolved),
+            getWorkspaceId: async () => (await this._getKanbanDb(resolved).getWorkspaceId()) || '',
+            getLinearService: () => this._getLinearService(resolved),
+            onColumnMove: async (plan, targetColumn) => {
+                await this._remoteApplyColumnMove(resolved, plan, targetColumn);
+            },
+            onComment: async (plan, body) => {
+                await this._remoteDispatchComment(resolved, plan, body);
+            },
+            log: (m) => this._outputChannel?.appendLine(m)
+        });
+        this._remoteControls.set(resolved, service);
+        return service;
+    }
+
+    /** §9 — apply a Linear-driven column move, then dispatch the destination column's agent. */
+    private async _remoteApplyColumnMove(workspaceRoot: string, plan: KanbanPlanRecord, targetColumn: string): Promise<void> {
+        await this.moveCardToColumnByPlanFile(workspaceRoot, plan.planFile, targetColumn);
+        const sessionId = plan.sessionId || (await this._getKanbanDb(workspaceRoot).getPlanByPlanFile(plan.planFile, await this._getKanbanDb(workspaceRoot).getWorkspaceId() || ''))?.sessionId || '';
+        await this._remoteDispatchColumnAgent(workspaceRoot, sessionId, targetColumn);
+    }
+
+    /**
+     * §7 — route an inbound comment to the current column's agent. The comment is
+     * appended to the plan file (so the agent sees it in the card's existing plan
+     * context) and the current column's agent is dispatched.
+     */
+    private async _remoteDispatchComment(workspaceRoot: string, plan: KanbanPlanRecord, body: string): Promise<void> {
+        try {
+            const abs = this._resolvePlanFilePath(workspaceRoot, plan.planFile);
+            if (abs) {
+                const stamp = new Date().toISOString();
+                await fs.promises.appendFile(abs, `\n\n## Inbound Comment (${stamp})\n\n${body}\n`, 'utf8');
+            }
+        } catch (e) {
+            this._outputChannel?.appendLine(`[RemoteControl] Failed to append inbound comment to ${plan.planFile}: ${e}`);
+        }
+        await this._remoteDispatchColumnAgent(workspaceRoot, plan.sessionId || '', plan.kanbanColumn);
+    }
+
+    /** Dispatch the agent assigned to a column, the same command a manual drag uses. */
+    private async _remoteDispatchColumnAgent(workspaceRoot: string, sessionId: string, column: string): Promise<void> {
+        if (!sessionId) { return; }
+        const spec = await this._resolveKanbanDispatchSpec(workspaceRoot, column);
+        const role = spec?.role || this._columnToRole(column);
+        if (!role) {
+            // No agent on this column → comment/move triggers nothing (matches a manual
+            // move onto an agentless column). No special handling, no reply comment.
+            return;
+        }
+        const canDispatch = await this._canAssignRole(workspaceRoot, role);
+        if (!canDispatch) { return; }
+        const instruction = role === 'planner' ? 'improve-plan' : undefined;
+        await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot);
     }
 
     private _getLinearService(workspaceRoot: string): LinearSyncService {
@@ -2657,6 +2729,7 @@ export class KanbanProvider implements vscode.Disposable {
             defaultPromptOverrides,
             workspaceRoot,
             routingMapConfig: this._routingMapConfig,
+            remoteControlActive: this._remoteControlActive,
         };
 
         if (role === 'planner') {
@@ -4287,6 +4360,19 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     this._panel?.webview.postMessage({ type: 'switchToTab', tab: this._pendingTab });
                     this._pendingTab = undefined;
                 }
+                // §10 — Constant-mode remote control auto-starts on load.
+                {
+                    const rcRoot = this._resolveWorkspaceRoot(undefined);
+                    if (rcRoot) {
+                        try {
+                            const rc = this._getRemoteControl(rcRoot);
+                            await rc.restoreFromConfig();
+                            this._remoteControlActive = rc.isActive;
+                        } catch (e) {
+                            this._outputChannel?.appendLine(`[RemoteControl] restore failed: ${e}`);
+                        }
+                    }
+                }
                 break;
             case 'selectPlan': {
                 const resolvedSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
@@ -4600,6 +4686,49 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 break;
             }
 
+            case 'getRemoteConfig': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (workspaceRoot) {
+                    const rc = this._getRemoteControl(workspaceRoot);
+                    const config = await rc.getConfig();
+                    const db = this._getKanbanDb(workspaceRoot);
+                    const workspaceId = (await db.ensureReady()) ? (await db.getWorkspaceId() || '') : '';
+                    const projects = workspaceId ? await db.getProjects(workspaceId) : [];
+                    this._panel?.webview.postMessage({ type: 'remoteConfig', config, projects, active: rc.isActive });
+                }
+                break;
+            }
+            case 'setRemoteConfig': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (workspaceRoot && msg.config) {
+                    const rc = this._getRemoteControl(workspaceRoot);
+                    await rc.setConfig(msg.config as RemoteConfig);
+                    this._remoteControlActive = rc.isActive;
+                    const config = await rc.getConfig();
+                    this._panel?.webview.postMessage({ type: 'remoteConfig', config, active: rc.isActive });
+                }
+                break;
+            }
+            case 'startRemoteControl': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (workspaceRoot) {
+                    const rc = this._getRemoteControl(workspaceRoot);
+                    await rc.start();
+                    this._remoteControlActive = rc.isActive;
+                    this._panel?.webview.postMessage({ type: 'remoteControlState', active: rc.isActive });
+                }
+                break;
+            }
+            case 'stopRemoteControl': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (workspaceRoot) {
+                    const rc = this._getRemoteControl(workspaceRoot);
+                    rc.stop();
+                    this._remoteControlActive = rc.isActive;
+                    this._panel?.webview.postMessage({ type: 'remoteControlState', active: rc.isActive });
+                }
+                break;
+            }
             case 'triggerAction': {
                 if (!this._cliTriggersEnabled) {
                     break;
@@ -6738,16 +6867,14 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (!plan) { vscode.window.showWarningMessage('Plan not found.'); break; }
                 if (plan.isEpic) { vscode.window.showWarningMessage('Plan is already an epic.'); break; }
 
-                // Move file to epics/ directory for unified architecture
+                // Move file to epics/ directory for unified architecture.
+                // Embed the full planId in the filename so the subtask→epic link survives
+                // re-import (the watcher derives plan_id back from this trailing UUID).
                 const slug = (plan.topic || 'epic').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'epic';
-                let uniqueSlug = slug;
                 const epicDir = path.join(workspaceRoot, '.switchboard', 'epics');
                 const oldAbsPath = path.resolve(workspaceRoot, plan.planFile);
                 await fs.promises.mkdir(epicDir, { recursive: true });
-                if (fs.existsSync(path.join(epicDir, `${slug}.md`))) {
-                    uniqueSlug = `${slug}-${plan.planId.slice(0, 8)}`;
-                }
-                const newRelPath = path.join('.switchboard', 'epics', `${uniqueSlug}.md`);
+                const newRelPath = path.join('.switchboard', 'epics', `${slug}-${plan.planId}.md`);
                 const newAbsPath = path.join(workspaceRoot, newRelPath);
 
                 // 1. Update DB plan_file BEFORE moving the file — so the watcher's delete
@@ -6810,13 +6937,13 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 }
 
                 const slug = (name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'epic');
-                let uniqueSlug = slug;
                 const epicDir = path.join(workspaceRoot, '.switchboard', 'epics');
                 await fs.promises.mkdir(epicDir, { recursive: true });
-                if (fs.existsSync(path.join(epicDir, `${slug}.md`))) {
-                    uniqueSlug = `${slug}-${planId.slice(0, 8)}`;
-                }
-                const epicPlanFile = path.join('.switchboard', 'epics', `${uniqueSlug}.md`);
+                // Embed the full planId in the filename so the link survives re-import:
+                // subtask→epic links are keyed on the epic's plan_id, and the watcher derives
+                // the plan_id back from this trailing UUID (see GlobalPlanWatcherService). A
+                // bare slug would let a re-import mint a fresh random id and orphan every subtask.
+                const epicPlanFile = path.join('.switchboard', 'epics', `${slug}-${planId}.md`);
                 const epicPath = path.join(workspaceRoot, epicPlanFile);
 
                 const now = new Date().toISOString();

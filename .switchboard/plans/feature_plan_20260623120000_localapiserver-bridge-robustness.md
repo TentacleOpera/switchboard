@@ -204,3 +204,36 @@ Key risks: (1) the auth bridge — not transport — is the dominant failure (`/
 ---
 
 **Recommendation:** Complexity is 6 → **Send to Coder**. The auth-gate relaxation (Step 3) should be user-approved first (see User Review Required).
+
+---
+
+## Reviewer Pass (2026-06-23)
+
+Adversarial review of the implemented changes against the plan. Two-stage (Grumpy → Balanced), fixes applied inline, verification run (no compile/tests per session directive).
+
+### Findings by severity
+
+- **CRITICAL:** none. The dominant failure mode (broken auth gate) is correctly addressed — `_checkAuth` now trusts the localhost boundary (`LocalApiServer.ts:95-98`), the dead `/config/token` fetch and all `Authorization: Bearer` lines are gone from every skill, and no token is written to disk by the new code.
+- **MAJOR (fixed): `get_tickets.md` split `source` from `sb_api_call` across separate fenced bash blocks.** The other 8 skills keep bootstrap + call in one block; `get_tickets.md` sourced the helper in "Step 1" and called `sb_api_call` in later, separate code fences. Agents that execute each fence as its own shell would hit `sb_api_call: command not found` — directly undermining the reliability goal. **Fix:** made every example block self-contained (each now does its own walk-up + `source` before the call), matching the other 8 skills. (`get_tickets.md`)
+- **MINOR (fixed): retry loop wasted a backoff cycle before giving up.** The loop slept after every attempt including the last, giving ~17s worst-case before the "not reachable" error vs the plan's ~10–12s bound. **Fix:** skip the trailing sleep; sequence is now 1+2+4+5 ≈ 12s over 5 attempts. (`_lib/sb_api_call.sh:96-110`)
+- **NIT (not fixed, intentional): `getAuthToken` option is now dead inside `LocalApiServer`.** `_checkAuth` no longer reads it and provider calls use the service objects' own tokens. Left in place deliberately — the downstream `/comment`/`postComment` plan (`feature_plan_20260622130000`) is expected to consume it, and the provider still populates it from SecretStorage. (`LocalApiServer.ts:14`)
+- **NIT (not fixed): dead 401 branches.** Every handler still calls `if (!await this._checkAuth(...))` with "Configure token…" 401 bodies that can no longer fire (the gate always returns true). Harmless; removing them is cosmetic and would enlarge the diff. (`LocalApiServer.ts` handler heads)
+- **NIT (not fixed): identity check is exact string match on paths.** `SB_ROOT` (from `$PWD` walk-up) vs `roots` (VS Code `uri.fsPath`) could false-negative under symlinked CWDs. Acknowledged in the plan's Risks; acceptable.
+
+### Verification results
+
+- `bash -n .agents/skills/_lib/sb_api_call.sh` → **SYNTAX OK**.
+- Backoff math simulated → 5 attempts, ~12s worst-case, matches plan bound.
+- `grep` audit of all 9 skills → **0** remaining `/config/token`, `Authorization: Bearer`, `TOKEN=`, or `localhost:$PORT` references outside the helper. All 9 source the helper and call `sb_api_call`.
+- `_checkAuth` confirmed relaxed to `return true`; `/health` returns `{status, port, roots}`; `_writePortFile` removed (single instantiation site passes `allRoots`); atomic temp+rename write and stop-time `unlink` present in `TaskViewerProvider`; `_cleanupTempFiles` covers `api-server-port.txt.tmp`.
+- `.vscodeignore` confirmed `!.agents/**` (line 26) and no `_lib`/`skills` exclusion → helper ships in the VSIX.
+- **Not run** (per session directive): `npm run compile`, automated tests. Implementer/user to run `npm run compile` (webpack → `dist/`) and the suite.
+
+### Files changed in this reviewer pass
+- `.agents/skills/get_tickets.md` — made all example blocks self-contained (bootstrap + call in one fence); renumbered steps.
+- `.agents/skills/_lib/sb_api_call.sh` — skip trailing backoff sleep on the final attempt.
+
+### Remaining risks
+- **Auth-gate relaxation still requires explicit user sign-off** (see User Review Required). Implemented exactly as designed; the 127.0.0.1/::1 socket check + loopback bind is the sole boundary. Any local process can now reach the bridge — but this matches the de-facto pre-change behavior (the Bearer gate was already broken) and is the standard VS Code local-server posture.
+- **Compilation unverified this session** — `src/` TypeScript changes (interface field, `_checkAuth` body, removed method) have not been type-checked here. Low risk (additive/removal only) but must be compiled before shipping.
+- Symlinked-CWD identity false-negative (NIT above) remains by design.

@@ -11,24 +11,25 @@ Use this skill to access ClickUp/Linear ticket data via the local API server (no
 
 ## How to Use
 
-### Step 1: Source API Helper
+> **Important:** `sb_api_call` is a bash function defined by sourcing the helper. Run the `source` line in the **same shell session** as the call — each self-contained block below already does this.
 
-Source the API helper script:
+### Step 1: Get Metadata (List View)
+
+**ClickUp metadata:**
 ```bash
 CUR="$PWD"
 while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
 source "$CUR/.agents/skills/_lib/sb_api_call.sh"
-```
 
-### Step 2: Get Metadata (List View)
-
-**ClickUp metadata:**
-```bash
 sb_api_call GET /metadata/clickup
 ```
 
 **Linear metadata:**
 ```bash
+CUR="$PWD"
+while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
+source "$CUR/.agents/skills/_lib/sb_api_call.sh"
+
 sb_api_call GET /metadata/linear
 ```
 
@@ -56,10 +57,14 @@ Use this metadata to:
 - Identify task IDs for full detail queries
 - Answer questions that don't require full task descriptions
 
-### Step 3: Get Full Task Details
+### Step 2: Get Full Task Details
 
 **ClickUp task with full details (description, comments, attachments):**
 ```bash
+CUR="$PWD"
+while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
+source "$CUR/.agents/skills/_lib/sb_api_call.sh"
+
 sb_api_call GET /task/clickup/TASK_ID
 ```
 
@@ -71,6 +76,10 @@ Response includes:
 
 **Linear issue with full details:**
 ```bash
+CUR="$PWD"
+while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
+source "$CUR/.agents/skills/_lib/sb_api_call.sh"
+
 sb_api_call GET /task/linear/ISSUE_ID
 ```
 
@@ -80,7 +89,7 @@ Response includes:
 - `comments` - array of comments
 - `attachments` - array of attachments
 
-### Step 4: Handle Errors
+### Step 3: Handle Errors
 
 - **Port file doesn't exist:** Extension not running or API server not started
 - **API server not responding:** Extension may have crashed

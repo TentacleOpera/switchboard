@@ -134,6 +134,52 @@ export class LocalApiServer {
         }
     }
 
+    /**
+     * §8 — POST /comment. Host-side comment write-back reached by agents over the bridge.
+     * Body: { provider: 'linear' | 'clickup', id: string, body: string }.
+     * The host stamps the self-marker and truncates (postManagedComment); the agent
+     * never touches the token or the marker.
+     */
+    private async _handlePostComment(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: 'Unauthorized',
+                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
+            }));
+            return;
+        }
+
+        try {
+            const body = await this._parseJsonBody(req);
+            const provider = String(body?.provider || '').trim().toLowerCase();
+            const id = String(body?.id || '').trim();
+            const text = String(body?.body || '');
+            if ((provider !== 'linear' && provider !== 'clickup') || !id || !text.trim()) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing or invalid provider/id/body' }));
+                return;
+            }
+
+            const service = provider === 'linear'
+                ? this._options.getLinearService()
+                : this._options.getClickUpService();
+            if (!service) {
+                res.writeHead(503, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: `${provider} service not available` }));
+                return;
+            }
+
+            const result = await service.postManagedComment(id, text);
+            res.writeHead(result.success ? 200 : 502, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+        } catch (err) {
+            console.error('[LocalApiServer] postComment error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'postComment failed' }));
+        }
+    }
+
     private async _handleClickUpApiProxy(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, false)) {
             res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -732,6 +778,8 @@ export class LocalApiServer {
             } else if (pathname.startsWith('/task/clickup/') && req.method === 'PUT') {
                 const taskId = pathname.split('/')[3];
                 await this._handleUpdateClickUpTask(taskId, req, res);
+            } else if (pathname === '/comment' && req.method === 'POST') {
+                await this._handlePostComment(req, res);
             } else if (pathname === '/api/clickup' && req.method === 'POST') {
                 await this._handleClickUpApiProxy(req, res);
             } else if (pathname === '/api/linear' && req.method === 'POST') {

@@ -4,6 +4,7 @@ import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { KanbanDatabase, KanbanPlanRecord, KanbanPlanStatus } from './KanbanDatabase';
 import { ensureWorkspaceIdentity } from './WorkspaceIdentityService';
+import { extractEmbeddedMetadata, extractClickUpTaskId, extractLinearIssueId } from './planMetadataUtils';
 
 type ImportablePlanFile = {
     filePath: string;
@@ -220,26 +221,6 @@ function extractComplexity(content: string): string {
         if (!isNaN(num) && num >= 1 && num <= 10) return num.toString();
     }
     return 'Unknown';
-}
-
-function extractEmbeddedMetadata(content: string, label: string): string {
-    const pattern = new RegExp(`^(?:>\\s+)?\\*\\*${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:\\*\\*\\s*(.+)$`, 'im');
-    const match = content.match(pattern);
-    return match ? match[1].trim() : '';
-}
-
-function extractClickUpTaskId(content: string): string {
-    const explicitId = extractEmbeddedMetadata(content, 'ClickUp Task ID');
-    if (explicitId) {
-        return explicitId;
-    }
-
-    const importedMatch = content.match(/^>\s+Imported from ClickUp task\s+`([^`]+)`$/im);
-    return importedMatch ? importedMatch[1].trim() : '';
-}
-
-function extractLinearIssueId(content: string): string {
-    return extractEmbeddedMetadata(content, 'Linear Issue ID');
 }
 
 function extractTags(content: string): string {

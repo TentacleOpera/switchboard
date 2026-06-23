@@ -20,6 +20,30 @@ export function sanitizeTags(raw: string): string {
     return `,${tags.join(',')},`;
 }
 
+/**
+ * Extract a `> **Label:** value` (or `**Label:** value`) embedded metadata line.
+ * Moved here from PlanFileImporter so the watcher and batch importer share one parser.
+ */
+export function extractEmbeddedMetadata(content: string, label: string): string {
+    const pattern = new RegExp(`^(?:>\\s+)?\\*\\*${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:\\*\\*\\s*(.+)$`, 'im');
+    const match = content.match(pattern);
+    return match ? match[1].trim() : '';
+}
+
+export function extractClickUpTaskId(content: string): string {
+    const explicitId = extractEmbeddedMetadata(content, 'ClickUp Task ID');
+    if (explicitId) {
+        return explicitId;
+    }
+
+    const importedMatch = content.match(/^>\s+Imported from ClickUp task\s+`([^`]+)`$/im);
+    return importedMatch ? importedMatch[1].trim() : '';
+}
+
+export function extractLinearIssueId(content: string): string {
+    return extractEmbeddedMetadata(content, 'Linear Issue ID');
+}
+
 export interface PlanMetadata {
     sessionId?: string;
     topic: string;

@@ -12,6 +12,7 @@ import {
   normalizeLinearAutomationRules
 } from '../models/PipelineDefinition';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
+import { stampMarker, truncateForComment } from './commentMarker';
 
 export interface LinearConfig {
   teamId: string;
@@ -1168,6 +1169,75 @@ export class LinearSyncService {
     }
   }
 
+  /**
+   * §8 — host-side shared comment write-back primitive.
+   *
+   * Runs in the extension host (which holds the SecretStorage token), stamps the
+   * self-marker, and truncates to Linear's comment size limit. Used by triage
+   * write-back (§6), agent replies (§7/§9), and the sync-mode question directive
+   * (§11). Agents reach it through the LocalApiServer `/comment` route — they never
+   * call the provider API directly and never touch the marker, so they cannot break
+   * the feedback-loop guard.
+   */
+  public async postManagedComment(issueId: string, body: string): Promise<{ success: boolean; error?: string }> {
+    // Linear has no hard documented comment cap; 64k is a generous safety bound.
+    const truncated = truncateForComment(body, 64000);
+    const stamped = stampMarker(truncated);
+    return this.addIssueComment(issueId, stamped);
+  }
+
+  /**
+   * §7/§9 — Remote Control poll. Fetch current state + recent comments for a set of
+   * synced issues in one batched query. Returns a map keyed by issue UUID. Comments
+   * include their author flag so the caller can skip Switchboard's own comments via
+   * the marker (the body is returned verbatim; marker filtering happens in the caller).
+   */
+  public async fetchIssueUpdates(issueIds: string[]): Promise<Record<string, {
+    stateId: string;
+    stateName: string;
+    stateType: string;
+    comments: Array<{ id: string; body: string; createdAt: string; author: string }>;
+  }>> {
+    const result: Record<string, { stateId: string; stateName: string; stateType: string; comments: Array<{ id: string; body: string; createdAt: string; author: string }> }> = {};
+    const ids = (issueIds || []).map((s) => String(s || '').trim()).filter(Boolean);
+    if (ids.length === 0) { return result; }
+
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) { return result; }
+
+    const QUERY = `
+      query($ids: [ID!]) {
+        issues(filter: { id: { in: $ids } }, first: 100) {
+          nodes {
+            id
+            state { id name type }
+            comments(first: 50) { nodes { id body createdAt user { name } } }
+          }
+        }
+      }
+    `;
+    try {
+      const resp = await this.graphqlRequest(QUERY, { ids });
+      const nodes = resp?.data?.issues?.nodes || [];
+      for (const node of nodes) {
+        result[node.id] = {
+          stateId: node.state?.id || '',
+          stateName: node.state?.name || '',
+          stateType: (node.state?.type || '').toLowerCase(),
+          comments: (node.comments?.nodes || []).map((c: any) => ({
+            id: String(c.id || ''),
+            body: String(c.body || ''),
+            createdAt: String(c.createdAt || ''),
+            author: String(c.user?.name || '')
+          }))
+        };
+      }
+    } catch (e) {
+      console.warn('[LinearSync] fetchIssueUpdates failed:', e);
+    }
+    return result;
+  }
+
   // ── Comment Manager: threading + members ──────────────────────────
 
   /**
@@ -1839,6 +1909,15 @@ export class LinearSyncService {
       return;
     } // column not mapped
 
+    // §4 — completeSyncEnabled gate. When the user disables "sync completed status",
+    // automatic DONE/COMPLETED/ARCHIVED transitions are NOT pushed to Linear.
+    // Manual dispatch (updateIssueState) is intentionally left untouched.
+    const terminalColumn = ['DONE', 'COMPLETED', 'ARCHIVED'].includes((newColumn || '').toUpperCase());
+    if (config.completeSyncEnabled === false && terminalColumn) {
+      console.log(`[LinearSync] completeSyncEnabled is off — skipping ${newColumn} sync for plan ${plan.planFile}`);
+      return;
+    }
+
     const existingIssueId = await this.getIssueIdForPlan(plan.planFile);
     const priority = this._complexityToPriority(plan.complexity);
 
@@ -2265,21 +2344,53 @@ export class LinearSyncService {
 
         const metaLines = [
           `> Imported from Linear issue \`${issue.identifier}\``,
+          // Provider linkage — UUID, not the human identifier — so the watcher can
+          // round-trip sync back to this issue (see GlobalPlanWatcherService §1).
+          `> **Linear Issue ID:** ${issue.id}`,
           issue.url         ? `> **URL:** ${issue.url}`              : '',
           parentRef         ? `> **Parent Issue:** ${parentRef}`     : '',
           priority          ? `> **Priority:** ${priority}`          : '',
           dueDate           ? `> **Due:** ${dueDate}`                : '',
           assignee          ? `> **Assignee:** ${assignee}`          : '',
-          labels            ? `> **Labels:** ${labels}`              : '',
+          labels            ? `> **Tags:** ${labels}`                : '',
           issue.state?.name ? `> **State:** ${issue.state.name}`    : '',
         ].filter(Boolean).join('\n');
+
+        // §2 — capture comments (most valuable triage context) and attachments.
+        // Caps: 20 most recent comments, 2000 chars each. Empty sections omitted.
+        const COMMENT_CAP = 20;
+        const COMMENT_CHAR_CAP = 2000;
+        const commentNodes = (issue.comments?.nodes || []).slice(-COMMENT_CAP);
+        const commentsSection = commentNodes.length
+          ? '\n## Comments\n\n' + commentNodes.map((c: any) => {
+              const author = c.user?.name || 'Unknown';
+              const when = c.createdAt || '';
+              let body = String(c.body || '').trim();
+              if (body.length > COMMENT_CHAR_CAP) {
+                body = body.slice(0, COMMENT_CHAR_CAP) + ' *[truncated]*';
+              }
+              return `**${author}**${when ? ` — ${when}` : ''}\n\n${body}`;
+            }).join('\n\n---\n\n') + '\n'
+          : '';
+
+        const attachmentNodes = (issue.attachments?.nodes || []).filter((a: any) => a?.url);
+        const attachmentsSection = attachmentNodes.length
+          ? '\n## Attachments\n\n' + attachmentNodes.map((a: any) =>
+              `- [${a.title || a.url}](${a.url})`
+            ).join('\n') + '\n'
+          : '';
 
         const stub = [
           `# ${issue.title || `Linear Issue ${issue.identifier}`}`,
           '',
+          // §5 — land backlog items in BACKLOG, everything else in CREATED.
+          `kanbanColumn: ${kanbanColumn}`,
+          '',
           metaLines,
           '',
           description || '',
+          commentsSection,
+          attachmentsSection,
         ].join('\n');
 
         await fs.promises.writeFile(planFile, stub, 'utf8');

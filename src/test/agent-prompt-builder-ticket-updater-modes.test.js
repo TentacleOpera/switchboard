@@ -5,52 +5,38 @@ const { buildKanbanBatchPrompt } = require('../../out/services/agentPromptBuilde
 const { parseCustomAgentAddons } = require('../../out/services/agentConfig');
 
 function testTicketUpdateModes() {
-    console.log('\nTesting ticket update mode prompts...');
-    
+    console.log('\nTesting ticket triager prompt (collapsed single behavior)...');
+
     const plans = [{ sessionId: 'sess1', title: 'Plan 1', topic: 'Plan 1', absolutePath: '/path/to/plan1.md' }];
-    
-    // Test disabled mode
-    const disabledPrompt = buildKanbanBatchPrompt('ticket_updater', plans, { ticketUpdateMode: 'disabled' });
-    assert.ok(!disabledPrompt.includes('TICKET UPDATE MODE'), 'Disabled mode should not include ticket update directive');
-    assert.ok(!disabledPrompt.includes('web_research skill'), 'Disabled mode should not include research directive');
-    
-    // Test comment-only mode
-    const commentOnlyPrompt = buildKanbanBatchPrompt('ticket_updater', plans, { ticketUpdateMode: 'comment-only' });
-    assert.ok(commentOnlyPrompt.includes('add an "AI Analysis" comment'), 'Comment-only mode should include comment directive');
-    assert.ok(!commentOnlyPrompt.includes('refine the ticket description'), 'Comment-only mode should not include refine directive');
-    assert.ok(!commentOnlyPrompt.includes('web_research skill'), 'Comment-only mode should not include research directive');
-    
-    // Test refine-ticket mode
-    const refinePrompt = buildKanbanBatchPrompt('ticket_updater', plans, { ticketUpdateMode: 'refine-ticket' });
-    assert.ok(refinePrompt.includes('refine the ticket description'), 'Refine mode should include refine directive');
-    assert.ok(!refinePrompt.includes('add an "AI Analysis" comment'), 'Refine mode should not include comment directive');
-    assert.ok(!refinePrompt.includes('web_research skill'), 'Refine mode should not include research directive');
-    
-    // Test research-and-refine mode
-    const researchPrompt = buildKanbanBatchPrompt('ticket_updater', plans, { ticketUpdateMode: 'research-and-refine' });
-    assert.ok(researchPrompt.includes('web_research skill'), 'Research mode should include research directive');
-    assert.ok(researchPrompt.includes('refine the ticket description'), 'Research mode should include refine directive');
-    assert.ok(!researchPrompt.includes('add an "AI Analysis" comment'), 'Research mode should not include comment directive');
-    
-    // Test default behavior (no mode specified) — should be disabled
-    const defaultPrompt = buildKanbanBatchPrompt('ticket_updater', plans, {});
-    assert.ok(!defaultPrompt.includes('TICKET UPDATE MODE'), 'Default mode should be disabled (no ticket update)');
-    
-    // Test undefined mode falls back to disabled in prompt builder
-    const undefinedPrompt = buildKanbanBatchPrompt('ticket_updater', plans, { ticketUpdateMode: undefined });
-    assert.ok(!undefinedPrompt.includes('TICKET UPDATE MODE'), 'Undefined mode should fall back to disabled');
-    
-    // Test migration: parseCustomAgentAddons maps old ticketUpdateEnabled to ticketUpdateMode
+
+    // The role now always performs triage-only verdicts regardless of the stored
+    // ticketUpdateMode value. The legacy 4-mode directives must be gone.
+    const modes = ['disabled', 'comment-only', 'refine-ticket', 'research-and-refine', undefined];
+    for (const mode of modes) {
+        const prompt = buildKanbanBatchPrompt('ticket_updater', plans, mode === undefined ? {} : { ticketUpdateMode: mode });
+        assert.ok(prompt.includes('Ticket Triager Agent'), `mode=${mode}: should use the triager prompt`);
+        assert.ok(prompt.includes('**Severity:**'), `mode=${mode}: should include the triage verdict shape`);
+        assert.ok(prompt.includes('**Routing:**'), `mode=${mode}: should include the routing field`);
+        assert.ok(prompt.includes('NEVER overwrite the ticket description'), `mode=${mode}: should forbid description overwrite`);
+        // Legacy mode directives are gone.
+        assert.ok(!prompt.includes('TICKET UPDATE MODE'), `mode=${mode}: legacy mode directive should be removed`);
+        assert.ok(!prompt.includes('add an "AI Analysis" comment'), `mode=${mode}: legacy comment directive removed`);
+        assert.ok(!prompt.includes('refine the ticket description'), `mode=${mode}: legacy refine directive removed`);
+        assert.ok(!prompt.includes('web_research skill'), `mode=${mode}: legacy research directive removed`);
+    }
+
+    // Migration: the ticketUpdateMode config key is still readable (value ignored at
+    // prompt time) so old stored configs don't error.
     const migratedTrue = parseCustomAgentAddons({ ticketUpdateEnabled: true });
     assert.strictEqual(migratedTrue?.ticketUpdateMode, 'comment-only', 'ticketUpdateEnabled=true should migrate to comment-only');
-    
+
     const migratedFalse = parseCustomAgentAddons({ ticketUpdateEnabled: false });
     assert.strictEqual(migratedFalse?.ticketUpdateMode, 'disabled', 'ticketUpdateEnabled=false should migrate to disabled');
-    
+
     const migratedNewMode = parseCustomAgentAddons({ ticketUpdateMode: 'refine-ticket' });
-    assert.strictEqual(migratedNewMode?.ticketUpdateMode, 'refine-ticket', 'ticketUpdateMode should pass through when valid');
-    
-    console.log('Ticket update mode tests PASSED!');
+    assert.strictEqual(migratedNewMode?.ticketUpdateMode, 'refine-ticket', 'ticketUpdateMode should still pass through when present');
+
+    console.log('Ticket triager prompt tests PASSED!');
 }
 
 try {

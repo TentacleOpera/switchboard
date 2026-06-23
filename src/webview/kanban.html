@@ -2392,6 +2392,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         <button class="shared-tab-btn" data-tab="agents">AGENTS</button>
         <button class="shared-tab-btn" data-tab="prompts">PROMPTS</button>
         <button class="shared-tab-btn" data-tab="automation">AUTOMATION</button>
+        <button class="shared-tab-btn" data-tab="remote">REMOTE</button>
         <button class="shared-tab-btn" data-tab="worktrees">WORKTREES</button>
 
         <button class="shared-tab-btn" data-tab="uat">UAT</button>
@@ -2414,6 +2415,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             </button>
             <button class="strip-icon-btn" id="btn-autoban" data-tooltip="Start or stop the automation engine">
                 <img src="{{ICON_22}}" alt="Start Automation">
+            </button>
+            <button class="strip-icon-btn" id="btn-remote-control" data-tooltip="Start or stop remote control">
+                <img src="{{ICON_28}}" alt="Remote Control">
             </button>
 
             <!-- Spacer to push right-side controls to the right -->
@@ -2472,6 +2476,47 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
     <!-- Automation Tab Content -->
     <div id="automation-tab-content" class="shared-tab-content">
         <div id="automation-panel-root" class="automation-panel"></div>
+    </div>
+
+    <!-- Remote Tab Content (§10 — config only, Linear) -->
+    <div id="remote-tab-content" class="shared-tab-content">
+        <div style="padding:12px; overflow-y:auto; height:100%; max-width:640px;">
+            <div class="db-subsection">
+                <div class="subsection-header"><span>Remote Control (Linear)</span></div>
+                <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:12px;">
+                    Drive your boards from the Linear app on your phone. Moving a card between Linear
+                    states moves it here and dispatches that column's agent; comments are routed to the
+                    current column's agent, which replies back as a Linear comment. Polling only — no
+                    webhooks, nothing to expose.
+                </div>
+
+                <label style="display:block; margin-bottom:10px;">
+                    <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Boards to sync</span>
+                    <select id="remote-boards" multiple size="5" style="width:100%;"></select>
+                </label>
+
+                <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+                    <input type="checkbox" id="remote-silent-sync">
+                    <span>Silent syncing — keep selected boards mirrored with Linear even while pinging is off</span>
+                </label>
+
+                <label style="display:block; margin-bottom:10px;">
+                    <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Ping mode</span>
+                    <select id="remote-ping-mode" style="width:100%;">
+                        <option value="manual">Manual — ping only while the toolbar toggle is on</option>
+                        <option value="constant">Constant — always pinging when configured</option>
+                    </select>
+                </label>
+
+                <label style="display:block; margin-bottom:12px;">
+                    <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Ping frequency (seconds, 30–120)</span>
+                    <input type="number" id="remote-ping-frequency" min="30" max="120" step="5" value="60" style="width:120px;">
+                </label>
+
+                <button id="btn-save-remote-config" class="action-btn">SAVE REMOTE SETTINGS</button>
+                <span id="remote-config-status" style="margin-left:10px; font-size:10px; color:var(--text-secondary);"></span>
+            </div>
+        </div>
     </div>
 
 
@@ -3085,7 +3130,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             reviewer: 'Evaluates completed implementations against plans, checking for regressions and scope creep.',
             tester: 'Validates implemented changes against the Design Doc/PRD, applies fixes for requirement gaps, and logs verification results.',
             analyst: 'Researches general-purpose technical queries and outlines plan dependencies.',
-            ticket_updater: 'Synchronizes plan state and comments back to connected project management systems (e.g. ClickUp/Linear).',
+            ticket_updater: 'Reads a ticket and posts a short triage verdict (severity, area, recommended action, auto/needs-human) back to ClickUp/Linear.',
             researcher: 'Researches general topics and saves results as documents to local docs storage (.switchboard/docs/).',
             code_researcher: 'Uses research to scope and improve coding plans with codebase exploration and external research.',
             splitter: 'Segregates planned files into distinct routine and complex task batches.',
@@ -3844,6 +3889,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 if (tabName === 'worktrees') {
                   loadWorktreeConfig();
                   renderWorktreesTab();
+                }
+
+                // Hydrate REMOTE tab when activated (§10)
+                if (tabName === 'remote') {
+                  postKanbanMessage({ type: 'getRemoteConfig' });
                 }
             });
         });
@@ -6291,6 +6341,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                     break;
                 }
+                case 'remoteConfig':
+                    if (typeof msg.active === 'boolean') { remoteControlActive = msg.active; applyRemoteControlButtonState(); }
+                    renderRemoteConfig(msg.config, msg.projects);
+                    break;
+                case 'remoteControlState':
+                    remoteControlActive = !!msg.active;
+                    applyRemoteControlButtonState();
+                    break;
                 case 'updateAutobanConfig':
                     autobanConfig = msg.state || null;
                     if (autobanConfig && autobanConfig.automationMode) {
@@ -6741,6 +6799,52 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const currentlyEnabled = !!(autobanConfig && autobanConfig.enabled);
             postKanbanMessage({ type: 'toggleAutoban', enabled: !currentlyEnabled });
         });
+        // ── Remote Control (§10) ──────────────────────────────────────────────
+        let remoteControlActive = false;
+        function applyRemoteControlButtonState() {
+            const btn = document.getElementById('btn-remote-control');
+            if (btn) { btn.classList.toggle('is-active', !!remoteControlActive); }
+        }
+        function renderRemoteConfig(config, projects) {
+            if (Array.isArray(projects)) {
+                const sel = document.getElementById('remote-boards');
+                if (sel) {
+                    const chosen = new Set((config && config.boards) || []);
+                    sel.innerHTML = '';
+                    projects.forEach(name => {
+                        const opt = document.createElement('option');
+                        opt.value = name; opt.textContent = name;
+                        if (chosen.has(name)) opt.selected = true;
+                        sel.appendChild(opt);
+                    });
+                }
+            }
+            if (config) {
+                const silent = document.getElementById('remote-silent-sync');
+                if (silent) silent.checked = config.silentSync === true;
+                const mode = document.getElementById('remote-ping-mode');
+                if (mode) mode.value = config.pingMode === 'constant' ? 'constant' : 'manual';
+                const freq = document.getElementById('remote-ping-frequency');
+                if (freq) freq.value = config.pingFrequencySeconds || 60;
+            }
+        }
+        document.getElementById('btn-save-remote-config')?.addEventListener('click', () => {
+            const boardsSel = document.getElementById('remote-boards');
+            const boards = boardsSel ? Array.from(boardsSel.selectedOptions).map(o => o.value) : [];
+            const config = {
+                boards,
+                silentSync: document.getElementById('remote-silent-sync')?.checked === true,
+                pingMode: document.getElementById('remote-ping-mode')?.value === 'constant' ? 'constant' : 'manual',
+                pingFrequencySeconds: Math.min(120, Math.max(30, parseInt(document.getElementById('remote-ping-frequency')?.value, 10) || 60))
+            };
+            const statusEl = document.getElementById('remote-config-status');
+            if (statusEl) statusEl.textContent = 'Saved.';
+            postKanbanMessage({ type: 'setRemoteConfig', config });
+        });
+        document.getElementById('btn-remote-control')?.addEventListener('click', () => {
+            postKanbanMessage({ type: remoteControlActive ? 'stopRemoteControl' : 'startRemoteControl' });
+        });
+
         document.getElementById('btn-reset-autoban-timer')?.addEventListener('click', () => {
             postKanbanMessage({ type: 'resetAutobanTimers' });
             // Brief visual cooldown to prevent rapid-fire clicks

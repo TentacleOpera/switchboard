@@ -32,3 +32,22 @@ sb_api_call POST /api/clickup \
 
 ## Response
 JSON response from ClickUp API or error object with `error` field.
+
+## Post a Comment (use this for triage verdicts / replies)
+Always post comments through the dedicated `/comment` route — NOT a raw `POST .../comment`
+proxy call. The host adds the hidden `<!-- switchboard -->` self-marker so the integration
+comment loop skips your own comment. The token stays host-side.
+
+```bash
+sb_api_call POST /comment \
+  -H "Content-Type: application/json" \
+  -d '{
+    "provider": "clickup",
+    "id": "<ClickUp Task ID from the plan metadata>",
+    "body": "Your comment text here."
+  }'
+```
+
+- provider: "clickup"
+- id: the task id (the `**ClickUp Task ID:**` line in the plan file)
+- body: the comment markdown. Do not add any marker yourself — the host stamps it.

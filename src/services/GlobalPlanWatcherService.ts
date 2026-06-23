@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord } from './KanbanDatabase';
-import { parsePlanMetadata } from './planMetadataUtils';
+import { parsePlanMetadata, extractClickUpTaskId, extractLinearIssueId } from './planMetadataUtils';
 import { isRuntimeMirrorPlanFile } from './PlanFileImporter';
 import type { ClickUpSyncService } from './ClickUpSyncService';
 import { resolveEffectiveWorkspaceRootFromMappings } from './WorkspaceIdentityService';
@@ -487,6 +487,21 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             const content = await fs.promises.readFile(uri.fsPath, 'utf8');
             const metadata = await parsePlanMetadata(content, relativePath);
 
+            // Extract provider linkage from the stub so imported cards can round-trip
+            // back to their source ticket. Independent of any automation-rule metadata.
+            let importClickupTaskId = extractClickUpTaskId(content);
+            let importLinearIssueId = extractLinearIssueId(content);
+            let importSourceType: KanbanPlanRecord['sourceType'] = 'local';
+            if (importClickupTaskId && importLinearIssueId) {
+                // Edge case: ambiguous provider — treat as local, drop both IDs.
+                importClickupTaskId = '';
+                importLinearIssueId = '';
+            } else if (importClickupTaskId) {
+                importSourceType = 'clickup-import';
+            } else if (importLinearIssueId) {
+                importSourceType = 'linear-import';
+            }
+
             if (!plan) {
                 const effectiveRoot = resolveEffectiveWorkspaceRootFromMappings(workspaceRoot);
                 if (effectiveRoot !== workspaceRoot) {
@@ -494,8 +509,27 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 }
                 const project = metadata.project || this._currentProjects.get(effectiveRoot) || '';
                 // New plan - parse and insert (sessionId left empty; plan_file+workspace_id is the unique key)
+                //
+                // For epic files named `epic-<uuid>.md`, reuse the embedded UUID as the
+                // plan_id instead of minting a random one. Subtask→epic links are stored as
+                // subtask.epic_id = epic.plan_id (DB-only, not in the subtask file), so if a
+                // re-import (atomic save/rename, migration, transient delete+create) gives the
+                // epic a fresh random plan_id, every subtask is silently orphaned and the epic
+                // shows 0 subtasks. Deriving the id from the stable filename keeps the link
+                // intact across re-imports.
+                let derivedPlanId = uuidv4();
+                if (relativePath.startsWith('.switchboard/epics/')) {
+                    // Matches both the legacy `epic-<uuid>.md` scheme and the current
+                    // `<slug>-<uuid>.md` scheme — any epic file whose name ends in a UUID.
+                    const epicUuidMatch = path.basename(relativePath).match(
+                        /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.md$/i
+                    );
+                    if (epicUuidMatch) {
+                        derivedPlanId = epicUuidMatch[1];
+                    }
+                }
                 const newRecord: KanbanPlanRecord = {
-                    planId: uuidv4(),
+                    planId: derivedPlanId,
                     sessionId: '',
                     topic: metadata.topic,
                     planFile: relativePath,
@@ -515,9 +549,10 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     routedTo: '',
                     dispatchedAgent: '',
                     dispatchedIde: '',
-                    clickupTaskId: '',
-                    linearIssueId: ''
+                    clickupTaskId: importClickupTaskId,
+                    linearIssueId: importLinearIssueId
                 };
+                newRecord.sourceType = importSourceType;
                 await db.insertFileDerivedPlan(newRecord);
                 if (relativePath.startsWith('.switchboard/epics/')) {
                     await db.updateEpicStatus(newRecord.planId, 1, '');

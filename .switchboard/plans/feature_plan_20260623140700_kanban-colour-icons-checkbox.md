@@ -22,13 +22,17 @@ Net effect: under Afterburner Pro, icons are grey (effectively "black" knockout)
 **Where settings persist.** The theme subsystem persists in **VS Code workspace configuration** under `switchboard.theme.*`, not the db `config` table:
 
 - `package.json:663-683` declares `switchboard.theme.disableCyberAnimation` (boolean, default false) and `switchboard.theme.name` (enum).
-- Read/write helpers: `src/services/TaskViewerProvider.ts:3524-3531` (`handleGet/SetCyberAnimationDisabledSetting`) and `:3779-3781` (`handleSetThemeSetting`) — all via `vscode.workspace.getConfiguration('switchboard').update(..., ConfigurationTarget.Workspace)`.
+- Read/write helpers: `src/services/TaskViewerProvider.ts:3536-3543` (`handleGet/SetCyberAnimationDisabledSetting`) and `:3791-3793` (`handleSetThemeSetting`) — all via `vscode.workspace.getConfiguration('switchboard').update(..., ConfigurationTarget.Workspace)`.
 
 The new "Colour kanban icons" checkbox mirrors the Animation checkbox exactly, so it persists the same way (`switchboard.theme.colourKanbanIcons`, default false). See the Edge-Case audit for why this deviates from the repo's "db config table" rule and why that is correct here.
 
 ## Metadata
 **Complexity:** 4
-**Tags:** theme, kanban, webview, css, setup, vscode-config
+**Tags:** frontend, ui, ux, feature
+
+## User Review Required
+
+**None** — all decisions are baked into the Proposed Changes. The setting defaults to OFF (no behavioral change for existing installs), the CSS specificity ordering is determined by the existing rule structure, and the visibility gating follows the established animation-checkbox pattern.
 
 ## Complexity Audit
 
@@ -46,14 +50,23 @@ The new "Colour kanban icons" checkbox mirrors the Animation checkbox exactly, s
 
 ## Edge-Case & Dependency Audit
 
-- **Setting persistence — deviation from the db-config rule, intentional.** Project rules say config lives in the db `config` table, not state.json. That rule governs Switchboard *application* state. The **theme subsystem is an existing, shipped exception**: `theme.name` and `theme.disableCyberAnimation` already live in VS Code workspace config (`package.json:663-683`, `TaskViewerProvider.ts:3524-3531`). The task explicitly says to model the new checkbox on the existing animation checkbox; introducing a *second* storage mechanism for one sibling setting would be inconsistent and would not be picked up by the existing `onDidChangeConfiguration` theme listeners (e.g. `KanbanProvider.ts:314`, `PlanningPanelProvider.ts:326`). Therefore the new setting uses `switchboard.theme.colourKanbanIcons` in VS Code workspace config, matching its siblings. This is noted explicitly rather than hidden.
+- **Setting persistence — deviation from the db-config rule, intentional.** Project rules say config lives in the db `config` table, not state.json. That rule governs Switchboard *application* state. The **theme subsystem is an existing, shipped exception**: `theme.name` and `theme.disableCyberAnimation` already live in VS Code workspace config (`package.json:663-683`, `TaskViewerProvider.ts:3536-3543`). The task explicitly says to model the new checkbox on the existing animation checkbox; introducing a *second* storage mechanism for one sibling setting would be inconsistent and would not be picked up by the existing `onDidChangeConfiguration` theme listeners (e.g. `KanbanProvider.ts:313`, `PlanningPanelProvider.ts:325`). Therefore the new setting uses `switchboard.theme.colourKanbanIcons` in VS Code workspace config, matching its siblings. This is noted explicitly rather than hidden.
 - **Default OFF.** `package.json` default `false`; all `.get<boolean>('theme.colourKanbanIcons', false)` calls pass `false` as the fallback. New installs and all ~4000 existing installs that have never set the key read `false` → identical to today's behaviour (grey at rest, flash on click). No behavioural change unless the user opts in.
 - **Migration for ~4000 existing installs.** None required, and that is the *correct* outcome under the project migration rule: this is a brand-new key that has never shipped in any released version, so a missing value defaulting to `false` reproduces current behaviour exactly. No prior state to import, archive, or preserve. (Contrast: we are not deleting or renaming any shipped key.)
 - **Visibility gating per theme.** The checkbox is shown only when the selected theme is `afterburner-professional` or `claudify` (mirrors the animation checkbox, which shows only for `afterburner` — see `setup.html:1665-1669`). For the plain `afterburner` theme the checkbox is hidden (afterburner already shows full-colour cyan icons, so the toggle is meaningless there).
 - **Theme switching while the setting is ON.** The colour CSS is gated on BOTH the theme body classes (`theme-claudify` / `theme-afterburner-pro`) AND the new `kanban-icons-colour` class. Switching to plain afterburner removes the claudify/pro classes, so the colour rules stop matching automatically — no stale styling.
 - **No confirmation dialogs.** The checkbox writes immediately on `change` (per project rule). No confirm gates.
 - **Other panels.** The grey-icon rules exist only in `kanban.html` (verified: `grep -ln "brightness(0) invert" src/webview/*.html` → kanban.html only). The strip/column icons are a kanban-board concept, so the CSS change is scoped to `kanban.html`. The body class is still injected on all panels via `themeBodyClass.ts` (harmless no-op where the rules don't exist), keeping behaviour uniform and future-proof.
-- **Build step.** `src/webview/*` and `src/services/*` are bundled into `dist/` by webpack; the extension serves from `dist/`. Must `npm run compile` after edits (CLAUDE.md build rule).
+- **Build step.** `src/webview/*` and `src/services/*` are bundled into `dist/` by webpack; the extension serves from `dist/`. Must `npm run compile` after edits (CLAUDE.md build rule). *(Note: compilation is not run as part of this plan's verification — see Verification Plan.)*
+
+## Dependencies
+
+- **None** — this is a self-contained CSS/setting change with no cross-plan dependencies. The theme subsystem (`themeBodyClass.ts`, `TaskViewerProvider` config helpers, `setup.html` UI) already exists and is fully shipped. The new setting clones the existing `disableCyberAnimation` pattern end-to-end.
+- **Known limitation — no `onDidChangeConfiguration` listener for the new key.** The existing theme listeners (`KanbanProvider.ts:313`, `PlanningPanelProvider.ts:325`) watch for `switchboard.theme.name` and `switchboard.theme.disableCyberAnimation` but not `switchboard.theme.colourKanbanIcons`. Direct `settings.json` edits won't update the kanban board until a reload. This is consistent with the existing pattern (KanbanProvider doesn't watch `disableCyberAnimation` either) — the setup panel's `broadcastToWebviews` call is the primary propagation path. Acknowledged as a known limitation, not a blocker.
+
+## Adversarial Synthesis
+
+**Risk Summary:** Key risks: (1) CSS specificity ordering — the new colour rules must come after the existing grey rules and win on specificity; mitigated by the dedicated `kanban-icons-colour` body class and correct source ordering. (2) The `:not(.theme-afterburner-pro)` guard on the Claudify terracotta rules prevents clobbering the pro cyan rules when both share `.theme-claudify` — this is the most subtle correctness point. (3) First-paint flash avoidance requires server-side body class injection via `themeBodyClass.ts` (the same reason that file exists). (4) The handler divergence from the clone target (missing `postSetupPanelState()` call) is a minor consistency gap. All risks are low-complexity and well-mitigated by following the existing animation-checkbox pattern.
 
 ## Proposed Changes
 
@@ -84,9 +97,9 @@ After:
         "switchboard.theme.name": {
 ```
 
-### 2. `src/services/TaskViewerProvider.ts` — get/set helpers (after `handleSetCyberAnimationDisabledSetting`, ~line 3531)
+### 2. `src/services/TaskViewerProvider.ts` — get/set helpers (after `handleSetCyberAnimationDisabledSetting`, ~line 3543)
 
-Add, mirroring the cyber-animation pair at `TaskViewerProvider.ts:3524-3531`:
+Add, mirroring the cyber-animation pair at `TaskViewerProvider.ts:3536-3543`:
 ```ts
     public handleGetColourKanbanIconsSetting(): boolean {
         return vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.colourKanbanIcons', false);
@@ -115,6 +128,7 @@ Add, mirroring `SetupPanelProvider.ts:667-677`:
                         type: 'colourKanbanIconsChanged',
                         enabled: message.enabled
                     });
+                    await this._taskViewerProvider.postSetupPanelState();
                     await vscode.commands.executeCommand('switchboard.refreshUI');
                     break;
 ```
@@ -198,16 +212,16 @@ Add:
 ```
 Note: the existing `.flash` rules (97-117) and the `.is-off` grey rules (119-123) are left untouched — flash still works, and OFF/disabled icons stay greyed.
 
-### 6. `src/webview/kanban.html` — runtime handler (in the message switch, alongside the theme case at 5892-5906)
+### 6. `src/webview/kanban.html` — runtime handler (in the message switch, alongside the theme case at 5898-5908)
 
-Add a live-toggle handler so flipping the checkbox updates the open board without a reload, plus keep the class in sync on theme change. Add this case after the `switchboardThemeChanged` case (~line 5906):
+Add a live-toggle handler so flipping the checkbox updates the open board without a reload, plus keep the class in sync on theme change. Add this case after the `switchboardThemeChanged` case (~line 5908):
 ```js
                 case 'colourKanbanIconsChanged': {
                     document.body.classList.toggle('kanban-icons-colour', !!msg.enabled);
                     break;
                 }
 ```
-Also, the existing theme case (5894-5904) removes `theme-claudify`/`theme-afterburner-pro` on theme change but must not strip `kanban-icons-colour` — it does not today (it only removes the three theme classes), so no change needed there. The class is re-evaluated server-side on next full HTML render via `themeBodyClass.ts`.
+Also, the existing theme case (5900-5908) removes `theme-claudify`/`theme-afterburner-pro` on theme change but must not strip `kanban-icons-colour` — it does not today (it only removes the three theme classes), so no change needed there. The class is re-evaluated server-side on next full HTML render via `themeBodyClass.ts`.
 
 ### 7. `src/webview/setup.html` — checkbox markup (after the animation block, ~line 1192)
 
@@ -298,7 +312,13 @@ Add, mirroring it (note: unlike the animation toggle, `enabled` here is the lite
 
 ## Verification Plan
 
-1. **Build:** `npm run compile` — must succeed (bundles `src/webview/*` and `src/services/*` into `dist/`). This is mandatory per CLAUDE.md; the extension runs from `dist/`.
+> **SKIP COMPILATION:** Do NOT run `npm run compile` or any project compilation step.
+>
+> **SKIP TESTS:** Do NOT run automated tests. The test suite will be run separately by the user.
+
+**Recommended verification steps (for the user to run later):**
+
+1. **Build (user's responsibility):** `npm run compile` — must succeed (bundles `src/webview/*` and `src/services/*` into `dist/`). This is mandatory per CLAUDE.md; the extension runs from `dist/`. Not run as part of this plan's verification.
 2. **TypeScript:** confirm no type errors from the new `TaskViewerProvider` / `SetupPanelProvider` methods (compile covers this).
 3. **Default-OFF regression (existing installs):** With no `switchboard.theme.colourKanbanIcons` set, open the kanban board under Afterburner Professional — icons must be grey at rest and cyan only on click flash (unchanged from today). Repeat under Claudify (grey at rest, terracotta flash). Confirms the no-migration default is behaviour-preserving for ~4000 installs.
 4. **Visibility gating:** Open Setup → Theme.
@@ -311,3 +331,7 @@ Add, mirroring it (note: unlike the animation toggle, `enabled` here is the lite
 8. **Theme switch with setting ON:** From Afterburner Pro (ON) switch to plain Afterburner → icons revert to standard afterburner cyan (the colour rules stop matching because the claudify/pro classes are removed); no stale styling.
 9. **Persistence:** Toggle ON, restart VS Code → checkbox still checked and icons still coloured (value read from `switchboard.theme.colourKanbanIcons` workspace config).
 10. **No confirm dialogs:** Confirm the checkbox writes immediately with no confirmation prompt (project rule).
+
+---
+
+**Recommendation:** Complexity 4 → **Send to Coder.** A well-scoped CSS/setting change that clones an existing shipped pattern (the animation checkbox) end-to-end. The main risk is CSS specificity ordering, which is mitigated by the dedicated body class and correct source placement. No migrations, no cross-plan dependencies, no architectural decisions remaining.

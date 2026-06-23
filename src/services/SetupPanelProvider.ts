@@ -422,6 +422,17 @@ export class SetupPanelProvider implements vscode.Disposable {
                     }
                     break;
                 }
+                case 'enableTriagePipeline': {
+                    const provider = message.provider === 'linear' ? 'linear' : 'clickup';
+                    const result = await this._taskViewerProvider.handleEnableTriagePipeline(
+                        provider,
+                        typeof message.token === 'string' ? message.token : ''
+                    );
+                    this._panel.webview.postMessage({ type: 'triagePipelineResult', provider, ...result });
+                    await this._taskViewerProvider.postSetupPanelState();
+                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    break;
+                }
                 case 'applyNotionConfig': {
                     const result = await this._taskViewerProvider.handleApplyNotionConfig(
                         message.token

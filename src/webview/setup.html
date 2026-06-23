@@ -694,6 +694,11 @@
                             Your key is stored in VS Code's encrypted secret storage (your OS keychain) and is used only to call ClickUp directly — it's never sent to any Switchboard server or logged.
                         </div>
                         <button id="btn-apply-clickup-config" class="action-btn w-full" style="margin-top: 8px;">APPLY CLICKUP SETTINGS</button>
+                        <button id="btn-enable-triage-clickup" class="action-btn w-full" style="margin-top: 8px;">⚡ ENABLE TRIAGE PIPELINE (ONE-CLICK)</button>
+                        <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
+                            Auto-pull bugs in, route them to the triage agent, sync verdicts back. Creates a "Bug Triage" board with sensible defaults — all editable afterward.
+                        </div>
+                        <div id="clickup-triage-result" style="min-height:16px; font-size:10px; margin-top:6px;"></div>
                         <div id="clickup-option-summary" style="display:none; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
                         <div id="clickup-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
                     </div>
@@ -893,6 +898,11 @@
                             Your key is stored in VS Code's encrypted secret storage (your OS keychain) and is used only to call Linear directly — it's never sent to any Switchboard server or logged.
                         </div>
                         <button id="btn-apply-linear-config" class="action-btn w-full" style="margin-top: 8px;">APPLY LINEAR SETTINGS</button>
+                        <button id="btn-enable-triage-linear" class="action-btn w-full" style="margin-top: 8px;">⚡ ENABLE TRIAGE PIPELINE (ONE-CLICK)</button>
+                        <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
+                            Auto-pull bugs in, route them to the triage agent, sync verdicts back. Creates a "Bug Triage" board with sensible defaults — all editable afterward.
+                        </div>
+                        <div id="linear-triage-result" style="min-height:16px; font-size:10px; margin-top:6px;"></div>
                         <div id="linear-option-summary" style="display:none; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
                         <div id="linear-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
                     </div>
@@ -3378,6 +3388,20 @@
                 options: collectClickupApplyOptions()
             });
         });
+        document.getElementById('btn-enable-triage-clickup')?.addEventListener('click', () => {
+            let token = document.getElementById('clickup-token-input')?.value.trim() || '';
+            if (token === '**********') { token = ''; }
+            const resultEl = document.getElementById('clickup-triage-result');
+            if (resultEl) { resultEl.style.color = 'var(--text-secondary)'; resultEl.textContent = 'Enabling triage pipeline…'; }
+            vscode.postMessage({ type: 'enableTriagePipeline', provider: 'clickup', token });
+        });
+        document.getElementById('btn-enable-triage-linear')?.addEventListener('click', () => {
+            let token = document.getElementById('linear-token-input')?.value.trim() || '';
+            if (token === '**********') { token = ''; }
+            const resultEl = document.getElementById('linear-triage-result');
+            if (resultEl) { resultEl.style.color = 'var(--text-secondary)'; resultEl.textContent = 'Enabling triage pipeline…'; }
+            vscode.postMessage({ type: 'enableTriagePipeline', provider: 'linear', token });
+        });
         document.getElementById('btn-clickup-save-mappings')?.addEventListener('click', () => {
             vscode.postMessage({
                 type: 'saveClickUpMappings',
@@ -4641,6 +4665,19 @@
                         setLinearSetupMessage('Linear settings applied. Review automation rules below.');
                     }
                     break;
+                case 'triagePipelineResult': {
+                    const resultEl = document.getElementById(message.provider === 'linear' ? 'linear-triage-result' : 'clickup-triage-result');
+                    if (resultEl) {
+                        if (message.success) {
+                            resultEl.style.color = 'var(--accent-green, var(--text-secondary))';
+                            resultEl.textContent = `✓ Triage pipeline enabled — board "${message.projectName || 'Bug Triage'}" created.`;
+                        } else {
+                            resultEl.style.color = 'var(--accent-red)';
+                            resultEl.textContent = message.error || 'Failed to enable triage pipeline.';
+                        }
+                    }
+                    break;
+                }
                 case 'linearBrowseProjectsResult':
                     if (message.success && Array.isArray(message.projects)) {
                         const targetInput = message.target === 'include'

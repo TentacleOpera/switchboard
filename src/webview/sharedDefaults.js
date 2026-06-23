@@ -181,12 +181,6 @@ const ROLE_ADDONS = {
     ticket_updater: [
         { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
         { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true },
-        { id: 'ticketUpdateMode', label: 'Ticket Update Mode', tooltip: 'Select how the agent should update the external ticket', type: 'radio', options: [
-            { value: 'disabled', label: 'Disabled', tooltip: 'No ticket update' },
-            { value: 'comment-only', label: 'Comment Only', tooltip: 'Add AI analysis as a comment to the ticket' },
-            { value: 'refine-ticket', label: 'Refine Ticket', tooltip: 'Refine the ticket description based on plan analysis' },
-            { value: 'research-and-refine', label: 'Research & Refine', tooltip: 'Research first, then refine the ticket with findings' }
-        ], default: 'disabled' },
         { id: 'clearAntigravityContext', label: 'Clear Antigravity Context', tooltip: 'Instruct agent to ignore previous checkpoint summaries from prior sessions', default: false },
         { id: 'cavemanOutput', label: 'Caveman Output', tooltip: 'Compress responses to reduce output tokens', default: false },
         { id: 'subagentPolicy', label: 'Subagent Policy', tooltip: 'Control how the agent handles subagent spawning', type: 'radio', options: [

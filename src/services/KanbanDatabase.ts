@@ -43,7 +43,7 @@ export interface KanbanPlanRecord {
     createdAt: string;
     updatedAt: string;
     lastAction: string;
-    sourceType: 'local' | 'brain' | 'clickup-automation' | 'linear-automation';
+    sourceType: 'local' | 'brain' | 'clickup-automation' | 'linear-automation' | 'clickup-import' | 'linear-import';
     brainSourcePath: string;
     mirrorPath: string;
     routedTo: string;        // agent role dispatched to: 'lead' | 'coder' | 'intern' | ''
@@ -4801,6 +4801,66 @@ export class KanbanDatabase {
         if (v36 < 36) {
             await this._runMigrationV36(this._workspaceRoot);
         }
+
+        // V37: Reconcile epic plan_ids with the UUID embedded in their filename.
+        const v37 = await this.getMigrationVersion();
+        if (v37 < 37) {
+            await this._runMigrationV37();
+        }
+    }
+
+    /**
+     * V37 — Heal orphaned epic subtasks.
+     *
+     * Subtask→epic links are stored as subtask.epic_id = epic.plan_id (DB-only). When an
+     * epic file's row is hard-deleted and re-imported (atomic save, rename, transient
+     * delete+create, or a registry rebuild), the watcher used to mint a fresh random
+     * plan_id — silently orphaning every subtask so the epic showed 0 subtasks.
+     *
+     * The stable identity is the UUID in the epic's filename (`…-<uuid>.md`). This migration
+     * restores each epic's plan_id to that UUID and migrates any subtask / worktree links
+     * that pointed at the stale id. Idempotent: only touches rows where the ids disagree.
+     * Going forward, GlobalPlanWatcherService derives the plan_id from the filename, so the
+     * link stays intact across re-imports and this stays a no-op.
+     */
+    private async _runMigrationV37(): Promise<void> {
+        if (!this._db) return;
+        const UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.md$/i;
+        try {
+            const stmt = this._db.prepare(
+                `SELECT ${PLAN_COLUMNS} FROM plans WHERE is_epic = 1 AND plan_file LIKE '.switchboard/epics/%'`
+            );
+            const epics = this._readRows(stmt);
+            let healed = 0;
+            for (const epic of epics) {
+                const match = path.basename(epic.planFile).match(UUID_RE);
+                if (!match) continue;
+                const stableId = match[1];
+                const currentId = epic.planId;
+                if (!stableId || stableId === currentId) continue;
+
+                // Safety: never collide with an existing distinct row that already owns stableId.
+                const collisionStmt = this._db.prepare(
+                    'SELECT plan_file FROM plans WHERE plan_id = ? LIMIT 1', [stableId]
+                );
+                let collision = false;
+                try { collision = collisionStmt.step(); } finally { collisionStmt.free(); }
+                if (collision) continue;
+
+                // Re-link subtasks/worktrees that referenced the stale id, then fix the epic.
+                this._db.run('UPDATE plans SET epic_id = ? WHERE epic_id = ?', [stableId, currentId]);
+                try { this._db.run('UPDATE worktrees SET epic_id = ? WHERE epic_id = ?', [stableId, currentId]); } catch { /* worktrees may predate epic_id */ }
+                this._db.run('UPDATE plans SET plan_id = ? WHERE plan_id = ?', [stableId, currentId]);
+                healed++;
+            }
+            if (healed > 0) {
+                console.log(`[KanbanDatabase] V37 migration: reconciled ${healed} epic plan_id(s) with filename UUID, re-linking subtasks`);
+            }
+            await this.setMigrationVersion(37);
+        } catch (migrationErr) {
+            console.error('[KanbanDatabase] V37 migration FAILED. Error:', migrationErr);
+            // Do NOT stamp version — retry on next init
+        }
     }
 
     private async _runMigrationV36(workspaceRoot: string): Promise<void> {
@@ -5629,6 +5689,7 @@ FROM plans
                     sourceType: (() => {
                         const st = String(row.source_type || 'local');
                         return st === 'brain' || st === 'clickup-automation' || st === 'linear-automation'
+                            || st === 'clickup-import' || st === 'linear-import'
                             ? st
                             : 'local';
                     })(),

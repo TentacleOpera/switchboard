@@ -98,12 +98,16 @@ sb_api_call() {
         if [ $BASE_BACKOFF -gt 5 ]; then
             BASE_BACKOFF=5
         fi
+
+        ATTEMPT=$(( ATTEMPT + 1 ))
+        # Don't sleep after the final attempt — fail fast instead of wasting a backoff cycle.
+        if [ $ATTEMPT -ge $MAX_ATTEMPTS ]; then
+            break
+        fi
+
         local JITTER_MS=$(( RANDOM % 500 ))
         local JITTER_PAD=$(printf "%03d" $JITTER_MS)
-        local SLEEP_TIME="${BASE_BACKOFF}.${JITTER_PAD}"
-        
-        sleep "$SLEEP_TIME"
-        ATTEMPT=$(( ATTEMPT + 1 ))
+        sleep "${BASE_BACKOFF}.${JITTER_PAD}"
     done
 
     if [ $HEALTH_OK -ne 1 ]; then

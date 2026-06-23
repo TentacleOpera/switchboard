@@ -11,6 +11,7 @@ import {
   type ClickUpAutomationRule
 } from '../models/PipelineDefinition';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
+import { stampMarker, truncateForComment } from './commentMarker';
 
 export interface ClickUpConfig {
   workspaceId: string;
@@ -120,7 +121,7 @@ export interface ClickUpApplyOptions {
 export type ClickUpWriteBackTarget = 'description' | 'comment';
 export type ClickUpWriteBackFormat = 'append' | 'prepend' | 'replace';
 
-export type ClickUpSyncSkipReason = 'unmapped-column' | 'excluded-column';
+export type ClickUpSyncSkipReason = 'unmapped-column' | 'excluded-column' | 'complete-sync-disabled';
 
 export interface ClickUpSyncResult {
   success: boolean;
@@ -305,7 +306,9 @@ export class ClickUpSyncService {
         ? false   // Default false — require explicit opt-in
         : raw.deleteSyncEnabled === true,
       completeSyncEnabled: raw.completeSyncEnabled === undefined
-        ? false   // Default false — require explicit opt-in
+        ? true   // §4 migration — the flag was a no-op before, so sync was effectively
+                 // unconditional. Defaulting undefined → true preserves that behavior for
+                 // existing installs; a false default would silently suppress DONE-column syncs.
         : raw.completeSyncEnabled === true,
       excludeBacklog: raw.excludeBacklog === undefined
         ? false   // Default false — include all tasks by default
@@ -1493,6 +1496,26 @@ export class ClickUpSyncService {
     }
   }
 
+  /**
+   * §8 — host-side shared comment write-back primitive (ClickUp implementation).
+   *
+   * Mirrors LinearSyncService.postManagedComment: stamps the self-marker and
+   * truncates to ClickUp's comment limit before posting. Shared interface, separate
+   * implementation per provider (different API shapes). Reached by agents only via
+   * the LocalApiServer `/comment` route — never directly.
+   */
+  public async postManagedComment(taskId: string, body: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      // ClickUp comment bodies cap around 50k chars; 40k keeps headroom for the marker.
+      const truncated = truncateForComment(body, 40000);
+      const stamped = stampMarker(truncated);
+      await this.addTaskComment(taskId, stamped);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
   // ── Comment Manager: threading + structured mentions ──────────────
 
   /**
@@ -2433,6 +2456,14 @@ export class ClickUpSyncService {
         return { success: false, error: 'ClickUp not set up' };
       }
 
+      // §4 — completeSyncEnabled gate. When off, automatic terminal-column transitions
+      // are not pushed to ClickUp. Manual dispatch (changeTicketStatus) stays untouched.
+      const terminalColumn = ['DONE', 'COMPLETED', 'ARCHIVED'].includes((plan.kanbanColumn || '').toUpperCase());
+      if (config.completeSyncEnabled === false && terminalColumn) {
+        console.log(`[ClickUpSync] completeSyncEnabled is off — skipping ${plan.kanbanColumn} sync for plan ${plan.planFile}`);
+        return { success: true, skippedReason: 'complete-sync-disabled' };
+      }
+
       const listId = config.columnMappings[plan.kanbanColumn];
       if (!listId) {
         const skippedReason: ClickUpSyncSkipReason = this._hasExplicitColumnMapping(config, plan.kanbanColumn)
@@ -2815,6 +2846,9 @@ export class ClickUpSyncService {
         const description = (task.markdown_description || task.description || '').trim();
         const parentName = task.parent ? (taskNameById.get(task.parent) || task.parent) : '';
 
+        // §5 — land backlog tasks in BACKLOG, everything else in CREATED.
+        const kanbanColumn = statusName === 'backlog' ? 'BACKLOG' : 'CREATED';
+
         // Metadata block (top of file)
         const metaLines = [
           `> Imported from ClickUp task \`${task.id}\``,
@@ -2829,6 +2863,8 @@ export class ClickUpSyncService {
 
         const stub = [
           `# ${task.name || `ClickUp Task ${task.id}`}`,
+          '',
+          `kanbanColumn: ${kanbanColumn}`,
           '',
           metaLines,
           '',
