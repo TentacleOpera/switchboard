@@ -1,5 +1,7 @@
 # Tickets Tab "Agent API" Modal — Source-Aware Non-MCP Capability Reference
 
+> **Implementation Status (verified 2026-06-23):** This feature is **already implemented** in the codebase. The `tickets-agent-api` button exists at `planning.html:3556`, `renderAgentApiModal()` exists at `planning.js:6357`, and the `AGENT_API_CAPABILITIES` constant is present. The line numbers in the original plan below reflect the pre-implementation codebase and are stale — see the **Line Number Audit** section at the end for corrections.
+
 ## Goal
 
 Today the Switchboard tickets tab gives users no in-UI explanation of what coding agents can do with tickets **without the MCP server** — i.e. via the `LocalApiServer` HTTP bridge that the extension already runs on a random localhost port. The bridge is real and shipped (`src/services/LocalApiServer.ts`), agents discover it through `.switchboard/api-server-port.txt`, and a set of skill docs (`.agents/skills/clickup_api.md`, `linear_api.md`, `get_tickets.md`, `clickup_create_task.md`, `clickup_modify_task.md`, `clickup_attach.md`, `clickup_create_subpage.md`, `generate_diagram.md`, `clickup_fetch.md`) document the individual endpoints. But a user sitting in the tickets tab has no way to learn "I can just tell my agent to update this ticket's status without any MCP" or to grab a ready-to-paste instruction.
@@ -15,7 +17,20 @@ This feature adds an **"Agent API"** button to the tickets-tab toolbar that open
 ## Metadata
 
 - **Complexity:** 4
-- **Tags:** webview, tickets, agent-api, modal, ui, documentation, clickup, linear
+- **Tags:** frontend, ui, feature, docs, api
+
+## User Review Required
+
+**None** — all decisions are baked into the Proposed Changes. The modal is purely additive UI (new button, new modal, new in-memory constant), no persisted state changes, no settings, no migrations. The capability list is hardcoded from the known bridge endpoint table and rebuilt on each open.
+
+## Dependencies
+
+- **`feature_plan_20260623120000_localapiserver-bridge-robustness`** — Fixes the `LocalApiServer` bridge auth/skill-discovery issues that today cause 401s when a token is configured. This modal advertises bridge capabilities; if it ships before the bridge fix, copy-prompts will instruct agents to do things that 401. **Recommended sequencing:** land the bridge robustness plan first (or together with this one). The modal code itself needs no change either way — it already avoids `/config/token` and names skills, matching the hardened skills.
+- **No other cross-plan dependencies.** The modal reuses existing UI patterns (folder-modal, strip-btn, clipboard copy) and existing module-level state (`lastIntegrationProvider`).
+
+## Adversarial Synthesis
+
+**Risk Summary:** Key risks: (1) The hardcoded `AGENT_API_CAPABILITIES` list has no sync mechanism with `LocalApiServer._handleRequest` — endpoints added/removed in the bridge will cause the modal to go stale silently. Mitigation: acceptable for a small modal; a build-time assertion is a future improvement. (2) Stale line numbers throughout the plan (8/12 references off by 15-200+ lines) — corrected in the Line Number Audit below. (3) The `_checkAuth` sequencing claim is unverified — the plan's approach of naming skills rather than raw endpoints is sound regardless. (4) Three required sections were missing from the original plan (now added).
 
 ## Complexity Audit
 
@@ -282,3 +297,30 @@ None. This is purely additive UI (new button, new modal, new in-memory constant)
    - With no integration configured (`lastIntegrationProvider === null`) the modal opens and shows the "Configure a ClickUp or Linear integration in Setup" empty state, and still closes cleanly.
 3. **Accuracy check:** cross-read each capability's endpoint against `src/services/LocalApiServer.ts:737-775` — every claimed endpoint exists; no prompt instructs an agent to call the non-existent `GET /config/token`.
 4. **No-confirm check:** grep the diff for `confirm(` — must be zero.
+
+> **SKIP COMPILATION:** Do NOT run `npm run compile` or any project compilation step.
+>
+> **SKIP TESTS:** Do NOT run automated tests. The test suite will be run separately by the user.
+
+## Line Number Audit (Post-Verification, 2026-06-23)
+
+The following corrections reflect the **current** codebase (post-implementation). The original plan citations above are preserved for reference; use these corrected numbers when navigating the code.
+
+| Original Citation | Correct Location | Notes |
+|---|---|---|
+| `planning.js:120` (`lastIntegrationProvider`) | `planning.js:120` | ✅ Correct |
+| `planning.js:6378` (provider `<select>` change handler) | `planning.js:6518` | Off by ~140 lines |
+| `planning.js:8473` and `:8489` (persist/restore) | `planning.js:8618` (`saveTicketsState`) and `:8634` (`restoreTicketsStateForRoot`) | Off by ~145-160 lines |
+| `planning.html:3795` (`#tickets-provider-selector`) | `planning.html:3811` | Off by 16 lines |
+| `planning.html:3527-3539` (`#controls-strip-tickets`) | `planning.html:3542-3556` | Off by 15 lines |
+| `LocalApiServer.ts:737-775` (route table) | `LocalApiServer.ts:737-776` | ✅ Correct (±1 line) |
+| `planning.js:6349-6371` (source modal handlers) | `planning.js:6469-6489` | Off by ~120 lines |
+| `planning.js:1229-1258` (research prompt copy) | `planning.js:1290-1319` | Off by ~61 lines |
+| `planning.html:2561-2645` (folder-modal CSS) | `planning.html:2561-2645` | ✅ Correct |
+| `planning.js:6298` (`updateTicketsSourceSummary`) | `planning.js:6417` | Off by ~119 lines |
+| `planning.js:416-417` and `:657` (selected ticket vars) | `planning.js:213` (`selectedLinearIssue`), `:227` (`selectedClickUpIssue`), `:472-474` (resolution logic) | Off by 200+ lines |
+| `PlanningPanelProvider.ts:4461` (`copyToClipboard` handler) | `PlanningPanelProvider.ts:4461` | ✅ Correct |
+
+---
+
+**Recommendation:** Complexity 4 → **Send to Coder.** The feature is already implemented and shipped. The plan's core approach (source-aware modal, skill-name references, no `/config/token`) is architecturally sound. Remaining work: verify the implementation matches the plan via the manual smoke test, and consider adding a build-time assertion to keep `AGENT_API_CAPABILITIES` in sync with the bridge route table.

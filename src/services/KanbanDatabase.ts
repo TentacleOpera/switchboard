@@ -4827,12 +4827,20 @@ export class KanbanDatabase {
         if (!this._db) return;
         const UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.md$/i;
         try {
+            // Any file under .switchboard/epics/ is an epic by the unified-architecture
+            // invariant (see GlobalPlanWatcherService) — match regardless of is_epic, since
+            // the clobbering bug also resets that flag to 0/NULL.
             const stmt = this._db.prepare(
-                `SELECT ${PLAN_COLUMNS} FROM plans WHERE is_epic = 1 AND plan_file LIKE '.switchboard/epics/%'`
+                `SELECT ${PLAN_COLUMNS} FROM plans WHERE plan_file LIKE '.switchboard/epics/%'`
             );
             const epics = this._readRows(stmt);
             let healed = 0;
             for (const epic of epics) {
+                // Restore the epic flag if it was clobbered.
+                if (!epic.isEpic) {
+                    this._db.run('UPDATE plans SET is_epic = 1 WHERE plan_id = ?', [epic.planId]);
+                }
+
                 const match = path.basename(epic.planFile).match(UUID_RE);
                 if (!match) continue;
                 const stableId = match[1];

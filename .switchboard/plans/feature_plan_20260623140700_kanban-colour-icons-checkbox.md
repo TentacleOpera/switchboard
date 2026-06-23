@@ -1,5 +1,7 @@
 # Colour Kanban Icons Toggle for Afterburner Professional and Claudify Themes
 
+> **Implementation Status (verified 2026-06-23):** This feature is **already implemented** in the codebase. `package.json:668-673` has the `colourKanbanIcons` setting, `themeBodyClass.ts:21-22` has the `kanban-icons-colour` class injection, `kanban.html` has the colour CSS rules, and `setup.html` has the checkbox, visibility gating, change listener, and hydration handler. The line numbers in the original plan below reflect the pre-implementation codebase and are stale — see the **Line Number Audit** section at the end for corrections.
+
 ## Goal (Problem analysis + Root Cause with cited file:line)
 
 **Problem.** The "Afterburner Professional" theme renders kanban board icons as flat grey/black at rest and only flashes them cyan for 0.3s on click. The user wants an *option* (default OFF) — for both "Afterburner Professional" and "Claudify" — that makes kanban icons render in colour at rest (cyan for Afterburner Professional; the theme's terracotta accent for Claudify), and removes the black→cyan flash-only behaviour. The checkbox should be modelled on the existing Animation checkbox that today only shows for the Afterburner theme.
@@ -7,8 +9,9 @@
 **Root cause of the "black then cyan flash".** "Afterburner Professional" is not a standalone CSS theme — it is rendered by applying **both** `theme-claudify` *and* `theme-afterburner-pro` body classes:
 
 - `src/services/themeBodyClass.ts:24-26` — `afterburner-professional` returns `'theme-claudify theme-afterburner-pro'`.
-- `src/webview/kanban.html:5901-5903` — runtime handler adds both classes.
-- `src/webview/setup.html:4108-4119` and `src/webview/design.js:3159-3160` — same dual-class pattern.
+- `src/webview/kanban.html:5901-5903` — runtime handler adds both classes. *(Corrected: actual location is `kanban.html:6005-6014` — see Line Number Audit.)*
+- ~~`src/webview/setup.html:4108-4119`~~ — **INCORRECT CITATION (verified 2026-06-23):** lines 4108-4119 contain ticket folder import handling, not the theme dual-class pattern. The dual-class pattern in `setup.html` is in its `switchboardThemeChanged` message handler (location varies; the correct evidence is in `design.js` below). This citation has been struck through but preserved per the content-preservation rule.
+- `src/webview/design.js:3159-3160` — same dual-class pattern. ✅ Verified correct.
 
 Because Afterburner Pro inherits the Claudify rules, the kanban icons get Claudify's **grey-at-rest** treatment:
 
@@ -66,7 +69,7 @@ The new "Colour kanban icons" checkbox mirrors the Animation checkbox exactly, s
 
 ## Adversarial Synthesis
 
-**Risk Summary:** Key risks: (1) CSS specificity ordering — the new colour rules must come after the existing grey rules and win on specificity; mitigated by the dedicated `kanban-icons-colour` body class and correct source ordering. (2) The `:not(.theme-afterburner-pro)` guard on the Claudify terracotta rules prevents clobbering the pro cyan rules when both share `.theme-claudify` — this is the most subtle correctness point. (3) First-paint flash avoidance requires server-side body class injection via `themeBodyClass.ts` (the same reason that file exists). (4) The handler divergence from the clone target (missing `postSetupPanelState()` call) is a minor consistency gap. All risks are low-complexity and well-mitigated by following the existing animation-checkbox pattern.
+**Risk Summary:** Key risks: (1) CSS specificity ordering — the new colour rules must come after the existing grey rules and win on specificity; mitigated by the dedicated `kanban-icons-colour` body class and correct source ordering. (2) The `:not(.theme-afterburner-pro)` guard on the Claudify terracotta rules prevents **matching** (not just specificity) when both `theme-claudify` and `theme-afterburner-pro` are present — without it, the Claudify terracotta rules (3 classes + body) would out-specify the pro cyan rules (2 classes + body) and clobber cyan with terracotta. This is the most subtle correctness point. (3) First-paint flash avoidance requires server-side body class injection via `themeBodyClass.ts` (the same reason that file exists). (4) The `setup.html:4108-4119` citation in the root cause analysis is **factually incorrect** — those lines contain ticket folder handling, not theme classes; corrected above. (5) 14/21 line numbers are stale (post-implementation drift) — see Line Number Audit. (6) No `onDidChangeConfiguration` listener for the new key — direct `settings.json` edits won't live-update the board; consistent with existing pattern but flagged as a future enhancement. All risks are low-complexity and well-mitigated by following the existing animation-checkbox pattern.
 
 ## Proposed Changes
 
@@ -332,6 +335,36 @@ Add, mirroring it (note: unlike the animation toggle, `enabled` here is the lite
 9. **Persistence:** Toggle ON, restart VS Code → checkbox still checked and icons still coloured (value read from `switchboard.theme.colourKanbanIcons` workspace config).
 10. **No confirm dialogs:** Confirm the checkbox writes immediately with no confirmation prompt (project rule).
 
+## Line Number Audit (Post-Verification, 2026-06-23)
+
+The following corrections reflect the **current** codebase (post-implementation). The original plan citations above are preserved for reference; use these corrected numbers when navigating the code.
+
+| Original Citation | Correct Location | Notes |
+|---|---|---|
+| `themeBodyClass.ts:9-12` (docstring) | `themeBodyClass.ts:9-12` | ✅ Correct |
+| `themeBodyClass.ts:21-27` (theme class returns) | `themeBodyClass.ts:21-27` | ✅ Correct (already includes `colourIcons` logic) |
+| `kanban.html:5901-5903` (runtime handler) | `kanban.html:6005-6014` | Off by ~104 lines |
+| `setup.html:4108-4119` (dual-class pattern) | **INCORRECT** — ticket folder handling | Factual error; corrected in root cause above |
+| `design.js:3159-3160` (dual-class pattern) | `design.js:3159-3160` | ✅ Correct |
+| `kanban.html:77-86` (grey filter rules) | `kanban.html:77-86` | ✅ Correct |
+| `kanban.html:87-95` (hover/active grey) | `kanban.html:87-95` | ✅ Correct |
+| `kanban.html:97-106` (flash terracotta) | `kanban.html:97-106` | ✅ Correct |
+| `kanban.html:107-117` (pro flash override) | `kanban.html:107-117` | ✅ Correct |
+| `kanban.html:119-123` (`.is-off` grey) | `kanban.html:119-123` | ✅ Correct |
+| `KanbanProvider.ts:7266-7288` (iconMap) | `KanbanProvider.ts:7443-7465` | Off by ~177 lines |
+| `package.json:663-683` (settings) | `package.json:663-687` | ✅ Correct (extends to 687) |
+| `TaskViewerProvider.ts:3536-3543` (cyber anim helpers) | `TaskViewerProvider.ts:3536-3543` | ✅ Correct |
+| `TaskViewerProvider.ts:3791-3793` (`handleSetThemeSetting`) | `TaskViewerProvider.ts:3800-3802` | Off by ~9 lines |
+| `SetupPanelProvider.ts:667-677` (message cases) | `SetupPanelProvider.ts:678-687` | Off by ~11 lines |
+| `setup.html:1665-1669` (`updateAnimationSectionVisibility`) | `setup.html:1688-1697` | Off by ~23 lines |
+| `setup.html:1758-1765` (theme tab callback) | `setup.html:1787-1795` | Off by ~29 lines |
+| `setup.html:3820-3830` (change listener) | `setup.html:3864-3873` | Off by ~44 lines |
+| `setup.html:4482-4488` (hydration handler) | `setup.html:4537-4542` | Off by ~55 lines |
+| `setup.html:1180-1192` (animation settings div) | `setup.html:1190-1199` | Off by ~10 lines |
+| `KanbanProvider.ts:313` (theme listener) | `KanbanProvider.ts:318` | Off by 5 lines |
+| `PlanningPanelProvider.ts:325` (theme listener) | `PlanningPanelProvider.ts:325` | ✅ Correct |
+| `kanban.html:5898-5908` (`switchboardThemeChanged` case) | `kanban.html:6005-6014` | Off by ~107 lines |
+
 ---
 
-**Recommendation:** Complexity 4 → **Send to Coder.** A well-scoped CSS/setting change that clones an existing shipped pattern (the animation checkbox) end-to-end. The main risk is CSS specificity ordering, which is mitigated by the dedicated body class and correct source placement. No migrations, no cross-plan dependencies, no architectural decisions remaining.
+**Recommendation:** Complexity 4 → **Send to Coder.** The feature is already implemented and shipped. The CSS architecture is sound — the `:not(.theme-afterburner-pro)` guard correctly prevents Claudify terracotta rules from matching when Afterburner Pro is active (matching prevention, not just specificity). The one factual error (`setup.html:4108-4119` citation) has been corrected. Remaining work: verify the implementation via the manual smoke test, and consider adding an `onDidChangeConfiguration` listener for `switchboard.theme.colourKanbanIcons` as a future enhancement for direct `settings.json` edits.

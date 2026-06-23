@@ -472,3 +472,61 @@ Add a `shared-tab-btn` (label "REMOTE") + `shared-tab-content` panel, following 
 ---
 
 **Recommendation:** Complexity 9 → **Send to Lead Coder.** Multi-file changes across integration services, file watcher, metadata parser, setup UI, and kanban project system, now spanning two presets over shared plumbing. Provider ID linkage (§1) is the critical path for both use cases — everything depends on cards having a valid link back to their source ticket. The Remote Control loop (§7–11) is the higher-risk, higher-value half: its inbound comment ingestion and state-dispatch mirror introduce cycles that must be guarded (self-marker, echo guard, per-card queue). Suggested sequencing: §1–5 shared plumbing → §6 triage preset (proves the outbound path end-to-end) → §7–11 remote control (closes the inbound loop).
+
+---
+
+## Reviewer Pass — 2026-06-23 (post-implementation, in-place)
+
+Reviewed the implemented diff (commit `fb98123`) against this plan as source of truth. Two adversarial stages below; valid MAJOR findings fixed in code. No compilation/tests run per session directive (verification deferred to user).
+
+### Stage 1 — Grumpy Principal Engineer
+
+> **CRITICAL — none survived the autopsy.** I went in expecting carnage and found the plumbing actually *plumbed*. Provider IDs extracted in the watcher (`GlobalPlanWatcherService.ts:490-526`), shared parsers actually shared (`planMetadataUtils.ts`), the Linear stub finally writes `**Linear Issue ID:**` *with the UUID* and `**Tags:**` not `**Labels:**`, comments/attachments captured with caps, `completeSyncEnabled` wired AND migrated `undefined→true` for ClickUp so I don't silently nuke 4,000 installs' DONE-syncs. The `ticket_updater` 4-mode relic is genuinely dead — collapsed to one triage verdict, modes test rewritten, config key kept readable with a one-time warning. Every method, command, sourceType, automation-rule field, and DB call I traced *exists*. Annoying. I wanted blood.
+>
+> **MAJOR #1 — the "remote mode" directive is a workspace-wide broadcast, not a per-board whisper (`KanbanProvider.ts:2732`).** The plan says — in BOLD, twice — "only injected when remote control is active for *that card's board*." You wired a single `_remoteControlActive` boolean and slapped it on *every* dispatch in the workspace. So the moment I start pinging board A from my phone, my agent grinding on local board B at my desk gets told "YOU ARE IN REMOTE MODE, post your questions as comments on the linked issue" — except board B's plan has NO linked issue. The agent shrugs, stops asking me anything, and barrels ahead. You broke the *exact* concurrent local+desk-and-phone scenario §10 sells as the headline. Per-board or it's a lie.
+>
+> **MAJOR #2 — first poll replays the entire comment history as agent dispatches (`RemoteControlService.ts:_ingestComments`).** Empty cursor → `!cursor || c.createdAt > cursor` is `true` for *everything*. So I flip on remote control for a board whose Linear issues have 40 comments of human back-and-forth, and your poller cheerfully fires the column agent FORTY TIMES per card on the first tick. Your OWN Adversarial Synthesis lists "runaway agent runs" as top risk #1 and you walked straight into it. "Fetch all comments on first poll" in §335 meant *seed the cursor*, not *dispatch the backlog*.
+>
+> **MINOR — the `lastSyncedCommentAt` column you swore to migrate (Dependencies, test #8) doesn't exist.** You stored cursors in a `remote.commentCursors` config-table JSON blob instead. Fine, §7 literally permits "the plan record / config table," and dodging a schema migration on a shipped extension is *arguably smarter* — but test #8 asserts a column that'll never be there. Update the test or stop writing checks you can't cash.
+>
+> **NIT — you smuggled a whole V37 epic-plan_id migration + epic-UUID-filename rework into an "integration import" commit.** Coherent, idempotent, harmless. Still, that's not this plan. Label your scope creep.
+>
+> **NIT — §9 echo guard tracks only `lastAppliedState`, not the plan's `lastPushedState`/`lastAppliedState` pair.** Column-equality (`targetColumn === plan.kanbanColumn`) covers the local-drag echo and re-pushing an identical state to Linear is idempotent (no new change → no loop), so it holds. Simpler than spec; not wrong.
+>
+> **NIT — Constant ping mode's toolbar toggle still toggles.** §397 says it "shows permanently active; no manual press needed," but the click handler always fires start/stop. Cosmetic.
+
+### Stage 2 — Balanced synthesis
+
+**Keep as-is (correct & complete):** §1 provider-ID linkage + shared parsers; §2 comment/attachment capture with caps; §3 tag fix; §4 `completeSyncEnabled` gate + ClickUp `undefined→true` migration; §5 `kanbanColumn` directive (both providers); the `ticket_updater` collapse (prompt, UI removal, migration warning, rewritten test); §6 one-click triage setup (end-to-end wired through `SetupPanelProvider` → `handleEnableTriagePipeline`); §8 host-side `postManagedComment` (dual-provider) + `/comment` bridge route; §10 Remote tab + Jules-icon toolbar toggle (`{{ICON_28}}` confirmed substituted, `is-active` styled, tab-content id convention correct).
+
+**Fix now (done — see below):** MAJOR #1 (per-board directive gating) and MAJOR #2 (first-poll history replay). Both are correctness defects in the headline Remote Control loop and both were cheap, contained fixes.
+
+**Defer / accept:** the `lastSyncedCommentAt` test (#8) should be revised to assert the config-table cursor instead of a column — flagged for the user's test pass, not blocking. V37 migration scope creep — leave it, it's a real fix. §9 single-field echo guard — adequate. Constant-mode toggle cosmetics — leave.
+
+### Fixes applied
+
+1. **§11 per-board gating — `KanbanProvider.ts`.** Replaced `remoteControlActive: this._remoteControlActive` with `await this._isRemoteActiveForDispatch(workspaceRoot, plans)`. New helper short-circuits on the global flag (no cost when remote control is off), then resolves each dispatched plan's project via `getPlanByPlanFile` and injects the directive only if a plan lands on a board in the active remote config. Fails *open* (to the old global behavior) when a plan can't be resolved, so the directive is never silently lost on the genuine remote board; suppresses only when confident all dispatched plans are on non-remote boards.
+2. **§7 first-poll baseline seed — `RemoteControlService.ts` `_ingestComments`.** On empty cursor, seed `lastSyncedComment` to the latest existing comment timestamp and return *without* dispatching. Only comments posted after remote control starts are acted on. Reload-safe (cursor persists in DB config), matching the intended "post from phone → agent responds" UX and eliminating the historical-replay runaway.
+
+### Findings by severity
+
+- **CRITICAL:** none.
+- **MAJOR (fixed):**
+  - Per-board remote directive gating — `src/services/KanbanProvider.ts:2732` + new `_isRemoteActiveForDispatch` (~`:1449`).
+  - First-poll comment-history replay — `src/services/RemoteControlService.ts` `_ingestComments` (~`:260`).
+- **MINOR (not fixed — flagged):**
+  - `lastSyncedCommentAt` stored as `remote.commentCursors` config JSON, not a DB column; revise test #8 accordingly — `src/services/RemoteControlService.ts:42,286-306`.
+- **NIT (not fixed):**
+  - V37 epic-plan_id migration + epic-UUID watcher logic bundled out-of-scope — `KanbanDatabase.ts:4804-4860`, `GlobalPlanWatcherService.ts:512-541`.
+  - §9 echo guard single-field (`lastAppliedState` only) — `RemoteControlService.ts:62,240-246`.
+  - Constant-mode toolbar toggle still interactive — `kanban.html` `btn-remote-control` handler.
+
+### Files changed in this reviewer pass
+- `src/services/KanbanProvider.ts` — per-board `_isRemoteActiveForDispatch` gating for §11.
+- `src/services/RemoteControlService.ts` — first-poll cursor baseline seed in `_ingestComments`.
+
+### Remaining risks
+- **Bridge dependency unchanged.** All agent-initiated comment posting still rides `feature_plan_20260623120000_localapiserver-bridge-robustness`. The `/comment` route + `postManagedComment` are in place, but agent-side reliability is only as good as that companion plan — sequence/land it alongside.
+- **Self-marker survival unverified.** `<!-- switchboard -->` vs Linear's renderer is still untested; `[sb]` fallback exists in `hasMarker`, but `stampMarker` only writes the HTML form. If Linear strips HTML comments, outbound posts won't carry a detectable marker and the feedback-loop guard fails — verify before shipping the loop, and switch `stampMarker` to the text marker if needed.
+- **In-memory per-card queue volatility** (§7) — accepted v1 limitation; cursor-not-advanced-until-dispatch means a lost comment is re-fetched, not lost.
+- **Test suite not run** (per session directive) — provider-ID extraction, triage setup, and the rewritten `ticket_updater` modes test should be exercised by the user; test #8 needs the config-cursor revision noted above.

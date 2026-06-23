@@ -665,6 +665,12 @@
           "default": false,
           "description": "Disable the animated rolling CRT sweep beam in the Cyber Panel theme."
         },
+        "switchboard.theme.colourKanbanIcons": {
+          "type": "boolean",
+          "default": false,
+          "description": "Render kanban board icons in full colour at rest (cyan for Afterburner Professional, terracotta for Claudify) instead of flat grey with a colour click-flash. Only affects the Afterburner Professional and Claudify themes.",
+          "scope": "window"
+        },
         "switchboard.theme.name": {
           "type": "string",
           "enum": [

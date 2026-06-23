@@ -18,11 +18,13 @@ export function getThemeBodyClass(): string {
         const animDisabled = cfg.get<boolean>('theme.disableCyberAnimation', false);
         return 'cyber-theme-enabled' + (animDisabled ? ' cyber-animation-disabled' : '');
     }
+    const colourIcons = cfg.get<boolean>('theme.colourKanbanIcons', false);
+    const colourClass = colourIcons ? ' kanban-icons-colour' : '';
     if (theme === 'claudify') {
-        return 'theme-claudify';
+        return 'theme-claudify' + colourClass;
     }
     if (theme === 'afterburner-professional') {
-        return 'theme-claudify theme-afterburner-pro';
+        return 'theme-claudify theme-afterburner-pro' + colourClass;
     }
     return '';
 }

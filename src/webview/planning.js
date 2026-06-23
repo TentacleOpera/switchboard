@@ -118,6 +118,63 @@
     let ticketsInitialized = false;
     let ticketsLoadedOnce = false;
     let lastIntegrationProvider = null;
+
+    // Source-aware list of what agents can do via the LocalApiServer bridge (no MCP).
+    // Mirrors the real endpoints in src/services/LocalApiServer.ts:737-775 and the
+    // .agents/skills/*.md docs. ClickUp has dedicated write endpoints; Linear writes
+    // go through the GraphQL proxy.
+    const AGENT_API_CAPABILITIES = {
+        clickup: [
+            { name: 'List / filter cached tickets',
+              desc: 'Read the local cached ticket metadata — no MCP round-trip (GET /metadata/clickup, get_tickets skill).',
+              prompt: 'Use the get_tickets skill to read my cached ClickUp tickets from the Switchboard local API (GET /metadata/clickup) and list them grouped by status. Do not use the MCP.' },
+            { name: 'Read a ticket in full',
+              desc: 'Fetch a task with description, subtasks, comments and attachments (GET /task/clickup/{id}).',
+              prompt: 'Use the get_tickets skill to fetch ClickUp task {ticketId} in full from the Switchboard local API (GET /task/clickup/{ticketId}) — description, subtasks, comments and attachments — and summarise it. Do not use the MCP.' },
+            { name: 'Create a task (with subtasks)',
+              desc: 'Create a new ClickUp task and optional subtasks (POST /task/clickup, clickup_create_task skill).',
+              prompt: 'Use the clickup_create_task skill to create a ClickUp task via the Switchboard local API (POST /task/clickup). Ask me for the list, then the task name, description and any subtasks. Do not use the MCP.' },
+            { name: 'Update a task',
+              desc: 'Change name, description, status, assignees, due date, priority or tags (PUT /task/clickup/{id}, clickup_modify_task skill).',
+              prompt: 'Use the clickup_modify_task skill to update ClickUp task {ticketId} via the Switchboard local API (PUT /task/clickup/{ticketId}). Ask me which fields to change (status, assignees, priority, tags, due date) and apply them. Do not use the MCP.' },
+            { name: 'Attach a file',
+              desc: 'Upload a screenshot/doc (≤10MB) to a task (POST /task/clickup/{id}/attach, clickup_attach skill).',
+              prompt: 'Use the clickup_attach skill to attach a file to ClickUp task {ticketId} via the Switchboard local API (POST /task/clickup/{ticketId}/attach). Ask me which local file to upload. Do not use the MCP.' },
+            { name: 'Create a doc page',
+              desc: 'Add a Markdown page to a ClickUp doc (POST /doc/clickup, clickup_create_subpage skill).',
+              prompt: 'Use the clickup_create_subpage skill to create a ClickUp doc page via the Switchboard local API (POST /doc/clickup). Ask me for the docId, page title and content. Do not use the MCP.' },
+            { name: 'Resolve a name to an ID',
+              desc: 'Turn a task/list name into its ID (GET /resolve/clickup/name/{name}, clickup_fetch skill).',
+              prompt: 'Use the clickup_fetch skill to resolve a ClickUp name to an ID via the Switchboard local API (GET /resolve/clickup/name/...). Ask me the name to resolve. Do not use the MCP.' },
+            { name: 'Generate an architecture diagram',
+              desc: 'Build a Mermaid diagram and optionally attach it to a task (POST /diagram/generate, generate_diagram skill).',
+              prompt: 'Use the generate_diagram skill to generate an architecture diagram via the Switchboard local API (POST /diagram/generate) and attach it to ClickUp task {ticketId}. Do not use the MCP.' },
+            { name: 'Raw ClickUp API call',
+              desc: 'Any ClickUp v2 REST endpoint not covered above (POST /api/clickup, clickup_api skill).',
+              prompt: 'Use the clickup_api skill to make a raw ClickUp REST call via the Switchboard local API proxy (POST /api/clickup). Tell me which endpoint/method you need and I will confirm. Do not use the MCP.' }
+        ],
+        linear: [
+            { name: 'List / filter cached issues',
+              desc: 'Read the local cached issue metadata — no MCP round-trip (GET /metadata/linear, get_tickets skill).',
+              prompt: 'Use the get_tickets skill to read my cached Linear issues from the Switchboard local API (GET /metadata/linear) and list them grouped by state. Do not use the MCP.' },
+            { name: 'Read an issue in full',
+              desc: 'Fetch an issue with description, sub-issues, comments and attachments (GET /task/linear/{id}).',
+              prompt: 'Use the get_tickets skill to fetch Linear issue {ticketId} in full from the Switchboard local API (GET /task/linear/{ticketId}) — description, sub-issues, comments and attachments — and summarise it. Do not use the MCP.' },
+            { name: 'Resolve a name to an ID',
+              desc: 'Turn an issue/project name into its ID (GET /resolve/linear/name/{name}).',
+              prompt: 'Resolve a Linear name to an ID via the Switchboard local API (GET /resolve/linear/name/...). Ask me the name to resolve. Do not use the MCP.' },
+            { name: 'Create / update / comment via GraphQL',
+              desc: 'Linear writes (create issue, change state, add comment) go through the GraphQL proxy (POST /api/linear, linear_api skill).',
+              prompt: 'Use the linear_api skill to run a Linear GraphQL mutation via the Switchboard local API proxy (POST /api/linear) — e.g. create an issue, change its state, or add a comment to {ticketId}. Tell me the operation and I will confirm the fields. Do not use the MCP.' },
+            { name: 'Run any GraphQL query',
+              desc: 'Arbitrary Linear GraphQL read query (POST /api/linear, linear_api skill).',
+              prompt: 'Use the linear_api skill to run a Linear GraphQL query via the Switchboard local API proxy (POST /api/linear). Tell me what to fetch and I will confirm the query. Do not use the MCP.' },
+            { name: 'Generate an architecture diagram',
+              desc: 'Build a Mermaid diagram and optionally attach it to an issue (POST /diagram/generate, generate_diagram skill).',
+              prompt: 'Use the generate_diagram skill to generate an architecture diagram via the Switchboard local API (POST /diagram/generate) and attach it to Linear issue {ticketId} (platform "linear"). Do not use the MCP.' }
+        ]
+    };
+
     let ticketsEditMode = false;
     let _ticketsEditBackupHtml = null;
     let ticketsWorkspaceRoot = '';
@@ -955,7 +1012,11 @@
             ticketsSourceSummary: document.getElementById('tickets-source-summary'),
             ticketsSourceModal: document.getElementById('tickets-source-modal'),
             btnCloseTicketsSourceModal: document.getElementById('btn-close-tickets-source-modal'),
-            btnCloseTicketsSourceModalAction: document.getElementById('btn-close-tickets-source-modal-action')
+            btnCloseTicketsSourceModalAction: document.getElementById('btn-close-tickets-source-modal-action'),
+            ticketsAgentApiBtn: document.getElementById('tickets-agent-api'),
+            ticketsAgentApiModal: document.getElementById('tickets-agent-api-modal'),
+            btnCloseTicketsAgentApiModal: document.getElementById('btn-close-tickets-agent-api-modal'),
+            btnCloseTicketsAgentApiModalAction: document.getElementById('btn-close-tickets-agent-api-modal-action')
         };
     }
 
@@ -6295,6 +6356,64 @@ Return ONLY the drafted prompt with no additional commentary.`;
         }
     }
 
+    function currentSelectedTicketId() {
+        return lastIntegrationProvider === 'linear'
+            ? (selectedLinearIssue?.issue?.id || null)
+            : (selectedClickUpIssue?.task?.id || null);
+    }
+
+    function renderAgentApiModal() {
+        const list = document.getElementById('tickets-agent-api-list');
+        const label = document.getElementById('tickets-agent-api-provider-label');
+        if (!list) return;
+        const provider = lastIntegrationProvider;
+        list.innerHTML = '';
+
+        if (!provider || !AGENT_API_CAPABILITIES[provider]) {
+            if (label) label.textContent = '';
+            const li = document.createElement('li');
+            li.style.justifyContent = 'flex-start';
+            li.innerHTML = '<span class="agent-api-desc">Configure a ClickUp or Linear integration in Setup to enable the agent API.</span>';
+            list.appendChild(li);
+            return;
+        }
+
+        if (label) label.textContent = (provider === 'clickup' ? 'ClickUp' : 'Linear') + ' — no MCP required';
+        const ticketId = currentSelectedTicketId();
+
+        AGENT_API_CAPABILITIES[provider].forEach(cap => {
+            const filledPrompt = cap.prompt.replace(/\{ticketId\}/g, ticketId || 'the ticket id');
+            const li = document.createElement('li');
+            const text = document.createElement('div');
+            text.className = 'agent-api-text';
+            const name = document.createElement('div');
+            name.className = 'agent-api-name';
+            name.textContent = cap.name;
+            const desc = document.createElement('div');
+            desc.className = 'agent-api-desc';
+            desc.textContent = cap.desc;
+            text.appendChild(name);
+            text.appendChild(desc);
+            const btn = document.createElement('button');
+            btn.className = 'strip-btn agent-api-copy';
+            btn.textContent = 'Copy prompt';
+            btn.addEventListener('click', async () => {
+                if (btn.textContent === 'COPIED') return;
+                try {
+                    await navigator.clipboard.writeText(filledPrompt);
+                    btn.textContent = 'COPIED';
+                } catch (err) {
+                    console.error('[AgentAPI] clipboard failed:', err);
+                    btn.textContent = 'FAILED';
+                }
+                setTimeout(() => { btn.textContent = 'Copy prompt'; }, 2000);
+            });
+            li.appendChild(text);
+            li.appendChild(btn);
+            list.appendChild(li);
+        });
+    }
+
     function updateTicketsSourceSummary() {
         const { ticketsSourceSummary } = getTicketsTabElements();
         if (!ticketsSourceSummary) return;
@@ -6340,7 +6459,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
         const {
             searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, loadMoreButton,
             btnImportAllTickets, importAllKanbanButton, linkAllButton, syncAllButton,
-            ticketsSourceBtn, ticketsSourceModal, btnCloseTicketsSourceModal, btnCloseTicketsSourceModalAction
+            ticketsSourceBtn, ticketsSourceModal, btnCloseTicketsSourceModal, btnCloseTicketsSourceModalAction,
+            ticketsAgentApiBtn, ticketsAgentApiModal, btnCloseTicketsAgentApiModal, btnCloseTicketsAgentApiModalAction
         } = getTicketsTabElements();
 
         // Custom update call to populate dropdown if integrations already fetched
@@ -6365,6 +6485,31 @@ Return ONLY the drafted prompt with no additional commentary.`;
         });
 
         ticketsSourceModal?.addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) {
+                e.currentTarget.style.display = 'none';
+            }
+        });
+
+        ticketsAgentApiBtn?.addEventListener('click', () => {
+            renderAgentApiModal();              // rebuild every open → source-aware
+            if (ticketsAgentApiModal) {
+                ticketsAgentApiModal.style.display = 'block';
+            }
+        });
+
+        btnCloseTicketsAgentApiModal?.addEventListener('click', () => {
+            if (ticketsAgentApiModal) {
+                ticketsAgentApiModal.style.display = 'none';
+            }
+        });
+
+        btnCloseTicketsAgentApiModalAction?.addEventListener('click', () => {
+            if (ticketsAgentApiModal) {
+                ticketsAgentApiModal.style.display = 'none';
+            }
+        });
+
+        ticketsAgentApiModal?.addEventListener('click', (e) => {
             if (e.target === e.currentTarget) {
                 e.currentTarget.style.display = 'none';
             }

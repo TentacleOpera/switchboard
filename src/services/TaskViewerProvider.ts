@@ -3542,6 +3542,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         await config.update('theme.disableCyberAnimation', disabled, vscode.ConfigurationTarget.Workspace);
     }
 
+    public handleGetColourKanbanIconsSetting(): boolean {
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.colourKanbanIcons', false);
+    }
+
+    public async handleSetColourKanbanIconsSetting(enabled: boolean): Promise<void> {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        await config.update('theme.colourKanbanIcons', enabled, vscode.ConfigurationTarget.Workspace);
+    }
+
     public handleGetJulesAutoSyncSetting(): boolean {
         return this._isJulesAutoSyncEnabled();
     }

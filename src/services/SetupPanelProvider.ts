@@ -686,6 +686,21 @@ export class SetupPanelProvider implements vscode.Disposable {
                     await this._taskViewerProvider.postSetupPanelState();
                     await vscode.commands.executeCommand('switchboard.refreshUI');
                     break;
+                case 'getColourKanbanIconsSetting':
+                    this._panel.webview.postMessage({
+                        type: 'colourKanbanIconsSetting',
+                        enabled: this._taskViewerProvider.handleGetColourKanbanIconsSetting()
+                    });
+                    break;
+                case 'setColourKanbanIconsSetting':
+                    await this._taskViewerProvider.handleSetColourKanbanIconsSetting(message.enabled);
+                    this._taskViewerProvider.broadcastToWebviews({
+                        type: 'colourKanbanIconsChanged',
+                        enabled: message.enabled
+                    });
+                    await this._taskViewerProvider.postSetupPanelState();
+                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    break;
                 case 'getDesignDocSetting': {
                     const designDocSetting = this._taskViewerProvider.handleGetDesignDocSetting();
                     this._panel.webview.postMessage({

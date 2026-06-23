@@ -258,6 +258,17 @@ export class RemoteControlService {
         cursors: Record<string, string>
     ): Promise<void> {
         const cursor = cursors[plan.linearIssueId] || '';
+        // First encounter (no cursor): seed the baseline to the latest existing comment
+        // WITHOUT dispatching. Otherwise the whole comment history of an existing issue is
+        // replayed as agent runs the instant remote control starts — exactly the runaway
+        // dispatch the plan's Adversarial Synthesis warns about. Only comments posted after
+        // remote control starts (i.e. after this baseline) are acted on. Reload-safe: the
+        // cursor persists in the DB config table, so this seeding happens once per card.
+        if (!cursor) {
+            const latest = comments.reduce((max, c) => (c.createdAt && c.createdAt > max ? c.createdAt : max), '');
+            if (latest) { await this._advanceCursor(plan.linearIssueId, latest); }
+            return;
+        }
         // New = created after the cursor AND not authored by Switchboard (marker).
         const fresh = comments
             .filter((c) => c.createdAt && (!cursor || c.createdAt > cursor) && !hasMarker(c.body))

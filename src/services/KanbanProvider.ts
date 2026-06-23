@@ -1446,6 +1446,43 @@ export class KanbanProvider implements vscode.Disposable {
         await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot);
     }
 
+    /**
+     * §11 — is a dispatch's board under active remote control? Only then does the
+     * remote-mode question directive get injected. Cheap short-circuit on the global
+     * flag first (the common case is no remote control at all). When confident that
+     * every dispatched plan resolves to a non-remote board, suppress; if a plan can't
+     * be resolved (path mismatch / preview), fail open to the global flag so the
+     * directive is never silently lost on the real remote board.
+     */
+    private async _isRemoteActiveForDispatch(workspaceRoot: string, plans: BatchPromptPlan[]): Promise<boolean> {
+        if (!this._remoteControlActive) { return false; }
+        try {
+            const rc = this._getRemoteControl(workspaceRoot);
+            if (!rc.isActive) { return false; }
+            const config = await rc.getConfig();
+            if (!config.boards || config.boards.length === 0) { return false; }
+            const boardSet = new Set(config.boards);
+            const db = this._getKanbanDb(workspaceRoot);
+            if (!(await db.ensureReady())) { return true; } // can't check → keep current behavior
+            const workspaceId = (await db.getWorkspaceId()) || '';
+            let resolvedAny = false;
+            for (const plan of plans) {
+                if (!plan.absolutePath) { continue; }
+                const rel = path.relative(workspaceRoot, plan.absolutePath);
+                const rec = await db.getPlanByPlanFile(rel, workspaceId);
+                if (rec) {
+                    resolvedAny = true;
+                    if (boardSet.has(rec.project || '')) { return true; }
+                }
+            }
+            // Resolved at least one plan and none were on a remote board → suppress.
+            // Couldn't resolve any → fail open (don't disable the feature on the real board).
+            return resolvedAny ? false : true;
+        } catch {
+            return true; // fail open to current behavior
+        }
+    }
+
     private _getLinearService(workspaceRoot: string): LinearSyncService {
         const resolved = path.resolve(workspaceRoot);
         const existing = this._linearServices.get(resolved);
@@ -1953,6 +1990,15 @@ export class KanbanProvider implements vscode.Disposable {
                     const projects = await db.getProjects(workspaceId);
                     if (this._projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER && !projects.includes(this._projectFilter ?? '')) {
                         this._projectFilter = KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
+                    }
+                    // The persisted filter restored at construction (~line 292) is assigned
+                    // directly to _projectFilter, bypassing setProjectFilter() — so the watcher's
+                    // _currentProjects map is never populated on a fresh extension load. Without
+                    // this, plans created while a restored project board is open get an empty
+                    // project and land on the workspace-root board. Propagate the restored +
+                    // validated filter now that the workspace and project list are known.
+                    if (this._currentWorkspaceRoot) {
+                        this._globalPlanWatcher?.setCurrentProject(path.resolve(this._currentWorkspaceRoot), this._projectFilter);
                     }
                 }
                 const projectFilter = this._projectFilter;
@@ -2729,7 +2775,11 @@ export class KanbanProvider implements vscode.Disposable {
             defaultPromptOverrides,
             workspaceRoot,
             routingMapConfig: this._routingMapConfig,
-            remoteControlActive: this._remoteControlActive,
+            // §11 — per-board gating: the remote-mode directive must only reach agents
+            // dispatched on a board under remote control, not every dispatch in the
+            // workspace (a local board worked at the desk while another is phone-driven
+            // must stay unchanged). The global flag is the cheap short-circuit.
+            remoteControlActive: await this._isRemoteActiveForDispatch(workspaceRoot, plans),
         };
 
         if (role === 'planner') {

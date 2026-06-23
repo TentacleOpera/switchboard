@@ -15,7 +15,13 @@ Two consequences:
 ## Metadata
 
 **Complexity:** 7/10
-**Tags:** webview, memo, sidebar-tab, implementation.html, kanban-cleanup, refactor, planner-dispatch
+**Tags:** ui, refactor, feature
+
+> Clarification (tag normalization): the allowed-tag vocabulary is `[ui, ux, refactor, feature, ...]`. The original descriptive labels (`webview, memo, sidebar-tab, implementation.html, kanban-cleanup, planner-dispatch`) are retained here as context keywords but are not part of the canonical Tags list.
+
+## User Review Required
+
+- **None.** This is a UI relocation with a fully preserved storage contract (`.switchboard/memo.md`) and no net-new product scope. All design decisions (remove KanbanProvider handlers, drop the modal Escape handler, single dispatch path) are decided in this plan, not deferred.
 
 ## Complexity Audit
 
@@ -42,7 +48,73 @@ Two consequences:
 - **Memo hotkey setting unaffected.** `switchboard.memo.hotkey` (read/written in `SetupPanelProvider` at `src/services/SetupPanelProvider.ts:646-657`) just maps a keybinding to `switchboard.openMemo`. Since the command id is unchanged, the hotkey keeps working and points at the new sidebar behavior. No change required there.
 - **Theme parity.** `implementation.html` already styles `.modal-textarea` (`src/webview/implementation.html:1003-1024`) and `.sub-tab-btn` including the `theme-claudify` variants (`src/webview/implementation.html:363-399`). The new Memo panel reuses `.modal-textarea` for the editor and `.sub-tab-btn` for the tab, so no new theme work is needed.
 - **Build artifact.** Per CLAUDE.md, `implementation.html` and `kanban.html` are bundled into `dist/webview/` by webpack; `npm run compile` is mandatory after editing either.
-- **No confirmation dialogs.** The "Clear" button must clear immediately (it already does — `src/webview/kanban.html:3721-3727`). Do not add any confirm gate when relocating.
+- **No confirmation dialogs.** The "Clear" button must clear immediately (it already does — see kanban memo JS). Do not add any confirm gate when relocating.
+
+### Race Conditions
+- **Reveal-then-post race (CRITICAL — see refinement #3 below).** `switchboard.openMemo` reveals the sidebar and then posts a "switch to memo" message. On a *cold* open the webview mounts asynchronously and only becomes able to receive messages after it fires `'ready'` (`src/services/TaskViewerProvider.ts:8049`) and the host replies via `_sendInitialState()`. Posting `openMemoTab` synchronously after a reveal can land before the iframe's listener exists and be silently dropped. Mitigation: persist the active sub-tab AND flush the post on `'ready'` — see refinement #3.
+- **Debounced save vs. clear/dispatch.** The 800ms debounced `memoSave` can still be pending when Clear / Copy / Send fires. The existing kanban code cancels the timer first (`if (memoSaveTimer) clearTimeout(memoSaveTimer)`) before Copy/Send; the relocated JS preserves this. Clear overwrites the file with `''` regardless, so a late save losing the race still writes the (now-empty) textarea value — no stale content resurrects.
+
+### Security
+- No new trust boundary. `workspaceRoot` from the webview is validated by `this._resolveWorkspaceRoot(data.workspaceRoot)` (`src/services/TaskViewerProvider.ts:989`) exactly as the kanban path did — an attacker-controlled path cannot escape the resolved workspace set. Memo content is user-authored plain text written only to `<workspaceRoot>/.switchboard/memo.md`; no shell interpolation, no eval.
+
+### Side Effects
+- **Clipboard write.** `memoGeneratePrompt` always writes the planner prompt to the system clipboard (`vscode.env.clipboard.writeText`) before attempting dispatch — preserved behavior.
+- **Memo file cleared on success.** On a successful Copy/Send, `memo.md` is truncated to `''` and a `memoContent` reset is pushed to the webview. Preserve this exactly (`src/services/KanbanProvider.ts:7170-7177`).
+- **Status-bar / quick-pick / hotkey** all retarget transparently because only the command *body* changes (id `switchboard.openMemo` unchanged).
+
+### Dependencies & Conflicts
+- Depends on `TaskViewerProvider.dispatchCustomPromptToRole` (`src/services/TaskViewerProvider.ts:2507`) — already public, already in `TaskViewerProvider`, so the relocation removes the cross-provider hop entirely.
+- No conflict with the in-flight `feature_plan_20260622_remove_sessionid_from_switchboard.md` work — memo handlers do not touch session ids.
+
+### Verified Code References & Refinements (verified 2026-06-23)
+
+The plan's inline line citations predate ~70–100 lines of growth in the cited files. **Use these verified coordinates; treat the inline numbers in Proposed Changes as approximate.**
+
+| Item | Plan said | Actual (2026-06-23) |
+|------|-----------|---------------------|
+| KanbanProvider memo cases (`memoLoad`…`openMemoModal`) | 6942-7015 | **7119-7192** |
+| KanbanProvider `_getMemoPath` / `_parseMemoEntries` / `_buildMemoPlannerPrompt` / `_dispatchMemoToPlanner` | 7019-7104 | **7196 / 7200 / 7224 / 7259** |
+| `extension.ts` `switchboard.openMemo` body | 752-756 | **752-756 ✓** |
+| TaskViewer message switch (`switch (data.type)`; param is `data`, not `msg`) | 7900 | **8048** |
+| TaskViewer `dispatchCustomPromptToRole` | 2495 | **2507** |
+| TaskViewer `_resolveWorkspaceRoot` def | 977 | **989** |
+| TaskViewer `setActiveSubTab` clamp / `validSubTabs` | 8994 | **9142** |
+| TaskViewer `'ready'` handler | — | **8049** |
+| `implementation.html` sub-tab bar / restore whitelist / `switchAgentTab` / `.sub-tab-btn` wiring | 1602-1605 / 2206 / 2576-2598 / 2622-2624 | **all ✓** |
+| `implementation.html` `agentListStandard`/`agentListTerminals` defs | — | **1656-1657** (consts via `getElementById`) |
+| `kanban.html` `#btn-open-memo` | 2429-2433 | **2490** |
+| `kanban.html` `#memo-modal` | 3018-3049 | **~3120-3149** |
+| `kanban.html` memo JS block (incl. Escape keydown) | 3686-3752 | **3788-3853** |
+| `kanban.html` message cases `memoContent`/`memoPromptResult`/`openMemoModal` | 6438-6456 | **6562 / 6573 / 6578** |
+| `kanban.html` `postKanbanMessage` helper | 3861-3865 | **3968** |
+
+**Refinement #1 — `taskViewerProvider` scope is NOT a concern.** It is constructed at `src/extension.ts:640` and the command registers at `752`. The variable is in scope; the plan's "if it is created later, move the registration" caveat is moot — no move needed.
+
+**Refinement #2 — drop `workspaceName` from the sidebar `memoContent` post.** The kanban handler posts `{ type: 'memoContent', content, workspaceName }` (`src/services/KanbanProvider.ts:7130`, `7176`) solely to title the modal. The sidebar has no modal title, so the relocated handler should post only `{ type: 'memoContent', content }`. Do not relocate the `_getWorkspaceItems()` lookup at all (it does not exist on `TaskViewerProvider`).
+
+**Refinement #3 — robust reveal in `openMemoTab` (avoids the cold-open dead-button).** There is **no** existing `switchboard-view.focus` usage in the codebase, but VS Code auto-registers `<viewId>.focus` for contributed views, and the view id is `switchboard-view` (`src/services/TaskViewerProvider.ts:249`, registered `src/extension.ts:656`). `this._view?.show?.(true)` alone is a silent no-op when the sidebar was never opened this session. Use this shape instead:
+
+```js
+public async openMemoTab(): Promise<void> {
+    // 1. Persist so a *cold* open restores straight to Memo via _sendInitialState.
+    await this._context.workspaceState.update(TaskViewerProvider.ACTIVE_SUB_TAB_STATE_KEY, 'memo');
+    // 2. Reveal the sidebar (resolves the view if not yet created).
+    await vscode.commands.executeCommand('switchboard-view.focus');
+    // 3. If the view is already live, switch immediately (initialState won't re-fire).
+    this._view?.webview.postMessage({ type: 'openMemoTab' });
+}
+```
+Additionally, in the `'ready'` handler (`src/services/TaskViewerProvider.ts:8049`) the restore path already sends `activeSubTab`; because the whitelist now includes `'memo'` (Proposed Changes 1d / 2c), a cold open lands on Memo with no extra wiring. Confirm `ACTIVE_SUB_TAB_STATE_KEY` is the static used by `setActiveSubTab` (it is — same key written at `src/services/TaskViewerProvider.ts:9144`).
+
+**Refinement #4 — single dispatch path, no double toast.** `dispatchCustomPromptToRole` (`src/services/TaskViewerProvider.ts:2507`) already calls `showErrorMessage('No agent assigned to role …')` (line 2512) on failure. The relocated `memoGeneratePrompt` must **not** copy `_dispatchMemoToPlanner`'s extra `window.showInformationMessage` / `showWarningMessage` calls — that would double-notify. Just `await this.dispatchCustomPromptToRole('planner', prompt, workspaceRoot)`, branch on the boolean, and post a single `memoPromptResult` to the webview (the clipboard write already happened, so the fallback message "copied to clipboard, paste manually" is still accurate on `false`).
+
+## Dependencies
+
+- None.
+
+## Adversarial Synthesis
+
+**Risk Summary.** Key risks: (1) the reveal-then-post race makes `switchboard.openMemo` a silent no-op on a cold sidebar — mitigated by persisting sub-tab=`memo` + revealing via `switchboard-view.focus` + flushing the post on `'ready'` (Refinement #3); (2) double error toasts if `_dispatchMemoToPlanner`'s window messages are copied alongside `dispatchCustomPromptToRole`'s own — mitigated by the single-dispatch path (Refinement #4); (3) stale line citations — mitigated by the verified-coordinates table above. The storage path is unchanged so there is no data-loss risk for the ~4,000-install base.
 
 ## Proposed Changes
 
@@ -261,3 +333,14 @@ Confirm `taskViewerProvider` is in scope at this point in `activate()` (the symb
 8. **Sub-tab persistence:** Leave the sidebar on the Memo tab, reload — it re-opens on Memo (not Terminals), proving both whitelist edits (`implementation.html:2206` and `TaskViewerProvider.ts:8994`).
 9. **Command / hotkey / status bar:** Run `switchboard.openMemo` via the command palette, the configured hotkey (`switchboard.memo.hotkey`), and the status-bar comment-discussion icon — each reveals the sidebar and selects the Memo tab. The Kanban panel must NOT be force-opened.
 10. **Kanban regression:** Open the Kanban board — the memo board icon is gone, no modal exists, no console errors, and other board icons/tabs work.
+11. **Cold-open reveal (Refinement #3):** With the Switchboard sidebar **never opened this session** (collapsed/never resolved), trigger `switchboard.openMemo` via the status-bar comment-discussion icon. The sidebar must open *and* land directly on the Memo tab — proving `switchboard-view.focus` + the persisted-sub-tab restore, not a silent no-op.
+12. **No double toast (Refinement #4):** With no planner terminal assigned, click **Send to Planner**. Exactly **one** failure notification should appear (from `dispatchCustomPromptToRole`), plus the in-panel `memoPromptResult` status — not two stacked toasts.
+
+### Automated Tests
+
+- No automated unit/integration tests are added for this UI relocation; the behavior is webview-DOM + VS Code message-passing, which the repo verifies manually (steps 1–12 above).
+- **Per session directive, the test suite and `npm run compile` are deferred to the user.** When run, `npm run compile` (webpack) must succeed with zero TypeScript errors, and `dist/webview/{implementation,kanban}.html` must be regenerated before manual verification (the extension serves from `dist/`).
+
+---
+
+**Recommendation:** Complexity 7/10 → **Send to Lead Coder.**

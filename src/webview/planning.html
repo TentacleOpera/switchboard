@@ -2644,6 +2644,21 @@
             max-height: none;
         }
 
+        .agent-api-list li {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 10px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--panel-bg2, var(--card-bg, #1a1a2e));
+        }
+        .agent-api-list .agent-api-text { flex: 1; min-width: 0; }
+        .agent-api-list .agent-api-name { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+        .agent-api-list .agent-api-desc { font-size: 11px; color: var(--text-secondary); line-height: 1.4; margin-top: 2px; }
+        .agent-api-list .agent-api-copy { white-space: nowrap; flex: 0 0 auto; }
+
         /* Delete-confirmation modal: red Delete button (rest + hover) */
         #btn-confirm-tickets-delete {
             color: var(--accent-red, #f85149);
@@ -3536,6 +3551,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <button id="tickets-create" class="strip-btn" disabled title="Configure an integration in Setup first">+ New Ticket</button>
                     <button id="tickets-refresh" class="strip-btn" title="Re-fetch from source and save local copies">Refetch</button>
                     <button id="tickets-sync-all" class="strip-btn" title="Push all local ticket changes back to the integration">Sync changes</button>
+                    <button id="tickets-agent-api" class="strip-btn" title="What agents can do with this ticket source without the MCP">Agent API</button>
                 </div>
             </div>
             <div class="content-row">
@@ -3810,6 +3826,27 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 </div>
                 <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
                     <button id="btn-close-tickets-source-modal-action" class="strip-btn">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="folder-modal" id="tickets-agent-api-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="tickets-agent-api-modal-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="tickets-agent-api-modal-title">Agent API</h3>
+                <button class="modal-close-btn" id="btn-close-tickets-agent-api-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="margin: 0 0 14px 0; font-size: 12px; color: var(--text-secondary); line-height: 1.5;">
+                    Switchboard runs a local HTTP bridge so your coding agent can read and change tickets
+                    <strong>without the MCP server</strong>. Agents discover it via
+                    <code>.switchboard/api-server-port.txt</code> and call it with the matching skill.
+                    Pick a capability below and copy a ready-to-paste instruction for your agent.
+                </p>
+                <div id="tickets-agent-api-provider-label" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); margin-bottom: 10px;"></div>
+                <ul id="tickets-agent-api-list" class="agent-api-list" style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px;"></ul>
+                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;">
+                    <button id="btn-close-tickets-agent-api-modal-action" class="strip-btn">Close</button>
                 </div>
             </div>
         </div>
