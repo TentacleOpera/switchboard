@@ -664,14 +664,31 @@
     }
 
     function formatCommentDate(dateStr) {
-        if (!dateStr) return '';
+        if (dateStr === null || dateStr === undefined || dateStr === '') return '';
         try {
-            const d = new Date(dateStr);
-            if (isNaN(d.getTime())) return dateStr;
+            const s = String(dateStr).trim();
+            // ClickUp dates are epoch-millisecond strings; Linear dates are ISO strings.
+            // Mirrors backend logic at TaskViewerProvider.ts:5038-5039.
+            const d = /^\d+$/.test(s) ? new Date(Number(s)) : new Date(s);
+            if (isNaN(d.getTime())) return s;
             return d.toLocaleString();
         } catch {
-            return dateStr;
+            return String(dateStr);
         }
+    }
+
+    // Read a comment's display fields regardless of provider shape.
+    // Linear: { body, user:{name,email}, createdAt }
+    // ClickUp: { comment_text, user:{username,email}, date }
+    function commentAuthorName(comment) {
+        const u = comment && comment.user ? comment.user : {};
+        return u.name || u.username || u.email || 'Unknown';
+    }
+    function commentBodyText(comment) {
+        return (comment && (comment.body || comment.comment_text)) || '';
+    }
+    function commentDateRaw(comment) {
+        return (comment && (comment.createdAt || comment.date)) || '';
     }
 
     function openReplyBox(commentId) {
@@ -7333,9 +7350,9 @@ Instructions:
             html += '<h3 style="user-select:none;">Comments</h3>';
             html += comments.map(comment => `
                 <div class="tickets-comment-item">
-                    <span class="tickets-comment-author">${escapeHtml(comment.user?.name || comment.user?.email || 'Unknown')}</span>
-                    <span class="tickets-comment-date">${escapeHtml(comment.createdAt ? comment.createdAt.slice(0, 10) : '')}</span>
-                    <div class="tickets-comment-body">${escapeHtml(comment.body || '').replace(/\n/g, '<br>')}</div>
+                    <span class="tickets-comment-author">${escapeHtml(commentAuthorName(comment))}</span>
+                    <span class="tickets-comment-date">${escapeHtml(formatCommentDate(commentDateRaw(comment)))}</span>
+                    <div class="tickets-comment-body">${escapeHtml(commentBodyText(comment)).replace(/\n/g, '<br>')}</div>
                 </div>
             `).join('');
         }
@@ -7825,9 +7842,9 @@ Instructions:
             contentHtml += '<h3>Comments</h3>';
             contentHtml += selectedLinearIssue.comments.map(comment => `
                 <div class="tickets-comment-item">
-                    <span class="tickets-comment-author">${escapeHtml(comment.user?.name || comment.user?.email || 'Unknown')}</span>
-                    <span class="tickets-comment-date">${escapeHtml(comment.createdAt ? comment.createdAt.slice(0, 10) : '')}</span>
-                    <div class="tickets-comment-body">${escapeHtml(comment.body || '').replace(/\n/g, '<br>')}</div>
+                    <span class="tickets-comment-author">${escapeHtml(commentAuthorName(comment))}</span>
+                    <span class="tickets-comment-date">${escapeHtml(formatCommentDate(commentDateRaw(comment)))}</span>
+                    <div class="tickets-comment-body">${escapeHtml(commentBodyText(comment)).replace(/\n/g, '<br>')}</div>
                 </div>
             `).join('');
         }
@@ -8302,9 +8319,9 @@ Instructions:
             contentHtml += '<h3>Comments</h3>';
             contentHtml += selectedClickUpIssue.comments.map(comment => `
                 <div class="tickets-comment-item">
-                    <span class="tickets-comment-author">${escapeHtml(comment.user?.name || comment.user?.email || 'Unknown')}</span>
-                    <span class="tickets-comment-date">${escapeHtml(comment.createdAt ? comment.createdAt.slice(0, 10) : '')}</span>
-                    <div class="tickets-comment-body">${escapeHtml(comment.body || '').replace(/\n/g, '<br>')}</div>
+                    <span class="tickets-comment-author">${escapeHtml(commentAuthorName(comment))}</span>
+                    <span class="tickets-comment-date">${escapeHtml(formatCommentDate(commentDateRaw(comment)))}</span>
+                    <div class="tickets-comment-body">${escapeHtml(commentBodyText(comment)).replace(/\n/g, '<br>')}</div>
                 </div>
             `).join('');
         }

@@ -11,7 +11,7 @@ Root cause / source of the label:
   ```
   The visible text is the static node text `Import all to kanban`. The `title` tooltip is a *different* phrasing ("Import all tickets as Switchboard plans") — see Edge-Case audit for the decision on it.
 
-Confirmed that the label is **never set dynamically** in JS — `src/webview/planning.js` only toggles `style.display` and `disabled` on this button (lines 7620, 7879, 6577, 6604, 3927–3929); it never assigns `textContent`/`innerHTML`. So the static HTML text is the single source of truth for the visible label.
+Confirmed that the label is **never set dynamically** in JS — `src/webview/planning.js` only toggles `style.display` and `disabled` on this button (lines 7635, 7894, 6596, 6623, 3939–3943); it never assigns `textContent`/`innerHTML`. So the static HTML text is the single source of truth for the visible label.
 
 The "Add to Kanban" verb already exists in sibling UI, which is the consistency target:
 - `src/webview/project.html:1363` — label "Add to Kanban board"
@@ -38,8 +38,8 @@ So renaming this button to "Add all to Kanban" aligns the bulk action with the p
 
 ## Edge-Case & Dependency Audit
 
-- **Element id stays the same.** `id="tickets-import-all-kanban"` is referenced in `planning.js` at lines 992, 3927, 7619, 7878 and in the comment at `planning.html:377`. Do NOT change the id — only the human-visible text node changes.
-- **Message/command name stays the same.** The click handler (`planning.js:6589`) posts `{ type: 'importAllTickets', ... }` (also lines 4494, 4670, 6580, 6607). This is the backend contract — leave it as `importAllTickets`. No backend/migration impact; this is purely a label string.
+- **Element id stays the same.** `id="tickets-import-all-kanban"` is referenced in `planning.js` at lines 1014, 3939, 3943, 7635, 7894 and in the comment at `planning.html:377`. Do NOT change the id — only the human-visible text node changes.
+- **Message/command name stays the same.** The click handler (`planning.js:6596`) posts `{ type: 'importAllTickets', ... }` (also lines 4510, 4686, 6596, 6623). This is the backend contract — leave it as `importAllTickets`. No backend/migration impact; this is purely a label string.
 - **No persisted/shipped state.** A button label is not stored anywhere (no DB `config`, no settings). No migration concerns despite the ~4,000-install base — this is display text only.
 - **Dynamic text:** none. Verified `planning.js` never assigns `textContent`/`innerHTML` to this button, so the static HTML is the only label. No "Importing…"-style progress relabel exists for this button.
 - **`title` tooltip:** currently "Import all tickets as Switchboard plans" — a separate phrasing from the visible label. Confirmed in scope: update the tooltip to **"Add all tickets to the Kanban board"** so the hover text matches the new "Add … to Kanban" verb and no longer says "Import". This keeps button + tooltip consistent. (The id and message name remain unchanged.)
@@ -92,10 +92,48 @@ No changes to `project.html` / `setup.html` (they already use "Add to Kanban").
    ```
 3. Confirm the wiring is intact (id + message name unchanged):
    ```bash
-   grep -n "tickets-import-all-kanban" src/webview/planning.js   # expect lines 992/3927/7619/7878 unchanged
-   grep -n "importAllTickets" src/webview/planning.js            # expect message type unchanged (4494/4670/6580/6607)
+   grep -n "tickets-import-all-kanban" src/webview/planning.js   # expect lines 1014/3939/3943/7635/7894 unchanged
+   grep -n "importAllTickets" src/webview/planning.js            # expect message type unchanged (4510/4686/6596/6623)
    ```
-4. Manual smoke test via installed VSIX in the Planning panel → Tickets tab: load a Linear or ClickUp project so the button shows (`planning.js:7620` / `7879` toggle `display`), confirm it reads **"Add all to Kanban"**, hover shows the new tooltip, and clicking still performs the bulk add (posts `importAllTickets`).
+4. Manual smoke test via installed VSIX in the Planning panel → Tickets tab: load a Linear or ClickUp project so the button shows (`planning.js:7635` / `7894` toggle `display`), confirm it reads **"Add all to Kanban"**, hover shows the new tooltip, and clicking still performs the bulk add (posts `importAllTickets`).
 
 ## Recommendation
 Complexity 1 → **Send to Intern**.
+
+---
+
+## Review Pass (2026-06-23)
+
+### Stage 1 — Adversarial Findings
+| Severity | Finding |
+|---|---|
+| NIT | Plan body cited stale `planning.js` line numbers (id: 992/3927/7619/7878; message: 4494/4670/6580/6607; handler: 6589; display toggles: 7620/7879) that did not match the actual file (id: 1014/3939/3943/7635/7894; message: 4510/4686/6596/6623; handler: 6596; display toggles: 7635/7894). This contradicted the plan's own "all line numbers re-verified" claim in Adversarial Synthesis. Informational only — did not mislead the implementer; the edit landed correctly. |
+
+No CRITICAL or MAJOR code findings. The code change matches the spec exactly.
+
+### Stage 2 — Balanced Synthesis
+- **Keep:** Code change is correct and complete (visible label, tooltip, id, class, style, message contract all match spec).
+- **Fix now:** Updated stale `planning.js` line citations in the plan body (Root Cause line 14, Edge-Case Audit lines 41–42, Verification Plan lines 95–98) to reflect actual line numbers.
+- **Defer:** Nothing — closed complexity-1 change.
+
+### Code Fixes Applied
+- None required. The implementation in `src/webview/planning.html:3561` was already correct.
+
+### Plan Fixes Applied
+- Corrected stale `planning.js` line-number citations in three sections of this plan file to match the actual file contents (see Stage 2).
+
+### Files Changed
+- `src/webview/planning.html:3561` — visible label `Import all to kanban` → `Add all to Kanban`; tooltip `Import all tickets as Switchboard plans` → `Add all tickets to the Kanban board`. (Pre-existing implementation; confirmed correct during this review.)
+- `.switchboard/plans/feature_plan_20260623140200_rename-add-all-to-kanban.md` — stale line citations corrected; this Review Pass section appended.
+
+### Validation Results (source-only; no compile, no tests per session directives)
+1. `grep -rn "Import all to kanban" src/` → **0 matches** ✓
+2. `grep -rn "Import all tickets as Switchboard plans" src/` → **0 matches** ✓
+3. `grep -n "Add all to Kanban" src/webview/planning.html` → **line 3561** ✓
+4. `grep -n "tickets-import-all-kanban" src/webview/planning.js` → lines 1014, 3939, 3943, 7635, 7894 (id intact) ✓
+5. `grep -n "importAllTickets" src/webview/planning.js` → lines 3939, 4510, 4686, 6596, 6623, 8678 (message type intact) ✓
+6. Sibling UI consistency confirmed: `project.html:1363` "Add to Kanban board"; `setup.html:721` & `:925` "Add to Kanban" help text — all unchanged and consistent with the new label. ✓
+7. No `textContent`/`innerHTML` assignment to `#tickets-import-all-kanban` found in `planning.js` — static HTML remains the single source of truth. ✓
+
+### Remaining Risks
+- None material. The only residual item is the manual VSIX smoke test (Verification Plan step 4), which cannot be executed in this session and is left for the user.

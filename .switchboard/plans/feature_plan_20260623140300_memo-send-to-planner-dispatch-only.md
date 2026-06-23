@@ -27,15 +27,19 @@ The memo was relocated from a Kanban modal (`kanban.html` + `KanbanProvider.ts`)
 ## Metadata
 
 **Complexity:** 2/10
-**Tags:** memo, planner-dispatch, ui-copy, consistency
+**Tags:** bugfix, ui, ux
+
+## User Review Required
+
+No — this is a pure behavior-consistency fix with no schema, migration, or product-scope impact. The change narrows a side-effect (clipboard write) to the correct action and preserves the failure fallback. Safe to proceed directly to implementation.
 
 ## Complexity Audit
 
 ### Routine
 - Scoping the clipboard write to the `copy` action (move one line inside a conditional + add failure fallback for `send`).
-- Rebuild via `npm run compile`.
+- Single-file change (`TaskViewerProvider.ts`); no webview/HTML edit required.
 
-### Complex/Risky
+### Complex / Risky
 - None. No state/schema changes, no persisted format changes, no migrations. The behavior change is purely which side-effect runs for the `send` button; nothing on disk changes.
 
 ## Edge-Case & Dependency Audit
@@ -47,6 +51,29 @@ The memo was relocated from a Kanban modal (`kanban.html` + `KanbanProvider.ts`)
 5. **No entries case unchanged** (`src/services/TaskViewerProvider.ts:9253-9258`) — returns early before any clipboard/dispatch.
 6. **No confirmation dialogs** are added or present. (Per repo rule.)
 7. **No webview rebuild required for the logic fix** — only `TaskViewerProvider.ts` changes. The intro text in `implementation.html` is already correct and needs no edit.
+
+### Race Conditions
+- None. The handler is sequential (`await` chain): build prompt → (copy | dispatch) → clear memo → post result. No concurrent access to the clipboard or memo file.
+
+### Security
+- None. No secrets, credentials, or sensitive data are involved. The prompt is built from user-entered memo entries and dispatched to a local terminal.
+
+### Side Effects
+- **Clipboard side-effect narrowed:** `send` success no longer overwrites the clipboard. This is the intended fix. The `copy` action and `send`-failure fallback retain their clipboard write.
+- **Memo file clear on success:** unchanged for both actions.
+- **Terminal focus:** `dispatchCustomPromptToRole` calls `vscode.commands.executeCommand('switchboard.focusTerminalByName', …)` (`:2516`) — unchanged.
+
+### Dependencies & Conflicts
+- Depends on the sidebar-tab relocation plan `feature_plan_20260623140600_memo-implementation-sidebar-tab.md` having landed (the handler must already be in `TaskViewerProvider.ts`, not `KanbanProvider.ts`). Verified: the handler is at `TaskViewerProvider.ts:9247-9282`.
+- No conflicts with other features — the `memoGeneratePrompt` handler is self-contained.
+
+## Dependencies
+
+- `feature_plan_20260623140600_memo-implementation-sidebar-tab.md` — Memo sidebar-tab relocation (handler moved from `KanbanProvider.ts` to `TaskViewerProvider.ts`). This plan retargets the clipboard fix to the new location.
+
+## Adversarial Synthesis
+
+Key risks: (1) the failure-fallback clipboard copy could be accidentally dropped if the `send` failure branch is refactored, breaking the "Prompt copied to clipboard" promise in the failure message; (2) a future third action value could bypass both the copy and dispatch branches. Mitigations: the failure-branch clipboard write is explicitly commented and tested in the verification plan; the action is normalized to `'send' | 'copy'` at line 9251, so no third value can reach the branch.
 
 ## Proposed Changes
 
@@ -89,13 +116,18 @@ The memo was relocated from a Kanban modal (`kanban.html` + `KanbanProvider.ts`)
 
 ## Verification Plan
 
-1. **Build:** `npm run compile` — confirm webpack builds `dist/` with no TypeScript errors.
-2. **Code inspection:** Confirm `src/services/TaskViewerProvider.ts` now writes the clipboard only in the `copy` branch and in the `send` failure branch — never on `send` success.
-3. **Manual — Copy Prompt:** Open the sidebar Memo tab, enter 2 entries, click **Copy Prompt**. Verify the clipboard contains the prompt and the status reads "Prompt for 2 issue(s) copied to clipboard. Memo cleared."
-4. **Manual — Send to Planner (success):** With a planner terminal assigned, enter entries, put unrelated text on the clipboard first, click **Send to Planner**. Verify: prompt is dispatched to the planner terminal, status reads "Sent 2 issue(s) to planner. Memo cleared.", and the clipboard still contains the unrelated text (i.e. it was NOT overwritten).
-5. **Manual — Send to Planner (failure fallback):** With no planner terminal assigned, click **Send to Planner**. Verify the error message fires, the memo is preserved, and the prompt IS on the clipboard (failure fallback intact) with status "Failed to send to planner. Prompt copied to clipboard. Memo preserved for retry."
-6. **No confirm dialogs** were introduced.
+### Automated Tests
+
+No automated tests required for this session. The test suite will be run separately by the user. (Per session directive: skip compilation and automated tests.)
+
+### Manual Verification
+
+1. **Code inspection:** Confirm `src/services/TaskViewerProvider.ts` now writes the clipboard only in the `copy` branch and in the `send` failure branch — never on `send` success.
+2. **Manual — Copy Prompt:** Open the sidebar Memo tab, enter 2 entries, click **Copy Prompt**. Verify the clipboard contains the prompt and the status reads "Prompt for 2 issue(s) copied to clipboard. Memo cleared."
+3. **Manual — Send to Planner (success):** With a planner terminal assigned, enter entries, put unrelated text on the clipboard first, click **Send to Planner**. Verify: prompt is dispatched to the planner terminal, status reads "Sent 2 issue(s) to planner. Memo cleared.", and the clipboard still contains the unrelated text (i.e. it was NOT overwritten).
+4. **Manual — Send to Planner (failure fallback):** With no planner terminal assigned, click **Send to Planner**. Verify the error message fires, the memo is preserved, and the prompt IS on the clipboard (failure fallback intact) with status "Failed to send to planner. Prompt copied to clipboard. Memo preserved for retry."
+5. **No confirm dialogs** were introduced.
 
 ---
 
-**Recommendation:** Complexity 2/10 → **Send to Lead Coder.**
+**Recommendation:** Complexity 2/10 → **Send to Intern.**
