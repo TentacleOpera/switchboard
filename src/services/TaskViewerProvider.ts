@@ -784,6 +784,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         const effectiveRoot = resolveEffectiveWorkspaceRootFromMappings(workspaceRoot);
         const cacheService = this._getCacheService(effectiveRoot);
+        const allRoots = this._filterMappedRoots(this._getWorkspaceRoots());
 
         this._localApiServer = new LocalApiServer({
             workspaceRoot: effectiveRoot,
@@ -794,18 +795,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             getAuthToken: async () => {
                 // Retrieve from VS Code SecretStorage - returns empty string if not set
                 return await this._context.secrets.get('switchboard.apiToken') || '';
-            }
+            },
+            allRoots: allRoots
         });
 
         try {
             const port = await this._localApiServer.start();
             // Write port file to ALL workspace roots (excluding mapped children) so agents in any folder can discover it
-            const allRoots = this._filterMappedRoots(this._getWorkspaceRoots());
             for (const root of allRoots) {
                 const portFilePath = path.join(root, '.switchboard', 'api-server-port.txt');
+                const tempFilePath = portFilePath + '.tmp';
                 try {
                     await fs.promises.mkdir(path.dirname(portFilePath), { recursive: true });
-                    await fs.promises.writeFile(portFilePath, port.toString(), 'utf8');
+                    await fs.promises.writeFile(tempFilePath, port.toString(), 'utf8');
+                    await fs.promises.rename(tempFilePath, portFilePath);
                 } catch (writeErr) {
                     console.warn(`[TaskViewerProvider] Failed to write port file to ${root}:`, writeErr);
                 }
@@ -820,6 +823,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      */
     private async _stopLocalApiServer(): Promise<void> {
         if (this._localApiServer) {
+            try {
+                const allRoots = this._filterMappedRoots(this._getWorkspaceRoots());
+                for (const root of allRoots) {
+                    const portFilePath = path.join(root, '.switchboard', 'api-server-port.txt');
+                    await fs.promises.unlink(portFilePath).catch(() => {});
+                }
+            } catch (err) {
+                console.warn('[TaskViewerProvider] Failed to clean up port files on stop:', err);
+            }
             await this._localApiServer.stop();
             this._localApiServer = null;
         }

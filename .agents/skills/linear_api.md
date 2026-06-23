@@ -11,15 +11,10 @@ description: Make direct Linear GraphQL API calls via LocalApiServer proxy
 ## Usage
 ```bash
 CUR="$PWD"
-while [ "$CUR" != "/" ] && [ ! -f "$CUR/.switchboard/api-server-port.txt" ]; do CUR=$(dirname "$CUR"); done
-PORT=$(cat "$CUR/.switchboard/api-server-port.txt" 2>/dev/null)
+while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
+source "$CUR/.agents/skills/_lib/sb_api_call.sh"
 
-if [ -z "$PORT" ]; then
-    echo '{"error": "LocalApiServer not running"}' >&2
-    exit 1
-fi
-
-curl -s -X POST http://localhost:$PORT/api/linear \
+sb_api_call POST /api/linear \
   -H "Content-Type: application/json" \
   -d '{
     "query": "query { issues(first: 10) { nodes { id title } } }"

@@ -13,19 +13,14 @@ description: Fetch ClickUp tasks/lists with automatic name resolution
 ### Resolve name to ID:
 ```bash
 CUR="$PWD"
-while [ "$CUR" != "/" ] && [ ! -f "$CUR/.switchboard/api-server-port.txt" ]; do CUR=$(dirname "$CUR"); done
-PORT=$(cat "$CUR/.switchboard/api-server-port.txt" 2>/dev/null)
-
-if [ -z "$PORT" ]; then
-    echo '{"error": "LocalApiServer not running"}' >&2
-    exit 1
-fi
+while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
+source "$CUR/.agents/skills/_lib/sb_api_call.sh"
 
 # Resolve a task name
-curl -s http://localhost:$PORT/resolve/clickup/name/My%20Task%20Name
+sb_api_call GET "/resolve/clickup/name/My%20Task%20Name"
 
 # Resolve a list name
-curl -s http://localhost:$PORT/resolve/clickup/name/My%20List%20Name
+sb_api_call GET "/resolve/clickup/name/My%20List%20Name"
 ```
 
 ## Response

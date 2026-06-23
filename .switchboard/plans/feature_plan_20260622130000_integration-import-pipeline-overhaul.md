@@ -48,7 +48,7 @@ The pipeline is: API fetch → write stub `.md` file → `GlobalPlanWatcherServi
 
 #### A. Cards are orphaned — no round-trip sync possible
 
-The real-time watcher (`GlobalPlanWatcherService._handlePlanFile`, `GlobalPlanWatcherService.ts:497-520`) hardcodes `clickupTaskId: ''`, `linearIssueId: ''`, and `sourceType: 'local'` for every new plan. This means:
+The real-time watcher (`GlobalPlanWatcherService._handlePlanFile`, `GlobalPlanWatcherService.ts:497-520`) hardcodes `clickupTaskId: ''` (line 518), `linearIssueId: ''` (line 519), and `sourceType: 'local'` (line 512) for every new plan. This means:
 
 - Cards have **no link back** to the source ticket
 - Agents can't update the original bug because the DB doesn't know which ticket the card came from
@@ -60,7 +60,7 @@ The ClickUp side is slightly better — the stub writes `> **ClickUp Task ID:** 
 
 #### B. Stub files discard useful context
 
-The Linear GraphQL query (`LinearSyncService.ts:1940-1951`) fetches comments, attachments, estimate, createdAt, project name, cycle, and sub-issues — then throws them all away. Only title, description, URL, priority, state, assignee, labels, dueDate, and parent are written to the stub.
+The Linear GraphQL query in `importIssuesFromLinear` (`LinearSyncService.ts:2170-2193`) fetches comments, attachments, estimate, createdAt, project name, cycle, and sub-issues (children) — then throws them all away. Only title, description, URL, priority, state, assignee, labels, dueDate, and parent are written to the stub. *(Note: both batch import and auto-pull use `importIssuesFromLinear` — confirmed via `KanbanProvider.ts:1636` — so comments are available in both paths.)*
 
 For a triage pipeline, **comments are the most valuable data** — they contain the bug report context that an agent needs to assess severity and write a response. Without them, the planner agent sees a title and maybe a description.
 
@@ -77,7 +77,7 @@ Enabling the import pipeline currently requires:
 - Setting up a separate kanban project board
 - Configuring custom agents with MCP servers
 
-A product manager who just wants "sync my bugs in" should not need to understand what `completeSyncEnabled` does (especially since it's a no-op — no code reads it). The existing `completeSyncEnabled` flag is persisted, shown in the UI, but never checked by `LinearSyncService.syncPlan()` (`LinearSyncService.ts:1595`) or `ClickUpSyncService.syncPlan()` (`ClickUpSyncService.ts:2113`).
+A product manager who just wants "sync my bugs in" should not need to understand what `completeSyncEnabled` does (especially since it's a no-op — no code reads it). The existing `completeSyncEnabled` flag is persisted, shown in the UI, but never checked by `LinearSyncService.syncPlan()` (`LinearSyncService.ts:1832`) or `ClickUpSyncService.syncPlan()` (`ClickUpSyncService.ts:2424`).
 
 #### D. The remote-control loop has no inbound comment path
 
@@ -112,15 +112,15 @@ The feature was designed as "full ClickUp/Linear automation" but shipped as a ha
 7. **Remote Control transport: poll only, no webhooks (§7/§9)** — The extension polls the Linear API on a ~60–90s timer; it never receives webhooks. Webhooks would require a public endpoint (tunnel/relay) for a locally-running extension, which defeats the zero-setup goal. Webhooks are explicitly deferred as a future optimization.
 8. **Remote Control surface & model (§10)** — Operates on the user's **selected existing board(s)**, not a separate board. Two independent mechanisms: **sync** (boards mirrored with Linear) and **ping** (the active poll loop that adds agent dispatch + comment routing). A **config-only "Remote" tab** in `kanban.html` holds the settings: boards-to-sync, **silent syncing** (stay synced even when ping is off), **ping mode** (Constant vs Manual), and **ping frequency** (30s–2min). No column→agent mapping — dispatch reuses the existing automation routing. A **board-toolbar toggle** next to `#btn-autoban` (reusing the Jules icon `{{ICON_28}}`) starts/stops pinging in Manual mode; on manual start, if silent sync is off, it runs a one-time reconciling sync first. Local and remote interaction are concurrent (work at desk → drive from phone at lunch → return).
 9. **Comment posting: host-side `postComment`, agent reaches it via the robust bridge — not direct API from the agent, not MCP (§8/§11)** — `postComment` runs in the extension host (which holds the SecretStorage token), makes the authenticated API call, and stamps the `<!-- switchboard -->` marker. The host calls it inline when host-driven; **agents reach it through the `LocalApiServer` bridge** (`curl localhost/comment`), because a CLI agent has no token and the token must stay in the host (security — no tokens to disk/env). **This plan depends on `feature_plan_20260623120000_localapiserver-bridge-robustness`** to make that bridge reliable; it does NOT abandon the local server (the earlier "direct API, rip out the server" framing was wrong — the server is architecturally required for token isolation). MCP rejected (uneven CLI-agent support; OAuth Linear MCP awkward headlessly).
-10. **Sync-mode question directive (§11)** — While a board is under remote control, `agentPromptBuilder` injects a directive into **all** role prompts telling agents to surface user-facing questions as issue comments (via the `post-comment` skill, which posts through the robust bridge) rather than waiting on terminal input. Gated on remote control being active; normal dispatch is unchanged.
+10. **Sync-mode question directive (§11)** — While a board is under remote control, `agentPromptBuilder` injects a directive into **all** role prompts telling agents to surface user-facing questions as issue comments (via the existing **`linear_api` skill**, which posts through the robust bridge) rather than waiting on terminal input. Gated on remote control being active; normal dispatch is unchanged. No new skill — comment-posting is a capability of `linear_api` (and `clickup_api`), which the agent already reaches for.
 
 ## Complexity Audit
 
 ### Routine
-- Adding `> **Linear Issue ID:** <uuid>` line to Linear stub metaLines (`LinearSyncService.ts:2029-2038`)
-- Changing `> **Labels:**` to `> **Tags:**` in Linear stub writer (`LinearSyncService.ts:2036`)
+- Adding `> **Linear Issue ID:** <uuid>` line to Linear stub metaLines (`LinearSyncService.ts:2266-2275`)
+- Changing `> **Labels:**` to `> **Tags:**` in Linear stub writer (`LinearSyncService.ts:2273`)
 - Adding `kanbanColumn: BACKLOG` directive to stubs for backlog-state items
-- Removing dead `kanbanColumn` variable (`LinearSyncService.ts:2021`) by wiring it up
+- Removing dead `kanbanColumn` variable (`LinearSyncService.ts:2258`) by wiring it up
 
 ### Complex / Risky
 - **Provider ID extraction in watcher (Medium):** Moving `extractClickUpTaskId` / `extractLinearIssueId` to shared utility and calling from `GlobalPlanWatcherService._handlePlanFile`. New `sourceType` logic independent of `automationRuleName`.
@@ -130,7 +130,7 @@ The feature was designed as "full ClickUp/Linear automation" but shipped as a ha
 - **`completeSyncEnabled` wiring (Medium):** Gating `syncPlan()` when target column is DONE/completed. Must distinguish automatic sync (gate it) from manual dispatch (don't gate it).
 - **Inbound comment ingestion + routing (High — §7, Linear only, poll-based):** Periodic poll, per-card last-comment cursor, self-comment filtering, and dispatch to the current column's agent. The dispatch-to-column-agent linkage is the riskiest coupling: it reuses the automation dispatch path but is triggered by a comment rather than a card move. Per-card sequential queue needed to avoid concurrent agent runs on one plan.
 - **Comment write-back channel (Medium — §8):** Host-side `postComment` (extension holds token) makes the authenticated API call (Linear GraphQL `commentCreate` / ClickUp REST) and stamps the self-marker + truncation. Reached inline by host code, or by agents via the `LocalApiServer` bridge `/comment` route. **Depends on `feature_plan_20260623120000_localapiserver-bridge-robustness`** for transport reliability — do not re-solve it here. Dual-provider; shared by triage (§6), agent replies (§7/§9), sync-mode directive (§11).
-- **Sync-mode question directive (Medium — §11):** Inject a directive into all role prompts (gated on remote control active) telling agents to surface user-facing questions as comments via the `post-comment` skill, which posts through the robust bridge (token + marker host-side). Touches `agentPromptBuilder.ts`; the skill builds on the bridge plan's `sb_api_call` helper.
+- **Sync-mode question directive (Medium — §11):** Inject a directive into all role prompts (gated on remote control active) telling agents to surface user-facing questions as comments via the existing `linear_api` skill (which posts through the robust bridge; token + marker host-side). Touches `agentPromptBuilder.ts` and extends `linear_api`/`clickup_api` with a comment-post capability — no new skill file.
 - **State → column dispatch mirror (High — §9, Linear only):** Poll-detected state-change must trigger the same dispatch a manual drag does, while guarding against an echo loop with outbound status write-back (§4). Getting the echo guard wrong causes infinite sync churn.
 - **Remote Control surface (Medium-High — §10, Linear only):** A board-toolbar start/stop toggle next to `#btn-autoban` (reusing the Jules icon) plus a config-only "Remote" tab. The real complexity is the **sync-vs-ping separation**: silent-sync ON keeps boards mirrored while ping is off; Manual ping start with silent-sync OFF must run a reconciling sync *before* the ping loop; Constant mode keeps ping always on. Operates on selected existing board(s), reusing the existing column↔state mapping. Local + remote concurrency must not fight (echo guards, §9). Touches `kanban.html` and `KanbanProvider.ts`.
 
@@ -148,7 +148,10 @@ The feature was designed as "full ClickUp/Linear automation" but shipped as a ha
 
 ### Side Effects
 - **Stub file size increase:** Comments/attachments make stubs larger. Hard cap (20 comments, 2000 chars) limits this to ~50KB worst case.
-- **`completeSyncEnabled` behavioral change for ClickUp:** ClickUp defaults to `false`. Wiring it up means existing ClickUp users will see DONE-column syncs suppressed unless they check the box. This matches the UI label intent but is a silent behavioral change for anyone who relied on unconditional sync.
+- **`completeSyncEnabled` behavioral change for ClickUp:** ClickUp's config loader currently coerces `undefined` → `false`. Wiring up the flag without migrating would silently suppress DONE-column syncs for existing users who never touched the checkbox. **Resolution:** migrate `undefined` → `true` in the config loader to preserve the effective unconditional-sync behavior. New presets explicitly set `true`. See §4 migration note.
+- **`ticket_updater` mode collapse — silent behavior change:** Users who configured `refine-ticket` or `research-and-refine` modes lose that behavior. Mitigated by a one-time console warning on load (see "Repurpose the `ticket_updater` role" — behavioral change warning). Not a UI dialog (per the no-confirm-dialogs rule).
+- **In-memory queue volatility (§7):** Extension reload mid-queue loses queued comments. Mitigated by not advancing the `lastSyncedCommentAt` cursor until dispatch completes — the next poll re-fetches the lost comment. Accepted as a v1 limitation.
+- **Echo-guard TTL expiry (§9):** If the extension is offline longer than the echo-guard TTL (5 min), the first poll after restart may echo a locally-pushed state change as a redundant dispatch. Self-correcting (no infinite loop). Accepted as a rare edge case.
 
 ### Dependencies & Conflicts
 - `extractClickUpTaskId` / `extractLinearIssueId` are module-private in `PlanFileImporter.ts`. Must export or move to `planMetadataUtils.ts`.
@@ -157,13 +160,14 @@ The feature was designed as "full ClickUp/Linear automation" but shipped as a ha
 
 ## Dependencies
 
-- **Blocking for all agent-side comment posting: `feature_plan_20260623120000_localapiserver-bridge-robustness`.** Triage write-back (§6), agent replies (§7/§9), and the sync-mode question directive (§11) all post through the `LocalApiServer` bridge (agent → host → SecretStorage token → provider API). That bridge is "almost always down" today; the bridge-robustness plan makes it reliable (health-gated discovery + retry + workspace-identity). The comment-posting features here are only as dependable as that bridge — sequence the bridge plan first, or land them together. This plan adds the host `/comment` route + `postComment` and the `post-comment` skill; it does **not** re-solve transport.
+- **Blocking for all agent-side comment posting: `feature_plan_20260623120000_localapiserver-bridge-robustness`.** Triage write-back (§6), agent replies (§7/§9), and the sync-mode question directive (§11) all post through the `LocalApiServer` bridge (agent → host → SecretStorage token → provider API). That bridge is "almost always down" today; the bridge-robustness plan makes it reliable (health-gated discovery + retry + workspace-identity). The comment-posting features here are only as dependable as that bridge — sequence the bridge plan first, or land them together. This plan adds the host `/comment` route + `postComment` and a comment-posting capability in the existing `linear_api`/`clickup_api` skills (no new skill file); it does **not** re-solve transport.
 - Host-driven posting paths (where the extension itself calls `postComment`) do not need the bridge — only agent-initiated posts do.
-- Decision on `completeSyncEnabled` (wire up vs. remove) should be made before implementation. (Resolved: wire up, default ON.)
+- Decision on `completeSyncEnabled` (wire up vs. remove) should be made before implementation. (Resolved: wire up, default ON; migrate existing `undefined` → `true` for ClickUp to preserve effective behavior.)
+- **DB schema migration for `lastSyncedCommentAt` (§7):** Adding a `lastSyncedCommentAt TEXT` column to the plans table is a non-destructive additive migration via `ensureReady()` schema-version bump. Must be implemented before the inbound comment poll can work. This is a self-contained migration within this plan — no external dependency.
 
 ## Adversarial Synthesis
 
-**Risk Summary:** The highest-risk items are now the two loop-closing mechanisms in Remote Control: **inbound comment ingestion → column-agent dispatch (§7)** and the **state→column dispatch mirror (§9)**. Both create cycles that, done wrong, cause runaway agent runs or infinite sync churn. They are mitigated by (a) the hidden self-comment marker, (b) a per-card last-pushed-state guard against echo, and (c) a per-card sequential dispatch queue. These guards are the load-bearing parts of the plan and should be the focus of review and testing.
+**Risk Summary:** Key risks: (1) the two loop-closing mechanisms in Remote Control — inbound comment ingestion → column-agent dispatch (§7) and state→column dispatch mirror (§9) — create cycles that can cause runaway agent runs or infinite sync churn if guards fail; (2) the self-comment marker (`<!-- switchboard -->`) is load-bearing and unverified against Linear's markdown renderer — a fallback text-prefix marker is specified; (3) the `completeSyncEnabled` ClickUp default and `ticket_updater` mode collapse are silent behavioral changes for existing ~4,000 installs — mitigated by config migration (`undefined` → `true`) and a one-time console warning; (4) the `lastSyncedCommentAt` DB column requires a schema migration on a shipped extension. Mitigations: self-marker + fallback, per-card echo guard with TTL, per-card sequential queue with cursor-not-advanced-until-dispatch, DB schema migration via `ensureReady()`, config migration for `completeSyncEnabled`, and console warning for `ticketUpdateMode` override.
 
 The triage one-click setup (§6) creates opinionated defaults (board, columns, automation rule routing to the simplified `ticket_updater`) that may not fit every team. Mitigation: everything is editable after creation, framed as a starting point. Remote Control (§10) adds no agent config of its own — it reuses existing automation routing — so there's less to get wrong.
 
@@ -179,15 +183,15 @@ The changes split into **shared plumbing** (§1–5, needed by both use cases) a
 
 **Why this matters:** Without provider IDs in the DB, the triage pipeline can't push results back to ClickUp/Linear. This is the #1 blocker.
 
-#### `src/services/LinearSyncService.ts` (stub writer, lines 2029-2046)
+#### `src/services/LinearSyncService.ts` (stub writer, lines 2266-2275)
 - Add `> **Linear Issue ID:** ${issue.id}` to the `metaLines` array after the `Imported from` line. Uses the UUID (`issue.id`), not the human identifier (`issue.identifier`).
 
 #### `src/services/planMetadataUtils.ts` (shared utility)
 - Move `extractClickUpTaskId`, `extractLinearIssueId`, and `extractEmbeddedMetadata` from `PlanFileImporter.ts` to here. Export them.
 - Update `PlanFileImporter.ts` to import from `planMetadataUtils` instead of defining locally.
 
-#### `src/services/GlobalPlanWatcherService.ts` (`_handlePlanFile`, lines 487-520)
-- After reading file content (line 487), call `extractClickUpTaskId(content)` and `extractLinearIssueId(content)`.
+#### `src/services/GlobalPlanWatcherService.ts` (`_handlePlanFile`, lines 497-520)
+- After reading file content (line 488), call `extractClickUpTaskId(content)` and `extractLinearIssueId(content)`.
 - Set `sourceType` based on provider ID presence:
   - ClickUp ID only → `'clickup-import'`
   - Linear ID only → `'linear-import'`
@@ -199,8 +203,8 @@ The changes split into **shared plumbing** (§1–5, needed by both use cases) a
 
 **Why this matters:** Comments are the bug report context that agents need for triage. Without them, the planner agent sees only a title and description.
 
-#### `src/services/LinearSyncService.ts` (stub assembly, lines 2040-2046)
-- After the description, append `## Comments` section (max 20 most recent, max 2000 chars per body, truncated with `*[truncated]*` marker).
+#### `src/services/LinearSyncService.ts` (stub assembly, lines 2277+)
+- After the description, append `## Comments` section (max 20 most recent, max 2000 chars per body, truncated with `*[truncated]*` marker). The rich query at lines 2170-2193 already fetches `comments { nodes { body user { name } createdAt } }` — this data is available but currently discarded.
 - After comments, append `## Attachments` section (list of `[title](url)` links).
 - Empty sections are omitted entirely.
 
@@ -208,7 +212,7 @@ The changes split into **shared plumbing** (§1–5, needed by both use cases) a
 
 **Why this matters:** Tags drive automation rules. Broken tag parsing means tag-based triage rules never match imported Linear tickets.
 
-#### `src/services/LinearSyncService.ts` (line 2036)
+#### `src/services/LinearSyncService.ts` (line 2273)
 - Change `> **Labels:** ${labels}` to `> **Tags:** ${labels}`.
 - Tags will pass through `sanitizeTags` on the DB side — only `ALLOWED_TAGS` values survive. Custom Linear labels are preserved in the plan file markdown but filtered from the DB tag field. This is intentional.
 
@@ -216,24 +220,26 @@ The changes split into **shared plumbing** (§1–5, needed by both use cases) a
 
 **Why this matters:** The UI checkbox promises "sync completed status" but does nothing. Users who uncheck it expect DONE-column moves to NOT push state changes to the provider.
 
-#### `src/services/LinearSyncService.ts` (`syncPlan()`, line 1595)
+#### `src/services/LinearSyncService.ts` (`syncPlan()`, line 1832)
 - After resolving `stateId` from column mapping, check: if `config.completeSyncEnabled === false` and `newColumn` is `DONE`/`COMPLETED`/`ARCHIVED` → skip the sync with a log message.
 
-#### `src/services/ClickUpSyncService.ts` (`syncPlan()`, line 2113)
+#### `src/services/ClickUpSyncService.ts` (`syncPlan()`, line 2424)
 - Same pattern: if `config.completeSyncEnabled === false` and `plan.kanbanColumn` is `DONE`/`COMPLETED`/`ARCHIVED` → return early with `skippedReason`.
 
 - **Leave manual dispatch (`changeTicketStatus`, `updateIssueState`) untouched** — those are explicit user actions that should always work.
+
+- **Migration (ClickUp default):** Existing ClickUp installs with `completeSyncEnabled` undefined or absent must be migrated to `true` to preserve the *effective* behavior (sync was unconditional before; wiring up the flag with a `false` default would silently suppress DONE-column syncs for existing users who never touched the checkbox). New presets explicitly set `true`. The config loader (`ClickUpSyncService.ts:295`, `raw.completeSyncEnabled === true`) currently coerces undefined → `false`; change this to coerce undefined → `true` for the migration, or add an explicit migration step in `loadConfig()`.
 
 ### 5. Wire up `kanbanColumn` directive in stubs
 
 **Why this matters:** When `excludeBacklog` is OFF and backlog items are imported, they should land in the BACKLOG column, not CREATED.
 
-#### `src/services/LinearSyncService.ts` (line 2021)
+#### `src/services/LinearSyncService.ts` (line 2258)
 - Keep the existing `kanbanColumn` variable (no longer dead code).
 - Add `kanbanColumn: ${kanbanColumn}` line to the stub, after the title and before the metadata block.
 - The parser at `planMetadataUtils.ts:57` already matches `kanbanColumn[:\s]+(\w+)`.
 
-#### `src/services/ClickUpSyncService.ts` (after line 2492)
+#### `src/services/ClickUpSyncService.ts` (stub writer area, after line 2485+)
 - Add equivalent: `const kanbanColumn = statusName === 'backlog' ? 'BACKLOG' : 'CREATED';`
 - Add `kanbanColumn: ${kanbanColumn}` to the ClickUp stub.
 
@@ -260,9 +266,10 @@ The changes split into **shared plumbing** (§1–5, needed by both use cases) a
 #### Remove the mode selector from the UI
 - Drop the `ticketUpdateMode` radio group from the addon UI (`sharedDefaults.js:184`) — there's nothing left to choose.
 - **Migration (the role shipped):** keep the `ticketUpdateMode` config key readable so old stored configs don't error (it has a `ticketUpdateEnabled → ticketUpdateMode` migration — see `agent-prompt-builder-ticket-updater-modes.test.js`); the value is simply ignored now since the agent always triages. Update/adjust that test to the single behavior.
+- **Behavioral change warning:** Users who configured `ticketUpdateMode: 'refine-ticket'` or `'research-and-refine'` (modes that rewrote ticket descriptions) will silently lose that behavior. On first load when `ticketUpdateMode` is present and not `'disabled'`/`'comment-only'`, log a one-time console warning: `"[Switchboard] ticketUpdateMode '${mode}' is no longer supported — the ticket_updater role now always performs triage-only verdicts."` This is not a UI dialog (per the no-confirm-dialogs rule); it's a diagnostic log so users investigating changed behavior can find the cause.
 
-#### `src/webview/kanban.html` (description map, line 3087)
-- Update the `ticket_updater` `roleDescriptions` entry to: *"Reads a ticket and posts a short triage verdict (severity, area, recommended action, auto/needs-human) back to ClickUp/Linear."* Optionally relabel the visible name to "Ticket Triager" — but keep the `ticket_updater` role id and config keys unchanged for migration.
+#### `src/webview/kanban.html` (description map, line 3088)
+- Update the `ticket_updater` description entry (currently `'Synchronizes plan state and comments back to connected project management systems (e.g. ClickUp/Linear).'`) to: *"Reads a ticket and posts a short triage verdict (severity, area, recommended action, auto/needs-human) back to ClickUp/Linear."* Optionally relabel the visible name to "Ticket Triager" — but keep the `ticket_updater` role id and config keys unchanged for migration.
 
 #### Relationship to Remote Control
 - This (now single-purpose) `ticket_updater` is the natural **default agent for the inbox/early column** in Remote Control (§10.3), since a freshly-posted issue wants triage before deeper work.
@@ -325,8 +332,11 @@ Keep the dispatch/comment abstractions in §7–9 from hard-coding Linear specif
 #### `src/services/LinearSyncService.ts` — comment poll
 - On a periodic timer (interval from the Remote tab, ~60–90s default), for each Linear-synced card on the Kanban, fetch comments **created after the last-seen timestamp** for that card and process new ones. No webhooks — the extension polls Linear outbound.
 - Track a per-card `lastSyncedCommentAt` (or last comment ID) in the DB so the same comment is never processed twice across poll cycles. Store on the plan record / `config` table — **not** a fictional state.json (see project rule).
+- **DB schema migration (shipped extension, ~4,000 installs):** The plans table does not currently have a `lastSyncedCommentAt` column. Add it via `ALTER TABLE plans ADD COLUMN lastSyncedCommentAt TEXT` in the `ensureReady()` schema-version upgrade path (the same pattern used for prior column additions). Default to `NULL` (meaning "never polled — fetch all comments on first poll"). Bump the schema version and run the migration idempotently. This is a non-destructive additive migration — existing rows are unaffected.
 - Ignore comments authored by Switchboard itself (tag outbound comments with a hidden marker, e.g. a trailing `<!-- switchboard -->` HTML comment, and skip any inbound comment containing it) to prevent self-feedback loops.
+- **Self-marker fallback:** The `<!-- switchboard -->` HTML comment is the primary marker, but its survival through Linear's markdown renderer is unverified. If implementation testing shows Linear strips HTML comments, fall back to a short text prefix marker (e.g., `[sb]` at the start of the comment body) that survives markdown rendering. The ingestion filter checks for either marker. Do not ship the feedback loop without verifying the marker survives.
 - Only poll while remote control is **started** (the board-toolbar toggle, §10) — not continuously. Stopping the toggle pauses the poll, bounding API usage and controlling when agents are phone-reachable.
+- **Per-poll card cap:** To bound API usage, cap the number of cards polled per cycle at 100. Cards beyond the cap are deferred to the next cycle (ordered by most-recent activity). At 60s intervals with 100 cards, that's ~100 comment-fetch calls/min — well within Linear's 1,500 req/min team-plan limit. Document the scaling ceiling: users syncing >100 active cards will see increased poll latency, not failures.
 
 #### Routing: comment → current column's agent
 - On a new inbound comment, look up the card's **current kanban column** and the **agent assigned to that column** (the same per-column agent the automation rules dispatch to).
@@ -336,6 +346,7 @@ Keep the dispatch/comment abstractions in §7–9 from hard-coding Linear specif
 #### Concurrency / ordering
 - Process inbound comments for a card sequentially (queue per card) so a rapid-fire "do X" then "actually do Y" can't run two agents on the same plan simultaneously.
 - A comment that arrives while the column agent is still working is queued, not dropped.
+- **Known limitation — queue is in-memory and volatile:** If the extension reloads (window reload, sleep/wake, crash) while a comment is queued or an agent is mid-run, the queued comment is lost. This is accepted as a v1 limitation; the companion bridge-robustness plan addresses reload resilience for the transport layer, and queue persistence can be added as a follow-up (e.g., persisting the queue to the DB and replaying on startup). The `lastSyncedCommentAt` cursor ensures the *next* poll cycle will re-fetch the lost comment if it hasn't been marked as processed — so the comment is delayed, not permanently lost, as long as the cursor wasn't advanced past it. **Do not advance the cursor until the comment has been dispatched (or explicitly skipped), not when it's merely fetched.**
 
 ### 8. Agent reply → ticket comment write-back (NEW — shared primitive)
 
@@ -345,6 +356,7 @@ Keep the dispatch/comment abstractions in §7–9 from hard-coding Linear specif
 
 #### `src/services/LinearSyncService.ts` (and ClickUp equivalent — for triage write-back)
 - Add a `postComment(providerId, body)` **host-side primitive** in the extension. It runs in the extension-host process (which holds the SecretStorage token), makes the authenticated provider API call (Linear GraphQL `commentCreate`; ClickUp REST `POST .../comment`) using the same API client `LinearSyncService` already uses for sync, and appends the `<!-- switchboard -->` marker itself. It is the **shared write-back primitive** used by triage (§6), agent replies (§7/§9), and the sync-mode question directive (§11).
+- **Clarification — shared interface, dual implementation:** `postComment` is a common interface over two fundamentally different API shapes (Linear GraphQL vs ClickUp REST have different signatures, error shapes, rate limits, and comment body formats). The "shared primitive" is a thin abstraction — the Linear and ClickUp implementations are separate code paths behind a common function signature. Do not attempt to share API-client code between the two providers; share only the marker-stamping, truncation, and bridge-route logic.
 - **Two invocation paths — the agent never calls the provider API directly:**
   - **Host-driven:** extension code calls `postComment` inline (e.g. when the poll/sync logic itself needs to post).
   - **Agent-driven:** the agent reaches `postComment` through the **`LocalApiServer` bridge** (agent → `curl localhost:<port>/comment` → host runs `postComment`). A CLI agent has no SecretStorage access and must not — the token stays in the host. This is the architecturally required path for any agent-initiated comment (triage verdict, §11 questions, §7 replies).
@@ -361,6 +373,7 @@ Keep the dispatch/comment abstractions in §7–9 from hard-coding Linear specif
 - On the same poll cycle, detect when a synced issue's **state has changed** since last seen and the new state maps to a different Switchboard column (via the existing column↔state mapping that Remote Control reuses, §10).
 - Apply the column move to the card, then **trigger the destination column's automation/agent dispatch** — the same dispatch path a manual board drag triggers, so behavior is identical whether the move came from Linear or from a drag.
 - This is one-directional inbound (Linear → Switchboard) for *moves*. Outbound status write-back (§4) still handles Switchboard → Linear when a human drags the card locally; guard against an echo loop (don't re-apply a state we just pushed, and don't re-push a state we just pulled — track last-applied / last-pushed state per card).
+- **Echo-guard state persistence:** The last-applied / last-pushed state per card must survive extension reloads, or the first poll after a reload will echo a locally-pushed state change back as a phantom inbound move. Store this as an in-memory `Map<planId, { lastPushedState, lastAppliedState, timestamp }>` with a short TTL (e.g., 5 minutes) — long enough to bridge a typical reload gap but short enough to avoid stale guards blocking legitimate remote moves after a long offline period. The companion bridge-robustness plan's reload-recovery window is the reference for the TTL. If the TTL expires before the next poll, the guard is dropped and the first poll may echo once — this is accepted as a rare, self-correcting edge case (the echo causes a redundant dispatch, not an infinite loop, because the second poll sees no further state change). An alternative is a DB-persisted guard column, but the TTL approach avoids another schema migration for a rare edge case.
 
 ### 10. Remote Control: a board-toolbar toggle + a config tab (NEW)
 
@@ -404,13 +417,13 @@ Add a `shared-tab-btn` (label "REMOTE") + `shared-tab-content` panel, following 
 
 #### `src/services/agentPromptBuilder.ts` — inject a directive in sync mode
 - When the card being dispatched belongs to a board with **remote control active** (sync/ping on), inject a directive into the built prompt for **all roles** (planner, coder, lead, reviewer, triage, …), e.g.:
-  > *"You are running in remote mode — the user is not at the terminal. If you need to ask the user anything or report a blocker, post it as a comment on the linked issue using the `post-comment` skill; do not wait on terminal input. Continue with any work you can do without the answer."*
+  > *"You are running in remote mode — the user is not at the terminal. If you need to ask the user anything or report a blocker, post it as a comment on the linked issue using the `linear_api` skill; do not wait on terminal input. Continue with any work you can do without the answer."*
 - **Gating:** only injected when remote control is active for that card's board. Normal (non-remote) dispatch is unchanged — questions go to the terminal as today.
 - This composes with each role's existing prompt; it does not replace role behavior, it just redirects the question channel.
 
-#### How the agent posts — through the robust LocalApiServer bridge (token + marker stay host-side)
-- The agent posts via a `post-comment` skill that reaches the **host `/comment` route through the `LocalApiServer` bridge** — it does **not** make a direct API call (a CLI agent has no SecretStorage token) and does **not** use MCP. The host route runs §8's `postComment`, which holds the token and stamps the marker.
-- **This relies on the bridge being reliable**, owned by the companion plan `feature_plan_20260623120000_localapiserver-bridge-robustness` (health-gated discovery, retry across reload gaps, workspace-identity). The `post-comment` skill should build on that plan's hardened `sb_api_call` helper, not the old brittle discover-and-curl pattern.
+#### How the agent posts — the existing `linear_api` skill, through the robust LocalApiServer bridge (token + marker stay host-side)
+- Comment-posting is a capability of the existing **`linear_api` skill** (and `clickup_api` for ClickUp triage), not a new skill — the agent already knows to reach for `linear_api` when it needs to touch Linear. The skill reaches the **host `/comment` route through the `LocalApiServer` bridge** — it does **not** make a direct API call (a CLI agent has no SecretStorage token) and does **not** use MCP. The host route runs §8's `postComment`, which holds the token and stamps the marker.
+- **This relies on the bridge being reliable**, owned by the companion plan `feature_plan_20260623120000_localapiserver-bridge-robustness` (health-gated discovery, retry across reload gaps, workspace-identity). `linear_api` is already one of the 9 skills that plan hardens via the `sb_api_call` helper, so the comment-post capability inherits that robustness for free.
 - The agent resolves the issue ID from the plan/card metadata and passes it + the body to the skill; it never constructs API calls, handles tokens, or touches the marker — so it can't break the feedback-loop guard (§7) or hit the unreliable-server problem (once the bridge plan lands).
 - Because the marker is applied host-side, the agent's question comment is skipped by the ingestion poller; your reply (a fresh, unmarked comment) is what the next ping picks up and feeds back to the agent (§7) — closing the conversation loop.
 
@@ -431,11 +444,14 @@ Add a `shared-tab-btn` (label "REMOTE") + `shared-tab-content` panel, following 
 5. **`completeSyncEnabled` gating:** Verify `syncPlan()` skips DONE-column sync when flag is false. Verify manual `changeTicketStatus` is unaffected.
 6. **`kanbanColumn` directive:** Verify backlog-state items get `kanbanColumn: BACKLOG` in stubs and land in BACKLOG column on the board.
 7. **One-click triage setup:** Verify "Enable Triage Pipeline" creates project board, sets defaults, and creates automation rule.
-8. **Inbound comment routing (§7, Linear):** Verify a new comment found by the poll is routed to the agent of the card's current column and processed exactly once across poll cycles (last-comment cursor). Verify a comment containing the self-marker is skipped.
+8. **Inbound comment routing (§7, Linear):** Verify a new comment found by the poll is routed to the agent of the card's current column and processed exactly once across poll cycles (last-comment cursor). Verify a comment containing the self-marker (both `<!-- switchboard -->` and the `[sb]` text-prefix fallback) is skipped. Verify the `lastSyncedCommentAt` DB column is created via schema migration and defaults to `NULL`. Verify the cursor is NOT advanced until dispatch completes (simulating an extension reload mid-dispatch should cause the next poll to re-fetch the comment). Verify the per-poll card cap (100) defers excess cards to the next cycle.
 9. **Comment write-back (§8):** Verify host-side `postComment` makes the authenticated API call, stamps the self-marker, and truncates oversized output. Verify an agent-initiated post reaches it through the `LocalApiServer` bridge (not a direct call, not MCP) and that the token never leaves the host. Test both providers (triage write-back is dual-provider).
-9a. **Sync-mode question directive (§11):** Verify that when remote control is active, the prompt builder injects the "post questions as comments" directive into all role prompts (and does NOT inject it for non-remote dispatch). Verify an agent question reaches Linear as a marked comment via the bridge `post-comment` skill and does not stall waiting on the terminal.
+9a. **Sync-mode question directive (§11):** Verify that when remote control is active, the prompt builder injects the "post questions as comments" directive into all role prompts (and does NOT inject it for non-remote dispatch). Verify an agent question reaches Linear as a marked comment via the `linear_api` skill (over the bridge) and does not stall waiting on the terminal.
 10. **State→column dispatch (§9, Linear):** Verify a poll-detected state change moves the card and dispatches the destination column's agent; verify a locally-dragged card does NOT echo back as an inbound move.
 11. **Remote Control surface (§10, Linear):** Verify the config-only "Remote" tab persists boards-to-sync, silent-sync, ping mode, and ping frequency (30s–2min) — and that it does NOT define its own agent mapping (dispatch reuses existing automation routing). Verify Manual-mode toolbar toggle (Jules icon, next to `#btn-autoban`) starts/stops pinging, and that starting with silent-sync OFF runs a reconciling sync first. Verify silent-sync ON keeps boards mirrored after ping stops; silent-sync OFF stops reconciling. Verify Constant mode keeps ping always on. Verify local drags and inbound Linear moves don't echo-fight (concurrency). No separate board, no webhook/endpoint config.
+12. **`completeSyncEnabled` ClickUp migration:** Verify that existing ClickUp configs with `completeSyncEnabled` undefined are migrated to `true` (not `false`) on load, preserving the effective unconditional-sync behavior. Verify new presets explicitly set `true`.
+13. **`ticket_updater` mode collapse warning:** Verify that loading a config with `ticketUpdateMode: 'refine-ticket'` or `'research-and-refine'` logs a one-time console warning. Verify the warning is NOT shown for `'disabled'` or `'comment-only'` or absent mode. Verify the agent always performs triage-only behavior regardless of the stored mode value.
+14. **Echo-guard TTL (§9):** Verify that a locally-pushed state change is not re-applied as an inbound move within the TTL window. Verify that after the TTL expires, a matching inbound state is applied (the guard drops). Verify the echo causes a redundant dispatch, not an infinite loop.
 
 ### Manual Verification
 

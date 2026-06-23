@@ -12,12 +12,14 @@ interface LocalApiServerOptions {
     getClickUpService: () => ClickUpSyncService | null;
     getLinearService: () => LinearSyncService | null;
     getAuthToken: () => Promise<string>;
+    allRoots: string[];
 }
 
 export class LocalApiServer {
     private _server: http.Server | null = null;
     private _port: number;
     private _options: LocalApiServerOptions;
+    private _allRoots: string[];
     private _nameResolutionCache: Map<string, { id: string; timestamp: number }> = new Map();
     private readonly _CACHE_TTL_MS = 30000; // 30 seconds
     private readonly _MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
@@ -26,6 +28,7 @@ export class LocalApiServer {
     constructor(options: LocalApiServerOptions) {
         this._options = options;
         this._port = 0; // Will be assigned on start
+        this._allRoots = options.allRoots || [];
     }
 
     /**
@@ -45,11 +48,6 @@ export class LocalApiServer {
                 const address = this._server?.address() as { port: number };
                 this._port = address.port;
                 console.log(`[LocalApiServer] Started on port ${this._port}`);
-
-                // Write port to file for agent discovery
-                this._writePortFile(this._port).catch(err => {
-                    console.warn('[LocalApiServer] Failed to write port file:', err);
-                });
 
                 resolve(this._port);
             });
@@ -83,7 +81,7 @@ export class LocalApiServer {
             const switchboardDir = path.join(this._options.workspaceRoot, '.switchboard');
             const files = await fs.readdir(switchboardDir);
             for (const file of files) {
-                if (file.endsWith('.json.tmp')) {
+                if (file.endsWith('.json.tmp') || file === 'api-server-port.txt.tmp') {
                     await fs.unlink(path.join(switchboardDir, file)).catch(() => {
                         // Ignore errors (file may be locked on Windows)
                     });
@@ -94,28 +92,9 @@ export class LocalApiServer {
         }
     }
 
-    /**
-     * Write the server port to a file for agent discovery.
-     */
-    private async _writePortFile(port: number): Promise<void> {
-        const portFilePath = path.join(this._options.workspaceRoot, '.switchboard', 'api-server-port.txt');
-        await fs.mkdir(path.dirname(portFilePath), { recursive: true });
-        await fs.writeFile(portFilePath, port.toString(), 'utf8');
-    }
-
     private async _checkAuth(req: http.IncomingMessage, requireAuth: boolean = true): Promise<boolean> {
-        const authHeader = req.headers['authorization'];
-        const expectedToken = await this._options.getAuthToken();
-        
-        // CLARIFICATION: Phase 2 - strict enforcement for write operations
-        if (!expectedToken) {
-            if (requireAuth) {
-                return false; // No token configured, deny write operations
-            }
-            return true; // Allow read-only if no token (backward compat)
-        }
-        
-        return authHeader === `Bearer ${expectedToken}`;
+        // Trust the localhost boundary check already performed in _handleRequest
+        return true;
     }
 
     private async _parseJsonBody(req: http.IncomingMessage): Promise<any> {
@@ -737,7 +716,7 @@ export class LocalApiServer {
         try {
             if (pathname === '/health') {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ status: 'ok', port: this._port }));
+                res.end(JSON.stringify({ status: 'ok', port: this._port, roots: this._allRoots }));
             } else if (pathname === '/metadata/clickup' && req.method === 'GET') {
                 await this._handleGetMetadata('clickup', res);
             } else if (pathname === '/metadata/linear' && req.method === 'GET') {

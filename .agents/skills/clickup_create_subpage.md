@@ -15,18 +15,10 @@ description: Create doc pages in ClickUp via LocalApiServer
 ## Usage
 ```bash
 CUR="$PWD"
-while [ "$CUR" != "/" ] && [ ! -f "$CUR/.switchboard/api-server-port.txt" ]; do CUR=$(dirname "$CUR"); done
-PORT=$(cat "$CUR/.switchboard/api-server-port.txt" 2>/dev/null)
+while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
+source "$CUR/.agents/skills/_lib/sb_api_call.sh"
 
-if [ -z "$PORT" ]; then
-    echo '{"error": "LocalApiServer not running"}' >&2
-    exit 1
-fi
-
-TOKEN=$(curl -s http://localhost:$PORT/config/token 2>/dev/null || echo "")
-
-curl -s -X POST http://localhost:$PORT/doc/clickup \
-  -H "Authorization: Bearer $TOKEN" \
+sb_api_call POST /doc/clickup \
   -H "Content-Type: application/json" \
   -d '{
     "docId": "doc123456",

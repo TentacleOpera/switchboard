@@ -4365,7 +4365,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         function buildBoardSignature(cards) {
             if (!Array.isArray(cards) || cards.length === 0) return '';
             return cards
-                .map(card => `${card.workspaceRoot || ''}|${card.planId || card.sessionId || ''}|${card.column}|${card.topic || ''}|${card.planFile || ''}|${card.complexity || 'Unknown'}|${card.lastActivity || ''}|${card.isEpic ? '1' : '0'}|${card.subtaskCount || 0}`)
+                .map(card => `${card.workspaceRoot || ''}|${card.planId || card.sessionId || ''}|${card.column}|${card.topic || ''}|${card.planFile || ''}|${card.complexity || 'Unknown'}|${card.lastActivity || ''}|${card.isEpic ? '1' : '0'}|${card.subtaskCount || 0}|${card.epicId || ''}`)
                 .sort()
                 .join('||');
         }
@@ -5019,6 +5019,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     const cardId = card.planId || card.sessionId;
                     return cardId === currentFocusedEpicId || card.epicId === currentFocusedEpicId;
                 });
+            } else {
+                // Subtasks roll up into their epic card and are only surfaced when that
+                // epic is focused. Hide them from the main board so adding a subtask
+                // visibly removes it from the columns (and bumps the epic's count badge).
+                displayCards = displayCards.filter(card => !card.epicId);
             }
 
             displayCards.forEach(card => {
@@ -7034,8 +7039,23 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (subtaskList) subtaskList.innerHTML = '<li>Loading...</li>';
             const addSelect = document.getElementById('epic-manage-add-select');
             if (addSelect) {
-                const options = currentCards.filter(c => !c.isEpic && !c.epicId).map(c => `<option value="${escapeAttr(c.planId || c.sessionId)}">${escapeHtml(c.topic)}</option>`).join('');
-                addSelect.innerHTML = '<option value="">Add subtask...</option>' + options;
+                // Eligible subtasks: any plan that isn't itself an epic and isn't already
+                // attached to one. Group them under a subheader per column so the list is
+                // navigable instead of one flat dump of every card on the board.
+                const eligible = currentCards.filter(c => !c.isEpic && !c.epicId);
+                const optionFor = c => `<option value="${escapeAttr(c.planId || c.sessionId)}">${escapeHtml(c.topic)}</option>`;
+                const knownCols = new Set(columnDefinitions.map(d => d.id));
+                const groups = columnDefinitions.map(def => {
+                    const inCol = eligible.filter(c => (c.column || 'CREATED') === def.id);
+                    if (inCol.length === 0) return '';
+                    return `<optgroup label="${escapeAttr(def.label)}">${inCol.map(optionFor).join('')}</optgroup>`;
+                }).join('');
+                // Catch cards in columns not present in columnDefinitions (e.g. BACKLOG).
+                const otherCards = eligible.filter(c => !knownCols.has(c.column || 'CREATED'));
+                const otherGroup = otherCards.length
+                    ? `<optgroup label="Other">${otherCards.map(optionFor).join('')}</optgroup>`
+                    : '';
+                addSelect.innerHTML = '<option value="">Add subtask...</option>' + groups + otherGroup;
             }
             if (modal) modal.classList.remove('hidden');
             postKanbanMessage({ type: 'getEpicDetails', sessionId: epicCard.planId || epicCard.sessionId, workspaceRoot: epicCard.workspaceRoot, source: 'kanban' });

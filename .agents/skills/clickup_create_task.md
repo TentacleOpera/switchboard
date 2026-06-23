@@ -14,19 +14,10 @@ VS Code setting `switchboard.apiToken` must be configured with your API token.
 ## Usage
 ```bash
 CUR="$PWD"
-while [ "$CUR" != "/" ] && [ ! -f "$CUR/.switchboard/api-server-port.txt" ]; do CUR=$(dirname "$CUR"); done
-PORT=$(cat "$CUR/.switchboard/api-server-port.txt" 2>/dev/null)
+while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
+source "$CUR/.agents/skills/_lib/sb_api_call.sh"
 
-if [ -z "$PORT" ]; then
-    echo '{"error": "LocalApiServer not running"}' >&2
-    exit 1
-fi
-
-# Get token from VS Code SecretStorage
-TOKEN=$(curl -s http://localhost:$PORT/config/token 2>/dev/null || echo "")
-
-curl -s -X POST http://localhost:$PORT/task/clickup \
-  -H "Authorization: Bearer $TOKEN" \
+sb_api_call POST /task/clickup \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Task name",

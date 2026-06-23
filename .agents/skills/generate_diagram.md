@@ -15,19 +15,11 @@ description: Generate architectural diagrams via LocalApiServer
 ## Usage
 ```bash
 CUR="$PWD"
-while [ "$CUR" != "/" ] && [ ! -f "$CUR/.switchboard/api-server-port.txt" ]; do CUR=$(dirname "$CUR"); done
-PORT=$(cat "$CUR/.switchboard/api-server-port.txt" 2>/dev/null)
-
-if [ -z "$PORT" ]; then
-    echo '{"error": "LocalApiServer not running"}' >&2
-    exit 1
-fi
-
-TOKEN=$(curl -s http://localhost:$PORT/config/token 2>/dev/null || echo "")
+while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
+source "$CUR/.agents/skills/_lib/sb_api_call.sh"
 
 # Generate and upload to ClickUp task
-curl -s -X POST http://localhost:$PORT/diagram/generate \
-  -H "Authorization: Bearer $TOKEN" \
+sb_api_call POST /diagram/generate \
   -H "Content-Type: application/json" \
   -d '{
     "diagramType": "flowchart",

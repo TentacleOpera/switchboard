@@ -11,25 +11,25 @@ Use this skill to access ClickUp/Linear ticket data via the local API server (no
 
 ## How to Use
 
-### Step 1: Get API Server Port
+### Step 1: Source API Helper
 
-Read the port from `.switchboard/api-server-port.txt`:
+Source the API helper script:
 ```bash
 CUR="$PWD"
-while [ "$CUR" != "/" ] && [ ! -f "$CUR/.switchboard/api-server-port.txt" ]; do CUR=$(dirname "$CUR"); done
-PORT=$(cat "$CUR/.switchboard/api-server-port.txt" 2>/dev/null)
+while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
+source "$CUR/.agents/skills/_lib/sb_api_call.sh"
 ```
 
 ### Step 2: Get Metadata (List View)
 
 **ClickUp metadata:**
 ```bash
-curl http://localhost:$PORT/metadata/clickup
+sb_api_call GET /metadata/clickup
 ```
 
 **Linear metadata:**
 ```bash
-curl http://localhost:$PORT/metadata/linear
+sb_api_call GET /metadata/linear
 ```
 
 Response structure:
@@ -60,7 +60,7 @@ Use this metadata to:
 
 **ClickUp task with full details (description, comments, attachments):**
 ```bash
-curl http://localhost:$PORT/task/clickup/TASK_ID
+sb_api_call GET /task/clickup/TASK_ID
 ```
 
 Response includes:
@@ -71,7 +71,7 @@ Response includes:
 
 **Linear issue with full details:**
 ```bash
-curl http://localhost:$PORT/task/linear/ISSUE_ID
+sb_api_call GET /task/linear/ISSUE_ID
 ```
 
 Response includes:

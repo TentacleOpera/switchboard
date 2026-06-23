@@ -16,21 +16,13 @@ description: Attach files to ClickUp tasks via LocalApiServer
 ## Usage
 ```bash
 CUR="$PWD"
-while [ "$CUR" != "/" ] && [ ! -f "$CUR/.switchboard/api-server-port.txt" ]; do CUR=$(dirname "$CUR"); done
-PORT=$(cat "$CUR/.switchboard/api-server-port.txt" 2>/dev/null)
-
-if [ -z "$PORT" ]; then
-    echo '{"error": "LocalApiServer not running"}' >&2
-    exit 1
-fi
-
-TOKEN=$(curl -s http://localhost:$PORT/config/token 2>/dev/null || echo "")
+while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
+source "$CUR/.agents/skills/_lib/sb_api_call.sh"
 
 # Encode file as Base64 (macOS/Linux)
 FILE_BASE64=$(base64 -i "./screenshot.png" | tr -d '\n')
 
-curl -s -X POST "http://localhost:$PORT/task/clickup/$TASK_ID/attach" \
-  -H "Authorization: Bearer $TOKEN" \
+sb_api_call POST "/task/clickup/$TASK_ID/attach" \
   -H "Content-Type: application/json" \
   -d "{
     \"fileName\": \"screenshot.png\",
