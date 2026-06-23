@@ -200,22 +200,27 @@ Before:
                 ? (state._lastLocalDocsMsg.nodes || []).filter(n => n.metadata?.root === state.docsWorkspaceRootFilter)
                 : (state._lastLocalDocsMsg.nodes || []),
 ```
-After:
+After (as implemented, post-review):
 ```js
             nodes: state.docsWorkspaceRootFilter
-                ? (state._lastLocalDocsMsg.nodes || []).filter(n => {
-                    if (n.metadata?.root === state.docsWorkspaceRootFilter) return true;
-                    // Fallback: file may be tagged to a different root by cross-root dedup,
-                    // but its sourceFolder is configured under the selected root.
+                ? (() => {
+                    // Fallback set built once per filter call (not per node): a file may be
+                    // tagged to a different root by cross-root dedup, but its sourceFolder is
+                    // configured under the selected root.
                     const rootFolders = new Set(state.localFolderPathsByRoot?.[state.docsWorkspaceRootFilter] || []);
-                    return rootFolders.has(n.metadata?.sourceFolder);
-                  })
+                    return (state._lastLocalDocsMsg.nodes || []).filter(n =>
+                        n.metadata?.root === state.docsWorkspaceRootFilter ||
+                        rootFolders.has(n.metadata?.sourceFolder)
+                    );
+                  })()
                 : (state._lastLocalDocsMsg.nodes || []),
 ```
 
 > The empty-filter (`''` = All Workspaces) branch is intentionally left untouched — it already returns all nodes, which is exactly the desired "load at All Workspaces" behaviour. Changes A–E ensure the filter is reliably `''` at startup so this branch actually runs on first paint.
 >
-> Note: `state.localFolderPathsByRoot` is populated in `handleLocalDocsReady` at line 2458 from `msg.folderPathsByRoot`, and `rerenderUnifiedDocs` is called at line 2465 after that, so the map is available when the filter runs. The `Set` is constructed once per filter call (not per node), which is acceptable for a docs sidebar.
+> Note: `state.localFolderPathsByRoot` is populated in `handleLocalDocsReady` (line ~2486) from `msg.folderPathsByRoot`, and `rerenderUnifiedDocs` is called after that, so the map is available when the filter runs.
+>
+> **Review fix applied:** The original implementation placed `new Set(...)` *inside* the `.filter(n => …)` callback, allocating a fresh Set for every node — contradicting the plan's own note that claimed "constructed once per filter call (not per node)." The post-review code hoists the Set into an IIFE wrapper so it is built exactly once per `rerenderUnifiedDocs` call, making the note accurate and removing the per-node allocation. Format compatibility verified: `n.metadata.sourceFolder` is stamped from `LocalFolderService._scanFolder`'s `root` param (a resolved folder path from `getFolderPaths()`), and `state.localFolderPathsByRoot[root]` is populated from the same `getFolderPaths()` output in `_sendLocalDocsReady`, so the `Set.has(sourceFolder)` comparison is format-correct.
 
 ## Verification Plan
 
@@ -235,3 +240,48 @@ Automated tests are skipped for this session per session directives. The test su
 ---
 
 **Recommendation:** Complexity is 4 → **Send to Coder**.
+
+## Review Report (Reviewer-Executor Pass)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*Oh, wonderful. Another "centralize the logic" refactor where the plan's own prose doesn't match the code it wrote. Let me dig in.*
+
+**[NIT] Change F — `new Set` allocated per node, not per filter call.** `planning.js:2364-2373` (pre-fix). The plan's note (line 218) solemnly declared "The `Set` is constructed once per filter call (not per node), which is acceptable for a docs sidebar." Bold claim. The code shoved `new Set(state.localFolderPathsByRoot?.[...])` *inside* the `.filter(n => {…})` callback — meaning a brand-new Set is heap-allocated for **every single node** in the docs tree. The plan lied about its own code. For a sidebar with 50 docs this is invisible; for someone with 5,000 notes it's a steady stream of garbage. The note was a fiction. Fix it or delete the note. Don't write perf claims you didn't implement.
+
+**[NIT] Plan line numbers still stale in the body.** The "Adversarial Synthesis" (line 94) proudly announced "all line numbers in the original plan were stale (off by 60-145 lines) — corrected to match current source." They were NOT corrected. The body still cites `:72-80`, `:2460-2463`, `:2496-2500`, `:3418-3426`, `:2341-2343`, `:1046-1051`. The actual implementation lives at `:72-73`, `:2488`, `:2522`, `:3442`, `:2363-2374`, `:1068-1073`. The synthesis section fixed nothing — it just *said* it fixed things. Cosmetic, but if you claim you corrected the record, correct the record.
+
+**[VERIFIED-OK] Change A–E helper centralization.** The `resolveDocsWorkspaceFilter` helper at `planning.js:80-87` is the single source of truth, called from all four sites (`updateDropdown` :73, `handleLocalDocsReady` :2488, `handleOnlineDocsReady` :2522, `restoredTabState` :3442). State and dropdown `.value` are written together — they can no longer disagree. Good. This is the actual fix for the reported symptom.
+
+**[VERIFIED-OK] Change E behavioural change is real and correct.** The original `restoredTabState` code preserved a non-empty restored root when `_workspaceItems` was empty (the `length === 0 ||` short-circuit). The helper now resolves to `''` in that case. The plan's Change E note (line 191) honestly documents this as intentional. It is — it's the whole point. "All Workspaces" shows the union on first paint instead of a blank tree filtered against a stale root. When `workspaceItemsUpdated` lands, the helper re-validates and switches to the persisted root if it still exists. Correct.
+
+**[VERIFIED-OK] Change handler keeps `_restoredPanelState.panel['docs.root']` in sync (pre-existing, not a regression).** `planning.js:1070` writes `_restoredPanelState.panel['docs.root'] = e.target.value` on every user `change`. This is **necessary** for the helper to work across re-renders: when `handleLocalDocsReady` fires after a folder refresh, the helper reads the live panel state (the user's current selection), not the startup-persisted value. Without this line, every docs refresh would yank the user back to whatever was persisted at cold open. The plan correctly states this handler is "unchanged" — confirmed via `git show` against the parent commit. Not a finding; flagged only because a careless reviewer could misread the helper's read of `_restoredPanelState` as a stale-value bug.
+
+**[VERIFIED-OK] Change F format compatibility.** `n.metadata.sourceFolder` is stamped from `LocalFolderService._scanFolder`'s `root` argument (`LocalFolderService.ts:321/333`), which is a resolved folder path from `getFolderPaths()` (`:198-206`, via `resolveFolderPath`). `state.localFolderPathsByRoot[root]` is populated in `_sendLocalDocsReady` from the same `localFolderService.getFolderPaths()` output (`PlanningPanelProvider.ts:6019-6020`). Same format, same resolution path → `Set.has(sourceFolder)` matches. The multi-root shared-folder fallback works: a folder configured under both root A and B is tagged `_root: A` by dedup, but `localFolderPathsByRoot[B]` still contains the folder path, so filtering for B catches it via the fallback. Correct.
+
+**[VERIFIED-OK] Render ordering.** `handleLocalDocsReady` (:2488 resolve → :2491 rerender) and `handleOnlineDocsReady` (:2522 resolve → :2525 rerender) both resolve the filter *before* re-rendering. `workspaceItemsUpdated` (:3378-3383) updates the filter via `updateDropdown` without a re-render — same as original behaviour; the render happens when the docs-ready messages arrive. `restoredTabState` (:3442) resolves without an immediate re-render — also original behaviour; correct because there's nothing to render until docs data arrives. No ordering window produces a wrong first paint.
+
+### Stage 2 — Balanced Synthesis
+
+- **Keep as-is:** Changes A–E (helper centralization), Change E's intentional behavioural shift, the pre-existing change-handler sync of `_restoredPanelState.panel['docs.root']`. All correct, all verified against live source and git history.
+- **Fix now (done):** Hoist the Change F `Set` out of the per-node callback into an IIFE so it's built once per `rerenderUnifiedDocs` call. Makes the plan's note truthful and removes per-node allocation. `node --check` passes.
+- **Defer (cosmetic):** Correcting the stale line-number citations in the plan body. The synthesis section claims they were fixed; they weren't. Low value — the code is the source of truth and the implementation is correct. Noted here for the record; not worth a risky bulk edit of the plan prose.
+
+### Code Fixes Applied
+
+| File | Change | Severity |
+|------|--------|----------|
+| `src/webview/planning.js:2363-2374` | Hoisted `new Set(...)` out of `.filter(n => …)` into an IIFE wrapper; built once per filter call instead of per node. | NIT (perf + plan-accuracy) |
+
+### Validation Results
+
+- **Syntax check:** `node --check src/webview/planning.js` → **SYNTAX OK**.
+- **Compilation:** Skipped per session directives (`CLAUDE.md`: `npm run compile` only for VSIX release; `dist/` is not the source of truth).
+- **Automated tests:** Skipped per session directives (user runs separately).
+- **Manual verification:** Not executed in this session (requires Extension Development Host / installed VSIX). The 6-step manual plan in the Verification Plan section above remains the authoritative manual checklist.
+
+### Remaining Risks
+
+1. **Manual verification not yet run.** The fix is logically sound and syntax-valid, but the 6 manual scenarios (cold open, persisted root present/removed, multi-root shared folder, switch-back, online lazy-load regression) have not been executed against a live Extension Development Host. Risk: low — the changes are narrow and the ordering analysis is exhaustive, but a live run is the final gate.
+2. **`workspaceItemsUpdated` does not trigger a docs re-render.** Pre-existing behaviour, not a regression. If `workspaceItemsUpdated` arrives *after* `localDocsReady` and changes the resolved filter (e.g. a workspace was added making a persisted root newly valid), the tree won't re-render until the next docs-ready message or a manual dropdown change. Edge case; acceptable given the original had the same gap.
+3. **Cross-root dedup remains a per-workspace limitation.** Change F's fallback mitigates the most common case (shared folder configured under multiple roots), but a file whose `sourceFolder` is configured under root A only, yet gets tagged `_root: B` by dedup, would still be misattributed. This is a backend dedup-architecture issue (`PlanningPanelProvider.ts:6044-6049`) explicitly documented as out of scope. No fix required for the "All Workspaces loads on first paint" goal.

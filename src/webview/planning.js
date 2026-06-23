@@ -2361,13 +2361,16 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         const localRoots = state._lastLocalDocsMsg ? {
             sourceId: state._lastLocalDocsMsg.sourceId || 'local-folder',
             nodes: state.docsWorkspaceRootFilter
-                ? (state._lastLocalDocsMsg.nodes || []).filter(n => {
-                    if (n.metadata?.root === state.docsWorkspaceRootFilter) return true;
-                    // Fallback: file may be tagged to a different root by cross-root dedup,
-                    // but its sourceFolder is configured under the selected root.
+                ? (() => {
+                    // Fallback set built once per filter call (not per node): a file may be
+                    // tagged to a different root by cross-root dedup, but its sourceFolder is
+                    // configured under the selected root.
                     const rootFolders = new Set(state.localFolderPathsByRoot?.[state.docsWorkspaceRootFilter] || []);
-                    return rootFolders.has(n.metadata?.sourceFolder);
-                  })
+                    return (state._lastLocalDocsMsg.nodes || []).filter(n =>
+                        n.metadata?.root === state.docsWorkspaceRootFilter ||
+                        rootFolders.has(n.metadata?.sourceFolder)
+                    );
+                  })()
                 : (state._lastLocalDocsMsg.nodes || []),
             folderPaths: getCurrentFolderPaths(state.localFolderPathsByRoot, state.docsWorkspaceRootFilter),
             error: state._lastLocalDocsMsg.error
