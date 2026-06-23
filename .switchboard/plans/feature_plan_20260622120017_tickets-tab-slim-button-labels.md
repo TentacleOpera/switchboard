@@ -39,7 +39,7 @@ No. This is a pure copy/label change with no behavioral, data, or structural imp
 - **Race Conditions:** None.
 - **Security:** None.
 - **Side Effects:** None — labels only. Verified that no code looks up these buttons by their text content: handlers bind by id (`planning.js:6624`, `planning.js:7036`, `planning.js:946`), so the rename is safe.
-- **Dependencies & Conflicts:** The Convert modal title ("Convert to Subtask", [planning.html:3736](src/webview/planning.html#L3736)) remains the full phrase for clarity; only the toolbar button is slimmed. An untracked sibling plan ("tickets-tab Source-modal / one-line layout") also tightens this toolbar — before merging either plan, diff against the other to confirm no overlapping line edits on `planning.html:3568`/`3570`. No session ID available for the sibling plan.
+- **Dependencies & Conflicts:** The Convert modal title ("Convert to Subtask", [planning.html:3736](src/webview/planning.html#L3736)) remains the full phrase for clarity; only the toolbar button is slimmed. The sibling plan `feature_plan_20260622120018` ("tickets-tab Source-modal / one-line layout") restructures the **top controls strip** (`#controls-strip-tickets`, `planning.html:3334-3355`) — a different DOM region from this plan's edits in the **preview meta bar** (`#tickets-preview-meta-bar`, `planning.html:3568`/`3570`). No line overlap. Both plans bind by element id, so line-number drift from either landing first is also a non-issue. The two plans can merge independently.
 - **i18n:** This webview has no localization layer; all sibling buttons in the same bar use hardcoded English labels. Hardcoding "To subtask" / "Diagram" is consistent with the existing file. Non-issue today; if an i18n layer is ever introduced, these strings would need to be externalized alongside every other button in the bar.
 
 ## Dependencies
@@ -76,7 +76,7 @@ Skipped per session directive. The test suite will be run separately by the user
 2. Confirm the buttons read **Diagram** and **To subtask**.
 3. Hover each → confirm the tooltip still explains the full action (diagram button now has a tooltip it previously lacked; convert button retains its existing tooltip).
 4. Click each → confirm behavior is unchanged (Diagram prompt copy; Convert-to-subtask modal opens).
-5. Pre-merge: diff against the sibling "tickets-tab Source-modal / one-line layout" plan to confirm no overlapping edits on `planning.html:3568`/`3570`.
+5. Pre-merge: the sibling Source-modal plan (`feature_plan_20260622120018`) edits a different DOM region (`#controls-strip-tickets`, lines 3334-3355) — no overlap with this plan's preview-meta-bar edits (lines 3568/3570). No diff required; both plans can merge independently.
 
 ## Recommendation
 
@@ -95,7 +95,7 @@ Complexity 1 → **Send to Intern**.
 | Severity | Finding | Location |
 |:---------|:--------|:---------|
 | NIT | Stale line references throughout plan (cited 3384/3386/3541/499/6021/6383; actual 3568/3570/3736/946/6624/7036) | plan file — fixed in this pass |
-| NIT | Sibling-plan overlap warning unverified (no session ID) | plan §Dependencies & Conflicts — deferred to pre-merge |
+| NIT | Sibling-plan overlap warning was unverified — checked and confirmed no overlap (different DOM regions) | plan §Dependencies & Conflicts — corrected |
 
 No CRITICAL or MAJOR findings. The code implementation is correct and complete.
 
@@ -114,4 +114,4 @@ No CRITICAL or MAJOR findings. The code implementation is correct and complete.
   - All 9 JS references to `btn-diagram-prompt` / `btn-convert-subtask` bind by id (`getElementById` or `getTicketsTabElements` destructure at `planning.js:946,6624,7036,7585,7595,7596,8092,8102,8103`) — zero text-content lookups ✓
 
 ### Remaining Risks
-- **Sibling-plan merge conflict:** An untracked "tickets-tab Source-modal / one-line layout" plan may edit the same `planning.html` lines. Resolve via pre-merge diff before landing either plan.
+- **None.** The sibling Source-modal plan (`feature_plan_20260622120018`) edits a different DOM region (`#controls-strip-tickets`, lines 3334-3355) with no line overlap. Both plans bind by element id, so line-number drift is also a non-issue. The two plans can merge independently.
