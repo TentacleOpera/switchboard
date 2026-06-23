@@ -179,14 +179,17 @@
             filter: brightness(0) saturate(100%) invert(54%) sepia(48%) saturate(700%) hue-rotate(330deg) brightness(120%) contrast(87%);
         }
 
-        /* Preserve the disabled (.is-off) greyed-out treatment when colour mode is ON.
-           The colour resting rules above would otherwise override the theme .is-off rule
-           at 119-123 by specificity (Claudify: 0,4,2 > 0,3,2) or source order (Pro: equal
-           0,3,2 but later), making disabled icons appear coloured. These restore the grey
-           treatment at equal-or-higher specificity and later source order. */
-        body.theme-claudify.kanban-icons-colour .strip-icon-btn.is-off img,
-        body.theme-claudify.kanban-icons-colour .kanban-sub-bar .strip-icon-btn.is-off img,
-        body.theme-claudify.kanban-icons-colour .complexity-routing-btn.is-off img,
+        /* Preserve the disabled (.is-off) greyed-out treatment when colour mode is ON —
+           at rest AND on hover. The colour resting rules above would otherwise override
+           the theme .is-off rule at 119-123 by specificity (Claudify: 0,5,2 > 0,3,2) or
+           source order (Pro: equal 0,4,2 but later), making disabled icons appear coloured.
+           The Claudify selectors carry :not(.theme-afterburner-pro) to match the colour
+           hover rule's (0,5,3) specificity, then win by later source order — so disabled
+           icons stay grey even while hovered. Pro selectors are (0,4,2), tying the Pro
+           colour hover (0,4,2) and winning by source order. */
+        body.theme-claudify.kanban-icons-colour:not(.theme-afterburner-pro) .strip-icon-btn.is-off img,
+        body.theme-claudify.kanban-icons-colour:not(.theme-afterburner-pro) .kanban-sub-bar .strip-icon-btn.is-off img,
+        body.theme-claudify.kanban-icons-colour:not(.theme-afterburner-pro) .complexity-routing-btn.is-off img,
         body.theme-afterburner-pro.kanban-icons-colour .strip-icon-btn.is-off img,
         body.theme-afterburner-pro.kanban-icons-colour .kanban-sub-bar .strip-icon-btn.is-off img,
         body.theme-afterburner-pro.kanban-icons-colour .complexity-routing-btn.is-off img {

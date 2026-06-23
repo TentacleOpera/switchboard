@@ -391,20 +391,21 @@ The following corrections reflect the **current** codebase (post-implementation)
 |---|---|---|---|
 | `.is-off` icons coloured when colour mode ON | MAJOR | Valid — contradicts plan claim & verification step 6 | **Fix now:** add `.is-off` override block after colour rules |
 | Claudify hover rules not in plan | NIT | Positive deviation, consistent with verification | Keep; document in plan |
-| Hover-on-disabled edge case | NIT | Real but trivial | Defer; acknowledged as known limitation |
+| Hover-on-disabled edge case | NIT | Real; fixed by adding `:not(.theme-afterburner-pro)` to Claudify `.is-off` selectors | **Fixed:** specificity now ties hover rules, source order wins |
 
 ### Fixes Applied
 
-1. **`src/webview/kanban.html:182-194`** — Added a `.is-off` override block after the colour hover rules. Six selectors (3 Claudify + 3 Pro) targeting `.strip-icon-btn.is-off img`, `.kanban-sub-bar .strip-icon-btn.is-off img`, and `.complexity-routing-btn.is-off img`, all scoped to `.kanban-icons-colour`. Specificity (0,4,2) — beats Claudify colour resting (0,4,2) by source order, beats Pro colour resting (0,3,2) by specificity. Restores `filter: grayscale(1) brightness(0.7)` matching the existing theme `.is-off` treatment.
+1. **`src/webview/kanban.html:182-197`** — Added a `.is-off` override block after the colour hover rules. Six selectors (3 Claudify + 3 Pro) targeting `.strip-icon-btn.is-off img`, `.kanban-sub-bar .strip-icon-btn.is-off img`, and `.complexity-routing-btn.is-off img`, all scoped to `.kanban-icons-colour`. The Claudify selectors carry `:not(.theme-afterburner-pro)` to match the colour hover rules' specificity (0,5,2 / 0,6,2), then win by later source order — so disabled icons stay grey at rest AND on hover. Pro selectors are (0,4,2 / 0,5,2), tying the Pro colour hover and winning by source order. Restores `filter: grayscale(1) brightness(0.7)` matching the existing theme `.is-off` treatment.
 
 ### Verification Results
 
 - **Compilation:** Skipped per instructions.
 - **Tests:** Skipped per instructions.
 - **Static verification (specificity math):**
-  - Claudify `.is-off` override (0,4,2) ≥ Claudify colour resting (0,4,2), later source → ✅ wins
-  - Pro `.is-off` override (0,4,2) > Pro colour resting (0,3,2) → ✅ wins
-  - `.is-off` override (0,4,2) < colour hover (0,4,3 Claudify / 0,3,3 Pro) → hover-on-disabled still coloured (NIT, deferred)
+  - Claudify `.is-off` override (0,5,2 / 0,6,2) = Claudify colour hover (0,5,2 / 0,6,2), later source → ✅ wins (rest + hover)
+  - Claudify `.is-off` override (0,5,2) > Claudify colour resting (0,5,2), later source → ✅ wins
+  - Pro `.is-off` override (0,4,2 / 0,5,2) = Pro colour hover (0,4,2 / 0,5,2), later source → ✅ wins (rest + hover)
+  - Pro `.is-off` override (0,4,2) > Pro colour resting (0,3,2) → ✅ wins by specificity
   - `:not(.theme-afterburner-pro)` guard prevents Claudify terracotta matching when Pro active → ✅
   - `themeBodyClass.ts` injects `kanban-icons-colour` only for claudify + afterburner-professional → ✅
   - `broadcastToWebviews` reaches kanban provider (TaskViewerProvider.ts:3811) → ✅
@@ -416,10 +417,9 @@ The following corrections reflect the **current** codebase (post-implementation)
 
 | File | Lines | Change |
 |---|---|---|
-| `src/webview/kanban.html` | 182-194 (new) | Added `.is-off` grey override block for colour mode |
+| `src/webview/kanban.html` | 182-197 (new) | Added `.is-off` grey override block for colour mode (rest + hover) |
 
 ### Remaining Risks
 
-1. **Hover-on-disabled (NIT):** Hovering a `.is-off` icon with colour mode ON shows the colour hover filter (higher specificity) instead of grey. Trivial edge case; not fixed.
-2. **No `onDidChangeConfiguration` listener:** Direct `settings.json` edits to `switchboard.theme.colourKanbanIcons` won't live-update the kanban board until reload. Consistent with the existing `disableCyberAnimation` pattern. Future enhancement.
-3. **Manual smoke test pending:** Verification steps 3-10 in the Verification Plan require runtime testing by the user (build, theme switching, toggle persistence, live update).
+1. **No `onDidChangeConfiguration` listener:** Direct `settings.json` edits to `switchboard.theme.colourKanbanIcons` won't live-update the kanban board until reload. Consistent with the existing `disableCyberAnimation` pattern. Future enhancement.
+2. **Manual smoke test pending:** Verification steps 3-10 in the Verification Plan require runtime testing by the user (build, theme switching, toggle persistence, live update).
