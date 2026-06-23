@@ -4021,6 +4021,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             return parts.length > 0 ? parts[parts.length - 1] : '';
         }
 
+        // Friendly name for the workspace a new worktree will actually be created in.
+        // Derived from getActiveWorkspaceRoot() (NOT raw currentWorkspaceRoot) so it matches
+        // the path postKanbanMessage() sends for createWorktreeForProject — including the
+        // workspaceItems[0] fallback used when currentWorkspaceRoot is still ''.
+        // Returns '' when no workspace is known, so callers can fall back to a plain label.
+        function getActiveWorkspaceDisplayName() {
+            const raw = String(getActiveWorkspaceRoot() || '').trim();
+            const parts = raw.split(/[\\/]/).filter(Boolean);
+            return parts.length > 0 ? parts[parts.length - 1] : '';
+        }
+
         function buildWorkspaceOptionLabel(item) {
             const baseLabel = String(item?.optionLabel || item?.label || item?.workspaceRoot || '');
             const role = String(item?.role || item?.workspaceRole || '').toLowerCase();
@@ -5970,6 +5981,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
                 case 'updateWorkspaceSelection': {
                     const previousRoot = currentWorkspaceRoot;
+                    const previousWorkspaceName = getActiveWorkspaceDisplayName();
                     currentWorkspaceRoot = msg.workspaceRoot || '';
                     activeWorkspaceFilter = msg.activeFilter || null;
                     activeProjectFilter = msg.projectFilter ?? null;
@@ -5983,6 +5995,20 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     const explicitChange = previousRoot !== '' && previousRoot !== currentWorkspaceRoot;
                     updateWorkspaceProjectDropdown(explicitChange ? currentWorkspaceRoot : null);
                     updateWorkspaceFilterBadge();
+
+                    // Keep the worktrees tab's "CREATE NEW WORKTREE IN <workspace>" header in sync
+                    // when the displayed workspace name changes while that tab is open. Compare the
+                    // derived display name (not just currentWorkspaceRoot) so the header also tracks
+                    // the workspaceItems[0] fallback used by getActiveWorkspaceRoot(). When the tab
+                    // is not active it re-renders itself on next activation, so no work is needed here.
+                    if (getActiveWorkspaceDisplayName() !== previousWorkspaceName) {
+                        const worktreesTabActive = document
+                            .querySelector('.shared-tab-btn[data-tab="worktrees"]')
+                            ?.classList.contains('active');
+                        if (worktreesTabActive) {
+                            renderWorktreesTab();
+                        }
+                    }
                     break;
                 }
                 case 'moveCards': {
@@ -8655,8 +8681,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             actionSection.style.cssText = 'padding: 12px; display: flex; flex-direction: column; gap: 12px; border: 1px dashed var(--border-color); border-radius: 6px;';
 
             const stateTitle = document.createElement('div');
-            stateTitle.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted);';
-            stateTitle.textContent = 'CREATE NEW WORKTREE';
+            stateTitle.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted); word-break: break-word;';
+            const wsName = getActiveWorkspaceDisplayName();
+            stateTitle.textContent = wsName
+                ? `CREATE NEW WORKTREE IN ${wsName.toUpperCase()}`
+                : 'CREATE NEW WORKTREE';
             actionSection.appendChild(stateTitle);
 
             // Repo select dropdown for control plane mode

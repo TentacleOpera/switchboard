@@ -70,15 +70,20 @@
         } else if (tabKey === 'notebook' && notebookWorkspaceRoot) {
             currentVal = notebookWorkspaceRoot;
         } else if (tabKey === 'docs') {
-            const restoredDocsRoot = _restoredPanelState.panel['docs.root'] || '';
-            if (restoredDocsRoot === '' || _workspaceItems.some(item => item.workspaceRoot === restoredDocsRoot)) {
-                state.docsWorkspaceRootFilter = restoredDocsRoot;
-            } else {
-                state.docsWorkspaceRootFilter = '';
-            }
-            currentVal = state.docsWorkspaceRootFilter;
+            currentVal = resolveDocsWorkspaceFilter(_workspaceItems);
         }
         populateWorkspaceDropdown(select, _workspaceItems, currentVal, includeAllOption);
+    }
+
+    // NEW helper — single source of truth for the Docs tab workspace filter.
+    // Restored/persisted specific roots win only if still present; otherwise "All Workspaces" ('').
+    function resolveDocsWorkspaceFilter(workspaceItems) {
+        const restored = _restoredPanelState.panel['docs.root'] || '';
+        const valid = restored === '' || (workspaceItems || []).some(item => item.workspaceRoot === restored);
+        state.docsWorkspaceRootFilter = valid ? restored : '';
+        const dropdown = document.getElementById('docs-workspace-filter');
+        if (dropdown) dropdown.value = state.docsWorkspaceRootFilter;
+        return state.docsWorkspaceRootFilter;
     }
 
     const _debounceTimers = {};
@@ -2339,7 +2344,13 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         const localRoots = state._lastLocalDocsMsg ? {
             sourceId: state._lastLocalDocsMsg.sourceId || 'local-folder',
             nodes: state.docsWorkspaceRootFilter
-                ? (state._lastLocalDocsMsg.nodes || []).filter(n => n.metadata?.root === state.docsWorkspaceRootFilter)
+                ? (state._lastLocalDocsMsg.nodes || []).filter(n => {
+                    if (n.metadata?.root === state.docsWorkspaceRootFilter) return true;
+                    // Fallback: file may be tagged to a different root by cross-root dedup,
+                    // but its sourceFolder is configured under the selected root.
+                    const rootFolders = new Set(state.localFolderPathsByRoot?.[state.docsWorkspaceRootFilter] || []);
+                    return rootFolders.has(n.metadata?.sourceFolder);
+                  })
                 : (state._lastLocalDocsMsg.nodes || []),
             folderPaths: getCurrentFolderPaths(state.localFolderPathsByRoot, state.docsWorkspaceRootFilter),
             error: state._lastLocalDocsMsg.error
@@ -2457,9 +2468,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         state._lastLocalDocsMsg = msg;
         state.localFolderPathsByRoot = msg.folderPathsByRoot || {};
         state.ticketsFolderPathsByRoot = msg.ticketsFolderPathsByRoot || {};
-        if (state.docsWorkspaceRootFilter && !(msg.workspaceItems || []).some(item => item.workspaceRoot === state.docsWorkspaceRootFilter)) {
-            state.docsWorkspaceRootFilter = '';
-        }
+        resolveDocsWorkspaceFilter(msg.workspaceItems || []);
         populateWorkspaceDropdown('docs-workspace-filter', msg.workspaceItems || [], state.docsWorkspaceRootFilter);
         
         rerenderUnifiedDocs();
@@ -2493,10 +2502,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         _savedBrowseFilterContainers = msg.browseFilterContainers || {};
         state.enabledSources = msg.enabledSources || {};
 
-        if (state.docsWorkspaceRootFilter && !_workspaceItems.some(item => item.workspaceRoot === state.docsWorkspaceRootFilter)) {
-            state.docsWorkspaceRootFilter = '';
-        }
-
+        resolveDocsWorkspaceFilter(msg.workspaceItems || _workspaceItems);
         populateWorkspaceDropdown('docs-workspace-filter', msg.workspaceItems || _workspaceItems, state.docsWorkspaceRootFilter);
         
         rerenderUnifiedDocs();
@@ -3415,15 +3421,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 }
                 _restoredPanelState.panel['notebook.root'] = notebookWorkspaceRoot;
 
-                // Restore Docs workspace filter
-                const restoredDocsRoot = _restoredPanelState.panel['docs.root'] || '';
-                if (_workspaceItems.length === 0 || restoredDocsRoot === '' || _workspaceItems.some(item => item.workspaceRoot === restoredDocsRoot)) {
-                    state.docsWorkspaceRootFilter = restoredDocsRoot;
-                } else {
-                    state.docsWorkspaceRootFilter = '';
-                }
-                const docsDropdown = document.getElementById('docs-workspace-filter');
-                if (docsDropdown) docsDropdown.value = state.docsWorkspaceRootFilter;
+                // Restore Docs workspace filter (single source of truth; "All Workspaces" by default)
+                resolveDocsWorkspaceFilter(_workspaceItems);
 
                 // Restore Kanban filters
                 const restoredKanbanRoot = _restoredPanelState.panel['kanban.root'] || '';

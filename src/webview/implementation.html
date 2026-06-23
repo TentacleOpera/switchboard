@@ -2217,17 +2217,21 @@
             switch (message.type) {
                 case 'initialState':
                     setActiveTab(message.activeTab || 'agents', false);
+                    if (message.workspaceRoot) {
+                        currentWorkspaceRoot = String(message.workspaceRoot).trim();
+                    }
                     {
-                        // Restore sub-tab selection from persisted state
+                        // Restore sub-tab selection from persisted state.
+                        // NOTE: currentWorkspaceRoot MUST be set before this block —
+                        // switchAgentTab('memo') fires memoLoad with workspaceRoot:
+                        // currentWorkspaceRoot, and an empty value would force the host
+                        // to fall back to a possibly-wrong workspace root.
                         const validSubTabs = ['agents', 'terminals', 'memo'];
                         const restoredSubTab = (message.activeSubTab && validSubTabs.includes(message.activeSubTab)) ? message.activeSubTab : 'terminals';
                         currentAgentTab = restoredSubTab;
                         switchAgentTab(currentAgentTab);
                     }
                     toggleOnboarding(message.needsSetup === true);
-                    if (message.workspaceRoot) {
-                        currentWorkspaceRoot = String(message.workspaceRoot).trim();
-                    }
                     break;
                 case 'memoContent': {
                     const textarea = document.getElementById('memo-textarea');
