@@ -9258,11 +9258,20 @@ Each plan file must include:
                             break;
                         }
                         const prompt = this._buildMemoPlannerPrompt(issues, workspaceRoot);
-                        await vscode.env.clipboard.writeText(prompt);
 
                         let sendSucceeded = action !== 'send';
                         if (action === 'send') {
+                            // Send to Planner dispatches only — it must NOT copy to clipboard
+                            // on success, matching every other dispatch action in the extension.
                             sendSucceeded = await this.dispatchCustomPromptToRole('planner', prompt, workspaceRoot);
+                            if (!sendSucceeded) {
+                                // Failure fallback: copy so the user can paste manually
+                                // (the failure message below promises this).
+                                await vscode.env.clipboard.writeText(prompt);
+                            }
+                        } else {
+                            // Copy Prompt owns the clipboard.
+                            await vscode.env.clipboard.writeText(prompt);
                         }
 
                         if (sendSucceeded) {

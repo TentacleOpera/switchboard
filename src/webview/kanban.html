@@ -6006,7 +6006,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             .querySelector('.shared-tab-btn[data-tab="worktrees"]')
                             ?.classList.contains('active');
                         if (worktreesTabActive) {
+                            // Immediate re-render fixes the header (derived from getActiveWorkspaceRoot()).
+                            // loadWorktreeConfig() fetches fresh config for the NEW workspace so the body
+                            // (worktree list, repo/project dropdowns, control-plane mode) doesn't stay
+                            // stale on the previous workspace's lastWorktreeConfig. The host only sends
+                            // worktreeConfig in response to getWorktreeConfig (KanbanProvider.ts:6616),
+                            // so without this call the body would not refresh until the user re-enters
+                            // the tab. The worktreeConfig handler (below) re-renders once it arrives.
                             renderWorktreesTab();
+                            loadWorktreeConfig();
                         }
                     }
                     break;

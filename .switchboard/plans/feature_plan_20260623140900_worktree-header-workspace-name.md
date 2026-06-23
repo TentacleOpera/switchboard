@@ -228,3 +228,45 @@ Notes:
 ---
 
 **Recommendation:** Complexity 2 → **Send to Intern.**
+
+## Reviewer Pass (2026-06-23)
+
+### Stage 1 — Adversarial Findings
+
+| # | Severity | Location | Finding |
+|---|----------|----------|---------|
+| 1 | **MAJOR** | `src/webview/kanban.html:6004-6011` (sync block) | Sync block calls `renderWorktreesTab()` on workspace switch while the tab is active, but `renderWorktreesTab()` rebuilds from `lastWorktreeConfig` — which is still the **previous** workspace's config. The header refreshes correctly (derived from `getActiveWorkspaceRoot()`), but the worktree list, repo/project dropdowns, and control-plane mode all stay stale on the old workspace. This creates a **header/body contradiction** ("CREATE NEW WORKTREE IN B" above workspace A's project list and worktree entries) — arguably worse than the pre-change behavior where the whole panel was at least consistently stale. Root cause: the sync code never calls `loadWorktreeConfig()`, and the host (`KanbanProvider.ts`) only sends `worktreeConfig` in response to an explicit `getWorktreeConfig` request (line 6616-6621) — none of the three `updateWorkspaceSelection` send sites (1245, 2107, 2264) push a `worktreeConfig` afterward. The plan's note at line 211 ("The config-dependent body refreshes when the next `worktreeConfig` message lands") is incorrect — that message never lands without an explicit fetch. |
+| 2 | NIT | Plan line-number citations | Plan cites `kanban.html:8657-8660` for the header and `5971-5987` for the handler; actuals drifted to 8691-8697 and 5982-6020 due to the auto-commit chain. No code impact. |
+| 3 | NIT | `src/webview/kanban.html:8692` | `word-break: break-word` is a non-standard alias for `overflow-wrap: break-word`, but universally supported. Leave as-is. |
+
+### Stage 2 — Balanced Synthesis
+
+- **Keep:** `getActiveWorkspaceDisplayName()` helper (correct source via `getActiveWorkspaceRoot()`, correct `workspaceItems[0]` fallback, correct empty-string return). Header injection (`textContent`, `toUpperCase`, fallback label, `word-break`). Active-tab guard. `previousWorkspaceName` capture-before-mutation timing. All correct and match the plan.
+- **Fix now (Finding #1):** Add `loadWorktreeConfig()` to the sync block so the body fetches fresh config for the new workspace. The immediate `renderWorktreesTab()` gives an instant correct header; `loadWorktreeConfig()` posts `getWorktreeConfig` with the now-updated `currentWorkspaceRoot`, and the `worktreeConfig` handler (6088-6090) updates `lastWorktreeConfig` and re-renders with correct body data. Double-render is harmless (plan line 57).
+- **Defer:** Findings #2 and #3 — no code impact.
+
+### Fix Applied
+
+**File:** `src/webview/kanban.html` (sync block in `updateWorkspaceSelection` handler)
+
+Added `loadWorktreeConfig()` call alongside the existing `renderWorktreesTab()` in the active-tab sync branch, with an explanatory comment documenting why both calls are needed (immediate header fix + async body refresh). The `worktreeConfig` response handler re-renders the panel once fresh config arrives, so the body no longer stays stale on the previous workspace.
+
+### Verification Results
+
+- **Compilation:** Skipped per session directive (`SKIP COMPILATION`). `src/` is the source of truth; `dist/` is not used during development.
+- **Automated tests:** Skipped per session directive (`SKIP TESTS`). The user runs the suite separately.
+- **Manual verification (code-level, read-only):**
+  - Confirmed all three plan changes are present and match the plan spec: helper at 4029-4033, header injection at 8691-8697, sync block at 5999-6019.
+  - Confirmed `getActiveWorkspaceRoot()` (3875-3877) has the `workspaceItems[0]` fallback the plan relies on.
+  - Confirmed `postKanbanMessage` (3879-3884) substitutes `getActiveWorkspaceRoot()` for falsy `workspaceRoot` — so the header's source matches the create action's true target.
+  - Confirmed `createWorktreeForProject` (8774-8779) sends `workspaceRoot: currentWorkspaceRoot`, which `postKanbanMessage` backstops — accuracy claim holds.
+  - Confirmed `renderWorktreesTab` (8600-8609) is a function declaration (hoisted) — safe to call from the earlier handler.
+  - Confirmed the `worktreeConfig` handler (6088-6090) updates `lastWorktreeConfig` and calls `renderWorktreesTab()` — so the added `loadWorktreeConfig()` will trigger a correct body refresh.
+  - Confirmed none of the three `updateWorkspaceSelection` send sites in `KanbanProvider.ts` (1245, 2107, 2264) push `worktreeConfig` — validating that the fix's `loadWorktreeConfig()` call is necessary.
+  - Confirmed no `confirm()`/`window.confirm()` dialogs introduced (per CLAUDE.md rules).
+
+### Remaining Risks
+
+- **Brief header-correct/body-stale flash:** Between the immediate `renderWorktreesTab()` and the `worktreeConfig` response, the header is correct but the body briefly shows the previous workspace's config. This is a sub-second async round-trip and is strictly better than the pre-fix state (body stale indefinitely until tab re-entry). Acceptable.
+- **Host non-response:** If the host cannot resolve the new workspace root (`KanbanProvider.ts:6619` — `if (!workspaceRoot) break;`), no `worktreeConfig` arrives and the body stays stale. The header is still correct (from the immediate `renderWorktreesTab()`). This matches the existing behavior for unresolvable roots and is an acceptable edge case.
+- **Manual checklist items 1-7 above** still require runtime verification via the installed VSIX (not executable in this review session).

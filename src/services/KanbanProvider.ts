@@ -106,6 +106,8 @@ export class KanbanProvider implements vscode.Disposable {
     private static readonly _AUTO_PULL_INTERVALS = new Set<number>([5, 15, 30, 60]);
     private _panel?: vscode.WebviewPanel;
     private _pendingTab?: string;
+    private _webviewReady = false;
+    private _pendingWebviewMessages: any[] = [];
     private _onWorkspaceChangeEmitter = new vscode.EventEmitter<string>();
     public readonly onWorkspaceChange = this._onWorkspaceChangeEmitter.event;
     private _disposables: vscode.Disposable[] = [];
@@ -883,6 +885,9 @@ export class KanbanProvider implements vscode.Disposable {
             return;
         }
 
+        this._webviewReady = false;
+        this._pendingWebviewMessages = [];
+
         this._panel = vscode.window.createWebviewPanel(
             'switchboard-kanban',
             'KANBAN',
@@ -908,6 +913,8 @@ export class KanbanProvider implements vscode.Disposable {
         this._panel.onDidDispose(() => {
             this._panel = undefined;
             this._lastColumnsSignature = null;
+            this._webviewReady = false;
+            this._pendingWebviewMessages = [];
         }, null, this._disposables);
 
         const workspaceRoot = this._resolveWorkspaceRoot();
@@ -926,6 +933,8 @@ export class KanbanProvider implements vscode.Disposable {
         panel: vscode.WebviewPanel,
         state: any
     ): Promise<void> {
+        this._webviewReady = false;
+        this._pendingWebviewMessages = [];
         this._panel = panel;
         // Reset webview options to the CURRENT extensionUri before loading html. VS Code
         // persists the localResourceRoots from the original panel, but after an extension
@@ -946,6 +955,8 @@ export class KanbanProvider implements vscode.Disposable {
         this._panel.onDidDispose(() => {
             this._panel = undefined;
             this._lastColumnsSignature = null;
+            this._webviewReady = false;
+            this._pendingWebviewMessages = [];
         }, null, this._disposables);
 
         const workspaceRoot = this._resolveWorkspaceRoot();
@@ -1326,8 +1337,11 @@ export class KanbanProvider implements vscode.Disposable {
      * Post message to webview (used by ContinuousSyncService).
      */
     public postMessage(message: any): void {
-        if (this._panel) {
+        if (!this._panel) { return; }
+        if (this._webviewReady) {
             this._panel.webview.postMessage(message);
+        } else {
+            this._pendingWebviewMessages.push(message);
         }
     }
 
@@ -4399,6 +4413,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
     private async _handleMessage(msg: any) {
         switch (msg.type) {
             case 'ready':
+                this._webviewReady = true;
                 // Initial load: trigger full file→DB sync to ensure DB is populated,
                 // then kanbanProvider.refresh() is called by fullSync after syncing.
                 await vscode.commands.executeCommand('switchboard.fullSync');
@@ -4409,6 +4424,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if (this._pendingTab) {
                     this._panel?.webview.postMessage({ type: 'switchToTab', tab: this._pendingTab });
                     this._pendingTab = undefined;
+                }
+                if (this._pendingWebviewMessages.length) {
+                    const queued = this._pendingWebviewMessages;
+                    this._pendingWebviewMessages = [];
+                    for (const m of queued) {
+                        this._panel?.webview.postMessage(m);
+                    }
                 }
                 // §10 — Constant-mode remote control auto-starts on load.
                 {
