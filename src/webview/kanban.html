@@ -3234,6 +3234,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 document.getElementById('plannerAddonCavemanOutput').checked = !!config.addons?.cavemanOutput;
                 document.getElementById('plannerAddonSkipCompilation').checked = !!config.addons?.skipCompilation;
                 document.getElementById('plannerAddonSkipTests').checked = !!config.addons?.skipTests;
+                document.getElementById('plannerAddonAdviseResearch').checked = !!config.addons?.adviseResearch;
                 // Load subagent policy radio for planner
                 const plannerSubagentPolicy = config.addons?.subagentPolicy || 'default';
                 const plannerSubagentRadios = document.getElementsByName('plannerSubagentPolicy');

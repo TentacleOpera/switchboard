@@ -222,3 +222,48 @@ No automated tests required for this session — the suite is run separately by 
 ---
 
 **Recommendation:** Complexity 6/10 → **Send to Coder** (multi-file webview + extension change with back-compat constraints).
+
+---
+
+## Reviewer Pass — 2026-06-23
+
+### Stage 1: Adversarial Findings (Grumpy Principal Engineer)
+
+| # | Severity | Finding | Location |
+|---|----------|---------|----------|
+| 1 | MAJOR | Shared `_constitutionWatchDebounce` across all watchers (all roots × all keys) drops `governanceFileChanged` for all but the last-firing watcher when two governance files change within 400ms (e.g., `git checkout` changing both CLAUDE.md and AGENTS.md). List badges still update (debounced `loadConstitutionFiles`), but the live preview for the first file goes stale. | `PlanningPanelProvider.ts:957-970` (original) |
+| 2 | NIT | `externalChangePending.constitution` is set but never read/cleared — pre-existing dead code across all tabs (kanban:243, epics:257, constitution:482). Not introduced by this plan. | `project.js:482` |
+| 3 | NIT | `constitutionFileDeleted` handler ignores `msg.success === false` — shows empty-state even when delete failed and file still exists. Pre-existing (original handler had same bug). | `project.js:423-474` |
+| 4 | NIT | Race guard `if (msg.governanceFile && ...)` skips when `governanceFile` is undefined. Backend always sends it now, but a future code path without it would clobber the wrong file-type's preview. | `project.js:478` (original) |
+| 5 | NIT | `btnSetConstitutionPath.disabled` toggled on a hidden element for claude/agents. Harmless. | `project.js:504, 538` |
+
+### Stage 2: Balanced Synthesis
+
+- **Fix now:** MAJOR-1 (move `governanceFileChanged` outside debounce), NIT-4 (tighten race guard to `(msg.governanceFile ?? 'constitution') !== _constitutionSelectedGovKey`).
+- **Defer:** NIT-2 (dead `externalChangePending` writes — pre-existing, all tabs), NIT-3 (delete success-check — pre-existing), NIT-5 (hidden-element disabled toggle — harmless).
+
+### Stage 3: Code Fixes Applied
+
+1. **`src/services/PlanningPanelProvider.ts` (lines 957-978):** Moved `governanceFileChanged` postMessage outside the shared debounce callback. The message now fires immediately per-watcher-event; only `loadConstitutionFiles` remains debounced. The webview's `governanceFileChanged` handler already gates on selected file-type + edit-mode, and `constitutionFileRead` has a race guard, so immediate dispatch is safe. This ensures a `git checkout` changing both CLAUDE.md and AGENTS.md triggers preview refresh for both (if both are the currently-selected file-type at their respective times).
+
+2. **`src/webview/project.js` (line 478):** Tightened race guard from `if (msg.governanceFile && msg.governanceFile !== _constitutionSelectedGovKey)` to `if ((msg.governanceFile ?? 'constitution') !== _constitutionSelectedGovKey)`. Now defaults both sides to `'constitution'` for back-compat, eliminating the undefined-skip hole.
+
+### Stage 4: Validation Results
+
+- **Compilation:** Skipped per session directive (`npm run compile` not run; `src/` is source of truth).
+- **Automated tests:** Skipped per session directive (run separately by user).
+- **Static verification:** Both edits confirmed syntactically consistent. All `governanceFileChanged` references (3 total across `src/`) are consistent with the new immediate-dispatch pattern. Race guard change is a strict tightening — no new false-positive breaks (back-compat messages default to `'constitution'` on both sides).
+
+### Files Changed by Review
+
+| File | Change |
+|------|--------|
+| `src/services/PlanningPanelProvider.ts` | `_setupConstitutionWatcher()`: moved `governanceFileChanged` postMessage outside debounce (lines 957-978) |
+| `src/webview/project.js` | `constitutionFileRead` handler: tightened race guard to default both sides (line 478) |
+| `.switchboard/plans/feature_plan_20260623141000_constitution-tab-cover-claude-agents-md.md` | This review section |
+
+### Remaining Risks
+
+1. **`externalChangePending` dead writes** (pre-existing, all tabs) — the flag is set when a read arrives during edit mode but never consumed. If a future feature intends to auto-refresh after exiting edit mode, this flag would need to be read in `exitEditMode()`. Low priority.
+2. **`constitutionFileDeleted` ignores `success: false`** (pre-existing) — a failed delete (permissions, locked file) shows the empty-state while the file still exists on disk. The list badges would still show the file as existing (since `loadConstitutionFiles` is only called on success). Fix: add `if (msg.success === false) { alert('Delete failed: ' + (msg.error || 'Unknown error')); break; }` at the top of the handler.
+3. **Rapid-fire `governanceFileChanged` for the same file** — with the immediate-dispatch fix, a script writing to CLAUDE.md 5 times in 100ms triggers 5 `readConstitutionFile` calls. The race guard ensures only the last response renders, but the earlier reads waste markdown-render cycles. Acceptable for a single file; would only matter under extreme churn. Per-key debounce would eliminate this but adds complexity.

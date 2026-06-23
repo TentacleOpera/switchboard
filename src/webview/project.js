@@ -475,8 +475,8 @@
                 break;
             case 'constitutionFileRead':
                 if (constitutionPreviewContent && _constitutionSelectedWorkspace && _constitutionSelectedWorkspace.workspaceRoot === msg.workspaceRoot) {
-                    if (msg.governanceFile && msg.governanceFile !== _constitutionSelectedGovKey) {
-                        break; // Race guard
+                    if ((msg.governanceFile ?? 'constitution') !== _constitutionSelectedGovKey) {
+                        break; // Race guard — ignore stale reads for a different file-type
                     }
                     if (state.editMode.constitution) {
                         state.externalChangePending.constitution = true;

@@ -956,17 +956,24 @@ export class PlanningPanelProvider {
                     new vscode.RelativePattern(vscode.Uri.file(root), relativePattern));
                 const refresh = () => {
                     if (!this._projectPanel) { return; }
+                    // Notify the webview immediately so the correct file-type preview
+                    // refreshes. A shared debounce would drop the message for all but
+                    // the last-firing watcher (e.g. a git checkout changing both
+                    // CLAUDE.md and AGENTS.md within 400ms). The webview's
+                    // governanceFileChanged handler already gates on the currently-
+                    // selected file-type and edit-mode, and constitutionFileRead has
+                    // a race guard, so immediate dispatch is safe.
+                    this._projectPanel?.webview.postMessage({
+                        type: 'governanceFileChanged',
+                        workspaceRoot: root,
+                        governanceFile: key
+                    });
                     if (this._constitutionWatchDebounce) { clearTimeout(this._constitutionWatchDebounce); }
                     this._constitutionWatchDebounce = setTimeout(() => {
                         this._constitutionWatchDebounce = undefined;
                         if (!this._projectPanel) { return; }
                         this._handleMessage({ type: 'loadConstitutionFiles', requestId: Date.now() }, true)
                             .catch(err => console.error('[PlanningPanel] Error auto-refreshing constitution files:', err));
-                        this._projectPanel?.webview.postMessage({
-                            type: 'governanceFileChanged',
-                            workspaceRoot: root,
-                            governanceFile: key
-                        });
                     }, 400);
                 };
                 watcher.onDidChange(refresh); watcher.onDidCreate(refresh); watcher.onDidDelete(refresh);
