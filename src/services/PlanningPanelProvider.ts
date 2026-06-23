@@ -27,6 +27,8 @@ import { PanelStateStore } from './PanelStateStore';
 import { buildWorkspaceItems } from './workspaceUtils';
 import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 import { InsightManager } from './InsightManager';
+import { GovernanceFileKey } from './constitutionUtils';
+
 
 export interface PlanningPanelAdapterFactories {
     getNotionService: (root: string) => NotionFetchService;
@@ -922,11 +924,15 @@ export class PlanningPanelProvider {
         return getConstitutionPath(this._context, workspaceRoot);
     }
 
+    private _getGovernanceFilePath(workspaceRoot: string, key: GovernanceFileKey = 'constitution'): string {
+        const { getGovernanceFilePath } = require('./constitutionUtils');
+        return getGovernanceFilePath(this._context, workspaceRoot, key);
+    }
+
     private _setupConstitutionWatcher(): void {
-        // Watch each workspace root's CONSTITUTION.md so the project panel's
+        // Watch each workspace root's governance files so the project panel's
         // Constitution tab live-updates when the file is created/edited/deleted
-        // outside the panel (e.g. an agent writes it directly to disk). Without
-        // this, the file list only refreshes on tab activation or in-panel save.
+        // outside the panel.
 
         // Dispose existing watchers
         for (const w of this._constitutionWatchers) {
@@ -937,46 +943,36 @@ export class PlanningPanelProvider {
         this._constitutionWatchers = [];
 
         const allRoots = this._getWorkspaceRoots();
-        const watchedPaths = new Set<string>();
+        allRoots.forEach(root => {
+            const watchedPaths = new Set<string>(); // dedup by resolved path
+            (['constitution', 'claude', 'agents'] as const).forEach(key => {
+                const targetPath = this._getGovernanceFilePath(root, key);
+                const resolved = path.resolve(targetPath);
+                if (watchedPaths.has(resolved)) { return; } // avoid double-registration if custom path === CLAUDE.md/AGENTS.md
+                watchedPaths.add(resolved);
 
-        for (const root of allRoots) {
-            if (watchedPaths.has(root)) { continue; }
-            watchedPaths.add(root);
-
-            const { getConstitutionPath } = require('./constitutionUtils');
-            const targetPath = getConstitutionPath(this._context, root);
-            const relativePattern = path.relative(root, targetPath);
-
-            const watcher = vscode.workspace.createFileSystemWatcher(
-                new vscode.RelativePattern(vscode.Uri.file(root), relativePattern)
-            );
-
-            const triggerRefresh = () => {
-                if (!this._projectPanel) { return; }
-                if (this._constitutionWatchDebounce) {
-                    clearTimeout(this._constitutionWatchDebounce);
-                }
-                this._constitutionWatchDebounce = setTimeout(() => {
-                    this._constitutionWatchDebounce = undefined;
+                const relativePattern = path.relative(root, targetPath);
+                const watcher = vscode.workspace.createFileSystemWatcher(
+                    new vscode.RelativePattern(vscode.Uri.file(root), relativePattern));
+                const refresh = () => {
                     if (!this._projectPanel) { return; }
-                    // Re-post the workspace list so hasConstitution flags refresh
-                    // (this is what makes a newly created file appear/disappear).
-                    this._handleMessage({
-                        type: 'loadConstitutionFiles',
-                        requestId: Date.now()
-                    }, true).catch(err => {
-                        console.error('[PlanningPanel] Error auto-refreshing constitution files:', err);
-                    });
-                }, 400);
-            };
-
-            watcher.onDidCreate(triggerRefresh);
-            watcher.onDidChange(triggerRefresh);
-            watcher.onDidDelete(triggerRefresh);
-
-            this._constitutionWatchers.push(watcher);
-            this._disposables.push(watcher);
-        }
+                    if (this._constitutionWatchDebounce) { clearTimeout(this._constitutionWatchDebounce); }
+                    this._constitutionWatchDebounce = setTimeout(() => {
+                        this._constitutionWatchDebounce = undefined;
+                        if (!this._projectPanel) { return; }
+                        this._handleMessage({ type: 'loadConstitutionFiles', requestId: Date.now() }, true)
+                            .catch(err => console.error('[PlanningPanel] Error auto-refreshing constitution files:', err));
+                        this._projectPanel?.webview.postMessage({
+                            type: 'governanceFileChanged',
+                            workspaceRoot: root,
+                            governanceFile: key
+                        });
+                    }, 400);
+                };
+                watcher.onDidChange(refresh); watcher.onDidCreate(refresh); watcher.onDidDelete(refresh);
+                this._constitutionWatchers.push(watcher); this._disposables.push(watcher);
+            });
+        });
     }
 
     private _setupInsightsWatcher(): void {
@@ -2962,11 +2958,15 @@ export class PlanningPanelProvider {
             case 'loadConstitutionFiles': {
                 const workspaceItems = buildWorkspaceItems(allRoots);
                 const workspaces = workspaceItems.map(ws => {
-                    const constitutionPath = this._getConstitutionPath(ws.workspaceRoot);
+                    const governance = (['constitution', 'claude', 'agents'] as const).map(key => ({
+                        key,
+                        exists: fs.existsSync(this._getGovernanceFilePath(ws.workspaceRoot, key)),
+                    }));
                     return {
                         label: ws.label,
                         workspaceRoot: ws.workspaceRoot,
-                        hasConstitution: fs.existsSync(constitutionPath)
+                        governance,
+                        hasConstitution: governance[0].exists /* keep legacy field */
                     };
                 });
                 this._projectPanel?.webview.postMessage({
@@ -2997,16 +2997,18 @@ export class PlanningPanelProvider {
             }
             case 'readConstitutionFile': {
                 const wsRoot = msg.workspaceRoot;
+                const key = msg.governanceFile ?? 'constitution';
                 if (!allRoots.includes(wsRoot)) {
                     this._projectPanel?.webview.postMessage({
                         type: 'constitutionFileRead',
                         workspaceRoot: wsRoot,
+                        governanceFile: key,
                         exists: false,
                         error: 'Invalid workspace root'
                     });
                     break;
                 }
-                const filePath = this._getConstitutionPath(wsRoot);
+                const filePath = this._getGovernanceFilePath(wsRoot, key);
                 if (fs.existsSync(filePath)) {
                     try {
                         const content = fs.readFileSync(filePath, 'utf8');
@@ -3014,6 +3016,7 @@ export class PlanningPanelProvider {
                         this._projectPanel?.webview.postMessage({
                             type: 'constitutionFileRead',
                             workspaceRoot: wsRoot,
+                            governanceFile: key,
                             filePath,
                             exists: true,
                             content,
@@ -3023,6 +3026,7 @@ export class PlanningPanelProvider {
                         this._projectPanel?.webview.postMessage({
                             type: 'constitutionFileRead',
                             workspaceRoot: wsRoot,
+                            governanceFile: key,
                             exists: false,
                             error: String(err)
                         });
@@ -3031,6 +3035,7 @@ export class PlanningPanelProvider {
                     this._projectPanel?.webview.postMessage({
                         type: 'constitutionFileRead',
                         workspaceRoot: wsRoot,
+                        governanceFile: key,
                         exists: false
                     });
                 }
@@ -3039,22 +3044,25 @@ export class PlanningPanelProvider {
             case 'saveConstitutionFile': {
                 const wsRoot = msg.workspaceRoot;
                 const content = msg.content;
+                const key = msg.governanceFile ?? 'constitution';
                 if (!allRoots.includes(wsRoot)) {
                     this._projectPanel?.webview.postMessage({
                         type: 'fileSaved',
                         success: false,
                         error: 'Invalid workspace root',
-                        tab: 'constitution'
+                        tab: 'constitution',
+                        governanceFile: key
                     });
                     break;
                 }
-                const filePath = this._getConstitutionPath(wsRoot);
+                const filePath = this._getGovernanceFilePath(wsRoot, key);
                 try {
                     fs.writeFileSync(filePath, content, 'utf8');
                     this._projectPanel?.webview.postMessage({
                         type: 'fileSaved',
                         success: true,
-                        tab: 'constitution'
+                        tab: 'constitution',
+                        governanceFile: key
                     });
                     await this._handleMessage({ type: 'loadConstitutionFiles', requestId: Date.now() }, true);
                 } catch (err) {
@@ -3062,7 +3070,8 @@ export class PlanningPanelProvider {
                         type: 'fileSaved',
                         success: false,
                         error: String(err),
-                        tab: 'constitution'
+                        tab: 'constitution',
+                        governanceFile: key
                     });
                 }
                 break;
@@ -3187,14 +3196,15 @@ Please format the updated output document strictly as follows:
             }
             case 'deleteConstitutionFile': {
                 const wsRoot = msg.workspaceRoot;
+                const key = msg.governanceFile ?? 'constitution';
                 if (!allRoots.includes(wsRoot)) { break; }
-                const filePath = this._getConstitutionPath(wsRoot);
+                const filePath = this._getGovernanceFilePath(wsRoot, key);
                 try {
                     if (fs.existsSync(filePath)) { fs.unlinkSync(filePath); }
-                    this._projectPanel?.webview.postMessage({ type: 'constitutionFileDeleted', workspaceRoot: wsRoot });
+                    this._projectPanel?.webview.postMessage({ type: 'constitutionFileDeleted', workspaceRoot: wsRoot, governanceFile: key });
                     await this._handleMessage({ type: 'loadConstitutionFiles', requestId: Date.now() }, true);
                 } catch (err) {
-                    this._projectPanel?.webview.postMessage({ type: 'constitutionFileDeleted', workspaceRoot: wsRoot, success: false, error: String(err) });
+                    this._projectPanel?.webview.postMessage({ type: 'constitutionFileDeleted', workspaceRoot: wsRoot, governanceFile: key, success: false, error: String(err) });
                 }
                 break;
             }

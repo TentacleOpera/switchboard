@@ -5032,6 +5032,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     }
 
     // Research Tab: Prompt Generation Functions
+    // The structure below is mirrored by ADVISE_RESEARCH_DIRECTIVE in src/services/agentPromptBuilder.ts.
+    // Keep both in sync — they cannot share a function across the webview/extension boundary.
     function generateResearchPrompt() {
         const promptInput = document.getElementById('research-prompt-input');
 

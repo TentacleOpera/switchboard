@@ -661,6 +661,49 @@
             background: color-mix(in srgb, #ffffff 5%, transparent);
         }
 
+        .governance-file-tabs {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            padding: 8px 16px 0;
+            background: var(--panel-bg);
+            border-bottom: 1px solid var(--border-color);
+        }
+        .gov-file-btn {
+            flex-shrink: 0;
+            white-space: nowrap;
+            background: transparent;
+            border: 1px solid transparent;
+            border-bottom: none;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-size: 10px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            padding: 6px 12px;
+            cursor: pointer;
+            border-radius: 3px 3px 0 0;
+            transition: all 0.15s;
+            position: relative;
+            top: 1px;
+        }
+        .gov-file-btn:hover {
+            color: var(--text-primary);
+            background: color-mix(in srgb, var(--accent-teal) 5%, transparent);
+        }
+        .gov-file-btn.active {
+            color: var(--accent-teal);
+            background: var(--panel-bg2);
+            border-color: var(--border-color);
+            border-bottom-color: var(--panel-bg2);
+        }
+        body.theme-claudify .gov-file-btn:not(.active) { color: #8a8a8a; }
+        body.theme-claudify .gov-file-btn.active { border-color: transparent; }
+        body.theme-claudify .gov-file-btn:hover:not(.active) {
+            color: #c8c8c8;
+            background: color-mix(in srgb, #ffffff 5%, transparent);
+        }
+
         /* --- Cyber Theme Styles --- */
         .cyber-scanlines {
             display: none;
@@ -1269,6 +1312,11 @@
 
         <!-- Constitution tab -->
         <div id="constitution-content" class="shared-tab-content">
+            <div class="governance-file-tabs" id="governance-file-tabs">
+                <button class="gov-file-btn active" data-gov="constitution">CONSTITUTION.md</button>
+                <button class="gov-file-btn" data-gov="claude">CLAUDE.md</button>
+                <button class="gov-file-btn" data-gov="agents">AGENTS.md</button>
+            </div>
             <div class="active-doc-banner inactive" id="active-constitution-banner">
                 <div class="active-doc-info">
                     <span class="active-doc-label">Constitution Reference:</span>

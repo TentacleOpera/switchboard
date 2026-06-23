@@ -10,3 +10,20 @@ export function getConstitutionPath(context: vscode.ExtensionContext, workspaceR
     }
     return path.join(workspaceRoot, 'CONSTITUTION.md');
 }
+export type GovernanceFileKey = 'constitution' | 'claude' | 'agents';
+
+const GOVERNANCE_BASENAMES: Record<Exclude<GovernanceFileKey, 'constitution'>, string> = {
+    claude: 'CLAUDE.md',
+    agents: 'AGENTS.md',
+};
+
+export function getGovernanceFilePath(
+    context: vscode.ExtensionContext,
+    workspaceRoot: string,
+    key: GovernanceFileKey = 'constitution'
+): string {
+    if (key === 'constitution') {
+        return getConstitutionPath(context, workspaceRoot); // preserves custom paths
+    }
+    return path.join(workspaceRoot, GOVERNANCE_BASENAMES[key]);
+}

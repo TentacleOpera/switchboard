@@ -135,6 +135,7 @@
     let _constitutionWorkspaces = [];
     let _constitutionSelectedWorkspace = null;
     let _constitutionSelectedFile = null;
+    let _constitutionSelectedGovKey = 'constitution';
 
     // Elements
     const kanbanWorkspaceFilter = document.getElementById('kanban-workspace-filter');
@@ -327,6 +328,15 @@
             case 'kanbanPlanLogReady':
                 showKanbanLogOverlay(msg.entries || []);
                 break;
+            case 'governanceFileChanged':
+                if (_constitutionSelectedWorkspace && _constitutionSelectedWorkspace.workspaceRoot === msg.workspaceRoot && msg.governanceFile === _constitutionSelectedGovKey && !state.editMode.constitution) {
+                    vscode.postMessage({
+                        type: 'readConstitutionFile',
+                        workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot,
+                        governanceFile: _constitutionSelectedGovKey
+                    });
+                }
+                break;
             case 'constitutionFilesLoaded':
                 _constitutionWorkspaces = msg.workspaces || [];
                 renderConstitutionWorkspaceList();
@@ -412,24 +422,43 @@
             }
             case 'constitutionFileDeleted':
                 if (constitutionPreviewContent && _constitutionSelectedWorkspace && _constitutionSelectedWorkspace.workspaceRoot === msg.workspaceRoot) {
-                    constitutionPreviewContent.innerHTML = `
-                        <div class="constitution-onboarding">
-                            <p class="constitution-onboarding-title">No constitution found for this workspace.</p>
-                            <p>A project constitution is a concise document that defines the soul of your project: its goals, the people it serves, its key features, guiding principles, and how the team communicates. It is not a technical spec — it is the context that tells an AI planning assistant <em>why</em> the project exists and <em>who</em> it is for.</p>
-                            <p>Once created, you can enable it as a Planning Reference so it is automatically included in every planning prompt alongside your task descriptions.</p>
-                            <p>Use <strong>Build via Planner</strong> above to generate one for this workspace.</p>
-                        </div>
-                    `;
+                    const govFile = msg.governanceFile || 'constitution';
+                    if (govFile === 'constitution') {
+                        constitutionPreviewContent.innerHTML = `
+                            <div class="constitution-onboarding">
+                                <p class="constitution-onboarding-title">No constitution found for this workspace.</p>
+                                <p>A project constitution is a concise document that defines the soul of your project: its goals, the people it serves, its key features, guiding principles, and how the team communicates. It is not a technical spec — it is the context that tells an AI planning assistant <em>why</em> the project exists and <em>who</em> it is for.</p>
+                                <p>Once created, you can enable it as a Planning Reference so it is automatically included in every planning prompt alongside your task descriptions.</p>
+                                <p>Use <strong>Build via Planner</strong> above to generate one for this workspace.</p>
+                            </div>
+                        `;
+                    } else {
+                        const filename = govFile === 'claude' ? 'CLAUDE.md' : 'AGENTS.md';
+                        constitutionPreviewContent.innerHTML = `
+                            <div class="constitution-onboarding">
+                                <p class="constitution-onboarding-title">No ${filename} found for this workspace.</p>
+                                <p>You can create one by clicking <strong>Edit</strong> or writing it from the terminal/editor.</p>
+                            </div>
+                        `;
+                    }
                     state.editOriginalContent.constitution = '';
                     _constitutionSelectedFile = null;
-                    if (btnEditConstitution) btnEditConstitution.disabled = true;
+                    if (btnEditConstitution) btnEditConstitution.disabled = (govFile === 'constitution');
                     if (btnBuildViaPlanner) {
-                        btnBuildViaPlanner.style.display = '';
-                        btnBuildViaPlanner.disabled = false;
+                        if (govFile === 'constitution') {
+                            btnBuildViaPlanner.style.display = '';
+                            btnBuildViaPlanner.disabled = false;
+                        } else {
+                            btnBuildViaPlanner.style.display = 'none';
+                        }
                     }
                     if (btnCopyBuildPrompt) {
-                        btnCopyBuildPrompt.style.display = '';
-                        btnCopyBuildPrompt.disabled = false;
+                        if (govFile === 'constitution') {
+                            btnCopyBuildPrompt.style.display = '';
+                            btnCopyBuildPrompt.disabled = false;
+                        } else {
+                            btnCopyBuildPrompt.style.display = 'none';
+                        }
                     }
                     if (btnUpdateViaPlanner) btnUpdateViaPlanner.style.display = 'none';
                     if (btnCopyUpdatePrompt) btnCopyUpdatePrompt.style.display = 'none';
@@ -446,10 +475,16 @@
                 break;
             case 'constitutionFileRead':
                 if (constitutionPreviewContent && _constitutionSelectedWorkspace && _constitutionSelectedWorkspace.workspaceRoot === msg.workspaceRoot) {
+                    if (msg.governanceFile && msg.governanceFile !== _constitutionSelectedGovKey) {
+                        break; // Race guard
+                    }
                     if (state.editMode.constitution) {
                         state.externalChangePending.constitution = true;
                     } else {
-                        vscode.postMessage({ type: 'getConstitutionStatus', workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot });
+                        const isConst = (_constitutionSelectedGovKey === 'constitution');
+                        if (isConst) {
+                            vscode.postMessage({ type: 'getConstitutionStatus', workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot });
+                        }
                         if (msg.exists) {
                             constitutionPreviewContent.innerHTML = msg.renderedHtml || '';
                             state.editOriginalContent.constitution = msg.content || '';
@@ -458,39 +493,49 @@
                             if (btnBuildViaPlanner) btnBuildViaPlanner.style.display = 'none';
                             if (btnCopyBuildPrompt) btnCopyBuildPrompt.style.display = 'none';
                             if (btnUpdateViaPlanner) {
-                                btnUpdateViaPlanner.style.display = '';
-                                btnUpdateViaPlanner.disabled = false;
+                                btnUpdateViaPlanner.style.display = isConst ? '' : 'none';
+                                btnUpdateViaPlanner.disabled = !isConst;
                             }
                             if (btnCopyUpdatePrompt) {
-                                btnCopyUpdatePrompt.style.display = '';
-                                btnCopyUpdatePrompt.disabled = false;
+                                btnCopyUpdatePrompt.style.display = isConst ? '' : 'none';
+                                btnCopyUpdatePrompt.disabled = !isConst;
                             }
                             if (btnDeleteConstitution) btnDeleteConstitution.style.display = '';
-                            if (btnSetConstitutionPath) btnSetConstitutionPath.disabled = false;
+                            if (btnSetConstitutionPath) btnSetConstitutionPath.disabled = !isConst;
                         } else {
-                            constitutionPreviewContent.innerHTML = `
-                                <div class="constitution-onboarding">
-                                    <p class="constitution-onboarding-title">No constitution found for this workspace.</p>
-                                    <p>A project constitution is a concise document that defines the soul of your project: its goals, the people it serves, its key features, guiding principles, and how the team communicates. It is not a technical spec — it is the context that tells an AI planning assistant <em>why</em> the project exists and <em>who</em> it is for.</p>
-                                    <p>Once created, you can enable it as a Planning Reference so it is automatically included in every planning prompt alongside your task descriptions.</p>
-                                    <p>Use <strong>Build via Planner</strong> above to generate one for this workspace.</p>
-                                </div>
-                            `;
+                            const filename = _constitutionSelectedGovKey === 'claude' ? 'CLAUDE.md' : 'AGENTS.md';
+                            if (isConst) {
+                                constitutionPreviewContent.innerHTML = `
+                                    <div class="constitution-onboarding">
+                                        <p class="constitution-onboarding-title">No constitution found for this workspace.</p>
+                                        <p>A project constitution is a concise document that defines the soul of your project: its goals, the people it serves, its key features, guiding principles, and how the team communicates. It is not a technical spec — it is the context that tells an AI planning assistant <em>why</em> the project exists and <em>who</em> it is for.</p>
+                                        <p>Once created, you can enable it as a Planning Reference so it is automatically included in every planning prompt alongside your task descriptions.</p>
+                                        <p>Use <strong>Build via Planner</strong> above to generate one for this workspace.</p>
+                                    </div>
+                                `;
+                            } else {
+                                constitutionPreviewContent.innerHTML = `
+                                    <div class="constitution-onboarding">
+                                        <p class="constitution-onboarding-title">No ${filename} found for this workspace.</p>
+                                        <p>You can create one by clicking <strong>Edit</strong> or writing it from the terminal/editor.</p>
+                                    </div>
+                                `;
+                            }
                             state.editOriginalContent.constitution = '';
                             _constitutionSelectedFile = null;
-                            if (btnEditConstitution) btnEditConstitution.disabled = true;
+                            if (btnEditConstitution) btnEditConstitution.disabled = isConst;
                             if (btnBuildViaPlanner) {
-                                btnBuildViaPlanner.style.display = '';
-                                btnBuildViaPlanner.disabled = false;
+                                btnBuildViaPlanner.style.display = isConst ? '' : 'none';
+                                btnBuildViaPlanner.disabled = !isConst;
                             }
                             if (btnCopyBuildPrompt) {
-                                btnCopyBuildPrompt.style.display = '';
-                                btnCopyBuildPrompt.disabled = false;
+                                btnCopyBuildPrompt.style.display = isConst ? '' : 'none';
+                                btnCopyBuildPrompt.disabled = !isConst;
                             }
                             if (btnUpdateViaPlanner) btnUpdateViaPlanner.style.display = 'none';
                             if (btnCopyUpdatePrompt) btnCopyUpdatePrompt.style.display = 'none';
                             if (btnDeleteConstitution) btnDeleteConstitution.style.display = 'none';
-                            if (btnSetConstitutionPath) btnSetConstitutionPath.disabled = false;
+                            if (btnSetConstitutionPath) btnSetConstitutionPath.disabled = !isConst;
                         }
                     }
                 }
@@ -1260,10 +1305,22 @@
                 itemDiv.classList.add('selected');
             }
 
-            const status = ws.hasConstitution ? '✓ Has Constitution' : '• No Constitution';
+            let statusHtml = '';
+            if (ws.governance && Array.isArray(ws.governance)) {
+                const badges = ws.governance.map(g => {
+                    const label = g.key === 'constitution' ? 'C' : (g.key === 'claude' ? 'Cl' : 'A');
+                    const color = g.exists ? 'var(--accent-teal)' : 'var(--text-secondary)';
+                    const opacity = g.exists ? '1' : '0.4';
+                    return `<span style="color: ${color}; opacity: ${opacity}; font-weight: bold; margin-right: 6px;">${label}</span>`;
+                }).join('');
+                statusHtml = `<div style="font-size: 11px; margin-top: 4px;">${badges}</div>`;
+            } else {
+                const status = ws.hasConstitution ? '✓ Has Constitution' : '• No Constitution';
+                statusHtml = `<div style="font-size: 11px; color: var(--text-secondary); margin-top: 4px;">${escapeHtml(status)}</div>`;
+            }
             itemDiv.innerHTML = `
                 <div style="font-weight: 500;">${escapeHtml(ws.label)}</div>
-                <div style="font-size: 11px; color: var(--text-secondary); margin-top: 4px;">${escapeHtml(status)}</div>
+                ${statusHtml}
             `;
 
             itemDiv.addEventListener('click', () => {
@@ -1280,8 +1337,39 @@
     function selectConstitutionWorkspace(ws) {
         _constitutionSelectedWorkspace = ws;
         if (constitutionPreviewContent) constitutionPreviewContent.innerHTML = '<div class="empty-state">Loading...</div>';
-        vscode.postMessage({ type: 'readConstitutionFile', workspaceRoot: ws.workspaceRoot });
+        vscode.postMessage({
+            type: 'readConstitutionFile',
+            workspaceRoot: ws.workspaceRoot,
+            governanceFile: _constitutionSelectedGovKey
+        });
     }
+
+    // Wire up governance tab buttons
+    document.querySelectorAll('.gov-file-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const key = btn.dataset.gov;
+            if (key === _constitutionSelectedGovKey) return;
+            if (state.dirtyFlags.constitution) {
+                exitEditMode('constitution');
+            }
+            document.querySelectorAll('.gov-file-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            _constitutionSelectedGovKey = key;
+
+            const isConst = (key === 'constitution');
+            if (activeConstitutionBanner) activeConstitutionBanner.classList.add('inactive');
+            if (btnEnableConstitution) btnEnableConstitution.style.display = isConst ? '' : 'none';
+            if (btnBuildViaPlanner) btnBuildViaPlanner.style.display = isConst ? '' : 'none';
+            if (btnCopyBuildPrompt) btnCopyBuildPrompt.style.display = isConst ? '' : 'none';
+            if (btnUpdateViaPlanner) btnUpdateViaPlanner.style.display = isConst ? '' : 'none';
+            if (btnCopyUpdatePrompt) btnCopyUpdatePrompt.style.display = isConst ? '' : 'none';
+            if (btnSetConstitutionPath) btnSetConstitutionPath.style.display = isConst ? '' : 'none';
+
+            if (_constitutionSelectedWorkspace) {
+                selectConstitutionWorkspace(_constitutionSelectedWorkspace);
+            }
+        });
+    });
 
     if (btnBuildViaPlanner) {
         btnBuildViaPlanner.addEventListener('click', () => {
@@ -1346,7 +1434,11 @@
                 alert('Please select a workspace first.');
                 return;
             }
-            vscode.postMessage({ type: 'deleteConstitutionFile', workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot });
+            vscode.postMessage({
+                type: 'deleteConstitutionFile',
+                workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot,
+                governanceFile: _constitutionSelectedGovKey
+            });
         });
     }
 
@@ -1464,7 +1556,8 @@
                 type: 'saveConstitutionFile',
                 workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot,
                 content,
-                originalContent
+                originalContent,
+                governanceFile: _constitutionSelectedGovKey
             });
         });
     }

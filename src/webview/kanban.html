@@ -2868,6 +2868,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   <span class="tooltip">Skip automated test execution to save tokens</span>
                 </label>
 
+                <label class="checkbox-item" title="Instruct the planner to emit a research prompt for anything it is not 100% sure about">
+                  <input type="checkbox" id="plannerAddonAdviseResearch">
+                  <span>Advise Research If Unsure</span>
+                  <span class="tooltip">Planner outputs a research prompt (for Google AI Studio / Claude / your research agent) covering its uncertain assumptions</span>
+                </label>
+
                 <div class="addon-radio-group" style="margin-top:8px;">
                   <span class="addon-label" style="font-weight:600;margin-bottom:4px;display:block;">Subagent Policy</span>
                   <label class="checkbox-item" title="Let the execution platform decide subagent behavior">
@@ -3961,7 +3967,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
 
             // Planner specific add-on listeners
-            ['plannerAddonSwitchboardSafeguards', 'plannerAddonPlanningEpic', 'plannerAddonConstitution', 'plannerAddonDesignSystemDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonClearAntigravityContext', 'plannerAddonCavemanOutput', 'plannerAddonSkipCompilation', 'plannerAddonSkipTests'].forEach(id => {
+            ['plannerAddonSwitchboardSafeguards', 'plannerAddonPlanningEpic', 'plannerAddonConstitution', 'plannerAddonDesignSystemDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonClearAntigravityContext', 'plannerAddonCavemanOutput', 'plannerAddonSkipCompilation', 'plannerAddonSkipTests', 'plannerAddonAdviseResearch'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) {
                     el.addEventListener('change', (e) => {

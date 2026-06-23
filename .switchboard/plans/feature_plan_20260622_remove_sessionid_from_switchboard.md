@@ -20,10 +20,10 @@ Fully eradicate `sessionId` / `session_id` from the switchboard extension. Every
 
 ## User Review Required
 
-Yes — this plan touches the SQLite schema of a published extension with ~4,000 installs. The DB migration (Phase 5) is irreversible (copy-swap drops the old table). A failed migration on a user's machine could corrupt their kanban database. The user must review:
-1. The Phase 5 copy-swap SQL (corrected below with the verified 28-column schema)
-2. The runsheet filename transition strategy (Phase 3.10)
-3. The decision to drop `session_id` from `activity_log` (Phase 5.3)
+Yes — this plan touches the SQLite schema of a published extension with ~4,000 installs. The DB migration (Phase 4) is irreversible (copy-swap drops the old table). A failed migration on a user's machine could corrupt their kanban database. The user must review:
+1. The Phase 4 copy-swap SQL (corrected below with the verified 28-column schema)
+2. The runsheet filename transition strategy (Phase 2.10)
+3. The decision to drop `session_id` from `activity_log` (Phase 4.3)
 
 ---
 
@@ -79,18 +79,18 @@ These replacement methods are live in `KanbanDatabase.ts` and must be used:
 ## Complexity Audit
 
 ### Routine
-- Deleting 26 deprecated DB methods from `KanbanDatabase.ts` (Phase 4) — mechanical deletion after callers are migrated
-- Removing `sessionId` field from interface declarations (Phase 6) — straightforward field removal
-- Updating webview JS message shapes to use `planId`/`planFile` (Phase 3.13) — find-and-replace in 2 files
-- Updating `extension.ts` command registrations (Phase 3.12) — parameter renames
-- Removing `sessionId` from `NotionBackupService` and `ArchiveManager` (Phases 3.6, 3.8) — field removal from serialization
-- Updating test fixtures (Phase 7) — mechanical replacement of `sessionId` with `planId`/`planFile`
+- Deleting 26 deprecated DB methods from `KanbanDatabase.ts` (Phase 3) — mechanical deletion after callers are migrated
+- Removing `sessionId` field from interface declarations (Phase 5) — straightforward field removal
+- Updating webview JS message shapes to use `planId`/`planFile` (Phase 2.13) — find-and-replace in 2 files
+- Updating `extension.ts` command registrations (Phase 2.12) — parameter renames
+- Removing `sessionId` from `NotionBackupService` and `ArchiveManager` (Phases 2.6, 2.8) — field removal from serialization
+- Updating test fixtures (Phase 6) — mechanical replacement of `sessionId` with `planId`/`planFile`
 
 ### Complex / Risky
-- **Phase 5 DB migration (copy-swap)** — irreversible schema change on a published extension with ~4,000 installs. The copy-swap SQL must exactly match the current 29-column schema or data is lost. Must handle the UNIQUE index `idx_plans_plan_file_workspace` correctly.
-- **Phase 3.10 SessionActionLog runsheet filename transition** — existing runsheet files on disk are keyed by the old `sessionId`/`planFile`. Removing the `normalized.sessionId = planFile` fallback (line 492) without a transition path will make existing runsheets unreadable. The `_resolvePlan` hybrid fallback (line 70–76) must also be updated.
-- **Phase 3.2 TaskViewerProvider migration** — 470 occurrences of `sessionId` across 18,879 lines. This is the highest-risk file. A missed callsite will cause a runtime error.
-- **`activity_log` INSERT paths** — must be identified and migrated before the `session_id` column is dropped (Phase 5.3), or every activity log write will crash.
+- **Phase 4 DB migration (copy-swap)** — irreversible schema change on a published extension with ~4,000 installs. The copy-swap SQL must exactly match the current 29-column schema or data is lost. Must handle the UNIQUE index `idx_plans_plan_file_workspace` correctly.
+- **Phase 2.10 SessionActionLog runsheet filename transition** — existing runsheet files on disk are keyed by the old `sessionId`/`planFile`. Removing the `normalized.sessionId = planFile` fallback (line 492) without a transition path will make existing runsheets unreadable. The `_resolvePlan` hybrid fallback (line 70–76) must also be updated.
+- **Phase 2.2 TaskViewerProvider migration** — 470 occurrences of `sessionId` across 18,879 lines. This is the highest-risk file. A missed callsite will cause a runtime error.
+- **`activity_log` INSERT paths** — must be identified and migrated before the `session_id` column is dropped (Phase 4.3), or every activity log write will crash.
 - **`_lastSessionId` → `_lastPlanFile` rename** — used for IDE restart recovery. If the restart recovery flow breaks, users lose their active plan tracking after restarting VS Code.
 
 ---
@@ -106,13 +106,13 @@ These replacement methods are live in `KanbanDatabase.ts` and must be used:
 - No security implications — `sessionId` is not used for authentication or authorization. It's an internal identifier.
 
 ### Side Effects
-- **Notion backup "Session ID" property removal** (Phase 3.6, line 276): Existing Notion pages will retain the property but new backups won't write it. This is cosmetic, not breaking.
-- **Archive schema change** (Phase 3.8): DuckDB archive table loses `session_id` column. Existing archived data retains the column; new archives don't write it. No FK in DuckDB so no integrity issue.
-- **`updateSessionId` deletion** (Phase 4): This method was used to remap session IDs when Claude restarted. With `planId` as the stable identifier, this concept no longer exists. Verify no caller depends on session ID remapping for plan continuity.
+- **Notion backup "Session ID" property removal** (Phase 2.6, line 276): Existing Notion pages will retain the property but new backups won't write it. This is cosmetic, not breaking.
+- **Archive schema change** (Phase 2.8): DuckDB archive table loses `session_id` column. Existing archived data retains the column; new archives don't write it. No FK in DuckDB so no integrity issue.
+- **`updateSessionId` deletion** (Phase 3): This method was used to remap session IDs when Claude restarted. With `planId` as the stable identifier, this concept no longer exists. Verify no caller depends on session ID remapping for plan continuity.
 
 ### Dependencies & Conflicts
 - **Migration V38 must run after V37** — V37 is the latest verified migration. Check for any other queued migrations before assigning V38.
-- **`plan_events` already migrated in V20** — `session_id` was removed from `plan_events` and replaced with `plan_id` FK. Phase 5.2 is confirmation-only, no SQL needed.
+- **`plan_events` already migrated in V20** — `session_id` was removed from `plan_events` and replaced with `plan_id` FK. Phase 4.2 is confirmation-only, no SQL needed.
 - **UNIQUE index `idx_plans_plan_file_workspace`** (line 183, recreated in V20 at line 392) — the copy-swap must recreate this index on the new table, not use a table-level UNIQUE constraint.
 - **`PLAN_COLUMNS` constant** (line 589) — includes `session_id`. Must be updated in the same migration that drops the column, or SELECT queries will reference a non-existent column.
 
@@ -120,13 +120,14 @@ These replacement methods are live in `KanbanDatabase.ts` and must be used:
 
 ## Dependencies
 
-- None — this plan is self-contained. All prerequisite `ByPlanFile`/`ByPlanId` methods already exist in the codebase.
+- `feature_plan_20260623_kill_sess_fallback_generator.md` — should be executed first. That plan kills the `sess_` generator (the actual bug source) and removes the dedup helpers. This plan assumes that work is complete.
+- All prerequisite `ByPlanFile`/`ByPlanId` methods already exist in the codebase.
 
 ---
 
 ## Adversarial Synthesis
 
-**Risk Summary:** Key risks: (1) Phase 5 copy-swap SQL must use the verified 28-column schema (excluding `session_id`) with correct types and defaults — the original plan's SQL was missing 5 columns and had wrong types, which would cause data loss for 4,000 users; (2) runsheet filename transition in SessionActionLog.ts must handle existing on-disk files keyed by old sessionId/planFile — removing the fallback without a transition path makes existing runsheets unreadable; (3) `activity_log` INSERT paths must be identified and migrated before the column is dropped. Mitigations: rewrite Phase 5 SQL against the verified schema (corrected below), add a read-both fallback for runsheet filenames during transition, and audit `activity_log` INSERT callsites in Phase 3.
+**Risk Summary:** Key risks: (1) Phase 4 copy-swap SQL must use the verified 28-column schema (excluding `session_id`) with correct types and defaults — the original plan's SQL was missing 5 columns and had wrong types, which would cause data loss for 4,000 users; (2) runsheet filename transition in SessionActionLog.ts must handle existing on-disk files keyed by old sessionId/planFile — removing the fallback without a transition path makes existing runsheets unreadable; (3) `activity_log` INSERT paths must be identified and migrated before the column is dropped. Mitigations: rewrite Phase 4 SQL against the verified schema (corrected below), add a read-both fallback for runsheet filenames during transition, and audit `activity_log` INSERT callsites in Phase 2.
 
 ---
 
@@ -262,11 +263,11 @@ Search for `sessionId` in both files (project.js: ~19 occurrences, planning.js: 
 
 ---
 
-### Phase 4 — Remove All Deprecated sessionId DB Methods
+### Phase 3 — Remove All Deprecated sessionId DB Methods
 
 File: `src/services/KanbanDatabase.ts`
 
-After all callers are migrated (Phase 3), delete the following methods entirely. No `@deprecated` stub, no empty shell — full deletion:
+After all callers are migrated (Phase 2), delete the following methods entirely. No `@deprecated` stub, no empty shell — full deletion:
 
 - `getPlanBySessionId(sessionId)` (line 2481)
 - `hasPlan(sessionId)` (line 1360 — the sessionId overload; `hasPlanByPlanFile` is the only one needed)
@@ -282,6 +283,7 @@ After all callers are migrated (Phase 3), delete the following methods entirely.
 - `isOwnedActive(sessionId, workspaceId)` (line 3759 — replaced by `isOwnedActiveByPlanId` from Phase 1)
 - `updateColumnTransaction(sessionIds[])` (line 3708 — replaced by `updateColumnTransactionByPlanId` from Phase 1)
 - `migrateSessionEvents(sessionId, events)` (line 5484 — replaced by `migrateSessionEventsByPlanId` from Phase 1)
+
 - `updateSessionId(oldSessionId, newSessionId)` (line 1748) — delete, no replacement (concept no longer exists)
 - `deletePlan(sessionId)` (line 1834)
 - `reviveDeletedPlans(sessionIds[])` (line 1650)
@@ -296,12 +298,12 @@ After all callers are migrated (Phase 3), delete the following methods entirely.
 - `getPlanFilePath(sessionId)` (line 1500 — superseded by `getPlanFilePathByPlanFile`)
 
 Also remove:
-- The `sess_`-row deduplication helpers: `cleanupSpuriousMirrorPlans` (lines 3437–3591) and `cleanupDuplicateLocalPlans` (lines 3599–3658) — these cleaned up rows that the now-deleted generator created.
-- `getRunSheet(sessionId)` fallback path and `_writeLocks.get(sessionId)` in `SessionActionLog.ts` (after Phase 3.10 transition is complete).
+- The `sess_`-row deduplication helpers: `cleanupSpuriousMirrorPlans` (lines 3437–3591) and `cleanupDuplicateLocalPlans` (lines 3599–3658) — these cleaned up rows that the now-deleted generator created. **Note:** If the separate `feature_plan_20260623_kill_sess_fallback_generator.md` plan has already been executed, these methods are already deleted.
+- `getRunSheet(sessionId)` fallback path and `_writeLocks.get(sessionId)` in `SessionActionLog.ts` (after Phase 2.10 transition is complete).
 
 ---
 
-### Phase 5 — DB Schema Migration (V38)
+### Phase 4 — DB Schema Migration (V38)
 
 File: `src/services/KanbanDatabase.ts`
 
@@ -309,7 +311,7 @@ File: `src/services/KanbanDatabase.ts`
 
 Add a new migration SQL constant and register it in the migration runner. The version number is **V38** (V37 is the latest verified migration as of 2026-06-23).
 
-#### 5.1 Drop `session_id` from `plans`
+#### 4.1 Drop `session_id` from `plans`
 
 SQLite does not support `ALTER TABLE DROP COLUMN` in versions before 3.35. Use the safe copy-swap pattern. **The new table must exactly match the current schema minus `session_id`:**
 
@@ -360,11 +362,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_plans_plan_file_workspace ON plans(plan_fi
 
 > **Important:** The `INSERT INTO plans_new SELECT ...` column list MUST match the `plans_new` column order exactly. The columns above are verified against lines 111–141 of `KanbanDatabase.ts`. Do not add or remove columns without re-reading the schema.
 
-#### 5.2 Drop `session_id` from `plan_events` — CONFIRMATION ONLY
+#### 4.2 Drop `session_id` from `plan_events` — CONFIRMATION ONLY
 
 Migration V20 (lines 396–407) already created `plan_events_v20` with `plan_id` FK and no `session_id` column. **No action needed.** Confirm by checking the current `plan_events` table schema at migration time. If for some reason `session_id` still exists (e.g., a non-V20 database), use the same copy-swap pattern.
 
-#### 5.3 Drop `session_id` from `activity_log`
+#### 4.3 Drop `session_id` from `activity_log`
 
 `activity_log` has `session_id TEXT` (nullable, no FK, line 220). Use the copy-swap pattern:
 
@@ -381,9 +383,9 @@ DROP TABLE activity_log;
 ALTER TABLE activity_log_new RENAME TO activity_log;
 ```
 
-> **Prerequisite:** Phase 3.14 must be complete — all `activity_log` INSERT paths must no longer write `session_id` before this migration runs.
+> **Prerequisite:** Phase 2.14 must be complete — all `activity_log` INSERT paths must no longer write `session_id` before this migration runs.
 
-#### 5.4 Drop orphaned indexes
+#### 4.4 Drop orphaned indexes
 
 ```sql
 DROP INDEX IF EXISTS idx_plans_session_id_unique;
@@ -393,7 +395,7 @@ DROP INDEX IF EXISTS idx_activity_session;
 
 Recreate `idx_events_session` and `idx_activity_session` without the `session_id` column (or drop them entirely if nothing queries by session anymore).
 
-#### 5.5 Update `PLAN_COLUMNS` constant
+#### 4.5 Update `PLAN_COLUMNS` constant
 
 Remove `session_id` from the `PLAN_COLUMNS` constant at line 589. The updated constant should be:
 
@@ -409,9 +411,9 @@ const PLAN_COLUMNS = `plan_id, topic, plan_file, kanban_column, status, complexi
 
 ---
 
-### Phase 6 — Remove `sessionId` from All Interfaces and Types
+### Phase 5 — Remove `sessionId` from All Interfaces and Types
 
-After Phases 3–5 compile cleanly, remove the field declarations:
+After Phases 2–4 compile cleanly, remove the field declarations:
 
 - `KanbanPlanRecord.sessionId: string` — the record shape used everywhere a DB row is returned
 - `KanbanDispatchCard.sessionId: string` in `TaskViewerProvider.ts:106`
@@ -422,11 +424,11 @@ After Phases 3–5 compile cleanly, remove the field declarations:
 - `JulesSessionRecord.sessionId` and `.planSessionId` at `TaskViewerProvider.ts:121` — these were sessionId aliases; replace with `planId` if still needed
 - `agentPromptBuilder.ts:33` `BatchPromptPlan` options type
 
-Also clean up `PLAN_COLUMNS` constant at `KanbanDatabase.ts:589` to remove `session_id` from the SQL select list after the column is dropped (Phase 5.5).
+Also clean up `PLAN_COLUMNS` constant at `KanbanDatabase.ts:589` to remove `session_id` from the SQL select list after the column is dropped (Phase 4.5).
 
 ---
 
-### Phase 7 — Tests
+### Phase 6 — Tests
 
 The following test files create/reference `sessionId`. Update them to use `planId` / `planFile`:
 
@@ -447,25 +449,25 @@ Do not add new tests for the removal itself. Update existing tests to construct 
 
 ## Order of Execution
 
+> **Prerequisite:** Execute `feature_plan_20260623_kill_sess_fallback_generator.md` first. That plan kills the `sess_` generator and removes the dedup helpers, which is the low-risk high-value fix. This plan handles the remaining full eradication.
+
 1. Phase 1 (add 4 new DB methods) — prerequisite for everything
-2. Phase 2 (kill sess_ generator) — can be done alongside Phase 1
-3. Phase 3 (migrate callers) — work file by file; compile after each file
-4. Phase 4 (delete old DB methods) — only after Phase 3 compiles clean
-5. Phase 5 (DB migration V38) — only after Phase 4
-6. Phase 6 (clean interfaces) — only after Phase 5 compiles clean
-7. Phase 7 (tests) — last
+2. Phase 2 (migrate callers) — work file by file; compile after each file
+3. Phase 3 (delete old DB methods) — only after Phase 2 compiles clean
+4. Phase 4 (DB migration V38) — only after Phase 3
+5. Phase 5 (clean interfaces) — only after Phase 4 compiles clean
+6. Phase 6 (tests) — last
 
 Do not skip ahead. Each phase is a compile gate for the next.
 
 ## Completion Criteria
 
-- `grep -r "sessionId\|session_id\|sess_" src/` returns zero hits in non-test, non-comment source code
+- `grep -r "sessionId\|session_id" src/` returns zero hits in non-test, non-comment source code
 - All `@deprecated` method stubs are gone — nothing left behind
 - DB schema has no `session_id` column in `plans`, `plan_events`, or `activity_log`
-- The `sess_${Date.now()}` pattern does not exist anywhere in the codebase
 - Extension compiles with `tsc --noEmit` with zero errors
-- All existing tests pass (they will need updates per Phase 7)
+- All existing tests pass (they will need updates per Phase 6)
 
 ## Recommendation
 
-**Complexity: 8 → Send to Lead Coder.** This is a multi-file coordination task with an irreversible DB migration on a published extension. The 470 occurrences in TaskViewerProvider.ts alone make this high-risk. A lead coder should handle the Phase 5 migration SQL and Phase 3.2 (TaskViewerProvider) personally; the remaining phases can be delegated if needed.
+**Complexity: 8 → Send to Lead Coder.** This is a multi-file coordination task with an irreversible DB migration on a published extension. The 470 occurrences in TaskViewerProvider.ts alone make this high-risk. A lead coder should handle the Phase 4 migration SQL and Phase 2.2 (TaskViewerProvider) personally; the remaining phases can be delegated if needed.

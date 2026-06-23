@@ -2798,6 +2798,7 @@ export class KanbanProvider implements vscode.Disposable {
 
         if (role === 'planner') {
             resolvedOptions.aggressivePairProgramming = promptsConfig.aggressivePairProgramming;
+            resolvedOptions.adviseResearchIfUnsure = promptsConfig.adviseResearchIfUnsure;
             resolvedOptions.plannerWorkflowPath = promptsConfig.plannerWorkflowPath;
             resolvedOptions.workflowFilePathEnabled = promptsConfig.workflowFilePathEnabledByRole?.planner !== false;
 
@@ -2926,6 +2927,7 @@ export class KanbanProvider implements vscode.Disposable {
             reviewerCompactPlanUpdateEnabled: reviewerConfig?.addons?.reviewerCompactPlanUpdate ?? false,
             leadChallengeEnabled: leadConfig?.addons?.leadChallenge ?? config.get<boolean>('leadCoder.inlineChallenge', false),
             aggressivePairProgramming: plannerConfig?.addons?.aggressivePairProgramming ?? config.get<boolean>('aggressivePairProgramming.enabled', false),
+            adviseResearchIfUnsure: plannerConfig?.addons?.adviseResearch ?? false,
             designDocEnabled: plannerConfig?.addons?.designDoc ?? config.get<boolean>('planner.designDocEnabled', false),
             designDocLink: config.get<string>('planner.designDocLink', ''),
             constitutionEnabled: plannerConfig?.addons?.constitution ?? config.get<boolean>('planner.constitutionEnabled', false),

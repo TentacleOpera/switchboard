@@ -221,3 +221,50 @@ Same rationale — a deserialized panel's JS hasn't loaded yet, so the buffer mu
 ---
 
 **Recommendation:** Complexity 3/10 → **Send to Intern.**
+
+## Review Pass — 2026-06-23
+
+### Stage 1: Adversarial Findings (Grumpy Principal Engineer)
+
+| # | Severity | Finding | Location |
+|---|----------|---------|----------|
+| 1 | NIT | `_pendingWebviewMessages: any[]` uses `any` instead of `unknown` — consistent with existing `postMessage(message: any)` signature, so acceptable. | `src/services/KanbanProvider.ts:110` |
+| 2 | NIT | `switchboardThemeChanged` broadcast (line 322) bypasses the queue, sending directly via `this._panel?.webview.postMessage`. Accepted risk — astronomically unlikely during the cold-open window, and next config change re-fires. Documented in plan. | `src/services/KanbanProvider.ts:322` |
+| 3 | NIT | Plan proposed inline comments ("Set readiness BEFORE any await...", "── Flush...──") that were omitted in implementation. Correct per global rule "Do NOT add or remove comments unless asked." No action. | `src/services/KanbanProvider.ts:4416, 4428` |
+
+**No CRITICAL findings. No MAJOR findings.**
+
+### Stage 2: Balanced Synthesis
+
+All 6 plan sections (a–f) verified present and correct in source:
+- **(a)** Fields at lines 109-110 ✅
+- **(b)** `postMessage()` queue logic at lines 1339-1346 ✅
+- **(c)** `ready` handler: `_webviewReady = true` set FIRST (before `await fullSync`), drain after `_pendingTab` flush, clear-before-drain, optional chaining — lines 4415-4434 ✅
+- **(d)** Both `onDidDispose` handlers reset flag + queue — lines 916-917, 958-959 ✅
+- **(e)** `open()` defense-in-depth reset at lines 888-889 ✅
+- **(f)** `deserializeWebviewPanel()` defense-in-depth reset at lines 936-937 ✅
+
+**Critical correctness property verified:** `_webviewReady = true` is set at line 4416 BEFORE `await fullSync` at line 4419. This prevents the dispose-during-await resurrection race described in the Complexity Audit. If dispose fires during the await, it sets the flag back to `false`; `ready` does not touch it again on resume.
+
+**External caller routing verified:**
+- All 10 `ContinuousSyncService` call sites route through `postMessage()` ✅
+- `postKanbanStatus` (extension.ts:2542) routes through `postMessage()` ✅
+
+**No code fixes applied — implementation is faithful and correct.**
+
+### Files Changed (by implementation, not by this review)
+
+- `src/services/KanbanProvider.ts` — lines 109-110 (fields), 888-889 (open reset), 916-917 (dispose reset #1), 936-937 (deserialize reset), 958-959 (dispose reset #2), 1339-1346 (postMessage queue), 4416 (ready flag-first), 4428-4434 (drain loop)
+
+### Validation Results
+
+- **Compilation:** SKIPPED per session directive — deferred to user (`npm run compile`).
+- **Tests:** SKIPPED per session directive — deferred to user.
+- **Static verification:** All 6 plan sections confirmed present via grep + read. Exactly 2 `onDidDispose` handlers, both patched. Exactly 1 `case 'ready'`, correctly implemented. No `confirm()`/`window.confirm()` introduced. No `kanban.html` edits needed.
+
+### Remaining Risks
+
+1. **`switchboardThemeChanged` (line 322) bypasses queue** — accepted; rare during cold open, self-healing on next config change.
+2. **25+ internal direct `this._panel.webview.postMessage` calls** bypass the queue — by design; these are post-ready internal operations (refreshWithData, fullSync, etc.), not cold-open callers. Out of plan scope.
+3. **Double-delivery of self-healing messages** — ContinuousSyncService messages may be delivered from both the queue drain and the next sync cycle. Webview handlers are idempotent (last-write-wins state updates). Harmless.
+4. **Manual verification steps 2–8** still pending — deferred to user per session directives.
