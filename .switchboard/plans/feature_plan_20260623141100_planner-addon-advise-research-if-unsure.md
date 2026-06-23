@@ -106,6 +106,7 @@ export const ADVISE_RESEARCH_DIRECTIVE = `RESEARCH WHEN UNSURE: As you plan, tra
 - SOURCE GUIDANCE (authoritative sources, check dates, separate required/recommended/opinion)
 - SCOPE boundaries
 - OUTPUT format (short H1 title, an "Executive Summary" H2, then tiered findings, trade-offs, glossary, source list)
+- CITATIONS: do NOT include inline source URLs or citations in the body; attach all references as a single consolidated list at the END only
 - DEPTH with a target of at least 50 authoritative sources
 Then advise the user to run that prompt through Google AI Studio (search grounding enabled), Claude, or their research agent of choice, and to feed the findings back before implementation. If you are confident about everything, state that no research is needed and omit the section.`;
 ```

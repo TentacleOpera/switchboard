@@ -31,13 +31,14 @@ Yes — this plan touches the SQLite schema of a published extension with ~4,000
 
 Agents kill one surface and leave three others. The surfaces are:
 
-1. **The `sess_` fallback generator** — `TaskViewerProvider.ts` at lines ~13076–13100 (line numbers are approximate; search for `sess_${Date.now()}`). When no Claude session ID is found in `state.json`, code fabricates `sess_${Date.now()}`. This creates orphan DB rows with garbage primary keys.
-2. **~20 `sessionId`-keyed DB methods on `KanbanDatabase`** — `getPlanBySessionId`, `updateColumn(sessionId)`, `movePlan(sessionId)`, `deletePlan(sessionId)`, `updateComplexity(sessionId)`, `updateTags(sessionId)`, `updateStatus(sessionId)`, `updateLastAction(sessionId)`, `updateTopic(sessionId)`, `updatePlanFile(sessionId)`, `updateBrainPaths(sessionId)`, `isOwnedActive(sessionId)`, `updateColumnTransaction(sessionIds[])`, `updateSessionId`, `hasPlan(sessionId)`, `getPlanFilePath(sessionId)`, `reviveDeletedPlans(sessionIds[])`, `completeMultiple(sessionIds[])`, `appendPlanEvent(sessionId)`, `getPlanEvents(sessionId)`, `getRunSheet(sessionId)`, `migrateSessionEvents(sessionId)`, `deletePlanEvents(sessionId)`, `updateDispatchInfo(sessionId)`, `updateLinearIssueId(sessionId)`, `updateClickUpTaskId(sessionId)`.
-3. **The `session_id` SQL column** — present in the `plans` and `activity_log` tables. Already removed from `plan_events` in V20. Can't be removed from `plans`/`activity_log` without a DB migration.
-4. **All callers** across six service files + two webview JS files + `extension.ts` command registrations.
-5. **The `sessionId` field on interfaces** — `KanbanPlanRecord`, `KanbanDispatchCard`, `LiveSyncState`, `PlanningPanelProvider` local type, `ArchiveManager` local type, `NotionBackupService` local type, `SessionActionLog` sheet shape.
-6. **`_lastSessionId`** — private field on `TaskViewerProvider` (line 341), used to resume tracking after IDE restart. Must be replaced by `_lastPlanFile`.
-7. **The `_planRegistry`** — one code path still indexes by `sheet.sessionId` (search for `_planRegistry.entries[sheet.sessionId]`, approximately line 11377).
+1. **~20 `sessionId`-keyed DB methods on `KanbanDatabase`** — `getPlanBySessionId`, `updateColumn(sessionId)`, `movePlan(sessionId)`, `deletePlan(sessionId)`, `updateComplexity(sessionId)`, `updateTags(sessionId)`, `updateStatus(sessionId)`, `updateLastAction(sessionId)`, `updateTopic(sessionId)`, `updatePlanFile(sessionId)`, `updateBrainPaths(sessionId)`, `isOwnedActive(sessionId)`, `updateColumnTransaction(sessionIds[])`, `updateSessionId`, `hasPlan(sessionId)`, `getPlanFilePath(sessionId)`, `reviveDeletedPlans(sessionIds[])`, `completeMultiple(sessionIds[])`, `appendPlanEvent(sessionId)`, `getPlanEvents(sessionId)`, `getRunSheet(sessionId)`, `migrateSessionEvents(sessionId)`, `deletePlanEvents(sessionId)`, `updateDispatchInfo(sessionId)`, `updateLinearIssueId(sessionId)`, `updateClickUpTaskId(sessionId)`.
+2. **The `session_id` SQL column** — present in the `plans` and `activity_log` tables. Already removed from `plan_events` in V20. Can't be removed from `plans`/`activity_log` without a DB migration.
+3. **All callers** across six service files + two webview JS files + `extension.ts` command registrations.
+4. **The `sessionId` field on interfaces** — `KanbanPlanRecord`, `KanbanDispatchCard`, `LiveSyncState`, `PlanningPanelProvider` local type, `ArchiveManager` local type, `NotionBackupService` local type, `SessionActionLog` sheet shape.
+5. **`_lastSessionId`** — private field on `TaskViewerProvider` (line 341), used to resume tracking after IDE restart. Must be replaced by `_lastPlanFile`.
+6. **The `_planRegistry`** — one code path still indexes by `sheet.sessionId` (search for `_planRegistry.entries[sheet.sessionId]`, approximately line 11377).
+
+> **Note:** The `sess_` fallback generator and deduplication helpers were previously listed here as surface #1. They have been split into a separate plan (`feature_plan_20260623_kill_sess_fallback_generator.md`) and should be executed first. This plan assumes that plan is already complete — no new `sess_` rows are being created.
 
 All `ByPlanFile` and `ByPlanId` replacement methods already exist in `KanbanDatabase`. **Four** methods have no `ByPlanId` variant yet and need to be added before callers can be migrated (Phase 1). Note: `updatePlanFile` already has a `ByPlanId` variant at line 1740 — it does NOT need a new method.
 
@@ -87,7 +88,6 @@ These replacement methods are live in `KanbanDatabase.ts` and must be used:
 
 ### Complex / Risky
 - **Phase 5 DB migration (copy-swap)** — irreversible schema change on a published extension with ~4,000 installs. The copy-swap SQL must exactly match the current 29-column schema or data is lost. Must handle the UNIQUE index `idx_plans_plan_file_workspace` correctly.
-- **Phase 2 sess_ generator removal** — changes the plan creation flow. If downstream code still expects a `sessionId` to exist, it will get `undefined` and crash. Must verify all downstream consumers are migrated first.
 - **Phase 3.10 SessionActionLog runsheet filename transition** — existing runsheet files on disk are keyed by the old `sessionId`/`planFile`. Removing the `normalized.sessionId = planFile` fallback (line 492) without a transition path will make existing runsheets unreadable. The `_resolvePlan` hybrid fallback (line 70–76) must also be updated.
 - **Phase 3.2 TaskViewerProvider migration** — 470 occurrences of `sessionId` across 18,879 lines. This is the highest-risk file. A missed callsite will cause a runtime error.
 - **`activity_log` INSERT paths** — must be identified and migrated before the `session_id` column is dropped (Phase 5.3), or every activity log write will crash.
@@ -158,42 +158,18 @@ The existing `migrateSessionEvents(sessionId, events)` at line 5484 inserts into
 
 ---
 
-### Phase 2 — Remove the `sess_` Fallback ID Generator
-
-File: `src/services/TaskViewerProvider.ts`
-
-Search for `sess_${Date.now()}` to find the block (approximately lines 13076–13100).
-
-The block currently reads (simplified):
-
-```ts
-let sessionId: string | undefined;
-if (fs.existsSync(statePath)) { /* read state.json → sessionId */ }
-if (!sessionId) {
-    sessionId = `sess_${Date.now()}`;  // ← DELETE THIS BRANCH (line ~13078)
-} else {
-    // collision check that assigns sess_${Date.now()}_${random} ← DELETE THIS BLOCK (line ~13098)
-}
-```
-
-**Replace with:** if no Claude session ID is found in `state.json`, do **not** fabricate one. The plan is identified by its `planFile` alone. The runsheet and DB row should be created/found by `planFile` + `workspaceId` from that point forward in the function. The `sessionId` local variable itself can be removed from this code path — callers downstream in the same function that pass `sessionId` to DB methods should already be on `ByPlanFile` variants after Phase 3.
-
-The `sess_` watcher-created-row cleanup code in `KanbanDatabase.ts` (`cleanupSpuriousMirrorPlans` at lines 3437–3591 and `cleanupDuplicateLocalPlans` at lines 3599–3658) can be removed once the generator is gone. Leave it in for now (Phase 5 cleanup).
-
----
-
-### Phase 3 — Migrate All Callers in Service Files
+### Phase 2 — Migrate All Callers in Service Files
 
 For each file: find every call that passes a `sessionId`, switch to the `planFile`/`planId` variant. The key is that by the time any service method is called, the caller already has the `KanbanPlanRecord` (which contains both `planFile` and `planId`). Use those. Do not do a secondary `getPlanBySessionId` lookup to get the planFile — the record is already in scope.
 
-#### 3.1 `src/services/ContinuousSyncService.ts` (~116 references)
+#### 2.1 `src/services/ContinuousSyncService.ts` (~116 references)
 
 - The `_states: Map<planFile, LiveSyncState>` is already keyed by `planFile`. Good.
 - The `_syncQueue: Array<{ sessionId: string; priority: number }>` (line 23) must change to `{ planFile: string; priority: number }`.
 - All method signatures `pausePlan(sessionId)` (line 131), `resumePlan(sessionId)` (line 165), `checkForConflicts(sessionId)` (line 227), `getState(sessionId)` (line 117), `_maybeSync(sessionId)` (line 366), `_executeSync(sessionId)` (line 398), `_showConflictDialog(sessionId)` (line 237), `_bumpEpoch(sessionId)` (line 134), `_isCurrentEpoch(sessionId)` (line 524), `_createInitialState(sessionId)` (line 204), `_getPlanRecord(sessionId)` (line 194), `_getPlanTopicSafe(sessionId)` — replace `sessionId: string` with `planFile: string` throughout. Update the single `_getPlanRecord` call that calls `db.getPlanBySessionId(sessionId)` → `db.getPlanByPlanFile(planFile, workspaceId)`.
 - `LiveSyncState` in `src/models/LiveSyncTypes.ts` line 11: remove `sessionId: string`.
 
-#### 3.2 `src/services/TaskViewerProvider.ts` (~470 references)
+#### 2.2 `src/services/TaskViewerProvider.ts` (~470 references)
 
 This is the largest file (18,879 lines). Work through it by callsite cluster. **Use grep to find each pattern — line numbers below are approximate.**
 
@@ -208,10 +184,10 @@ This is the largest file (18,879 lines). Work through it by callsite cluster. **
 - **The `currentColumnBySession.set(row.planId || row.sessionId, ...)`** fallbacks (search for `row.planId || row.sessionId`, approximately lines 2395 and 7050): use `row.planId` only.
 - **`routedSessions[role].push({ sessionId: card.sessionId, ... })`** (search for `routedSessions.*push.*sessionId`, approximately line 7933): remove `sessionId` from the pushed shape.
 - **`handleKanbanRestorePlan(data.sessionId)`** (search for `handleKanbanRestorePlan(data.sessionId`, approximately line 9075): use `data.planId`.
-- **Any webview message with `{ sessionId: ... }`**: update the message shape to use `planId` or `planFile`. See Phase 3.3 for PlanningPanelProvider message handlers.
+- **Any webview message with `{ sessionId: ... }`**: update the message shape to use `planId` or `planFile`. See Phase 2.3 for PlanningPanelProvider message handlers.
 - **`JulesSessionRecord`** (line 121): contains both `sessionId: string` and `planSessionId?: string`. Remove `sessionId` and `planSessionId` if no longer needed, or replace with `planId`.
 
-#### 3.3 `src/services/PlanningPanelProvider.ts`
+#### 2.3 `src/services/PlanningPanelProvider.ts`
 
 - Local interface `KanbanPlanSummary` at line 43 includes `sessionId: string` — remove.
 - Message handlers (search for `msg.sessionId`): approximately lines 2582, 2618, 2690, 2709, 2776 — extract `sessionId` from `msg.sessionId` — switch to `msg.planId` or `msg.planFile`.
@@ -219,70 +195,70 @@ This is the largest file (18,879 lines). Work through it by callsite cluster. **
 - Line ~7567 (search for `sessionId: r.sessionId`): `sessionId: r.sessionId || ''` in serialized response — remove field.
 - Line ~1810 (search for `sessionId: msg.sessionId`): `sessionId: msg.sessionId || ''` — remove.
 
-#### 3.4 `src/services/GlobalPlanWatcherService.ts`
+#### 2.4 `src/services/GlobalPlanWatcherService.ts`
 
 - Line ~533 (search for `sessionId: ''`): `sessionId: ''` in upsert object — remove field.
 - Line ~591 (search for `sessionId: plan.sessionId`): `sessionId: plan.sessionId` in upsert object — remove field.
 
-#### 3.5 `src/services/KanbanMigration.ts`
+#### 2.5 `src/services/KanbanMigration.ts`
 
 - Line 5: `sessionId: string` in `LegacyKanbanSnapshotRow` interface — remove.
 - Line 58: `db.updateColumn(row.sessionId, remappedColumn)` → `db.updateColumnByPlanFile(row.planFile, row.workspaceId, remappedColumn)`.
 
-#### 3.6 `src/services/NotionBackupService.ts`
+#### 2.6 `src/services/NotionBackupService.ts`
 
 - Line 105: `columnUpdates: Array<{ sessionId: string; column: string }>` → `Array<{ planId: string; column: string }>`.
 - Line 129: `columnUpdates.push({ sessionId: plan.sessionId, ... })` → `{ planId: plan.planId, ... }`.
 - Line 276: `'Session ID': { rich_text: [{ text: { content: plan.sessionId } }] }` — remove this Notion property entirely (it was only ever written for debugging and is not used on restore).
 - Line 304: `sessionId: getRichText(p['Session ID'])` — remove.
 
-#### 3.7 `src/services/PipelineOrchestrator.ts`
+#### 2.7 `src/services/PipelineOrchestrator.ts`
 
 - Line 17: `DispatchCallback` type includes `sessionId: string` parameter — remove.
 - Line 223: `const sessionId: string = sheet.sessionId` — change to use `planId` or `planFile` from the sheet.
 
-#### 3.8 `src/services/ArchiveManager.ts`
+#### 2.8 `src/services/ArchiveManager.ts`
 
 - Line 12: `sessionId: string` in `PlanRecord` interface — remove.
 - Line 32: same in `ReviewOutcome` interface — remove.
 - Line 158: DuckDB INSERT includes `plan.sessionId` — remove that column from the archive schema (it was only ever written for debugging; there is no FK use in DuckDB).
 - Line 278: similar — remove `sessionId` from the outcome INSERT.
 
-#### 3.9 `src/services/LinearAutomationService.ts` and `ClickUpAutomationService.ts`
+#### 2.9 `src/services/LinearAutomationService.ts` and `ClickUpAutomationService.ts`
 
 - Line 475 (Linear) and 332 (ClickUp): `_buildWriteBackSummary(planContent, plan.sessionId, rule.name)` — the `sessionId` parameter in `_buildWriteBackSummary` is used for display only (not written to DB). Replace with `plan.planId`.
 - Line 478 (Linear) and 336 (ClickUp): `db.updateLastAction(plan.sessionId, ...)` → `db.updateLastActionByPlanFile(plan.planFile, plan.workspaceId, ...)`.
 
-#### 3.10 `src/services/SessionActionLog.ts`
+#### 2.10 `src/services/SessionActionLog.ts`
 
-> **Critical addition not in original plan:** The `_resolvePlan` method (line 70–76) is a hybrid that tries `getPlanByPlanFile` first, then falls back to `getPlanBySessionId`. This fallback MUST be removed when `getPlanBySessionId` is deleted in Phase 4. If not removed, every legacy runsheet access will throw a runtime error.
+> **Critical addition not in original plan:** The `_resolvePlan` method (line 70–76) is a hybrid that tries `getPlanByPlanFile` first, then falls back to `getPlanBySessionId`. This fallback MUST be removed when `getPlanBySessionId` is deleted in Phase 3. If not removed, every legacy runsheet access will throw a runtime error.
 
 - **`_resolvePlan` method** (line 70): remove the `getPlanBySessionId` fallback at line 76. Keep only the `getPlanByPlanFile` path.
 - **`_composeHydratedSheet(sessionId, ...)`** (line 464): rename parameter to `planId`. The `sessionId` field in the returned sheet object (line 466) should be removed or renamed to `planId`.
 - **`_writeLocks` map** (declared at line 37, used at lines 478, 480, 481, 482, 539, 541, 542, 543): key by `planId` instead of `sessionId`.
 - **`createRunSheet(sessionId, data)`** (line 477): rename to `createRunSheetByPlanId(planId, data)`.
-- **`normalized.sessionId = planFile` fallback** (lines 491–492): this is compensating for missing IDs. With the generator gone (Phase 2), all sheets have real planIds. **However:** existing runsheet files on disk may still use the old `planFile` as their key. Instead of throwing, implement a **read-both transition**: if `planId` is missing, fall back to looking up the runsheet by `planFile` (which is what the old key was), then migrate the file to use `planId` on next write. Remove the fallback only after all on-disk files have been migrated (or after a reasonable transition period).
+- **`normalized.sessionId = planFile` fallback** (lines 491–492): this is compensating for missing IDs. With the generator gone (see `feature_plan_20260623_kill_sess_fallback_generator.md`), all sheets have real planIds. **However:** existing runsheet files on disk may still use the old `planFile` as their key. Instead of throwing, implement a **read-both transition**: if `planId` is missing, fall back to looking up the runsheet by `planFile` (which is what the old key was), then migrate the file to use `planId` on next write. Remove the fallback only after all on-disk files have been migrated (or after a reasonable transition period).
 - **`updateRunSheet(sessionId, updater)`** (line 538): rename to `updateRunSheetByPlanId(planId, updater)`.
 - **`getRunSheet(sessionId)`** (line 655): rename to `getRunSheetByPlanId(planId)`.
 - **`deleteRunSheet(sessionIdOrPlanFile)`** (line 640): already takes a hybrid key — update to `planId` only after transition.
 
-#### 3.11 `src/services/agentPromptBuilder.ts`
+#### 2.11 `src/services/agentPromptBuilder.ts`
 
 - Line 33 (search for `sessionId?: string` in `BatchPromptPlan` interface): remove the field.
 
-#### 3.12 `src/extension.ts`
+#### 2.12 `src/extension.ts`
 
 - Line 691: `switchboard.selectSession` command → rename to `switchboard.selectPlan`. Update webview callers.
 - Lines 1110–1120: `switchboard.triggerAgentFromKanban`, `switchboard.analystMapFromKanban`, `switchboard.analystMapFromKanbanBatch` — parameters change from `sessionId: string` / `sessionIds: string[]` to `planId: string` / `planIds: string[]`.
 - Lines 1130, 1140, 1145, 1150, 1160, 1165: same for batch trigger, backward/forward move, complete, delete, copy commands.
 
-#### 3.13 Webviews: `src/webview/project.js` and `src/webview/planning.js`
+#### 2.13 Webviews: `src/webview/project.js` and `src/webview/planning.js`
 
-Search for `sessionId` in both files (project.js: ~19 occurrences, planning.js: ~32 occurrences) and update all message sends to use `planId` or `planFile` instead. These are the messages the webview sends back to the extension host — they must match the command parameter changes in 3.12.
+Search for `sessionId` in both files (project.js: ~19 occurrences, planning.js: ~32 occurrences) and update all message sends to use `planId` or `planFile` instead. These are the messages the webview sends back to the extension host — they must match the command parameter changes in 2.12.
 
-#### 3.14 `activity_log` INSERT paths (NEW — not in original plan)
+#### 2.14 `activity_log` INSERT paths (NEW — not in original plan)
 
-> **Critical addition:** Before Phase 5.3 drops the `session_id` column from `activity_log`, all INSERT statements that write `session_id` must be found and updated. Search `KanbanDatabase.ts` and all service files for `activity_log` INSERT statements. If any code path writes `session_id` to `activity_log`, remove that column from the INSERT. If no code writes to it (it may be a vestigial column), confirm with grep before dropping.
+> **Critical addition:** Before Phase 4.3 drops the `session_id` column from `activity_log`, all INSERT statements that write `session_id` must be found and updated. Search `KanbanDatabase.ts` and all service files for `activity_log` INSERT statements. If any code path writes `session_id` to `activity_log`, remove that column from the INSERT. If no code writes to it (it may be a vestigial column), confirm with grep before dropping.
 
 ---
 

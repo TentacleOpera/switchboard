@@ -5041,13 +5041,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             return '';
         }
 
-        const STRUCTURED_PROMPT_RE = /^(ROLE|CONTEXT|OBJECTIVE|TASK|INSTRUCTIONS):/m;
-        const isStructured = STRUCTURED_PROMPT_RE.test(customPrompt);
-
-        if (isStructured) {
-            return customPrompt;
-        }
-
         let prompt = `You are helping me draft a research prompt for Google AI Studio with search grounding enabled.
 
 TOPIC: ${customPrompt}
@@ -5063,6 +5056,7 @@ Please draft a comprehensive research prompt optimized for Google AI Studio. The
   - A short H1 document title (fewer than 10 words, no colons or extra statements) — this is the title of the research document, not "Executive Summary"
   - "Executive Summary" as an H2 section heading beneath the title
   - Tiered findings, trade-off evaluation, glossary, and source list as subsequent sections
+- CITATIONS: Do NOT include inline source URLs or citations in the body of the report. Attach all references as a single consolidated list at the END of the report only
 - DEPTH level with a source count target of at least 50 authoritative sources
 
 Do NOT perform the research yourself. Only draft the prompt text that I will paste into Google AI Studio.

@@ -242,3 +242,67 @@ This change adds no `confirm()`/modal/two-click patterns, per CLAUDE.md.
 ---
 
 **Recommendation:** Complexity 3 → **Send to Intern.**
+
+## Reviewer Pass (2026-06-23)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*cracks knuckles, glares at the diff*
+
+Alright. Let me tear this apart like it personally insulted my codebase.
+
+**CRITICAL:** None. I looked. Hard. The fix actually does what it says.
+
+**MAJOR:** None. The three renderers are consistent, the accessor handles null `user` with a `{}` default, the date helper mirrors the *proven* backend logic at `TaskViewerProvider.ts:5038-5039` instead of reinventing it. The regex gate `/^\d+$/` is the right disambiguator — ISO strings contain `-`/`T`/`:` and route to `new Date(str)`; pure-digit ClickUp epoch-ms route to `new Date(Number(s))`. I confirmed the backend shapes myself: `ClickUpSyncService.ts:1242-1250` emits `{ comment_text, user:{username,email}, date }` as strings, and `_mapClickUpComment` (`TaskViewerProvider.ts:5409-5416`) preserves that shape verbatim. The plan's root-cause analysis is *accurate*, not hand-waved. Annoying. I wanted to find something.
+
+**NIT 1:** The "known harmless edge" — a bare `"2026"` would be read as 2026ms past epoch (Jan 1 1970). The plan acknowledges this and correctly notes ClickUp = 13-digit epoch, Linear = full ISO, so it cannot occur. I'll let it live. But if someone someday feeds a 4-digit year string into this helper, they'll get a 1970 date and a confusing bug. Defensive `epoch > 100000000000` floor would cost one comparison. Not fixing now — the plan explicitly scoped this out and the data sources don't produce it.
+
+**NIT 2:** `commentBodyText` returns `comment.body || comment.comment_text`. If a comment body is legitimately the string `"0"` it's truthy and fine; if it's `""` it falls through to `comment_text` which is also the right call. No bug. Just noting the `||` chain is intentional and correct for the empty-string-fallthrough semantics.
+
+**NIT 3:** The Comment Manager (`renderThreadHtml` at `:622`, `renderReplyHtml` at `:651`) calls `formatCommentDate(thread.date)` / `formatCommentDate(reply.date)` — a *different* normalized shape (`author`/`date`, not `user`/`createdAt`). The hardened helper is purely beneficial there: if `thread.date` is a ClickUp epoch-ms string it now formats correctly instead of returning raw digits; if it's already ISO/Date-compatible the regex gate routes it correctly. The plan predicted this as a "beneficial side effect" — confirmed. No regression.
+
+*grudgingly closes the review folder*
+
+This is a clean, well-scoped, single-file display fix. The field-name mismatch was the actual bug, the accessor pattern avoids re-introducing it in the shared edit-mode renderer, and the date hardening fixes both the inline renderers AND the Comment Manager in one stroke. I hate that I can't find a real problem.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is:**
+- All five changes (A–E). Implementation matches the plan byte-for-byte.
+- The shape-agnostic accessor pattern (`commentAuthorName`/`commentBodyText`/`commentDateRaw`) — this is the correct fix for the shared edit-mode renderer trap and avoids provider branching.
+- The `/^\d+$/` epoch gate mirroring backend logic.
+- The `{}` default for null `comment.user`.
+- No backend changes — confirmed unnecessary; data already reaches the webview with all needed fields.
+
+**Fix now:** None. No CRITICAL or MAJOR findings. No code edits applied.
+
+**Defer:**
+- NIT 1 (bare-year-string defensive floor) — explicitly out of scope; data sources don't produce it. Could add `epoch > 100000000000` guard in a future hardening pass if the helper gets reused on uncontrolled inputs.
+
+### Code Fixes Applied
+
+None. The implementation was already correct and complete. No edits to `src/webview/planning.js` were made during this review.
+
+### Verification Results
+
+**Static check (run this session):**
+- `grep "comment\.user\?\.name|comment\.body|comment\.createdAt" src/webview/planning.js` → only 2 hits, both inside the new accessor functions at `:688` (`comment.body || comment.comment_text`) and `:691` (`comment.createdAt || comment.date`). No stale reads in any `.tickets-comment-item` block. **PASS.**
+- `grep "\.slice\(0,\s*10\)" src/webview/planning.js` → 0 hits. The crude `YYYY-MM-DD` slice is gone everywhere. **PASS.**
+- `grep "tickets-comment-item" src/webview/planning.js` → exactly 3 renderers (`:7355`, `:7847`, `:8324`), all using the new accessors. No 4th renderer was missed. **PASS.**
+- Backend shape confirmation: `ClickUpSyncService.ts:1242-1250` and `TaskViewerProvider.ts:5409-5416` confirm the ClickUp `{ comment_text, user:{username,email}, date }` shape; `TaskViewerProvider.ts:5038-5039` confirms the dual-format date handling the helper mirrors. **PASS.**
+
+**Build:** Skipped per session directive (and per CLAUDE.md — `dist/` is not used during dev/testing; `src/` is source of truth).
+
+**Tests:** Skipped per session directive (run separately by the user).
+
+**Manual (installed VSIX):** Not run this session — deferred to the user. The five manual checks in the original Verification Plan remain the authoritative runtime confirmation.
+
+### Files Changed by Implementation (pre-review)
+
+- `src/webview/planning.js` — Changes A–E (lines `:666-692` helper/accessors; `:7355-7359` edit-mode renderer; `:7847-7851` Linear detail renderer; `:8324-8328` ClickUp detail renderer).
+
+### Remaining Risks
+
+1. **Bare-year-string edge** (NIT 1, deferred) — `formatCommentDate("2026")` returns a 1970 date. Cannot occur with current ClickUp (13-digit epoch) or Linear (full ISO) data. Revisit if the helper is reused on uncontrolled inputs.
+2. **Runtime confirmation pending** — the static check proves the code is structurally correct, but the actual ClickUp/Linear comment rendering in an installed VSIX is the final authority. The five manual checks in the Verification Plan must be run by the user.
+3. **No regression risk identified** — the Comment Manager benefits from the date hardening; the diff-cache re-render logic detects the HTML change naturally; no migrations, no async changes, no new dependencies.
