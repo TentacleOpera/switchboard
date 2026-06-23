@@ -271,3 +271,69 @@ this._view?.webview.postMessage({ type: 'selectSession', sessionId: planId });
 ## Recommendation
 
 **Complexity: 3 → Send to Intern.** This is a pure mechanical rename: replace one fabrication block with a `crypto.randomUUID()` call, then update 6 variable references in the same function. No DB changes, no migrations, no helper removal. An intern can handle this with the step-by-step instructions above.
+
+---
+
+## Review Pass — 2026-06-24
+
+### Stage 1: Grumpy Principal Engineer Review
+
+> *Glares at the diff. Sniffs. Pokes it with a stick.*
+
+**What I see:** A clean excision. The `sess_${Date.now()}` tumor is gone. The `else` collision-check block — which was treating a symptom of an unstable key with an even MORE unstable key (`sess_${Date.now()}_${Math.random()}`) — is also gone. Replaced with `crypto.randomUUID()`. The `activeWorkflow` read from `state.json` is preserved. All 6 downstream usages in `_handlePlanCreation` and the `_incrementallyRegisterPlan` parameter rename are done. The webview `selectSession` messages pass `planId` as the value. The dedup helpers are untouched. `crypto` was already imported at line 7.
+
+**Findings:**
+
+| Severity | Finding | Location |
+|----------|---------|----------|
+| NIT | Stale comment: "incorrectly allow a duplicate sess_* row to be created" — no new `sess_*` rows can be created after this fix. The absolute-path fallback is still valid (prevents duplicate UUID rows), but the comment references the old symptom. Left in place per CLAUDE.md "do not remove comments unless asked" rule. | `TaskViewerProvider.ts:13034` |
+| NIT | `sess_` prefix handling in `_findReviewFilesForSession` and `_extractReviewSessionToken` remains. This is CORRECT — these handle legacy `sess_` rows that still exist in user DBs and will be cleaned up incrementally. Removal is tracked in the backlog plan. | `TaskViewerProvider.ts:13874`, `13887` |
+
+**No CRITICAL findings. No MAJOR findings.** The implementation is a faithful, mechanical execution of the plan. Nothing is broken, nothing is missing, nothing is over-engineered.
+
+> *Grudgingly nods. Shoves the diff back across the desk.*
+
+### Stage 2: Balanced Synthesis
+
+**Keep as-is:**
+- The core UUID generation at line 13077 — correct, uses already-imported `crypto` module.
+- The `else` block removal — UUIDs are unique by construction; the collision check was dead weight.
+- All 6 downstream `planId` usages — verified at lines 13094, 13111, 13112, 13117, 13133, 13154, 13188, 13193.
+- The `activeWorkflow` preservation — still read from `state.json`, still used in the runsheet events array.
+- The dedup helpers remaining untouched — they incrementally clean up existing `sess_` rows in user DBs.
+
+**Fix now:** Nothing. No material issues found.
+
+**Defer:**
+- Stale comment at line 13034 (NIT) — can be updated in the backlog cleanup plan when all `sess_` references are eradicated.
+- `sess_` handling in review-file matching (lines 13874, 13887) — correctly deferred to the backlog plan.
+
+### Verification Results
+
+| Check | Result |
+|-------|--------|
+| `grep -r "sess_\${Date.now()}" src/` returns zero hits | ✅ PASS — zero matches in `src/` |
+| `crypto.randomUUID()` used for `planId` generation | ✅ PASS — `TaskViewerProvider.ts:13077` |
+| `crypto` module imported | ✅ PASS — `TaskViewerProvider.ts:7` |
+| `activeWorkflow` still read from `state.json` | ✅ PASS — `TaskViewerProvider.ts:13066-13073` |
+| Runsheet `sessionId` field set to `planId` | ✅ PASS — `TaskViewerProvider.ts:13094` |
+| `createRunSheet` called with `planId` | ✅ PASS — `TaskViewerProvider.ts:13111` |
+| Console.log uses `planId` | ✅ PASS — `TaskViewerProvider.ts:13112` |
+| `_registerPlan` called with `planId` | ✅ PASS — `TaskViewerProvider.ts:13117` |
+| `_incrementallyRegisterPlan` called with `planId` (no `!` assertion) | ✅ PASS — `TaskViewerProvider.ts:13133` |
+| `_incrementallyRegisterPlan` parameter renamed to `planId` | ✅ PASS — `TaskViewerProvider.ts:13154` |
+| Both `selectSession` webview messages use `sessionId: planId` | ✅ PASS — `TaskViewerProvider.ts:13188`, `13193` |
+| Dedup helpers untouched (`cleanupSpuriousMirrorPlans`, `cleanupDuplicateLocalPlans`) | ✅ PASS — still at lines 2276, 2318, 13176 |
+| `else` collision-check block removed | ✅ PASS — no `getRunSheet`/`getPlanBySessionId` calls in the fabrication region |
+| `tsc --noEmit` compilation | ⏭️ SKIPPED — per review instructions (SKIP COMPILATION) |
+| Automated test suite | ⏭️ SKIPPED — per review instructions (SKIP TESTS) |
+
+### Files Changed
+
+- `src/services/TaskViewerProvider.ts` — lines 13066-13195: replaced `sess_` fabrication block with `crypto.randomUUID()`, removed collision-check `else` block, updated all downstream `sessionId` references to `planId`, renamed `_incrementallyRegisterPlan` parameter.
+
+### Remaining Risks
+
+1. **Existing `sess_` rows in user DBs**: Still present but will be incrementally cleaned by the untouched dedup helpers on next startup/snapshot sync. No data loss — canonical plan identified by `(plan_file, workspace_id)` is always preserved. Tracked in backlog plan `feature_plan_20260623_sess_cleanup_and_migration.md`.
+2. **Duplicate-row prevention relies on dedup guards, not UUID uniqueness**: The UUID fix removes garbage primary keys but does not by itself prevent duplicate rows — the DB-level dedup (lines 13028-13050) and runsheet dedup (lines 13054-13063) guards are the real protection. These guards were already in place and remain unchanged. This is correct and as designed.
+3. **Stale comment at line 13034**: References `sess_*` rows which can no longer be created. Cosmetic only; deferred to backlog cleanup plan.

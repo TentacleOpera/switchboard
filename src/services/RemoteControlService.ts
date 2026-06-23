@@ -197,10 +197,13 @@ export class RemoteControlService {
             const linearConfig = await linear.loadConfig();
             const stateIdToColumn = this._reverseStateMap(linearConfig?.columnToStateId || {});
 
-            const updates = await linear.fetchIssueUpdates(batch.map((p) => p.linearIssueId));
+            const updates = await linear.fetchIssueUpdates(
+                batch.map((p) => p.linearIssueId).filter((id): id is string => !!id)
+            );
             const cursors = await this._loadCursors();
 
             for (const plan of batch) {
+                if (!plan.linearIssueId) { continue; }
                 const upd = updates[plan.linearIssueId];
                 if (!upd) { continue; }
 
@@ -257,7 +260,9 @@ export class RemoteControlService {
         comments: Array<{ id: string; body: string; createdAt: string; author: string }>,
         cursors: Record<string, string>
     ): Promise<void> {
-        const cursor = cursors[plan.linearIssueId] || '';
+        const linearIssueId = plan.linearIssueId;
+        if (!linearIssueId) { return; }
+        const cursor = cursors[linearIssueId] || '';
         // First encounter (no cursor): seed the baseline to the latest existing comment
         // WITHOUT dispatching. Otherwise the whole comment history of an existing issue is
         // replayed as agent runs the instant remote control starts — exactly the runaway
@@ -266,7 +271,7 @@ export class RemoteControlService {
         // cursor persists in the DB config table, so this seeding happens once per card.
         if (!cursor) {
             const latest = comments.reduce((max, c) => (c.createdAt && c.createdAt > max ? c.createdAt : max), '');
-            if (latest) { await this._advanceCursor(plan.linearIssueId, latest); }
+            if (latest) { await this._advanceCursor(linearIssueId, latest); }
             return;
         }
         // New = created after the cursor AND not authored by Switchboard (marker).
@@ -282,7 +287,7 @@ export class RemoteControlService {
                 try {
                     await this._deps.onComment(plan, comment.body);
                     // Advance cursor only AFTER dispatch completes (reload-safe).
-                    await this._advanceCursor(plan.linearIssueId, comment.createdAt);
+                    await this._advanceCursor(linearIssueId, comment.createdAt);
                 } catch (e) {
                     this._log(`onComment failed for ${plan.planId} — cursor NOT advanced: ${e instanceof Error ? e.message : String(e)}`);
                     break; // stop; the next poll re-fetches from the un-advanced cursor
