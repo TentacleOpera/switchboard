@@ -13062,42 +13062,19 @@ What would you like to find?`;
                 return;
             }
 
-            // Read current state (best-effort; anonymous session if unavailable)
-            let sessionId: string | undefined;
+            // Read current state (best-effort)
             let activeWorkflow = 'unknown';
             if (fs.existsSync(statePath)) {
                 try {
                     const stateContent = await fs.promises.readFile(statePath, 'utf8');
                     const state = JSON.parse(stateContent);
-                    sessionId = state.session?.id;
                     activeWorkflow = state.session?.activeWorkflow || 'unknown';
                 } catch { }
             }
-            // Fall back to anonymous session ID so orphaned plans still get a runsheet
-            if (!sessionId) {
-                sessionId = `sess_${Date.now()}`;
-            } else {
-                // Prevent collision/overwrite: if this session id is already bound to a different plan,
-                // allocate a new plan session id.
-                const existingSheet = await log.getRunSheet(sessionId);
-                const existingSheetPlanFile = typeof existingSheet?.planFile === 'string'
-                    ? existingSheet.planFile.replace(/\\/g, '/')
-                    : '';
-                const existingDbRow = db ? await db.getPlanBySessionId(sessionId) : null;
-                const existingDbPlanFile = typeof existingDbRow?.planFile === 'string'
-                    ? existingDbRow.planFile.replace(/\\/g, '/')
-                    : '';
-
-                const runsheetCollision = !!existingSheet && existingSheetPlanFile !== normalizedPlanFileRelative;
-                const dbCollision = !!existingDbRow
-                    && !!existingDbPlanFile
-                    && existingDbPlanFile !== normalizedPlanFileRelative
-                    && existingDbPlanFile !== absolutePlanFile;
-
-                if (runsheetCollision || dbCollision) {
-                    sessionId = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-                }
-            }
+            // Always generate a proper UUID for planId — never fabricate timestamp-based IDs.
+            // The Claude session ID from state.json is not a stable plan identifier (it changes
+            // on every Claude restart), so we don't use it as the planId regardless.
+            const planId = crypto.randomUUID();
 
             // Extract H1 title from full file content; fall back to filename-based topic
             let topic = '';
@@ -13114,7 +13091,7 @@ What would you like to find?`;
             const fileCreationTimeMs = fileStat.birthtimeMs || fileStat.mtimeMs;
 
             const runSheet: any = {
-                sessionId,
+                sessionId: planId,  // Keep field for backward compat with existing runsheet readers
                 planFile: planFileRelative,
                 topic,
                 createdAt: new Date(fileCreationTimeMs).toISOString(),
@@ -13131,13 +13108,13 @@ What would you like to find?`;
                 runSheet.source = 'managed-import';
             }
 
-            await log.createRunSheet(sessionId, runSheet);
-            console.log(`[TaskViewerProvider] Created Run Sheet for session ${sessionId}: ${topic}`);
+            await log.createRunSheet(planId, runSheet);
+            console.log(`[TaskViewerProvider] Created Run Sheet for session ${planId}: ${topic}`);
 
             // Register local plan in ownership registry
             const wsId = await this._getOrCreateWorkspaceId(resolvedWorkspaceRoot);
             await this._registerPlan(resolvedWorkspaceRoot, {
-                planId: sessionId,
+                planId,
                 ownerWorkspaceId: wsId,
                 sourceType: 'local',
                 localPlanPath: normalizedPlanFileRelative,
@@ -13153,7 +13130,7 @@ What would you like to find?`;
                 // Use incremental UI refresh instead of heavy full filesystem scan.
                 // The runsheet and registry writes completed above; this only pushes
                 // the updated DB snapshot to the webview.
-                await this._incrementallyRegisterPlan(resolvedWorkspaceRoot, sessionId!);
+                await this._incrementallyRegisterPlan(resolvedWorkspaceRoot, planId);
             }
         } catch (e) {
             console.error('[TaskViewerProvider] Failed to handle plan creation:', e);
@@ -13174,7 +13151,7 @@ What would you like to find?`;
      */
     private async _incrementallyRegisterPlan(
         workspaceRoot: string,
-        sessionId: string
+        planId: string
     ): Promise<void> {
         try {
             // Lightweight DB-read-only refresh: reads current board snapshot and posts to webview.
@@ -13208,12 +13185,12 @@ What would you like to find?`;
             }, 1500);
 
             // Auto-focus the new plan in the sidebar dropdown and kanban board.
-            this._view?.webview.postMessage({ type: 'selectSession', sessionId });
+            this._view?.webview.postMessage({ type: 'selectSession', sessionId: planId });
         } catch (e) {
             console.error('[TaskViewerProvider] Incremental registration failed, falling back to full sync:', e);
             // Full fallback: repairs any partial state from the failed refresh.
             await this._syncFilesAndRefreshRunSheets(workspaceRoot);
-            this._view?.webview.postMessage({ type: 'selectSession', sessionId });
+            this._view?.webview.postMessage({ type: 'selectSession', sessionId: planId });
         }
     }
 

@@ -139,3 +139,80 @@ No automated tests required for this session — the suite is run separately by 
 ---
 
 **Recommendation:** Complexity 3/10 → **Send to Intern.**
+
+---
+
+## Code Review — Reviewer Pass (2026-06-23)
+
+### Stage 1: Adversarial Findings (Grumpy Principal Engineer)
+
+| Severity | Finding | Location |
+|:---------|:--------|:---------|
+| CRITICAL | None | — |
+| MAJOR | None | — |
+| NIT | Cross-reference comment cites `≈5035-5067` but `generateResearchPrompt()` is currently at lines 5037-5069. The `≈` hedge makes this cosmetic; not worth a code change. | `src/services/agentPromptBuilder.ts:303` |
+
+### Stage 2: Balanced Synthesis
+
+**Keep as-is:**
+- All four code touch-points verified present and correct: checkbox HTML, listener array entry, KanbanProvider read + planner-branch assignment, prompt builder option + directive constant + destructure + append.
+- **Restore-on-load line** (`kanban.html:3237`) — NOT in the plan's Proposed Changes section but required by verification step #4 (persistence). The implementer correctly added `document.getElementById('plannerAddonAdviseResearch').checked = !!config.addons?.adviseResearch;`. This is a plan gap that was caught.
+- **Expanded OUTPUT format** in `ADVISE_RESEARCH_DIRECTIVE` (`agentPromptBuilder.ts:312-315`) — deviates from the plan's compact one-line proposal (plan lines 108) by expanding to a multi-line block mirroring `generateResearchPrompt()` verbatim. This is a strictly better deviation: it satisfies verification step #6 (structure parity) more faithfully than the plan's own proposed text.
+- Bidirectional cross-reference comments in `agentPromptBuilder.ts:303-304` and `planning.js:5035-5036`.
+
+**Fix now:** Nothing — no CRITICAL or MAJOR findings.
+
+**Defer:** Stale line-number reference in the cross-reference comment (`agentPromptBuilder.ts:303`). Cosmetic; `≈` covers the drift.
+
+### Files Changed (Verified in current source)
+
+| File | Lines | Change |
+|:-----|:------|:-------|
+| `src/webview/kanban.html` | 2871-2875 | New checkbox `plannerAddonAdviseResearch` with title/span/tooltip |
+| `src/webview/kanban.html` | 3237 | Restore-on-load: `...checked = !!config.addons?.adviseResearch;` (plan gap — added for persistence) |
+| `src/webview/kanban.html` | 3971 | `'plannerAddonAdviseResearch'` appended to addon-id listener array |
+| `src/services/KanbanProvider.ts` | 2801 | `resolvedOptions.adviseResearchIfUnsure = promptsConfig.adviseResearchIfUnsure;` (planner branch) |
+| `src/services/KanbanProvider.ts` | 2930 | `adviseResearchIfUnsure: plannerConfig?.addons?.adviseResearch ?? false,` (in `_getPromptsConfig`) |
+| `src/services/agentPromptBuilder.ts` | 147-148 | `adviseResearchIfUnsure?: boolean;` in `PromptBuilderOptions` with JSDoc |
+| `src/services/agentPromptBuilder.ts` | 303-318 | `ADVISE_RESEARCH_DIRECTIVE` constant + cross-reference comment |
+| `src/services/agentPromptBuilder.ts` | 449 | `const adviseResearchIfUnsure = options?.adviseResearchIfUnsure ?? false;` |
+| `src/services/agentPromptBuilder.ts` | 547-549 | `if (adviseResearchIfUnsure) { plannerBase += '\n\n' + ADVISE_RESEARCH_DIRECTIVE; }` (planner block) |
+| `src/webview/planning.js` | 5035-5036 | Cross-reference comment pointing back at `ADVISE_RESEARCH_DIRECTIVE` |
+
+### Validation Results
+
+- **Source-of-truth audit:** All 9 proposed changes present and correct; plus 1 correctly-added persistence line not in the original proposal.
+- **Planner-only scoping:** Confirmed — both the `resolvedOptions` assignment (`KanbanProvider.ts:2801`) and the directive append (`agentPromptBuilder.ts:547`) are inside `if (role === 'planner')` blocks. No by-role map entry; no effect on other roles.
+- **Structure parity with `generateResearchPrompt()` (`planning.js:5037-5069`):** All 9 fields match — ROLE, CONTEXT, CENTRAL QUESTION, 4-6 SUB-QUESTIONS, SOURCE GUIDANCE, SCOPE, OUTPUT format (H1 title / Executive Summary H2 / tiered findings), CITATIONS, DEPTH ≥50 sources.
+- **No-confirm-dialog rule (CLAUDE.md):** No `confirm()`, no modal, no two-click pattern introduced. ✓
+- **Back-compat:** `?? false` at every read site. Absent key → directive off → byte-identical planner prompts for existing installs. No migration required (key lives in the already-extensible `roleConfig_planner.addons` object).
+- **Session directives honored:** No compilation run, no automated tests run, no git state-mutating commands executed, no subagents spawned.
+
+### Remaining Risks
+
+- **None material.** The feature is purely additive, opt-in (default off), gated to the planner role, and emits static text with no network calls or state schema changes.
+- **Cosmetic only:** The `≈5035-5067` line reference in `agentPromptBuilder.ts:303` will continue to drift as `planning.js` evolves. The `≈` hedge and the function-name reference make this self-healing for a human reader; no action needed.
+
+---
+
+## Post-Review Change: Default to ON (2026-06-23)
+
+**Request:** The "Advise Research If Unsure" add-on should be enabled by default for the planner agent (checkbox starts checked), like `switchboardSafeguards` and `gitProhibition`.
+
+**Migration assessment:** This feature has only ever existed in unreleased dev work (auto-commit `6d4a525`, not a released VSIX). Per CLAUDE.md migration rules, unreleased features can take clean breaks — no migration required. Existing installs that have never seen this toggle will get the directive by default; users who explicitly disable it will have `adviseResearch: false` persisted, which the `!== false` / `?? true` checks honor.
+
+### Files Changed
+
+| File | Line | Change |
+|:-----|:-----|:-------|
+| `src/services/KanbanProvider.ts` | 2930 | `?? false` → `?? true` — directive now emits by default when key is absent |
+| `src/webview/kanban.html` | 3237 | `!!config.addons?.adviseResearch` → `config.addons?.adviseResearch !== false` — checkbox now shows checked by default (follows the `switchboardSafeguards` pattern at line 3226, avoiding the `gitProhibition` UI/provider mismatch) |
+
+### Validation
+
+- **Provider default:** `plannerConfig?.addons?.adviseResearch ?? true` — absent key → `true` → directive emits. ✓
+- **UI default:** `config.addons?.adviseResearch !== false` — absent key → `undefined !== false` → `true` → checkbox checked. ✓
+- **Explicit disable honored:** User unchecks → `adviseResearch: false` persisted → provider reads `false`, UI reads `false !== false` → `false`. ✓
+- **Pattern consistency:** Uses the `switchboardSafeguards` pattern (`?? true` + `!== false`), not the `gitProhibition` pattern (`?? true` + `!!` which has a UI/provider mismatch on fresh installs). ✓
+- **Planner-only:** Unchanged — still gated to the planner role. ✓
+- **No-confirm-dialog rule:** No confirm gates involved. ✓
