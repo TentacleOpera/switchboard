@@ -4300,6 +4300,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (tgtCount) {
                 tgtCount.textContent = String((parseInt(tgtCount.textContent || '0') + actualMovedCount));
             }
+
+            // Keep the render-guard signature in sync with the optimistic model.
+            // currentCards[].column was just mutated above; recompute so a subsequent
+            // stale updateBoard (same columns, only lastActivity differs) does not
+            // trigger a spurious re-render that reverts the move.
+            lastBoardSignature = buildBoardSignature(currentCards);
         }
 
         /** Get all selected session IDs within a specific column. */
@@ -6070,7 +6076,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (!idsToMove.size || !targetCol) break;
                     let changed = false;
                     currentCards = currentCards.map(card => {
-                        if (idsToMove.has(card.sessionId)) {
+                        const cardKey = card.planId || card.sessionId;        // planId-primary, mirrors backend _cardMatchesIds
+                        if (idsToMove.has(cardKey) || (card.sessionId && idsToMove.has(card.sessionId))) {
                             changed = true;
                             return { ...card, column: targetCol };
                         }
@@ -6079,6 +6086,38 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (changed) {
                         lastBoardSignature = buildBoardSignature(currentCards);
                         renderBoard(currentCards);
+                    }
+                    break;
+                }
+                case 'moveCardsFailed': {
+                    const failed = Array.isArray(msg.failures) ? msg.failures : []; // [{id, sourceColumn, reason}]
+                    if (!failed.length) break;
+                    const byId = new Map(failed.map(f => [f.id, f]));
+                    let changed = false;
+                    currentCards = currentCards.map(card => {
+                        const key = card.planId || card.sessionId;
+                        const f = byId.get(key) || (card.sessionId && byId.get(card.sessionId));
+                        if (f) { changed = true; return { ...card, column: f.sourceColumn }; }
+                        return card;
+                    });
+                    if (changed) {
+                        lastBoardSignature = buildBoardSignature(currentCards);
+                        renderBoard(currentCards);
+                    }
+                    const statusEl = document.getElementById('status-message');
+                    if (statusEl) {
+                        statusEl.textContent = `${failed.length} plan(s) not advanced: ${failed[0]?.reason || 'database update failed'}`;
+                        statusEl.style.color = 'var(--vscode-errorForeground, #ff6b6b)';
+                        statusEl.style.display = 'inline-block';
+                        statusEl.classList.remove('flashing');
+                        void statusEl.offsetWidth;
+                        statusEl.classList.add('flashing');
+                        if (statusEl._statusTimeoutId) { clearTimeout(statusEl._statusTimeoutId); }
+                        statusEl._statusTimeoutId = setTimeout(() => {
+                            statusEl.textContent = '';
+                            statusEl.classList.remove('flashing');
+                            statusEl._statusTimeoutId = null;
+                        }, 5000);
                     }
                     break;
                 }

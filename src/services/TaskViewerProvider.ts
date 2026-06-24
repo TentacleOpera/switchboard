@@ -3445,6 +3445,61 @@ Each plan file must include:
         return this._getAliveAutobanTerminalNames(role, workspaceRoot, false);
     }
 
+    /**
+     * Returns the alive, non-backup terminals for a role together with a stable
+     * "location key" identifying that physical set of terminals. The key is the
+     * resolved worktree path the terminals share (worktree case), or the resolved
+     * workspace root when they live in the main checkout. The same set of terminals
+     * therefore yields the same key regardless of how many Switchboard workspaces
+     * dispatch to it — which is what the persistent rotation cursor keys off.
+     */
+    public async getRoleTerminalSet(role: string, workspaceRoot: string): Promise<{ terminals: string[]; locationKey: string }> {
+        const aliveTerminals = await this._getAliveAutobanTerminalRegistry(workspaceRoot);
+        const normalizedRole = this._normalizeAutobanPoolRole(role);
+        const entries = Object.entries(aliveTerminals)
+            .filter(([, info]) => this._normalizeAgentKey((info as any)?.role) === normalizedRole)
+            .filter(([, info]) => !this._isAutobanBackupTerminalInfo(info))
+            .sort(([a], [b]) => a.localeCompare(b));
+        const terminals = entries.map(([name]) => name);
+        const worktreePaths = new Set(
+            entries
+                .map(([, info]) => (info as any)?.worktreePath ? path.resolve((info as any).worktreePath) : '')
+                .filter(Boolean)
+        );
+        let locationKey: string;
+        if (worktreePaths.size === 1) {
+            locationKey = [...worktreePaths][0];
+        } else if (worktreePaths.size === 0) {
+            locationKey = path.resolve(workspaceRoot || '') || 'default';
+        } else {
+            // Mixed worktrees in one role pool is not expected; fall back to a
+            // name signature so distinct sets still get distinct cursors.
+            locationKey = terminals.join('|');
+        }
+        return { terminals, locationKey };
+    }
+
+    /**
+     * Persistent round-robin cursor for planner dispatch, keyed by terminal-set
+     * location (see getRoleTerminalSet) and stored in globalState so it is shared
+     * across all Switchboard workspaces serving the same terminals. Used so that
+     * sequential single-plan moves continue the rotation rather than always
+     * restarting at terminal 0.
+     */
+    public getPlannerRotationCursor(locationKey: string): number {
+        if (!locationKey) return 0;
+        const map = this._context.globalState.get<Record<string, number>>('switchboard.planner.rotationCursor') || {};
+        const v = map[locationKey];
+        return Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
+    }
+
+    public async advancePlannerRotationCursor(locationKey: string, by: number): Promise<void> {
+        if (!locationKey || !Number.isFinite(by) || by <= 0) return;
+        const map = { ...(this._context.globalState.get<Record<string, number>>('switchboard.planner.rotationCursor') || {}) };
+        map[locationKey] = this.getPlannerRotationCursor(locationKey) + Math.floor(by);
+        await this._context.globalState.update('switchboard.planner.rotationCursor', map);
+    }
+
     private async _readStateField<T>(field: string, workspaceRoot: string | undefined, defaultValue: T): Promise<T> {
         const globalValue = this._context.globalState.get<T>(`switchboard.agents.${field}`);
         if (globalValue !== undefined) {

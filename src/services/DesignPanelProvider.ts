@@ -2964,10 +2964,20 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
         this._autoRefreshDebounce = setTimeout(() => {
             this._autoRefreshDebounce = undefined;
             if (!this._activeHtmlPreview || !this._panel) return;
+            // Re-verify the active preview hasn't switched to a different file
+            // while we were debouncing — otherwise a stale refresh for the
+            // previously-previewed file would overwrite the new selection
+            // (requestId === -1 bypasses the frontend's request-matching guard).
+            const current = this._activeHtmlPreview;
+            const currentRel = current.docId.includes(':')
+                ? current.docId.substring(current.docId.indexOf(':') + 1)
+                : current.docId;
+            const currentPath = path.resolve(current.sourceFolder, currentRel);
+            if (currentPath !== activePath) return;
             this._buildAndSendPreview({
-                sourceId: active.sourceId,
-                sourceFolder: active.sourceFolder,
-                docId: active.docId,
+                sourceId: current.sourceId,
+                sourceFolder: current.sourceFolder,
+                docId: current.docId,
                 requestId: -1,            // frontend accepts -1 without request matching
                 isAutoRefreshed: true
             });

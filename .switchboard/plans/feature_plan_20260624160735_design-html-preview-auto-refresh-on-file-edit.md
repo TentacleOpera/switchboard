@@ -310,10 +310,51 @@ No frontend changes are required.
 7. **Verify rapid saves** — Save the file multiple times quickly. The 300ms debounce should collapse the burst into a single refresh. The final state should reflect the latest save.
 8. **Verify tab re-entry** — Switch away from HTML Previews and back. The file tree should refresh (existing behaviour). Select a file again and confirm auto-refresh still works.
 9. **Verify srcdoc fallback** — Force the `srcdoc` path (e.g., a folder whose localhost server fails to start). Edit and save; confirm the inline preview still updates.
+10. **Verify rapid file switch during debounce (reviewer-added)** — Preview file A, save A, then within 300ms click file B in the sidebar. The preview must show file B, NOT flash file A's content. (This covers the stale-debounce race fixed during review — see Reviewer Pass below.)
 
 ### Automated Tests
 - No automated test suite currently covers `DesignPanelProvider` preview behaviour, and the change is exercised through the VS Code webview message bus + `FileSystemWatcher` (hard to unit-test without an Extension Host). Verification is **manual** per the steps above. _(Per session directive, the user will run any tests separately; no new test scaffolding is added here.)_
 - If unit coverage is later desired, the cleanest seam is `_buildAndSendPreview(...)` (§0): inject a fake `postMessage` and assert the emitted `previewReady` payload (`isAutoRefreshed`, `requestId: -1`, `iframeSrc`) for a given file, plus the path-equality gate in `_autoRefreshHtmlPreview`.
+
+---
+
+## Reviewer Pass (2026-06-24)
+
+### Files Changed
+- `src/services/DesignPanelProvider.ts` — `_autoRefreshHtmlPreview` (lines 2950-2985): added post-debounce active-preview re-validation.
+
+### Findings
+
+| # | Severity | Location | Description |
+|---|----------|----------|-------------|
+| 1 | **MAJOR** | `DesignPanelProvider.ts:2964-2984` (original) | **Stale-debounce race.** The debounce callback captured `active` (the preview state at watcher-fire time) and only re-checked `_activeHtmlPreview` for null. If the user switched to a different file within the 300ms debounce window, the captured `active` (old file) was sent with `requestId: -1`, which bypasses the frontend's request-matching guard (`design.js:968`) and overwrote the new file's preview with the old file's content. No subsequent event corrected it. The plan's "Race Conditions" section claimed the path-equality check "naturally filters" stale refreshes — but that check runs pre-debounce, not post-debounce. |
+| 2 | NIT | `DesignPanelProvider.ts:408-413` | `onDidDelete` does not clear `_activeHtmlPreview` when the currently-previewed file is deleted. No incorrect refresh occurs (no `onDidChange` fires for a deleted file), but the preview shows stale content until the user re-selects. Accepted scope boundary ("on file edit"); deferred. |
+| 3 | NIT | `DesignPanelProvider.ts:2851` | `sourceFolder?: string` (optional) vs plan §0's `sourceFolder: string` (required). The implementation is more defensive (throws inside if missing). No action — kept as-is. |
+
+### Fix Applied (Finding #1)
+Inside the `setTimeout` callback of `_autoRefreshHtmlPreview`, re-derive the current active preview path from the live `this._activeHtmlPreview` field and compare it to `activePath` (the path that triggered the debounce). If they diverge (user switched files), bail before sending. The build call now uses `current` (the live field) instead of the captured `active`, so the correct file is always sent.
+
+```ts
+// Added inside the debounce timeout, after the null guard:
+const current = this._activeHtmlPreview;
+const currentRel = current.docId.includes(':')
+    ? current.docId.substring(current.docId.indexOf(':') + 1)
+    : current.docId;
+const currentPath = path.resolve(current.sourceFolder, currentRel);
+if (currentPath !== activePath) return;
+// ... build with current.sourceId / current.sourceFolder / current.docId
+```
+
+### Validation
+- **Compilation**: Skipped per session directive (project assumed pre-compiled).
+- **Automated tests**: Skipped per session directive (user runs separately).
+- **Static verification**: Brace/syntax balance confirmed; variable usage checked (no dangling refs); type consistency confirmed against `_buildAndSendPreview` signature; path-derivation parity verified (identical to the two other call sites); frontend `requestId === -1` bypass contract re-confirmed at `design.js:968`.
+- **Manual verification**: Steps 1-10 (step 10 added for the race fix). To be run by the user.
+
+### Remaining Risks
+- **Finding #2 (NIT, deferred)**: Deleted-file stale preview. Low impact, accepted scope boundary. Can be addressed later with a one-line clear in `onDidDelete` if desired.
+- **External-editor edits**: The pre-existing 4s `_pollTick` refreshes the tree but not the preview for files changed outside VS Code (watcher may not fire). This is an accepted scope boundary noted in the plan — not a regression (today neither path refreshes the preview for external edits).
+- **macOS case-insensitive filesystem**: `path.resolve` does not normalize case. If the watcher reports a path with different casing than the stored `sourceFolder`/`docId`, the path-equality check could miss. In practice all paths derive from the same filesystem and VS Code normalizes consistently; low risk, not guarded.
 
 ---
 

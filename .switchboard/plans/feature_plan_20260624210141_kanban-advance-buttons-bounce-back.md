@@ -111,7 +111,7 @@ The three review questions raised during improve-plan have been answered. Decisi
 
 ## Edge-Case & Dependency Audit
 
-- **`_refreshBoard` does double duty.** It both (a) refreshes `this._lastCards` server-side and (b) posts `updateBoard` to the webview (via the `switchboard.refreshUI` → `refreshWithData` pipeline). `moveAll` calls it at the start only for (a). The fix needs a data-only variant (recompute `_lastCards` without `postMessage`) so recomputing `sourceCards` no longer reverts the UI. **Clarification:** the simplest data-only variant is *no variant at all* — filter the existing `this._lastCards` directly (as `moveSelected` does), accepting the same narrow race `moveSelected` already accepts. If a true fresh-DB read is required, the function to factor is `refreshWithData` (1132, the LIVE path), NOT `_refreshBoardImpl` (1977, dead code). Verify no other early-refresh caller relies on the webview side effect.
+- **`_refreshBoard` does double duty.** It both (a) refreshes `this._lastCards` server-side and (b) posts `updateBoard` to the webview (via the `switchboard.refreshUI` → `refreshWithData` pipeline). `moveAll` calls it at the start only for (a). **Resolved (Decision #1):** no data-only variant is introduced — `moveAll` filters the existing `this._lastCards` directly (as `moveSelected` does), accepting the same narrow watcher-race. `_lastCards` was just populated by the render the user clicked, so a fresh-DB read is unnecessary. Verify no other early-refresh caller relies on the webview side effect.
 - **`buildBoardSignature` includes `lastActivity`.** Any persist changes `updated_at`, so signature-based render guards cannot be relied on to suppress a stale render. The authoritative `moveCards` echo (not a full board refresh) should be the mechanism that moves cards, and it must run before dispatch.
 - **File-based plans (empty `session_id`).** The reconcile fix (match `planId`) is required or the echo silently misses NEW plans. Mirror `_cardMatchesIds` (330-333).
 - **Limit-dispatch-to-terminals.** When the "Limit dispatches to number of available terminals" toggle is ON, `_distributePlannerDispatch` only moves the oldest N plans ([KanbanProvider.ts:3384-3385](../../src/services/KanbanProvider.ts#L3384-L3385)). The remaining plans legitimately stay in NEW — that is not a bounce and must not be "corrected". Persist-first must only persist the plans actually being advanced.
@@ -136,27 +136,18 @@ Key risks: (1) proposal 1b originally targeted `_refreshBoardImpl`, which is **d
 
 **1a. Persist the move and emit the authoritative echo BEFORE dispatch, in `_distributePlannerDispatch`.** The pre-move loop already exists at [3392-3398](../../src/services/KanbanProvider.ts#L3392-L3398) and already runs before the slow dispatch — the problem is the *stale refresh at the moveAll caller* and the *trailing* refresh, not this block. Keep the pre-move+echo here, but ensure nothing reverts it in the interim (1b, 1c). **Clarification (verified):** this block ALREADY persists + posts `moveCards` (3398) before the slow dispatch loop (3400-3418), so 1a is effectively a no-op confirmation — the real fix is the caller-side 1b/1c below. No code change required here unless wiring 1d's failure capture.
 
-**1b. Stop the stale full-board refresh at the start of `moveAll` (and `moveSelected`).** Replace the UI-posting `await this._refreshBoard(workspaceRoot)` at [5601](../../src/services/KanbanProvider.ts#L5601) with a **data-only** recompute that updates `this._lastCards` without posting `updateBoard` to the webview:
+**1b. Stop the stale full-board refresh at the start of `moveAll`.** Delete the `await this._refreshBoard(workspaceRoot)` at [5601](../../src/services/KanbanProvider.ts#L5601) and derive `sourceCards` by filtering `this._lastCards` directly — exactly as `moveSelected` (5506-5572) already does:
 
 ```js
-// Recompute sourceCards from fresh DB state WITHOUT pushing a stale board to the
-// webview (which would revert the optimistic advance before we've persisted).
-await this._reloadLastCards(workspaceRoot);   // new: refreshes this._lastCards only, no postMessage
+// moveAll — NO start-refresh; _lastCards was just populated by the render the user clicked,
+// so it already agrees with the webview. Filtering it directly avoids the full pipeline +
+// stale updateBoard that reverts the optimistic advance.
 const sourceCards = this._lastCards.filter(card => card.workspaceRoot === workspaceRoot && card.column === column);
 ```
 
-Introduce `_reloadLastCards(workspaceRoot)` by factoring the card-loading half of `_refreshBoardImpl` ([1977-2098](../../src/services/KanbanProvider.ts#L1977-L2098)) out from the `postMessage` half, so it can be called for data only.
+This accepts the same narrow watcher-race `moveSelected` already ships with (Decision #1) — no new function, no factoring, no touch to the shared `refreshWithData` pipeline.
 
-> **⚠️ 1b REVISED (verified during improve-plan — supersedes the above).** `_refreshBoardImpl` (1977-2098) is **dead code in production** (only test call sites). Factoring it produces a function that is never on the live path, and the bounce would persist. Two corrected options, in order of preference:
->
-> **Option A (preferred — simplest, lowest risk, mirrors `moveSelected`):** Delete the start-refresh entirely and filter `this._lastCards` directly, exactly as `moveSelected` (5506-5572) already does:
-> ```js
-> // moveAll — NO start-refresh; _lastCards was just populated by the render the user clicked.
-> const sourceCards = this._lastCards.filter(card => card.workspaceRoot === workspaceRoot && card.column === column);
-> ```
-> This accepts the same narrow watcher-race `moveSelected` already ships with. No new function, no factoring, no touch to the shared `refreshWithData` pipeline.
->
-> **Option B (only if a fresh-DB read is deemed mandatory):** Factor the card-building half out of **`refreshWithData`** ([1132-1228](../../src/services/KanbanProvider.ts#L1132-L1228), the LIVE path) into a `_reloadLastCards(workspaceRoot)` that queries the DB, filters ghost plans, and sets `this._lastCards` — but does NOT post `updateBoard`. Do NOT factor `_refreshBoardImpl`; it is dead code.
+> **Do not** introduce a `_reloadLastCards` helper or factor `_refreshBoardImpl` ([1977-2098](../../src/services/KanbanProvider.ts#L1977-L2098)) — that function is **dead code in production** (only test call sites); the live refresh path is `_refreshBoard` → `switchboard.refreshUI` → `refreshWithData` ([1132](../../src/services/KanbanProvider.ts#L1132)). A fresh-DB read is explicitly **not** required here (Decision #1), so the simple direct filter above is the whole change.
 
 **1c. Replace the trailing `_refreshBoard` with a targeted confirmation delta.** The post-dispatch `_refreshBoard` at [5671](../../src/services/KanbanProvider.ts#L5671) / [5686](../../src/services/KanbanProvider.ts#L5686) exists to reconcile the DB truth after the move. But since the persist already happened and the per-card target columns are known server-side, this does not need a whole-board redraw — emit a `moveCards` delta with the final `{sessionIds, targetColumn}` instead:
 
@@ -174,9 +165,9 @@ Wrap the dispatch in `try/finally` so the confirming delta is posted regardless 
 > **⚠️ 1e ADDENDUM (added during improve-plan).** `_scheduleBoardRefresh` (2352-2359) is a 100ms-debounced `_refreshBoard` shared with **structural** callers (461, 508, 1111, 3779, 3810, 4195, 4203, 4963, 5006, 5031). Only replace the two drag-advance call sites (5042, 5054); do NOT alter `_scheduleBoardRefresh` itself or the other call sites, which legitimately need a full redraw (watcher scan, order-override change, control-plane switch, etc.).
 
 **1d. Surface failed persists.** Capture `moveCardToColumn`'s currently-discarded boolean in the pre-move loop ([3394](../../src/services/KanbanProvider.ts#L3394)); if a write returns `false`, post a `moveCardsFailed` message (File 2, 2b) for that id so the card visibly reverts *with a reason* instead of silently.
-> **⚠️ 1d CLARIFICATION (added during improve-plan).** `moveCardToColumn` returns a bare `boolean` (`false` for invalid column name, DB unavailable, or zero rows matched — see [KanbanDatabase.ts:1415-1418](../../src/services/KanbanDatabase.ts#L1415-L1418)) and provides **no reason string**. Before implementing, decide (see User Review Required #2): (a) ship a generic `reason: 'database update failed'`; (b) extend `updateColumnByPlanFile` to return a `{ ok, reason }` tuple and thread it through `moveCardToColumn`; or (c) cut `moveCardsFailed` and rely on the existing silent-revert + `showStatusMessage`. Option (b) is the only one that produces a useful per-failure reason but widens the change into `KanbanDatabase.ts`.
+> **✅ 1d DECISION (resolved — Option a).** Ship `moveCardsFailed` with a **generic** `reason: 'couldn't save — board may be out of sync'`. `moveCardToColumn` returns a bare `boolean` (`false` for invalid column name, DB unavailable, or zero rows matched — [KanbanDatabase.ts:1415-1418](../../src/services/KanbanDatabase.ts#L1415-L1418)); a generic string is sufficient. **Do NOT cut the handler (option c):** this plan removes the trailing `_refreshBoard` that previously silently reverted a failed persist, so without `moveCardsFailed` a failed write would leave a card optimistically moved with no correction — the UI would lie. Threading a real `{ ok, reason }` tuple out of `updateColumnByPlanFile` (option b) is **deferred** as a future nicety; not in scope here.
 
-**1f. (Added during improve-plan) Apply the start-refresh removal to sibling bounce sources.** `promptOnDrop` ([5359](../../src/services/KanbanProvider.ts#L5359)) and `julesLowComplexity` ([5488](../../src/services/KanbanDatabase.ts#L5488)) both call `await this._refreshBoard()` at the start to recompute `sourceCards` from `this._lastCards` — the identical bounce pattern. If approved (User Review Required #3), drop those start-refreshes and filter `this._lastCards` directly (Option A), the same treatment as `moveAll` 1b. These are not on the planner "Advance all" path but share the defect and the fix.
+**1f. (DECISION: in scope) Apply the start-refresh removal to sibling bounce sources.** `promptOnDrop` ([5359](../../src/services/KanbanProvider.ts#L5359)) and `julesLowComplexity` ([5488](../../src/services/KanbanProvider.ts#L5488)) both call `await this._refreshBoard()` at the start to recompute `sourceCards` from `this._lastCards` — the identical bounce pattern. **Resolved (review #3): fix both here.** Drop those start-refreshes and filter `this._lastCards` directly (Option A), the same treatment as `moveAll` 1b. Scope boundary: only the **start-refresh** (the bounce) is fixed in this plan; the separate **trailing-refresh → `moveCards` delta** conversion for `promptOnDrop` (pure snappiness) belongs to the hot-path Part 1 plan ([feature_plan_20260624212729_kanban-refresh-to-delta-hotpath.md](feature_plan_20260624212729_kanban-refresh-to-delta-hotpath.md)) and must not be duplicated here.
 
 ### File 2: `src/webview/kanban.html`
 
@@ -249,7 +240,7 @@ case 'moveCardsFailed': {
 
 Per session directives, automated tests are **not run as part of this plan** — the suite will be executed separately by the user. The following tests are relevant and should be green after implementation:
 
-- `src/services/__tests__/KanbanProvider.test.ts` — exercises `_refreshBoardImpl` (project-filter fallback at :625). Note: `_refreshBoardImpl` is dead production code but still covered here; if Option B factors `refreshWithData` instead, add equivalent coverage for the new `_reloadLastCards` data-only path.
+- `src/services/__tests__/KanbanProvider.test.ts` — exercises `_refreshBoardImpl` (project-filter fallback at :625). Note: `_refreshBoardImpl` is dead production code but still covered here; the chosen fix (direct `_lastCards` filter, Decision #1) introduces no new function, so no new test path is needed — but confirm these existing tests still pass since they touch the refresh machinery.
 - `src/test/kanban-persistence.test.ts` — project-filter fallback (:147, :189) via `_refreshBoardImpl`.
 - New/updated tests for: `moveAll` with no start-refresh (sourceCards derived from `_lastCards`); `moveCards` webview reconcile matching `planId` for empty-`sessionId` cards; `moveCardsOptimistically` recomputing `lastBoardSignature`; `moveCardsFailed` revert (if 1d/2b in scope).
 

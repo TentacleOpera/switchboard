@@ -48,9 +48,11 @@ Scoped to what the prerequisite plan does **not** already cover:
 |---|---|---|
 | `promptSelected` | 5722 body (trailing `_refreshBoard`) | Drop trailing refresh; keep the `moveCards` it already posts |
 | `promptAll` | 5804 body (trailing `_refreshBoard`) | Drop trailing refresh; keep its `moveCards` |
-| `promptOnDrop` | 5359, 5385, 5425 | Replace refresh with a `moveCards` delta; keep `promptOnDropResult` |
+| `promptOnDrop` | 5385, 5425 (trailing only) | Replace trailing refresh with a `moveCards` delta; keep `promptOnDropResult`. **Start-refresh 5359 is NOT here — it's the bounce-back plan §1f.** |
 
 (Already handled by the prerequisite plan — listed only so they are not re-touched: `moveAll` 5601/5635/5671/5686, `moveSelected` 5593, `moveCardForward` 5054, `moveCardBackwards` 5042.)
+
+> **Cross-plan boundary rule.** The bounce-back plan (`feature_plan_20260624210141`) owns the **start-refresh removal** (the bounce fix) for `moveAll`, `promptOnDrop`, and `julesLowComplexity`. This plan owns converting all **other** (post-dispatch / trailing) refreshes on those handlers and on the dispatch handlers to `moveCards` deltas. When in doubt about a specific line, the start-of-handler `_refreshBoard` that exists only to recompute `sourceCards` belongs to the bounce plan; everything after the move/dispatch belongs here. Verify exact line numbers against the live code — the audit was indexed before either plan landed and the numbers shift as edits are applied.
 
 ### Tier 2 — Dispatch handlers that move cards (low–moderate risk; high value)
 
@@ -59,9 +61,8 @@ Scoped to what the prerequisite plan does **not** already cover:
 | `triggerAction` | 4963, 5006 | post `moveCards` to dispatched target; drop refresh |
 | `triggerBatchAction` | 5031 | post `moveCards`; drop refresh |
 | `batchPlannerPrompt` | 5435, 5445 | post `moveCards` per target group; drop refresh |
-| `batchDispatchLow` | 5462 | post `moveCards`; drop refresh |
-| `batchLowComplexity` | 5474, 5488 | post `moveCards`; drop refresh |
-| `julesLowComplexity` | 5502 | post `moveCards`; drop refresh |
+| `batchLowComplexity` | 5462, 5474 | post `moveCards`; drop refresh |
+| `julesLowComplexity` | 5502 (trailing only) | post `moveCards`; drop trailing refresh. **Start-refresh 5488 → bounce-back plan §1f.** |
 | `julesSelected` | 5911 | post `moveCards`; drop refresh |
 | `splitterSelected` | 5938 | post `moveCards`; drop refresh |
 | `rePlanSelected` / `codeMapSelected` | 6284-region | post `moveCards`; drop refresh |
@@ -73,11 +74,13 @@ For each, confirm the handler knows the final target column server-side (it comp
 
 ### File: `src/services/KanbanProvider.ts`
 
-1. **Tier 1.** In `promptSelected` and `promptAll`, delete the trailing `await this._refreshBoard(workspaceRoot)` (the `moveCards` they already post is sufficient). In `promptOnDrop`, replace each `await this._refreshBoard(...)` with:
+1. **Tier 1.** In `promptSelected` and `promptAll`, delete the trailing `await this._refreshBoard(workspaceRoot)` (the `moveCards` they already post is sufficient). In `promptOnDrop`, replace its **trailing** `await this._refreshBoard(...)` (the post-dispatch one(s) at ~5385/5425) with:
    ```js
    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds, targetColumn: effectiveTargetColumn });
    ```
    keeping the existing `promptOnDropResult` post.
+
+   > **⚠️ Boundary with the bounce-back plan.** `promptOnDrop`'s **start-refresh at 5359** is the bounce defect and is fixed in [feature_plan_20260624210141_kanban-advance-buttons-bounce-back.md](feature_plan_20260624210141_kanban-advance-buttons-bounce-back.md) §1f (drop it, filter `_lastCards` directly). **Do NOT touch 5359 here** — this plan only converts `promptOnDrop`'s *trailing* refreshes to deltas. If the bounce-back plan has already landed, 5359 is gone; this plan handles only what remains.
 
 2. **Tier 2.** In each dispatch handler, after the persist/dispatch, replace `await this._refreshBoard(...)` with a `moveCards` delta to the resolved target column:
    ```js

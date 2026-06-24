@@ -3361,17 +3361,31 @@ This step is what moves the plan forward in the Switchboard pipeline.
         const tvp = this._taskViewerProvider;
         if (!tvp) return;
 
-        // Enumerate live, non-backup planner terminals
-        const terminals = await tvp.getAliveRoleTerminalNames('planner', workspaceRoot);
+        // Enumerate live, non-backup planner terminals plus a stable location key
+        // for this physical terminal set (worktree path / repo root). The key drives
+        // the persistent rotation cursor so sequential moves keep rotating.
+        const { terminals, locationKey } = await tvp.getRoleTerminalSet('planner', workspaceRoot);
         if (terminals.length === 0) {
             // No live planner terminals — fall back to single trigger via default resolution
-            const sessionIds = sourceCards.map(c => this._cardId(c));
-            for (const sid of sessionIds) {
-                await this.moveCardToColumn(workspaceRoot, sid, nextCol);
-                await tvp.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
+            const movedIds: string[] = [];
+            const failures: { id: string; sourceColumn: string; reason: string }[] = [];
+            for (const card of sourceCards) {
+                const sid = this._cardId(card);
+                const ok = await this.moveCardToColumn(workspaceRoot, sid, nextCol);
+                if (ok) {
+                    movedIds.push(sid);
+                    await tvp.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
+                } else {
+                    failures.push({ id: sid, sourceColumn: card.column, reason: "couldn't save — board may be out of sync" });
+                }
             }
-            this._panel?.webview.postMessage({ type: 'moveCards', sessionIds, targetColumn: nextCol });
-            await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', 'planner', sessionIds, 'improve-plan', workspaceRoot);
+            if (movedIds.length > 0) {
+                this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn: nextCol });
+            }
+            if (failures.length > 0) {
+                this._panel?.webview.postMessage({ type: 'moveCardsFailed', failures });
+            }
+            await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', 'planner', movedIds, 'improve-plan', workspaceRoot);
             return;
         }
 
@@ -3389,18 +3403,38 @@ This step is what moves the plan forward in the Switchboard pipeline.
             return;
         }
 
-        // Pre-move only dispatched cards (optimistic UI)
+        // Pre-move only dispatched cards (optimistic UI). Persist BEFORE the slow /clear+send
+        // chain so the move sticks immediately. Capture failed writes so the UI reverts them
+        // with a reason instead of silently (the trailing full refresh that used to do this is
+        // gone).
         const dispatchedIds = plans.map(c => this._cardId(c));
-        for (const sid of dispatchedIds) {
-            await this.moveCardToColumn(workspaceRoot, sid, nextCol);
-            await tvp.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
+        const movedIds: string[] = [];
+        const failures: { id: string; sourceColumn: string; reason: string }[] = [];
+        for (const card of plans) {
+            const sid = this._cardId(card);
+            const ok = await this.moveCardToColumn(workspaceRoot, sid, nextCol);
+            if (ok) {
+                movedIds.push(sid);
+                await tvp.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
+            } else {
+                failures.push({ id: sid, sourceColumn: card.column, reason: "couldn't save — board may be out of sync" });
+            }
         }
-        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: dispatchedIds, targetColumn: nextCol });
+        if (movedIds.length > 0) {
+            this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn: nextCol });
+        }
+        if (failures.length > 0) {
+            this._panel?.webview.postMessage({ type: 'moveCardsFailed', failures });
+        }
 
-        // Round-robin partition into per-terminal buckets
+        // Round-robin partition into per-terminal buckets, starting from the
+        // persisted rotation cursor for this terminal set. A batch of N fans out
+        // one-per-terminal (cursor..cursor+N-1); sequential single moves continue
+        // the rotation instead of always restarting at terminal 0.
+        const cursor = tvp.getPlannerRotationCursor(locationKey);
         const buckets = new Map<string, string[]>();
         plans.forEach((card, i) => {
-            const term = terminals[i % terminals.length];
+            const term = terminals[(cursor + i) % terminals.length];
             if (!buckets.has(term)) buckets.set(term, []);
             buckets.get(term)!.push(this._cardId(card));
         });
@@ -3416,6 +3450,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 console.error(`[KanbanProvider] Distribute dispatch to '${terminalName}' failed:`, err);
             }
         }
+
+        // Advance the rotation so the next move continues after the last plan's terminal.
+        await tvp.advancePlannerRotationCursor(locationKey, plans.length);
 
         const limitSuffix = limit && ordered.length > terminals.length
             ? ` (${ordered.length - terminals.length} plan(s) held — limit ON)`
@@ -5039,7 +5076,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         await this.moveCardToColumn(workspaceRoot, sid, targetColumn);
                         await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetColumn, 'backward', workspaceRoot);
                     }
-                    this._scheduleBoardRefresh(workspaceRoot);
+                    // Targeted delta, not a full-board redraw — the move is already persisted
+                    // and the target column is known. Keeps drag-advance snappy.
+                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds, targetColumn });
                 }
                 break;
             }
@@ -5051,7 +5090,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         await this.moveCardToColumn(workspaceRoot, sid, targetColumn);
                         await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetColumn, 'forward', workspaceRoot);
                     }
-                    this._scheduleBoardRefresh(workspaceRoot);
+                    // Targeted delta, not a full-board redraw — the move is already persisted
+                    // and the target column is known. Keeps drag-advance snappy.
+                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds, targetColumn });
                 }
                 break;
             }
@@ -5356,7 +5397,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const sourceColumn: string = msg.sourceColumn;
                 const targetColumn: string = msg.targetColumn;
 
-                await this._refreshBoard(workspaceRoot);
+                // No start-refresh — filter the already-current _lastCards directly (same as
+                // moveSelected). The stale full-board updateBoard here is what bounced the
+                // dropped card back to its source column during dispatch.
                 const sourceCards = this._lastCards.filter(card =>
                     card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, sessionIds)
                 );
@@ -5485,7 +5528,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     vscode.window.showWarningMessage('Jules is currently disabled in setup.');
                     break;
                 }
-                await this._refreshBoard(workspaceRoot);
+                // No start-refresh — filter the already-current _lastCards directly (same as
+                // moveSelected) to avoid the stale updateBoard bounce.
                 const sourceCards = this._lastCards.filter(card => card.workspaceRoot === workspaceRoot && card.column === 'PLAN REVIEWED' && this._isLowComplexity(card));
                 if (sourceCards.length === 0) {
                     vscode.window.showInformationMessage('No LOW-complexity PLAN REVIEWED plans available for Jules dispatch.');
@@ -5590,7 +5634,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         }
                     }
                 }
-                await this._refreshBoard(workspaceRoot);
+                // No full refresh — every branch above (PLAN REVIEWED per-group, custom-user,
+                // planner distribute, and the general path) posts its own targeted moveCards
+                // delta. The move persists immediately and does not wait on dispatch.
                 break;
             }
             case 'moveAll': {
@@ -5598,7 +5644,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if (!workspaceRoot) { break; }
                 const column: string = msg.column;
 
-                await this._refreshBoard(workspaceRoot);
+                // NO start-refresh — _lastCards was just populated by the render the user
+                // clicked, so it already agrees with the webview. Filtering it directly (like
+                // moveSelected) avoids the full pipeline + stale updateBoard that reverts the
+                // optimistic advance (the bounce-back to NEW).
                 const sourceCards = this._lastCards.filter(card => card.workspaceRoot === workspaceRoot && card.column === column);
                 if (sourceCards.length === 0) {
                     vscode.window.showInformationMessage(`No plans in ${column} to move.`);
@@ -5632,7 +5681,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         }
                         movedParts.push(`${sids.length} → ${targetCol}`);
                     }
-                    await this._refreshBoard(workspaceRoot);
+                    // No full refresh — each complexity group already posted its own targeted
+                    // moveCards delta above (one per target column). N small deltas, not a redraw.
                     const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} skipped — unknown complexity)` : '';
                     this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`, isError: false });
                 } else {
@@ -5664,11 +5714,11 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         const role = this._columnToRole(nextCol);
                         if (role === 'planner' && this._cliTriggersEnabled) {
                             await this._distributePlannerDispatch(workspaceRoot, sourceCards, nextCol);
-                            // _distributePlannerDispatch posts its own accurate status
-                            // message (including limit-held count); skip the generic
-                            // "Moved N plans" below which would overwrite it with the
-                            // full sourceCards.length (misleading when limit is ON).
-                            await this._refreshBoard(workspaceRoot);
+                            // _distributePlannerDispatch persists + posts its own targeted
+                            // moveCards echo (and moveCardsFailed for any failed write) BEFORE
+                            // the slow /clear+send chain, and posts its own accurate status
+                            // message (including limit-held count). No trailing full refresh —
+                            // that is what reverted the move to NEW until dispatch finished.
                             break;
                         } else {
                             for (const sid of sessionIds) {
@@ -5683,7 +5733,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             }
                         }
                     }
-                    await this._refreshBoard(workspaceRoot);
+                    // No full refresh — the custom-user and general branches each posted their
+                    // own targeted moveCards delta. Persist already happened; the move sticks
+                    // independent of dispatch.
                     this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Moved ${sourceCards.length} plans from ${column} to ${nextCol}.`, isError: false });
                 }
                 break;
