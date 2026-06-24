@@ -2686,6 +2686,20 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           <div class="agent-description">Researches codebase context for plans and writes context briefs before planning review.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="planner" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Planner</label><input type="text" data-role="planner" id="agents-tab-cmd-planner" placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;"></div>
           <div class="agent-description">Writes detailed step-by-step implementation plans and creates work checklists.</div>
+          <div class="startup-row planner-pool-row" style="padding-left:24px;">
+            <label style="min-width:70px;">Terminals</label>
+            <select id="agents-tab-planner-terminal-count" data-role="planner" style="flex:0 0 auto;">
+              <option value="1" selected>1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+            </select>
+            <label class="cli-toggle-inline" style="margin-left:12px;" title="When advancing all, send at most one plan per available planner terminal (oldest plans first). Reducing the count does not close existing terminals — close them manually.">
+              <input type="checkbox" id="agents-tab-planner-limit-dispatch" data-role="planner" style="width:auto;margin:0;">
+              Limit dispatches to number of available terminals
+            </label>
+          </div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="code_researcher" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Code Researcher</label><input type="text" data-role="code_researcher" id="agents-tab-cmd-code-researcher" placeholder="e.g. agy" style="flex:1;"></div>
           <div class="agent-description">Uses research to scope and improve coding plans with codebase exploration and external research.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="splitter" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Splitter Agent</label><input type="text" data-role="splitter" id="agents-tab-cmd-splitter" placeholder="e.g. claude" style="flex:1;"></div>
@@ -3607,7 +3621,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           });
           return {
             commands, visibleAgents,
-            julesAutoSyncEnabled: document.getElementById('agents-tab-jules-auto-sync')?.checked ?? false
+            julesAutoSyncEnabled: document.getElementById('agents-tab-jules-auto-sync')?.checked ?? false,
+            plannerTerminalCount: parseInt(document.getElementById('agents-tab-planner-terminal-count')?.value || '1', 10),
+            plannerLimitDispatchToTerminals: document.getElementById('agents-tab-planner-limit-dispatch')?.checked ?? false
           };
         }
         function agentsTabSaveConfig() {
@@ -3621,6 +3637,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         document.querySelectorAll('#agents-tab-content input[type="text"][data-role]').forEach(i => {
           i.addEventListener('blur', agentsTabSaveConfig);
         });
+        document.getElementById('agents-tab-planner-terminal-count')?.addEventListener('change', agentsTabSaveConfig);
+        document.getElementById('agents-tab-planner-limit-dispatch')?.addEventListener('change', agentsTabSaveConfig);
 
 
 
@@ -6455,6 +6473,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   });
                   const julesSyncCb = document.getElementById('agents-tab-jules-auto-sync');
                   if (julesSyncCb) julesSyncCb.checked = !!msg.julesAutoSyncEnabled;
+                  const plannerCountSelect = document.getElementById('agents-tab-planner-terminal-count');
+                  if (plannerCountSelect) plannerCountSelect.value = String(msg.plannerTerminalCount ?? 1);
+                  const plannerLimitCb = document.getElementById('agents-tab-planner-limit-dispatch');
+                  if (plannerLimitCb) plannerLimitCb.checked = !!msg.plannerLimitDispatchToTerminals;
 
                   
 

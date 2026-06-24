@@ -2593,10 +2593,17 @@ export async function activate(context: vscode.ExtensionContext) {
             { name: 'Reviewer', role: 'reviewer' },
             { name: 'Analyst', role: 'analyst' }
         ];
+        const plannerCount = await taskViewerProvider.getPlannerTerminalCount(effectiveWorkspaceRoot);
         const agents: { name: string; role: string }[] = [];
         for (const builtIn of allBuiltInAgents) {
             if (visibleAgents[builtIn.role] !== false) {
-                agents.push(builtIn);
+                if (builtIn.role === 'planner' && plannerCount > 1) {
+                    for (let n = 1; n <= plannerCount; n++) {
+                        agents.push({ name: n === 1 ? 'Planner' : `Planner ${n}`, role: 'planner' });
+                    }
+                } else {
+                    agents.push(builtIn);
+                }
             }
         }
         for (const agent of customAgents) {

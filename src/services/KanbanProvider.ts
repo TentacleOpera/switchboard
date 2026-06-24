@@ -2622,11 +2622,15 @@ export class KanbanProvider implements vscode.Disposable {
             const visibleAgents = await this._taskViewerProvider.getVisibleAgents(workspaceRoot);
             const autoCommitOnCodeReview = await this._taskViewerProvider.handleGetAutoCommitOnCodeReviewSetting(workspaceRoot);
             const julesAutoSyncEnabled = this._context.globalState.get<boolean>('switchboard.agents.julesAutoSyncEnabled', false);
+            const plannerTerminalCount = await this._taskViewerProvider.getPlannerTerminalCount(workspaceRoot);
+            const plannerLimitDispatchToTerminals = await this._taskViewerProvider.getLimitDispatchToTerminals('planner', workspaceRoot);
             return {
                 commands,
                 visibleAgents,
                 julesAutoSyncEnabled,
-                autoCommitOnCodeReview
+                autoCommitOnCodeReview,
+                plannerTerminalCount,
+                plannerLimitDispatchToTerminals
             };
         }
         const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
@@ -2637,10 +2641,12 @@ export class KanbanProvider implements vscode.Disposable {
                 commands: state.startupCommands || {},
                 visibleAgents: state.visibleAgents || {},
                 julesAutoSyncEnabled: state.julesAutoSyncEnabled ?? false,
-                autoCommitOnCodeReview: state.autoCommitOnCodeReview ?? true
+                autoCommitOnCodeReview: state.autoCommitOnCodeReview ?? true,
+                plannerTerminalCount: state.plannerTerminalCount ?? 1,
+                plannerLimitDispatchToTerminals: state.plannerLimitDispatchToTerminals ?? false
             };
         } catch {
-            return { commands: {}, visibleAgents: {}, julesAutoSyncEnabled: false, autoCommitOnCodeReview: true };
+            return { commands: {}, visibleAgents: {}, julesAutoSyncEnabled: false, autoCommitOnCodeReview: true, plannerTerminalCount: 1, plannerLimitDispatchToTerminals: false };
         }
     }
 
@@ -2670,6 +2676,12 @@ export class KanbanProvider implements vscode.Disposable {
                 if (typeof msg.autoCommitOnCodeReview === 'boolean') {
                     state.autoCommitOnCodeReview = msg.autoCommitOnCodeReview;
                 }
+                if (typeof msg.plannerTerminalCount === 'number') {
+                    state.plannerTerminalCount = msg.plannerTerminalCount;
+                }
+                if (typeof msg.plannerLimitDispatchToTerminals === 'boolean') {
+                    state.plannerLimitDispatchToTerminals = msg.plannerLimitDispatchToTerminals;
+                }
             });
             return;
         }
@@ -2684,6 +2696,8 @@ export class KanbanProvider implements vscode.Disposable {
             if (msg.visibleAgents) state.visibleAgents = { ...(state.visibleAgents || {}), ...msg.visibleAgents };
             if (typeof msg.julesAutoSyncEnabled === 'boolean') state.julesAutoSyncEnabled = msg.julesAutoSyncEnabled;
             if (typeof msg.autoCommitOnCodeReview === 'boolean') state.autoCommitOnCodeReview = msg.autoCommitOnCodeReview;
+            if (typeof msg.plannerTerminalCount === 'number') state.plannerTerminalCount = msg.plannerTerminalCount;
+            if (typeof msg.plannerLimitDispatchToTerminals === 'boolean') state.plannerLimitDispatchToTerminals = msg.plannerLimitDispatchToTerminals;
             await fs.promises.writeFile(statePath, JSON.stringify(state, null, 2), 'utf8');
             // No notifyStateChanged() here: this legacy state.json branch only runs when
             // there is no TaskViewerProvider to notify (the provider path returned above).
@@ -3329,6 +3343,81 @@ This step is what moves the plan forward in the Switchboard pipeline.
             const worktreePath = allSameWorktree ? commonWorktree : undefined;
             await vscode.commands.executeCommand('switchboard.dispatchToCoderTerminal', coderPrompt, worktreePath);
         }
+    }
+
+    private async _distributePlannerDispatch(
+        workspaceRoot: string,
+        sourceCards: KanbanCard[],
+        nextCol: string,
+        options?: { skipLimit?: boolean }
+    ): Promise<void> {
+        const tvp = this._taskViewerProvider;
+        if (!tvp) return;
+
+        // Enumerate live, non-backup planner terminals
+        const terminals = await tvp.getAliveRoleTerminalNames('planner', workspaceRoot);
+        if (terminals.length === 0) {
+            // No live planner terminals — fall back to single trigger via default resolution
+            const sessionIds = sourceCards.map(c => this._cardId(c));
+            for (const sid of sessionIds) {
+                await this.moveCardToColumn(workspaceRoot, sid, nextCol);
+                await tvp.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
+            }
+            this._panel?.webview.postMessage({ type: 'moveCards', sessionIds, targetColumn: nextCol });
+            await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', 'planner', sessionIds, 'improve-plan', workspaceRoot);
+            return;
+        }
+
+        // Oldest-first ordering (lastActivity is ISO timestamp string)
+        const ordered = [...sourceCards].sort((a, b) =>
+            (a.lastActivity || '').localeCompare(b.lastActivity || '')
+        );
+
+        // Limit: only oldest N plans (N = live terminal count), one per terminal
+        const limit = !options?.skipLimit && await tvp.getLimitDispatchToTerminals('planner', workspaceRoot);
+        const plans = limit ? ordered.slice(0, terminals.length) : ordered;
+
+        if (plans.length === 0) {
+            this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'No plans to dispatch.', isError: false });
+            return;
+        }
+
+        // Pre-move only dispatched cards (optimistic UI)
+        const dispatchedIds = plans.map(c => this._cardId(c));
+        for (const sid of dispatchedIds) {
+            await this.moveCardToColumn(workspaceRoot, sid, nextCol);
+            await tvp.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
+        }
+        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: dispatchedIds, targetColumn: nextCol });
+
+        // Round-robin partition into per-terminal buckets
+        const buckets = new Map<string, string[]>();
+        plans.forEach((card, i) => {
+            const term = terminals[i % terminals.length];
+            if (!buckets.has(term)) buckets.set(term, []);
+            buckets.get(term)!.push(this._cardId(card));
+        });
+
+        // Dispatch per bucket with per-bucket failure isolation
+        for (const [terminalName, ids] of buckets) {
+            try {
+                await vscode.commands.executeCommand(
+                    'switchboard.triggerBatchAgentFromKanban',
+                    'planner', ids, 'improve-plan', workspaceRoot, terminalName
+                );
+            } catch (err) {
+                console.error(`[KanbanProvider] Distribute dispatch to '${terminalName}' failed:`, err);
+            }
+        }
+
+        const limitSuffix = limit && ordered.length > terminals.length
+            ? ` (${ordered.length - terminals.length} plan(s) held — limit ON)`
+            : '';
+        this._panel?.webview.postMessage({
+            type: 'showStatusMessage',
+            message: `Distributed ${dispatchedIds.length} plan(s) across ${terminals.length} planner terminal(s).${limitSuffix}`,
+            isError: false
+        });
     }
 
     /** Get the next column ID in the pipeline, or null for the last column. */
@@ -5444,21 +5533,26 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             await vscode.commands.executeCommand('switchboard.kanbanForwardMove', msg.sessionIds, nextCol, workspaceRoot);
                         }
                     } else {
-                        for (const sid of msg.sessionIds) {
-                            await this.moveCardToColumn(workspaceRoot, sid, nextCol);
-                            await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
-                        }
-                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: msg.sessionIds, targetColumn: nextCol });
-                        if (this._cliTriggersEnabled) {
-                            const role = this._columnToRole(nextCol);
-                            if (role) {
+                        const role = this._columnToRole(nextCol);
+                        if (role === 'planner' && this._cliTriggersEnabled) {
+                            const selectedCards = this._lastCards.filter(card =>
+                                card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds)
+                            );
+                            await this._distributePlannerDispatch(workspaceRoot, selectedCards, nextCol, { skipLimit: true });
+                        } else {
+                            for (const sid of msg.sessionIds) {
+                                await this.moveCardToColumn(workspaceRoot, sid, nextCol);
+                                await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
+                            }
+                            this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: msg.sessionIds, targetColumn: nextCol });
+                            if (this._cliTriggersEnabled && role) {
                                 const instruction = role === 'planner' ? 'improve-plan' : undefined;
                                 if (msg.sessionIds.length === 1) {
                                     await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, msg.sessionIds[0], instruction, workspaceRoot);
                                 } else {
                                     await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, msg.sessionIds, instruction, workspaceRoot);
                                 }
-                            } else {
+                            } else if (!role) {
                                 console.log(`[Kanban] Column '${nextCol}' has no role mapping, using visual move only`);
                             }
                         }
@@ -5535,16 +5629,24 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sessionIds, nextCol, workspaceRoot);
                         }
                     } else {
-                        for (const sid of sessionIds) {
-                            await this.moveCardToColumn(workspaceRoot, sid, nextCol);
-                            await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
-                        }
-                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sessionIds, targetColumn: nextCol });
-                        if (this._cliTriggersEnabled) {
-                            const role = this._columnToRole(nextCol);
-                            if (role) {
+                        const role = this._columnToRole(nextCol);
+                        if (role === 'planner' && this._cliTriggersEnabled) {
+                            await this._distributePlannerDispatch(workspaceRoot, sourceCards, nextCol);
+                            // _distributePlannerDispatch posts its own accurate status
+                            // message (including limit-held count); skip the generic
+                            // "Moved N plans" below which would overwrite it with the
+                            // full sourceCards.length (misleading when limit is ON).
+                            await this._refreshBoard(workspaceRoot);
+                            break;
+                        } else {
+                            for (const sid of sessionIds) {
+                                await this.moveCardToColumn(workspaceRoot, sid, nextCol);
+                                await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
+                            }
+                            this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sessionIds, targetColumn: nextCol });
+                            if (this._cliTriggersEnabled && role) {
                                 await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, sessionIds, undefined, workspaceRoot);
-                            } else {
+                            } else if (!role) {
                                 console.log(`[Kanban] Column '${nextCol}' has no role mapping, using visual move only`);
                             }
                         }

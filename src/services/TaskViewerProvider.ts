@@ -696,6 +696,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         ['switchboard.agents.promptOverrides', 'defaultPromptOverrides'],
         ['switchboard.kanban.autoCommitOnCodeReview', 'autoCommitOnCodeReview'],
         ['switchboard.agents.julesAutoSyncEnabled', 'julesAutoSyncEnabled'],
+        ['switchboard.agents.plannerTerminalCount', 'plannerTerminalCount'],
+        ['switchboard.agents.plannerLimitDispatchToTerminals', 'plannerLimitDispatchToTerminals'],
     ];
 
     /** Discover all role config keys from a state object (global or workspace). */
@@ -3304,6 +3306,36 @@ Each plan file must include:
 
     public async handleDeletePlanFromReview(sessionId: string, workspaceRoot?: string, planFileAbsolute?: string): Promise<boolean> {
         return await this._handleDeletePlan(sessionId, workspaceRoot, planFileAbsolute);
+    }
+
+    public async getPlannerTerminalCount(ws?: string): Promise<number> {
+        const n = await this._readStateField('plannerTerminalCount', ws, 1);
+        return Math.max(1, Math.min(5, Number.isFinite(n) ? Math.floor(n) : 1));
+    }
+
+    public async getLimitDispatchToTerminals(role: string, ws?: string): Promise<boolean> {
+        if (role !== 'planner') return false;
+        return await this._readStateField('plannerLimitDispatchToTerminals', ws, false);
+    }
+
+    public async getAliveRoleTerminalNames(role: string, workspaceRoot: string): Promise<string[]> {
+        return this._getAliveAutobanTerminalNames(role, workspaceRoot, false);
+    }
+
+    private async _readStateField<T>(field: string, workspaceRoot: string | undefined, defaultValue: T): Promise<T> {
+        const globalValue = this._context.globalState.get<T>(`switchboard.agents.${field}`);
+        if (globalValue !== undefined) {
+            return globalValue;
+        }
+        const statePath = this._resolveStateFilePath(workspaceRoot);
+        if (!statePath) return defaultValue;
+        try {
+            const content = await fs.promises.readFile(statePath, 'utf8');
+            const state = JSON.parse(content);
+            return (state[field] !== undefined) ? state[field] : defaultValue;
+        } catch {
+            return defaultValue;
+        }
     }
 
     public async getStartupCommands(workspaceRoot?: string): Promise<Record<string, string>> {
