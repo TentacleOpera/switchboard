@@ -120,3 +120,43 @@ The existing template `Subtasks (${plan.subtaskCount || 0})` (line ~1217) will n
    - Confirm an epic with zero subtasks still shows `Subtasks (0)`.
    - Confirm a standalone epic document (`.switchboard/epics/*.md`) still shows `Subtasks (0)`.
 3. **Regression check:** Open the Kanban board tab and confirm epic cards there still show correct subtask counts (unchanged code path).
+
+## Implementation Review (Reviewer Pass — 2026-06-24)
+
+### Status: APPROVED — no code fixes required
+
+The implementation faithfully mirrors the proven `KanbanProvider.ts` pattern. All plan requirements are satisfied.
+
+### Files Changed
+
+| File | Change | Lines |
+|------|--------|-------|
+| `src/services/PlanningPanelProvider.ts` | Added `subtaskCount?: number` to `KanbanPlanSummary` interface | L58 |
+| `src/services/PlanningPanelProvider.ts` | Build `subtaskCountMap` from `allRecords` (active + completed) | L7562–7567 |
+| `src/services/PlanningPanelProvider.ts` | Assign `subtaskCount` in `.map()` output (epics only) | L7599 |
+| `src/webview/project.js` | No change (existing `plan.subtaskCount \|\| 0` template now receives real values) | L1232 (unchanged) |
+
+### Verification Results
+
+- **Compilation:** Skipped per session instructions.
+- **Tests:** Skipped per session instructions (to be run separately by user).
+- **Static verification (performed):**
+  - All 5 `kanbanPlansReady` send sites (L2489, L2668, L2780, L2796, L2821) confirmed to route through the fixed `_getKanbanPlans()` — no bypass path.
+  - Interface field is optional → no downstream type breakage.
+  - Frontend `|| 0` fallback handles `undefined` for non-epics correctly.
+  - Reference pattern parity confirmed against `KanbanProvider.ts:1186–1208`.
+  - Standalone epic documents still hardcoded `subtaskCount: 0` (L2864) — correct, unchanged.
+
+### Findings
+
+| # | Severity | Finding | Disposition |
+|---|----------|---------|-------------|
+| NIT-1 | NIT | `PlanningPanelProvider._getKanbanPlans()` does not filter ghost plans / planFile-less completed rows before building `subtaskCountMap`, unlike `KanbanProvider` (which applies `filterGhostPlans` + `row.planFile` filter at KanbanProvider.ts:1181–1185). A tombstoned row carrying an `epicId` could inflate the Epics tab count relative to the Kanban board. | **Defer** — pre-existing divergence, explicitly accepted by plan's Edge-Case Audit (line 37). Edge case. Track separately. |
+| NIT-2 | NIT | Per-workspace count isolation: in the multi-workspace merge path (L2489), `_getKanbanPlans(root)` is called per-root, so each call's `subtaskCountMap` only sees that root's records. Cross-workspace epic/subtask links would miscount. | **Defer** — inherent to the per-workspace `kanban.db` model; `KanbanProvider` has the identical limitation. Not introduced by this change. |
+
+**No CRITICAL or MAJOR findings.**
+
+### Remaining Risks
+
+1. **NIT-1 divergence** could cause a count mismatch between the Epics tab and the Kanban board in workspaces that have ghost/tombstoned plans with `epicId` set. Low probability, cosmetic impact only.
+2. **NIT-2** — cross-workspace epic/subtask linking is not supported by the DB schema; count would be scoped to the epic's own workspace DB. Pre-existing, not a regression.
