@@ -69,6 +69,7 @@ Configure roles:
 - **Reviewer** — Compares implementation to plans (Grumpy Principal Engineer).
 - **Acceptance Tester** — Validates finished work.
 - **Analyst** — General research.
+- **Ticket Updater** — Reads imported tickets and posts short triage verdicts (severity, area, recommended action) back to ClickUp/Linear as comments.
 
 You can add custom roles in the Setup panel.
 
@@ -133,6 +134,12 @@ Commands: `Set Notion API Token`, `Fetch Notion Design Doc`
 - **Board Management Mode** — Pulls tasks automatically, processes cards independently, and writes back only when `COMPLETED`.
 Configure via: `switchboard.defaultMode` (`action` | `plan`)
 
+### Automated Triage Pipeline (ClickUp & Linear)
+One-click setup in the Setup panel creates a "Bug Triage" board that auto-pulls bugs from ClickUp or Linear, routes them to the Ticket Updater agent for triage verdicts (severity, area, recommended action, routing), and syncs the verdicts back as comments on the source ticket. The agent never overwrites the ticket description — it posts a short structured comment only (target ≤120 words).
+
+### Linear Remote Control
+Drive your Kanban board from the Linear app on your phone. Moving a card between Linear states moves it on the board and dispatches that column's agent. Comments posted on a Linear issue are routed to the card's current column agent. Configure boards, sync mode, and ping frequency in the Kanban REMOTE tab. Toggle remote control from the toolbar button. Config is stored in the Kanban database (key `remote.config`), not in `settings.json`.
+
 ### Live Sync Mode
 Automatically syncs edits back to ClickUp/Linear every 30 seconds.
 - Pause/resume from card right-click menu.
@@ -168,6 +175,9 @@ Testing failed? Press **Report** to return cards with logs to the Coder column.
 ### Cross-IDE Workflows
 Copy links and prompts to share state between Antigravity, Windsurf, and Cursor.
 
+### Memo Capture Mode
+Use `/memo` to enter append-only capture mode. Every message you send is appended verbatim to `.switchboard/memo.md` — no analysis, no action. This is ideal for logging issues, bugs, and ideas during testing without breaking your flow. Process captured entries into plan files using the Memo sub-tab in the sidebar (Copy Prompt or Send to Planner buttons), or send `process memo` in chat to exit capture mode and create one plan per entry. You can also open the Memo tab directly with the `switchboard.memo.hotkey` keybinding (default `cmd+shift+alt+m`).
+
 ---
 
 ## Planning Tools
@@ -177,6 +187,7 @@ Copy links and prompts to share state between Antigravity, Windsurf, and Cursor.
 - `/improve-plan` — Deep planning and adversarial review.
 - `/archive` — Search DuckDB plan archives.
 - `/export` — Save current conversation to archives.
+- `/memo` — Enter memo capture mode (append-only issue/idea logging).
 
 ### Plan Scanner
 Periodically scans AI IDE/agent folders for newly generated plan files and imports them.

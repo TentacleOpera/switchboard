@@ -33,7 +33,10 @@
 25. [File Layout & Runtime State](#25-file-layout--runtime-state)
 26. [Kanban Database Schema](#26-kanban-database-schema)
 27. [Webview Panels Reference](#27-webview-panels-reference)
-28. [Troubleshooting / FAQ](#28-troubleshooting--faq)
+28. [Memo Capture Mode](#28-memo-capture-mode)
+29. [Automated Triage Pipeline](#29-automated-triage-pipeline)
+30. [Linear Remote Control](#30-linear-remote-control)
+31. [Troubleshooting / FAQ](#31-troubleshooting--faq)
 
 ---
 
@@ -87,7 +90,7 @@ Switchboard ships with the following built-in agent roles (defined in `agentConf
 | `reviewer` | Reviewer | Compares implementation to plans (Grumpy Principal Engineer persona). |
 | `tester` | Acceptance Tester | Validates finished work. |
 | `analyst` | Analyst | General research and context map generation. |
-| `ticket_updater` | Ticket Updater | Updates PM tool ticket statuses. |
+| `ticket_updater` | Ticket Updater | Reads imported tickets and posts short triage verdicts (severity, area, assessment, recommended action, routing) back to ClickUp/Linear as comments. Never overwrites the ticket description. |
 | `researcher` | Researcher | Research tasks. |
 | `splitter` | Splitter Agent | Splits large plans into sub-plans. |
 | `gatherer` | Context Gatherer | Gathers code context before planning. |
@@ -567,6 +570,8 @@ All settings are defined in `package.json` contributes.configuration. Scope: `ap
 | `switchboard.theme.cyberPanel` | boolean | false | — | *Deprecated*: Cyber Panel is always active |
 | `switchboard.theme.disableCyberAnimation` | boolean | false | — | Disable animated CRT sweep beam |
 | `switchboard.theme.name` | string (`afterburner` \| `claudify`) | `afterburner` | window | Visual theme for webviews |
+| `switchboard.memo.hotkey` | string | `cmd+shift+alt+m` | — | Hotkey to open the memo tab (requires window reload to take effect) |
+| `switchboard.statusBar.showMemoButton` | boolean | false | window | Show a dedicated memo button in the status bar |
 
 ---
 
@@ -742,6 +747,7 @@ These are slash commands available in IDE chat agents (Windsurf, Cursor, Antigra
 - **`/improve-plan`** — Deep planning and adversarial review. Runs a multi-phase workflow to write, critique, and refine plans.
 - **`/archive`** — Search the DuckDB plan archive for historical plans and conversations.
 - **`/export`** — Save the current conversation to the archive for future reference.
+- **`/memo`** — Enter memo capture mode. Appends each message verbatim to `.switchboard/memo.md` without analysis or action. Process entries via the Memo sub-tab in the sidebar, or send `process memo` to exit and create one plan per entry. Clear the conversation to leave without processing.
 
 ---
 
@@ -1375,7 +1381,84 @@ Hosted by `SetupPanelProvider`. Ten tabs:
 
 ---
 
-## 28. Troubleshooting / FAQ
+## 28. Memo Capture Mode
+
+An append-only capture mode for progressively logging issues, bugs, and ideas during testing or exploration — without breaking your flow with analysis or code changes.
+
+### How to Enter
+- Type `/memo` in your IDE chat, or
+- Open the Memo sub-tab directly via the `switchboard.memo.hotkey` keybinding (default `cmd+shift+alt+m`).
+
+### Behavior
+- Every message you send is appended verbatim to `.switchboard/memo.md`. No analysis, no action.
+- Every capture-mode reply begins with the marker `[MEMO CAPTURE ACTIVE]`.
+
+### How to Process
+Open the Memo sub-tab in the sidebar (**Agents & Terminals** tab → **Memo** sub-tab). Three buttons:
+- **Send to Planner** — dispatch entries to the planner and clear the memo.
+- **Copy Prompt** — copy the planner prompt to clipboard and clear the memo.
+- **Clear** — clear the memo without processing.
+
+### How to Exit
+Send exactly `process memo` (case-insensitive, as the entire message) to exit capture mode and create one plan file per entry in `.switchboard/plans/`. The memo file is **NOT** cleared by this path — clear it via the Memo sub-tab to avoid duplicates on re-run. To leave without processing, clear the conversation.
+
+### Guaranteed Capture
+The Memo sub-tab also supports direct capture without agent involvement — type into the textarea and it saves automatically to `.switchboard/memo.md` via the extension backend (guaranteed capture, immune to host system prompt overrides).
+
+### Settings
+- `switchboard.memo.hotkey` (default `cmd+shift+alt+m`)
+- `switchboard.statusBar.showMemoButton` (default `false`)
+
+---
+
+## 29. Automated Triage Pipeline
+
+One-click setup for auto-pulling bugs from ClickUp or Linear and routing them to the triage agent.
+
+### Setup
+Setup panel → ClickUp or Linear tab → **"⚡ ENABLE TRIAGE PIPELINE (ONE-CLICK)"**. This creates a "Bug Triage" board with sensible defaults (all editable afterward).
+
+### Triage Verdict
+The Ticket Updater agent posts a structured verdict as a comment:
+- **Severity** — blocker / high / normal / low
+- **Area** — one or two tags
+- **Assessment** — 1–2 sentence root-cause hypothesis
+- **Recommended action** — the concrete next step
+- **Routing** — auto / needs-human
+
+The verdict is posted via the `clickup_api` or `linear_api` skill — it **never overwrites the ticket description**, comment only. Target ≤120 words per verdict. The agent resolves the provider ticket ID from the plan metadata (the `**ClickUp Task ID:**` or `**Linear Issue ID:**` line).
+
+---
+
+## 30. Linear Remote Control
+
+Drive your Kanban board from the Linear mobile app.
+
+### How It Works
+Remote Control polls Linear on a timer (no webhooks), mirrors state changes to Kanban columns and dispatches the column's agent, and ingests comments — routing each to the current column's agent.
+
+### Configuration
+Kanban **REMOTE** tab:
+- **Boards to sync** (multi-select)
+- **Silent sync** — keep mirroring while pinging is off
+- **Ping mode** — manual / constant
+- **Ping frequency** — 30–120s (default 60)
+
+Toggle remote control on/off from the toolbar remote control button.
+
+### Guards
+- **Self-comment marker** — skips its own outbound comments on ingest.
+- **State echo guard** (5-minute TTL) — prevents re-applying a state that matches the current column.
+- **Per-card sequential queue** — no two agents run for one card simultaneously.
+- **Comment cursor** — advanced only AFTER dispatch completes (reload-safe); first-encounter cursor seeding prevents replaying the entire comment history on first start.
+- **Per-poll card cap** — 100 cards (most-recently-updated first; remainder deferred to the next cycle).
+
+### Config Storage
+Stored in the Kanban DB `config` table (key `remote.config`), **not** in `settings.json`. The `RemoteConfig` fields: `boards` (string[]), `silentSync` (boolean), `pingMode` (`constant` | `manual`), `pingFrequencySeconds` (30–120, default 60).
+
+---
+
+## 31. Troubleshooting / FAQ
 
 ### Setup Issues
 **Q: The sidebar shows "Setup Required" — what do I do?**

@@ -97,7 +97,7 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 
 ### 📌 Memo Capture Mode — Priority Rule
 
-While `/memo` capture mode is active, capture mode takes precedence over the default "analyze and act" behavior. The agent appends each user message to `.switchboard/memo.md` and does NOT analyze, plan, or write code. Every capture-mode reply begins with `[MEMO CAPTURE ACTIVE]` and ends by advising the command `process memo`. The sole exit trigger is the exact command `process memo` (case-insensitive, as the entire message) — it exits capture mode and processes all entries into plan files (one per entry). To leave without processing, clear the conversation. The Memo modal in the Kanban panel remains as an alternative processing path (backend-driven, immune to host system prompt overrides).
+While `/memo` capture mode is active, capture mode takes precedence over the default "analyze and act" behavior. The agent appends each user message to `.switchboard/memo.md` and does NOT analyze, plan, or write code. Every capture-mode reply begins with `[MEMO CAPTURE ACTIVE]` and ends by advising the command `process memo`. The sole exit trigger is the exact command `process memo` (case-insensitive, as the entire message) — it exits capture mode and processes all entries into plan files (one per entry). To leave without processing, clear the conversation. The Memo sub-tab in the sidebar remains as an alternative processing path (backend-driven, immune to host system prompt overrides).
 See `.agents/workflows/memo.md` for the full protocol.
 
 ### 📝 Plan Authoring & Problem Analysis Protocol

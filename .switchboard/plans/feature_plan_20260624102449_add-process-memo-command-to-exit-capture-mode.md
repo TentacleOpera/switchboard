@@ -207,3 +207,44 @@ to:
 ## Recommendation
 
 Complexity is 4 → **Send to Coder.** Documentation/prompt-engineering change across 2 files with no code surface, but it modifies shipped agent behavior and must keep the prior in-sentence/substring false-exit bug class dead via the exact-whole-message match requirement. The user has already confirmed the design direction (User Review Required = No).
+
+---
+
+## Reviewer Pass (2026-06-24)
+
+### Stage 1 — Adversarial Findings
+
+- **CRITICAL — None.** The core mechanism (exact-whole-message match in Hard Rule #4, `process memo` footer, Process Memo Command section) is correct and does not re-introduce the in-sentence/substring false-exit bug class.
+- **MAJOR — `memo.md:25-27` (pre-fix):** Stale anti-example body still claimed "There are no chat-based exit commands" and "Processing is done only via the Memo modal in the Kanban panel." This directly contradicted Hard Rule #4 (line 13), the appended exception sentence (line 29), and the two-paths "Processing Captured Entries" section (lines 48-52). The plan's section 1D said "append after the existing anti-example," which the implementation did — but it left the stale body text that the append now contradicts, creating an internal contradiction in the same section. An LLM reading the workflow file would get conflicting signals.
+- **NIT — `AGENTS.md:91`:** Skill registry one-liner for `memo` does not mention the `process memo` exit. The plan did not scope this line; the workflow registry table (line 21) was updated. Minor inconsistency, not material to behavior.
+- **NIT — `memo.md:32`:** Process step 1 entry note runs into "Enter capture mode" without a separator (`...send: process memo" Enter capture mode.`). Cosmetic only.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep:** Hard Rule #4 (line 13), Hard Rule #5 footer (lines 14-16), Process Memo Command section (lines 36-46), Processing Captured Entries two-paths section (lines 48-52), AGENTS.md line 100, AGENTS.md line 21, front-matter description (line 2) — all match the plan exactly.
+**Fix now:** `memo.md:25-27` stale anti-example body — rewrite to remove the false "no chat-based exit commands" / "only via the Memo modal" claims while preserving the core teaching (embedded trigger words = content).
+**Defer:** AGENTS.md:91 skill one-liner and memo.md:32 punctuation — cosmetic, not material.
+
+### Stage 3 — Code Fixes Applied
+
+- **`memo.md:24-28` (MAJOR fix):** Rewrote the anti-example body. Removed "There are no chat-based exit commands" and "Processing is done only via the Memo modal in the Kanban panel." Replaced with: "Trigger words embedded inside a longer sentence are always memo content — the sole chat-based exit is the exact whole-message command `process memo` (see Hard Rule #4 and the Process Memo Command section below). The Memo modal in the Kanban panel remains the alternative processing path." This eliminates the internal contradiction; the appended exception sentence (line 30) now reinforces rather than contradicts the body.
+
+### Stage 4 — Verification
+
+- **Compilation:** Skipped per session directive.
+- **Automated tests:** Skipped per session directive (project test suite does not cover agent prompt text in any case).
+- **Stale-reference scan:** `grep` for `no chat-based exit|only via the Memo modal|no exit` in `memo.md` → **0 matches** post-fix. Contradiction eliminated.
+- **AGENTS.md scan:** `grep` for the same stale patterns → **0 matches**. AGENTS.md lines 21 and 100 verified to match the plan exactly.
+- **Git diff:** Only the anti-example body fix is uncommitted (` M .agents/workflows/memo.md`). All other implementation changes were committed in `45d2027`.
+
+### Files Changed
+
+- `.agents/workflows/memo.md` — anti-example body rewritten (MAJOR fix, lines 24-28). All other memo.md changes were committed in `45d2027` and verified correct.
+- `AGENTS.md` — committed in `45d2027`, verified correct (lines 21, 100). No review changes.
+
+### Remaining Risks
+
+1. **Re-processing hazard (accepted):** `process memo` does NOT clear `.switchboard/memo.md`; re-running creates duplicate plan files. Documented in the Process Memo Command section and the completion-report step. User manages via Memo modal clearing. This is the plan's accepted design decision, not a defect.
+2. **Residual LLM-misfire-on-exact-match (accepted):** An LLM may occasionally misfire even on an exact-match instruction. Mitigated by single-command scope + anti-example; Memo modal remains the button-driven fallback. Accepted by the user.
+3. **AGENTS.md:91 skill one-liner (NIT, deferred):** Does not mention `process memo`. Not material to behavior; the workflow registry table (line 21) and the priority rule (line 100) both carry the full guidance.
+4. **memo.md:32 punctuation (NIT, deferred):** Entry note runs into "Enter capture mode" without a separator. Cosmetic only.

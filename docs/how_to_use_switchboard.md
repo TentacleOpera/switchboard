@@ -16,6 +16,12 @@ To get the most out of Switchboard, follow the standard full-lifecycle pipeline:
 
 ---
 
+## 1.5. Capturing Issues with Memo Mode
+
+During testing or exploration, use `/memo` to enter capture mode. Each message is appended verbatim to `.switchboard/memo.md` — no analysis, no code changes, just capture. When you're done, either open the Memo sub-tab in the sidebar (Agents & Terminals tab → Memo sub-tab) to dispatch entries to the planner or copy the planner prompt to clipboard, or send `process memo` in chat to exit capture mode and create one plan per entry. You can also open the Memo tab directly via the `switchboard.memo.hotkey` keybinding (default `cmd+shift+alt+m`).
+
+---
+
 ## 2. Setting Up Your Constitution & Requirements
 
 The Project Constitution is your spec-driven governance model. Instead of typing the same rules into every prompt:
@@ -52,3 +58,13 @@ Access unlimited Gemini Pro planning quota:
 2. Upload the bundles to a Google NotebookLM notebook.
 3. Ask NotebookLM to write plans according to the generated "How to Plan" guide.
 4. Copy the output and click **Import from Clipboard** on the board.
+
+---
+
+## 4. Automated Triage & Remote Control
+
+### One-Click Triage Pipeline
+In the Setup panel, click "ENABLE TRIAGE PIPELINE" under ClickUp or Linear to auto-create a Bug Triage board. Bugs are pulled in, routed to the Ticket Updater agent, and triage verdicts (severity, area, assessment, recommended action, routing — ≤120 words) are synced back as comments. The agent never overwrites the ticket description.
+
+### Linear Remote Control
+Drive your board from your phone via the Linear app. Configure in the Kanban REMOTE tab — select boards, set ping mode (manual/constant), and ping frequency (30-120s). Moving a Linear issue between states dispatches the corresponding Kanban column agent; comments are routed to the current column's agent. Toggle from the toolbar remote control button. Config stored in the Kanban DB, not `settings.json`.
