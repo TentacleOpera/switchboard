@@ -1,0 +1,146 @@
+{
+  "generator": "ClaudeCodeMirrorService",
+  "version": "1.7.4",
+  "generatedAt": "2026-06-24T19:59:44.466Z",
+  "skills": [
+    {
+      "source": "workflows/memo.md",
+      "name": "memo",
+      "relPath": ".claude/skills/memo/SKILL.md"
+    },
+    {
+      "source": "workflows/accuracy.md",
+      "name": "accuracy",
+      "relPath": ".claude/skills/accuracy/SKILL.md"
+    },
+    {
+      "source": "workflows/improve-plan.md",
+      "name": "improve-plan",
+      "relPath": ".claude/skills/improve-plan/SKILL.md"
+    },
+    {
+      "source": "workflows/switchboard-chat.md",
+      "name": "switchboard-chat",
+      "relPath": ".claude/skills/switchboard-chat/SKILL.md"
+    },
+    {
+      "source": "skills/clickup_api.md",
+      "name": "clickup-api",
+      "relPath": ".claude/skills/clickup-api/SKILL.md"
+    },
+    {
+      "source": "skills/clickup_fetch.md",
+      "name": "clickup-fetch",
+      "relPath": ".claude/skills/clickup-fetch/SKILL.md"
+    },
+    {
+      "source": "skills/clickup_create_task.md",
+      "name": "clickup-create-task",
+      "relPath": ".claude/skills/clickup-create-task/SKILL.md"
+    },
+    {
+      "source": "skills/clickup_modify_task.md",
+      "name": "clickup-modify-task",
+      "relPath": ".claude/skills/clickup-modify-task/SKILL.md"
+    },
+    {
+      "source": "skills/clickup_attach.md",
+      "name": "clickup-attach",
+      "relPath": ".claude/skills/clickup-attach/SKILL.md"
+    },
+    {
+      "source": "skills/clickup_create_subpage.md",
+      "name": "clickup-create-subpage",
+      "relPath": ".claude/skills/clickup-create-subpage/SKILL.md"
+    },
+    {
+      "source": "skills/linear_api.md",
+      "name": "linear-api",
+      "relPath": ".claude/skills/linear-api/SKILL.md"
+    },
+    {
+      "source": "skills/get_tickets.md",
+      "name": "get-tickets",
+      "relPath": ".claude/skills/get-tickets/SKILL.md"
+    },
+    {
+      "source": "skills/generate_diagram.md",
+      "name": "generate-diagram",
+      "relPath": ".claude/skills/generate-diagram/SKILL.md"
+    },
+    {
+      "source": "skills/kanban_operations",
+      "name": "kanban-operations",
+      "relPath": ".claude/skills/kanban-operations/SKILL.md"
+    },
+    {
+      "source": "skills/refine_ticket.md",
+      "name": "refine-ticket",
+      "relPath": ".claude/skills/refine-ticket/SKILL.md"
+    },
+    {
+      "source": "skills/archive.md",
+      "name": "archive",
+      "relPath": ".claude/skills/archive/SKILL.md"
+    },
+    {
+      "source": "skills/query_archive",
+      "name": "query-archive",
+      "relPath": ".claude/skills/query-archive/SKILL.md"
+    },
+    {
+      "source": "skills/query_switchboard_kanban.md",
+      "name": "query-switchboard-kanban",
+      "relPath": ".claude/skills/query-switchboard-kanban/SKILL.md"
+    },
+    {
+      "source": "skills/query_kanban_plans.md",
+      "name": "query-kanban-plans",
+      "relPath": ".claude/skills/query-kanban-plans/SKILL.md"
+    },
+    {
+      "source": "skills/web_research.md",
+      "name": "web-research",
+      "relPath": ".claude/skills/web-research/SKILL.md"
+    },
+    {
+      "source": "skills/deep_planning.md",
+      "name": "deep-planning",
+      "relPath": ".claude/skills/deep-planning/SKILL.md"
+    },
+    {
+      "source": "skills/complexity_scoring.md",
+      "name": "complexity-scoring",
+      "relPath": ".claude/skills/complexity-scoring/SKILL.md"
+    },
+    {
+      "source": "skills/advise_research",
+      "name": "advise-research",
+      "relPath": ".claude/skills/advise-research/SKILL.md"
+    },
+    {
+      "source": "skills/constitution_builder.md",
+      "name": "constitution-builder",
+      "relPath": ".claude/skills/constitution-builder/SKILL.md"
+    },
+    {
+      "source": "skills/tuning.md",
+      "name": "tuning",
+      "relPath": ".claude/skills/tuning/SKILL.md"
+    }
+  ],
+  "settingsAllowEntries": [
+    "Bash(curl *)",
+    "Bash(node *)",
+    "Bash(source *)",
+    "Bash(sqlite3 *)",
+    "Bash(duckdb *)"
+  ],
+  "settingsAllowAdded": [
+    "Bash(curl *)",
+    "Bash(node *)",
+    "Bash(source *)",
+    "Bash(sqlite3 *)",
+    "Bash(duckdb *)"
+  ]
+}

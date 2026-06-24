@@ -321,7 +321,8 @@ suite('Kanban complexity parsing', () => {
             // 2. Advance the session from CREATED -> PLAN REVIEWED
             // This should trigger the complexity sync to DB
             const advanced = await (provider as any)._advanceSessionsInColumn([sessionId], 'CREATED', 'improve-plan', tempDir);
-            assert.deepStrictEqual(advanced, [sessionId]);
+            // _advanceSessionsInColumn now returns {sessionId, targetColumn} pairs.
+            assert.deepStrictEqual(advanced.map((p: any) => p.sessionId), [sessionId]);
 
             // After advancement, the DB complexity should have synced to '8'
             plan = await db.getPlanBySessionId(sessionId);
@@ -376,7 +377,8 @@ suite('Kanban complexity parsing', () => {
 
             // 2. Advance the session. Plan file is missing, so getComplexityFromPlan will return 'Unknown'
             const advanced = await (provider as any)._advanceSessionsInColumn([sessionId], 'CREATED', 'improve-plan', tempDir);
-            assert.deepStrictEqual(advanced, [sessionId]);
+            // _advanceSessionsInColumn now returns {sessionId, targetColumn} pairs.
+            assert.deepStrictEqual(advanced.map((p: any) => p.sessionId), [sessionId]);
 
             // The DB complexity should STILL be 5 (not overwritten with Unknown)
             plan = await db.getPlanBySessionId(sessionId);

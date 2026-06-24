@@ -192,6 +192,7 @@
         #design-content,
         #briefs-content,
         #html-preview-content,
+        #claude-content,
         #images-content,
         #tickets-content {
             display: none;
@@ -206,6 +207,7 @@
         #design-content.active,
         #briefs-content.active,
         #html-preview-content.active,
+        #claude-content.active,
         #images-content.active,
         #tickets-content.active {
             display: flex;
@@ -305,6 +307,7 @@
         .content-row.collapsed #tree-pane-design,
         .content-row.collapsed #tree-pane-briefs,
         .content-row.collapsed #tree-pane-html,
+        .content-row.collapsed #tree-pane-claude,
         .content-row.collapsed #tree-pane-images,
         .content-row.collapsed #tree-pane-tickets {
             padding: 4px;
@@ -316,6 +319,7 @@
         .content-row.collapsed #tree-pane-design > *:not(.sidebar-toggle-row),
         .content-row.collapsed #tree-pane-briefs > *:not(.sidebar-toggle-row),
         .content-row.collapsed #tree-pane-html > *:not(.sidebar-toggle-row),
+        .content-row.collapsed #tree-pane-claude > *:not(.sidebar-toggle-row),
         .content-row.collapsed #tree-pane-images > *:not(.sidebar-toggle-row),
         .content-row.collapsed #tree-pane-tickets > *:not(.sidebar-toggle-row) {
             display: none !important;
@@ -680,6 +684,7 @@
         #tree-pane-design,
         #tree-pane-briefs,
         #tree-pane-html,
+        #tree-pane-claude,
         #tree-pane-images,
         #tree-pane-tickets {
             position: relative;
@@ -2227,6 +2232,7 @@
         .cyber-theme-enabled #tree-pane-design,
         .cyber-theme-enabled #tree-pane-briefs,
         .cyber-theme-enabled #tree-pane-html,
+        .cyber-theme-enabled #tree-pane-claude,
         .cyber-theme-enabled #tree-pane-images,
         .cyber-theme-enabled #tree-pane-tickets {
             background: rgba(10, 10, 10, 0.70);
@@ -2295,6 +2301,7 @@
         .cyber-theme-enabled #design-content,
         .cyber-theme-enabled #briefs-content,
         .cyber-theme-enabled #html-preview-content,
+        .cyber-theme-enabled #claude-content,
         .cyber-theme-enabled #images-content,
         .cyber-theme-enabled #tickets-content,
         .cyber-theme-enabled #stitch-content {
@@ -3618,6 +3625,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         <button class="shared-tab-btn active" data-tab="stitch">STITCH</button>
         <button class="shared-tab-btn" data-tab="briefs">BRIEFS</button>
         <button class="shared-tab-btn" data-tab="html-preview">HTML PREVIEWS</button>
+        <button class="shared-tab-btn" data-tab="claude">CLAUDE</button>
         <button class="shared-tab-btn" data-tab="images">IMAGES</button>
         <button class="shared-tab-btn" data-tab="design">DESIGN SYSTEM</button>
     </div>
@@ -3782,6 +3790,56 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             </div>
                             <!-- Shown only while Space is held — captures drag/scroll for
                                  pan/zoom; otherwise the iframe stays fully interactive. -->
+                            <div class="zoom-event-layer"></div>
+                            <div class="zoom-toolbar">
+                                <button class="zoom-btn" data-action="zoom-in" title="Zoom In (hold Space + Scroll)">+</button>
+                                <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (hold Space + Scroll)">−</button>
+                                <button class="zoom-btn" data-action="reset" title="Reset Zoom (100%)">⟲</button>
+                                <button class="zoom-btn" data-action="fit" title="Fit to View (Double-click)">⤢</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="cyber-scanlines"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Claude Tab -->
+        <div id="claude-content" class="shared-tab-content">
+            <div class="controls-strip" id="controls-strip-claude">
+                <select id="claude-workspace-filter" class="workspace-filter-select">
+                    <option value="">All Workspaces</option>
+                </select>
+                <input type="text" id="claude-docs-search" class="sidebar-search-input" placeholder="Search previews..." />
+                <input type="text" id="claude-design-project" class="sidebar-search-input" placeholder="claude.ai/design URL or ID (optional)..." style="max-width: 200px;" />
+                <span id="claude-target-folder" style="font-size: 11px; font-family: var(--font-mono); color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 250px;">Target: [Select target]</span>
+                <button id="btn-copy-claude-prompt" class="strip-btn" title="Copy the import prompt to clipboard">Copy import prompt</button>
+                <button id="btn-send-claude-prompt" class="strip-btn stitch-btn-primary" title="Send prompt to active Claude Code terminal">Send to active terminal</button>
+            </div>
+            <div class="content-row">
+                <div id="tree-pane-claude">
+                    <div class="sidebar-toggle-row">
+                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                    </div>
+                    <div class="empty-state">Configure a folder to browse HTML files</div>
+                </div>
+                <div class="preview-panel-wrapper">
+                    <div id="preview-pane-claude" style="flex: 1; width: 100%; box-sizing: border-box; height: 100%; display: flex; flex-direction: column; overflow: hidden;">
+                        <div id="claude-initial-state" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 32px; color: var(--text-secondary);">
+                            <span style="font-size: 48px; opacity: 0.5;">🌐</span>
+                            <div style="text-align: center;">
+                                <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px;">Claude Previewer</div>
+                                <div style="font-size: 12px; max-width: 320px; line-height: 1.5;">Select a file from the sidebar to preview HTML pages. Configure folders using the Manage Folders button.</div>
+                            </div>
+                        </div>
+                        <div id="claude-loading-state" style="flex: 1; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 32px; color: var(--text-secondary);">
+                            <div style="width: 32px; height: 32px; border: 3px solid var(--border-color); border-top-color: var(--accent-teal); border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+                            <div style="font-size: 12px;">Loading preview...</div>
+                        </div>
+                        <div id="claude-preview-wrapper" class="zoomable-container" style="display: none; flex: 1;">
+                            <div class="zoomable-viewport" style="width: 100%; height: 100%;">
+                                <iframe id="claude-preview-frame" sandbox="allow-scripts allow-same-origin" style="border: none; background: var(--panel-bg); width: 100%; height: 100%; display: block;"></iframe>
+                            </div>
                             <div class="zoom-event-layer"></div>
                             <div class="zoom-toolbar">
                                 <button class="zoom-btn" data-action="zoom-in" title="Zoom In (hold Space + Scroll)">+</button>

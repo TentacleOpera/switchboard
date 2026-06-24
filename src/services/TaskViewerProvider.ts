@@ -9399,8 +9399,8 @@ Each plan file must include:
                         break;
                     }
                     case 'setMcpMonitorConfig': {
-                        if (msg.config) {
-                            await this.setMcpMonitorConfigFromKanban(msg.config);
+                        if (data.config) {
+                            await this.setMcpMonitorConfigFromKanban(data.config);
                         }
                         break;
                     }

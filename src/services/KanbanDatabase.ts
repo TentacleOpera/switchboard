@@ -1129,9 +1129,13 @@ export class KanbanDatabase {
             console.log(`[KanbanDatabase.ensureReady] No _db and no _initPromise for ${this._dbPath}, calling _initialize()`);
             this._initPromise = this._initialize().then((ready) => {
                 console.log(`[KanbanDatabase.ensureReady] _initialize() returned ${ready} for ${this._dbPath}, lastError=${this._lastInitError}`);
-                if (!ready) {
-                    this._initPromise = null;
-                }
+                // Always clear the in-flight marker once settled. On success this._db
+                // is set and the `if (this._db)` fast-path serves subsequent calls, so
+                // a lingering settled promise is never needed — and clearing it means
+                // that if _db ever becomes null again (e.g. a future code path), the
+                // next ensureReady() re-initializes instead of returning a stale
+                // resolved `true` while _db is null.
+                this._initPromise = null;
                 return ready;
             });
         } else {
@@ -3820,17 +3824,30 @@ export class KanbanDatabase {
             const SQL = await KanbanDatabase._loadSqlJs();
             const fileBuffer = await fs.promises.readFile(this._dbPath);
 
-            // Release old DB reference for GC
-            this._db = null;
-            this._db = new SQL.Database(new Uint8Array(fileBuffer));
+            // Build the reloaded image, swap it in, then re-apply schema/migrations
+            // (idempotent). CRITICAL: never null this._db before we have a working
+            // replacement. If construction or the schema re-apply throws (e.g. a
+            // sql.js WASM allocation failure after long uptime, or reading the file
+            // mid-write by another writer), restore the previous in-memory image.
+            // Leaving this._db === null here would permanently wedge ensureReady():
+            // it returns true off the already-settled _initPromise while every read
+            // sees a null _db and silently returns empty.
+            const previousDb = this._db;
+            try {
+                this._db = new SQL.Database(new Uint8Array(fileBuffer));
 
-            // Re-apply schema and migrations (idempotent — safe to re-run).
-            // Tables → reconcile columns → indexes (see _initialize for rationale).
-            this._safeExec('SCHEMA_TABLES (reload)', SCHEMA_TABLES_SQL);
-            this._ensureSchemaColumns();
-            this._applySchemaIndexes('SCHEMA_INDEXES (reload)');
-            await this._runMigrations();
-            this._ensureSchemaColumns();
+                // Tables → reconcile columns → indexes (see _initialize for rationale).
+                this._safeExec('SCHEMA_TABLES (reload)', SCHEMA_TABLES_SQL);
+                this._ensureSchemaColumns();
+                this._applySchemaIndexes('SCHEMA_INDEXES (reload)');
+                await this._runMigrations();
+                this._ensureSchemaColumns();
+            } catch (reloadErr) {
+                // Roll back to the last known-good image rather than serving null.
+                this._db = previousDb;
+                console.error('[KanbanDatabase] Reload from disk failed; kept previous in-memory image:', reloadErr);
+                return;
+            }
 
             this._loadedMtime = currentMtime;
             KanbanDatabase._lastLoadedMtimes.set(this._dbPath, currentMtime);

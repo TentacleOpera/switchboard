@@ -29,15 +29,19 @@
         imagesPreviewCollapsed: persistedState.imagesPreviewCollapsed || false,
         briefsPreviewCollapsed: persistedState.briefsPreviewCollapsed || false,
         htmlWorkspaceRootFilter: '',
+        claudeWorkspaceRootFilter: '',
         designWorkspaceRootFilter: '',
         imagesWorkspaceRootFilter: '',
         briefsWorkspaceRootFilter: '',
         stitchWorkspaceRoot: '',
         htmlDocsSearch: '',
+        claudeDocsSearch: '',
+        claudeTargetFolder: '',
         designDocsSearch: '',
         imagesDocsSearch: '',
         briefsDocsSearch: '',
         _lastHtmlDocsMsg: null,
+        _lastClaudeDocsMsg: null,
         _lastDesignDocsMsg: null,
         _lastImagesDocsMsg: null,
         _lastBriefsDocsMsg: null,
@@ -167,7 +171,7 @@
         // Re-scan source folders on tab entry. VS Code's file watcher misses
         // externally-created files, so the list can be stale; this forces a fresh
         // server-side readdir every time the tab is activated (mirrors planning.js).
-        if (tabName === 'html-preview' || tabName === 'images' || tabName === 'briefs') {
+        if (tabName === 'html-preview' || tabName === 'claude' || tabName === 'images' || tabName === 'briefs') {
             vscode.postMessage({ type: 'refreshDocsForTab', tab: tabName });
         }
 
@@ -189,6 +193,7 @@
     // ── Zoom/Pan Engine ──
     const zoomState = {
         html:     { scale: 1, panX: 0, panY: 0, isPanning: false, startX: 0, startY: 0, panSource: null },
+        claude:   { scale: 1, panX: 0, panY: 0, isPanning: false, startX: 0, startY: 0, panSource: null },
         images:   { scale: 1, panX: 0, panY: 0, isPanning: false, startX: 0, startY: 0, panSource: null },
         design:   { scale: 1, panX: 0, panY: 0, isPanning: false, startX: 0, startY: 0, panSource: null },
     };
@@ -355,6 +360,7 @@
 
     // Initialize Zoom for Previews
     initZoomListeners('html-preview-wrapper', '.zoomable-viewport', 'html');
+    initZoomListeners('claude-preview-wrapper', '.zoomable-viewport', 'claude');
     initZoomListeners('image-preview-container', '.zoomable-viewport', 'html');
     initZoomListeners('image-preview-container-images', '.zoomable-viewport', 'images');
     initZoomListeners('image-preview-container-design', '.zoomable-viewport', 'design');
@@ -380,7 +386,7 @@
     // Sidebar Collapsing
     function toggleSidebarCollapsed(e) {
         const btn = e.target;
-        const pane = btn.closest('#tree-pane-design') || btn.closest('#tree-pane-html') || btn.closest('#tree-pane-images') || btn.closest('#tree-pane-briefs');
+        const pane = btn.closest('#tree-pane-design') || btn.closest('#tree-pane-html') || btn.closest('#tree-pane-claude') || btn.closest('#tree-pane-images') || btn.closest('#tree-pane-briefs');
         if (!pane) return;
         const row = pane.closest('.content-row');
         if (!row) return;
@@ -392,6 +398,8 @@
             state.designPreviewCollapsed = isCollapsed;
         } else if (pane.id === 'tree-pane-html') {
             state.htmlPreviewCollapsed = isCollapsed;
+        } else if (pane.id === 'tree-pane-claude') {
+            state.claudePreviewCollapsed = isCollapsed;
         } else if (pane.id === 'tree-pane-images') {
             state.imagesPreviewCollapsed = isCollapsed;
         } else if (pane.id === 'tree-pane-briefs') {
@@ -963,6 +971,44 @@
 
     function handlePreviewReady(msg) {
         const { sourceId, requestId, content, docName, isAutoRefreshed, filePath, htmlContent, webviewUri, isImage } = msg;
+
+        if (msg.target === 'claude') {
+            if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
+            resetZoom('claude');
+
+            const initialState = document.getElementById('claude-initial-state');
+            const loadingState = document.getElementById('claude-loading-state');
+            if (initialState) initialState.style.display = 'none';
+            if (loadingState) loadingState.style.display = 'none';
+
+            const iframe = document.getElementById('claude-preview-frame');
+            const iframeWrapper = document.getElementById('claude-preview-wrapper');
+            const clWrapper = document.querySelector('#claude-content .preview-panel-wrapper');
+
+            if (msg.iframeSrc) {
+                if (iframeWrapper) iframeWrapper.style.display = 'flex';
+                if (clWrapper) clWrapper.classList.add('scanlines-suppressed');
+                if (iframe) {
+                    iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+                    iframe.removeAttribute('srcdoc');
+                    iframe.src = isAutoRefreshed ? msg.iframeSrc + '?t=' + Date.now() : msg.iframeSrc;
+                }
+                const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
+                if (iframeViewport) applyZoom('claude', iframeViewport);
+            } else if (htmlContent) {
+                if (iframeWrapper) iframeWrapper.style.display = 'flex';
+                if (clWrapper) clWrapper.classList.add('scanlines-suppressed');
+                if (iframe) {
+                    iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+                    iframe.removeAttribute('src');
+                    iframe.removeAttribute('srcdoc');
+                    iframe.srcdoc = injectBaseTag(htmlContent, webviewUri);
+                    const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
+                    if (iframeViewport) applyZoom('claude', iframeViewport);
+                }
+            }
+            return;
+        }
 
         if (sourceId === 'html-folder') {
             if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
@@ -2308,6 +2354,24 @@
         });
     });
 
+    document.getElementById('claude-workspace-filter')?.addEventListener('change', (e) => {
+        state.claudeWorkspaceRootFilter = e.target.value;
+        persistTab('claude.root', state.claudeWorkspaceRootFilter);
+        state.activeClaudeDocId = null;
+        state.claudeTargetFolder = '';
+        updateClaudeTargetFolderStatus();
+        const msg = state._lastClaudeDocsMsg || {};
+        const filteredNodes = state.claudeWorkspaceRootFilter
+            ? (msg.nodes || []).filter(n => n.metadata?.root === state.claudeWorkspaceRootFilter)
+            : (msg.nodes || []);
+        renderClaudeDocs({
+            sourceId: msg.sourceId || 'html-folder',
+            nodes: filteredNodes,
+            folderPaths: getCurrentFolderPaths(state.htmlFolderPathsByRoot, state.claudeWorkspaceRootFilter),
+            error: msg.error
+        });
+    });
+
     document.getElementById('images-workspace-filter')?.addEventListener('change', (e) => {
         state.imagesWorkspaceRootFilter = e.target.value;
         _restoredPanelState.panel['images.root'] = e.target.value;
@@ -2389,6 +2453,20 @@
             sourceId: msg.sourceId || 'html-folder',
             nodes: filteredNodes,
             folderPaths: getCurrentFolderPaths(state.htmlFolderPathsByRoot, state.htmlWorkspaceRootFilter),
+            error: msg.error
+        });
+    });
+
+    document.getElementById('claude-docs-search')?.addEventListener('input', (e) => {
+        state.claudeDocsSearch = e.target.value;
+        const msg = state._lastClaudeDocsMsg || {};
+        const filteredNodes = state.claudeWorkspaceRootFilter
+            ? (msg.nodes || []).filter(n => n.metadata?.root === state.claudeWorkspaceRootFilter)
+            : (msg.nodes || []);
+        renderClaudeDocs({
+            sourceId: msg.sourceId || 'html-folder',
+            nodes: filteredNodes,
+            folderPaths: getCurrentFolderPaths(state.htmlFolderPathsByRoot, state.claudeWorkspaceRootFilter),
             error: msg.error
         });
     });
@@ -2513,6 +2591,16 @@
                 }
                 const htmlSelect = document.getElementById('html-workspace-filter');
                 if (htmlSelect) htmlSelect.value = state.htmlWorkspaceRootFilter;
+
+                const restoredClaudeRoot = _restoredPanelState.panel['claude.root'] || '';
+                if (_workspaceItems.length === 0 || restoredClaudeRoot === '' || _workspaceItems.some(i => i.workspaceRoot === restoredClaudeRoot)) {
+                    state.claudeWorkspaceRootFilter = restoredClaudeRoot;
+                } else {
+                    state.claudeWorkspaceRootFilter = '';
+                }
+                const claudeSelect = document.getElementById('claude-workspace-filter');
+                if (claudeSelect) claudeSelect.value = state.claudeWorkspaceRootFilter;
+                updateClaudeTargetFolderStatus();
 
                 const restoredDesignRoot = _restoredPanelState.panel['design.root'] || '';
                 if (_workspaceItems.length === 0 || restoredDesignRoot === '' || _workspaceItems.some(i => i.workspaceRoot === restoredDesignRoot)) {
@@ -2680,8 +2768,10 @@
 
             case 'htmlDocsReady':
                 state._lastHtmlDocsMsg = msg;
+                state._lastClaudeDocsMsg = msg;
                 state.htmlFolderPathsByRoot = msg.folderPathsByRoot || {};
                 populateWorkspaceDropdown('html-workspace-filter', msg.workspaceItems || [], state.htmlWorkspaceRootFilter);
+                populateWorkspaceDropdown('claude-workspace-filter', msg.workspaceItems || [], state.claudeWorkspaceRootFilter);
                 const filteredHtmlNodes = state.htmlWorkspaceRootFilter
                     ? (msg.nodes || []).filter(n => n.metadata?.root === state.htmlWorkspaceRootFilter)
                     : (msg.nodes || []);
@@ -2689,6 +2779,16 @@
                     sourceId: msg.sourceId || 'html-folder',
                     nodes: filteredHtmlNodes,
                     folderPaths: getCurrentFolderPaths(state.htmlFolderPathsByRoot, state.htmlWorkspaceRootFilter),
+                    error: msg.error
+                });
+
+                const filteredClaudeNodes = state.claudeWorkspaceRootFilter
+                    ? (msg.nodes || []).filter(n => n.metadata?.root === state.claudeWorkspaceRootFilter)
+                    : (msg.nodes || []);
+                renderClaudeDocs({
+                    sourceId: msg.sourceId || 'html-folder',
+                    nodes: filteredClaudeNodes,
+                    folderPaths: getCurrentFolderPaths(state.htmlFolderPathsByRoot, state.claudeWorkspaceRootFilter),
                     error: msg.error
                 });
                 break;
@@ -3205,6 +3305,7 @@
 
     // Register workspace dropdowns
     registerWorkspaceDropdown('html-workspace-filter', 'html.root');
+    registerWorkspaceDropdown('claude-workspace-filter', 'claude.root');
     registerWorkspaceDropdown('design-workspace-filter', 'design.root');
     registerWorkspaceDropdown('stitch-workspace-filter', 'stitch.root', false);
 
@@ -3966,6 +4067,207 @@
         if (designRow) designRow.classList.toggle('collapsed', !!state.designPreviewCollapsed);
         const htmlRow = document.getElementById('tree-pane-html')?.closest('.content-row');
         if (htmlRow) htmlRow.classList.toggle('collapsed', !!state.htmlPreviewCollapsed);
+        const claudeRow = document.getElementById('tree-pane-claude')?.closest('.content-row');
+        if (claudeRow) claudeRow.classList.toggle('collapsed', !!state.claudePreviewCollapsed);
+        const briefsRow = document.getElementById('tree-pane-briefs')?.closest('.content-row');
+        if (briefsRow) briefsRow.classList.toggle('collapsed', !!state.briefsPreviewCollapsed);
+        const imagesRow = document.getElementById('tree-pane-images')?.closest('.content-row');
+        if (imagesRow) imagesRow.classList.toggle('collapsed', !!state.imagesPreviewCollapsed);
+    }
+
+    // Claude Helpers & Handlers
+    function findTreeNodeInPane(paneId, nodeId) {
+        const pane = document.getElementById(paneId);
+        if (!pane) return null;
+        return pane.querySelector(`.tree-node[data-node-id="${nodeId}"]`);
+    }
+
+    function loadClaudePreview(sourceId, docId, docName) {
+        const pane = document.getElementById('tree-pane-claude');
+        if (pane) {
+            pane.querySelectorAll('.tree-node.selected').forEach(el => el.classList.remove('selected'));
+        }
+        const wrapper = findTreeNodeInPane('tree-pane-claude', docId);
+        const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : undefined;
+        if (wrapper) {
+            wrapper.classList.add('selected');
+        }
+        state.activeClaudeDocId = docId;
+        state.previewRequestId++;
+
+        let relativePath = docId.includes(':') ? docId.substring(docId.indexOf(':') + 1) : docId;
+        const parts = relativePath.replace(/\\/g, '/').split('/');
+        parts.pop();
+        state.claudeTargetFolder = parts.join('/') || '';
+        updateClaudeTargetFolderStatus();
+
+        const initialState = document.getElementById('claude-initial-state');
+        const loadingState = document.getElementById('claude-loading-state');
+        const iframeWrapper = document.getElementById('claude-preview-wrapper');
+        if (initialState) initialState.style.display = 'none';
+        if (loadingState) loadingState.style.display = 'flex';
+        if (iframeWrapper) iframeWrapper.style.display = 'none';
+
+        vscode.postMessage({
+            type: 'fetchPreview',
+            sourceId,
+            docId,
+            target: 'claude',
+            requestId: state.previewRequestId,
+            sourceFolder
+        });
+    }
+
+    function updateClaudeTargetFolderStatus() {
+        const folderSpan = document.getElementById('claude-target-folder');
+        if (!folderSpan) return;
+
+        let displayPath = '';
+        if (state.claudeTargetFolder) {
+            displayPath = state.claudeTargetFolder;
+        } else {
+            const select = document.getElementById('claude-workspace-filter');
+            if (select && select.value) {
+                const selectedOption = select.options[select.selectedIndex];
+                displayPath = selectedOption ? selectedOption.text : '(workspace root)';
+            } else {
+                displayPath = '(workspace root)';
+            }
+        }
+        folderSpan.textContent = `Target: ${displayPath}`;
+    }
+
+    const CLAUDE_IMPORT_PROMPT = ({ folder, projectRef }) =>
+      `Import a design from claude.ai/design into this repository, writing the implementation into \`${folder}\`, built with the repo's existing components and styles. ` +
+      (projectRef
+        ? `Use the Claude Design project: ${projectRef}. `
+        : `First list my available claude.ai/design projects and ask me which one (and which screen) to import. `) +
+      `If you're not logged in to Claude Design, run /design-login first.`;
+
+    document.getElementById('btn-copy-claude-prompt')?.addEventListener('click', () => {
+        const projectInput = document.getElementById('claude-design-project');
+        const projectRef = projectInput ? projectInput.value.trim() : '';
+        const folder = state.claudeTargetFolder || getClaudeWorkspaceRootFallback();
+        const prompt = CLAUDE_IMPORT_PROMPT({ folder, projectRef });
+        vscode.postMessage({
+            type: 'copyClaudeImportPrompt',
+            prompt
+        });
+    });
+
+    document.getElementById('btn-send-claude-prompt')?.addEventListener('click', () => {
+        const projectInput = document.getElementById('claude-design-project');
+        const projectRef = projectInput ? projectInput.value.trim() : '';
+        const folder = state.claudeTargetFolder || getClaudeWorkspaceRootFallback();
+        const prompt = CLAUDE_IMPORT_PROMPT({ folder, projectRef });
+        vscode.postMessage({
+            type: 'sendClaudeImportPrompt',
+            prompt
+        });
+    });
+
+    function getClaudeWorkspaceRootFallback() {
+        const select = document.getElementById('claude-workspace-filter');
+        if (select && select.value) return select.value;
+        return state.claudeWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+    }
+
+    function renderClaudeDocs(rootEntry) {
+        const { sourceId, nodes, folderPaths } = rootEntry;
+        const treePaneClaude = document.getElementById('tree-pane-claude');
+        if (!treePaneClaude) return;
+
+        treePaneClaude.innerHTML = '';
+
+        const toggleRow = document.createElement('div');
+        toggleRow.className = 'sidebar-toggle-row';
+
+        const foldersBtn = document.createElement('button');
+        foldersBtn.className = 'sidebar-folders-btn';
+        foldersBtn.title = 'Manage Folders';
+        foldersBtn.textContent = 'Manage Folders';
+        foldersBtn.addEventListener('click', () => openFoldersModal('html'));
+        toggleRow.appendChild(foldersBtn);
+
+        const toggleBtn = document.createElement('button');
+        toggleBtn.className = 'sidebar-toggle-btn';
+        toggleBtn.title = 'Toggle sidebar';
+        toggleBtn.textContent = state.claudePreviewCollapsed ? '»' : '«';
+        toggleBtn.addEventListener('click', toggleSidebarCollapsed);
+        toggleRow.appendChild(toggleBtn);
+        treePaneClaude.appendChild(toggleRow);
+
+        const docList = document.createElement('div');
+        docList.className = 'source-doc-list';
+        docList.dataset.sourceId = sourceId;
+        treePaneClaude.appendChild(docList);
+
+        if (!nodes || nodes.length === 0) {
+            docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No HTML preview files found.</div>';
+            return;
+        }
+
+        let docNodes = (nodes || []).filter(n => {
+            if (n.kind === 'folder') return true;
+            const ext = n.name.substring(n.name.lastIndexOf('.')).toLowerCase();
+            return ['.html', '.htm'].includes(ext);
+        });
+
+        const search = String(state.claudeDocsSearch || '').trim().toLowerCase();
+        if (search) {
+            docNodes = docNodes.filter(d => (d.title || d.name || '').toLowerCase().includes(search));
+        }
+
+        if (docNodes.length === 0) {
+            docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No matching files or folders found.</div>';
+            return;
+        }
+
+        const typeSubheader = document.createElement('div');
+        typeSubheader.className = 'type-subheader';
+        typeSubheader.textContent = 'Repo Folders & Files';
+        docList.appendChild(typeSubheader);
+
+        docNodes.forEach(doc => {
+            const isFolder = doc.kind === 'folder';
+            const card = renderDocCard({
+                title: doc.name || doc.id,
+                subtitle: isFolder ? 'Folder' : 'HTML',
+                sourceId,
+                nodeId: doc.id,
+                nodeMetadata: doc.metadata,
+                actions: [],
+                isSelected: isFolder ? false : (state.activeClaudeDocId === doc.id),
+                clickHandler: () => {
+                    if (isFolder) {
+                        let relativePath = doc.id.includes(':') ? doc.id.substring(doc.id.indexOf(':') + 1) : doc.id;
+                        state.claudeTargetFolder = relativePath;
+                        updateClaudeTargetFolderStatus();
+                        
+                        const pane = document.getElementById('tree-pane-claude');
+                        if (pane) {
+                            pane.querySelectorAll('.tree-node.selected').forEach(el => el.classList.remove('selected'));
+                        }
+                        const wrapper = findTreeNodeInPane('tree-pane-claude', doc.id);
+                        if (wrapper) {
+                            wrapper.classList.add('selected');
+                        }
+                    } else {
+                        loadClaudePreview(sourceId, doc.id, doc.name);
+                    }
+                }
+            });
+            docList.appendChild(card);
+        });
+    }
+
+    function applySidebarState() {
+        const designRow = document.getElementById('tree-pane-design')?.closest('.content-row');
+        if (designRow) designRow.classList.toggle('collapsed', !!state.designPreviewCollapsed);
+        const htmlRow = document.getElementById('tree-pane-html')?.closest('.content-row');
+        if (htmlRow) htmlRow.classList.toggle('collapsed', !!state.htmlPreviewCollapsed);
+        const claudeRow = document.getElementById('tree-pane-claude')?.closest('.content-row');
+        if (claudeRow) claudeRow.classList.toggle('collapsed', !!state.claudePreviewCollapsed);
         const briefsRow = document.getElementById('tree-pane-briefs')?.closest('.content-row');
         if (briefsRow) briefsRow.classList.toggle('collapsed', !!state.briefsPreviewCollapsed);
         const imagesRow = document.getElementById('tree-pane-images')?.closest('.content-row');

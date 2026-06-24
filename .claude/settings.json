@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(curl *)",
+      "Bash(node *)",
+      "Bash(source *)",
+      "Bash(sqlite3 *)",
+      "Bash(duckdb *)"
+    ],
+    "deny": []
+  }
+}

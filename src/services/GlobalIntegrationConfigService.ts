@@ -156,8 +156,40 @@ export class GlobalIntegrationConfigService {
         return (await this.loadGlobal()).agents?.[key] as T | undefined;
     }
 
+    /**
+     * Count of "meaningful" entries in an agent-config value. Used by the wipe
+     * guard: startupCommands counts non-blank commands, visibleAgents counts
+     * keys present (an all-false map is still an intentional config), customAgents
+     * counts array items.
+     */
+    private static agentConfigMeaningfulCount(key: AgentGlobalKey, value: unknown): number {
+        if (value === undefined || value === null) return 0;
+        if (key === 'customAgents') return Array.isArray(value) ? value.length : 0;
+        if (typeof value !== 'object') return 0;
+        if (key === 'visibleAgents') return Object.keys(value as object).length;
+        // startupCommands: a role with a blank command is not "set".
+        return Object.values(value as Record<string, unknown>)
+            .filter((v) => typeof v === 'string' && v.trim() !== '').length;
+    }
+
     public static async setAgentConfig(key: AgentGlobalKey, value: unknown): Promise<void> {
         const globalConfig = await this.loadGlobal();
+
+        // WIPE GUARD: never let an empty/all-blank startupCommands or visibleAgents
+        // overwrite a populated stored value. This is what stops a reinstall (which
+        // resets per-IDE globalState and can re-trigger onboarding/launch saves built
+        // from an empty webview state) from blanking the user's real config. These two
+        // keys are never legitimately emptied wholesale; customAgents CAN go to []
+        // (deleting the last custom agent), so it is intentionally not guarded.
+        if (key === 'startupCommands' || key === 'visibleAgents') {
+            const incoming = this.agentConfigMeaningfulCount(key, value);
+            const existing = this.agentConfigMeaningfulCount(key, globalConfig.agents?.[key]);
+            if (incoming === 0 && existing > 0) {
+                console.warn(`[GlobalIntegrationConfigService] Refusing to overwrite non-empty ${key} with an empty value (wipe guard).`);
+                return;
+            }
+        }
+
         globalConfig.agents = { ...(globalConfig.agents || {}), [key]: value };
         await this.saveGlobal(globalConfig);
     }

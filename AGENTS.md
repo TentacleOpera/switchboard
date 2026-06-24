@@ -1,4 +1,5 @@
 <!-- switchboard:agents-protocol:start -->
+<!-- switchboard:agents-protocol:start -->
 # AGENTS.md - Switchboard Protocol
 
 ## 🚨 STRICT PROTOCOL ENFORCEMENT 🚨
@@ -120,4 +121,5 @@ When creating plan files in multi-workspace setups, use this decision tree to de
 4. **Fallback: Ask the user** — If detection is ambiguous (multiple signals conflict or no signal matches), ask the user which workspace to use. Do NOT silently default to any workspace.
 
 **Edge case**: If the user has multiple workspace folders open in VS Code, the active editor's containing workspace folder is the strongest signal.
+<!-- switchboard:agents-protocol:end -->
 <!-- switchboard:agents-protocol:end -->

@@ -337,6 +337,32 @@ export class KanbanProvider implements vscode.Disposable {
         return card.planId || card.sessionId;
     }
 
+    /**
+     * Cards that are visible as loose cards in `column` — the source set for
+     * column-batch operations (Advance All, Prompt All, Complete All, batch
+     * planner/coder prompts).
+     *
+     * This MUST mirror the webview's board-display contract (kanban.html: the
+     * main board renders `displayCards.filter(card => !card.epicId)`): an epic's
+     * subtasks are rolled up under the epic card and are NOT shown as standalone
+     * cards in their own `kanban_column`. A subtask carries its own column,
+     * independent of its epic's column, so without this exclusion a subtask whose
+     * column happens to match (e.g. CREATED) gets swept into the operation even
+     * though the user only sees it nested under an epic that may live in a
+     * different column (e.g. BACKLOG). That divergence is exactly what made
+     * "Advance All" on CREATED dispatch a BACKLOG epic's subtasks instead of the
+     * loose plans the user could actually see in the column.
+     *
+     * Selection-based operations (explicit `msg.sessionIds` / `_cardMatchesIds`)
+     * deliberately do NOT use this — there the user picked specific cards (a
+     * subtask can be selected from epic-focus mode) and the IDs are trusted.
+     */
+    private _visibleColumnCards(workspaceRoot: string, column: string): KanbanCard[] {
+        return this._lastCards.filter(card =>
+            card.workspaceRoot === workspaceRoot && card.column === column && !card.epicId
+        );
+    }
+
     /** Resolve the best available identifier for a card. Returns sessionId if present, otherwise planId. */
     private _resolveSessionId(planId?: string, sessionId?: string): string | undefined {
         if (sessionId) { return sessionId; }
@@ -2575,6 +2601,10 @@ export class KanbanProvider implements vscode.Disposable {
                 let plans: BatchPromptPlan[] = [];
                 const cards = this._lastCards.filter(c => {
                     if (c.workspaceRoot !== workspaceRoot) return false;
+                    // Epic subtasks roll up under their epic and are not loose column
+                    // cards — exclude them so the preview matches what a column-batch
+                    // dispatch would actually send (see _visibleColumnCards).
+                    if (c.epicId) return false;
                     switch (role) {
                         case 'planner':
                             return c.column === 'CREATED';
@@ -3655,14 +3685,16 @@ This step is what moves the plan forward in the Switchboard pipeline.
         return eligible;
     }
 
-    private async _advanceSessionsInColumn(sessionIds: string[], expectedColumn: string, workflow: string | undefined, workspaceRoot?: string): Promise<string[]> {
+    private async _advanceSessionsInColumn(sessionIds: string[], expectedColumn: string, workflow: string | undefined, workspaceRoot?: string): Promise<{ sessionId: string; targetColumn: string }[]> {
         const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedWorkspaceRoot || sessionIds.length === 0) {
             return [];
         }
         const log = this._getSessionLog(resolvedWorkspaceRoot);
         const customAgents = await this._getCustomAgents(resolvedWorkspaceRoot);
-        const advanced: string[] = [];
+        // Return {sessionId, targetColumn} pairs (not bare ids) so batch callers can emit
+        // a per-target-column moveCards delta instead of forcing a full board refresh.
+        const advanced: { sessionId: string; targetColumn: string }[] = [];
 
         for (const sessionId of sessionIds) {
             const sheet = await log.getRunSheet(sessionId);
@@ -3720,11 +3752,30 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         console.error('[KanbanProvider] Failed to sync complexity during column advance:', err);
                     }
                 }
-                advanced.push(sessionId);
+                advanced.push({ sessionId, targetColumn: normalizedColumn });
             }
         }
 
         return advanced;
+    }
+
+    /**
+     * Emit one `moveCards` delta per distinct target column for a set of advanced
+     * {sessionId, targetColumn} pairs. Replaces a full board refresh for handlers
+     * that already know each card's derived destination. Pairs with no resolved
+     * target column are skipped (the card did not actually move).
+     */
+    private _postMoveCardsByTarget(pairs: { sessionId: string; targetColumn: string }[]): void {
+        if (!this._panel || !Array.isArray(pairs) || pairs.length === 0) { return; }
+        const byTarget = new Map<string, string[]>();
+        for (const { sessionId, targetColumn } of pairs) {
+            if (!sessionId || !targetColumn) { continue; }
+            if (!byTarget.has(targetColumn)) { byTarget.set(targetColumn, []); }
+            byTarget.get(targetColumn)!.push(sessionId);
+        }
+        for (const [targetColumn, sessionIds] of byTarget) {
+            this._panel.webview.postMessage({ type: 'moveCards', sessionIds, targetColumn });
+        }
     }
 
     private async _getCustomAgents(workspaceRoot: string): Promise<CustomAgentConfig[]> {
@@ -5425,7 +5476,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             await this._dispatchWithPairProgrammingIfNeeded(highComplexityCards, workspaceRoot);
                         }
                     }
-                    await this._refreshBoard(workspaceRoot);
+                    // Targeted delta instead of a full refresh — dispatchConfiguredKanbanColumnAction
+                    // already persisted the column move server-side (mirrors promptAll custom-user branch).
+                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds, targetColumn });
                     this._panel?.webview.postMessage({ type: 'promptOnDropResult', sessionIds, success: dispatched });
                     if (dispatched) {
                         this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plan(s) to clipboard.`, isError: false });
@@ -5438,23 +5491,30 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 await vscode.env.clipboard.writeText(prompt);
 
                 // Advance cards visually — PLAN REVIEWED uses complexity routing
+                // Direct moveCardToColumn + per-group moveCards delta instead of routing through
+                // kanbanForwardMove (whose trailing refreshUI redrew the whole board). The run-sheet
+                // workflow-event write is preserved via recordRunSheetForColumnMove.
                 if (sourceColumn === 'PLAN REVIEWED') {
                     const groups = await this._partitionByComplexityRoute(workspaceRoot, sessionIds);
                     for (const [role, sids] of groups) {
                         if (sids.length === 0) { continue; }
                         const targetCol = this._targetColumnForDispatchRole(role);
-                        await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sids, targetCol, workspaceRoot);
-                        // Record IDE dispatch identity after drag-drop with prompt mode
                         for (const sid of sids) {
+                            await this.moveCardToColumn(workspaceRoot, sid, targetCol);
+                            await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
+                            // Record IDE dispatch identity after drag-drop with prompt mode
                             await this._recordDispatchIdentity(workspaceRoot, sid, targetCol, undefined, true);
                         }
+                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sids, targetColumn: targetCol });
                     }
                 } else {
-                    await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sessionIds, targetColumn, workspaceRoot);
-                    // Record IDE dispatch identity after drag-drop with prompt mode
                     for (const sid of sessionIds) {
+                        await this.moveCardToColumn(workspaceRoot, sid, targetColumn);
+                        await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetColumn, 'forward', workspaceRoot);
+                        // Record IDE dispatch identity after drag-drop with prompt mode
                         await this._recordDispatchIdentity(workspaceRoot, sid, targetColumn, undefined, true);
                     }
+                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds, targetColumn });
                 }
 
                 // Pair programming: dispatch coder work for high-complexity cards routed to Lead
@@ -5465,7 +5525,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     }
                 }
 
-                await this._refreshBoard(workspaceRoot);
                 this._panel?.webview.postMessage({ type: 'promptOnDropResult', sessionIds, success: true });
                 this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plan(s) to clipboard.`, isError: false });
                 break;
@@ -5475,8 +5534,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if (!workspaceRoot) {
                     break;
                 }
-                await this._refreshBoard(workspaceRoot);
-                const sourceCards = this._lastCards.filter(card => card.workspaceRoot === workspaceRoot && card.column === 'CREATED');
+                // No start-refresh — _visibleColumnCards reads the already-current _lastCards directly.
+                const sourceCards = this._visibleColumnCards(workspaceRoot, 'CREATED');
                 if (sourceCards.length === 0) {
                     vscode.window.showInformationMessage('No CREATED plans available for batch planner prompt.');
                     break;
@@ -5485,7 +5544,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const prompt = await this.generateUnifiedPrompt('planner', plans, workspaceRoot, { instruction: 'improve-plan' });
                 await vscode.env.clipboard.writeText(prompt);
                 const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => this._cardId(card)), 'CREATED', 'improve-plan', workspaceRoot);
-                await this._refreshBoard(workspaceRoot);
+                // Per-target moveCards deltas instead of a trailing full refresh.
+                this._postMoveCardsByTarget(advanced);
                 this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied batch planner prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to PLAN REVIEWED.`, isError: false });
                 break;
             }
@@ -5502,8 +5562,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if (!workspaceRoot) {
                     break;
                 }
-                await this._refreshBoard(workspaceRoot);
-                const sourceCards = this._lastCards.filter(card => card.workspaceRoot === workspaceRoot && card.column === 'PLAN REVIEWED' && this._isLowComplexity(card));
+                // No start-refresh — _visibleColumnCards reads the already-current _lastCards directly.
+                const sourceCards = this._visibleColumnCards(workspaceRoot, 'PLAN REVIEWED').filter(card => this._isLowComplexity(card));
                 if (sourceCards.length === 0) {
                     vscode.window.showInformationMessage('No LOW-complexity PLAN REVIEWED plans available for batch coding prompt.');
                     break;
@@ -5514,7 +5574,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const prompt = await this.generateUnifiedPrompt('coder', plans, workspaceRoot, { instruction: 'low-complexity' });
                 await vscode.env.clipboard.writeText(prompt);
                 const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => this._cardId(card)), 'PLAN REVIEWED', undefined, workspaceRoot);
-                await this._refreshBoard(workspaceRoot);
+                // Per-target moveCards deltas (target derived dynamically by the helper) — no full refresh.
+                this._postMoveCardsByTarget(advanced);
                 this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied batch low-complexity prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to CODER CODED.`, isError: false });
                 break;
             }
@@ -5530,7 +5591,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
                 // No start-refresh — filter the already-current _lastCards directly (same as
                 // moveSelected) to avoid the stale updateBoard bounce.
-                const sourceCards = this._lastCards.filter(card => card.workspaceRoot === workspaceRoot && card.column === 'PLAN REVIEWED' && this._isLowComplexity(card));
+                const sourceCards = this._visibleColumnCards(workspaceRoot, 'PLAN REVIEWED').filter(card => this._isLowComplexity(card));
                 if (sourceCards.length === 0) {
                     vscode.window.showInformationMessage('No LOW-complexity PLAN REVIEWED plans available for Jules dispatch.');
                     break;
@@ -5564,16 +5625,28 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     for (const [role, sids] of groups) {
                         if (sids.length === 0) { continue; }
                         const targetCol = this._targetColumnForDispatchRole(role);
+                        const movedSids: string[] = [];
+                        const failures: { id: string; sourceColumn: string; reason: string }[] = [];
                         for (const sid of sids) {
-                            await this.moveCardToColumn(workspaceRoot, sid, targetCol);
-                            await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
-                        }
-                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sids, targetColumn: targetCol });
-                        if (this._cliTriggersEnabled) {
-                            if (sids.length === 1) {
-                                await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, sids[0], undefined, workspaceRoot);
+                            const ok = await this.moveCardToColumn(workspaceRoot, sid, targetCol);
+                            if (ok) {
+                                movedSids.push(sid);
+                                await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
                             } else {
-                                await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, sids, undefined, workspaceRoot);
+                                failures.push({ id: sid, sourceColumn: 'PLAN REVIEWED', reason: "couldn't save — board may be out of sync" });
+                            }
+                        }
+                        if (movedSids.length > 0) {
+                            this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
+                        }
+                        if (failures.length > 0) {
+                            this._panel?.webview.postMessage({ type: 'moveCardsFailed', failures });
+                        }
+                        if (this._cliTriggersEnabled) {
+                            if (movedSids.length === 1) {
+                                await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, movedSids[0], undefined, workspaceRoot);
+                            } else {
+                                await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, movedSids, undefined, workspaceRoot);
                             }
                         }
                         movedParts.push(`${sids.length} → ${targetCol}`);
@@ -5616,17 +5689,29 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             );
                             await this._distributePlannerDispatch(workspaceRoot, selectedCards, nextCol, { skipLimit: true });
                         } else {
+                            const movedIds: string[] = [];
+                            const failures: { id: string; sourceColumn: string; reason: string }[] = [];
                             for (const sid of msg.sessionIds) {
-                                await this.moveCardToColumn(workspaceRoot, sid, nextCol);
-                                await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
+                                const ok = await this.moveCardToColumn(workspaceRoot, sid, nextCol);
+                                if (ok) {
+                                    movedIds.push(sid);
+                                    await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
+                                } else {
+                                    failures.push({ id: sid, sourceColumn: column, reason: "couldn't save — board may be out of sync" });
+                                }
                             }
-                            this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: msg.sessionIds, targetColumn: nextCol });
+                            if (movedIds.length > 0) {
+                                this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn: nextCol });
+                            }
+                            if (failures.length > 0) {
+                                this._panel?.webview.postMessage({ type: 'moveCardsFailed', failures });
+                            }
                             if (this._cliTriggersEnabled && role) {
                                 const instruction = role === 'planner' ? 'improve-plan' : undefined;
-                                if (msg.sessionIds.length === 1) {
-                                    await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, msg.sessionIds[0], instruction, workspaceRoot);
+                                if (movedIds.length === 1) {
+                                    await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, movedIds[0], instruction, workspaceRoot);
                                 } else {
-                                    await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, msg.sessionIds, instruction, workspaceRoot);
+                                    await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, movedIds, instruction, workspaceRoot);
                                 }
                             } else if (!role) {
                                 console.log(`[Kanban] Column '${nextCol}' has no role mapping, using visual move only`);
@@ -5648,7 +5733,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 // clicked, so it already agrees with the webview. Filtering it directly (like
                 // moveSelected) avoids the full pipeline + stale updateBoard that reverts the
                 // optimistic advance (the bounce-back to NEW).
-                const sourceCards = this._lastCards.filter(card => card.workspaceRoot === workspaceRoot && card.column === column);
+                const sourceCards = this._visibleColumnCards(workspaceRoot, column);
                 if (sourceCards.length === 0) {
                     vscode.window.showInformationMessage(`No plans in ${column} to move.`);
                     break;
@@ -5667,16 +5752,28 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     for (const [role, sids] of groups) {
                         if (sids.length === 0) { continue; }
                         const targetCol = this._targetColumnForDispatchRole(role);
+                        const movedSids: string[] = [];
+                        const failures: { id: string; sourceColumn: string; reason: string }[] = [];
                         for (const sid of sids) {
-                            await this.moveCardToColumn(workspaceRoot, sid, targetCol);
-                            await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
-                        }
-                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sids, targetColumn: targetCol });
-                        if (this._cliTriggersEnabled) {
-                            if (sids.length === 1) {
-                                await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, sids[0], undefined, workspaceRoot);
+                            const ok = await this.moveCardToColumn(workspaceRoot, sid, targetCol);
+                            if (ok) {
+                                movedSids.push(sid);
+                                await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
                             } else {
-                                await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, sids, undefined, workspaceRoot);
+                                failures.push({ id: sid, sourceColumn: 'PLAN REVIEWED', reason: "couldn't save — board may be out of sync" });
+                            }
+                        }
+                        if (movedSids.length > 0) {
+                            this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
+                        }
+                        if (failures.length > 0) {
+                            this._panel?.webview.postMessage({ type: 'moveCardsFailed', failures });
+                        }
+                        if (this._cliTriggersEnabled) {
+                            if (movedSids.length === 1) {
+                                await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, movedSids[0], undefined, workspaceRoot);
+                            } else {
+                                await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, movedSids, undefined, workspaceRoot);
                             }
                         }
                         movedParts.push(`${sids.length} → ${targetCol}`);
@@ -5721,13 +5818,25 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             // that is what reverted the move to NEW until dispatch finished.
                             break;
                         } else {
+                            const movedIds: string[] = [];
+                            const failures: { id: string; sourceColumn: string; reason: string }[] = [];
                             for (const sid of sessionIds) {
-                                await this.moveCardToColumn(workspaceRoot, sid, nextCol);
-                                await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
+                                const ok = await this.moveCardToColumn(workspaceRoot, sid, nextCol);
+                                if (ok) {
+                                    movedIds.push(sid);
+                                    await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
+                                } else {
+                                    failures.push({ id: sid, sourceColumn: column, reason: "couldn't save — board may be out of sync" });
+                                }
                             }
-                            this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sessionIds, targetColumn: nextCol });
+                            if (movedIds.length > 0) {
+                                this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn: nextCol });
+                            }
+                            if (failures.length > 0) {
+                                this._panel?.webview.postMessage({ type: 'moveCardsFailed', failures });
+                            }
                             if (this._cliTriggersEnabled && role) {
-                                await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, sessionIds, undefined, workspaceRoot);
+                                await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, movedIds, undefined, workspaceRoot);
                             } else if (!role) {
                                 console.log(`[Kanban] Column '${nextCol}' has no role mapping, using visual move only`);
                             }
@@ -5857,7 +5966,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) { break; }
                 const column: string = msg.column;
-                const sourceCards = this._lastCards.filter(card => card.workspaceRoot === workspaceRoot && card.column === column);
+                const sourceCards = this._visibleColumnCards(workspaceRoot, column);
                 if (sourceCards.length === 0) {
                     vscode.window.showInformationMessage(`No plans in ${column} for prompt generation.`);
                     break;
@@ -5920,7 +6029,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                 }
                             }
                             this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sids, targetColumn: targetCol });
-                            await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sids, targetCol, workspaceRoot);
+                            // Column already persisted DB-first above. Preserve only the run-sheet
+                            // workflow-event write that kanbanForwardMove (via _applyManualKanbanColumnChange)
+                            // performed — drop its trailing full refreshUI that defeated this delta.
+                            for (const sid of sids) {
+                                await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
+                            }
                             movedParts.push(`${sids.length} → ${targetCol}`);
                         }
                         this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans. Advanced ${knownIds.length}: ${movedParts.join(', ')}.`, isError: false });
@@ -5939,7 +6053,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         }
                     }
                     this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sessionIds, targetColumn: nextCol });
-                    await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sessionIds, nextCol, workspaceRoot);
+                    // Column already persisted DB-first above. Preserve only the run-sheet
+                    // workflow-event write that kanbanForwardMove (via _applyManualKanbanColumnChange)
+                    // performed — drop its trailing full refreshUI that defeated this delta.
+                    for (const sid of sessionIds) {
+                        await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
+                    }
                     this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`, isError: false });
                 }
                 break;
@@ -6036,7 +6155,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) { break; }
                 await this._refreshBoard(workspaceRoot);
-                const reviewedCards = this._lastCards.filter(card => card.workspaceRoot === workspaceRoot && card.column === 'CODE REVIEWED');
+                const reviewedCards = this._visibleColumnCards(workspaceRoot, 'CODE REVIEWED');
                 if (reviewedCards.length === 0) {
                     vscode.window.showInformationMessage('No plans in Reviewed to complete.');
                     break;
@@ -6333,7 +6452,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     break;
                 }
 
-                await this._refreshBoard(workspaceRoot);
+                // No start-refresh — filter the already-current _lastCards directly (moveSelected pattern).
                 const sourceCards = this._lastCards.filter(card =>
                     card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds)
                 );
@@ -6389,7 +6508,8 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                         }
                     }
 
-                    await this._refreshBoard(workspaceRoot);
+                    // Cards persisted to LEAD CODED via db.updateColumn above — targeted delta, no full refresh.
+                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: msg.sessionIds, targetColumn: 'LEAD CODED' });
                     const verb = msg.action === 'sendToLead' ? 'Prompt dispatched to lead coder.' : '';
                     vscode.window.showInformationMessage(
                         `Testing failure prompt copied and ${sourceCards.length} plan(s) moved to Lead Coder. ${verb}`.trim()
@@ -6544,6 +6664,10 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     } else {
                         const cards = this._lastCards.filter(c => {
                             if (c.workspaceRoot !== workspaceRoot) return false;
+                            // Epic subtasks roll up under their epic and are not loose
+                            // column cards — exclude them so the preview matches what a
+                            // column-batch dispatch would actually send.
+                            if (c.epicId) return false;
                             switch (role) {
                                 case 'planner':
                                     return c.column === 'CREATED';

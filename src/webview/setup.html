@@ -1495,6 +1495,14 @@
         let lastCustomAgents = [];
         let lastCustomKanbanColumns = [];
         let lastKanbanStructure = [];
+        // Have these arrays been hydrated from the backend yet? Until they have,
+        // they hold their initial [] — and since the server does a FULL REPLACE on
+        // customAgents / customKanbanColumns, an autosave fired before hydration
+        // would wipe the user's real custom agents / columns. Gate the payload on
+        // these so we never send a not-yet-loaded empty array. (Same bug class that
+        // wiped startup commands via the old `commands` echo.)
+        let customAgentsHydrated = false;
+        let kanbanStructureHydrated = false;
         let lastPromptOverrides = {};
         let lastPromptPreviews = {};
         let editingPromptRole = 'planner';
@@ -2346,11 +2354,11 @@
             const gitIgnoreRules = gitIgnoreStrategy === 'custom'
                 ? sanitizeGitIgnoreRules(document.getElementById('git-ignore-rules')?.value || '')
                 : [...lastGitIgnoreConfig.rules];
-            // Agent CLI commands and visibility now managed in Terminals tab
-            // Preserve existing settings from cached state
-            const commands = {
-                ...lastStartupCommands,
-            };
+            // Agent CLI commands are managed in the Terminals/Agents tab, NOT here.
+            // Do NOT echo `commands` back: this payload is a full REPLACE on the
+            // server, so re-sending a stale/empty cached map (e.g. right after a
+            // reinstall, before the cache hydrates) would WIPE the user's real
+            // startup commands. Omitting the field leaves the stored value untouched.
             const visibleAgents = {
                 ...getCustomVisibleAgentsPatch(),
                 // gatherer is a built-in agent toggled via the Agents tab checkboxes.
@@ -2362,17 +2370,25 @@
                 strategy: gitIgnoreStrategy,
                 rules: gitIgnoreRules
             };
-            return {
+            const payload = {
                 type: 'saveStartupCommands',
                 designDocLink: lastDesignDocLink,
                 planIngestionFolder,
-                customAgents: lastCustomAgents,
-                customKanbanColumns: getPersistedCustomKanbanColumns(),
-                commands,
                 visibleAgents,
                 gitIgnoreStrategy,
                 gitIgnoreRules
             };
+            // Only include the full-REPLACE array fields once they've hydrated from
+            // the backend. Before that they're still the initial [], and sending them
+            // would wipe the user's real custom agents / kanban columns. (Omitted
+            // fields are left untouched server-side via `if (data.x !== undefined)`.)
+            if (customAgentsHydrated) {
+                payload.customAgents = lastCustomAgents;
+            }
+            if (kanbanStructureHydrated) {
+                payload.customKanbanColumns = getPersistedCustomKanbanColumns();
+            }
+            return payload;
         }
 
         function refreshSetupAutosaveSignature() {
@@ -2405,7 +2421,7 @@
             if (signature === lastSentSetupSignature || signature === lastAckedSetupSignature) {
                 return;
             }
-            lastStartupCommands = payload.commands;
+            // (Setup panel no longer sends `commands`; leave lastStartupCommands untouched.)
             lastVisibleAgents = { ...lastVisibleAgents, ...payload.visibleAgents };
             lastPlanIngestionFolder = payload.planIngestionFolder;
             lastGitIgnoreConfig = {
@@ -4376,6 +4392,7 @@
                     if (Array.isArray(message.customAgents)) {
                         runSetupHydration(() => {
                             lastCustomAgents = message.customAgents;
+                            customAgentsHydrated = true;
                             syncDerivedKanbanOrdersFromStructure();
                         });
                     }
@@ -4384,6 +4401,7 @@
                     if (Array.isArray(message.items)) {
                         runSetupHydration(() => {
                             lastKanbanStructure = message.items;
+                            kanbanStructureHydrated = true;
                             lastCustomKanbanColumns = message.items
                                 .filter(item => item?.source === 'custom-user')
                                 .map(item => ({

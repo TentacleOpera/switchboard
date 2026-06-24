@@ -1,0 +1,56 @@
+---
+name: clickup-attach
+description: Attach files to ClickUp tasks via LocalApiServer
+allowed-tools: Bash
+disable-model-invocation: true
+---
+
+# Attach File to ClickUp Task
+
+## When to Use
+- User asks to attach a file to a task
+- Need to upload screenshots, documents, or other files
+
+## Prerequisites
+- VS Code setting `switchboard.apiToken` configured
+- File must be under 10MB
+- Allowed types: .png, .jpg, .jpeg, .gif, .pdf, .txt, .md, .json
+
+## Usage
+```bash
+CUR="$PWD"
+while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
+source "$CUR/.agents/skills/_lib/sb_api_call.sh"
+
+# Encode file as Base64 (macOS/Linux)
+FILE_BASE64=$(base64 -i "./screenshot.png" | tr -d '\n')
+
+sb_api_call POST "/task/clickup/$TASK_ID/attach" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"fileName\": \"screenshot.png\",
+    \"fileDataBase64\": \"$FILE_BASE64\",
+    \"comment\": \"Screenshot of issue\"
+  }"
+```
+
+## Parameters
+- **fileName** (required): Name of the file with extension
+- **fileDataBase64** (required): Base64-encoded file content
+- **comment** (optional): Comment to accompany attachment
+
+## Response
+```json
+{
+  "success": true,
+  "url": "https://...",
+  "fileName": "screenshot.png",
+  "size": 12345
+}
+```
+
+## Error Handling
+- 400: Invalid file type or missing fields
+- 401: Unauthorized
+- 413: File too large (>10MB)
+- 503: ClickUp service unavailable

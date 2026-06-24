@@ -245,3 +245,46 @@ Per session directives, automated tests are **not run as part of this plan** —
 - New/updated tests for: `moveAll` with no start-refresh (sourceCards derived from `_lastCards`); `moveCards` webview reconcile matching `planId` for empty-`sessionId` cards; `moveCardsOptimistically` recomputing `lastBoardSignature`; `moveCardsFailed` revert (if 1d/2b in scope).
 
 **Recommendation:** Complexity 6/10 → **Send to Coder.** The dominant fix (drop the start-refresh, filter `_lastCards` directly) is routine and mirrors `moveSelected`, but the change touches the shared advance hot path with real regression surface across drag-drop, CLI dispatch, complexity routing, and epic cascade, and the `moveCardsFailed` reason-sourcing decision (1d) needs user input before implementation.
+
+---
+
+## Reviewer Pass (2026-06-24)
+
+### Stage 1: Adversarial Findings
+
+| Severity | Finding | Location |
+|----------|---------|----------|
+| **MAJOR** | `moveCardsFailed` failure capture only applied to `_distributePlannerDispatch`; 4 other advance paths that lost their trailing `_refreshBoard` (moveAll general, moveAll PLAN REVIEWED, moveSelected general, moveSelected PLAN REVIEWED) discard `moveCardToColumn`'s boolean and post `moveCards` unconditionally — a failed persist leaves the UI lying with no correction, exactly what 1d's rationale said was unacceptable. | KanbanProvider.ts:5724-5728 (moveAll general), 5670-5674 (moveAll PLAN REVIEWED), 5619-5623 (moveSelected general), 5567-5571 (moveSelected PLAN REVIEWED) |
+| **NIT** | `moveCardsFailed` webview handler inlines `showStatusMessage` logic (15 lines duplicated) instead of extracting a shared helper. | kanban.html:6107-6121 |
+| **NIT** | Status message in `_distributePlannerDispatch` uses `dispatchedIds.length` (includes failures) — "Distributed N" when some failed. `moveCardsFailed` alerts separately; acceptable. | KanbanProvider.ts:3462 |
+| **OOS** | Commit bundles rotation cursor feature (`getRoleTerminalSet`, `getPlannerRotationCursor`, `advancePlannerRotationCursor` in TaskViewerProvider.ts) from the companion lag plan. Not a defect in this plan's implementation. | TaskViewerProvider.ts:3445-3501 |
+
+### Stage 2: Balanced Synthesis
+
+**Keep as-is:** 1b (start-refresh removal), 1c (trailing refresh → delta), 1d/2b (moveCardsFailed in `_distributePlannerDispatch`), 1e (drag-advance delta), 1f (sibling start-refresh removal), 2a (planId-aware reconcile), 2c (signature sync). Persist-before-dispatch ordering is correct and cleaner than the plan's try/finally suggestion — the echo runs before the slow dispatch, so no try/finally is needed.
+
+**Fixed now:** MAJOR #1 — Applied failure capture (`movedIds`/`failures` split + `moveCardsFailed` post + `movedIds`-only dispatch) to all 4 high-impact paths: `moveAll` general, `moveAll` PLAN REVIEWED, `moveSelected` general, `moveSelected` PLAN REVIEWED. Source column is known in all 4 (`column` variable / `'PLAN REVIEWED'` literal).
+
+**Deferred (remaining risk):** `moveCardForward` (5090) and `moveCardBackwards` (5076) drag-advance handlers still discard `moveCardToColumn`'s boolean. Low risk: single-card moves, no dispatch chain, user can see immediately if the card didn't move. `promptSelected`/`promptAll` handlers (5884, 5896, 5946) have the same pre-existing pattern but were not modified in this commit and are out of scope.
+
+### Files Changed (Reviewer Fixes)
+
+- `src/services/KanbanProvider.ts` — 4 paths updated with failure capture:
+  - `moveAll` general path (~5760): `movedIds`/`failures` split, `moveCardsFailed` post, `movedIds`-only `triggerBatchAgentFromKanban`.
+  - `moveAll` PLAN REVIEWED path (~5694): `movedSids`/`failures` split per complexity group, `moveCardsFailed` post, `movedSids`-only dispatch.
+  - `moveSelected` general path (~5631): `movedIds`/`failures` split, `moveCardsFailed` post, `movedIds`-only dispatch (single/batch).
+  - `moveSelected` PLAN REVIEWED path (~5567): `movedSids`/`failures` split per complexity group, `moveCardsFailed` post, `movedSids`-only dispatch.
+
+### Validation Results
+
+- **Compilation:** Skipped per session directives.
+- **Tests:** Skipped per session directives.
+- **Static verification:** All 4 fixed paths verified for: (1) `column`/source column in scope, (2) `movedIds`/`movedSids` used in dispatch calls (not original `sessionIds`/`sids`), (3) `handleKanbanBatchTrigger` handles empty `movedIds` safely (returns false at TaskViewerProvider.ts:3307), (4) `moveCardsFailed` handler in webview matches `planId || sessionId` (mirrors backend `_cardMatchesIds`).
+
+### Remaining Risks
+
+1. **Drag-advance handlers (`moveCardForward`/`moveCardBackwards`)** — no failure capture; a failed persist leaves the card optimistically moved with no `moveCardsFailed` correction. Low risk (single-card, no dispatch chain).
+2. **`promptSelected`/`promptAll`** — pre-existing pattern (not modified in this commit); same gap but out of scope.
+3. **Custom-user path optimistic delta** — `moveAll`/`moveSelected` custom-user branches post `moveCards` before `dispatchConfiguredKanbanColumnAction` persists; if dispatch fails and rolls back inside `_handleTriggerAgentActionInternal`, the webview isn't corrected. Narrow edge case (dispatch failure with rollback).
+4. **`triggerAction` (single-card drag with dispatch)** — still uses `_scheduleBoardRefresh`; intentionally left per plan 1e scope boundary.
+5. **Watcher race** — filtering `_lastCards` directly (Decision #1) accepts the same sub-millisecond watcher race as `moveSelected`; trailing confirmation delta plus next structural refresh reconciles.
