@@ -201,3 +201,69 @@ Key risks: (1) bidirectional desync between the dropdown and sidebar list if a s
 ## Recommendation
 
 Complexity is 5 (Mixed — majority routine UI additions, with one moderate risk: bidirectional sync between two controls). **Send to Coder.**
+
+---
+
+## Reviewer Pass — 2026-06-24
+
+### Stage 1: Grumpy Principal Engineer Review
+
+*Theatrical adversarial pass. Findings severity-tagged.*
+
+**[MAJOR] Sidebar has no highlighted card on initial auto-selection — bidirectional sync broken on first load.**
+`src/webview/project.js:373-378` (original). The `constitutionFilesLoaded` handler calls `renderConstitutionWorkspaceList()` and `renderSystemWorkspaceList()` BEFORE `populateConstitutionWorkspaceDropdowns()`. On first tab activation, `_constitutionSelectedWorkspace` is `null` when the sidebar renders, so NO `.constitution-file-item` gets the `.selected` class. Then `populateConstitutionWorkspaceDropdowns` auto-selects the first workspace via `selectConstitutionWorkspace()`, which sets the dropdown `.value` and fires `readConstitutionFile` — but does NOT touch the sidebar DOM. Net result: the dropdown shows workspace #1 selected, the constitution content loads, but the sidebar looks like nothing is selected. The plan's entire "bidirectional sync" requirement — the ONE moderate-risk item — is silently broken on the most common code path (initial load). This is exactly the desync the Adversarial Synthesis warned about. Unacceptable.
+
+**[NIT] Redundant dropdown value assignment in change handler.**
+`src/webview/project.js:1428` / `:1512`. The dropdown `change` handler calls `selectConstitutionWorkspace(ws)`, which centrally sets `constitutionWorkspaceFilter.value = ws.workspaceRoot`. But the dropdown value is already `ws.workspaceRoot` — that's literally what fired the `change` event. Harmless but sloppy. The plan's clarification section explicitly offered the centralized approach; the implementer chose it correctly, but didn't prune the now-redundant implicit re-set. Not worth fixing — it's a no-op assignment.
+
+**[NIT] Empty `<select>` renders narrow before `constitutionFilesLoaded` fires.**
+`src/webview/project.html:1360,1398`. The `<select>` elements start empty (no options). Before the `constitutionFilesLoaded` message arrives, they render as a minimal-width dropdown. This is a transient state (the message fires immediately on tab switch) and matches the behavior of the sidebar's "Loading workspaces..." placeholder. Not a real issue.
+
+**[INFO] No disabled placeholder option added.**
+The plan offered two alternatives: "a disabled placeholder ('Select workspace…') OR auto-select the first workspace." The implementer chose auto-selection only, with no placeholder. This is correct — a placeholder would be immediately replaced by auto-selection and adds no value. Consistent with plan intent.
+
+**[INFO] Centralized sync approach chosen (per plan clarification).**
+The implementer placed `constitutionWorkspaceFilter.value = ws.workspaceRoot` inside `selectConstitutionWorkspace` / `selectSystemWorkspace` rather than in the sidebar click handlers. This is the cleaner approach the plan's clarification section explicitly permitted. The sidebar click handlers correctly rely on this centralization and do NOT redundantly set the dropdown value. Good architectural choice.
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Severity | Verdict | Action |
+|:---|:---|:---|:---|
+| Sidebar no `.selected` on initial auto-select | MAJOR | **Fix now** — breaks core bidirectional sync requirement on the primary code path | Reorder: call `populateConstitutionWorkspaceDropdowns()` BEFORE `renderConstitutionWorkspaceList()` / `renderSystemWorkspaceList()` in the `constitutionFilesLoaded` handler, so auto-selection sets `_constitutionSelectedWorkspace` before the sidebar renders |
+| Redundant dropdown value set in change handler | NIT | Defer — harmless no-op | No action |
+| Empty `<select>` narrow before load | NIT | Defer — transient, matches existing sidebar placeholder pattern | No action |
+| No placeholder option | INFO | Keep — correct per plan alternatives | No action |
+| Centralized sync approach | INFO | Keep — cleaner, plan-approved | No action |
+
+### Fixes Applied
+
+1. **`src/webview/project.js:373-382`** — Reordered the `constitutionFilesLoaded` handler: `populateConstitutionWorkspaceDropdowns()` now runs BEFORE `renderConstitutionWorkspaceList()` and `renderSystemWorkspaceList()`. Added explanatory comment. This ensures auto-selection sets `_constitutionSelectedWorkspace` / `_systemSelectedWorkspace` before the sidebar lists render, so the correct card receives `.selected`. Verified `selectConstitutionWorkspace` / `selectSystemWorkspace` do not reference sidebar DOM, making the reorder safe.
+
+2. **`src/webview/project.js` + `src/webview/project.html`** — Removed all 17 `alert()` calls and 1 `confirm()` call from `project.js` (per user directive and CLAUDE.md policy — both are silent no-ops in VS Code webviews). Changes:
+   - Added `showToast(message, type)` function (line 74) — lightweight floating notification that auto-dismisses after 4s with fade-out.
+   - Added `.toast-notification` CSS (error/success/info variants) in `project.html`.
+   - Removed 8 `alert('Please select a workspace first.')` guards in Constitution/System button handlers — these were dead code because the buttons are already `disabled` when no workspace is selected (all button-enable sites are guarded by `_constitutionSelectedWorkspace` / `_systemSelectedWorkspace` checks inside `constitutionFileRead` / `constitutionStatus` / `constitutionFileDeleted` handlers).
+   - Replaced 9 remaining `alert()` calls (error notifications, upload results, save failures, epic validation) with `showToast(msg, 'error'|'success')`.
+   - Removed 1 `confirm('Delete this insight?')` gate in the Tuning tab delete-insight handler (line 697) — was a broken no-op that prevented the delete button from ever working. Delete now fires immediately per CLAUDE.md policy.
+
+### Validation Results
+
+- **Typecheck/compile:** Skipped per session directive (SKIP COMPILATION).
+- **Tests:** Skipped per session directive (SKIP TESTS).
+- **Manual code trace:** Verified the full execution path for (a) initial load with multiple workspaces, (b) subsequent reloads with existing selection, (c) dropdown→sidebar sync, (d) sidebar→dropdown sync, (e) edit-mode guard on workspace switch, (f) button disabled-state when no workspace selected (all enable sites guarded), (g) showToast scope (defined at line 74, all 9 call sites within same IIFE). All paths correct after fixes.
+- **Grep verification:** Zero `alert(` or `confirm(` calls remain in `project.js` (only comment references).
+- **Git policy:** No state-mutating git commands executed. Read-only `git log` / `git show` used for diff inspection only.
+
+### Files Changed in Review
+
+| File | Change |
+|:---|:---|
+| `src/webview/project.js` | Reordered `constitutionFilesLoaded` handler calls + comment (lines 373-382); added `showToast()` function (line 74); removed 8 workspace-selection alert() guards; replaced 9 alert() calls with `showToast()`; removed 1 confirm() gate in tuning delete-insight handler |
+| `src/webview/project.html` | Added `.toast-notification` CSS (error/success/info variants + slide-in animation) before `</style>` |
+
+### Remaining Risks
+
+- **alert() in other webview files (out of scope):** `kanban.html:9165` (`alert('Epic name is required.')`), `design.js:3638` (`alert('Please enter a display name.')`), `design.js:3688` (`alert('Please select at least one screen...')`). Same no-op bug, but outside the `project.js` scope the user specified. Should be addressed in a separate pass.
+- **No automated test coverage** for the bidirectional sync logic or the new toast notification. Manual verification checklist in the plan must be exercised by the user.
+- **Index-based card matching** in dropdown change handlers (`_constitutionWorkspaces.indexOf(ws)`) assumes sidebar cards are rendered in the same order as `_constitutionWorkspaces`. This holds today but is fragile if the sidebar render logic ever filters/reorders. Low risk given current code.
+- **Toast stacking:** Multiple rapid toasts will stack vertically at the same fixed position (bottom-right). Not a bug, but could overlap if many errors fire simultaneously. Low risk in practice.

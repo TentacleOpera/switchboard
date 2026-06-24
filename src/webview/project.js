@@ -69,6 +69,20 @@
     state.systemListCollapsed = persistedState.systemListCollapsed || false;
     state.tuningListCollapsed = persistedState.tuningListCollapsed || false;
 
+    // Toast notification — replaces alert() which is a silent no-op in VS Code webviews.
+    // type: 'error' | 'success' | 'info'
+    function showToast(message, type = 'info') {
+        const toast = document.createElement('div');
+        toast.className = `toast-notification toast-${type}`;
+        toast.textContent = message;
+        document.body.appendChild(toast);
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            toast.style.transition = 'opacity 0.3s ease-out';
+            setTimeout(() => toast.remove(), 300);
+        }, 4000);
+    }
+
     function applySidebarState(tabName, collapsed) {
         const tabContent = document.getElementById(`${tabName}-content`);
         if (!tabContent) return;
@@ -320,7 +334,7 @@
                 renderEpicsList();
                 break;
             case 'epicError':
-                alert(msg.message || 'Error occurred');
+                showToast(msg.message || 'Error occurred', 'error');
                 break;
             case 'activeDesignDocUpdated': {
                 const planningEpic = msg.planningEpic || { enabled: msg.enabled, docName: msg.docName, sourceId: msg.sourceId, docId: msg.docId };
@@ -330,14 +344,14 @@
             }
             case 'kanbanContextSet':
                 if (!msg.success) {
-                    alert('Failed to set active planning context: ' + (msg.error || 'Unknown error'));
+                    showToast('Failed to set active planning context: ' + (msg.error || 'Unknown error'), 'error');
                 }
                 break;
             case 'kanbanPlanColumnChanged':
                 if (msg.success) {
                     vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
                 } else {
-                    alert('Failed to move column: ' + (msg.error || 'Unknown error'));
+                    showToast('Failed to move column: ' + (msg.error || 'Unknown error'), 'error');
                 }
                 break;
             case 'kanbanPlanDeleted':
@@ -348,7 +362,7 @@
                     if (dynamicEditBtn) dynamicEditBtn.disabled = true;
                     vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
                 } else {
-                    alert('Delete failed: ' + (msg.error || 'Unknown error'));
+                    showToast('Delete failed: ' + (msg.error || 'Unknown error'), 'error');
                 }
                 break;
             case 'kanbanPlanLogReady':
@@ -372,9 +386,13 @@
                 break;
             case 'constitutionFilesLoaded':
                 _constitutionWorkspaces = msg.workspaces || [];
+                // Populate dropdowns (and auto-select first workspace) BEFORE rendering the
+                // sidebar lists, so the sidebar render sees the selected workspace and marks
+                // the correct card with `.selected`. Otherwise auto-selection sets the
+                // dropdown value but leaves the sidebar with no highlighted card.
+                populateConstitutionWorkspaceDropdowns();
                 renderConstitutionWorkspaceList();
                 renderSystemWorkspaceList();
-                populateConstitutionWorkspaceDropdowns();
                 break;
             case 'constitutionStatus':
                 if (_constitutionSelectedWorkspace && _constitutionSelectedWorkspace.workspaceRoot === msg.workspaceRoot) {
@@ -600,9 +618,9 @@
                     renderKanbanMetaBar(_kanbanSelectedPlan);
                 }
                 if (msg.success) {
-                    alert(`Plan uploaded to ${msg.provider} ticket.\n${msg.url || ''}`);
+                    showToast(`Plan uploaded to ${msg.provider} ticket.\n${msg.url || ''}`, 'success');
                 } else {
-                    alert(`Upload failed: ${msg.error}`);
+                    showToast(`Upload failed: ${msg.error}`, 'error');
                 }
                 break;
             }
@@ -633,7 +651,7 @@
                         vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
                     }
                 } else {
-                    alert('Save failed: ' + (msg.error || 'Unknown error'));
+                    showToast('Save failed: ' + (msg.error || 'Unknown error'), 'error');
                 }
                 break;
             case 'insightsLoaded': {
@@ -676,9 +694,7 @@
                     vscode.postMessage({ type: 'updateInsightStatus', filename: _tuningSelectedInsight, status: 'dismissed', workspaceRoot: _tuningSelectedWorkspaceRoot });
                 });
                 if (btnDeleteInsight) btnDeleteInsight.addEventListener('click', () => {
-                    if (confirm('Delete this insight? This cannot be undone.')) {
-                        vscode.postMessage({ type: 'deleteInsight', filename: _tuningSelectedInsight, workspaceRoot: _tuningSelectedWorkspaceRoot });
-                    }
+                    vscode.postMessage({ type: 'deleteInsight', filename: _tuningSelectedInsight, workspaceRoot: _tuningSelectedWorkspaceRoot });
                 });
                 break;
             }
@@ -1310,7 +1326,7 @@
                     filePath: _epicSelectedPlan.planFile
                 });
             } else {
-                alert('This epic has no plan file on disk to set as planning context.');
+                showToast('This epic has no plan file on disk to set as planning context.', 'error');
             }
         });
     }
@@ -1544,50 +1560,30 @@
 
     if (btnBuildViaPlanner) {
         btnBuildViaPlanner.addEventListener('click', () => {
-            if (!_constitutionSelectedWorkspace) {
-                alert('Please select a workspace first.');
-                return;
-            }
             vscode.postMessage({ type: 'invokeConstitutionBuilder', workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot });
         });
     }
 
     if (btnCopyBuildPrompt) {
         btnCopyBuildPrompt.addEventListener('click', () => {
-            if (!_constitutionSelectedWorkspace) {
-                alert('Please select a workspace first.');
-                return;
-            }
             vscode.postMessage({ type: 'copyConstitutionPrompt', workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot });
         });
     }
 
     if (btnUpdateViaPlanner) {
         btnUpdateViaPlanner.addEventListener('click', () => {
-            if (!_constitutionSelectedWorkspace) {
-                alert('Please select a workspace first.');
-                return;
-            }
             vscode.postMessage({ type: 'invokeConstitutionUpdater', workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot });
         });
     }
 
     if (btnCopyUpdatePrompt) {
         btnCopyUpdatePrompt.addEventListener('click', () => {
-            if (!_constitutionSelectedWorkspace) {
-                alert('Please select a workspace first.');
-                return;
-            }
             vscode.postMessage({ type: 'copyConstitutionUpdatePrompt', workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot });
         });
     }
 
     if (btnEnableConstitution) {
         btnEnableConstitution.addEventListener('click', () => {
-            if (!_constitutionSelectedWorkspace) {
-                alert('Please select a workspace first.');
-                return;
-            }
             const isCurrentlyEnabled = btnEnableConstitution.dataset.enabled === 'true';
             vscode.postMessage({ type: 'toggleConstitutionAddon', enabled: !isCurrentlyEnabled });
         });
@@ -1601,10 +1597,6 @@
 
     if (btnDeleteConstitution) {
         btnDeleteConstitution.addEventListener('click', () => {
-            if (!_constitutionSelectedWorkspace) {
-                alert('Please select a workspace first.');
-                return;
-            }
             vscode.postMessage({
                 type: 'deleteConstitutionFile',
                 workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot,
@@ -1615,10 +1607,6 @@
 
     if (btnSetConstitutionPath) {
         btnSetConstitutionPath.addEventListener('click', () => {
-            if (!_constitutionSelectedWorkspace) {
-                alert('Please select a workspace first.');
-                return;
-            }
             vscode.postMessage({ type: 'openSetConstitutionPath', workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot });
         });
     }
@@ -1684,7 +1672,7 @@
             const name = newEpicName ? newEpicName.value.trim() : '';
             const description = newEpicDescription ? newEpicDescription.value.trim() : '';
             if (!name) {
-                alert('Epic name is required.');
+                showToast('Epic name is required.', 'error');
                 return;
             }
             vscode.postMessage({
@@ -1756,10 +1744,6 @@
     }
     if (btnDeleteSystem) {
         btnDeleteSystem.addEventListener('click', () => {
-            if (!_systemSelectedWorkspace) {
-                alert('Please select a workspace first.');
-                return;
-            }
             vscode.postMessage({
                 type: 'deleteConstitutionFile',
                 workspaceRoot: _systemSelectedWorkspace.workspaceRoot,

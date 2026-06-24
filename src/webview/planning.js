@@ -4925,15 +4925,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     showTicketsStatus('Import failed', true);
                 }
                 break;
-            case 'linearTaskRefined':
-            case 'clickupTaskRefined':
-                if (msg.success) {
-                    showTicketsStatus('Refined ✓', false);
-                } else {
-                    console.error('Refine failed:', msg.error);
-                    showTicketsStatus('Refine failed', true);
-                }
-                break;
             case 'ticketsAskAgentResult':
                 if (msg.success) {
                     showTicketsStatus('Sent to agent ✓', false);

@@ -1261,6 +1261,41 @@
             margin-bottom: 12px;
             line-height: 1.6;
         }
+
+        /* Toast notification (replaces alert() which is a no-op in VS Code webviews) */
+        .toast-notification {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            z-index: 10000;
+            max-width: 400px;
+            padding: 10px 16px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-family: var(--font-mono);
+            line-height: 1.4;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            animation: toast-slide-in 0.2s ease-out;
+        }
+        .toast-notification.toast-error {
+            background: #5d2424;
+            color: #ffb0b0;
+            border: 1px solid #8a3838;
+        }
+        .toast-notification.toast-success {
+            background: #1e4030;
+            color: #8fdab0;
+            border: 1px solid #2e6a4a;
+        }
+        .toast-notification.toast-info {
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+        @keyframes toast-slide-in {
+            from { opacity: 0; transform: translateY(8px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
     </style>
     <!-- Poppins via Google Fonts CDN (online, temporary — bundled local @font-face also exists above).
          Declared last so this definition wins for the markdown-preview headings. -->

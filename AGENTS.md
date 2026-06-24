@@ -17,7 +17,7 @@ This project relies on **Switchboard Workflows** defined in `.agents/workflows`.
 | :--- | :--- | :--- |
 | `/accuracy` | **`accuracy.md`** | High accuracy mode with self-review (Standard Protocol). |
 | `/improve-plan` | **`improve-plan.md`** | Deep planning with optional dependency checks and adversarial review. |
-| `/chat` | **`switchboard-chat.md`** | Activate chat consultation workflow. |
+| `/switchboard-chat` | **`switchboard-chat.md`** | Activate chat consultation workflow. (Trigger is `/switchboard-chat`, not `/chat`, to avoid clashing with native CLI `/chat` reset commands.) |
 | `/memo` | **`memo.md`** | Memo capture mode — append-only, no analysis. Exit with `process memo`. Edit entries with `edit N: <text>`. |
 
 
