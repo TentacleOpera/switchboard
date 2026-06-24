@@ -1622,11 +1622,12 @@
             <div id="agent-list-memo" class="agent-list hidden">
                 <div class="memo-tab-content" style="padding: 10px; display: flex; flex-direction: column; gap: 8px;">
                     <p style="font-size: 11px; color: var(--text-secondary); margin: 0 0 4px;">
-                        Jot down bugs, thoughts, or issues — one per line or paragraph. Each entry becomes a
-                        <strong>separate issue</strong>. Saved automatically; cleared after Copy Prompt / Send to Planner.
+                        Jot down bugs, thoughts, or issues — one per line or paragraph. Saved automatically.
+                        Send to an agent via Copy Prompt / Send to Planner to create
+                        <strong>one plan per issue</strong>.
                     </p>
                     <textarea id="memo-textarea" class="modal-textarea"
-                              placeholder="Bug: login button overlaps on mobile&#10;Thought: maybe cache the user profile&#10;Issue: API returns 500 on empty payload..."
+                              placeholder="Bug: login button overlaps on mobile&#10;Thought: maybe cache the user profile&#10;Issue: API returns 500 on empty payload...&#10;Tip: use the /memo skill to dictate memo entries to an agent"
                               style="width: 100%; min-height: 240px; resize: vertical; font-family: var(--font-mono, monospace); font-size: 13px;"></textarea>
                     <span id="memo-status" style="font-size: 11px; color: var(--text-secondary); min-height: 14px;"></span>
                     <button id="memo-clear-btn" class="secondary-btn w-full">Clear</button>
@@ -2228,14 +2229,19 @@
                         // to fall back to a possibly-wrong workspace root.
                         const validSubTabs = ['agents', 'terminals', 'memo'];
                         const restoredSubTab = (message.activeSubTab && validSubTabs.includes(message.activeSubTab)) ? message.activeSubTab : 'terminals';
-                        currentAgentTab = restoredSubTab;
-                        switchAgentTab(currentAgentTab);
+                        switchAgentTab(restoredSubTab);
                     }
                     toggleOnboarding(message.needsSetup === true);
                     break;
                 case 'memoContent': {
                     const textarea = document.getElementById('memo-textarea');
-                    if (textarea) textarea.value = typeof message.content === 'string' ? message.content : '';
+                    if (textarea) {
+                        const isFocused = document.activeElement === textarea;
+                        if (isFocused || memoDirty) {
+                            break;
+                        }
+                        textarea.value = typeof message.content === 'string' ? message.content : '';
+                    }
                     break;
                 }
                 case 'memoPromptResult': {
@@ -2607,7 +2613,9 @@
 
         let currentAgentTab = 'terminals';
         let isAutobanPanelInteracting = false;
+        let memoDirty = false;
         function switchAgentTab(tab) {
+            const isChanging = currentAgentTab !== tab;
             currentAgentTab = tab;
             vscode.postMessage({ type: 'setActiveSubTab', tab: tab });
             const tabs = {
@@ -2618,7 +2626,7 @@
             document.querySelectorAll('.sub-tab-btn').forEach(btn => {
                 btn.classList.toggle('is-active', btn.dataset.tab === tab);
             });
-            if (tab === 'memo') {
+            if (tab === 'memo' && isChanging) {
                 vscode.postMessage({ type: 'memoLoad', workspaceRoot: currentWorkspaceRoot });
             }
             if (tab === 'terminals') {
@@ -2667,10 +2675,12 @@
         // === Memo (sidebar tab) ===
         let memoSaveTimer = null;
         function debouncedMemoSave() {
+            memoDirty = true;
             if (memoSaveTimer) clearTimeout(memoSaveTimer);
             memoSaveTimer = setTimeout(() => {
                 const content = document.getElementById('memo-textarea')?.value || '';
                 vscode.postMessage({ type: 'memoSave', content, workspaceRoot: currentWorkspaceRoot });
+                memoDirty = false;
                 const statusEl = document.getElementById('memo-status');
                 if (statusEl) { statusEl.textContent = 'Saved'; setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 1500); }
             }, 800);
@@ -2679,17 +2689,21 @@
         document.getElementById('memo-clear-btn')?.addEventListener('click', () => {
             const textarea = document.getElementById('memo-textarea');
             if (textarea) textarea.value = '';
+            if (memoSaveTimer) clearTimeout(memoSaveTimer);
+            memoDirty = false;
             vscode.postMessage({ type: 'memoClear', workspaceRoot: currentWorkspaceRoot });
             const statusEl = document.getElementById('memo-status');
             if (statusEl) statusEl.textContent = 'Cleared';
         });
         document.getElementById('memo-copy-btn')?.addEventListener('click', () => {
             if (memoSaveTimer) clearTimeout(memoSaveTimer);
+            memoDirty = false;
             const content = document.getElementById('memo-textarea')?.value || '';
             vscode.postMessage({ type: 'memoGeneratePrompt', content, action: 'copy', workspaceRoot: currentWorkspaceRoot });
         });
         document.getElementById('memo-send-btn')?.addEventListener('click', () => {
             if (memoSaveTimer) clearTimeout(memoSaveTimer);
+            memoDirty = false;
             const content = document.getElementById('memo-textarea')?.value || '';
             vscode.postMessage({ type: 'memoGeneratePrompt', content, action: 'send', workspaceRoot: currentWorkspaceRoot });
         });
