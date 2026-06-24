@@ -396,3 +396,46 @@ private async _distributePlannerDispatch(
 - Worktree-grid planner multiplication.
 - Custom-user dispatch spec path integration (distribute applies only to built-in dispatch path this iteration).
 - Automatic disposal of orphaned pool terminals when count decreases.
+
+---
+
+## Reviewer Pass — 2026-06-24
+
+### Stage 1: Grumpy Adversarial Findings
+
+| # | Severity | File:Line | Finding |
+|---|----------|-----------|---------|
+| 1 | **CRITICAL** | `src/services/KanbanProvider.ts:3345-3346` | Missing closing brace for `_dispatchWithPairProgrammingIfNeeded`. The method (line 3304) opens at 3307; its `else` block closes at 3345, but the method body never closes. `_distributePlannerDispatch` was declared with `private async` *inside* another method — a syntax error that breaks compilation of the entire extension. |
+| 2 | **MAJOR** | `src/services/TaskViewerProvider.ts:691-699` | `plannerTerminalCount` and `plannerLimitDispatchToTerminals` absent from `_GLOBAL_TO_STATE_KEY`. `_readStateField` reads `globalState` first (fast path), but `_processUpdateQueue` never mirrors these fields to `globalState`. Every read falls back to a state.json disk read. Works in normal operation, but if state.json is reset while globalState persists (e.g. workspace re-clone), the user's dropdown selection silently reverts to defaults. Inconsistent with every other persisted startup field. |
+| 3 | **MAJOR** | `src/services/KanbanProvider.ts:5649` (pre-fix) | `moveAll` overwrites the accurate distribute status message. `_distributePlannerDispatch` posts "Distributed 2 plan(s) across 2 planner terminal(s). (8 held — limit ON)", then line 5649 unconditionally stomps it with "Moved 10 plans from CREATED to PLAN REVIEWED." — where 10 = `sourceCards.length` (ALL cards, not just dispatched). Misleading when limit is ON. The `moveSelected` path (line 5539) correctly omits the trailing generic message. |
+| 4 | NIT | `src/services/KanbanProvider.ts:5634` | `moveAll` distribute path calls `_distributePlannerDispatch` without `skipLimit`, so limit applies — correct per plan. `moveSelected` passes `{ skipLimit: true }` — correct per plan. No action needed. |
+
+### Stage 2: Balanced Synthesis
+
+- **Keep:** All six implementation sections match the plan spec. Frontend markup, persistence round-trip, `createAgentGrid` N-terminal expansion, `getAliveRoleTerminalNames` wrapper (with `includeBackups = false`), `_distributePlannerDispatch` round-robin + oldest-first limit + per-bucket failure isolation, and `moveSelected`/`moveAll` integration are all structurally sound. The `else if (!role)` change (replacing `else`) in both move paths is a correct incidental fix — it stops printing "no role mapping" when CLI triggers are disabled but a role exists.
+- **Fix now:** Findings #1, #2, #3 — all three are material and cheap to fix.
+- **Defer:** No deferred items. All findings addressed.
+
+### Fixes Applied
+
+1. **CRITICAL-1 fixed** — Added closing `}` at `KanbanProvider.ts:3346` to properly close `_dispatchWithPairProgrammingIfNeeded` before `_distributePlannerDispatch` begins. The two are now sibling class methods.
+2. **MAJOR-2 fixed** — Added `['switchboard.agents.plannerTerminalCount', 'plannerTerminalCount']` and `['switchboard.agents.plannerLimitDispatchToTerminals', 'plannerLimitDispatchToTerminals']` to `_GLOBAL_TO_STATE_KEY` (`TaskViewerProvider.ts:699-700`). Both fields now mirror to `globalState` via `_processUpdateQueue`, giving `_readStateField` the fast cache path and surviving state.json resets.
+3. **MAJOR-3 fixed** — `moveAll` distribute branch now calls `await this._refreshBoard(workspaceRoot); break;` immediately after `_distributePlannerDispatch`, skipping the generic "Moved N plans" status message that would overwrite the accurate distribute message (including limit-held count). The non-distribute `else` branch retains the generic message as before.
+
+### Files Changed (reviewer pass)
+
+- `src/services/KanbanProvider.ts` — brace fix (line 3346), moveAll status-message fix (lines 5634-5640)
+- `src/services/TaskViewerProvider.ts` — `_GLOBAL_TO_STATE_KEY` entries (lines 699-700)
+
+### Validation Results
+
+- **Compilation:** Not run per session directives (`SKIP COMPILATION`). The CRITICAL-1 brace fix resolves the syntax error that would have blocked compilation; structural verification confirms `_dispatchWithPairProgrammingIfNeeded` (3304-3346) and `_distributePlannerDispatch` (3348-3421) are now correctly delimited sibling methods.
+- **Tests:** Not run per session directives (`SKIP TESTS`).
+- **Manual verification:** Confirmed `_cardId` (line 335), `_cardMatchesIds` (line 329), `sourceCards` (moveAll scope, line 5570), `triggerBatchAgentFromKanban` 5th-arg `targetTerminalOverride` (extension.ts:1130), and `handleKanbanBatchTrigger` terminal routing (TaskViewerProvider.ts:3198) all exist and match the plan's assumptions. `moveSelected` path verified clean (no trailing generic status message).
+
+### Remaining Risks
+
+- **Count-decrease orphaned terminals** — documented in plan; user closes manually. No code fix (by design).
+- **Custom-user dispatch spec + planner role** — distribute is skipped for custom-user columns (by design, documented as known limitation).
+- **Per-terminal dispatch failure** — pre-moved cards orphaned in PLAN REVIEWED if a terminal dies between enumeration and dispatch. Mitigated by per-bucket try/catch (already in place). User can re-advance. Acceptable per plan.
+- **No automated test for round-robin partition** — plan item #9 (unit test for pure partition function) is not yet implemented. Recommend adding before release.

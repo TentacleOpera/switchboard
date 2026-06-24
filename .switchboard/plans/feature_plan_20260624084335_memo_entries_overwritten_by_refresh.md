@@ -178,3 +178,40 @@ Automated tests are skipped per session directive. The test suite will be run se
 ---
 
 **Recommendation:** Complexity is 4/10 → **Send to Coder**.
+
+---
+
+## Reviewer Pass — 2026-06-24
+
+**Verdict:** Implementation complete and faithful to all four proposed changes. No CRITICAL/MAJOR findings. No code fixes required.
+
+### Changes verified in `src/webview/implementation.html`
+
+1. **`memoContent` guard** (`2236–2246`) — reload skipped when `isFocused || memoDirty`; otherwise applies `message.content`. Matches change #1.
+2. **`memoDirty` tracking** — declared `2616`; set `true` at start of `debouncedMemoSave` (`2678`); cleared `false` when the debounced save posts (`2683`). Matches change #2.
+3. **`switchAgentTab` `isChanging` gate** (`2618`, `2629`) — `memoLoad` fires only on actual change to `memo`, suppressing the redundant reloads from `renderAgentList`'s tail calls at `2996` and `3114`. Matches change #3.
+4. **Cold-open restore fix** (`2232`) — the `currentAgentTab = restoredSubTab;` pre-assignment was removed; `switchAgentTab(restoredSubTab)` is now called with `currentAgentTab` still at its initial `'terminals'`, so `isChanging === true` and `memoLoad` correctly fires on cold open. The exact landmine flagged in the Complexity Audit is disarmed. Matches change #4.
+5. **Clear/Copy/Send handlers** (`2692–2693`, `2699–2700`, `2705–2706`) — all clear `memoDirty` (Clear also clears `memoSaveTimer`), so the host's `memoGeneratePrompt` → `memoContent: ''` round-trip is accepted. Matches the "load-bearing" requirement in §2.
+
+### Findings by severity
+
+- **CRITICAL:** None.
+- **MAJOR:** None.
+- **NIT — `memoDirty` cleared at post-time, not write-confirm-time** (`implementation.html:2683`): the flag flips on `postMessage`, not on host write-ack. A reload arriving between post and disk flush could theoretically apply stale content. Not exploitable in practice — reloads now only originate from explicit tab changes (human-speed) and file writes are sub-millisecond. Not worth write-ack plumbing. Deferred.
+- **NIT — TDZ false alarm** (`2240` refs `memoDirty` declared at `2616`): safe; the `memoContent` handler is an async message callback that runs only after full script execution.
+- **NIT — `openMemoTab` while already on memo is a no-op** (`2252`): correct (content already loaded), as reasoned in §Dependencies.
+
+### Validation
+
+- Compilation: **skipped per session directive.**
+- Automated tests: **skipped per session directive** (to be run separately by the user).
+- Static review of the diff confirms surgical, correctly-scoped edits; no stray `confirm()` gates introduced; no other writers to `#memo-textarea.value` bypass the guard.
+
+### Code fixes applied
+
+None — implementation required no changes.
+
+### Remaining risks
+
+- The post-time `memoDirty` clear leaves a vanishingly small disk-write-ordering window (NIT above). Pre-existing class of I/O race, not introduced or worsened by this change.
+- Manual verification steps 1–8 (above) remain to be exercised by the user, particularly step 4 (cold-open with memo as last active sub-tab) and step 8 (Send to Planner round-trip clear).

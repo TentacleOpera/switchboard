@@ -132,7 +132,10 @@ export interface PromptBuilderOptions {
     gitProhibitionEnabled?: boolean;
     /** When true (default), include batchExecutionRules and FOCUS_DIRECTIVE. When false, omit them. */
     switchboardSafeguardsEnabled?: boolean;
-    /** Optional display label of the column where the plans originated. */
+    /**
+     * @deprecated No longer consumed by the prompt builder. Callers still pass it
+     * harmlessly; retained to avoid widening the blast radius of the intro cleanup.
+     */
     sourceColumnLabel?: string;
     /** The research depth to use for the deep research protocol (e.g. 'quick', 'standard', 'deep', 'academic'). */
     researchDepth?: string;
@@ -432,7 +435,6 @@ export function buildKanbanBatchPrompt(
     plans: BatchPromptPlan[],
     options?: PromptBuilderOptions
 ): string {
-    const baseInstruction = options?.instruction;
     const includeInlineChallenge = options?.includeInlineChallenge ?? false;
     const accurateCodingEnabled = options?.accurateCodingEnabled ?? false;
     const pairProgrammingEnabled = options?.pairProgrammingEnabled ?? false;
@@ -442,7 +444,6 @@ export function buildKanbanBatchPrompt(
     const reviewerCompactPlanUpdateEnabled = options?.reviewerCompactPlanUpdateEnabled ?? false;
     const gitProhibitionEnabled = options?.gitProhibitionEnabled ?? true;
     const switchboardSafeguardsEnabled = options?.switchboardSafeguardsEnabled ?? true;
-    const sourceColumnLabel = options?.sourceColumnLabel;
     const clearAntigravityContext = options?.clearAntigravityContext ?? false;
     const skipCompilation = options?.skipCompilation ?? false;
     const skipTests = options?.skipTests ?? false;
@@ -739,7 +740,6 @@ For each plan:
         const safeguardsBlock = switchboardSafeguardsEnabled
             ? `${batchExecutionRules}\n\n${challengeBlock}`.trim()
             : challengeBlock.trim();
-        const sourceSuffix = sourceColumnLabel ? ` from the ${sourceColumnLabel} column` : '';
 
         let leadBase = '';
         if (pairProgrammingEnabled) {
@@ -775,7 +775,7 @@ For each plan:
 
         const suppressWalkthroughBlock = suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '';
         const promptParts = [
-            `Please execute the following ${plans.length} plans${sourceSuffix}.`,
+            `Please execute the following ${plans.length} plans.`,
             executionDirective,
             safeguardsBlock,
             baseInstructions,
@@ -788,10 +788,7 @@ For each plan:
     }
 
     if (role === 'coder') {
-        const sourceSuffix = sourceColumnLabel ? ` from the ${sourceColumnLabel} column` : '';
-        const intro = baseInstruction === 'low-complexity'
-            ? `Please execute the following ${plans.length} low-complexity plans${sourceSuffix}.`
-            : `Please execute the following ${plans.length} plans${sourceSuffix}.`;
+        const intro = `Please execute the following ${plans.length} plans.`;
         const safeguardsBlock = switchboardSafeguardsEnabled
             ? `${batchExecutionRules}\n\n${challengeBlock}`.trim()
             : challengeBlock.trim();
