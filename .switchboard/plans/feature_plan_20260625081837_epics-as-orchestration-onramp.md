@@ -49,7 +49,7 @@ This plan adds the orchestrate-it path + the orchestrator role + the modal remov
 
 - **Tags:** `feature`, `epics`, `orchestration`, `roles`, `project-panel`, `ui`, `prompt`
 - **Complexity:** 7/10 (new role across many enumeration touch-points; relocating management UI between two webviews; migrating shipped global config keys)
-- **Depends on:** `review-epic-opens-kanban-tab-not-epic-tab` (Review→Epics nav), `kanban-epic-subtask-column-leak-and-backlog-cascade` (epic-as-unit), `kanban-epic-focus-worktree-decouple` (focus mode). All three drafted; sequence after them.
+- **Depends on:** `review-epic-opens-kanban-tab-not-epic-tab` (Review→Epics nav), `kanban-epic-subtask-column-leak-and-backlog-cascade` (epic-as-unit), `kanban-epic-focus-worktree-decouple` (removes focus mode + worktree cleanup). All three drafted; sequence after them.
 
 ## Decisions (made, not deferred)
 

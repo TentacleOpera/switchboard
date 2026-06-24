@@ -791,6 +791,39 @@
             outline: none;
         }
 
+        /* Remote (Linear) tab controls — themed checkbox list, radios, number input */
+        .remote-checkbox-list {
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            background: var(--panel-bg2);
+            padding: 6px 8px;
+            max-height: 160px;
+            overflow-y: auto;
+        }
+        .remote-checkbox-row,
+        .remote-radio-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 11px;
+            color: var(--text-primary);
+            font-family: var(--font-mono);
+            padding: 3px 0;
+        }
+        .remote-checkbox-row input,
+        .remote-radio-row input { accent-color: var(--accent-teal); }
+        .remote-number-input {
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            padding: 3px 6px;
+            width: 120px;
+        }
+        .remote-number-input:focus { outline: none; border-color: var(--accent-teal-dim); }
+
         .column-button-area {
             display: flex;
             align-items: center;
@@ -2559,31 +2592,42 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     webhooks, nothing to expose.
                 </div>
 
+                <!-- Workspace selector -->
                 <label style="display:block; margin-bottom:10px;">
-                    <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Boards to sync</span>
-                    <select id="remote-boards" multiple size="5" style="width:100%;"></select>
+                    <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Workspace</span>
+                    <select id="remote-workspace" class="workspace-project-select"></select>
                 </label>
+
+                <!-- Boards to sync: themed checkbox list, includes "No Project" base board -->
+                <div style="margin-bottom:10px;">
+                    <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Boards to sync</span>
+                    <div id="remote-boards-list" class="remote-checkbox-list"></div>
+                </div>
 
                 <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
                     <input type="checkbox" id="remote-silent-sync">
                     <span>Silent syncing — keep selected boards mirrored with Linear even while pinging is off</span>
                 </label>
 
-                <label style="display:block; margin-bottom:10px;">
+                <!-- Ping mode: radio group -->
+                <div style="margin-bottom:10px;">
                     <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Ping mode</span>
-                    <select id="remote-ping-mode" style="width:100%;">
-                        <option value="manual">Manual — ping only while the toolbar toggle is on</option>
-                        <option value="constant">Constant — always pinging when configured</option>
-                    </select>
-                </label>
+                    <label class="remote-radio-row">
+                        <input type="radio" name="remote-ping-mode" value="manual" checked>
+                        <span>Manual — ping only while the toolbar toggle is on</span>
+                    </label>
+                    <label class="remote-radio-row">
+                        <input type="radio" name="remote-ping-mode" value="constant">
+                        <span>Constant — always pinging when configured</span>
+                    </label>
+                </div>
 
                 <label style="display:block; margin-bottom:12px;">
                     <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Ping frequency (seconds, 30–120)</span>
-                    <input type="number" id="remote-ping-frequency" min="30" max="120" step="5" value="60" style="width:120px;">
+                    <input type="number" id="remote-ping-frequency" class="remote-number-input" min="30" max="120" step="5" value="60">
                 </label>
 
-                <button id="btn-save-remote-config" class="action-btn">SAVE REMOTE SETTINGS</button>
-                <span id="remote-config-status" style="margin-left:10px; font-size:10px; color:var(--text-secondary);"></span>
+                <span id="remote-config-status" style="font-size:10px; color:var(--text-secondary);"></span>
             </div>
         </div>
     </div>
@@ -6433,7 +6477,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
                 case 'remoteConfig':
                     if (typeof msg.active === 'boolean') { remoteControlActive = msg.active; applyRemoteControlButtonState(); }
-                    renderRemoteConfig(msg.config, msg.projects);
+                    renderRemoteConfig(msg.config, msg);
                     break;
                 case 'remoteControlState':
                     remoteControlActive = !!msg.active;
@@ -6888,41 +6932,96 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const btn = document.getElementById('btn-remote-control');
             if (btn) { btn.classList.toggle('is-active', !!remoteControlActive); }
         }
-        function renderRemoteConfig(config, projects) {
-            if (Array.isArray(projects)) {
-                const sel = document.getElementById('remote-boards');
-                if (sel) {
-                    const chosen = new Set((config && config.boards) || []);
-                    sel.innerHTML = '';
-                    projects.forEach(name => {
-                        const opt = document.createElement('option');
-                        opt.value = name; opt.textContent = name;
-                        if (chosen.has(name)) opt.selected = true;
-                        sel.appendChild(opt);
-                    });
-                }
+        let _remoteWorkspaces = [];
+        function renderRemoteConfig(config, payload) {
+            payload = payload || {};
+            // Workspace dropdown
+            const wsSel = document.getElementById('remote-workspace');
+            if (wsSel && Array.isArray(payload.workspaces)) {
+                _remoteWorkspaces = payload.workspaces;
+                wsSel.innerHTML = '';
+                payload.workspaces.forEach(w => {
+                    const opt = document.createElement('option');
+                    opt.value = w.workspaceRoot;
+                    opt.textContent = w.label;
+                    if (w.active) opt.selected = true;
+                    wsSel.appendChild(opt);
+                });
             }
+
+            // Board checkboxes (base board '' rendered as "No Project")
+            const list = document.getElementById('remote-boards-list');
+            const boardKeys = Array.isArray(payload.boardKeys)
+                ? payload.boardKeys
+                : ['', ...((payload.projects) || [])];   // legacy fallback
+            if (list) {
+                const chosen = new Set((config && config.boards) || []);
+                list.innerHTML = '';
+                boardKeys.forEach(key => {
+                    const row = document.createElement('label');
+                    row.className = 'remote-checkbox-row';
+                    const cb = document.createElement('input');
+                    cb.type = 'checkbox';
+                    cb.value = key;                       // '' for the base board
+                    cb.checked = chosen.has(key);
+                    cb.dataset.role = 'remote-board';
+                    const span = document.createElement('span');
+                    span.textContent = key === '' ? 'No Project (base workspace board)' : key;
+                    row.appendChild(cb);
+                    row.appendChild(span);
+                    list.appendChild(row);
+                });
+            }
+
             if (config) {
                 const silent = document.getElementById('remote-silent-sync');
                 if (silent) silent.checked = config.silentSync === true;
-                const mode = document.getElementById('remote-ping-mode');
-                if (mode) mode.value = config.pingMode === 'constant' ? 'constant' : 'manual';
+                const mode = config.pingMode === 'constant' ? 'constant' : 'manual';
+                const radio = document.querySelector(`input[name="remote-ping-mode"][value="${mode}"]`);
+                if (radio) radio.checked = true;
                 const freq = document.getElementById('remote-ping-frequency');
                 if (freq) freq.value = config.pingFrequencySeconds || 60;
             }
         }
-        document.getElementById('btn-save-remote-config')?.addEventListener('click', () => {
-            const boardsSel = document.getElementById('remote-boards');
-            const boards = boardsSel ? Array.from(boardsSel.selectedOptions).map(o => o.value) : [];
-            const config = {
+
+        function remoteCollectConfig() {
+            const boards = Array.from(
+                document.querySelectorAll('#remote-boards-list input[data-role="remote-board"]:checked')
+            ).map(cb => cb.value);   // keeps '' — do NOT filter by truthiness
+            const modeEl = document.querySelector('input[name="remote-ping-mode"]:checked');
+            return {
                 boards,
                 silentSync: document.getElementById('remote-silent-sync')?.checked === true,
-                pingMode: document.getElementById('remote-ping-mode')?.value === 'constant' ? 'constant' : 'manual',
-                pingFrequencySeconds: Math.min(120, Math.max(30, parseInt(document.getElementById('remote-ping-frequency')?.value, 10) || 60))
+                pingMode: modeEl && modeEl.value === 'constant' ? 'constant' : 'manual',
+                pingFrequencySeconds: Math.min(120, Math.max(30,
+                    parseInt(document.getElementById('remote-ping-frequency')?.value, 10) || 60)),
             };
+        }
+
+        function remoteAutosave() {
+            const wsSel = document.getElementById('remote-workspace');
+            const workspaceRoot = wsSel ? wsSel.value : undefined;
+            const config = remoteCollectConfig();
             const statusEl = document.getElementById('remote-config-status');
             if (statusEl) statusEl.textContent = 'Saved.';
-            postKanbanMessage({ type: 'setRemoteConfig', config });
+            postKanbanMessage({ type: 'setRemoteConfig', config, workspaceRoot });
+        }
+
+        // Autosave on any control change (delegated, so it covers dynamically-added checkboxes)
+        document.getElementById('remote-tab-content')?.addEventListener('change', (e) => {
+            if (e.target.id === 'remote-workspace') {
+                // Switching workspace: load THAT workspace's own config (no save).
+                postKanbanMessage({ type: 'getRemoteConfig', workspaceRoot: e.target.value });
+                return;
+            }
+            remoteAutosave();
+        });
+        // Debounce the frequency text input so rapid keystrokes don't spam setRemoteConfig
+        // (each call writes the DB config row and may reschedule the ping timer).
+        let _remoteFreqTimer;
+        document.getElementById('remote-ping-frequency')?.addEventListener('input', () => {
+            clearTimeout(_remoteFreqTimer);
+            _remoteFreqTimer = setTimeout(remoteAutosave, 400);
         });
         document.getElementById('btn-remote-control')?.addEventListener('click', () => {
             postKanbanMessage({ type: remoteControlActive ? 'stopRemoteControl' : 'startRemoteControl' });

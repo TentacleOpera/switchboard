@@ -1446,6 +1446,39 @@ export class KanbanProvider implements vscode.Disposable {
         return service;
     }
 
+    /**
+     * Build the full `remoteConfig` webview payload for a workspace. Shared by the
+     * getRemoteConfig and setRemoteConfig handlers so both responses stay symmetric —
+     * the autosave echo MUST carry boardKeys/workspaces or the webview checkbox list
+     * collapses to just "No Project" after the first save.
+     */
+    private async _buildRemoteConfigPayload(
+        workspaceRoot: string,
+        config: RemoteConfig,
+        rc: RemoteControlService
+    ): Promise<Record<string, unknown>> {
+        const db = this._getKanbanDb(workspaceRoot);
+        const workspaceId = (await db.ensureReady()) ? (await db.getWorkspaceId() || '') : '';
+        const projects = workspaceId ? await db.getProjects(workspaceId) : [];
+        // The base workspace board is the empty-string project key ('').
+        // Surface it explicitly so the UI can offer a "No Project" checkbox.
+        const boardKeys = ['', ...projects];
+        const workspaces = this._getWorkspaceItems().map(item => ({
+            workspaceRoot: item.workspaceRoot,
+            label: item.label,
+            active: item.workspaceRoot === workspaceRoot,
+        }));
+        return {
+            type: 'remoteConfig',
+            config,
+            projects,                 // legacy field, kept
+            boardKeys,                // ['', ...projectNames]
+            workspaceRoot,            // echo which workspace this config is for
+            workspaces,               // dropdown options
+            active: rc.isActive,
+        };
+    }
+
     /** §9 — apply a Linear-driven column move, then dispatch the destination column's agent. */
     private async _remoteApplyColumnMove(workspaceRoot: string, plan: KanbanPlanRecord, targetColumn: string): Promise<void> {
         await this.moveCardToColumnByPlanFile(workspaceRoot, plan.planFile, targetColumn);
@@ -4991,10 +5024,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if (workspaceRoot) {
                     const rc = this._getRemoteControl(workspaceRoot);
                     const config = await rc.getConfig();
-                    const db = this._getKanbanDb(workspaceRoot);
-                    const workspaceId = (await db.ensureReady()) ? (await db.getWorkspaceId() || '') : '';
-                    const projects = workspaceId ? await db.getProjects(workspaceId) : [];
-                    this._panel?.webview.postMessage({ type: 'remoteConfig', config, projects, active: rc.isActive });
+                    const payload = await this._buildRemoteConfigPayload(workspaceRoot, config, rc);
+                    this._panel?.webview.postMessage(payload);
                 }
                 break;
             }
@@ -5005,7 +5036,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     await rc.setConfig(msg.config as RemoteConfig);
                     this._remoteControlActive = rc.isActive;
                     const config = await rc.getConfig();
-                    this._panel?.webview.postMessage({ type: 'remoteConfig', config, active: rc.isActive });
+                    const payload = await this._buildRemoteConfigPayload(workspaceRoot, config, rc);
+                    this._panel?.webview.postMessage(payload);
                 }
                 break;
             }

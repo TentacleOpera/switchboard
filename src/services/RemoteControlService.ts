@@ -83,7 +83,7 @@ export class RemoteControlService {
             if (!raw) { return { ...DEFAULT_REMOTE_CONFIG }; }
             const parsed = JSON.parse(raw);
             return {
-                boards: Array.isArray(parsed.boards) ? parsed.boards.map((b: unknown) => String(b)).filter(Boolean) : [],
+                boards: this._normalizeBoards(parsed.boards),
                 silentSync: parsed.silentSync === true,
                 pingMode: parsed.pingMode === 'constant' ? 'constant' : 'manual',
                 pingFrequencySeconds: this._clampFrequency(parsed.pingFrequencySeconds)
@@ -97,7 +97,7 @@ export class RemoteControlService {
         const db = this._deps.getDb();
         if (!db || !(await db.ensureReady())) { return; }
         const normalized: RemoteConfig = {
-            boards: Array.isArray(config.boards) ? config.boards.map((b) => String(b)).filter(Boolean) : [],
+            boards: this._normalizeBoards(config.boards),
             silentSync: config.silentSync === true,
             pingMode: config.pingMode === 'constant' ? 'constant' : 'manual',
             pingFrequencySeconds: this._clampFrequency(config.pingFrequencySeconds)
@@ -110,6 +110,17 @@ export class RemoteControlService {
             // Restart the timer with the new cadence.
             this._scheduleTimer(normalized.pingFrequencySeconds);
         }
+    }
+
+    /**
+     * Normalize the persisted board list. Keeps the empty string '' (the base
+     * workspace board key) but rejects null/undefined/non-string junk. A plain
+     * .filter(Boolean) would silently drop '' and the "No Project" board could
+     * never round-trip.
+     */
+    private _normalizeBoards(input: unknown): string[] {
+        if (!Array.isArray(input)) { return []; }
+        return input.filter((b): b is string => typeof b === 'string');
     }
 
     private _clampFrequency(value: unknown): number {

@@ -220,3 +220,52 @@ After making all changes, run a final grep for `toAgentRef`, `'@' +`, and `start
 ## Recommendation
 
 Complexity is 3 (routine, single-concept change across multiple files, all following the same pattern). **Send to Coder.**
+
+---
+
+## Reviewer Pass — Completed
+
+**Reviewer:** Direct in-place reviewer pass (Grumpy + Balanced).
+**Date:** 2026-06-25
+
+### Stage 1 — Grumpy Findings (severity-tagged)
+
+| Severity | File:Line | Finding |
+|----------|-----------|---------|
+| NIT | `src/webview/sharedUtils.js:7-10` | `toAgentRef` passthrough has a redundant `if (!absPath)` guard — both branches return `absPath`. Per-spec; harmless. |
+| NIT | `src/services/PlanningPanelProvider.ts:4671` | `const ticketRefs = paths;` is a pointless alias. Per-spec (minimizes diff). |
+| NIT | `src/services/PlanningPanelProvider.ts:5570` | `const linkRef = link;` pointless alias. Per-spec. |
+| NIT | `src/services/PlanningPanelProvider.ts:5735` | `const docRef = docPath;` pointless alias. Per-spec. |
+| NIT | `src/services/DesignPanelProvider.ts:1512` | `const linkRef = linkPath;` pointless alias. Per-spec. |
+
+No CRITICAL or MAJOR findings.
+
+### Stage 2 — Balanced Synthesis
+
+All 8 in-scope changes verified correct and matching the plan exactly. Out-of-scope `@` usages (TaskViewerProvider prompt generation, ClickUp mentions, `_handleLinkToFolder`) correctly untouched. Test assertions correctly inverted. No fixes required — all NITs are per-spec and not worth the scope expansion to clean up.
+
+### Code Fixes Applied
+
+None.
+
+### Files Changed (verified)
+
+| File | Change |
+|------|--------|
+| `src/webview/sharedUtils.js` | `toAgentRef` → passthrough (returns `absPath` unchanged) |
+| `src/services/PlanningPanelProvider.ts` | 4 locations: `paths.push(filePath)`, `ticketRefs = paths`, `linkRef = link`, `docRef = docPath` |
+| `src/services/DesignPanelProvider.ts` | 1 location: `linkRef = linkPath` |
+| `src/test/tickets-link-to-ticket-regression.test.js` | Assertions inverted: absence of `'@' + filePath`, presence of `paths.push(filePath)` |
+
+### Validation Results
+
+- **Final grep** (`'@' +`, `startsWith('@')`) across `src/`: only matches are test-file negative assertions (expected). PASS
+- **Out-of-scope verification**: `TaskViewerProvider.ts` `@${planFilePath}` intact; `_handleLinkToFolder` uses `resolvedFolder` without prefix. PASS
+- **Compilation**: Skipped per session directives.
+- **Tests**: Skipped per session directives.
+
+### Remaining Risks
+
+- **Low**: The `toAgentRef` function name is now a misnomer (documented in JSDoc). Future readers may be confused. Acceptable technical debt per plan.
+- **Low**: The redundant guard and aliases in passthrough/alias variables are cosmetic debt. Defer to a future refactor.
+- **None functional**: No behavioral risks. All clipboard operations now produce clean absolute paths.
