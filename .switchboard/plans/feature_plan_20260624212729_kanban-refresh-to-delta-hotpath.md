@@ -176,3 +176,54 @@ None. All call-site line numbers, the `_reloadLastCards` absence, the `handleKan
 ---
 
 **Recommendation:** Complexity is 7/10 (the `_advanceSessionsInColumn` return-shape refactor + the shared `handleKanbanForwardMove` obstacle + run-sheet side-effect preservation). **Send to Lead Coder.**
+
+---
+
+## Reviewer Pass (executed in-place)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *Slams chair back.* You know what I love? A plan that spends six paragraphs agonizing over a `_reloadLastCards` ghost and a `handleKanbanForwardMove` "hidden obstacle," then quietly drops the one side effect that actually mattered. Let me read you the riot act.
+
+- **CRITICAL — `promptAll` epic-cascade amnesia.** `KanbanProvider.ts:6026` & `6050` (pre-fix). The pre-conversion path was `kanbanForwardMove` → `_applyManualKanbanColumnChange` → `_updateKanbanColumnForSession` → **`moveCardToColumn`** (`TaskViewerProvider.ts:2204`), and `moveCardToColumn` **cascades epic subtasks** (`KanbanProvider.ts:4444-4448`, `updateColumnWithEpicCascade`). Your "DB-first" replacement called `dbPa.updateColumn` / `dbPa2.updateColumn` directly — which does **zero** cascade. So the moment a user hits prompt-all on a column holding an epic parent, the parent moves and its subtasks are **orphaned in the source column**. Worse: your own `_visibleColumnCards` helper (`KanbanProvider.ts:362`, `!card.epicId`) deliberately excludes subtasks from `sourceCards` because they roll up under the epic — so the subtasks were NEVER advanced independently either. Net: subtasks stranded, epic/subtask column divergence, exactly the class of bug `kanban-subtask-column-leak-regression.test.js` exists to prevent. The plan's "the DB-first blocks already persist" line was true and **irrelevant** — persisting the parent is not persisting the family. You optimized the redraw and broke the data model. Fix: use `moveCardToColumn` (epic-aware, DB-first, no refresh) — which is *literally what `promptOnDrop`'s general branch already does* (`KanbanProvider.ts:5503`). Consistency, people.
+
+- **MAJOR (downgraded to NIT after fix) — run-sheet write was correct, just for the wrong reason.** `recordRunSheetForColumnMove` → `_updateSessionRunSheet` writes a `move-to-<target>` event (`TaskViewerProvider.ts:3068-3074`, `14599-14605`), and `deriveKanbanColumn` **does** consume `move-to-X` slugs (`kanbanColumnDerivationImpl.js:50-64`). So the "preserve the run-sheet workflow-event write" requirement is genuinely satisfied — the next structural refresh re-derives the same column. Good. But the plan framed this as "add an equivalent `log.updateRunSheet` push" and the implementation used `recordRunSheetForColumnMove` instead. Functionally equivalent (it calls `updateRunSheet` internally). Not a defect — noting only because the plan's prescription and the implementation's mechanism diverged and nobody flagged it.
+
+- **NIT — `batchLowComplexity` status message hardcodes `CODER CODED`.** `KanbanProvider.ts:5579`. The helper derives the target dynamically (called with `workflow: undefined`, so derivation falls back to prior events) and the delta correctly uses the returned pairs via `_postMoveCardsByTarget`. The user-facing string still says "to CODER CODED" regardless of the actual derived column. Cosmetic; pre-existing pattern (the helper's dynamic derivation predates this plan). Defer.
+
+- **NIT — `testingFailed` does not cascade epic subtasks.** `KanbanProvider.ts:6495` uses `db.updateColumn` directly. Pre-conversion `testingFailed` **also** used `db.updateColumn` directly (no `kanbanForwardMove`, no `moveCardToColumn`) — so this is **parity, not a regression**. An epic sent back to `LEAD CODED` on a testing-failure report leaves its subtasks behind. Pre-existing behavior; out of this plan's scope. Flag for Part 2 if epic-failure handling matters.
+
+- **NIT — `codeMapSelected` still routes through `kanbanForwardMove`.** `KanbanProvider.ts:6361, 6380`. The plan excluded `codeMapSelected` claiming "No `_refreshBoard` exists. Already not refreshing." Technically true about `_refreshBoard`, but `kanbanForwardMove` → `refreshUI` **is** a full redraw — so the exclusion rationale was half-wrong. It's correctly out of scope (no `moveCards` infra wired there), but the plan should have said "excluded; still full-refreshes via kanbanForwardMove — defer to a later part." Not a regression; just sloppy reasoning.
+
+- **CLEAN — everything else.** `_advanceSessionsInColumn` return-shape refactor (`KanbanProvider.ts:3688`) ✓. `_postMoveCardsByTarget` helper (`KanbanProvider.ts:3768`) ✓. `batchPlannerPrompt`/`batchLowComplexity` start-refresh dropped, pairs → per-group deltas (`5532`, `5560`) ✓. `promptOnDrop` custom-user + general branches converted, `moveCardToColumn` + `recordRunSheetForColumnMove` + per-group `moveCards`, `promptOnDropResult` preserved (`5441-5530`) ✓. `testingFailed` start/trailing refreshes dropped, `moveCards` to `LEAD CODED` (`6446-6518`) ✓. Excluded handlers (`julesLowComplexity` 5607, `julesSelected` 6082, `splitterSelected` 6109, `triggerAction` 5051/5094, `triggerBatchAction` 5119) all retain their reconciliation refreshes ✓. Zero `_reloadLastCards` references ✓. Webview `moveCards` planId-primary reconcile confirmed (`kanban.html:6079`) — no webview change needed ✓. Test stubs already updated for the return-shape change (`kanban-complexity.test.ts:324,380`) ✓.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is:** `_advanceSessionsInColumn` refactor + `_postMoveCardsByTarget`; `batchPlannerPrompt`/`batchLowComplexity`/`testingFailed`/`promptOnDrop` conversions; all excluded-handler refreshes; run-sheet write via `recordRunSheetForColumnMove`.
+
+**Fix now (CRITICAL):** `promptAll` epic-cascade regression — replace the direct `dbPa.updateColumn`/`dbPa2.updateColumn` blocks in both branches with `this.moveCardToColumn(workspaceRoot, sid, target)`. This restores the pre-conversion cascade (which flowed through `moveCardToColumn` via `kanbanForwardMove`), keeps the DB-first persist, preserves the `_autoCommitIfCodeReviewTransition` + `queueIntegrationSyncForSession` side effects that the old `kanbanForwardMove` path also performed, and still emits the targeted `moveCards` delta with no full refresh. `_schedulePlanStateWrite` is a no-op (`KanbanProvider.ts:55-56`) so dropping it is lossless. This makes `promptAll` consistent with `promptOnDrop`'s general branch.
+
+**Defer (NIT):** `batchLowComplexity` hardcoded status string; `testingFailed`/`codeMapSelected` epic-cascade + full-refresh gaps (pre-existing / out-of-scope).
+
+### Code Fixes Applied
+
+**File: `src/services/KanbanProvider.ts`**
+- `promptAll` PLAN REVIEWED branch (~line 6022-6028): replaced `dbPa.updateColumn` loop + `_schedulePlanStateWrite` with `this.moveCardToColumn(workspaceRoot, sid, targetCol)` — restores epic subtask cascade.
+- `promptAll` else branch (~line 6044-6049): replaced `dbPa2.updateColumn` loop + `_schedulePlanStateWrite` with `this.moveCardToColumn(workspaceRoot, sid, nextCol)` — same.
+- Updated accompanying comments to document the epic-cascade rationale.
+
+No other files modified in this review pass.
+
+### Validation Results
+
+- **Compilation:** Skipped per session directive.
+- **Automated tests:** Skipped per session directive. Noted: `kanban-complexity.test.ts` and `kanban-batch-prompt-regression.test.js` already reflect the `_advanceSessionsInColumn` return-shape change; `pair-programming-comprehensive.test.ts` `kanbanForwardMove` assertions target `codeMapSelected` (excluded, still uses `kanbanForwardMove`) so they remain green; `kanban-subtask-column-leak-regression.test.js` asserts `promptAll` uses `_visibleColumnCards` (still satisfied) — the epic-cascade fix is complementary to that test's intent (subtasks roll up under the epic and follow it).
+- **Static checks performed:** grep-verified zero `_reloadLastCards` references; no dangling `dbPa`/`dbPa2` identifiers in `promptAll` after edit; webview `moveCards` handler confirmed planId-primary; `moveCardToColumn` epic-cascade path confirmed (`updateColumnWithEpicCascade`); `recordRunSheetForColumnMove` → `deriveKanbanColumn` `move-to-X` consumption confirmed.
+- **Manual verification:** Still required per the plan's Verification Plan (Steps 1–9), against an installed VSIX. **Add to Step 1:** verify an epic parent advanced via prompt-all carries its subtasks to the target column (the cascade regression scenario).
+
+### Remaining Risks
+
+1. **`testingFailed` epic subtask stranding** (pre-existing, not a regression) — an epic moved to `LEAD CODED` on a failure report leaves subtasks behind. Defer to Part 2 if epic-failure reconciliation is desired.
+2. **`codeMapSelected` full refresh** — still routes through `kanbanForwardMove` → `refreshUI` (`KanbanProvider.ts:6361,6380`). Out of scope here; the plan's exclusion rationale ("already not refreshing") was inaccurate. Candidate for a future delta-conversion part.
+3. **`moveCardToColumn` failure is not surfaced on the `moveCards` delta path** — if a per-card persist returns `false`, the `moveCards` delta still posts for that id (pre-existing pattern shared with `promptOnDrop`/`moveSelected`). Card would visually move then revert on next structural refresh. Not introduced by this plan; noting for completeness.
+4. **`batchLowComplexity` target derivation with `workflow: undefined`** — the helper pushes an event with no workflow, so `deriveKanbanColumn` falls back to prior events to pick the column. This is unchanged pre-conversion behavior; the delta correctly uses the returned pairs. Flagged only because the status message's hardcoded `CODER CODED` may occasionally mismatch the actual derived column.

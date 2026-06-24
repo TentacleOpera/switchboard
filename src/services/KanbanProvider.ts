@@ -3382,6 +3382,20 @@ This step is what moves the plan forward in the Switchboard pipeline.
         }
     }
 
+    private async _nextPlannerTerminals(workspaceRoot: string, count = 1): Promise<string[] | null> {
+        const tvp = this._taskViewerProvider;
+        if (!tvp) return null;
+        const { terminals, locationKey } = await tvp.getRoleTerminalSet('planner', workspaceRoot);
+        if (terminals.length === 0) return null;
+        const cursor = tvp.getPlannerRotationCursor(locationKey);
+        const picked: string[] = [];
+        for (let i = 0; i < count; i++) {
+            picked.push(terminals[(cursor + i) % terminals.length]);
+        }
+        await tvp.advancePlannerRotationCursor(locationKey, count);
+        return picked;
+    }
+
     private async _distributePlannerDispatch(
         workspaceRoot: string,
         sourceCards: KanbanCard[],
@@ -3461,28 +3475,37 @@ This step is what moves the plan forward in the Switchboard pipeline.
         // persisted rotation cursor for this terminal set. A batch of N fans out
         // one-per-terminal (cursor..cursor+N-1); sequential single moves continue
         // the rotation instead of always restarting at terminal 0.
-        const cursor = tvp.getPlannerRotationCursor(locationKey);
+        const picked = await this._nextPlannerTerminals(workspaceRoot, plans.length);
         const buckets = new Map<string, string[]>();
         plans.forEach((card, i) => {
-            const term = terminals[(cursor + i) % terminals.length];
+            const term = picked ? picked[i] : terminals[i % terminals.length];
             if (!buckets.has(term)) buckets.set(term, []);
             buckets.get(term)!.push(this._cardId(card));
         });
 
-        // Dispatch per bucket with per-bucket failure isolation
-        for (const [terminalName, ids] of buckets) {
-            try {
-                await vscode.commands.executeCommand(
+        // Dispatch buckets concurrently — distinct terminals are independent processes,
+        // so their per-send settle delays should overlap, not stack. Each bucket is ONE
+        // unified prompt for its terminal (handleKanbanBatchTrigger generates a single
+        // prompt per bucket), so there is no intra-bucket send loop to serialize.
+        // NOTE: clipboard-paste portions (~1s each for /clear and the prompt) are
+        // serialized by the global _clipboardLock in terminalUtils.ts, so the paste
+        // steps queue; the setTimeout settle delays (~4s/bucket) overlap. Net speedup
+        // is ~2.5-3x, NOT single-terminal time.
+        const bucketEntries = [...buckets.entries()];
+        const bucketResults = await Promise.allSettled(
+            bucketEntries.map(([terminalName, ids]) =>
+                vscode.commands.executeCommand(
                     'switchboard.triggerBatchAgentFromKanban',
                     'planner', ids, 'improve-plan', workspaceRoot, terminalName
-                );
-            } catch (err) {
-                console.error(`[KanbanProvider] Distribute dispatch to '${terminalName}' failed:`, err);
+                )
+            )
+        );
+        bucketResults.forEach((r, i) => {
+            if (r.status === 'rejected') {
+                const terminalName = bucketEntries[i][0];
+                console.error(`[KanbanProvider] Distribute dispatch to '${terminalName}' failed:`, r.reason);
             }
-        }
-
-        // Advance the rotation so the next move continues after the last plan's terminal.
-        await tvp.advancePlannerRotationCursor(locationKey, plans.length);
+        });
 
         const limitSuffix = limit && ordered.length > terminals.length
             ? ` (${ordered.length - terminals.length} plan(s) held — limit ON)`
@@ -5034,12 +5057,18 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     const canRunConfiguredDispatch = dispatchMode === 'prompt' || canDispatch;
                     if (canRunConfiguredDispatch) {
                         const instruction = role === 'planner' ? 'improve-plan' : undefined;
+                        let targetTerminalOverride: string | undefined;
+                        if (role === 'planner' && dispatchMode !== 'prompt') {
+                            const picked = await this._nextPlannerTerminals(workspaceRoot, 1);
+                            targetTerminalOverride = picked?.[0];
+                        }
                         const dispatched = await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(role, [sessionId], {
                             targetColumn,
                             dragDropMode: dispatchMode,
                             additionalInstructions: dispatchSpec.triggerPrompt,
                             instruction,
-                            workspaceRoot: workspaceRoot || undefined
+                            workspaceRoot: workspaceRoot || undefined,
+                            targetTerminalOverride
                         });
                         if (dispatched && role === 'lead') {
                             const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
@@ -5071,11 +5100,16 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         }
                     } else {
                         const instruction = role === 'planner' ? 'improve-plan' : undefined;
-                        const dispatched = await vscode.commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot);
+                        let targetTerminalOverride: string | undefined;
+                        if (role === 'planner') {
+                            const picked = await this._nextPlannerTerminals(workspaceRoot, 1);
+                            targetTerminalOverride = picked?.[0];
+                        }
+                        const dispatched = await vscode.commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot, targetTerminalOverride);
                         if (dispatched && workspaceRoot) {
                             // Record dispatch identity (TaskViewerProvider does NOT call this for drag-drop
                             // because explicitTargetColumn is empty when triggerAgentFromKanban has no options)
-                            await this._recordDispatchIdentity(workspaceRoot, sessionId, targetColumn);
+                            await this._recordDispatchIdentity(workspaceRoot, sessionId, targetColumn, targetTerminalOverride);
 
                             // Pair programming: when a high-complexity card is dispatched to Lead,
                             // also dispatch the Coder terminal with the Routine prompt.
@@ -6019,19 +6053,17 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         for (const [role, sids] of groups) {
                             if (sids.length === 0) { continue; }
                             const targetCol = this._targetColumnForDispatchRole(role);
-                            // DB-first
-                            const dbPa = this._getKanbanDb(workspaceRoot);
-                            if (await dbPa.ensureReady()) {
-                                for (const sid of sids) {
-                                    await dbPa.updateColumn(sid, targetCol);
-                                    _schedulePlanStateWrite(dbPa, workspaceRoot, sid, targetCol,
-                                        targetCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
-                                }
+                            // Persist via moveCardToColumn (DB-first, epic-cascade aware) — matches the
+                            // pre-conversion kanbanForwardMove path which routed through moveCardToColumn.
+                            // A direct db.updateColumn would skip the epic subtask cascade and orphan
+                            // subtasks in the source column when an epic parent is advanced.
+                            for (const sid of sids) {
+                                await this.moveCardToColumn(workspaceRoot, sid, targetCol);
                             }
                             this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sids, targetColumn: targetCol });
-                            // Column already persisted DB-first above. Preserve only the run-sheet
-                            // workflow-event write that kanbanForwardMove (via _applyManualKanbanColumnChange)
-                            // performed — drop its trailing full refreshUI that defeated this delta.
+                            // Column already persisted above. Preserve only the run-sheet workflow-event
+                            // write that kanbanForwardMove (via _applyManualKanbanColumnChange) performed —
+                            // drop its trailing full refreshUI that defeated this delta.
                             for (const sid of sids) {
                                 await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
                             }
@@ -6043,19 +6075,16 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     }
                     this._notifySkippedUnknownComplexity(skippedCount, knownIds.length);
                 } else {
-                    // DB-first
-                    const dbPa2 = this._getKanbanDb(workspaceRoot);
-                    if (await dbPa2.ensureReady()) {
-                        for (const sid of sessionIds) {
-                            await dbPa2.updateColumn(sid, nextCol);
-                            _schedulePlanStateWrite(dbPa2, workspaceRoot, sid, nextCol,
-                                nextCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
-                        }
+                    // Persist via moveCardToColumn (DB-first, epic-cascade aware) — matches the
+                    // pre-conversion kanbanForwardMove path. A direct db.updateColumn would skip the
+                    // epic subtask cascade and orphan subtasks when an epic parent is advanced.
+                    for (const sid of sessionIds) {
+                        await this.moveCardToColumn(workspaceRoot, sid, nextCol);
                     }
                     this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sessionIds, targetColumn: nextCol });
-                    // Column already persisted DB-first above. Preserve only the run-sheet
-                    // workflow-event write that kanbanForwardMove (via _applyManualKanbanColumnChange)
-                    // performed — drop its trailing full refreshUI that defeated this delta.
+                    // Column already persisted above. Preserve only the run-sheet workflow-event
+                    // write that kanbanForwardMove (via _applyManualKanbanColumnChange) performed —
+                    // drop its trailing full refreshUI that defeated this delta.
                     for (const sid of sessionIds) {
                         await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
                     }

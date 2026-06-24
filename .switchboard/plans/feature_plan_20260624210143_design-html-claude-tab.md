@@ -318,3 +318,65 @@ Manual verification steps (exercise against the installed VSIX, not `dist/`):
 ---
 
 **Recommendation:** Complexity 6 → **Send to Coder**.
+
+---
+
+## Reviewer Pass — 2026-06-25
+
+### Stage 1: Grumpy Principal Engineer
+
+> *"You know what I love? When a plan spends 120 lines threading a `target: 'claude'` field through four backend touchpoints to prevent cross-tab auto-refresh corruption, and then the implementer actually does it. That's not a compliment — that's the bare minimum. Let's see what they broke."*
+
+**CRITICAL — none.** The load-bearing routing (`target: 'claude'` through all 4 touchpoints), the `_activeClaudePreview` isolation slot, and the auto-refresh parallel path are all correctly implemented. I checked every single one. Painfully. They match the plan.
+
+**MAJOR — `claudePreviewCollapsed` doesn't persist.** `design.js` — the sidebar collapse state for the Claude pane is written to `state.claudePreviewCollapsed` on toggle (L402) and read in `applySidebarState` (L4071) and `renderClaudeDocs` (L4195), but it was **never added to the state init object** (L7-55) nor to `saveState()` (L1477-1486). Every other pane — html, design, images, briefs — has `XPreviewCollapsed: persistedState.XPreviewCollapsed || false` in state init AND `XPreviewCollapsed: state.XPreviewCollapsed` in `saveState()`. The Claude pane has neither. Result: collapse the Claude sidebar, reload the webview, and it's back open. The toggle calls `saveState()` which silently drops the field because it's not in the spread. This is a copy-paste omission, not a design choice.
+
+**NIT — `activeClaudeDocId` undeclared in state init.** Used at L2360, L4095, L4240 but never declared in the state object. Works because JS doesn't care, but it's sloppy — every other `active*DocId` field is declared. The `isSelected` check at L4240 relies on `undefined !== doc.id` which happens to be correct, but relying on accidental `undefined` is how we get Heisenbugs later.
+
+**NIT — Claude `handlePreviewReady` branch ignores `isImage`.** The HTML branch (L1028-1042) handles `isImage && webviewUri` to render images in a dedicated container. The Claude branch (L975-1011) doesn't. Currently moot because `renderClaudeDocs` filters to `.html`/`.htm` only, so images can never enter the Claude tree. But if someone later relaxes that filter, the Claude pane will silently swallow image previews — the loading state hides, the initial state hides, and nothing shows. Defensive gap, not a live bug.
+
+**NIT — Shared debounce timer in `_autoRefreshHtmlPreview`.** The refactored `checkAndRefresh` closure is called for both `_activeHtmlPreview` and `_activeClaudePreview`, but they share a single `_autoRefreshDebounce` timer. If both slots point to the same file and it changes, the second call clears the first's timer — only the Claude refresh fires, the HTML refresh is lost. Practically impossible (same file previewed in both tabs simultaneously), but the timer should be per-target if we're being clean.
+
+**OBSERVATION — Uncommitted backend.** `DesignPanelProvider.ts` and `sharedDefaults.js` changes are in the working tree but NOT in the `9d3d2bb` commit. The committed state is broken (frontend sends messages the backend doesn't handle). Process note, not a code defect — the user will commit the remaining files.
+
+**OBSERVATION — `setup.html` piggybacked.** The `9d3d2bb` commit includes unrelated `setup.html` changes (autosave hydration gating for customAgents/customKanbanColumns). Good fix, wrong commit. Not this plan's scope.
+
+**POSITIVE — Phase 2 exceeded spec.** `sharedDefaults.js` adds `claude_designer` to `DEFAULT_VISIBLE_AGENTS` (false), `DEFAULT_ROLE_CONFIG`, `BUILT_IN_AGENT_LABELS`, AND `ROLE_ADDONS` — the plan didn't explicitly require the `ROLE_ADDONS` entry but the setup UI needs it to render the agent's addon controls. Good catch by the implementer. `agentConfig.ts` correctly untouched per plan recommendation.
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Severity | Verdict | Action |
+|---|---|---|---|
+| `claudePreviewCollapsed` not persisted | MAJOR | **Fix now** — trivial, breaks UX | **Fixed:** added to state init + `saveState()` |
+| `activeClaudeDocId` undeclared | NIT | **Fix now** — trivial, prevents future confusion | **Fixed:** added to state init |
+| Claude branch missing `isImage` handling | NIT | **Defer** — moot today (tree filters to HTML only); document as known gap if filter ever relaxes | Not fixed (no live bug) |
+| Shared debounce timer | NIT | **Defer** — practically impossible to trigger; refactoring to per-target timers is over-engineering for zero user impact | Not fixed |
+| Uncommitted backend | OBSERVATION | **User action** — commit `DesignPanelProvider.ts` + `sharedDefaults.js` | Reported to user |
+| `setup.html` piggyback | OBSERVATION | **No action** — good fix, just in the wrong commit | Noted |
+
+### Code Fixes Applied
+
+1. **`src/webview/design.js` L28:** Added `claudePreviewCollapsed: persistedState.claudePreviewCollapsed || false` to state init.
+2. **`src/webview/design.js` L1482:** Added `claudePreviewCollapsed: state.claudePreviewCollapsed` to `saveState()`.
+3. **`src/webview/design.js` L17:** Added `activeClaudeDocId: null` to state init.
+4. **Image preview support (user-requested during review):** Claude Design can import image assets (PNG, SVG, JPG, etc.) alongside HTML. The original implementation filtered the Claude tree to `.html`/`.htm` only and had no `isImage` branch in `handlePreviewReady` — images would be invisible in the tree and would render as a blank pane if ever loaded. Changes applied:
+   - **`src/webview/design.html` L3851-3861:** Added `#image-preview-container-claude` (zoomable container + `<img id="image-preview-img-claude">`) to the Claude pane, mirroring the Images tab's `#image-preview-container-images` structure.
+   - **`src/webview/design.html` L2058:** Added `#image-preview-container-claude .zoomable-viewport` to the shared CSS viewport fill rule.
+   - **`src/webview/design.js` L366:** Registered `initZoomListeners('image-preview-container-claude', '.zoomable-viewport', 'claude')` so zoom/pan works on images.
+   - **`src/webview/design.js` L4216:** Relaxed `renderClaudeDocs` tree filter from `['.html', '.htm']` to `['.html', '.htm', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp']` — same extension list as `renderImagesDocs`.
+   - **`src/webview/design.js` L4236-4240:** Added `isImageFile` detection in the tree card renderer so image files show subtitle "Image" instead of "HTML".
+   - **`src/webview/design.js` L988-1032:** Added `isImage && webviewUri` branch to the Claude `handlePreviewReady` handler — hides the iframe, shows `#image-preview-container-claude`, sets `imageImg.src`, wires `fitToContainer` on load. Also added image container cleanup to the `iframeSrc` and `htmlContent` branches (hide image container + clear src when showing HTML).
+   - **`src/webview/design.js` L4132-4138:** Added image container hide + src clear to `loadClaudePreview` so a previous image doesn't linger behind the loading state when switching to an HTML file.
+
+### Validation Results
+
+- **Compilation:** Skipped per session directives.
+- **Tests:** Skipped per session directives.
+- **Manual review:** All 4 `target: 'claude'` routing touchpoints verified present and correct. `_activeClaudePreview` isolation slot verified. Auto-refresh parallel path verified. Phase 2 defaults verified migration-safe (merge path unions defaults with stored). `agentConfig.ts` correctly untouched.
+
+### Remaining Risks
+
+1. **Folder path semantics:** `claudeTargetFolder` from folder clicks is relative to the configured HTML source folder, not the workspace root. The fallback (`getClaudeWorkspaceRootFallback`) returns an absolute workspace root path. This means the prompt's `${folder}` is sometimes relative, sometimes absolute — depending on whether a folder was selected. The agent can handle both, but the inconsistency is a design-level issue (not introduced by the implementation — it follows the plan's spec).
+2. **Shared debounce timer:** latent if both panes ever preview the same file simultaneously.
+3. **Uncommitted files:** `DesignPanelProvider.ts` and `sharedDefaults.js` must be committed for the feature to function.
+4. **Image preview in Claude tab is untested:** The `isImage` branch and relaxed tree filter are new code paths. The backend `_buildAndSendPreview` already supports image files (the Images tab uses the same pipeline), but the Claude-specific `target: 'claude'` routing for images has not been exercised end-to-end. Needs manual testing per verification step 2/3 with an image file in a configured folder.

@@ -73,6 +73,7 @@ export class DesignPanelProvider implements vscode.Disposable {
     private _lastWebviewRootsSignature?: string;
     private _themeListenersRegistered = false;
     private _activeHtmlPreview: { sourceFolder: string; docId: string; sourceId: string } | null = null;
+    private _activeClaudePreview: { sourceFolder: string; docId: string; sourceId: string } | null = null;
     private _autoRefreshDebounce?: NodeJS.Timeout;
 
     constructor(
@@ -1318,6 +1319,9 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 if (message.tab !== 'html-preview') {
                     this._activeHtmlPreview = null;
                 }
+                if (message.tab !== 'claude') {
+                    this._activeClaudePreview = null;
+                }
                 if (this._isPolledTab(message.tab) && this._panel?.visible) {
                     this._startExternalFilePoll();
                 } else {
@@ -1439,21 +1443,60 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             case 'fetchPreview': {
                 const rawDocId = String(message.docId || '');
                 if (message.sourceId === 'html-folder' && message.sourceFolder) {
-                    this._activeHtmlPreview = {
-                        sourceFolder: path.resolve(message.sourceFolder),
-                        docId: rawDocId,
-                        sourceId: message.sourceId
-                    };
+                    if (message.target === 'claude') {
+                        this._activeClaudePreview = {
+                            sourceFolder: path.resolve(message.sourceFolder),
+                            docId: rawDocId,
+                            sourceId: message.sourceId
+                        };
+                    } else {
+                        this._activeHtmlPreview = {
+                            sourceFolder: path.resolve(message.sourceFolder),
+                            docId: rawDocId,
+                            sourceId: message.sourceId
+                        };
+                    }
                 } else {
-                    this._activeHtmlPreview = null;
+                    if (message.target === 'claude') {
+                        this._activeClaudePreview = null;
+                    } else {
+                        this._activeHtmlPreview = null;
+                    }
                 }
                 await this._buildAndSendPreview({
                     sourceId: message.sourceId,
                     sourceFolder: message.sourceFolder,
                     docId: rawDocId,
+                    target: message.target,
                     requestId: message.requestId,
                     isAutoRefreshed: false
                 });
+                break;
+            }
+
+            case 'copyClaudeImportPrompt': {
+                const prompt = String(message.prompt || '');
+                if (!prompt) break;
+                await vscode.env.clipboard.writeText(prompt);
+                vscode.window.showInformationMessage('Copied Claude import prompt to clipboard.');
+                break;
+            }
+
+            case 'sendClaudeImportPrompt': {
+                const prompt = String(message.prompt || '');
+                if (!prompt) break;
+                const terminal = vscode.window.activeTerminal;
+                if (!terminal) {
+                    vscode.window.showWarningMessage('No active terminal. Focus your running Claude Code terminal, then send.');
+                    break;
+                }
+                terminal.show();
+                try {
+                    const { sendRobustText } = require('./terminalUtils');
+                    await sendRobustText(terminal, prompt, true);
+                } catch (err: any) {
+                    vscode.window.showErrorMessage('Failed to send prompt to terminal: ' + err.message);
+                }
                 break;
             }
 
@@ -2238,6 +2281,9 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     case 'html-preview':
                         await this._sendHtmlDocsReady();
                         break;
+                    case 'claude':
+                        await this._sendHtmlDocsReady();
+                        break;
                     case 'images':
                         await this._sendImagesDocsReady();
                         break;
@@ -2851,9 +2897,10 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
         sourceFolder?: string;
         docId: string;
         requestId: number;
+        target?: string;
         isAutoRefreshed?: boolean;
     }): Promise<void> {
-        const { sourceId, sourceFolder, docId, requestId, isAutoRefreshed } = opts;
+        const { sourceId, sourceFolder, docId, requestId, target, isAutoRefreshed } = opts;
         try {
             if (!sourceFolder) throw new Error('sourceFolder is required');
             const relativePath = docId.includes(':')
@@ -2924,6 +2971,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 type: 'previewReady',
                 sourceId,
                 requestId,
+                target,
                 content: isImage ? '' : fileContent,
                 docName: path.basename(relativePath),
                 filePath: absPath,
@@ -2948,39 +2996,42 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
     }
 
     private _autoRefreshHtmlPreview(changedUri: vscode.Uri): void {
-        if (!this._activeHtmlPreview || !this._panel) return;
+        const changedPath = path.resolve(changedUri.fsPath);
 
-        const active = this._activeHtmlPreview;
-        const relativePath = active.docId.includes(':')
-            ? active.docId.substring(active.docId.indexOf(':') + 1)
-            : active.docId;
-        const activePath = path.resolve(active.sourceFolder, relativePath);
+        const checkAndRefresh = (active: typeof this._activeHtmlPreview, target?: string) => {
+            if (!active) return;
+            const relativePath = active.docId.includes(':')
+                ? active.docId.substring(active.docId.indexOf(':') + 1)
+                : active.docId;
+            const activePath = path.resolve(active.sourceFolder, relativePath);
 
-        // Only refresh when the changed file IS the file currently previewed.
-        if (path.resolve(changedUri.fsPath) !== activePath) return;
+            if (changedPath !== activePath) return;
 
-        // Debounce to match the 300ms tree-refresh and collapse rapid-save bursts.
-        if (this._autoRefreshDebounce) clearTimeout(this._autoRefreshDebounce);
-        this._autoRefreshDebounce = setTimeout(() => {
-            this._autoRefreshDebounce = undefined;
-            if (!this._activeHtmlPreview || !this._panel) return;
-            // Re-verify the active preview hasn't switched to a different file
-            // while we were debouncing — otherwise a stale refresh for the
-            // previously-previewed file would overwrite the new selection
-            // (requestId === -1 bypasses the frontend's request-matching guard).
-            const current = this._activeHtmlPreview;
-            const currentRel = current.docId.includes(':')
-                ? current.docId.substring(current.docId.indexOf(':') + 1)
-                : current.docId;
-            const currentPath = path.resolve(current.sourceFolder, currentRel);
-            if (currentPath !== activePath) return;
-            this._buildAndSendPreview({
-                sourceId: current.sourceId,
-                sourceFolder: current.sourceFolder,
-                docId: current.docId,
-                requestId: -1,            // frontend accepts -1 without request matching
-                isAutoRefreshed: true
-            });
-        }, 300);
+            if (this._autoRefreshDebounce) clearTimeout(this._autoRefreshDebounce);
+            this._autoRefreshDebounce = setTimeout(() => {
+                this._autoRefreshDebounce = undefined;
+                
+                const current = target === 'claude' ? this._activeClaudePreview : this._activeHtmlPreview;
+                if (!current || !this._panel) return;
+
+                const currentRel = current.docId.includes(':')
+                    ? current.docId.substring(current.docId.indexOf(':') + 1)
+                    : current.docId;
+                const currentPath = path.resolve(current.sourceFolder, currentRel);
+                if (currentPath !== activePath) return;
+
+                this._buildAndSendPreview({
+                    sourceId: current.sourceId,
+                    sourceFolder: current.sourceFolder,
+                    docId: current.docId,
+                    target,
+                    requestId: -1,
+                    isAutoRefreshed: true
+                });
+            }, 300);
+        };
+
+        checkAndRefresh(this._activeHtmlPreview);
+        checkAndRefresh(this._activeClaudePreview, 'claude');
     }
 }

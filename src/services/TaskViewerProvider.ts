@@ -161,6 +161,7 @@ type ConfiguredKanbanDispatchOptions = {
     workingDirectory?: string;
     /** Override git prohibition for this dispatch (false = allow git commands, used by worktree sessions). */
     gitProhibitionEnabled?: boolean;
+    targetTerminalOverride?: string;
 };
 
 type ClickUpSetupColumnState = {
@@ -2755,7 +2756,8 @@ Each plan file must include:
             dragDropMode: options.dragDropMode,
             additionalInstructions: String(options.additionalInstructions || '').trim() || undefined,
             instruction: options.instruction,
-            workspaceRoot: resolvedWorkspaceRoot
+            workspaceRoot: resolvedWorkspaceRoot,
+            targetTerminalOverride: options.targetTerminalOverride
         };
 
         if (options.dragDropMode === 'prompt') {
@@ -15405,6 +15407,12 @@ What would you like to find?`;
         // (copilot, claude, etc.), causing the subsequent prompt to concatenate
         // with the /clear input. Clipboard paste uses a different input path
         // that avoids this.
+        // NOTE: handleKanbanBatchTrigger may now be invoked concurrently across
+        // distinct terminals (see _distributePlannerDispatch). The /clear + prompt
+        // await chain below is safe to run in parallel across terminals because each
+        // operates on its own vscode.Terminal. The clipboard pastes are serialized by
+        // _clipboardLock (terminalUtils.ts), which is intentional and prevents
+        // clipboard corruption — do NOT remove that lock.
         const clearBeforePrompt = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true);
         const rawClearDelay = vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 2000);
         const clearDelay = Math.min(Math.max(rawClearDelay, 0), 10000);
@@ -15576,7 +15584,11 @@ What would you like to find?`;
 
 
         let targetAgent: string | undefined;
-        targetAgent = await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath);
+        if (options?.targetTerminalOverride && this._isValidAgentName(options.targetTerminalOverride)) {
+            targetAgent = options.targetTerminalOverride;
+        } else {
+            targetAgent = await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath);
+        }
 
         if (!targetAgent) {
             clearDispatchLock();

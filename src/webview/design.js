@@ -14,6 +14,7 @@
         activeDocFilePath: null,
         activeDocSourceFolder: null,
         activeFileType: null,
+        activeClaudeDocId: null,
         designEditMode: false,
         designEditOriginalContent: '',
         designSystemDocEnabled: false,
@@ -25,6 +26,7 @@
         designFolderPathsByRoot: persistedState.designFolderPathsByRoot || {},
         briefsFolderPathsByRoot: persistedState.briefsFolderPathsByRoot || {},
         htmlPreviewCollapsed: persistedState.htmlPreviewCollapsed || false,
+        claudePreviewCollapsed: persistedState.claudePreviewCollapsed || false,
         designPreviewCollapsed: persistedState.designPreviewCollapsed || false,
         imagesPreviewCollapsed: persistedState.imagesPreviewCollapsed || false,
         briefsPreviewCollapsed: persistedState.briefsPreviewCollapsed || false,
@@ -361,6 +363,7 @@
     // Initialize Zoom for Previews
     initZoomListeners('html-preview-wrapper', '.zoomable-viewport', 'html');
     initZoomListeners('claude-preview-wrapper', '.zoomable-viewport', 'claude');
+    initZoomListeners('image-preview-container-claude', '.zoomable-viewport', 'claude');
     initZoomListeners('image-preview-container', '.zoomable-viewport', 'html');
     initZoomListeners('image-preview-container-images', '.zoomable-viewport', 'images');
     initZoomListeners('image-preview-container-design', '.zoomable-viewport', 'design');
@@ -983,9 +986,28 @@
 
             const iframe = document.getElementById('claude-preview-frame');
             const iframeWrapper = document.getElementById('claude-preview-wrapper');
+            const imageContainer = document.getElementById('image-preview-container-claude');
+            const imageImg = document.getElementById('image-preview-img-claude');
             const clWrapper = document.querySelector('#claude-content .preview-panel-wrapper');
 
-            if (msg.iframeSrc) {
+            if (isImage && webviewUri) {
+                if (iframeWrapper) iframeWrapper.style.display = 'none';
+                if (iframe) { iframe.removeAttribute('src'); iframe.removeAttribute('srcdoc'); }
+                if (imageContainer) { imageContainer.style.display = 'flex'; }
+                if (clWrapper) clWrapper.classList.add('scanlines-suppressed');
+                const imgViewport = imageContainer ? imageContainer.querySelector('.zoomable-viewport') : null;
+                if (imgViewport) applyZoom('claude', imgViewport);
+                if (imageImg) {
+                    imageImg.src = webviewUri + '?t=' + Date.now();
+                    imageImg.onload = () => {
+                        const container = document.getElementById('image-preview-container-claude');
+                        const viewport = container ? container.querySelector('.zoomable-viewport') : null;
+                        if (container && viewport) fitToContainer('claude', container, viewport);
+                    };
+                }
+            } else if (msg.iframeSrc) {
+                if (imageContainer) imageContainer.style.display = 'none';
+                if (imageImg) imageImg.removeAttribute('src');
                 if (iframeWrapper) iframeWrapper.style.display = 'flex';
                 if (clWrapper) clWrapper.classList.add('scanlines-suppressed');
                 if (iframe) {
@@ -996,6 +1018,8 @@
                 const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
                 if (iframeViewport) applyZoom('claude', iframeViewport);
             } else if (htmlContent) {
+                if (imageContainer) imageContainer.style.display = 'none';
+                if (imageImg) imageImg.removeAttribute('src');
                 if (iframeWrapper) iframeWrapper.style.display = 'flex';
                 if (clWrapper) clWrapper.classList.add('scanlines-suppressed');
                 if (iframe) {
@@ -1478,6 +1502,7 @@
             ...vscode.getState(),
             designPreviewCollapsed: state.designPreviewCollapsed,
             htmlPreviewCollapsed: state.htmlPreviewCollapsed,
+            claudePreviewCollapsed: state.claudePreviewCollapsed,
             imagesPreviewCollapsed: state.imagesPreviewCollapsed,
             briefsPreviewCollapsed: state.briefsPreviewCollapsed,
             stitchThumbnailStripCollapsed: state.stitchThumbnailStripCollapsed
@@ -4104,9 +4129,13 @@
         const initialState = document.getElementById('claude-initial-state');
         const loadingState = document.getElementById('claude-loading-state');
         const iframeWrapper = document.getElementById('claude-preview-wrapper');
+        const imageContainer = document.getElementById('image-preview-container-claude');
+        const imageImg = document.getElementById('image-preview-img-claude');
         if (initialState) initialState.style.display = 'none';
         if (loadingState) loadingState.style.display = 'flex';
         if (iframeWrapper) iframeWrapper.style.display = 'none';
+        if (imageContainer) imageContainer.style.display = 'none';
+        if (imageImg) imageImg.removeAttribute('src');
 
         vscode.postMessage({
             type: 'fetchPreview',
@@ -4210,7 +4239,7 @@
         let docNodes = (nodes || []).filter(n => {
             if (n.kind === 'folder') return true;
             const ext = n.name.substring(n.name.lastIndexOf('.')).toLowerCase();
-            return ['.html', '.htm'].includes(ext);
+            return ['.html', '.htm', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(ext);
         });
 
         const search = String(state.claudeDocsSearch || '').trim().toLowerCase();
@@ -4230,9 +4259,11 @@
 
         docNodes.forEach(doc => {
             const isFolder = doc.kind === 'folder';
+            const ext = isFolder ? '' : doc.name.substring(doc.name.lastIndexOf('.')).toLowerCase();
+            const isImageFile = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(ext);
             const card = renderDocCard({
                 title: doc.name || doc.id,
-                subtitle: isFolder ? 'Folder' : 'HTML',
+                subtitle: isFolder ? 'Folder' : (isImageFile ? 'Image' : 'HTML'),
                 sourceId,
                 nodeId: doc.id,
                 nodeMetadata: doc.metadata,
