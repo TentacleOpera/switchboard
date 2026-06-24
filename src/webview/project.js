@@ -128,16 +128,30 @@
 
     function handleThemeChanged(theme) {
         if (theme) { state.switchboardTheme = theme; }
-        document.body.classList.remove('theme-claudify', 'theme-afterburner-pro');
+        // Compute the desired theme class set without touching unrelated classes
+        // (e.g. kanban-icons-colour, cyber-animation-disabled) that may have been
+        // injected server-side by applyThemeBodyClass().
+        const allThemeClasses = ['theme-claudify', 'theme-afterburner-pro', 'cyber-theme-enabled'];
+        const desired = new Set();
         if (state.switchboardTheme === 'afterburner') {
-            document.body.classList.add('cyber-theme-enabled');
-        } else {
-            document.body.classList.remove('cyber-theme-enabled');
-        }
-        if (state.switchboardTheme === 'claudify') {
-            document.body.classList.add('theme-claudify');
+            desired.add('cyber-theme-enabled');
+        } else if (state.switchboardTheme === 'claudify') {
+            desired.add('theme-claudify');
         } else if (state.switchboardTheme === 'afterburner-professional') {
-            document.body.classList.add('theme-claudify', 'theme-afterburner-pro');
+            desired.add('theme-claudify');
+            desired.add('theme-afterburner-pro');
+        }
+        // Remove only theme classes that should NOT be present — leave the
+        // correct ones in place so there is no flash if they were already
+        // injected by applyThemeBodyClass at HTML generation time.
+        for (const cls of allThemeClasses) {
+            if (!desired.has(cls)) {
+                document.body.classList.remove(cls);
+            }
+        }
+        // Add any desired classes that are not yet present.
+        for (const cls of desired) {
+            document.body.classList.add(cls);
         }
     }
 
@@ -150,6 +164,7 @@
     let uploadingPlanAttachment = false;
 
     let _epicSelectedPlan = null;
+    let _epicPreviewFilePath = null;
     let _epicDocumentsCache = [];
     let _pendingKanbanSelection = null;
     let _pendingAutoEdit = false;
@@ -306,7 +321,7 @@
                         }
                     }
                 }
-                if (epicsPreviewContent && _epicSelectedPlan && _epicSelectedPlan.planFile === msg.filePath) {
+                if (epicsPreviewContent && _epicPreviewFilePath && _epicPreviewFilePath === msg.filePath) {
                     if (state.editMode.epics) {
                         state.externalChangePending.epics = true;
                     } else {
@@ -1245,6 +1260,7 @@
 
     function selectEpic(plan) {
         _epicSelectedPlan = plan;
+        _epicPreviewFilePath = plan.planFile || null;
         if (btnSetActiveEpic) btnSetActiveEpic.disabled = false;
         renderEpicMetaBar(plan);
 
@@ -1305,10 +1321,33 @@
         }
         subtasksDiv.innerHTML = subtasks.map(st => `
             <div class="epic-subtask-item">
-                <span>• ${escapeHtml(st.topic)} (${escapeHtml(st.kanbanColumn)})</span>
+                <span class="epic-subtask-link" data-plan-file="${escapeHtml(st.planFile || '')}" style="cursor: pointer; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">• ${escapeHtml(st.topic)} (${escapeHtml(st.kanbanColumn)})</span>
                 <button class="epic-remove-subtask-btn" data-subtask-session="${escapeHtml(st.sessionId || st.planId)}" data-workspace-root="${escapeHtml(epic.workspaceRoot)}">Remove</button>
             </div>
         `).join('');
+
+        // Wire subtask click → preview
+        subtasksDiv.querySelectorAll('.epic-subtask-link').forEach(link => {
+            link.addEventListener('click', e => {
+                e.stopPropagation();
+                const planFile = link.dataset.planFile;
+                if (!planFile) {
+                    showToast('This subtask has no plan file to preview.', 'error');
+                    return;
+                }
+                if (state.editMode.epics) exitEditMode('epics');
+                _epicPreviewFilePath = planFile;
+                if (epicsPreviewContent) epicsPreviewContent.innerHTML = '<div class="kanban-empty-state">Loading preview...</div>';
+                vscode.postMessage({
+                    type: 'fetchKanbanPlanPreview',
+                    filePath: planFile,
+                    requestId: ++_kanbanPreviewRequestId
+                });
+                // Hide the Edit button while a subtask is previewed
+                const btnEdit = document.getElementById('btn-edit-epics');
+                if (btnEdit) btnEdit.style.display = 'none';
+            });
+        });
 
         subtasksDiv.querySelectorAll('.epic-remove-subtask-btn').forEach(btn => {
             btn.addEventListener('click', e => {

@@ -4843,6 +4843,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
                 break;
             }
+            case 'setMcpMonitorConfig': {
+                if (this._taskViewerProvider && msg.config) {
+                    await this._taskViewerProvider.setMcpMonitorConfigFromKanban(msg.config);
+                }
+                break;
+            }
             case 'updateAutobanConfig': {
                 if (this._taskViewerProvider && msg.state) {
                     await this._taskViewerProvider.updateAutobanConfigFromKanban(msg.state);

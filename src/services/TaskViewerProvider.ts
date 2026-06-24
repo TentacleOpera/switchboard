@@ -33,7 +33,8 @@ import { deriveKanbanColumn } from './kanbanColumnDerivation';
 import {
     BatchPromptPlan,
     columnToPromptRole,
-    resolveWorkingDir
+    resolveWorkingDir,
+    normalizeNewlines
 } from './agentPromptBuilder';
 import type { NotionFetchService } from './NotionFetchService';
 let NotionFetchServiceClass: any;
@@ -58,7 +59,7 @@ let LinearDocsAdapterClass: any;
 import { LocalFolderService } from './LocalFolderService';
 import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 import { LocalApiServer } from './LocalApiServer';
-import { GlobalIntegrationConfigService, AgentGlobalKey } from './GlobalIntegrationConfigService';
+import { GlobalIntegrationConfigService, AgentGlobalKey, McpMonitorConfig } from './GlobalIntegrationConfigService';
 import { MultiRepoScaffoldingService } from './MultiRepoScaffoldingService';
 import { KanbanDatabase, KanbanPlanRecord, WorkspaceDatabaseMapping } from './KanbanDatabase';
 import { KanbanMigration } from './KanbanMigration';
@@ -318,6 +319,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
     // Safety-net sweep: checks every 60s whether source columns are empty and stops autoban if so.
     private _autobanEmptyColumnSweepTimer?: NodeJS.Timeout;
+    private _mcpMonitorTimer?: NodeJS.Timeout;
+    private _mcpMonitorTickQueue: Promise<void> = Promise.resolve();
+    private _mcpMonitorLastSendAt = 0;
+    private _mcpMonitorInFlight = false;
     // Dedupe key set: tracks recently processed mirror events (sessionId+stablePath) to prevent watcher churn re-processing
     private _recentMirrorProcessed = new Map<string, NodeJS.Timeout>();
     // Persisted workspace blacklist: stable-path keys of brain plans present during setup.
@@ -440,6 +445,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // Start local API server for agent access
         void this._startLocalApiServer();
         void this._validateNoSwitchboardPollution();
+        void this._startMcpMonitorLoop();
 
         this._terminalOpenDisposable = vscode.window.onDidOpenTerminal((terminal) => {
             void this._waitWithTimeout(terminal.processId, 1000, undefined).then(pid => {
@@ -3510,6 +3516,12 @@ Each plan file must include:
             console.log(`[TaskViewerProvider] Applied jules_monitor fallback command: ${cmd}`);
         }
 
+        // Fallback: mcp_monitor defaults to claude command with permission bypass flags when configured command is missing/blank
+        if (role === 'mcp_monitor' && (!cmd || cmd.trim() === '')) {
+            cmd = 'claude --model claude-haiku-4-5 --permission-mode dontAsk --allowedTools "mcp__*"';
+            console.log(`[TaskViewerProvider] Applied mcp_monitor fallback command: ${cmd}`);
+        }
+
         return cmd;
     }
 
@@ -3541,7 +3553,8 @@ Each plan file must include:
             code_researcher: false,
             ticket_updater: false,
             researcher: false,
-            splitter: false
+            splitter: false,
+            mcp_monitor: false
         };
 
         const customAgentsGlobal = await this.getCustomAgents(workspaceRoot);
@@ -8277,6 +8290,7 @@ Each plan file must include:
                     this._postAutobanState();
                     await this._pipeline.restore();
                     this._postPipelineState();
+                    await this._postMcpMonitorConfig();
                 }, 100);
             }
         }).catch(err => {
@@ -9323,6 +9337,16 @@ Each plan file must include:
                     case 'getVisibleAgents': {
                         const vis = await this.getVisibleAgents();
                         this._view?.webview.postMessage({ type: 'visibleAgents', agents: vis });
+                        break;
+                    }
+                    case 'getMcpMonitorConfig': {
+                        await this._postMcpMonitorConfig();
+                        break;
+                    }
+                    case 'setMcpMonitorConfig': {
+                        if (msg.config) {
+                            await this.setMcpMonitorConfigFromKanban(msg.config);
+                        }
                         break;
                     }
                     case 'getAccurateCodingSetting': {
@@ -15441,11 +15465,12 @@ What would you like to find?`;
 
         const planFileAbsolute = path.resolve(resolvedWorkspaceRoot, planFileRelative);
 
-        // Safety invariant: jules_monitor is monitor-only and cannot receive execute dispatches.
-        if (role === 'jules_monitor') {
+        // Safety invariant: jules_monitor and mcp_monitor are monitor-only and cannot receive execute dispatches.
+        if (role === 'jules_monitor' || role === 'mcp_monitor') {
             clearDispatchLock();
-            vscode.window.showWarningMessage("The 'Jules Monitor' terminal is monitor-only and cannot receive agent actions.");
-            this._view?.webview.postMessage({ type: 'actionTriggered', role: 'jules_monitor', success: false });
+            const displayName = role === 'jules_monitor' ? "Jules Monitor" : "MCP Monitor";
+            vscode.window.showWarningMessage(`The '${displayName}' terminal is monitor-only and cannot receive agent actions.`);
+            this._view?.webview.postMessage({ type: 'actionTriggered', role, success: false });
             return false;
         }
 
@@ -17991,6 +18016,7 @@ What would you like to find?`;
 
     public dispose() {
         this._stopAutobanEngine();
+        this._stopMcpMonitorLoop();
         this.stopPlanScanner();
         if (this._postAutobanStateDebounceTimer) {
             clearTimeout(this._postAutobanStateDebounceTimer);
@@ -19010,5 +19036,130 @@ What would you like to find?`;
         } catch {
             return [];
         }
+    }
+
+    public static readonly SOURCE_PRESETS: Record<string, string> = {
+        slack: "Slack: unread direct messages and @-mentions across my channels.",
+        gmail: "Gmail: unread or important emails in my inbox.",
+        gcal: "Google Calendar: events starting in the next 24 hours.",
+        custom: "Custom Instruction"
+    };
+
+    private async _startMcpMonitorLoop() {
+        const cfg = await GlobalIntegrationConfigService.getMcpMonitorConfig();
+        if (!cfg.enabled) {
+            this._stopMcpMonitorLoop();
+            return;
+        }
+        if (this._mcpMonitorTimer) {
+            clearInterval(this._mcpMonitorTimer);
+        }
+        const intervalMs = Math.max(cfg.intervalMinutes, 1) * 60 * 1000;
+        this._mcpMonitorTimer = setInterval(() => this._enqueueMcpMonitorTick(), intervalMs);
+    }
+
+    private _stopMcpMonitorLoop() {
+        if (this._mcpMonitorTimer) {
+            clearInterval(this._mcpMonitorTimer);
+            this._mcpMonitorTimer = undefined;
+        }
+    }
+
+    private _enqueueMcpMonitorTick() {
+        this._mcpMonitorTickQueue = this._mcpMonitorTickQueue.then(async () => {
+            try {
+                await this._mcpMonitorTick();
+            } catch (err) {
+                console.error('[MCP Monitor] Tick failed:', err);
+            }
+        });
+    }
+
+    private async _mcpMonitorTick() {
+        const cfg = await GlobalIntegrationConfigService.getMcpMonitorConfig();
+        if (!cfg.enabled) return;
+
+        // Singleton guard: resolve the target terminal in this window
+        const openTerminals = vscode.window.terminals || [];
+        const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix('MCP Monitor'));
+        const terminal = openTerminals.find(t => {
+            const tName = this._normalizeAgentKey(this._stripIdeSuffix(t.name));
+            return tName === strippedTarget;
+        });
+
+        if (!terminal || terminal.exitStatus !== undefined) {
+            // No monitor terminal running in this window. Another window may own it.
+            return;
+        }
+
+        // In-flight guard
+        if (this._mcpMonitorInFlight) {
+            return;
+        }
+
+        const intervalMs = Math.max(cfg.intervalMinutes, 1) * 60 * 1000;
+        // Secondary debounce
+        if (Date.now() - this._mcpMonitorLastSendAt < intervalMs * 0.5) {
+            return;
+        }
+
+        this._mcpMonitorInFlight = true;
+        try {
+            const prompt = this._buildMcpMonitorPrompt(cfg);
+            if (prompt) {
+                await sendRobustText(terminal, prompt, true);
+                this._mcpMonitorLastSendAt = Date.now();
+            }
+        } finally {
+            this._mcpMonitorInFlight = false;
+        }
+    }
+
+    private _buildMcpMonitorPrompt(cfg: McpMonitorConfig): string {
+        const preamble = "Check the following for anything new that needs my attention since your previous check. Report only what is new and noteworthy as a short bullet list. If nothing needs attention, reply 'All clear'. This is read-only — do NOT take any actions, send any messages, or modify anything.";
+        const lines: string[] = [];
+        const sources = cfg.sources || [];
+        for (const src of sources) {
+            if (src === 'custom') {
+                if (cfg.customInstruction && cfg.customInstruction.trim()) {
+                    lines.push(cfg.customInstruction.trim());
+                }
+            } else {
+                const text = TaskViewerProvider.SOURCE_PRESETS[src];
+                if (text) {
+                    lines.push(text);
+                }
+            }
+        }
+        if (lines.length === 0) return '';
+        const body = preamble + "\n\n" + lines.map(line => `- ${line}`).join('\n');
+        return normalizeNewlines(body);
+    }
+
+    public async setMcpMonitorConfigFromKanban(config: Partial<McpMonitorConfig>) {
+        await GlobalIntegrationConfigService.setMcpMonitorConfig(config);
+        await this._startMcpMonitorLoop();
+        this._postMcpMonitorConfig();
+    }
+
+    private async _postMcpMonitorConfig() {
+        const config = await GlobalIntegrationConfigService.getMcpMonitorConfig();
+        const isMonitorRunning = this._isMcpMonitorTerminalRunning(config.targetRole);
+        this._view?.webview.postMessage({
+            type: 'updateMcpMonitorConfig',
+            config,
+            isMonitorRunning,
+            presets: TaskViewerProvider.SOURCE_PRESETS
+        });
+    }
+
+    private _isMcpMonitorTerminalRunning(targetRole: string): boolean {
+        const openTerminals = vscode.window.terminals || [];
+        const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix('MCP Monitor'));
+        const found = openTerminals.find(t => {
+            const tName = this._normalizeAgentKey(this._stripIdeSuffix(t.name));
+            return tName === strippedTarget;
+        });
+        return !!found && found.exitStatus === undefined;
     }
 }

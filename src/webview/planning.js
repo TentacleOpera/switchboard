@@ -2851,20 +2851,32 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     function handleThemeChanged(theme) {
         // Track the active Switchboard visual theme
         if (theme) { state.switchboardTheme = theme; }
-        // Remove Switchboard visual theme classes
-        document.body.classList.remove('theme-claudify', 'theme-afterburner-pro');
+        // Compute the desired theme class set without touching unrelated classes
+        // (e.g. kanban-icons-colour, cyber-animation-disabled) that may have been
+        // injected server-side by applyThemeBodyClass().
+        const allThemeClasses = ['theme-claudify', 'theme-afterburner-pro', 'cyber-theme-enabled'];
+        const desired = new Set();
         // Cyberpunk CRT effects (scanlines, grid, glow, sweep) are part of the Afterburner aesthetic.
         // Toggle cyber-theme-enabled: on for afterburner ONLY.
         if (state.switchboardTheme === 'afterburner') {
-            document.body.classList.add('cyber-theme-enabled');
-        } else {
-            document.body.classList.remove('cyber-theme-enabled');
-        }
-        // Apply palette override when claudify is active
-        if (state.switchboardTheme === 'claudify') {
-            document.body.classList.add('theme-claudify');
+            desired.add('cyber-theme-enabled');
+        } else if (state.switchboardTheme === 'claudify') {
+            desired.add('theme-claudify');
         } else if (state.switchboardTheme === 'afterburner-professional') {
-            document.body.classList.add('theme-claudify', 'theme-afterburner-pro');
+            desired.add('theme-claudify');
+            desired.add('theme-afterburner-pro');
+        }
+        // Remove only theme classes that should NOT be present — leave the
+        // correct ones in place so there is no flash if they were already
+        // injected by applyThemeBodyClass at HTML generation time.
+        for (const cls of allThemeClasses) {
+            if (!desired.has(cls)) {
+                document.body.classList.remove(cls);
+            }
+        }
+        // Add any desired classes that are not yet present.
+        for (const cls of desired) {
+            document.body.classList.add(cls);
         }
     }
 

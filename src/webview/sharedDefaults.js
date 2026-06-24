@@ -12,7 +12,8 @@ const DEFAULT_VISIBLE_AGENTS = {
     ticket_updater: false,
     researcher: false,
     splitter: false,
-    code_researcher: false
+    code_researcher: false,
+    mcp_monitor: false
 };
 
 // CRITICAL: DO NOT CHANGE DEFAULTS UNLESS SPECIFICALLY ASKED
@@ -48,7 +49,8 @@ const BUILT_IN_AGENT_LABELS = [
     { key: 'analyst', label: 'Analyst' },
     { key: 'ticket_updater', label: 'Ticket Updater' },
     { key: 'researcher', label: 'Researcher' },
-    { key: 'jules', label: 'Jules' }
+    { key: 'jules', label: 'Jules' },
+    { key: 'mcp_monitor', label: 'MCP Monitor' }
 ];
 
 // Derivable helper

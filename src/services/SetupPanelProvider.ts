@@ -594,6 +594,19 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this._panel.webview.postMessage({ type: 'persistPanelsSetting', enabled });
                     break;
                 }
+                case 'getProtocolTarget': {
+                    const config = vscode.workspace.getConfiguration('switchboard');
+                    const value = config.get<string>('protocol.target', 'both');
+                    this._panel.webview.postMessage({ type: 'protocolTarget', value });
+                    break;
+                }
+                case 'setProtocolTarget': {
+                    const config = vscode.workspace.getConfiguration('switchboard');
+                    const value = ['agents', 'claude', 'both'].includes(message.value) ? message.value : 'both';
+                    await config.update('protocol.target', value, vscode.ConfigurationTarget.Workspace);
+                    this._panel.webview.postMessage({ type: 'protocolTarget', value });
+                    break;
+                }
                 case 'getStatusShowAgentOpenSetting':
                     this._panel.webview.postMessage({
                         type: 'statusShowAgentOpenSetting',

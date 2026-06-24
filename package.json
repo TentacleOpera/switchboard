@@ -187,6 +187,22 @@
           "default": "action",
           "description": "Default mode for switchboard commands"
         },
+        "switchboard.protocol.target": {
+          "type": "string",
+          "enum": [
+            "agents",
+            "claude",
+            "both"
+          ],
+          "enumDescriptions": [
+            "Antigravity only: scaffold AGENTS.md (read by Antigravity).",
+            "Claude Code only: scaffold CLAUDE.md and the native .claude/skills/ mirror (read by Claude Code).",
+            "Both: scaffold AGENTS.md and CLAUDE.md + the .claude/skills/ mirror."
+          ],
+          "default": "both",
+          "description": "Which agent-protocol files Switchboard scaffolds. Antigravity reads AGENTS.md; Claude Code reads CLAUDE.md and discovers skills in .claude/skills/. 'both' generates both layers (non-destructive).",
+          "scope": "resource"
+        },
         "switchboard.stitch.defaultProjectId": {
           "type": "string",
           "default": "",

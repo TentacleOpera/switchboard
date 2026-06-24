@@ -20,6 +20,14 @@ import { NotionFetchService } from './services/NotionFetchService';
 import { NotionBrowseService } from './services/NotionBrowseService';
 import { LocalFolderService } from './services/LocalFolderService';
 import { ControlPlaneMigrationService } from './services/ControlPlaneMigrationService';
+import {
+    CLAUDE_PROTOCOL_HEADER,
+    CLAUDE_BLOCK_START,
+    CLAUDE_BLOCK_END,
+    CLAUDE_PREAMBLE,
+    buildManagedInner,
+    generateClaudeMirror,
+} from './services/ClaudeCodeMirrorService';
 import { WorkspaceExcludeService } from './services/WorkspaceExcludeService';
 import { cleanWorkspace, pruneZombieTerminalEntries } from './lifecycle/cleanWorkspace';
 import { PlanningPanelProvider } from './services/PlanningPanelProvider';
@@ -422,30 +430,17 @@ export async function activate(context: vscode.ExtensionContext) {
     kanbanProvider = new KanbanProvider(context.extensionUri, context, outputChannel);
     const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
 
-    // Version-gated AGENTS.md migration: when the extension version changes,
-    // ensure the workspace AGENTS.md is updated to the latest bundled version.
-    // This handles the transition from full-protocol to skills-only AGENTS.md.
+    // Version-gated protocol migration: when the extension version changes,
+    // ensure the workspace protocol files (AGENTS.md / CLAUDE.md + .claude/ mirror)
+    // are updated to the latest bundled version. Gated on the SAME predicate the
+    // workflow-file migration uses so upgrade behavior is consistent.
     if (workspaceRoot) {
-        try {
-            if (shouldRefreshAgentWorkspaceFiles(context.extensionUri.fsPath, workspaceRoot)) {
-                const agentsResult = await ensureAgentsProtocol(
-                    vscode.Uri.file(workspaceRoot),
-                    context.extensionUri
-                );
-                outputChannel?.appendLine(
-                    `[Migration] AGENTS.md: ${agentsResult.status} — ${agentsResult.reason}`
-                );
-                // Record the version so the migration doesn't re-run on every activation.
-                const currentVersion = getExtensionVersion(context.extensionUri.fsPath);
-                if (currentVersion) {
-                    setLastCopiedAgentVersion(workspaceRoot, currentVersion);
-                }
-            }
-        } catch (err) {
-            console.error('[Switchboard] AGENTS.md migration failed, continuing activation:', err);
-        }
+        // Capture the refresh decision BEFORE seeding stamps the version, so the
+        // mirror (which runs after seeding) sees the correct gate.
+        const needsAgentRefresh = shouldRefreshAgentWorkspaceFiles(context.extensionUri.fsPath, workspaceRoot);
 
         // Activation-time skill seeding: copy any new skill files to workspace that don't already exist.
+        // MUST run BEFORE the .claude mirror so source .agents/skills/ is populated on a fresh install.
         try {
             const bundledSkillsUri = vscode.Uri.joinPath(context.extensionUri, '.agents', 'skills');
             const skillFiles = await crawlDirectory(bundledSkillsUri);
@@ -465,6 +460,25 @@ export async function activate(context: vscode.ExtensionContext) {
             }
         } catch (err) {
             console.error('[Switchboard] Skill-file seed failed, continuing activation:', err);
+        }
+
+        // Scaffold protocol layers AFTER skill seeding so the .claude/ mirror reads
+        // a populated .agents/skills/ source.
+        if (needsAgentRefresh) {
+            try {
+                await scaffoldProtocolLayers(
+                    vscode.Uri.file(workspaceRoot),
+                    context.extensionUri,
+                    'Migration'
+                );
+                // Record the version so the migration doesn't re-run on every activation.
+                const currentVersion = getExtensionVersion(context.extensionUri.fsPath);
+                if (currentVersion) {
+                    setLastCopiedAgentVersion(workspaceRoot, currentVersion);
+                }
+            } catch (err) {
+                console.error('[Switchboard] Protocol-file migration failed, continuing activation:', err);
+            }
         }
     }
 
@@ -2630,12 +2644,16 @@ export async function activate(context: vscode.ExtensionContext) {
                 }
             }
         }
+        const includeMcpMonitor = visibleAgents.mcp_monitor !== false;
         for (const agent of customAgents) {
             if (visibleAgents[agent.role] === false) { continue; }
             agents.push({ name: agent.name, role: agent.role });
         }
         if (includeJulesMonitor) {
             agents.push({ name: 'Jules Monitor', role: 'jules_monitor' });
+        }
+        if (includeMcpMonitor) {
+            agents.push({ name: 'MCP Monitor', role: 'mcp_monitor' });
         }
 
         // Open worktree terminals if configured
@@ -2663,6 +2681,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const clearGridBlockers = async () => {
                 const agentNames = new Set(agents.map(a => a.name));
                 if (!includeJulesMonitor) { agentNames.add('Jules Monitor'); }
+                if (!includeMcpMonitor) { agentNames.add('MCP Monitor'); }
                 for (const [name, terminal] of Array.from(registeredTerminals.entries())) {
                     const bareName = stripIdeSuffix(name);
                     if ((agentNames.has(name) || agentNames.has(bareName)) && terminal.exitStatus !== undefined) {
@@ -2677,6 +2696,15 @@ export async function activate(context: vscode.ExtensionContext) {
                     }
                     registeredTerminals.delete('Jules Monitor');
                     registeredTerminals.delete(suffixedName('Jules Monitor'));
+                }
+                if (!includeMcpMonitor) {
+                    const mcpMatches = vscode.window.terminals.filter(t => t.exitStatus === undefined && matchesGridAgentName(t, 'MCP Monitor'));
+                    for (const terminal of mcpMatches) {
+                        outputChannel?.appendLine(`[Extension] Disposing hidden grid terminal '${terminal.name}' for agent 'MCP Monitor'`);
+                        terminal.dispose();
+                    }
+                    registeredTerminals.delete('MCP Monitor');
+                    registeredTerminals.delete(suffixedName('MCP Monitor'));
                 }
                 for (const agent of agents) {
                     const matches = vscode.window.terminals.filter(t => t.exitStatus === undefined && matchesGridAgentName(t, agent.name));
@@ -2974,26 +3002,42 @@ function isFileNotFoundError(error: unknown): boolean {
     return false;
 }
 
-function hasProtocolHeaderLine(content: string): boolean {
-    const escapedHeader = AGENTS_PROTOCOL_HEADER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function hasProtocolHeaderLine(content: string, header: string): boolean {
+    const escapedHeader = header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return new RegExp(`^${escapedHeader}\\s*$`, 'm').test(content);
 }
 
-/**
- * Ensure the workspace AGENTS.md contains the Switchboard protocol block.
- * Preserves user content outside boundary markers when markers are present.
- * For legacy markerless files (header only, no markers), replaces the entire
- * file content — see markerless branch below.
- * Idempotent: skips if protocol block is already up-to-date.
- */
-async function ensureAgentsProtocol(
-    workspaceUri: vscode.Uri,
-    extensionUri: vscode.Uri
-): Promise<{ status: AgentsProtocolStatus; reason: string }> {
-    const sourceUri = vscode.Uri.joinPath(extensionUri, 'AGENTS.md');
-    const targetUri = vscode.Uri.joinPath(workspaceUri, 'AGENTS.md');
+interface ProtocolFileOptions {
+    /** Target filename in the workspace root, e.g. `AGENTS.md` or `CLAUDE.md`. */
+    targetFileName: string;
+    blockStart: string;
+    blockEnd: string;
+    /** Header line used by the legacy-markerless heuristic — MUST be unique per target. */
+    header: string;
+    /** Optional preamble injected ABOVE the bundled source inside the managed block (CLAUDE.md). */
+    preamble?: string;
+}
 
-    // Read bundled source
+/**
+ * Ensure a workspace protocol file (AGENTS.md / CLAUDE.md) contains the managed
+ * Switchboard protocol block. The bundled source is always `AGENTS.md`; the
+ * target filename, boundary markers, header heuristic, and optional preamble are
+ * parameterized so AGENTS.md and CLAUDE.md share one code path.
+ *
+ * Preserves user content outside the boundary markers. For legacy markerless
+ * files (per-target header present, no markers), replaces the entire file.
+ * Idempotent: skips if the managed block is already up-to-date.
+ */
+async function ensureProtocolFile(
+    workspaceUri: vscode.Uri,
+    extensionUri: vscode.Uri,
+    opts: ProtocolFileOptions
+): Promise<{ status: AgentsProtocolStatus; reason: string }> {
+    const { targetFileName, blockStart, blockEnd, header, preamble } = opts;
+    const sourceUri = vscode.Uri.joinPath(extensionUri, 'AGENTS.md');
+    const targetUri = vscode.Uri.joinPath(workspaceUri, targetFileName);
+
+    // Read bundled source (always AGENTS.md — the single protocol source of truth)
     let sourceContent: string;
     try {
         const sourceBytes = await vscode.workspace.fs.readFile(sourceUri);
@@ -3002,8 +3046,9 @@ async function ensureAgentsProtocol(
         return { status: 'failed', reason: `Bundled AGENTS.md source is missing or unreadable: ${getErrorMessage(error)}` };
     }
 
-    // Build managed block with boundary markers
-    const managedBlock = `${AGENTS_BLOCK_START}\n${sourceContent.trimEnd()}\n${AGENTS_BLOCK_END}`;
+    // Build managed inner content (+ optional preamble) and the marker-wrapped block.
+    const managedInner = buildManagedInner(sourceContent, preamble);
+    const managedBlock = `${blockStart}\n${managedInner}\n${blockEnd}`;
     const sourceForCreate = `${sourceContent.trimEnd()}\n`;
 
     // Check if target exists
@@ -3013,39 +3058,43 @@ async function ensureAgentsProtocol(
         targetContent = Buffer.from(targetBytes).toString('utf8');
     } catch (error) {
         if (!isFileNotFoundError(error)) {
-            return { status: 'failed', reason: `Failed to read existing AGENTS.md: ${getErrorMessage(error)}` };
+            return { status: 'failed', reason: `Failed to read existing ${targetFileName}: ${getErrorMessage(error)}` };
         }
         // Target does not exist — will create.
     }
 
     if (targetContent === null) {
-        // Create new file from bundled source.
+        // Create new file. CLAUDE.md (preamble present) MUST be created as the
+        // managed block: a markerless create would let the legacy branch wipe the
+        // preamble on the next run. AGENTS.md keeps the historical markerless
+        // create (it self-heals to a managed block on the next pass).
+        const createBody = preamble ? `${managedBlock}\n` : sourceForCreate;
         try {
-            await vscode.workspace.fs.writeFile(targetUri, Buffer.from(sourceForCreate, 'utf8'));
-            return { status: 'created', reason: 'AGENTS.md created from bundled source' };
+            await vscode.workspace.fs.writeFile(targetUri, Buffer.from(createBody, 'utf8'));
+            return { status: 'created', reason: `${targetFileName} created from bundled source` };
         } catch (e) {
-            return { status: 'failed', reason: `Failed to write AGENTS.md: ${getErrorMessage(e)}` };
+            return { status: 'failed', reason: `Failed to write ${targetFileName}: ${getErrorMessage(e)}` };
         }
     }
 
     // Target exists — validate and check for existing protocol block.
-    const hasBlockStart = targetContent.includes(AGENTS_BLOCK_START);
-    const hasBlockEnd = targetContent.includes(AGENTS_BLOCK_END);
-    const blockStartIndex = targetContent.indexOf(AGENTS_BLOCK_START);
+    const hasBlockStart = targetContent.includes(blockStart);
+    const hasBlockEnd = targetContent.includes(blockEnd);
+    const blockStartIndex = targetContent.indexOf(blockStart);
     // Use the FIRST start marker and the LAST end marker so the managed region
     // spans any duplicated/stray markers an earlier buggy scaffold may have left
     // behind (e.g. tripled start/end pairs). Replacing that whole span collapses
     // them back to a single clean block instead of tripping the malformed guard
     // or leaving orphaned trailing markers.
-    const blockEndIndex = targetContent.lastIndexOf(AGENTS_BLOCK_END);
-    const startMarkerCount = targetContent.split(AGENTS_BLOCK_START).length - 1;
-    const endMarkerCount = targetContent.split(AGENTS_BLOCK_END).length - 1;
+    const blockEndIndex = targetContent.lastIndexOf(blockEnd);
+    const startMarkerCount = targetContent.split(blockStart).length - 1;
+    const endMarkerCount = targetContent.split(blockEnd).length - 1;
     const hasDuplicateMarkers = startMarkerCount > 1 || endMarkerCount > 1;
 
     if ((hasBlockStart && !hasBlockEnd) || (!hasBlockStart && hasBlockEnd) || (hasBlockStart && hasBlockEnd && blockStartIndex > blockEndIndex)) {
         return {
             status: 'failed',
-            reason: 'Detected malformed managed protocol markers in AGENTS.md; fix markers before rerunning setup'
+            reason: `Detected malformed managed protocol markers in ${targetFileName}; fix markers before rerunning setup`
         };
     }
 
@@ -3054,21 +3103,21 @@ async function ensureAgentsProtocol(
         // last end marker, so any duplicate inner markers are captured here and get
         // collapsed when the managed block is rewritten below.
         const existingBlockContent = targetContent.substring(
-            blockStartIndex + AGENTS_BLOCK_START.length,
+            blockStartIndex + blockStart.length,
             blockEndIndex
         ).trim();
 
-        // Compare with bundled source (trimmed to avoid whitespace differences).
-        // Duplicate markers always force an update so the file is healed to a single
-        // clean block even when the inner content already matches the latest source.
-        if (!hasDuplicateMarkers && existingBlockContent === sourceContent.trim()) {
+        // Compare with the expected managed inner content (preamble + source for
+        // CLAUDE.md, bare source for AGENTS.md). Duplicate markers always force an
+        // update so the file heals to a single clean block.
+        if (!hasDuplicateMarkers && existingBlockContent === managedInner.trim()) {
             return { status: 'skipped', reason: 'Switchboard protocol block already up-to-date' };
         }
 
         // Content differs (or duplicate markers need collapsing) — perform in-place update
         try {
             const before = targetContent.substring(0, blockStartIndex);
-            const after = targetContent.substring(blockEndIndex + AGENTS_BLOCK_END.length);
+            const after = targetContent.substring(blockEndIndex + blockEnd.length);
             const updated = before + managedBlock + after;
             await vscode.workspace.fs.writeFile(targetUri, Buffer.from(updated, 'utf8'));
             return {
@@ -3078,18 +3127,20 @@ async function ensureAgentsProtocol(
                     : 'Switchboard protocol block updated to latest bundled version'
             };
         } catch (e) {
-            return { status: 'failed', reason: `Failed to update AGENTS.md: ${getErrorMessage(e)}` };
+            return { status: 'failed', reason: `Failed to update ${targetFileName}: ${getErrorMessage(e)}` };
         }
     }
 
-    if (hasProtocolHeaderLine(targetContent)) {
-        // Legacy markerless AGENTS.md — replace entire content with managed block.
+    if (hasProtocolHeaderLine(targetContent, header)) {
+        // Legacy markerless file — replace entire content with managed block.
         // The old file was fully scaffolded by the extension, so this is safe.
+        // Keyed on the PER-TARGET header so a normal CLAUDE.md (or a CLAUDE.md
+        // whose copied body still contains the AGENTS header) is not mis-detected.
         try {
             await vscode.workspace.fs.writeFile(targetUri, Buffer.from(managedBlock + '\n', 'utf8'));
-            return { status: 'updated', reason: 'Legacy markerless AGENTS.md replaced with managed block' };
+            return { status: 'updated', reason: `Legacy markerless ${targetFileName} replaced with managed block` };
         } catch (e) {
-            return { status: 'failed', reason: `Failed to replace legacy AGENTS.md: ${getErrorMessage(e)}` };
+            return { status: 'failed', reason: `Failed to replace legacy ${targetFileName}: ${getErrorMessage(e)}` };
         }
     }
 
@@ -3098,9 +3149,88 @@ async function ensureAgentsProtocol(
         const separator = targetContent.endsWith('\n') ? '\n' : '\n\n';
         const merged = targetContent + separator + managedBlock + '\n';
         await vscode.workspace.fs.writeFile(targetUri, Buffer.from(merged, 'utf8'));
-        return { status: 'appended', reason: 'Switchboard protocol block appended to existing AGENTS.md' };
+        return { status: 'appended', reason: `Switchboard protocol block appended to existing ${targetFileName}` };
     } catch (e) {
-        return { status: 'failed', reason: `Failed to append to AGENTS.md: ${getErrorMessage(e)}` };
+        return { status: 'failed', reason: `Failed to append to ${targetFileName}: ${getErrorMessage(e)}` };
+    }
+}
+
+/** Thin wrapper: scaffold the AGENTS.md managed block (Antigravity host). */
+async function ensureAgentsProtocol(
+    workspaceUri: vscode.Uri,
+    extensionUri: vscode.Uri
+): Promise<{ status: AgentsProtocolStatus; reason: string }> {
+    return ensureProtocolFile(workspaceUri, extensionUri, {
+        targetFileName: 'AGENTS.md',
+        blockStart: AGENTS_BLOCK_START,
+        blockEnd: AGENTS_BLOCK_END,
+        header: AGENTS_PROTOCOL_HEADER,
+    });
+}
+
+/** Thin wrapper: scaffold the CLAUDE.md managed block (Claude Code host) with the Claude preamble. */
+async function ensureClaudeProtocol(
+    workspaceUri: vscode.Uri,
+    extensionUri: vscode.Uri
+): Promise<{ status: AgentsProtocolStatus; reason: string }> {
+    return ensureProtocolFile(workspaceUri, extensionUri, {
+        targetFileName: 'CLAUDE.md',
+        blockStart: CLAUDE_BLOCK_START,
+        blockEnd: CLAUDE_BLOCK_END,
+        header: CLAUDE_PROTOCOL_HEADER,
+        preamble: CLAUDE_PREAMBLE,
+    });
+}
+
+/** Resolve which protocol layers to scaffold from the `switchboard.protocol.target` setting. */
+function getProtocolTargets(workspaceUri?: vscode.Uri): { agents: boolean; claude: boolean } {
+    let target = 'both';
+    try {
+        target = vscode.workspace
+            .getConfiguration('switchboard', workspaceUri)
+            .get<string>('protocol.target', 'both');
+    } catch { /* default to both */ }
+    return {
+        agents: target === 'agents' || target === 'both',
+        claude: target === 'claude' || target === 'both',
+    };
+}
+
+/**
+ * Scaffold the selected protocol layers (AGENTS.md / CLAUDE.md + `.claude/` mirror)
+ * for a workspace root. Each target is independently marker-managed and the mirror
+ * is independent of AGENTS.md, so running all selected targets is safe/idempotent.
+ */
+async function scaffoldProtocolLayers(
+    workspaceUri: vscode.Uri,
+    extensionUri: vscode.Uri,
+    logPrefix: string
+): Promise<void> {
+    const targets = getProtocolTargets(workspaceUri);
+
+    if (targets.agents) {
+        try {
+            const r = await ensureAgentsProtocol(workspaceUri, extensionUri);
+            outputChannel?.appendLine(`[${logPrefix}] AGENTS.md: ${r.status} — ${r.reason}`);
+        } catch (e) {
+            outputChannel?.appendLine(`[${logPrefix}] AGENTS.md scaffolding error (non-fatal): ${e}`);
+        }
+    }
+
+    if (targets.claude) {
+        try {
+            const r = await ensureClaudeProtocol(workspaceUri, extensionUri);
+            outputChannel?.appendLine(`[${logPrefix}] CLAUDE.md: ${r.status} — ${r.reason}`);
+        } catch (e) {
+            outputChannel?.appendLine(`[${logPrefix}] CLAUDE.md scaffolding error (non-fatal): ${e}`);
+        }
+        try {
+            const version = getExtensionVersion(extensionUri.fsPath);
+            const m = generateClaudeMirror(workspaceUri.fsPath, version);
+            outputChannel?.appendLine(`[${logPrefix}] .claude/skills mirror: ${m.status} — ${m.reason}`);
+        } catch (e) {
+            outputChannel?.appendLine(`[${logPrefix}] .claude/skills mirror error (non-fatal): ${e}`);
+        }
     }
 }
 
@@ -3375,14 +3505,11 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
         } catch { /* non-fatal */ }
     }
 
-    // 2b. AGENTS.md scaffolding (non-destructive, failure-isolated)
-    // Targets the same active workspace root used by setup flow; no multi-root fan-out.
-    try {
-        const agentsResult = await ensureAgentsProtocol(workspaceUri, extensionUri);
-        outputChannel?.appendLine(`[Setup] AGENTS.md scaffolding: ${agentsResult.status} — ${agentsResult.reason}`);
-    } catch (e) {
-        outputChannel?.appendLine(`[Setup] AGENTS.md scaffolding error (non-fatal): ${e}`);
-    }
+    // 2b. Protocol-file scaffolding (non-destructive, failure-isolated).
+    // Scaffolds AGENTS.md / CLAUDE.md + the .claude/ mirror per the configured
+    // target. `.agents/` is already copied above, so the mirror sees a populated
+    // source. Targets the same active workspace root used by setup flow.
+    await scaffoldProtocolLayers(workspaceUri, extensionUri, 'Setup');
 
     // 3. Create README Stub
     const readmeUri = vscode.Uri.joinPath(workspaceUri, '.switchboard', 'README.md');

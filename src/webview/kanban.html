@@ -2685,7 +2685,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="gatherer" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Context Gatherer</label><span style="flex:1;font-size:10px;color:var(--text-secondary);">Pre-planning research and context briefs</span></div>
           <div class="agent-description">Researches codebase context for plans and writes context briefs before planning review.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="planner" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Planner</label><input type="text" data-role="planner" id="agents-tab-cmd-planner" placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;"></div>
-          <div class="agent-description">Writes detailed step-by-step implementation plans and creates work checklists.</div>
+          <div class="agent-description">Writes detailed step-by-step implementation plans and creates work checklists. Increase the number of terminals to spread multiple plans among different planners for faster processing of plan batches.</div>
           <div class="startup-row planner-pool-row" style="padding-left:24px;">
             <label style="min-width:70px;">Terminals</label>
             <select id="agents-tab-planner-terminal-count" data-role="planner" style="flex:0 0 auto;">
@@ -5943,6 +5943,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let currentAutomationMode = 'single-column';
         let lastAntigravityBatchSize = 5;
         let managedTerminalPools = {};
+        let mcpMonitorConfig = { enabled: false, intervalMinutes: 5, targetRole: 'mcp_monitor', sources: ['slack'], customInstruction: '' };
+        let isMcpMonitorTerminalRunning = false;
+        let mcpMonitorPresets = {};
 
         // Listen for messages from the extension
         window.addEventListener('message', (event) => {
@@ -5951,14 +5954,31 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 case 'switchboardThemeNameSetting':
                 case 'switchboardThemeChanged': {
                     if (msg.theme) {
-                        document.body.classList.remove('theme-claudify', 'theme-afterburner-pro', 'cyber-theme-enabled');
+                        // Compute the desired theme class set without touching unrelated classes
+                        // (e.g. kanban-icons-colour, cyber-animation-disabled) that may have been
+                        // injected server-side by applyThemeBodyClass().
+                        const allThemeClasses = ['theme-claudify', 'theme-afterburner-pro', 'cyber-theme-enabled'];
+                        const desired = new Set();
                         // Cyber CRT effects belong to Afterburner ONLY (matches the other panels).
                         if (msg.theme === 'afterburner') {
-                            document.body.classList.add('cyber-theme-enabled');
+                            desired.add('cyber-theme-enabled');
                         } else if (msg.theme === 'claudify') {
-                            document.body.classList.add('theme-claudify');
+                            desired.add('theme-claudify');
                         } else if (msg.theme === 'afterburner-professional') {
-                            document.body.classList.add('theme-claudify', 'theme-afterburner-pro');
+                            desired.add('theme-claudify');
+                            desired.add('theme-afterburner-pro');
+                        }
+                        // Remove only theme classes that should NOT be present — leave the
+                        // correct ones in place so there is no flash if they were already
+                        // injected by applyThemeBodyClass at HTML generation time.
+                        for (const cls of allThemeClasses) {
+                            if (!desired.has(cls)) {
+                                document.body.classList.remove(cls);
+                            }
+                        }
+                        // Add any desired classes that are not yet present.
+                        for (const cls of desired) {
+                            document.body.classList.add(cls);
                         }
                     }
                     break;
@@ -6490,6 +6510,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     updateAllColumnAgents();
                     updateJulesButtonVisibility();
                     updateSplitterButtonVisibility();
+                  }
+                case 'updateMcpMonitorConfig': {
+                  mcpMonitorConfig = msg.config || mcpMonitorConfig;
+                  isMcpMonitorTerminalRunning = !!msg.isMcpMonitorRunning;
+                  mcpMonitorPresets = msg.presets || mcpMonitorPresets;
+                  if (!isAutobanPanelInteracting) {
+                      renderAutobanPanel();
                   }
                   break;
                 }
@@ -7293,6 +7320,154 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             modeRow.appendChild(modeLabel);
             modeRow.appendChild(modeSelect);
             container.appendChild(modeRow);
+
+            // MCP Monitor Row
+            const mcpRow = document.createElement('div');
+            mcpRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary); margin-bottom:8px;';
+            const mcpLabel = document.createElement('span');
+            mcpLabel.textContent = 'MCP MONITOR:';
+            const mcpSelect = document.createElement('select');
+            mcpSelect.style.cssText = autobanSelectStyle + ' flex:1;';
+            guardInteraction(mcpSelect);
+
+            [
+                { value: 'off', label: 'Off' },
+                { value: 'on', label: 'On' }
+            ].forEach(optInfo => {
+                const opt = document.createElement('option');
+                opt.value = optInfo.value;
+                opt.textContent = optInfo.label;
+                if ((optInfo.value === 'on') === mcpMonitorConfig.enabled) opt.selected = true;
+                mcpSelect.appendChild(opt);
+            });
+            mcpRow.appendChild(mcpLabel);
+            mcpRow.appendChild(mcpSelect);
+            container.appendChild(mcpRow);
+
+            // MCP Monitor Config Panel (Collapsible)
+            const mcpConfigPanel = document.createElement('div');
+            mcpConfigPanel.style.cssText = 'padding:8px; margin:0 8px 8px 8px; border:1px solid var(--border-color); border-radius:4px; background:var(--panel-bg2); display:' + (mcpMonitorConfig.enabled ? 'block' : 'none') + '; font-family:var(--font-mono); font-size:10px; color:var(--text-primary);';
+
+            // Interval select row
+            const intervalRow = document.createElement('div');
+            intervalRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:8px;';
+            const intervalLabel = document.createElement('span');
+            intervalLabel.textContent = 'Interval:';
+            const intervalSelect = document.createElement('select');
+            intervalSelect.style.cssText = autobanSelectStyle + ' flex:1;';
+            guardInteraction(intervalSelect);
+
+            [1, 2, 5, 10, 15, 30].forEach(minutes => {
+                const opt = document.createElement('option');
+                opt.value = String(minutes);
+                opt.textContent = `${minutes} minute${minutes === 1 ? '' : 's'}`;
+                if (mcpMonitorConfig.intervalMinutes === minutes) opt.selected = true;
+                intervalSelect.appendChild(opt);
+            });
+            intervalRow.appendChild(intervalLabel);
+            intervalRow.appendChild(intervalSelect);
+            mcpConfigPanel.appendChild(intervalRow);
+
+            // Sources checklist
+            const sourcesHeader = document.createElement('div');
+            sourcesHeader.style.cssText = 'font-weight:bold; color:var(--text-secondary); margin-bottom:4px;';
+            sourcesHeader.textContent = 'Watched Sources:';
+            mcpConfigPanel.appendChild(sourcesHeader);
+
+            const sourcesList = document.createElement('div');
+            sourcesList.style.cssText = 'display:flex; flex-direction:column; gap:4px; margin-bottom:8px; padding-left:4px;';
+
+            const activeSources = new Set(mcpMonitorConfig.sources || []);
+            
+            // Build checklists based on mcpMonitorPresets sent by backend (fallback to default presets keys if empty)
+            const presetsToRender = Object.keys(mcpMonitorPresets).length > 0 ? mcpMonitorPresets : {
+                slack: "Slack: unread direct messages and @-mentions across my channels.",
+                gmail: "Gmail: unread or important emails in my inbox.",
+                gcal: "Google Calendar: events starting in the next 24 hours.",
+                custom: "Custom Instruction"
+            };
+
+            const customInstructionRow = document.createElement('div');
+            customInstructionRow.style.cssText = 'margin-top:6px; display:' + (activeSources.has('custom') ? 'block' : 'none') + ';';
+            const customInstructionTextarea = document.createElement('textarea');
+            customInstructionTextarea.placeholder = 'Enter custom instructions for monitor (e.g. check a specific HTTP endpoint)...';
+            customInstructionTextarea.style.cssText = 'width:100%; height:48px; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:4px; border-radius:3px; resize:vertical; box-sizing:border-box;';
+            customInstructionTextarea.value = mcpMonitorConfig.customInstruction || '';
+            guardInteraction(customInstructionTextarea);
+            customInstructionRow.appendChild(customInstructionTextarea);
+
+            Object.entries(presetsToRender).forEach(([key, label]) => {
+                const labelWrapper = document.createElement('label');
+                labelWrapper.style.cssText = 'display:flex; align-items:flex-start; gap:6px; cursor:pointer; font-size:9px; color:var(--text-secondary); line-height:1.2;';
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.value = key;
+                checkbox.checked = activeSources.has(key);
+                checkbox.style.cssText = 'margin:1px 0 0 0; cursor:pointer; flex-shrink:0;';
+                guardInteraction(checkbox);
+
+                const span = document.createElement('span');
+                span.textContent = label;
+
+                labelWrapper.appendChild(checkbox);
+                labelWrapper.appendChild(span);
+                sourcesList.appendChild(labelWrapper);
+
+                checkbox.addEventListener('change', () => {
+                    if (checkbox.checked) {
+                        activeSources.add(key);
+                    } else {
+                        activeSources.delete(key);
+                    }
+                    if (key === 'custom') {
+                        customInstructionRow.style.display = checkbox.checked ? 'block' : 'none';
+                    }
+                    saveMonitorConfig();
+                });
+            });
+
+            mcpConfigPanel.appendChild(sourcesList);
+            mcpConfigPanel.appendChild(customInstructionRow);
+
+            // Status Line
+            const statusLine = document.createElement('div');
+            statusLine.style.cssText = 'margin-top:8px; padding-top:6px; border-top:1px dashed var(--border-color); font-size:9px; line-height:1.3;';
+            if (isMcpMonitorTerminalRunning) {
+                statusLine.innerHTML = '🟢 <strong>Monitor terminal:</strong> running';
+            } else {
+                statusLine.innerHTML = '🔴 <strong>No monitor terminal running:</strong> launch one as the <code>mcp_monitor</code> role with a cheap/local model and permission-bypass flags (e.g. <code>claude --model claude-haiku-4-5 --permission-mode dontAsk --allowedTools "mcp__*"</code>).';
+            }
+            mcpConfigPanel.appendChild(statusLine);
+
+            // Help text
+            const mcpHelp = document.createElement('div');
+            mcpHelp.style.cssText = 'margin-top:8px; font-size:9px; color:var(--text-secondary); line-height:1.3; border-top:1px solid var(--border-color); padding-top:6px;';
+            mcpHelp.textContent = 'On this interval, Switchboard asks your monitor terminal to check the selected sources via your claude.ai MCP servers. Checks run unattended using flat subscription interactive terminal sessions (saving programmatic token billing costs).';
+            mcpConfigPanel.appendChild(mcpHelp);
+
+            container.appendChild(mcpConfigPanel);
+
+            const saveMonitorConfig = () => {
+                const enabled = mcpSelect.value === 'on';
+                const intervalMinutes = parseInt(intervalSelect.value, 10);
+                const customInstruction = customInstructionTextarea.value;
+                postKanbanMessage({
+                    type: 'setMcpMonitorConfig',
+                    config: {
+                        enabled,
+                        intervalMinutes,
+                        sources: Array.from(activeSources),
+                        customInstruction
+                    }
+                });
+            };
+
+            mcpSelect.addEventListener('change', () => {
+                mcpConfigPanel.style.display = mcpSelect.value === 'on' ? 'block' : 'none';
+                saveMonitorConfig();
+            });
+            intervalSelect.addEventListener('change', saveMonitorConfig);
+            customInstructionTextarea.addEventListener('input', saveMonitorConfig);
 
             const modeDescriptions = {
                 'single-column': 'Automates a single workflow stage. For example, code all plans in the PLANNED column overnight, ready for review the next day.',

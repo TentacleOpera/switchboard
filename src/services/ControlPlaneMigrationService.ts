@@ -7,6 +7,13 @@ import { isAllowedSwitchboardLocation } from '../utils/switchboardLocationGuard'
 import { importPlanFiles } from './PlanFileImporter';
 import { KanbanDatabase } from './KanbanDatabase';
 import { ensureWorkspaceIdentity } from './WorkspaceIdentityService';
+import {
+    generateClaudeMirror,
+    buildManagedInner,
+    CLAUDE_BLOCK_START,
+    CLAUDE_BLOCK_END,
+    CLAUDE_PREAMBLE,
+} from './ClaudeCodeMirrorService';
 
 export type DiscoveredRepo = {
     repoName: string;
@@ -686,15 +693,36 @@ export class ControlPlaneMigrationService {
             );
         }
 
+        const targets = this._getProtocolTargets(parentDir);
+
         const bundledAgentsFile = path.join(extensionPath, BUNDLED_AGENTS_FILE);
-        if (fs.existsSync(bundledAgentsFile)) {
+        if (targets.agents && fs.existsSync(bundledAgentsFile)) {
             const targetAgentsFile = path.join(parentDir, 'AGENTS.md');
             if (!fs.existsSync(targetAgentsFile)) {
                 await fs.promises.copyFile(bundledAgentsFile, targetAgentsFile);
             }
         }
 
-
+        // Claude Code layer: CLAUDE.md managed block (initial seed) + .claude/ skills
+        // mirror + settings allow-list. Activation-time scaffolding handles ongoing
+        // in-place CLAUDE.md updates; here we only seed the file if absent.
+        if (targets.claude) {
+            try {
+                if (fs.existsSync(bundledAgentsFile)) {
+                    const claudeFile = path.join(parentDir, 'CLAUDE.md');
+                    if (!fs.existsSync(claudeFile)) {
+                        const source = await fs.promises.readFile(bundledAgentsFile, 'utf8');
+                        const inner = buildManagedInner(source, CLAUDE_PREAMBLE);
+                        const block = `${CLAUDE_BLOCK_START}\n${inner}\n${CLAUDE_BLOCK_END}\n`;
+                        await fs.promises.writeFile(claudeFile, block, 'utf8');
+                    }
+                }
+                const version = this._getExtensionVersion(extensionPath);
+                generateClaudeMirror(parentDir, version);
+            } catch (error) {
+                console.warn('[ControlPlaneMigrationService] Claude Code layer scaffolding failed (non-fatal):', error);
+            }
+        }
 
         // Update agent version tracking after successful copy
         if (extensionPath) {
@@ -706,6 +734,20 @@ export class ControlPlaneMigrationService {
     }
 
 
+
+    /** Resolve which protocol layers to scaffold from `switchboard.protocol.target`. */
+    private static _getProtocolTargets(parentDir: string): { agents: boolean; claude: boolean } {
+        let target = 'both';
+        try {
+            target = vscode.workspace
+                .getConfiguration('switchboard', vscode.Uri.file(parentDir))
+                .get<string>('protocol.target', 'both');
+        } catch { /* default to both */ }
+        return {
+            agents: target === 'agents' || target === 'both',
+            claude: target === 'claude' || target === 'both',
+        };
+    }
 
     private static _getExtensionVersion(extensionPath: string): string | undefined {
         const packageJsonPath = path.join(extensionPath, 'package.json');

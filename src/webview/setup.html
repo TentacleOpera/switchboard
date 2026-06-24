@@ -546,6 +546,21 @@
                 </div>
                 <div id="setup-save-status" style="min-height:14px; margin-top:6px; font-size:10px; color:var(--text-secondary); font-family:var(--font-mono);"></div>
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 12px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                    AGENT PROTOCOL TARGET
+                </div>
+                <div class="startup-row" style="display:flex; flex-direction:column; gap:6px; align-items:stretch; margin-top:6px;">
+                    <select id="protocol-target" style="width:100%; box-sizing:border-box; font-family:var(--font-mono); font-size:11px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; border-radius:4px;">
+                        <option value="both">Both — AGENTS.md + CLAUDE.md & .claude/ skills (recommended)</option>
+                        <option value="agents">Antigravity only — AGENTS.md</option>
+                        <option value="claude">Claude Code only — CLAUDE.md + .claude/ skills</option>
+                    </select>
+                </div>
+                <div style="font-size:10px; color:var(--text-secondary); line-height:1.4; font-family:var(--font-mono); margin-top:4px;">
+                    Antigravity reads <code style="font-size:10px;">AGENTS.md</code>; Claude Code reads <code style="font-size:10px;">CLAUDE.md</code> and discovers skills in <code style="font-size:10px;">.claude/skills/</code>. Selecting Claude Code generates native <code style="font-size:10px;">/memo</code>, <code style="font-size:10px;">/clickup-api</code> (etc.) slash commands and a permission allow-list so Bash proxy skills don't prompt.
+                    <br><br>
+                    Note: in Claude Code, skills <strong>hot-reload mid-session</strong>, but <code style="font-size:10px;">CLAUDE.md</code> and the permission settings load only at session start — <strong>restart Claude Code</strong> for those to take effect. If the "Accept, do not ask again" prompt narrows your allow-list, re-run Switchboard setup to restore it.
+                </div>
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 12px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     WORKFLOW SETTINGS
                 </div>
                 <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
@@ -1758,6 +1773,7 @@
                     vscode.postMessage({ type: 'getAutoCommitOnCodeReviewSetting' });
                     vscode.postMessage({ type: 'getExcludeReviewedBacklogSetting' });
                     vscode.postMessage({ type: 'getPersistPanelsSetting' });
+                    vscode.postMessage({ type: 'getProtocolTarget' });
                 },
                 'database': () => {
                     vscode.postMessage({ type: 'getAllDbPaths' });
@@ -3903,6 +3919,10 @@
         document.getElementById('persist-panels-toggle')?.addEventListener('change', (e) => {
             vscode.postMessage({ type: 'setPersistPanelsSetting', enabled: e.target.checked });
         });
+
+        document.getElementById('protocol-target')?.addEventListener('change', (e) => {
+            vscode.postMessage({ type: 'setProtocolTarget', value: e.target.value });
+        });
  
         document.getElementById('workspace-mapping-enabled')?.addEventListener('change', (e) => {
             vscode.postMessage({
@@ -4166,14 +4186,30 @@
                     currentSwitchboardTheme = theme;
                     const themeRadio = document.querySelector(`input[name="theme-selection"][value="${theme}"]`);
                     if (themeRadio) themeRadio.checked = true;
-                    // Only remove Switchboard visual theme classes — preserve other body classes
-                    document.body.classList.remove('theme-claudify', 'theme-afterburner-pro', 'cyber-theme-enabled');
+                    // Compute the desired theme class set without touching unrelated classes
+                    // (e.g. kanban-icons-colour, cyber-animation-disabled) that may have been
+                    // injected server-side by applyThemeBodyClass().
+                    const allThemeClasses = ['theme-claudify', 'theme-afterburner-pro', 'cyber-theme-enabled'];
+                    const desired = new Set();
                     if (theme === 'afterburner') {
-                        document.body.classList.add('cyber-theme-enabled');
+                        desired.add('cyber-theme-enabled');
                     } else if (theme === 'claudify') {
-                        document.body.classList.add('theme-claudify');
+                        desired.add('theme-claudify');
                     } else if (theme === 'afterburner-professional') {
-                        document.body.classList.add('theme-claudify', 'theme-afterburner-pro');
+                        desired.add('theme-claudify');
+                        desired.add('theme-afterburner-pro');
+                    }
+                    // Remove only theme classes that should NOT be present — leave the
+                    // correct ones in place so there is no flash if they were already
+                    // injected by applyThemeBodyClass at HTML generation time.
+                    for (const cls of allThemeClasses) {
+                        if (!desired.has(cls)) {
+                            document.body.classList.remove(cls);
+                        }
+                    }
+                    // Add any desired classes that are not yet present.
+                    for (const cls of desired) {
+                        document.body.classList.add(cls);
                     }
                     updateAnimationSectionVisibility(theme);
                     break;
@@ -4465,6 +4501,13 @@
                     runSetupHydration(() => {
                         const toggle = document.getElementById('persist-panels-toggle');
                         if (toggle) toggle.checked = message.enabled === true;
+                    });
+                    break;
+                }
+                case 'protocolTarget': {
+                    runSetupHydration(() => {
+                        const select = document.getElementById('protocol-target');
+                        if (select) select.value = message.value || 'both';
                     });
                     break;
                 }

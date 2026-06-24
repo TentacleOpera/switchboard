@@ -61,7 +61,7 @@ The flash occurs because of a **timing gap between first paint and the `switchbo
 
 ### Dependencies & Conflicts
 - **`themeBodyClass.ts` ↔ handler sync** — The client handler's theme→class mapping must stay consistent with `getThemeBodyClass()`. Verified consistent today: `afterburner → cyber-theme-enabled`, `claudify → theme-claudify`, `afterburner-professional → theme-claudify theme-afterburner-pro`. A clarifying comment in `themeBodyClass.ts` will document this coupling.
-- **Other panels** — `planning.html`, `kanban.html`, `setup.html`, `design.html` carry near-identical handlers. This plan addresses ONLY `implementation.html` per the issue. The same idempotent pattern could later be applied to them if they exhibit the same flash, but that is explicitly out of scope here.
+- **Other panels** — `planning.js`, `kanban.html`, `setup.html`, `design.js`, `project.js` carried the same destructive remove-all-then-add pattern. **Applied during review pass (2026-06-24):** the same idempotent diff-based fix was applied to all 5 remaining panels. See "Review Pass — Expanded Scope" section below.
 
 ## Dependencies
 - None. This change does not depend on any other in-flight plan/session.
@@ -78,7 +78,7 @@ The flash occurs because of a **timing gap between first paint and the `switchbo
 
 **Logic:** Compute the *desired* theme-class set for the incoming theme. Remove from the body only those theme classes (from a fixed allow-list) that are NOT desired. Add only the desired classes. Never touch classes outside the theme allow-list, so server-injected `kanban-icons-colour` / `cyber-animation-disabled` survive.
 
-**Edge Cases:** `afterburner-professional` requires BOTH `theme-claudify` and `theme-afterburner-pro`; the desired-set handles this. Unknown/empty `message.theme` falls through to an empty desired set → all theme classes removed (matches prior default-theme behaviour of no theme class).
+**Edge Cases:** `afterburner-professional` requires BOTH `theme-claudify` and `theme-afterburner-pro`; the desired-set handles this. An unknown-but-truthy `message.theme` (e.g. `'foobar'`) enters the block with an empty desired set → all theme classes removed (matches prior default-theme behaviour of no theme class). An empty-string / null / undefined `message.theme` is falsy and skips the entire block (the `if (message.theme)` guard) — nothing is removed or added, identical to the prior code's behaviour.
 
 Replace the destructive remove-all-then-add pattern with an idempotent diff-based approach:
 
@@ -166,3 +166,75 @@ None — every claim in this plan (handler location and code, server-side inject
 ---
 
 **Recommendation:** Complexity 3/10 → **Send to Intern.**
+
+---
+
+## Code Review Results (Reviewer Pass — 2026-06-24)
+
+### Stage 1: Adversarial Findings
+
+| # | Severity | Finding | Location |
+|---|----------|---------|----------|
+| 1 | NIT | Plan Edge Cases prose claimed empty-string `message.theme` "falls through to an empty desired set → all theme classes removed". Incorrect: `if (message.theme)` guard skips the block entirely for falsy values (empty string, null, undefined) — nothing is removed. Only unknown-but-truthy strings (e.g. `'foobar'`) produce the empty-desired-set behaviour. Runtime behaviour is identical to the prior code (same guard existed before). | Plan file line 81 (documentation) |
+| 2 | NIT | `new Set()` declared without a type parameter. Would be `Set<any>` under TS strict mode, but this is inline `<script>` JS in an HTML file — no TypeScript compiler touches it. Not actionable. | `implementation.html:2499` |
+| 3 | NIT | Unrelated memo-textarea change (moving "/memo skill" tip from placeholder to a `<p>` tag) was swept into the same auto-commit `1db57b7`. Commit hygiene issue, not a code defect. | `implementation.html:1624-1636` |
+
+**No CRITICAL or MAJOR findings.** The implementation is correct, minimal, and matches the plan exactly.
+
+### Stage 2: Balanced Synthesis
+
+- **Keep as-is:** The core diff-based handler logic (implementation.html:2492-2522). Verified idempotent, order-independent, preserves non-theme classes, and consistent with `getThemeBodyClass()`.
+- **Fix now:** Corrected the plan's Edge Cases prose (NIT-1) to accurately describe empty-string vs. unknown-truthy behaviour.
+- **Defer:** NIT-2 (untyped Set in inline JS — not actionable) and NIT-3 (auto-commit hygiene — not a code issue).
+
+### Code Fixes Applied
+
+- **Plan file only:** Corrected the Edge Cases description at line 81 to distinguish falsy `message.theme` (skips block) from unknown-truthy `message.theme` (empty desired set, removes all theme classes).
+- **No source code changes needed.** The implementation in `src/webview/implementation.html` and `src/services/themeBodyClass.ts` is correct as committed.
+
+### Verification Results
+
+Per session directives: **SKIP COMPILATION** and **SKIP TESTS** are in effect. Verification was performed by static analysis against the source:
+
+1. **Handler implementation matches plan "After" block exactly** — Confirmed at `implementation.html:2492-2522`. ✓
+2. **`themeBodyClass.ts` clarifying comment present** — Confirmed at lines 14-15. ✓
+3. **Single bare `<body>` tag** — Confirmed at `implementation.html:1401`. `applyThemeBodyClass` regex `/<body\b([^>]*)>/i` matches it. ✓
+4. **Server-side call site** — `applyThemeBodyClass(content)` confirmed at `TaskViewerProvider.ts:17766`. ✓
+5. **Theme→class mapping consistency** — Handler and `getThemeBodyClass()` produce identical class sets for all three themes. ✓
+6. **Non-theme class preservation** — `kanban-icons-colour` and `cyber-animation-disabled` are absent from `allThemeClasses`; the remove loop cannot touch them. ✓
+7. **Idempotency** — Re-invocation with the same theme is a complete no-op. ✓
+
+### Files Changed by This Review
+
+- `.switchboard/plans/feature_plan_20260624160734_implementation-html-theme-flash-on-load.md` — Corrected Edge Cases prose (NIT-1 fix).
+
+### Remaining Risks
+
+1. **Stale VSIX without `applyThemeBodyClass`** — If the installed VSIX predates the server-side injection, the body tag arrives without a class and the panel still flashes teal→correct on first paint. The handler fix cannot help here (there's no correct class to preserve). The deferred "visibility gating" hardening (plan line 146) would address this. Low risk for current install base since `applyThemeBodyClass` has shipped.
+2. **Other panels** — ~~`planning.js`, `kanban.html`, `setup.html`, `design.js`, `project.js` carry the same destructive pattern. Explicitly out of scope.~~ **RESOLVED during review pass (2026-06-24):** All 5 remaining panels now use the same idempotent diff-based pattern. See "Review Pass — Expanded Scope" below.
+3. **Theme→class map drift** — The handler's hardcoded mapping could diverge from `getThemeBodyClass()` if a new theme is added to one but not the other. The clarifying comment in `themeBodyClass.ts:14-15` mitigates this but is not enforced programmatically. Acceptable for current scope.
+
+---
+
+## Review Pass — Expanded Scope (2026-06-24): All Remaining Panels
+
+During the reviewer pass, the user confirmed that all 5 remaining panels with the same destructive remove-all-then-add pattern should be fixed. The same idempotent diff-based approach was applied to each.
+
+### Files Changed
+
+| File | Location | Old Pattern | Notes |
+|---|---|---|---|
+| `src/webview/kanban.html` | lines 5951-5982 | Single `classList.remove(all three)` then conditional adds | Identical to old implementation.html. Now uses `allThemeClasses`/`desired` pattern. |
+| `src/webview/setup.html` | lines 4183-4216 | Single `classList.remove(all three)` then conditional adds | Preserved `theme` var (from `message.theme \|\| 'afterburner'`), radio button logic, and `updateAnimationSectionVisibility(theme)` call. |
+| `src/webview/planning.js` | `handleThemeChanged()` lines 2851-2881 | Two-step: remove `theme-claudify`+`theme-afterburner-pro`, then separate `cyber-theme-enabled` toggle with else-branch remove | Now uses unified `allThemeClasses`/`desired` pattern. Preserved `state.switchboardTheme` tracking. |
+| `src/webview/project.js` | `handleThemeChanged()` lines 129-156 | Same two-step pattern as planning.js | Same fix. Preserved `state.switchboardTheme` tracking. |
+| `src/webview/design.js` | lines 3136-3166 | Same two-step pattern, inline in switch case | Same fix. Preserved `state.switchboardTheme` tracking and `cyberAnimationSetting` case below. |
+
+### Verification
+
+- **No destructive `classList.remove('theme-claudify', 'theme-afterburner-pro', ...)` remains** in any webview file. Confirmed via grep — 0 matches.
+- **No bare `classList.remove('cyber-theme-enabled')` remains** (the old else-branch in the two-step pattern). Confirmed via grep — 0 matches.
+- **All 6 panels now declare `const allThemeClasses = ['theme-claudify', 'theme-afterburner-pro', 'cyber-theme-enabled']`** — confirmed via grep, 6 files match (implementation.html, kanban.html, setup.html, planning.js, project.js, design.js).
+- **Theme→class mapping consistent across all 6 panels and `getThemeBodyClass()`** — all use: `afterburner`→`cyber-theme-enabled`, `claudify`→`theme-claudify`, `afterburner-professional`→`theme-claudify theme-afterburner-pro`.
+- **Non-theme classes preserved** — `kanban-icons-colour` and `cyber-animation-disabled` are absent from `allThemeClasses` in all 6 panels; the remove loop cannot touch them.
+- **Per-panel extras preserved** — setup.html's radio button + `updateAnimationSectionVisibility()` design.js's `cyberAnimationSetting` case, planning.js/project.js's `state.switchboardTheme` tracking — all intact.
