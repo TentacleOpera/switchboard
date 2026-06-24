@@ -3030,7 +3030,15 @@ async function ensureAgentsProtocol(
     const hasBlockStart = targetContent.includes(AGENTS_BLOCK_START);
     const hasBlockEnd = targetContent.includes(AGENTS_BLOCK_END);
     const blockStartIndex = targetContent.indexOf(AGENTS_BLOCK_START);
-    const blockEndIndex = targetContent.indexOf(AGENTS_BLOCK_END);
+    // Use the FIRST start marker and the LAST end marker so the managed region
+    // spans any duplicated/stray markers an earlier buggy scaffold may have left
+    // behind (e.g. tripled start/end pairs). Replacing that whole span collapses
+    // them back to a single clean block instead of tripping the malformed guard
+    // or leaving orphaned trailing markers.
+    const blockEndIndex = targetContent.lastIndexOf(AGENTS_BLOCK_END);
+    const startMarkerCount = targetContent.split(AGENTS_BLOCK_START).length - 1;
+    const endMarkerCount = targetContent.split(AGENTS_BLOCK_END).length - 1;
+    const hasDuplicateMarkers = startMarkerCount > 1 || endMarkerCount > 1;
 
     if ((hasBlockStart && !hasBlockEnd) || (!hasBlockStart && hasBlockEnd) || (hasBlockStart && hasBlockEnd && blockStartIndex > blockEndIndex)) {
         return {
@@ -3040,24 +3048,33 @@ async function ensureAgentsProtocol(
     }
 
     if (hasBlockStart && hasBlockEnd) {
-        // Extract existing block content
+        // Extract existing block content. Spans from the first start marker to the
+        // last end marker, so any duplicate inner markers are captured here and get
+        // collapsed when the managed block is rewritten below.
         const existingBlockContent = targetContent.substring(
             blockStartIndex + AGENTS_BLOCK_START.length,
             blockEndIndex
         ).trim();
 
-        // Compare with bundled source (trimmed to avoid whitespace differences)
-        if (existingBlockContent === sourceContent.trim()) {
+        // Compare with bundled source (trimmed to avoid whitespace differences).
+        // Duplicate markers always force an update so the file is healed to a single
+        // clean block even when the inner content already matches the latest source.
+        if (!hasDuplicateMarkers && existingBlockContent === sourceContent.trim()) {
             return { status: 'skipped', reason: 'Switchboard protocol block already up-to-date' };
         }
 
-        // Content differs — perform in-place update
+        // Content differs (or duplicate markers need collapsing) — perform in-place update
         try {
             const before = targetContent.substring(0, blockStartIndex);
             const after = targetContent.substring(blockEndIndex + AGENTS_BLOCK_END.length);
             const updated = before + managedBlock + after;
             await vscode.workspace.fs.writeFile(targetUri, Buffer.from(updated, 'utf8'));
-            return { status: 'updated', reason: 'Switchboard protocol block updated to latest bundled version' };
+            return {
+                status: 'updated',
+                reason: hasDuplicateMarkers
+                    ? 'Collapsed duplicate protocol markers and updated block to latest bundled version'
+                    : 'Switchboard protocol block updated to latest bundled version'
+            };
         } catch (e) {
             return { status: 'failed', reason: `Failed to update AGENTS.md: ${getErrorMessage(e)}` };
         }

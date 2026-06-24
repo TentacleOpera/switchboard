@@ -179,3 +179,65 @@ This is optional because the toggle is a simple string-concatenation branch with
 ## Recommendation
 
 Complexity 5/10 → **Send to Coder.**
+
+---
+
+## Reviewer Pass (2026-06-24)
+
+**Reviewer mode:** Direct in-place reviewer-executor (no auxiliary workflow). Adversarial review + balanced synthesis + verification, executed in one continuous pass.
+
+### Implementation Verification (all six Proposed Changes)
+
+| # | Change | Status | Evidence |
+|---|---|---|---|
+| 1 | Create `.agents/skills/advise_research/SKILL.md` | DONE | File exists (1549 bytes); contains full template (ROLE/CONTEXT/CENTRAL QUESTION/SUB-QUESTIONS/SOURCE GUIDANCE/SCOPE/OUTPUT/CITATIONS/DEPTH/After Generating) verbatim from the plan. |
+| 2 | Replace `ADVISE_RESEARCH_DIRECTIVE` with short reference | DONE | `src/services/agentPromptBuilder.ts:311` — ~70-word stub containing `RESEARCH WHEN UNSURE:` + skill-file path + graceful-degradation clause. |
+| 3 | Update code comment at `agentPromptBuilder.ts:306-310` | DONE | Expanded comment notes skill file is canonical; notes `generateResearchPrompt()` is a separate webview path. |
+| 4 | Update stale mirror comment in `planning.js:5034-5037` | DONE | Comment now references the skill file as canonical; `generateResearchPrompt()` itself unchanged. |
+| 5 | Activation-time copy-if-missing skill seeding in `extension.ts` | DONE | `src/extension.ts:448-468`, inside the `if (workspaceRoot)` guard (line 428). Reuses existing `crawlDirectory` helper (line 3264). `stat`-then-`copy({overwrite:false})`; wrapped in try/catch that logs and continues. |
+| 6 | (Optional) Add test coverage for the toggle | DONE | `src/services/__tests__/agentPromptBuilder.test.ts:159-175` — three tests (true/false/undefined). Uses existing `buildKanbanBatchPrompt` + `makePlans` helpers and the `'planner'` role, which routes through the `if (role === 'planner')` block (line 494) containing the `adviseResearchIfUnsure` branch (line 538). |
+
+### Stage 1 — Adversarial Findings (Grumpy Principal Engineer)
+
+- **CRITICAL:** None.
+- **MAJOR:** None.
+- **NIT-1 (pre-existing, NOT introduced by this plan):** `crawlDirectory` (`extension.ts:3279`) joins relative paths with `path.sep`. On Windows this yields `advise_research\SKILL.md`, which `vscode.Uri.joinPath` *may* treat as a single literal segment. However, `performSetup` (`extension.ts:3307-3314`) uses the identical pattern and has shipped to ~4,000 installs, so this is a shared latent concern, not a regression from this plan. **Defer.**
+- **NIT-2 (documented design tradeoff):** The activation seeding is unconditional (not version-gated), so a user who intentionally deletes a skill file gets it re-seeded on every activation. The plan explicitly accepted this ("skills are extension-managed assets... matches performSetup behavior"). Defensible; an optional one-line code comment stating the re-seed-on-delete intent would help future maintainers. **Defer.**
+
+### Stage 2 — Balanced Synthesis
+
+No CRITICAL or MAJOR findings → **no code fixes applied.** All six proposed changes (including the optional test) are implemented correctly and match the plan. The two NITs are pre-existing or documented tradeoffs and do not warrant changes under this plan's scope.
+
+### Verification Results
+
+- **Compilation:** Skipped per session directive (project assumed pre-compiled).
+- **Automated tests:** Skipped per session directive (run separately by the user). Static inspection confirms the new tests are wired correctly: `buildKanbanBatchPrompt` and `makePlans` are imported/defined at the top of the test file; the `'planner'` role exercises the `adviseResearchIfUnsure` branch.
+- **Static checks performed:**
+  - `path` is imported at `extension.ts:3` (used by the seeding block at line 458).
+  - `ADVISE_RESEARCH_DIRECTIVE` is referenced at `agentPromptBuilder.ts:539` (the only runtime use).
+  - `git status` → working tree clean; all changes committed.
+  - No lingering `mirrored by ADVISE_RESEARCH_DIRECTIVE` wording in `planning.js`.
+
+### Files Changed (final state)
+
+- `.agents/skills/advise_research/SKILL.md` (new, 1549 bytes)
+- `src/services/agentPromptBuilder.ts` (lines 306-311: comment + constant replaced)
+- `src/webview/planning.js` (lines 5034-5037: mirror comment updated)
+- `src/extension.ts` (lines 448-468: activation-time skill seeding added)
+- `src/services/__tests__/agentPromptBuilder.test.ts` (lines 159-175: three new tests)
+
+### Remaining Risks
+
+1. **NIT-1 (path.sep on Windows):** pre-existing latent concern shared with `performSetup`. Not addressed here; track separately if Windows skill-copy failures are ever reported.
+2. **NIT-2 (re-seed-on-delete):** intentional per plan. A user who deletes a bundled skill will see it restored on next activation. Acceptable for extension-managed assets; revisit only if user-customized skills are ever introduced.
+3. **No runtime verification of the activation seed path** was performed in this session (would require reloading the extension in a VS Code host). Manual verification step #6 in the plan's Verification Plan covers this and should be executed by the user.
+
+### Reviewer Summary
+
+| Severity | Count | File:Line | Fix Applied |
+|---|---|---|---|
+| CRITICAL | 0 | — | — |
+| MAJOR | 0 | — | — |
+| NIT | 2 | `extension.ts:3279` (pre-existing); `extension.ts:448` (documented tradeoff) | None (deferred) |
+
+**Outcome:** Implementation complete and correct. No fixes required. Plan ready to close.

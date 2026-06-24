@@ -211,7 +211,7 @@
             height: 100%;
             min-height: 0;
         }
-        #kanban-list-pane, #epics-list-pane, #constitution-list-pane, #tuning-list-pane {
+        #kanban-list-pane, #epics-list-pane, #constitution-list-pane, #system-list-pane, #tuning-list-pane {
             width: 320px;
             flex-shrink: 0;
             border-right: 1px solid var(--border-color);
@@ -267,6 +267,7 @@
         .edit-mode #kanban-preview-content, 
         .edit-mode #epics-preview-content, 
         .edit-mode #constitution-preview-content,
+        .edit-mode #system-preview-content,
         .edit-mode #tuning-preview-content {
             display: none;
         }
@@ -891,19 +892,13 @@
             color: var(--accent-primary);
         }
 
-        body.theme-afterburner-pro #kanban-preview-content h2, body.theme-afterburner-pro #kanban-preview-content h3, body.theme-afterburner-pro #kanban-preview-content h4, body.theme-afterburner-pro #kanban-preview-content h5, body.theme-afterburner-pro #kanban-preview-content h6,
-        body.theme-afterburner-pro #epics-preview-content h2, body.theme-afterburner-pro #epics-preview-content h3, body.theme-afterburner-pro #epics-preview-content h4, body.theme-afterburner-pro #epics-preview-content h5, body.theme-afterburner-pro #epics-preview-content h6,
-        body.theme-afterburner-pro #constitution-preview-content h2, body.theme-afterburner-pro #constitution-preview-content h3, body.theme-afterburner-pro #constitution-preview-content h4, body.theme-afterburner-pro #constitution-preview-content h5, body.theme-afterburner-pro #constitution-preview-content h6,
-        body.theme-afterburner-pro #tuning-preview-content h2, body.theme-afterburner-pro #tuning-preview-content h3, body.theme-afterburner-pro #tuning-preview-content h4, body.theme-afterburner-pro #tuning-preview-content h5, body.theme-afterburner-pro #tuning-preview-content h6 {
-            font-family: var(--display-font), var(--font-family);
-            letter-spacing: var(--display-letter-spacing);
-            font-stretch: var(--display-font-stretch);
-        }
+
 
         /* Unified Markdown Preview Styling (Kanban, Epics & Constitution) */
         #kanban-preview-content,
         #epics-preview-content,
         #constitution-preview-content,
+        #system-preview-content,
         #tuning-preview-content {
             flex: 1;
             width: 100%;
@@ -1237,6 +1232,7 @@
         <button class="shared-tab-btn active" data-tab="kanban">KANBAN PLANS</button>
         <button class="shared-tab-btn" data-tab="epics">EPICS</button>
         <button class="shared-tab-btn" data-tab="constitution">CONSTITUTION</button>
+        <button class="shared-tab-btn" data-tab="system">SYSTEM</button>
         <button class="shared-tab-btn" data-tab="tuning">TUNING</button>
     </div>
     <div class="container">
@@ -1312,11 +1308,6 @@
 
         <!-- Constitution tab -->
         <div id="constitution-content" class="shared-tab-content">
-            <div class="governance-file-tabs" id="governance-file-tabs">
-                <button class="gov-file-btn active" data-gov="constitution">CONSTITUTION.md</button>
-                <button class="gov-file-btn" data-gov="claude">CLAUDE.md</button>
-                <button class="gov-file-btn" data-gov="agents">AGENTS.md</button>
-            </div>
             <div class="active-doc-banner inactive" id="active-constitution-banner">
                 <div class="active-doc-info">
                     <span class="active-doc-label">Constitution Reference:</span>
@@ -1350,6 +1341,37 @@
                             <div class="empty-state">Select a workspace to view its Constitution</div>
                         </div>
                         <textarea id="constitution-editor" class="markdown-editor"></textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- System tab -->
+        <div id="system-content" class="shared-tab-content">
+            <div class="governance-file-tabs" id="system-file-tabs">
+                <button class="gov-file-btn active" data-gov="claude">CLAUDE.md</button>
+                <button class="gov-file-btn" data-gov="agents">AGENTS.md</button>
+            </div>
+            <div class="controls-strip">
+                <button id="btn-edit-system" class="strip-btn" disabled>Edit</button>
+                <button id="btn-save-system" class="strip-btn" style="display:none;">Save</button>
+                <button id="btn-cancel-system" class="strip-btn" style="display:none;">Cancel</button>
+                <button id="btn-delete-system" class="strip-btn" style="display:none; color: #ff6b6b;">Delete</button>
+            </div>
+            <div class="content-row">
+                <div id="system-list-pane">
+                    <div class="sidebar-toggle-row">
+                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                    </div>
+                    <div class="empty-state">Loading workspaces...</div>
+                </div>
+                <div class="preview-panel-wrapper">
+                    <div class="cyber-scanlines"></div>
+                    <div id="system-preview-pane" class="constitution-preview-pane">
+                        <div id="system-preview-content">
+                            <div class="empty-state">Select a workspace to view its system file</div>
+                        </div>
+                        <textarea id="system-editor" class="markdown-editor"></textarea>
                     </div>
                 </div>
             </div>

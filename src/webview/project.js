@@ -24,6 +24,8 @@
                 applySidebarState('epics', state.epicsListCollapsed);
             } else if (targetTab === 'constitution') {
                 applySidebarState('constitution', state.constitutionListCollapsed);
+            } else if (targetTab === 'system') {
+                applySidebarState('system', state.systemListCollapsed);
             } else if (targetTab === 'tuning') {
                 applySidebarState('tuning', state.tuningListCollapsed);
             }
@@ -36,6 +38,8 @@
                 updateActiveEpicBanner();
             } else if (activeTab === 'constitution') {
                 vscode.postMessage({ type: 'loadConstitutionFiles' });
+            } else if (activeTab === 'system') {
+                vscode.postMessage({ type: 'loadConstitutionFiles' });
             } else if (activeTab === 'tuning') {
                 vscode.postMessage({ type: 'loadInsights', workspaceRoot: tuningWorkspaceFilter ? tuningWorkspaceFilter.value : '' });
             }
@@ -44,14 +48,15 @@
 
     // Global state
     const state = {
-        editMode: { kanban: false, constitution: false, epics: false },
-        editOriginalContent: { kanban: null, constitution: null, epics: null },
-        dirtyFlags: { kanban: false, constitution: false, epics: false },
-        externalChangePending: { kanban: false, constitution: false, epics: false },
+        editMode: { kanban: false, constitution: false, epics: false, system: false },
+        editOriginalContent: { kanban: null, constitution: null, epics: null, system: null },
+        dirtyFlags: { kanban: false, constitution: false, epics: false, system: false },
+        externalChangePending: { kanban: false, constitution: false, epics: false, system: false },
         reviewMode: { kanban: false },
         kanbanListCollapsed: false,
         epicsListCollapsed: false,
         constitutionListCollapsed: false,
+        systemListCollapsed: false,
         tuningListCollapsed: false,
         switchboardTheme: 'afterburner'
     };
@@ -61,6 +66,7 @@
     state.kanbanListCollapsed = persistedState.kanbanListCollapsed || false;
     state.epicsListCollapsed = persistedState.epicsListCollapsed || false;
     state.constitutionListCollapsed = persistedState.constitutionListCollapsed || false;
+    state.systemListCollapsed = persistedState.systemListCollapsed || false;
     state.tuningListCollapsed = persistedState.tuningListCollapsed || false;
 
     function applySidebarState(tabName, collapsed) {
@@ -86,6 +92,9 @@
         } else if (activeTab === 'constitution') {
             state.constitutionListCollapsed = !state.constitutionListCollapsed;
             applySidebarState('constitution', state.constitutionListCollapsed);
+        } else if (activeTab === 'system') {
+            state.systemListCollapsed = !state.systemListCollapsed;
+            applySidebarState('system', state.systemListCollapsed);
         } else if (activeTab === 'tuning') {
             state.tuningListCollapsed = !state.tuningListCollapsed;
             applySidebarState('tuning', state.tuningListCollapsed);
@@ -98,6 +107,7 @@
             kanbanListCollapsed: state.kanbanListCollapsed,
             epicsListCollapsed: state.epicsListCollapsed,
             constitutionListCollapsed: state.constitutionListCollapsed,
+            systemListCollapsed: state.systemListCollapsed,
             tuningListCollapsed: state.tuningListCollapsed
         });
     }
@@ -136,6 +146,10 @@
     let _constitutionSelectedWorkspace = null;
     let _constitutionSelectedFile = null;
     let _constitutionSelectedGovKey = 'constitution';
+
+    let _systemSelectedWorkspace = null;
+    let _systemSelectedFile = null;
+    let _systemSelectedGovKey = 'claude';
 
     // Elements
     const kanbanWorkspaceFilter = document.getElementById('kanban-workspace-filter');
@@ -186,6 +200,16 @@
     const constitutionPreviewPane = document.getElementById('constitution-preview-pane');
     const constitutionPreviewContent = document.getElementById('constitution-preview-content');
     const constitutionEditor = document.getElementById('constitution-editor');
+
+    // System tab elements
+    const btnEditSystem = document.getElementById('btn-edit-system');
+    const btnSaveSystem = document.getElementById('btn-save-system');
+    const btnCancelSystem = document.getElementById('btn-cancel-system');
+    const btnDeleteSystem = document.getElementById('btn-delete-system');
+    const systemListPane = document.getElementById('system-list-pane');
+    const systemPreviewPane = document.getElementById('system-preview-pane');
+    const systemPreviewContent = document.getElementById('system-preview-content');
+    const systemEditor = document.getElementById('system-editor');
 
     // Tuning tab elements
     const tuningWorkspaceFilter = document.getElementById('tuning-workspace-filter');
@@ -336,10 +360,18 @@
                         governanceFile: _constitutionSelectedGovKey
                     });
                 }
+                if (_systemSelectedWorkspace && _systemSelectedWorkspace.workspaceRoot === msg.workspaceRoot && msg.governanceFile === _systemSelectedGovKey && !state.editMode.system) {
+                    vscode.postMessage({
+                        type: 'readConstitutionFile',
+                        workspaceRoot: _systemSelectedWorkspace.workspaceRoot,
+                        governanceFile: _systemSelectedGovKey
+                    });
+                }
                 break;
             case 'constitutionFilesLoaded':
                 _constitutionWorkspaces = msg.workspaces || [];
                 renderConstitutionWorkspaceList();
+                renderSystemWorkspaceList();
                 break;
             case 'constitutionStatus':
                 if (_constitutionSelectedWorkspace && _constitutionSelectedWorkspace.workspaceRoot === msg.workspaceRoot) {
@@ -420,10 +452,10 @@
                 }
                 break;
             }
-            case 'constitutionFileDeleted':
-                if (constitutionPreviewContent && _constitutionSelectedWorkspace && _constitutionSelectedWorkspace.workspaceRoot === msg.workspaceRoot) {
-                    const govFile = msg.governanceFile || 'constitution';
-                    if (govFile === 'constitution') {
+            case 'constitutionFileDeleted': {
+                const govFile = msg.governanceFile || 'constitution';
+                if (govFile === 'constitution') {
+                    if (constitutionPreviewContent && _constitutionSelectedWorkspace && _constitutionSelectedWorkspace.workspaceRoot === msg.workspaceRoot) {
                         constitutionPreviewContent.innerHTML = `
                             <div class="constitution-onboarding">
                                 <p class="constitution-onboarding-title">No constitution found for this workspace.</p>
@@ -432,79 +464,75 @@
                                 <p>Use <strong>Build via Planner</strong> above to generate one for this workspace.</p>
                             </div>
                         `;
-                    } else {
+                        state.editOriginalContent.constitution = '';
+                        _constitutionSelectedFile = null;
+                        if (btnEditConstitution) btnEditConstitution.disabled = true;
+                        if (btnBuildViaPlanner) {
+                            btnBuildViaPlanner.style.display = '';
+                            btnBuildViaPlanner.disabled = false;
+                        }
+                        if (btnCopyBuildPrompt) {
+                            btnCopyBuildPrompt.style.display = '';
+                            btnCopyBuildPrompt.disabled = false;
+                        }
+                        if (btnUpdateViaPlanner) btnUpdateViaPlanner.style.display = 'none';
+                        if (btnCopyUpdatePrompt) btnCopyUpdatePrompt.style.display = 'none';
+                        if (btnDeleteConstitution) btnDeleteConstitution.style.display = 'none';
+                        if (btnEnableConstitution) {
+                            btnEnableConstitution.disabled = true;
+                            btnEnableConstitution.textContent = 'Enable as Planning Reference';
+                            btnEnableConstitution.dataset.enabled = 'false';
+                        }
+                        if (activeConstitutionBanner) {
+                            activeConstitutionBanner.classList.add('inactive');
+                        }
+                    }
+                } else {
+                    if (systemPreviewContent && _systemSelectedWorkspace && _systemSelectedWorkspace.workspaceRoot === msg.workspaceRoot) {
                         const filename = govFile === 'claude' ? 'CLAUDE.md' : 'AGENTS.md';
-                        constitutionPreviewContent.innerHTML = `
+                        systemPreviewContent.innerHTML = `
                             <div class="constitution-onboarding">
                                 <p class="constitution-onboarding-title">No ${filename} found for this workspace.</p>
                                 <p>You can create one by clicking <strong>Edit</strong> or writing it from the terminal/editor.</p>
                             </div>
                         `;
-                    }
-                    state.editOriginalContent.constitution = '';
-                    _constitutionSelectedFile = null;
-                    if (btnEditConstitution) btnEditConstitution.disabled = (govFile === 'constitution');
-                    if (btnBuildViaPlanner) {
-                        if (govFile === 'constitution') {
-                            btnBuildViaPlanner.style.display = '';
-                            btnBuildViaPlanner.disabled = false;
-                        } else {
-                            btnBuildViaPlanner.style.display = 'none';
-                        }
-                    }
-                    if (btnCopyBuildPrompt) {
-                        if (govFile === 'constitution') {
-                            btnCopyBuildPrompt.style.display = '';
-                            btnCopyBuildPrompt.disabled = false;
-                        } else {
-                            btnCopyBuildPrompt.style.display = 'none';
-                        }
-                    }
-                    if (btnUpdateViaPlanner) btnUpdateViaPlanner.style.display = 'none';
-                    if (btnCopyUpdatePrompt) btnCopyUpdatePrompt.style.display = 'none';
-                    if (btnDeleteConstitution) btnDeleteConstitution.style.display = 'none';
-                    if (btnEnableConstitution) {
-                        btnEnableConstitution.disabled = true;
-                        btnEnableConstitution.textContent = 'Enable as Planning Reference';
-                        btnEnableConstitution.dataset.enabled = 'false';
-                    }
-                    if (activeConstitutionBanner) {
-                        activeConstitutionBanner.classList.add('inactive');
+                        state.editOriginalContent.system = '';
+                        _systemSelectedFile = null;
+                        if (btnEditSystem) btnEditSystem.disabled = false;
+                        if (btnDeleteSystem) btnDeleteSystem.style.display = 'none';
                     }
                 }
                 break;
-            case 'constitutionFileRead':
-                if (constitutionPreviewContent && _constitutionSelectedWorkspace && _constitutionSelectedWorkspace.workspaceRoot === msg.workspaceRoot) {
-                    if ((msg.governanceFile ?? 'constitution') !== _constitutionSelectedGovKey) {
-                        break; // Race guard — ignore stale reads for a different file-type
-                    }
-                    if (state.editMode.constitution) {
-                        state.externalChangePending.constitution = true;
-                    } else {
-                        const isConst = (_constitutionSelectedGovKey === 'constitution');
-                        if (isConst) {
-                            vscode.postMessage({ type: 'getConstitutionStatus', workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot });
+            }
+            case 'constitutionFileRead': {
+                const govFile = msg.governanceFile ?? 'constitution';
+                if (govFile === 'constitution') {
+                    if (constitutionPreviewContent && _constitutionSelectedWorkspace && _constitutionSelectedWorkspace.workspaceRoot === msg.workspaceRoot) {
+                        if (_constitutionSelectedGovKey !== 'constitution') {
+                            break;
                         }
-                        if (msg.exists) {
-                            constitutionPreviewContent.innerHTML = msg.renderedHtml || '';
-                            state.editOriginalContent.constitution = msg.content || '';
-                            _constitutionSelectedFile = msg.filePath;
-                            if (btnEditConstitution) btnEditConstitution.disabled = false;
-                            if (btnBuildViaPlanner) btnBuildViaPlanner.style.display = 'none';
-                            if (btnCopyBuildPrompt) btnCopyBuildPrompt.style.display = 'none';
-                            if (btnUpdateViaPlanner) {
-                                btnUpdateViaPlanner.style.display = isConst ? '' : 'none';
-                                btnUpdateViaPlanner.disabled = !isConst;
-                            }
-                            if (btnCopyUpdatePrompt) {
-                                btnCopyUpdatePrompt.style.display = isConst ? '' : 'none';
-                                btnCopyUpdatePrompt.disabled = !isConst;
-                            }
-                            if (btnDeleteConstitution) btnDeleteConstitution.style.display = '';
-                            if (btnSetConstitutionPath) btnSetConstitutionPath.disabled = !isConst;
+                        if (state.editMode.constitution) {
+                            state.externalChangePending.constitution = true;
                         } else {
-                            const filename = _constitutionSelectedGovKey === 'claude' ? 'CLAUDE.md' : 'AGENTS.md';
-                            if (isConst) {
+                            vscode.postMessage({ type: 'getConstitutionStatus', workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot });
+                            if (msg.exists) {
+                                constitutionPreviewContent.innerHTML = msg.renderedHtml || '';
+                                state.editOriginalContent.constitution = msg.content || '';
+                                _constitutionSelectedFile = msg.filePath;
+                                if (btnEditConstitution) btnEditConstitution.disabled = false;
+                                if (btnBuildViaPlanner) btnBuildViaPlanner.style.display = 'none';
+                                if (btnCopyBuildPrompt) btnCopyBuildPrompt.style.display = 'none';
+                                if (btnUpdateViaPlanner) {
+                                    btnUpdateViaPlanner.style.display = '';
+                                    btnUpdateViaPlanner.disabled = false;
+                                }
+                                if (btnCopyUpdatePrompt) {
+                                    btnCopyUpdatePrompt.style.display = '';
+                                    btnCopyUpdatePrompt.disabled = false;
+                                }
+                                if (btnDeleteConstitution) btnDeleteConstitution.style.display = '';
+                                if (btnSetConstitutionPath) btnSetConstitutionPath.disabled = false;
+                            } else {
                                 constitutionPreviewContent.innerHTML = `
                                     <div class="constitution-onboarding">
                                         <p class="constitution-onboarding-title">No constitution found for this workspace.</p>
@@ -513,33 +541,56 @@
                                         <p>Use <strong>Build via Planner</strong> above to generate one for this workspace.</p>
                                     </div>
                                 `;
+                                state.editOriginalContent.constitution = '';
+                                _constitutionSelectedFile = null;
+                                if (btnEditConstitution) btnEditConstitution.disabled = true;
+                                if (btnBuildViaPlanner) {
+                                    btnBuildViaPlanner.style.display = '';
+                                    btnBuildViaPlanner.disabled = false;
+                                }
+                                if (btnCopyBuildPrompt) {
+                                    btnCopyBuildPrompt.style.display = '';
+                                    btnCopyBuildPrompt.disabled = false;
+                                }
+                                if (btnUpdateViaPlanner) btnUpdateViaPlanner.style.display = 'none';
+                                if (btnCopyUpdatePrompt) btnCopyUpdatePrompt.style.display = 'none';
+                                if (btnDeleteConstitution) btnDeleteConstitution.style.display = 'none';
+                                if (btnSetConstitutionPath) btnSetConstitutionPath.disabled = true;
+                            }
+                        }
+                    }
+                } else {
+                    if (systemPreviewContent && _systemSelectedWorkspace && _systemSelectedWorkspace.workspaceRoot === msg.workspaceRoot) {
+                        if (govFile !== _systemSelectedGovKey) {
+                            break;
+                        }
+                        if (state.editMode.system) {
+                            state.externalChangePending.system = true;
+                        } else {
+                            if (msg.exists) {
+                                systemPreviewContent.innerHTML = msg.renderedHtml || '';
+                                state.editOriginalContent.system = msg.content || '';
+                                _systemSelectedFile = msg.filePath;
+                                if (btnEditSystem) btnEditSystem.disabled = false;
+                                if (btnDeleteSystem) btnDeleteSystem.style.display = '';
                             } else {
-                                constitutionPreviewContent.innerHTML = `
+                                const filename = _systemSelectedGovKey === 'claude' ? 'CLAUDE.md' : 'AGENTS.md';
+                                systemPreviewContent.innerHTML = `
                                     <div class="constitution-onboarding">
                                         <p class="constitution-onboarding-title">No ${filename} found for this workspace.</p>
                                         <p>You can create one by clicking <strong>Edit</strong> or writing it from the terminal/editor.</p>
                                     </div>
                                 `;
+                                state.editOriginalContent.system = '';
+                                _systemSelectedFile = null;
+                                if (btnEditSystem) btnEditSystem.disabled = false;
+                                if (btnDeleteSystem) btnDeleteSystem.style.display = 'none';
                             }
-                            state.editOriginalContent.constitution = '';
-                            _constitutionSelectedFile = null;
-                            if (btnEditConstitution) btnEditConstitution.disabled = isConst;
-                            if (btnBuildViaPlanner) {
-                                btnBuildViaPlanner.style.display = isConst ? '' : 'none';
-                                btnBuildViaPlanner.disabled = !isConst;
-                            }
-                            if (btnCopyBuildPrompt) {
-                                btnCopyBuildPrompt.style.display = isConst ? '' : 'none';
-                                btnCopyBuildPrompt.disabled = !isConst;
-                            }
-                            if (btnUpdateViaPlanner) btnUpdateViaPlanner.style.display = 'none';
-                            if (btnCopyUpdatePrompt) btnCopyUpdatePrompt.style.display = 'none';
-                            if (btnDeleteConstitution) btnDeleteConstitution.style.display = 'none';
-                            if (btnSetConstitutionPath) btnSetConstitutionPath.disabled = !isConst;
                         }
                     }
                 }
-                break;
+            }
+            break;
             case 'uploadPlanAttachmentResult': {
                 uploadingPlanAttachment = false;
                 if (_kanbanSelectedPlan && _kanbanSelectedPlan.planFile === msg.planFile) {
@@ -563,8 +614,13 @@
                         if (_kanbanSelectedPlan) loadKanbanPlanPreview(_kanbanSelectedPlan);
                         vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
                     } else if (msg.tab === 'constitution') {
-                        exitEditMode('constitution');
-                        if (_constitutionSelectedWorkspace) selectConstitutionWorkspace(_constitutionSelectedWorkspace);
+                        if (msg.governanceFile === 'claude' || msg.governanceFile === 'agents') {
+                            exitEditMode('system');
+                            if (_systemSelectedWorkspace) selectSystemWorkspace(_systemSelectedWorkspace);
+                        } else {
+                            exitEditMode('constitution');
+                            if (_constitutionSelectedWorkspace) selectConstitutionWorkspace(_constitutionSelectedWorkspace);
+                        }
                     } else if (msg.tab === 'epics') {
                         exitEditMode('epics');
                         if (msg.renamedFilePath && _epicSelectedPlan) {
@@ -1344,29 +1400,90 @@
         });
     }
 
+    // =========================================================================
+    // SYSTEM TAB
+    // =========================================================================
+    function renderSystemWorkspaceList() {
+        if (!systemListPane) return;
+        systemListPane.innerHTML = '';
+
+        const toggleRow = document.createElement('div');
+        toggleRow.className = 'sidebar-toggle-row';
+        const toggleBtn = document.createElement('button');
+        toggleBtn.className = 'sidebar-toggle-btn';
+        toggleBtn.title = 'Toggle sidebar';
+        toggleBtn.textContent = state.systemListCollapsed ? '»' : '«';
+        toggleBtn.addEventListener('click', toggleSidebarCollapsed);
+        toggleRow.appendChild(toggleBtn);
+        systemListPane.appendChild(toggleRow);
+
+        if (_constitutionWorkspaces.length === 0) {
+            const emptyState = document.createElement('div');
+            emptyState.className = 'empty-state';
+            emptyState.textContent = 'No workspaces open';
+            systemListPane.appendChild(emptyState);
+            return;
+        }
+
+        _constitutionWorkspaces.forEach(ws => {
+            const itemDiv = document.createElement('div');
+            itemDiv.className = 'system-file-item';
+            if (_systemSelectedWorkspace && _systemSelectedWorkspace.workspaceRoot === ws.workspaceRoot) {
+                itemDiv.classList.add('selected');
+            }
+
+            let statusHtml = '';
+            if (ws.governance && Array.isArray(ws.governance)) {
+                const badges = ws.governance
+                    .filter(g => g.key === 'claude' || g.key === 'agents')
+                    .map(g => {
+                        const label = g.key === 'claude' ? 'Cl' : 'A';
+                        const color = g.exists ? 'var(--accent-teal)' : 'var(--text-secondary)';
+                        const opacity = g.exists ? '1' : '0.4';
+                        return `<span style="color: ${color}; opacity: ${opacity}; font-weight: bold; margin-right: 6px;">${label}</span>`;
+                    }).join('');
+                statusHtml = `<div style="font-size: 11px; margin-top: 4px;">${badges}</div>`;
+            }
+            itemDiv.innerHTML = `
+                <div style="font-weight: 500;">${escapeHtml(ws.label)}</div>
+                ${statusHtml}
+            `;
+
+            itemDiv.addEventListener('click', () => {
+                if (state.dirtyFlags.system) exitEditMode('system');
+                document.querySelectorAll('.system-file-item').forEach(el => el.classList.remove('selected'));
+                itemDiv.classList.add('selected');
+                selectSystemWorkspace(ws);
+            });
+
+            systemListPane.appendChild(itemDiv);
+        });
+    }
+
+    function selectSystemWorkspace(ws) {
+        _systemSelectedWorkspace = ws;
+        if (systemPreviewContent) systemPreviewContent.innerHTML = '<div class="empty-state">Loading...</div>';
+        vscode.postMessage({
+            type: 'readConstitutionFile',
+            workspaceRoot: ws.workspaceRoot,
+            governanceFile: _systemSelectedGovKey
+        });
+    }
+
     // Wire up governance tab buttons
     document.querySelectorAll('.gov-file-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             const key = btn.dataset.gov;
-            if (key === _constitutionSelectedGovKey) return;
-            if (state.dirtyFlags.constitution) {
-                exitEditMode('constitution');
+            if (key === _systemSelectedGovKey) return;
+            if (state.dirtyFlags.system) {
+                exitEditMode('system');
             }
-            document.querySelectorAll('.gov-file-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('#system-file-tabs .gov-file-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
-            _constitutionSelectedGovKey = key;
+            _systemSelectedGovKey = key;
 
-            const isConst = (key === 'constitution');
-            if (activeConstitutionBanner) activeConstitutionBanner.classList.add('inactive');
-            if (btnEnableConstitution) btnEnableConstitution.style.display = isConst ? '' : 'none';
-            if (btnBuildViaPlanner) btnBuildViaPlanner.style.display = isConst ? '' : 'none';
-            if (btnCopyBuildPrompt) btnCopyBuildPrompt.style.display = isConst ? '' : 'none';
-            if (btnUpdateViaPlanner) btnUpdateViaPlanner.style.display = isConst ? '' : 'none';
-            if (btnCopyUpdatePrompt) btnCopyUpdatePrompt.style.display = isConst ? '' : 'none';
-            if (btnSetConstitutionPath) btnSetConstitutionPath.style.display = isConst ? '' : 'none';
-
-            if (_constitutionSelectedWorkspace) {
-                selectConstitutionWorkspace(_constitutionSelectedWorkspace);
+            if (_systemSelectedWorkspace) {
+                selectSystemWorkspace(_systemSelectedWorkspace);
             }
         });
     });
@@ -1544,6 +1661,11 @@
             state.dirtyFlags.constitution = true;
         });
     }
+    if (systemEditor) {
+        systemEditor.addEventListener('input', () => {
+            state.dirtyFlags.system = true;
+        });
+    }
 
     if (btnEditConstitution) btnEditConstitution.addEventListener('click', () => enterEditMode('constitution'));
     if (btnCancelConstitution) btnCancelConstitution.addEventListener('click', () => exitEditMode('constitution'));
@@ -1558,6 +1680,36 @@
                 content,
                 originalContent,
                 governanceFile: _constitutionSelectedGovKey
+            });
+        });
+    }
+
+    if (btnEditSystem) btnEditSystem.addEventListener('click', () => enterEditMode('system'));
+    if (btnCancelSystem) btnCancelSystem.addEventListener('click', () => exitEditMode('system'));
+    if (btnSaveSystem) {
+        btnSaveSystem.addEventListener('click', () => {
+            if (!_systemSelectedWorkspace) return;
+            const content = systemEditor ? systemEditor.value : '';
+            const originalContent = state.editOriginalContent.system;
+            vscode.postMessage({
+                type: 'saveConstitutionFile',
+                workspaceRoot: _systemSelectedWorkspace.workspaceRoot,
+                content,
+                originalContent,
+                governanceFile: _systemSelectedGovKey
+            });
+        });
+    }
+    if (btnDeleteSystem) {
+        btnDeleteSystem.addEventListener('click', () => {
+            if (!_systemSelectedWorkspace) {
+                alert('Please select a workspace first.');
+                return;
+            }
+            vscode.postMessage({
+                type: 'deleteConstitutionFile',
+                workspaceRoot: _systemSelectedWorkspace.workspaceRoot,
+                governanceFile: _systemSelectedGovKey
             });
         });
     }
