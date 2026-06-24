@@ -1566,11 +1566,6 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(getAttachmentListDisposable);
 
-    const refineTaskDisposable = vscode.commands.registerCommand('switchboard.refineTask', async (data: { workspaceRoot: string; id: string; title: string; description: string; provider: 'linear' | 'clickup' }) => {
-        return taskViewerProvider.refineTask(data.workspaceRoot, { id: data.id, title: data.title, description: data.description, provider: data.provider });
-    });
-    context.subscriptions.push(refineTaskDisposable);
-
     const askAgentTaskDisposable = vscode.commands.registerCommand('switchboard.askAgentTask', async (data: { workspaceRoot: string; id: string; title: string; description: string; provider: 'linear' | 'clickup' }) => {
         return taskViewerProvider.askAgentTask(data.workspaceRoot, { id: data.id, title: data.title, description: data.description, provider: data.provider });
     });

@@ -3648,7 +3648,14 @@ Each plan file must include:
     }
 
     public handleGetColourKanbanIconsSetting(): boolean {
-        return vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.colourKanbanIcons', false);
+        const config = vscode.workspace.getConfiguration('switchboard');
+        const theme = config.get<string>('theme.name', 'afterburner');
+        const colourIconsConfig = config.inspect<boolean>('theme.colourKanbanIcons');
+        const hasExplicitColourIcons = colourIconsConfig?.workspaceValue !== undefined || colourIconsConfig?.globalValue !== undefined;
+        if (hasExplicitColourIcons) {
+            return !!config.get<boolean>('theme.colourKanbanIcons');
+        }
+        return (theme === 'claudify' || theme === 'afterburner-professional');
     }
 
     public async handleSetColourKanbanIconsSetting(enabled: boolean): Promise<void> {
@@ -4999,18 +5006,6 @@ Each plan file must include:
         }
     }
 
-
-    public async refineTask(workspaceRoot: string, data: { id: string; title: string; description: string; provider: 'linear' | 'clickup' }): Promise<void> {
-        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
-        if (!resolvedRoot) return;
-        const agentName = await this._getAgentNameForRole('planner', resolvedRoot);
-        if (!agentName) {
-            vscode.window.showWarningMessage('No planner agent found. Set one up in the Setup panel.');
-            return;
-        }
-        const prompt = `Please refine the following ${data.provider} task:\n\nTitle: ${data.title}\nDescription: ${data.description}\n\nTask ID: ${data.id}`;
-        await this.dispatchCustomPromptToRole('planner', prompt, resolvedRoot);
-    }
 
     public async askAgentTask(workspaceRoot: string, data: { id: string; title: string; description: string; provider: 'linear' | 'clickup' }): Promise<void> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
@@ -8891,22 +8886,6 @@ Each plan file must include:
                         break;
                     }
 
-                    case 'linearRefineTask':
-                        await this.refineTask(data.workspaceRoot, {
-                            id: data.issueId,
-                            title: data.title,
-                            description: data.description,
-                            provider: 'linear'
-                        });
-                        break;
-                    case 'clickupRefineTask':
-                        await this.refineTask(data.workspaceRoot, {
-                            id: data.taskId,
-                            title: data.title,
-                            description: data.description,
-                            provider: 'clickup'
-                        });
-                        break;
                     case 'copyTextToClipboard': {
                         const text = String(data.text || '');
                         if (!text.trim()) {

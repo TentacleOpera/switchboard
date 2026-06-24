@@ -117,3 +117,41 @@ No automated tests — this is a pure CSS visual change. Verification is manual.
 ## Recommendation
 
 **Send to Intern** — Complexity 2: three identical CSS block deletions with exact line numbers provided. No logic, no dependencies, no edge cases beyond "don't touch the h1 rule above each block."
+
+---
+
+## Reviewer Pass (in-place, 2026-06-24)
+
+### Stage 1 — Grumpy Findings
+
+| Severity | File:Line | Finding |
+|:---------|:----------|:--------|
+| CRITICAL | src/webview/planning.html:2389-2394 | afterburner-pro h2–h6 override block still present — implementation was NOT applied despite "complete" claim. |
+| CRITICAL | src/webview/design.html:2414-2419 | afterburner-pro h2–h6 override block still present — implementation was NOT applied. |
+| CRITICAL | src/webview/project.html:907-915 | afterburner-pro h2–h6 override block still present — implementation was NOT applied. |
+| MAJOR | src/webview/project.html (plan snippet) | Plan's "Implementation" snippet for project.html omitted the `#system-preview-content` selector that exists in the actual block; quoted line range "894–901" did not match the real file (907–915). A naive follower of the snippet would have left a stray override. |
+| NIT | plan "Edge Cases" for project.html | h1 color rule line ref "887–892" is wrong; actual is 899–905. |
+
+### Stage 2 — Balanced Synthesis
+
+- **Keep:** Core diagnosis (delete afterburner-pro h2–h6 blocks; Claudify's earlier equal-specificity Poppins rule wins) is correct. h1 preservation requirement correct. 3-file scope correct.
+- **Fix now:** Delete all three afterburner-pro h2–h6 blocks using the **actual** block text (including `#system-preview-content` in project.html).
+- **Defer:** Nothing.
+
+### Fixes Applied
+
+1. `src/webview/planning.html` — deleted afterburner-pro `#markdown-preview`/`#markdown-preview-tickets` h2–h6 block (was lines 2389–2394). h1 color rule at 2384–2387 preserved.
+2. `src/webview/design.html` — deleted afterburner-pro `#markdown-preview-briefs`/`#markdown-preview-design` h2–h6 block (was lines 2414–2419). h1 color rule at 2409–2412 preserved.
+3. `src/webview/project.html` — deleted afterburner-pro h2–h6 block for `#kanban-preview-content`, `#epics-preview-content`, `#constitution-preview-content`, `#system-preview-content`, `#tuning-preview-content` (was lines 907–915). h1 color rule at 899–905 preserved.
+
+### Validation Results
+
+- Grep `theme-afterburner-pro.*h[2-6]` across `src/webview/` → **0 matches** (was 9). PASS.
+- Grep `theme-afterburner-pro.*h1` across `src/webview/` → **9 matches**, all in the three preserved h1 color rules (planning.html:2384-2385, design.html:2409-2410, project.html:899-903). PASS — h1 rules intact.
+- Compilation: skipped per session policy.
+- Tests: skipped per session policy; manual visual verification checklist below still applies.
+
+### Remaining Risks
+
+- **None material.** The only documentation defect (project.html `#system-preview-content` omission in the plan snippet) was a plan-accuracy issue, not a code risk; the actual deletion covered it correctly.
+- Manual visual check still recommended per the Verification Plan checklist (Poppins headings under Afterburner Professional, GeistPixel h1 + cyan preserved, Claudify/Afterburner-plain unaffected).

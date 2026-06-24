@@ -197,6 +197,7 @@
     const btnSaveConstitution = document.getElementById('btn-save-constitution');
     const btnCancelConstitution = document.getElementById('btn-cancel-constitution');
     const constitutionListPane = document.getElementById('constitution-list-pane');
+    const constitutionWorkspaceFilter = document.getElementById('constitution-workspace-filter');
     const constitutionPreviewPane = document.getElementById('constitution-preview-pane');
     const constitutionPreviewContent = document.getElementById('constitution-preview-content');
     const constitutionEditor = document.getElementById('constitution-editor');
@@ -207,6 +208,7 @@
     const btnCancelSystem = document.getElementById('btn-cancel-system');
     const btnDeleteSystem = document.getElementById('btn-delete-system');
     const systemListPane = document.getElementById('system-list-pane');
+    const systemWorkspaceFilter = document.getElementById('system-workspace-filter');
     const systemPreviewPane = document.getElementById('system-preview-pane');
     const systemPreviewContent = document.getElementById('system-preview-content');
     const systemEditor = document.getElementById('system-editor');
@@ -372,6 +374,7 @@
                 _constitutionWorkspaces = msg.workspaces || [];
                 renderConstitutionWorkspaceList();
                 renderSystemWorkspaceList();
+                populateConstitutionWorkspaceDropdowns();
                 break;
             case 'constitutionStatus':
                 if (_constitutionSelectedWorkspace && _constitutionSelectedWorkspace.workspaceRoot === msg.workspaceRoot) {
@@ -1390,8 +1393,45 @@
         });
     }
 
+    function populateConstitutionWorkspaceDropdowns() {
+        const fill = (sel, selectedWs) => {
+            if (!sel) return;
+            sel.innerHTML = '';
+            _constitutionWorkspaces.forEach(ws => {
+                const opt = document.createElement('option');
+                opt.value = ws.workspaceRoot;
+                opt.textContent = ws.label;
+                sel.appendChild(opt);
+            });
+            if (selectedWs) sel.value = selectedWs.workspaceRoot;
+        };
+        fill(constitutionWorkspaceFilter, _constitutionSelectedWorkspace);
+        fill(systemWorkspaceFilter, _systemSelectedWorkspace);
+        // Auto-select first workspace if none selected
+        if (!_constitutionSelectedWorkspace && _constitutionWorkspaces.length > 0) {
+            selectConstitutionWorkspace(_constitutionWorkspaces[0]);
+        }
+        if (!_systemSelectedWorkspace && _constitutionWorkspaces.length > 0) {
+            selectSystemWorkspace(_constitutionWorkspaces[0]);
+        }
+    }
+
+    if (constitutionWorkspaceFilter) {
+        constitutionWorkspaceFilter.addEventListener('change', () => {
+            const ws = _constitutionWorkspaces.find(w => w.workspaceRoot === constitutionWorkspaceFilter.value);
+            if (!ws) return;
+            if (state.dirtyFlags.constitution) exitEditMode('constitution');
+            document.querySelectorAll('.constitution-file-item').forEach(el => el.classList.remove('selected'));
+            const idx = _constitutionWorkspaces.indexOf(ws);
+            const card = constitutionListPane?.querySelectorAll('.constitution-file-item')[idx];
+            if (card) card.classList.add('selected');
+            selectConstitutionWorkspace(ws);
+        });
+    }
+
     function selectConstitutionWorkspace(ws) {
         _constitutionSelectedWorkspace = ws;
+        if (constitutionWorkspaceFilter) constitutionWorkspaceFilter.value = ws.workspaceRoot;
         if (constitutionPreviewContent) constitutionPreviewContent.innerHTML = '<div class="empty-state">Loading...</div>';
         vscode.postMessage({
             type: 'readConstitutionFile',
@@ -1460,8 +1500,22 @@
         });
     }
 
+    if (systemWorkspaceFilter) {
+        systemWorkspaceFilter.addEventListener('change', () => {
+            const ws = _constitutionWorkspaces.find(w => w.workspaceRoot === systemWorkspaceFilter.value);
+            if (!ws) return;
+            if (state.dirtyFlags.system) exitEditMode('system');
+            document.querySelectorAll('.system-file-item').forEach(el => el.classList.remove('selected'));
+            const idx = _constitutionWorkspaces.indexOf(ws);
+            const card = systemListPane?.querySelectorAll('.system-file-item')[idx];
+            if (card) card.classList.add('selected');
+            selectSystemWorkspace(ws);
+        });
+    }
+
     function selectSystemWorkspace(ws) {
         _systemSelectedWorkspace = ws;
+        if (systemWorkspaceFilter) systemWorkspaceFilter.value = ws.workspaceRoot;
         if (systemPreviewContent) systemPreviewContent.innerHTML = '<div class="empty-state">Loading...</div>';
         vscode.postMessage({
             type: 'readConstitutionFile',

@@ -18,7 +18,10 @@ export function getThemeBodyClass(): string {
         const animDisabled = cfg.get<boolean>('theme.disableCyberAnimation', false);
         return 'cyber-theme-enabled' + (animDisabled ? ' cyber-animation-disabled' : '');
     }
-    const colourIcons = cfg.get<boolean>('theme.colourKanbanIcons', false);
+    const colourIconsConfig = cfg.inspect<boolean>('theme.colourKanbanIcons');
+    const hasExplicitColourIcons = colourIconsConfig?.workspaceValue !== undefined || colourIconsConfig?.globalValue !== undefined;
+    const isProTheme = theme === 'claudify' || theme === 'afterburner-professional';
+    const colourIcons = hasExplicitColourIcons ? !!cfg.get<boolean>('theme.colourKanbanIcons') : (isProTheme ? true : false);
     const colourClass = colourIcons ? ' kanban-icons-colour' : '';
     if (theme === 'claudify') {
         return 'theme-claudify' + colourClass;
