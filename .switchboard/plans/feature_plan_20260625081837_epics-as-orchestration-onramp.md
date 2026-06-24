@@ -33,7 +33,7 @@ There are two legitimate ways to action an epic, and the confusion comes from tr
 - **`kanban-epic-subtask-column-leak-and-backlog-cascade.md`** §3 (focus-aware column buttons) → **dropped**: with focus mode removed there is no focused-subtask column path to support. §2's cascade should generalize so **every** epic move cascades to its subtasks (not only backlog/activate).
 - **`kanban-epic-focus-worktree-decouple.md`** → **headline goal rejected**: do *not* make focus mode first-class; **remove** on-board focus mode instead. Salvage only its worktree half — move per-epic worktree creation into the Worktrees tab and demote the epic card's worktree chip to a read-only branch label. The plan effectively becomes "worktree cleanup."
 
-This plan adds the orchestrate-it path + the orchestrator role + the modal removal, **and** the focus-mode removal (Decision #8). It does not change cascade semantics beyond generalizing them, and does not touch dispatch routing (which is by `epic_id`, independent of focus).
+This plan adds the orchestrate-it path + the orchestrator role + the modal removal. It **requires** the focus-mode removal of Decision #8 but does not own it — that work lives in the two amended plans above. It does not touch dispatch routing (which is by `epic_id`, independent of focus).
 
 ## Metadata
 
@@ -103,11 +103,12 @@ None — all forks decided. One product note: Decision #1 deliberately keeps the
 - Remove the modal-open path on the EPIC strip button (`:9335-9340`) while **keeping** its convert-to-epic / bulk-add-subtask path (`:9341-9356`).
 - Remove the `kanbanEpicDetails` message (sender `KanbanProvider.ts:7466-7469` `source:'kanban'` branch; receiver `kanban.html:6600-6601`). Keep `getEpicDetails`/`updateEpicConfig`/`addSubtaskToEpic`/`removeSubtaskFromEpic`/`deleteEpic` handlers (shared / relocated).
 
-### Phase 3b — Remove on-board focus mode; make subtasks a rigid unit (`kanban.html`; amends drafted plans #2/#3)
-- Make the subtask exclusion unconditional: `displayCards.filter(card => !card.epicId)` (`kanban.html:~5086`) always applied — drop the `currentFocusedEpicId` branch (`:5077-5087`).
-- Delete focus machinery: `currentFocusedEpicId` (`:3738`), `enterEpicFocusMode`/`clearEpicFocusMode` (`:4992-5021`), `renderFocusBanner`, the badge/chip focus triggers (`:9301-9307`), and focus-conditional render branches (`:6152-6184`).
-- Generalize cascade: ensure **every** epic move cascades to subtasks (`moveCardToColumn` already does via `updateColumnWithEpicCascade`; confirm all board move paths route through it). Drop plan #2 §3 (focus-aware column buttons) as moot.
-- Salvage plan #3's worktree half: per-epic worktree creation → Worktrees tab; epic card's worktree chip → read-only branch label. (Dispatch routing by `epic_id` unchanged.)
+### Phase 3b — On-board focus-mode removal (owned by the amended drafted plans; dependency, not re-specced here)
+Focus-mode removal and the rigid-unit board behavior that Decision #8 requires are **owned by the two amended drafted plans**, and this plan depends on them landing — it does not re-implement them:
+- `kanban-epic-subtask-column-leak-and-backlog-cascade.md` → unconditional `!card.epicId` exclusion (§1) + cascade on every epic move (§2). (§3 dropped.)
+- `kanban-epic-focus-worktree-decouple.md` → deletes the focus machinery (`enterEpicFocusMode`/`clearEpicFocusMode`/`currentFocusedEpicId`/`renderFocusBanner`) and salvages the worktree half (creation → Worktrees tab; chip → label).
+
+This plan's only stake here is the **consequence**: with focus mode gone, the **Epics tab (Phase 2) is the sole surface for inspecting/managing an epic's subtasks** — which is exactly what Phase 2 builds. If those two plans are deferred, Phase 2 must not assume focus mode is already gone.
 
 ### Phase 4 (optional) — Per-CLI orchestration keyword
 - Add `targetCli`/`epicCliKeyword` to `PromptBuilderOptions`; in the orchestrator branch, append a delimited keyword line only when a keyword is mapped. In the dispatch path, derive the CLI binary from `getStartupCommands(workspaceRoot)['orchestrator']` first token; look up an `epic_cli_keywords` config map; unknown → inject nothing.

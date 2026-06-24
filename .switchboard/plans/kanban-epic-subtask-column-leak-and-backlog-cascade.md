@@ -14,7 +14,7 @@ Two defects compound:
 
 2. **Missing backlog/activate cascade (the root cause).** `moveCardToColumn` (`KanbanProvider.ts` ~L4423-L4427) already cascades an epic move to its subtasks via `db.updateColumnWithEpicCascade(...)`. But the right-click actions `sendToBacklog` (~L6257) and `sendToNew` (~L6269) bypass it — they call `db.updateColumn(epicSessionId, ...)` directly on just the epic. So backlogging an epic moves only the epic; its subtasks stay where they were (CREATED), orphaned and free to be picked up by Advance All.
 
-A model note that resolves the underlying tension: **at board level the epic is one unit (moves cascade to subtasks); inside epic-focus mode subtasks progress independently.** This fix enforces the board-level half (cascade + hide subtasks from loose columns); focus-mode independence is preserved by making column ops focus-aware (below).
+A model note: **the epic is a rigid unit — its subtasks always share its column, cascade on every move, and never appear as individual board cards.** Subtasks do not diverge across stages; the place to inspect or manage them is the **Epics tab**, not an on-board filter. (On-board epic *focus mode* is being removed — see `kanban-epic-focus-worktree-decouple.md`.) This fix enforces the data half: exclude subtasks from loose-column ops, and cascade the container's moves so subtasks follow it.
 
 ## Metadata
 
@@ -23,12 +23,12 @@ A model note that resolves the underlying tension: **at board level the epic is 
 
 ## Complexity Audit
 
-Routine. No schema changes — `updateColumnWithEpicCascade` and `getSubtasksByEpicId` already exist and are used by `moveCardToColumn`. The work is (a) a one-line-each reroute of `sendToBacklog`/`sendToNew` through the cascade, (b) a shared source-card helper that mirrors the webview's display contract, and (c) a focus-aware tweak so focus-mode Advance All still targets the focused epic's subtasks.
+Routine. No schema changes — `updateColumnWithEpicCascade` and `getSubtasksByEpicId` already exist and are used by `moveCardToColumn`. The work is (a) a one-line-each reroute of `sendToBacklog`/`sendToNew` through the cascade, (b) a shared source-card helper that mirrors the webview's display contract, and (c) making the subtask exclusion **unconditional** now that on-board focus mode is being removed (no focus-aware exception needed).
 
 ## Edge-Case & Dependency Audit
 
 - **Subtask carries its own column independent of the epic** — by design (subtasks can progress in focus mode). The fix does NOT force-sync columns; it only (i) excludes subtasks from loose-column ops and (ii) cascades the *container* moves (backlog/activate).
-- **Epic-focus mode (worktree-gated today).** In focus mode the board shows the focused epic's subtasks as column cards, and the per-column Advance-All button is shown. A blanket `!card.epicId` exclusion would make focus-mode Advance All a no-op. Must be focus-aware: when focused, column buttons send explicit subtask IDs through the selection-based path (same mechanism already used for `CODED_AUTO` at `kanban.html` ~L4737-L4738), which trusts IDs and does not exclude subtasks.
+- **No focus-mode exception (model change).** On-board epic-focus mode is being removed (`kanban-epic-focus-worktree-decouple.md`), so the `!card.epicId` exclusion is now **unconditional** and correct — subtasks never appear as column cards, so there is no focus-mode Advance-All to preserve. The focus-aware column-button work this plan originally proposed (§3) is therefore dropped.
 - **Selection-based handlers must NOT exclude subtasks.** Explicit `msg.sessionIds` / `_cardMatchesIds` handlers (drag-drop move, `moveSelected`, `promptSelected`, chat copy, lead pair-programming) trust the IDs the user picked. Leave them untouched.
 - **Epic card itself is not a subtask** (`epicId` empty, `isEpic` true), so `!card.epicId` keeps epic cards in column ops; advancing a column containing an epic still cascades via `moveCardToColumn`.
 - **Completed subtasks** carry `epicId` too and are correctly excluded from active-column ops.
@@ -43,9 +43,9 @@ Added `_visibleColumnCards(workspaceRoot, column)` returning `_lastCards.filter(
 - `batchPlannerPrompt` (CREATED), `batchLowComplexity` + Jules dispatch (PLAN REVIEWED low-complexity), `moveAll`, `promptAll`, `completeAll`.
 Also added `if (c.epicId) return false;` to the two per-role prompt-preview filters so previews match what dispatch sends. Regression test: `src/test/kanban-subtask-column-leak-regression.test.js` (passing).
 
-### 2. Backlog/activate cascade — `src/services/KanbanProvider.ts` — PENDING
+### 2. Cascade on **every** epic move — `src/services/KanbanProvider.ts` — PENDING
 
-Reroute `sendToBacklog` and `sendToNew` so an epic move cascades to its subtasks, mirroring `moveCardToColumn`:
+Model: an epic is rigid, so **every** move of an epic card cascades to its subtasks. `moveCardToColumn` already does this via `updateColumnWithEpicCascade`; the gap is the handlers that bypass it with a direct `db.updateColumn(...)`. Reroute `sendToBacklog` and `sendToNew` through `moveCardToColumn`, and audit the other epic move paths (drag-drop, `moveCardForward`/`moveCardBackwards`, `moveAll`) to confirm they all route through `moveCardToColumn` (the cascading path) for epic cards:
 
 ```ts
 case 'sendToBacklog': {
@@ -61,21 +61,9 @@ Same for `sendToNew` with `'CREATED'`. This replaces the direct `db.updateColumn
 
 > Decision point: confirm `moveCardToColumn` performs the same side effects `sendToBacklog`/`sendToNew` did (state-write mirror, integration sync). If it diverges, factor a small `moveEpicOrPlan(root, sid, col)` that both paths share.
 
-### 3. Focus-aware column buttons — `src/webview/kanban.html` — PENDING
+### 3. Focus-aware column buttons — **DROPPED**
 
-In the column-action click handler (`moveAll`/`promptAll`/etc., ~L4724), when `currentFocusedEpicId` is set, send the explicit IDs through the selection path instead of the column path:
-
-```js
-if (currentFocusedEpicId) {
-    postKanbanMessage({ type: 'moveSelected', column: backendColumn, sessionIds: ids });
-} else if (column === 'CODED_AUTO') {
-    postKanbanMessage({ type: 'moveSelected', column: backendColumn, sessionIds: ids });
-} else {
-    postKanbanMessage({ type: 'moveAll', column: backendColumn });
-}
-```
-
-`getAllInColumn` already returns the subtask IDs visible in that column while focused. The backend `moveSelected` path trusts IDs and does not exclude subtasks, so focus-mode Advance All keeps working. (This is a no-op for users who never enter focus mode.)
+This step originally added a focus-mode branch to the column-action handler so focus-mode Advance All would target the focused epic's subtasks. **On-board focus mode is being removed** (`kanban-epic-focus-worktree-decouple.md`), so there is no focus path to support and the unconditional `!card.epicId` exclusion from §1 is the complete, correct behavior. No change to the column-action handler is needed for epics.
 
 ## Verification Plan
 
@@ -91,8 +79,8 @@ if (currentFocusedEpicId) {
 
 ## Status
 
-- §1 (exclusion + previews + test) — **implemented** in working tree.
-- §2 (backlog/activate cascade) — **pending**.
-- §3 (focus-aware column buttons) — **pending**.
+- §1 (exclusion + previews + test) — **implemented** in working tree. The exclusion is now **unconditional** (no focus exception).
+- §2 (cascade on every epic move) — **pending**.
+- §3 (focus-aware column buttons) — **dropped** (on-board focus mode is being removed).
 
-Depends-on: none. Blocks: `kanban-epic-focus-worktree-decouple.md` (that plan makes focus always-available, which relies on §3 being in place).
+Depends-on: none. Relates-to: `kanban-epic-focus-worktree-decouple.md` (removes on-board focus mode) and `feature_plan_20260625081837_epics-as-orchestration-onramp.md` (the Epics tab becomes the sole epic-inspection surface).

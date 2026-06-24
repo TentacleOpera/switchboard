@@ -281,3 +281,51 @@ case 'systemPromptCopied': {
 ---
 
 **Recommendation:** Complexity 4 → **Send to Coder.**
+
+## Reviewer Pass — Completed
+
+### Review Status: APPROVED (no code fixes required)
+
+All five plan sections (§1–§5) have corresponding code changes present in `src/`. Static verification confirms the implementation is faithful to the plan. No CRITICAL or MAJOR findings. Three NITs identified, all either pre-existing issues mirrored for parity or explicitly accepted risks documented in the plan.
+
+### Files Changed (verified in working tree)
+
+| File | Lines | Change |
+|------|-------|--------|
+| `src/webview/project.html` | 1551–1552 | Added `btn-build-system` and `btn-copy-system-prompt` buttons to System control strip |
+| `src/webview/project.js` | 251–252 | Element lookups for new buttons |
+| `src/webview/project.js` | 512–523 | `systemPromptCopied` handler — dedicated Copy-button toast feedback |
+| `src/webview/project.js` | 560–574 | `constitutionFileDeleted` System branch — shows Build/Copy buttons after delete (§3b) |
+| `src/webview/project.js` | 647–648 | `constitutionFileRead` exists branch — hides Build/Copy buttons |
+| `src/webview/project.js` | 651–662 | `constitutionFileRead` missing branch — shows Build/Copy buttons + updated empty-state copy |
+| `src/webview/project.js` | 1879–1898 | Click handlers for `invokeSystemBuilder` and `copySystemBuildPrompt` |
+| `src/services/PlanningPanelProvider.ts` | 3252–3271 | `invokeSystemBuilder` case — parameterized by gov key, `allRoots` guard, terminal reuse |
+| `src/services/PlanningPanelProvider.ts` | 3272–3291 | `copySystemBuildPrompt` case — parameterized prompt, clipboard write, `systemPromptCopied` toast |
+
+### Findings
+
+| ID | Severity | Location | Description | Disposition |
+|----|----------|----------|-------------|-------------|
+| NIT-1 | NIT | `project.js:524–576` | `constitutionFileDeleted` handler does not check `msg.success` — if the filesystem delete fails, the empty state and Build buttons are shown even though the file still exists on disk. | **Defer** — pre-existing in the Constitution branch (lines 526–558). Not introduced by this plan. Fixing only the System branch would create an asymmetry. File a separate plan if desired. |
+| NIT-2 | NIT | `PlanningPanelProvider.ts:3260–3262` | Terminal-reuse logic grabs any terminal with "planner"/"lead" in its name regardless of workspace — prompt could be sent to a terminal in the wrong workspace. | **Defer** — explicitly accepted parity-risk per plan §4. Identical to shipped `invokeConstitutionBuilder` (line 3231). |
+| NIT-3 | NIT | `project.js:570` | `btnEditSystem.disabled = false` when file is missing, while Constitution branch sets `btnEditConstitution.disabled = true`. System tab allows creating a file via Edit; Constitution doesn't. | **Keep** — intentional pre-existing behavioral divergence. Plan code samples explicitly specify `disabled = false`. |
+
+### Validation Results
+
+- **Compilation (`npm run compile`):** Skipped per session directives.
+- **Automated tests:** Skipped per session directives (run separately by user).
+- **Static verification:**
+  - `allRoots` confirmed in scope at both provider cases (defined at `PlanningPanelProvider.ts:1617`, `_handleMessage` function scope).
+  - `governanceFile` parameterization (`claude` → `CLAUDE.md`, `agents` → `AGENTS.md`) verified correct in all four locations (two provider cases, two JS branches).
+  - Empty-state copy matches plan verbatim ("Use **Build via Planner** above… or **Copy Build Prompt** to run it yourself.").
+  - `systemPromptCopied` handler properly decoupled from `constitutionPromptCopied` — no coupling between tabs' toast logic.
+  - `governanceFileChanged` watcher (`project.js:413–419`) triggers `readConstitutionFile` which toggles button visibility — refresh-after-build path confirmed.
+  - No `confirm()` / `window.confirm()` dialogs introduced (repo hard rule respected).
+  - No `dist/` edits (source of truth is `src/`).
+  - No new runtime dependencies (reuses `terminalUtils.sendRobustText` via inline `require`, matching existing pattern).
+
+### Remaining Risks
+
+1. **NIT-1 (deferred):** Failed deletes silently show the empty state. Pre-existing; affects both Constitution and System tabs.
+2. **NIT-2 (deferred):** Cross-workspace terminal reuse. Pre-existing; affects both Constitution and System builder invocations.
+3. **Manual UI verification (plan §1–§8) not executed** — requires installed VSIX and interactive testing. User should run through the 8 manual verification steps before release.
