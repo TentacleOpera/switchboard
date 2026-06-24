@@ -236,3 +236,54 @@ tryResolvePendingEpicSelection();   // <-- ADD
 ---
 
 **Recommendation:** Complexity is 4/10 → **Send to Coder**.
+
+---
+
+## Reviewer Pass (2026-06-25)
+
+### Verdict: APPROVED — no code fixes required.
+
+All five implementation steps (3a–3e) verified against the actual code. Implementation is faithful to the plan; the non-epic path is preserved byte-for-byte.
+
+### Files Changed (verified in code)
+
+| File | Location | Change |
+|---|---|---|
+| `src/webview/kanban.html` | 5226-5239 | Review-button handler now looks up `cardData` from `currentCards` and attaches `isEpic: cardData?.isEpic \|\| false` to the `reviewPlan` message. |
+| `src/services/KanbanProvider.ts` | 6321-6328 | `case 'reviewPlan'` forwards `isEpic: msg.isEpic === true` on the `activateKanbanTabAndSelectPlan` message to the project webview. |
+| `src/webview/project.js` | 170 | `let _pendingEpicSelection = null;` declared adjacent to `_pendingKanbanSelection` (169). |
+| `src/webview/project.js` | 341-355 | `case 'activateKanbanTabAndSelectPlan'` — epic branch gated on `msg.isEpic === true`: sets `_pendingEpicSelection`, clears `epicsFilters.workspaceRoot`, clicks the epics tab, calls `tryResolvePendingEpicSelection()`, breaks before the kanban path. |
+| `src/webview/project.js` | 356-377 | Non-epic kanban path — unchanged from original. |
+| `src/webview/project.js` | 1023-1041 | `tryResolvePendingEpicSelection()` — mirrors `tryResolvePendingKanbanSelection()`; searches pool of `[..._kanbanPlansCache.filter(p => p.isEpic), ..._epicDocumentsCache]`; matches by `planFile` → `planId` → `sessionId`; resolves DOM via `.epic-plan-item[data-plan-id]`, scrolls into view, selects, calls `selectEpic(match)`. |
+| `src/webview/project.js` | 1285 | `renderEpicsList()` — `itemDiv.dataset.planId = plan.planId \|\| ''` added to the `.epic-plan-item` div. |
+| `src/webview/project.js` | 307 | `kanbanPlansLoaded` handler — `tryResolvePendingEpicSelection()` added after `tryResolvePendingKanbanSelection()`. |
+| `src/webview/project.js` | 385 | `epicDocumentsReady` handler — `tryResolvePendingEpicSelection()` added after `renderEpicsList()`. |
+
+### Adversarial Findings
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| 1 | NIT | Plan line-number citations drifted from actual code: `KanbanProvider.ts` reviewPlan case cited at 6272-6292, actual **6309-6331**; `epicsFilters` cited at 275, actual **276**; `epicsWorkspaceFilter` cited at 213, actual **214**. Implementer located correct code via grep; no code impact. | Doc-only — plan citations corrected in this table. |
+| 2 | NIT (pre-existing, parity) | `tryResolvePendingEpicSelection` (project.js:1034) uses unescaped `match.planId` in `querySelector(\`.epic-plan-item[data-plan-id="${match.planId}"]\`)`. For standalone epic documents, `planId` is `epic-doc:${fullPath}` (PlanningPanelProvider.ts:2879) — contains colons/slashes/spaces. Safe inside *quoted* CSS attribute selectors. Identical to the pre-existing `tryResolvePendingKanbanSelection` (project.js:1014). | Defer — not a regression; out of scope. |
+| 3 | NIT (pre-existing, parity) | `_pendingEpicSelection` is not cleared if the target epic is never found in either cache (e.g. deleted between click and resolution). Lingers until the next Review click. Same latent pattern as `_pendingKanbanSelection`. | Defer — harmless; out of scope. |
+
+### Regression Safety (verified)
+
+- **Non-epic path:** Epic branch is strictly gated on `msg.isEpic === true` and `break`s before the kanban path (project.js:342-354). Kanban path (356-377) is byte-for-byte original. **No regression.**
+- **`activatePlanInProjectPanel` (KanbanProvider.ts:178-192):** Does not pass `isEpic` → falls through to kanban path. Used by `TaskViewerProvider.ts:15985` for new-plan auto-edit. **Unaffected.**
+- **Legacy `planning.js:3673` handler:** Separate handler in planning.html webview; not reached by the Review button flow (which routes to project.html via `postMessageToProjectWebview`). **Unaffected.**
+- **Cold-cache timing:** Epics tab click fires both `fetchKanbanPlans` and `fetchEpicDocuments` (project.js:35-38). Deferred resolution re-attempts after both `kanbanPlansLoaded` (line 307) and `epicDocumentsReady` (line 385). **Correct.**
+- **Standalone epic documents:** Carry `planId: 'epic-doc:${fullPath}'` and `isEpic: true` (PlanningPanelProvider.ts:2879-2886), so the resolver's pool and `data-plan-id` lookup both work. **Correct.**
+- **`selectEpic()` compatibility:** Only consumes `plan.planFile` (project.js:1326) — present on both DB epics and standalone documents. **Correct.**
+
+### Validation Results
+
+- **Compilation:** Skipped per session directives.
+- **Automated tests:** Skipped per session directives.
+- **Manual verification:** Not executed in this session (requires running VS Code webview). The manual verification checklist in the Verification Plan section above remains the user's responsibility.
+
+### Remaining Risks
+
+1. **Unescaped `planId` in querySelector** (NIT, pre-existing parity) — would only break if a `planFile` path contained a double-quote `"` or backslash `\`, which is not expected on macOS/Windows/Linux file systems. Shared with the kanban resolver.
+2. **Stale pending selection** (NIT, pre-existing parity) — a Review click on an epic that no longer exists in either cache leaves `_pendingEpicSelection` set until the next Review click. No user-visible impact.
+3. **No automated test coverage** for the new epic-routing branch. The existing test suite (`src/test/direct-create-ticket-regression.test.js`) only asserts that `activatePlanInProjectPanel` is defined and invoked — it does not cover the `isEpic` branch. A future test could assert that `reviewPlan` with `isEpic: true` produces an `activateKanbanTabAndSelectPlan` message carrying `isEpic: true`.

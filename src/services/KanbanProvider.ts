@@ -149,7 +149,6 @@ export class KanbanProvider implements vscode.Disposable {
     private _kanbanOrderOverrides: Record<string, number>;
     private _taskViewerProvider?: TaskViewerProvider;
     private _repoScopeFilter: string | null = null;
-    private _focusedWorktreePath: string | null = null;
     private _projectFilter: string | null = KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
     private _projectFilterNeedsValidation: boolean = false;
     private _projectFilterSaveTimeout: NodeJS.Timeout | null = null;
@@ -7234,14 +7233,6 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                         .map(([role]) => role);
                     await this._taskViewerProvider.ensureWorktreeTerminals(wt.path, activeAgents);
                     await this._taskViewerProvider.revealWorktreeTerminal(wt.path);
-                }
-                break;
-            }
-            case 'focusWorktree': {
-                const { worktreePath } = msg;
-                this._focusedWorktreePath = worktreePath || null;
-                if (this._taskViewerProvider) {
-                    this._taskViewerProvider.notifyStateChanged();
                 }
                 break;
             }

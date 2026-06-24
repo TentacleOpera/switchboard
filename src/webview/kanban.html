@@ -2570,7 +2570,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <span id="wt-indicator-branch" style="font-family:monospace;"></span>
                 </div>
             </div>
-            <div id="kanban-focus-banner" style="display:none; align-items:center; padding:4px 8px; background:var(--banner-bg, #222); border-bottom:1px solid var(--border-subtle, #333);"></div>
             <div class="kanban-board" id="kanban-board"></div>
         </div>
     </div>
@@ -3779,8 +3778,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             .map(col => col.id);
         let currentCards = [];
         let currentEpicWorktrees = {};
-        let currentFocusedEpicId = null;
-        let currentFocusedEpicWorktreePath = null;
         let lastAgentNames = {};
         let cliTriggersEnabled = true;
         let dynamicComplexityRoutingEnabled = true;
@@ -5033,46 +5030,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             el.style.display = 'flex';
         }
 
-        function enterEpicFocusMode(epicId) {
-            currentFocusedEpicId = epicId;
-            const linked = currentEpicWorktrees[epicId];
-            currentFocusedEpicWorktreePath = linked ? linked.path : null;
 
-            postKanbanMessage({ type: 'focusWorktree', worktreePath: currentFocusedEpicWorktreePath });
-            updateWorktreeIndicator(currentFocusedEpicWorktreePath);
-
-            renderBoard(currentCards);
-            renderFocusBanner();
-        }
-
-        function clearEpicFocusMode() {
-            currentFocusedEpicId = null;
-            currentFocusedEpicWorktreePath = null;
-            postKanbanMessage({ type: 'focusWorktree', worktreePath: null });
-            updateWorktreeIndicator(null);
-            renderBoard(currentCards);
-            renderFocusBanner();
-        }
-
-        function renderFocusBanner() {
-            const bar = document.getElementById('kanban-focus-banner');
-            if (!bar) return;
-            if (!currentFocusedEpicId) {
-                bar.style.display = 'none';
-                return;
-            }
-            const epic = currentCards.find(p => (p.planId || p.sessionId) === currentFocusedEpicId);
-            const wtInfo = currentEpicWorktrees[currentFocusedEpicId];
-            bar.style.display = 'flex';
-            bar.style.alignItems = 'center';
-            bar.innerHTML = `
-                <span style="font-size:11px; flex:1; color: var(--foreground, #ccc);">
-                    Focus: <strong>${escapeHtml(epic?.topic ?? 'Epic')}</strong>
-                    ${wtInfo ? `&nbsp;·&nbsp;<span style="font-family:monospace; background: var(--badge-bg, #333); padding: 1px 4px; border-radius: 3px;">${escapeHtml(wtInfo.branch)}</span>` : ''}
-                </span>
-                <button class="btn-icon" title="Clear focus" style="background:none; border:none; color:inherit; font-size:14px; cursor:pointer;">×</button>
-            `;
-        }
 
         function renderBoard(cards) {
             hideTooltip();
@@ -5118,17 +5076,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     .map(card => card.column === 'BACKLOG' ? { ...card, _effectiveColumn: 'CREATED' } : card);
             }
 
-            if (currentFocusedEpicId) {
-                displayCards = displayCards.filter(card => {
-                    const cardId = card.planId || card.sessionId;
-                    return cardId === currentFocusedEpicId || card.epicId === currentFocusedEpicId;
-                });
-            } else {
-                // Subtasks roll up into their epic card and are only surfaced when that
-                // epic is focused. Hide them from the main board so adding a subtask
-                // visibly removes it from the columns (and bumps the epic's count badge).
-                displayCards = displayCards.filter(card => !card.epicId);
-            }
+            // Subtasks roll up into their epic card. Hide them from the main board.
+            displayCards = displayCards.filter(card => !card.epicId);
 
             displayCards.forEach(card => {
                 const effectiveCol = card._effectiveColumn || card.column;
@@ -5411,13 +5360,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (card.isEpic) {
                 const linkedWorktree = currentEpicWorktrees[card.planId];
                 wtButton = linkedWorktree
-                    ? ` <span class="wt-chip" title="Worktree: ${linkedWorktree.branch}" data-epic-id="${escapeAttr(card.planId)}"
-                           style="font-family:monospace; font-size:10px; cursor:pointer; padding:1px 5px; background:var(--badge-bg, #333); border-radius:3px; margin-left:5px;">
+                    ? ` <span class="wt-chip" title="Worktree: ${linkedWorktree.branch}"
+                           style="font-family:monospace; font-size:10px; cursor:default; padding:1px 5px; background:var(--badge-bg, #333); border-radius:3px; margin-left:5px;">
                          ${escapeHtml(linkedWorktree.branch)}
                        </span>`
-                    : ` <button class="card-btn icon-btn create-wt-chip" title="Create Worktree for this epic"
-                           data-epic-id="${escapeAttr(card.planId)}" data-epic-topic="${escapeAttr(card.topic)}" data-workspace-root="${escapeAttr(card.workspaceRoot || currentWorkspaceRoot)}"
-                           style="opacity:0.6; font-size:10px; cursor:pointer; background:none; border:none; color:inherit; padding: 2px 4px; margin-left: 5px;">⎇</button>`;
+                    : '';
             }
             const completeOrDoneBtn = isCompleted
                 ? `<span class="card-done-badge">✓ Done</span>`
@@ -6196,17 +6143,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         lastBoardSignature = nextBoardSignature;
                         console.log('[Kanban WV] signature changed, calling renderBoard with', nextCards.length, 'cards');
                         renderBoard(nextCards);
-                    } else if (epicWorktreesChanged) {
-                        currentCards = nextCards;
-                        console.log('[Kanban WV] epicWorktrees changed, calling renderBoard with', nextCards.length, 'cards');
-                        renderBoard(currentCards);
                     } else {
                         currentCards = nextCards;
-                        if (currentFocusedEpicId) {
+                        if (epicWorktreesChanged) {
+                            console.log('[Kanban WV] epicWorktrees changed, calling renderBoard with', nextCards.length, 'cards');
                             renderBoard(currentCards);
                         }
                     }
-                    renderFocusBanner();
                     break;
                 case 'settingResult': {
                     const { key, value } = msg;
@@ -6234,12 +6177,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     lastWorktreeConfig = msg;
                     renderWorktreesTab();
                     const activeWorktrees = msg.worktrees || [];
-                    if (!currentFocusedEpicId) {
-                        if (activeWorktrees.length === 1) {
-                            updateWorktreeIndicator(activeWorktrees[0].path);
-                        } else {
-                            updateWorktreeIndicator(null);
-                        }
+                    if (activeWorktrees.length === 1) {
+                        updateWorktreeIndicator(activeWorktrees[0].path);
+                    } else {
+                        updateWorktreeIndicator(null);
                     }
                     break;
                 }
@@ -9169,6 +9110,58 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             });
             actionSection.appendChild(batchEpicsBtn);
 
+            // 2b. Create worktree for a single epic
+            const epicForm = document.createElement('div');
+            epicForm.style.cssText = 'display: flex; gap: 8px; align-items: center;';
+            const epicLabel = document.createElement('span');
+            epicLabel.style.fontSize = '11px';
+            epicLabel.textContent = 'Epic:';
+            const epicSelect = document.createElement('select');
+            epicSelect.style.cssText = 'flex: 1; padding: 4px; font-size: 11px; background: var(--input-bg, #222); color: var(--text-normal, #ccc); border: 1px solid var(--border-color);';
+            const epicDefaultOpt = document.createElement('option');
+            epicDefaultOpt.value = '';
+            epicDefaultOpt.textContent = '-- Choose an Epic --';
+            epicSelect.appendChild(epicDefaultOpt);
+            const epicCards = (Array.isArray(currentCards) ? currentCards : []).filter(c => c.isEpic);
+            epicCards.forEach(epic => {
+                if (currentEpicWorktrees[epic.planId]) return; // exclude epics that already have a worktree
+                const opt = document.createElement('option');
+                opt.value = epic.planId;
+                opt.textContent = epic.topic;
+                epicSelect.appendChild(opt);
+            });
+            const createEpicBtn = document.createElement('button');
+            createEpicBtn.className = 'worktree-primary-btn';
+            createEpicBtn.style.padding = '4px 8px';
+            createEpicBtn.style.fontSize = '10px';
+            createEpicBtn.textContent = 'Create Epic Worktree';
+            if (config && config.controlPlaneMode === 'explicit' && repos.length === 0) {
+                createEpicBtn.disabled = true;
+                createEpicBtn.title = 'No git repositories detected in control plane';
+            }
+            createEpicBtn.addEventListener('click', () => {
+                const selectedEpicId = epicSelect.value;
+                if (!selectedEpicId) {
+                    showUIMessage('Please select an epic first.');
+                    return;
+                }
+                const epic = epicCards.find(e => e.planId === selectedEpicId);
+                if (!epic) return;
+                createEpicBtn.disabled = true;
+                postKanbanMessage({
+                    type: 'createWorktreeForEpic',
+                    epicId: selectedEpicId,
+                    epicTopic: epic.topic,
+                    workspaceRoot: currentWorkspaceRoot,
+                    repoName: selectedWorktreeRepo || undefined
+                });
+                setTimeout(() => { createEpicBtn.disabled = false; }, 5000);
+            });
+            epicForm.appendChild(epicLabel);
+            epicForm.appendChild(epicSelect);
+            epicForm.appendChild(createEpicBtn);
+            actionSection.appendChild(epicForm);
+
             // 3. Ad-hoc unbound
             const adhocForm = document.createElement('div');
             adhocForm.style.cssText = 'display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--border-subtle); padding-top: 8px;';
@@ -9414,38 +9407,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     flashIconBtn(btn);
                 }
 
-                // CSP Delegators
-                const wtChip = e.target.closest('.wt-chip');
-                if (wtChip) {
-                    const epicId = wtChip.getAttribute('data-epic-id');
-                    if (epicId) {
-                        enterEpicFocusMode(epicId);
-                        return;
-                    }
-                }
-
-                const createWtChip = e.target.closest('.create-wt-chip');
-                if (createWtChip) {
-                    const epicId = createWtChip.getAttribute('data-epic-id');
-                    const epicTopic = createWtChip.getAttribute('data-epic-topic');
-                    const workspaceRoot = createWtChip.getAttribute('data-workspace-root');
-                    if (epicId && epicTopic) {
-                        postKanbanMessage({
-                            type: 'createWorktreeForEpic',
-                            epicId,
-                            epicTopic,
-                            workspaceRoot: workspaceRoot || currentWorkspaceRoot,
-                            repoName: selectedWorktreeRepo || undefined
-                        });
-                        return;
-                    }
-                }
-
-                const clearEpicFocus = e.target.closest('#kanban-focus-banner .btn-icon');
-                if (clearEpicFocus) {
-                    clearEpicFocusMode();
-                    return;
-                }
             });
 
             // Epic button event listeners
