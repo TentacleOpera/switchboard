@@ -294,10 +294,10 @@
         }
 
         .content-row.collapsed > :first-child {
-            flex: 0 0 40px !important;
+            flex: 0 0 40px;
         }
         .content-row.collapsed > :last-child {
-            flex: 1 !important;
+            flex: 1;
         }
 
         .content-row.collapsed #tree-pane,
@@ -3581,7 +3581,6 @@
 }
 .shared-tab-content.active {
   display: flex;
-  overflow-y: auto;
 }
 .cyber-theme-enabled .shared-tab-btn.active {
   box-shadow: 0 -2px 8px color-mix(in srgb, var(--accent-teal) 30%, transparent);
@@ -3606,7 +3605,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap');
     </style>
 </head>
-<body class="cyber-theme-enabled">
+    <!-- The cyber-theme-enabled class below is a STATIC FALLBACK ONLY.
+         It is always overwritten at HTML-generation time by applyThemeBodyClass()
+         (src/services/themeBodyClass.ts), called from DesignPanelProvider._getHtmlForWebview().
+         The correct theme class for the user's switchboard.theme.name setting is injected
+         before this HTML reaches the webview, so the user sees the right theme on first paint
+         regardless of whether JS loads. The JS handler in design.js (~line 3136) provides a
+         second layer of theme updates on switchboardThemeChanged messages. Do NOT remove this
+         class or add a noscript fallback — neither is needed. -->
+    <body class="cyber-theme-enabled">
     <div id="research-tab-bar" class="shared-tab-bar">
         <button class="shared-tab-btn active" data-tab="stitch">STITCH</button>
         <button class="shared-tab-btn" data-tab="briefs">BRIEFS</button>

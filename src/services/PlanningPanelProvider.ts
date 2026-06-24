@@ -55,6 +55,7 @@ interface KanbanPlanSummary {
     complexity: string;
     isEpic?: number;
     epicId?: string;
+    subtaskCount?: number;
     clickupTaskId?: string;
     linearIssueId?: string;
 }
@@ -7557,6 +7558,14 @@ Read the existing ticket content from the local file if it exists. Determine wha
         ));
         const completedRecords = await db.getCompletedPlans(workspaceId, completedLimit);
         const allRecords = [...records, ...completedRecords];
+        
+        const subtaskCountMap = new Map<string, number>();
+        for (const r of allRecords) {
+            if (r.epicId) {
+                subtaskCountMap.set(r.epicId, (subtaskCountMap.get(r.epicId) || 0) + 1);
+            }
+        }
+
         allRecords.sort((a, b) => {
             const aTime = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
             const bTime = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
@@ -7587,6 +7596,7 @@ Read the existing ticket content from the local file if it exists. Determine wha
             complexity: r.complexity || 'Unknown',
             isEpic: r.isEpic,
             epicId: r.epicId || '',
+            subtaskCount: r.isEpic ? (subtaskCountMap.get(r.planId) || 0) : undefined,
             clickupTaskId: r.clickupTaskId || r.clickup_task_id || '',
             linearIssueId: r.linearIssueId || r.linear_issue_id || ''
         }));

@@ -706,6 +706,10 @@ export class ControlPlaneMigrationService {
         // Claude Code layer: CLAUDE.md managed block (initial seed) + .claude/ skills
         // mirror + settings allow-list. Activation-time scaffolding handles ongoing
         // in-place CLAUDE.md updates; here we only seed the file if absent.
+        // The mirror is version-gated on the SAME predicate used for workflow files
+        // (needsAgentMigration) so generated skills are only overwritten on version
+        // change — not on every bootstrap. The CLAUDE.md seed is file-absence-gated
+        // (one-time initial seed); ongoing updates are handled by the activation site.
         if (targets.claude) {
             try {
                 if (fs.existsSync(bundledAgentsFile)) {
@@ -717,8 +721,10 @@ export class ControlPlaneMigrationService {
                         await fs.promises.writeFile(claudeFile, block, 'utf8');
                     }
                 }
-                const version = this._getExtensionVersion(extensionPath);
-                generateClaudeMirror(parentDir, version);
+                if (needsAgentMigration) {
+                    const version = this._getExtensionVersion(extensionPath);
+                    generateClaudeMirror(parentDir, version);
+                }
             } catch (error) {
                 console.warn('[ControlPlaneMigrationService] Claude Code layer scaffolding failed (non-fatal):', error);
             }

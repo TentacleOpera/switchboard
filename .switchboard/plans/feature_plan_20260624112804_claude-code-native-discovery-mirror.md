@@ -204,3 +204,58 @@ Source: `docs/claude_code_project_skills_and_configuration_architecture.md` (54 
 ## Recommendation
 
 **Complexity: 7/10 → Send to Lead Coder.** The change is additive and the marker/version machinery is reused, but it spans multiple files, introduces a new generator with real clobbering/idempotency risk, must coordinate two differently-gated scaffold call sites, and carries per-skill invocation-mode + kebab-name + allow-list semantics that must be emitted exactly per the verified Claude Code 2.1.0 schema. All Claude Code discovery/invocation/permission assumptions are now verified (see Research Findings) — no further research is blocking implementation.
+
+## Reviewer Pass (2026-06-24)
+
+### Files Changed (Implementation)
+- `package.json` — `switchboard.protocol.target` enum setting (agents/claude/both, default `both`).
+- `src/services/ClaudeCodeMirrorService.ts` — new generator module: manifest (25 entries), frontmatter parser/normalizer, `buildManagedInner`, `generateClaudeMirror`, `mergePermissionsAllowList`, CLAUDE.md preamble/constants.
+- `src/extension.ts` — `ensureAgentsProtocol` generalized to `ensureProtocolFile(opts)`; `ensureClaudeProtocol` wrapper; `getProtocolTargets`; `scaffoldProtocolLayers`; activation-site reordering (refresh captured before seeding, scaffold after seeding); setup-site uses `scaffoldProtocolLayers`.
+- `src/services/ControlPlaneMigrationService.ts` — CLAUDE.md seed + mirror wired into `_bootstrapControlPlaneLayout`; `_getProtocolTargets` helper.
+- `src/services/SetupPanelProvider.ts` — `getProtocolTarget`/`setProtocolTarget` message handlers.
+- `src/webview/setup.html` — protocol-target `<select>` control + hydration + help text (hot-reload/restart note, allow-list recovery note).
+
+### Stage 1 — Adversarial Findings
+
+| # | Severity | Finding | Location |
+|---|----------|---------|----------|
+| 1 | **MAJOR** | Control-plane mirror not version-gated. `generateClaudeMirror` ran unconditionally when `targets.claude`, ignoring `needsAgentMigration`. Plan §1/§2 require gating on the same version predicate each call site uses. Caused generated skills to be regenerated on every bootstrap/migration regardless of version — violating the "overwritten on version change" invariant and risking clobbering user edits to generated skill bodies. | `ControlPlaneMigrationService.ts:721` (pre-fix) |
+| 2 | NIT | `name` frontmatter field uses kebab-case directory name, dropping human-readable display names from source frontmatter (`Kanban Operations`, `Query Archive`, etc.). Plan says "may" keep human-readable — valid but minor UX degradation. | `ClaudeCodeMirrorService.ts:237` |
+| 3 | NIT | `complexity_scoring`, `advise_research`, `constitution_builder`, `tuning` have no `allowedTools`. These skills read plan/codebase files; plan §2 says file-reading skills should get `Read, Glob, Grep`. Latent permission-prompt risk. | `ClaudeCodeMirrorService.ts:83-97` |
+| 4 | NIT | Frontmatter parser is line-based (`^description:\s*(.+)$`). Multi-line YAML descriptions would be silently truncated. No current source triggers it. | `ClaudeCodeMirrorService.ts:172-173` |
+| 5 | NIT | `mergePermissionsAllowList` reformats user's `settings.json` to 2-space indent + trailing newline. Non-destructive content-wise, cosmetic diff. | `ClaudeCodeMirrorService.ts:362` |
+
+### Stage 2 — Balanced Synthesis
+
+- **Fix now:** Finding #1 (MAJOR) — gate the control-plane mirror on `needsAgentMigration`. Simple, aligns with plan, prevents clobbering.
+- **Defer:** Findings #2-5 (NIT) — no functional breakage; cosmetic or latent only.
+
+### Stage 3 — Fix Applied
+
+**Finding #1 (MAJOR) — FIXED.** Wrapped `generateClaudeMirror(parentDir, version)` in `if (needsAgentMigration)` at `ControlPlaneMigrationService.ts:724`. The CLAUDE.md seed remains file-absence-gated (one-time initial seed); ongoing CLAUDE.md updates are handled by the activation site's `ensureClaudeProtocol` (which IS version-gated via `needsAgentRefresh`). The setup site (`performSetup` → `scaffoldProtocolLayers`) runs unconditionally, covering the target-change-without-version-change case.
+
+### Verification
+
+- **Compilation:** Skipped per session instructions.
+- **Tests:** Skipped per session instructions.
+- **Manual code verification performed:**
+  - Manifest (25 entries: 4 workflows + 21 skills) matches actual `.agents/` source directory exactly. `_lib` excluded. ✓
+  - Activation-site ordering: `needsAgentRefresh` captured before seeding (line 440), seeding runs (444-463), `scaffoldProtocolLayers` runs after (467-482). ✓
+  - Control-plane ordering: `.agents/` copied (688-694), CLAUDE.md seed + mirror run after (713-731). ✓ (mirror now version-gated)
+  - `ensureProtocolFile` create branch: CLAUDE.md (preamble present) writes managed block, not markerless. ✓
+  - `ensureProtocolFile` skip branch: compares `existingBlockContent === managedInner.trim()` (preamble + source for CLAUDE.md). ✓
+  - Per-target header: `hasProtocolHeaderLine(content, header)` takes header as arg; CLAUDE.md uses `CLAUDE_PROTOCOL_HEADER`, AGENTS.md uses `AGENTS_PROTOCOL_HEADER`. ✓
+  - `user-invokable` spelled with "k" (not "c"). ✓
+  - Kebab-case directory names for all 25 entries. ✓
+  - Allow-list includes `Bash(curl *)`, `Bash(node *)`, `Bash(source *)`, `Bash(sqlite3 *)`, `Bash(duckdb *)` — last two are a good addition beyond the plan for the query skills. ✓
+  - Non-destructive `settings.json` merge (reads existing, appends only absent entries, never overwrites). ✓
+  - Setup-panel control: `<select>` with 3 options, `getProtocolTarget`/`setProtocolTarget` handlers, hydration via `runSetupHydration`, help text with hot-reload/restart + allow-list recovery notes. ✓
+  - No-frontmatter sources (`get_tickets`, `archive`, `web_research`, `deep_planning`, `complexity_scoring`, `tuning`, `constitution_builder`, `advise_research`) all have `descriptionFallback` in manifest. ✓
+  - Directory skills (`advise_research`, `kanban_operations`, `query_archive`) read `SKILL.md` directly; auxiliary `.js` files NOT copied. ✓
+
+### Remaining Risks
+
+1. **Target-change without version change at control-plane site:** If a user changes `protocol.target` from `agents` to `both` and triggers only `_bootstrapControlPlaneLayout` (not `performSetup`), the mirror won't run (version unchanged). Mitigated: `performSetup` runs `scaffoldProtocolLayers` unconditionally, and the activation site runs on next version bump. The CLAUDE.md seed still fires (file-absence-gated).
+2. **`allowed-tools` frontmatter enforcement inconsistency** (research Issue #18737/#37683): the `settings.json` allow-list is the reliable gate, not the frontmatter. Documented in setup help text.
+3. **"Accept, do not ask again" UI can wipe wildcard configs** (research Issue #9814): setup help text documents the re-run-setup recovery path.
+4. **NIT findings #2-5 deferred** — no functional breakage; safe to address in a future polish pass.
