@@ -93,3 +93,45 @@ No automated tests required or applicable. This is a static HTML attribute text 
 ---
 
 **Recommendation:** Complexity 1/10 → **Send to Intern**
+
+---
+
+## Reviewer Pass (2026-06-24)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*"A placeholder text append. My expertise is being wasted, but fine — I'll waste it thoroughly."*
+
+**NIT-1 — `src/webview/implementation.html:1630` — "dictate" is a stretch, but you documented it.**
+The tip says "dictate memo entries to an agent." The `/memo` skill (per `.agents/workflows/memo.md`) appends user messages to `.switchboard/memo.md` — it's a capture/append channel, not a speech-to-text dictation interface. "Dictate" in the sense of "to state/prescribe" is technically defensible, but a user reading "dictate" in a textarea placeholder will likely think voice input. The plan's Adversarial Synthesis already acknowledged this wording is user-specified verbatim. It's the user's word. Not changing it.
+
+**NIT-2 — `src/webview/implementation.html:1630` — `&#10;` entity correctness (verified, non-issue).**
+The tip is appended with a single `&#10;` before "Tip:", producing one newline. The plan says "a line break followed by a tip" — a single newline satisfies this (the tip appears on its own line immediately after the last example). A double `&#10;&#10;` would produce a blank line separator, which the plan did not request. The single-entity approach matches the existing pattern used between the three examples. Correct.
+
+**No CRITICAL findings. No MAJOR findings.** The implementation is a faithful, byte-accurate execution of the plan. The `placeholder` attribute now ends with `...&#10;Tip: use the /memo skill to dictate memo entries to an agent"`. The `id`, `class`, and `style` attributes are unchanged. The tip wording matches the user's verbatim specification exactly.
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Severity | Verdict |
+|:---|:---|:---|
+| NIT-1: "dictate" wording may imply voice input | NIT | **Keep as-is.** User-specified verbatim. The plan's Adversarial Synthesis already addressed this. No silent rewrite of user-supplied copy. |
+| NIT-2: `&#10;` entity count (single vs. double) | NIT | **Non-issue.** Single `&#10;` matches the existing pattern and the plan's "line break" requirement. Verified correct. |
+
+**Fixes applied:** None. No CRITICAL or MAJOR findings. The implementation matches the plan exactly.
+
+### Verification Results
+
+- **Static HTML attribute text change** — no compile needed (per session directive, compilation skipped). `npm run compile` would succeed for a VSIX release build.
+- **No automated tests** applicable (per session directive, test suite run separately by user).
+- **Grep verification:** Exactly one `#memo-textarea` element in `src/webview/implementation.html` (line 1629). No duplicate or stale placeholder copies elsewhere. The 6 other `memo-textarea` matches are JS references (`getElementById`), not element definitions — unaffected by the attribute change.
+- **Git diff verification:** `git diff HEAD~1 -- src/webview/implementation.html` confirms the only in-scope change is the `placeholder` attribute at line 1630 — the `&#10;Tip: use the /memo skill to dictate memo entries to an agent` suffix was appended. The `id`, `class`, and `style` attributes are unchanged.
+- **Out-of-scope note:** The same commit (`b97ee33`) bundled unrelated changes (intro `<p>` text swap, `memoDirty` flag, `switchAgentTab` isChanging guard, `memoContent` race buffer) belonging to separate plans. Those changes are out of scope for this review and were not assessed here.
+
+### Files Changed
+
+- `src/webview/implementation.html` — line 1630 (`placeholder` attribute of `#memo-textarea` extended with `&#10;Tip: use the /memo skill to dictate memo entries to an agent`).
+
+### Remaining Risks
+
+1. **"Dictate" wording (NIT-1):** Low risk. Users may interpret "dictate" as voice input rather than agent-based capture. Mitigated by the `/memo` skill's actual behavior being self-evident once invoked. Resolvable only by the user choosing different wording.
+2. **No technical risk.** No logic, state, migration, or build surface touched. The `placeholder` attribute is purely presentational and only visible when the textarea is empty.

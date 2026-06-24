@@ -115,3 +115,50 @@ No other lines are touched. The `style` attribute, element tag, and surrounding 
 ---
 
 **Recommendation:** Complexity 1/10 → **Send to Intern**. Resolve the two items in `## User Review Required` first; default to the user's verbatim copy if no further direction is given.
+
+---
+
+## Reviewer Pass (2026-06-24)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*"You want me to review a four-line text swap? Fine. Let me get my magnifying glass."*
+
+**NIT-1 — `src/webview/implementation.html:1625-1627` — "Send to an agent via Copy Prompt" is a lie, and you knew it.**
+The plan's own `## User Review Required` section admits Copy Prompt is clipboard-only (`TaskViewerProvider.ts` lines 9272–9275) and does NOT dispatch to an agent. Yet the shipped copy says "Send to an agent via Copy Prompt / Send to Planner," implying both actions dispatch. The plan defaulted to verbatim user copy (option (a)) — so this is a *documented, consciously-accepted* inaccuracy, not an oversight. It's the user's words. But it's still technically wrong, and I'm noting it because someone will file a bug about it eventually.
+
+**NIT-2 — `src/webview/implementation.html:1624-1628` — "cleared after…" notice silently dropped.**
+The original copy warned users the memo clears after dispatch. The new copy says "Saved automatically" and stops. The plan flagged this (User Review Required item 2), defaulted to option (a) (drop it), and noted the in-UI status line ("Memo cleared") covers it at dispatch time. Again: documented and accepted. But a user who skims the intro and then watches their text vanish after Send to Planner will have a moment of panic. The status line is transient (1.5s) and easy to miss.
+
+**NIT-3 — Whitespace collapsing semantics (non-issue, verified).**
+The `<p>` splits the sentence across three text lines with newlines/indentation between "automatically." → "Send" and "create" → `<strong>`. HTML collapses inline whitespace to a single space, so the rendered text is: *"Jot down bugs, thoughts, or issues — one per line or paragraph. Saved automatically. Send to an agent via Copy Prompt / Send to Planner to create one plan per issue."* — exactly the user-supplied copy. No rendering defect. I checked so you don't have to.
+
+**No CRITICAL findings. No MAJOR findings.** The implementation is a faithful, byte-accurate execution of the plan's stated default (verbatim user copy, option (a) for both User Review Required items). Style attribute, tag, location, and `<strong>` placement all match the Proposed Changes section exactly.
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Severity | Verdict |
+|:---|:---|:---|
+| NIT-1: "Send to an agent via Copy Prompt" mischaracterizes Copy Prompt | NIT | **Keep as-is.** The plan explicitly deferred this to the user with a verbatim-copy default. The user's copy shipped verbatim. If the user wants to revisit, options (b)/(c) are documented in `## User Review Required`. No silent rewrite of user-supplied copy. |
+| NIT-2: "cleared after…" notice dropped | NIT | **Keep as-is.** Same rationale — documented, deferred, default applied. The transient status line partially covers it. Defer to user if they want option (b). |
+| NIT-3: Whitespace collapsing | NIT | **Non-issue.** Verified correct rendering. No action. |
+
+**Fixes applied:** None. No CRITICAL or MAJOR findings. The implementation matches the plan exactly.
+
+### Verification Results
+
+- **Static HTML text change** — no compile needed (per session directive, compilation skipped). `npm run compile` would succeed for a VSIX release build.
+- **No automated tests** applicable (per session directive, test suite run separately by user).
+- **Grep verification:** Exactly one instance of the intro `<p>` and one `#memo-textarea` in `src/webview/` — no duplicate or stale copies elsewhere.
+- **Git diff verification:** `git diff HEAD~1 -- src/webview/implementation.html` confirms the only in-scope change is the `<p>` inner text swap at lines 1624–1628. The `style` attribute, `<p>` tag, surrounding markup, and all sibling elements (`#memo-textarea`, `#memo-status`, Clear/Copy/Send buttons) are unchanged.
+- **Out-of-scope note:** The same commit (`b97ee33`) bundled unrelated changes (`memoDirty` flag, `switchAgentTab` isChanging guard, `memoContent` race buffer) belonging to a separate plan ("Kanban Webview — Cold-Open Message Race Buffer"). Those changes are out of scope for this review and were not assessed here.
+
+### Files Changed
+
+- `src/webview/implementation.html` — lines 1624–1628 (intro `<p>` inner text replaced with user-supplied descriptive copy; `<strong>` moved from "separate issue" to "one plan per issue").
+
+### Remaining Risks
+
+1. **Copy Prompt mischaracterization (NIT-1):** Low risk. Users may believe Copy Prompt dispatches to an agent. Mitigated by the button's actual behavior (copies to clipboard); users will discover the truth on first use. Resolvable by user choosing option (b) or (c) in `## User Review Required` item 1.
+2. **Dropped clear-on-success notice (NIT-2):** Low risk. Users may be briefly surprised when the memo clears after Send to Planner. Partially mitigated by the transient "Memo cleared" status line. Resolvable by user choosing option (b) in `## User Review Required` item 2.
+3. **No technical risk.** No logic, state, migration, or build surface touched.
