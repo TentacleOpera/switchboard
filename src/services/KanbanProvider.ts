@@ -6323,7 +6323,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         planId: msg.planId || '',
                         sessionId: reviewId,
                         planFile: msg.planFile || '',
-                        workspaceRoot: msg.workspaceRoot || ''
+                        workspaceRoot: msg.workspaceRoot || '',
+                        isEpic: msg.isEpic === true
                     });
                 }
                 break;

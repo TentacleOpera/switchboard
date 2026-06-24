@@ -444,3 +444,46 @@ Skipped per session directive. The user will run the test suite separately. No n
 ## Recommendation
 
 Complexity is **7/10** (backend behavior change + multi-file coordination + two critical correctness fixes the original plan missed). **Send to Lead Coder.**
+
+---
+
+## Reviewer Pass (2026-06-25)
+
+### Stage 1 — Adversarial Findings
+
+| # | Severity | File:Line | Finding |
+|---|---|---|---|
+| 1 | CRITICAL (plan) → verified FIXED | `RemoteControlService.ts:86,100,121-123` | `.filter(Boolean)` base-board strip — **correctly fixed** via `_normalizeBoards` type guard keeping `''`, wired into both `getConfig` and `setConfig`. |
+| 2 | CRITICAL (plan) → verified FIXED | `KanbanProvider.ts:1455-1480,5027-5048` | Autosave echo wipes board list — **correctly fixed** via shared `_buildRemoteConfigPayload` helper used by both `getRemoteConfig` and `setRemoteConfig`; echo carries `boardKeys` + `workspaces`. |
+| 3 | COMPLEX (plan) → verified CORRECT | `KanbanProvider.ts:786,1466` | `_getWorkspaceItems()` (not the nonexistent `_getAllWorkspaceRoots`) is used; returns expected `Array<{ label, workspaceRoot }>`. |
+| 4 | NIT | `kanban.html:7006` | "Saved." status text set on every autosave but never cleared — persists indefinitely after first save. Matches plan spec (plan authored this exact line); cosmetic only. |
+| 5 | NIT | `kanban.html:7011-7018` | Workspace-switch race: checkboxes show old workspace's selections until `getRemoteConfig` round-trip completes; a toggle in that window writes stale state to the new workspace. Narrow window (local DB read). |
+| 6 | NIT | `KanbanProvider.ts:1466` | `_getWorkspaceItems()` re-derived on every autosave echo (does `require()` + reads mappings index). Not a hot path; mildly wasteful. |
+
+### Stage 2 — Balanced Synthesis
+
+- **Keep (no fix needed):** All CRITICAL/COMPLEX plan items (#1–#3) are correctly implemented. Markup (`kanban.html:2584-2633`), CSS (`:795-825`), `renderRemoteConfig` (`:6936-6985`), `remoteCollectConfig` (`:6987-6999`), `remoteAutosave` (`:7001-7008`), delegated `change` autosave (`:7011-7018`), frequency debounce (`:7021-7025`), message handler (`:6478-6481`), tab-open trigger (`:3933`), and Save button removal (no `btn-save-remote-config` anywhere) all match the plan.
+- **Defer:** NITs #4–#6 are cosmetic/edge-case only; none rise to CRITICAL/MAJOR. No code fixes applied.
+
+### Code Fixes Applied
+
+None. No CRITICAL or MAJOR findings — the implementation is a faithful, correct execution of the plan.
+
+### Files Changed (by implementation, reviewed here)
+
+- `src/services/RemoteControlService.ts` — `_normalizeBoards` helper (`:121-123`); used in `getConfig` (`:86`) and `setConfig` (`:100`).
+- `src/services/KanbanProvider.ts` — `_buildRemoteConfigPayload` helper (`:1455-1480`); used in `getRemoteConfig` (`:5027-5036`) and `setRemoteConfig` (`:5037-5048`).
+- `src/webview/kanban.html` — Remote tab markup (`:2584-2633`), CSS classes (`:795-825`), `renderRemoteConfig` (`:6936-6985`), `remoteCollectConfig`/`remoteAutosave` (`:6987-7008`), delegated autosave + debounce (`:7011-7025`), message handler (`:6478-6481`).
+
+### Validation Results
+
+- **Compilation:** Skipped per session directive.
+- **Automated tests:** Skipped per session directive.
+- **Static verification (this review):** Confirmed no `confirm()` dialogs (repo hard rule); no leftover `remote-boards` select references; Save button fully removed; `_resolveWorkspaceRoot(undefined)` falls through to `_currentWorkspaceRoot` for tab-open trigger; sync filter `boardSet.has(p.project || '')` (`RemoteControlService.ts:197`) now matches base-board cards since `''` survives round-trip; `setConfig` constant-mode gate `boards.length > 0` (`:107`) passes for `boards: ['']`.
+
+### Remaining Risks
+
+1. **NIT #4 — "Saved." persistence:** Cosmetic; "Saved." never clears after first autosave. Low user impact; can be addressed by clearing on a timeout or on next interaction if desired.
+2. **NIT #5 — Workspace-switch race:** A checkbox toggle in the ~ms window between dropdown change and `getRemoteConfig` response could write stale board selections to the newly-selected workspace. Probability is low (local DB read is fast); could be mitigated by disabling the checkbox list during the fetch.
+3. **NIT #6 — Workspace list re-derivation:** `_getWorkspaceItems()` called on every autosave echo. Not a perf concern at current toggle frequency; could cache the workspace list and only refresh on `getRemoteConfig`.
+4. **Manual verification deferred to user:** The 11-step manual verification checklist (Verification Plan section) must be run via an installed VSIX by the user — not executed in this review session.

@@ -5225,7 +5225,16 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             document.querySelectorAll('.card-btn.review').forEach(btn => {
                 btn.addEventListener('click', () => {
-                    postKanbanMessage({ type: 'reviewPlan', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', planFile: btn.dataset.planFile || '', workspaceRoot: btn.dataset.workspaceRoot });
+                    const pid = btn.dataset.planId || btn.dataset.session || '';
+                    const cardData = currentCards.find(c => (c.planId || c.sessionId) === pid);
+                    postKanbanMessage({
+                        type: 'reviewPlan',
+                        sessionId: btn.dataset.session || '',
+                        planId: btn.dataset.planId || '',
+                        planFile: btn.dataset.planFile || '',
+                        workspaceRoot: btn.dataset.workspaceRoot,
+                        isEpic: cardData?.isEpic || false
+                    });
                 });
             });
 

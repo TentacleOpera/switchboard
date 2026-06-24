@@ -47,14 +47,20 @@ This plan adds the orchestrate-it path + the orchestrator role + the modal remov
 
 ## Metadata
 
-- **Tags:** `feature`, `epics`, `orchestration`, `roles`, `project-panel`, `ui`, `prompt`
+- **Tags:** `feature`, `ui`, `backend`
 - **Complexity:** 7/10 (new role across many enumeration touch-points; relocating management UI between two webviews; migrating shipped global config keys)
 - **Depends on:** `review-epic-opens-kanban-tab-not-epic-tab` (Review→Epics nav), `kanban-epic-subtask-column-leak-and-backlog-cascade` (epic-as-unit), `kanban-epic-focus-worktree-decouple` (removes focus mode + worktree cleanup). All three drafted; sequence after them.
+
+## Dependencies
+
+- `feature_plan_20260625120001_review-epic-opens-kanban-tab-not-epic-tab.md` — routes the epic Review button to the Epics tab (navigation dependency; this plan's Epics-tab orchestration surface relies on it)
+- `kanban-epic-subtask-column-leak-and-backlog-cascade.md` — epic = one rigid unit on the board; §1 + §2 must land first (§3 is dropped per Decision #8)
+- `kanban-epic-focus-worktree-decouple.md` — removes on-board focus mode machinery and salvages worktree creation to the Worktrees tab (headline goal rejected; worktree cleanup half is kept)
 
 ## Decisions (made, not deferred)
 
 1. **Orchestration lives ONLY in the Epics tab.** No orchestrator board column, no on-board orchestrate toggle. The board keeps the epic-as-traveller model; on-board focus mode is removed (Decision #8).
-2. **New `orchestrator` role, full role but with NO kanban column.** Register it across **all** role enumerations (below) so (a) its prompt edits "with everyone else" in the per-role modal, (b) the user can configure its **startup command and spawn its terminal in the same agent-setup area as every other agent** (this is why it must be a full role, not an Epics-tab-local config — confirmed), and (c) it is a dispatch-by-role target. But do **not** add it to `DEFAULT_KANBAN_COLUMNS`. No column references `role:'orchestrator'`, so no lane appears. This means the previously-"conditional" terminal touch-points are now **required**: the built-in agent grid (`extension.ts:2626-2633`) and the setup agents list must include orchestrator so its terminal is configurable/spawnable.
+2. **New `orchestrator` role, full role but with NO kanban column.** Register it across **all** role enumerations (below) so (a) its prompt edits "with everyone else" in the per-role modal, (b) the user can configure its **startup command and spawn its terminal in the same agent-setup area as every other agent** (this is why it must be a full role, not an Epics-tab-local config — confirmed), and (c) it is a dispatch-by-role target. But do **not** add it to `DEFAULT_KANBAN_COLUMNS`. No column references `role:'orchestrator'`, so no lane appears. This means the built-in agent grid (`extension.ts:2626-2633`) and the setup agents list must include orchestrator so its terminal is configurable/spawnable. **Correction:** `validRoles` (`extension.ts:347`) and `rolePriority` (`extension.ts:2497`) are review-role resolution arrays, NOT terminal-setup arrays — the orchestrator must NOT be added to either, since it is not a review role and should never be a candidate for review dispatch.
 3. **The orchestration prompt is GLOBAL** — it is the orchestrator role's prompt (base branch in `agentPromptBuilder.ts` + the per-role override from setup). The Epics tab only *triggers and previews* it for a chosen epic. This resolves the per-epic-vs-global smell.
 4. **Migrate the legacy global keys.** On first read, import `epic_prompt_template` → orchestrator role prompt override and `epic_max_subtasks` → an orchestrator config/addon; keep reading the legacy keys as fallback (shipped keys — never drop, per CLAUDE.md). `epic_lock_columns` is dormant (its default `IN PROGRESS,CODE REVIEW,REVIEWED,DONE` matches no real column id) — treat the stale default as unset; preserve any non-default user value.
 5. **Remove the kanban epic-manage modal entirely**, relocating its still-needed capabilities to the Epics tab FIRST (no capability regression): epic **delete** (Epics tab has none today), **add-subtask** (only bulk-add via the EPIC strip button survives on the board), and config (now the orchestrator role prompt + Epics-tab orchestration settings). Preserve shared messages used elsewhere.

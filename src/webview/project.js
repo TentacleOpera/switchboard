@@ -167,6 +167,7 @@
     let _epicPreviewFilePath = null;
     let _epicDocumentsCache = [];
     let _pendingKanbanSelection = null;
+    let _pendingEpicSelection = null;
     let _pendingAutoEdit = false;
     let _activeEpicName = 'None';
     let _activeEpicFilePath = '';
@@ -303,6 +304,7 @@
                 renderKanbanPlans();
                 renderEpicsList();
                 tryResolvePendingKanbanSelection();
+                tryResolvePendingEpicSelection();
                 break;
             case 'planCreated':
                 if (btnCreateKanbanPlan) {
@@ -337,6 +339,20 @@
                 }
                 break;
             case 'activateKanbanTabAndSelectPlan': {
+                if (msg.isEpic === true) {
+                    _pendingEpicSelection = {
+                        planId: msg.planId || '',
+                        sessionId: msg.sessionId || '',
+                        planFile: msg.planFile || '',
+                        workspaceRoot: msg.workspaceRoot || ''
+                    };
+                    epicsFilters.workspaceRoot = '';
+                    if (epicsWorkspaceFilter) epicsWorkspaceFilter.value = '';
+                    const epicsTabBtn = document.querySelector('.shared-tab-btn[data-tab="epics"]');
+                    if (epicsTabBtn) epicsTabBtn.click();
+                    tryResolvePendingEpicSelection();
+                    break;
+                }
                 _pendingKanbanSelection = {
                     planId: msg.planId || '',
                     sessionId: msg.sessionId || '',
@@ -366,6 +382,7 @@
             case 'epicDocumentsReady':
                 _epicDocumentsCache = msg.documents || [];
                 renderEpicsList();
+                tryResolvePendingEpicSelection();
                 break;
             case 'epicError':
                 showToast(msg.message || 'Error occurred', 'error');
@@ -1003,6 +1020,26 @@
         _pendingKanbanSelection = null;
     }
 
+    function tryResolvePendingEpicSelection() {
+        if (!_pendingEpicSelection) return;
+        const sel = _pendingEpicSelection;
+        const pool = [..._kanbanPlansCache.filter(p => p.isEpic), ..._epicDocumentsCache];
+        const match = pool.find(p =>
+            (sel.planFile && p.planFile === sel.planFile) ||
+            (sel.planId && p.planId === sel.planId) ||
+            (sel.sessionId && p.sessionId === sel.sessionId)
+        );
+        if (!match) return;
+        const itemDiv = epicsListPane &&
+            epicsListPane.querySelector(`.epic-plan-item[data-plan-id="${match.planId}"]`);
+        if (!itemDiv) return;
+        itemDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        document.querySelectorAll('.epic-plan-item').forEach(el => el.classList.remove('selected'));
+        itemDiv.classList.add('selected');
+        selectEpic(match);
+        _pendingEpicSelection = null;
+    }
+
     function loadKanbanPlanPreview(plan) {
         _kanbanSelectedPlan = plan;
         renderKanbanMetaBar(plan);
@@ -1245,6 +1282,7 @@
         filtered.forEach(plan => {
             const itemDiv = document.createElement('div');
             itemDiv.className = 'epic-plan-item';
+            itemDiv.dataset.planId = plan.planId || '';
             if (_epicSelectedPlan && _epicSelectedPlan.planId === plan.planId) {
                 itemDiv.classList.add('selected');
             }
