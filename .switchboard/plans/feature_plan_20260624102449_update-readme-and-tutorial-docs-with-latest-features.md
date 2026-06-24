@@ -221,3 +221,58 @@ No automated tests are applicable — this is a documentation-only change with n
 6. **Memo location accuracy:** Confirm all references in all five files say "Memo sub-tab in the sidebar" (not "Memo modal in the Kanban panel") — the original plan's wording was incorrect.
 7. **Workflow file fix verification:** Run `grep -r "Memo modal in the Kanban panel" .agents/workflows/memo.md AGENTS.md` and confirm zero matches after edits.
 8. **`process memo` documentation:** Confirm the user manual's Memo Capture Mode section (section 29) documents the `process memo` exit command, including that it creates one plan per entry and does NOT clear the memo file.
+
+---
+
+## Reviewer Pass — Completed 2026-06-24
+
+### Stage 1: Grumpy Adversarial Findings
+
+| Severity | File:Line | Finding |
+|----------|-----------|---------|
+| NIT | `docs/how_to_use_switchboard.md:64` | Section numbered "4" instead of plan's suggested "7.5". Correct deviation — file only had 3 sections; "7.5" was a plan-author guess based on incorrect file structure assumptions. Sequential numbering is correct. |
+| NIT | `README.md:72` vs `docs/switchboard_user_manual.md:93` | Ticket Updater field list is concise in README ("severity, area, recommended action") vs full in manual ("severity, area, assessment, recommended action, routing"). Intentional tiered detail per plan's proposed text (line 102). Not a defect. |
+| NIT | `docs/switchboard_user_manual.md` ToC | Plan labeled new sections "29-31" but also said "renumber Troubleshooting to 31" — internally contradictory. Implementation correctly used 28-30 for new sections, 31 for Troubleshooting. Correct resolution. |
+
+**No CRITICAL findings. No MAJOR findings.**
+
+### Stage 2: Balanced Synthesis
+
+- **Keep as-is:** All five files. Implementation faithfully matches plan proposed changes with sensible deviations where plan suggestions were based on incorrect file-structure assumptions.
+- **Fix now:** Nothing — no CRITICAL/MAJOR findings, no code fixes required.
+- **Defer:** Nothing — all plan requirements met.
+
+### Stage 3: Code Fixes Applied
+
+None — documentation-only plan, implementation is complete and correct.
+
+### Stage 4: Verification Results
+
+| Check | Result |
+|-------|--------|
+| Grep `memo\|remote\|triage` in 3 docs | README=8, how_to=7, manual=31 — all non-zero ✓ |
+| `Memo modal in the Kanban panel` in `memo.md` + `AGENTS.md` | 0 matches ✓ |
+| `Memo sub-tab` in `AGENTS.md` | 1 match (line 100) ✓ |
+| Stale `Updates PM tool ticket statuses` in docs | 0 matches ✓ |
+| README links resolve | Both targets exist ✓ |
+| ToC anchors match section headings | Sections 28-31 all match ✓ |
+| `switchboard.memo.hotkey` default | `cmd+shift+alt+m` (`package.json:699`) ✓ |
+| `switchboard.statusBar.showMemoButton` | `false`, scope `window` (`package.json:702-706`) ✓ |
+| Triage verdict format | 5 fields, ≤120 words, comment-only (`agentPromptBuilder.ts:930-940`) ✓ |
+| `RemoteConfig` fields + clamp | boards/silentSync/pingMode/pingFrequencySeconds, 30-120s (`RemoteControlService.ts:23-38, 118`) ✓ |
+| Memo UI buttons | Clear/Copy Prompt/Send to Planner (`implementation.html:1633-1635`) ✓ |
+| REMOTE tab + button | `kanban.html:2469, 2493` ✓ |
+| Triage buttons | `setup.html:697, 901` ✓ |
+| `process memo` documented in manual section 28 | Lines 1402-1403, includes "NOT cleared" note ✓ |
+
+### Files Changed (by implementer, verified by reviewer)
+
+- `README.md` — Added Memo Capture Mode, Triage Pipeline, Linear Remote Control sections; added `/memo` to chat commands; added Ticket Updater role.
+- `docs/how_to_use_switchboard.md` — Added section 1.5 (Memo) and section 4 (Triage & Remote Control).
+- `docs/switchboard_user_manual.md` — Fixed Ticket Updater description (line 93); added sections 28-30; added `/memo` to chat commands (line 750); added memo settings to settings table (lines 573-574); updated ToC (lines 36-39); renumbered Troubleshooting to 31.
+- `.agents/workflows/memo.md` — Replaced all 7 "Memo modal in the Kanban panel" references with "Memo sub-tab in the sidebar".
+- `AGENTS.md` — Replaced 1 "Memo modal in the Kanban panel" reference with "Memo sub-tab in the sidebar" (line 100).
+
+### Remaining Risks
+
+None — all plan requirements are met, all source-code spot-checks pass, and the "Memo modal" location error has been fully purged from both canonical source files.

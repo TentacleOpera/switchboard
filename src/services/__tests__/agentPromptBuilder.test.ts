@@ -156,6 +156,24 @@ suite('agentPromptBuilder', () => {
         });
     });
 
+    suite('adviseResearchIfUnsure option', () => {
+        test('adviseResearchIfUnsure: true includes research directive', () => {
+            const prompt = buildKanbanBatchPrompt('planner', makePlans(1), { adviseResearchIfUnsure: true });
+            assert.ok(prompt.includes('RESEARCH WHEN UNSURE:'), 'Should include research directive');
+            assert.ok(prompt.includes('.agents/skills/advise_research/SKILL.md'), 'Should include path to skill file');
+        });
+
+        test('adviseResearchIfUnsure: false omits research directive', () => {
+            const prompt = buildKanbanBatchPrompt('planner', makePlans(1), { adviseResearchIfUnsure: false });
+            assert.ok(!prompt.includes('RESEARCH WHEN UNSURE:'), 'Should NOT include research directive');
+        });
+
+        test('adviseResearchIfUnsure: undefined omits research directive', () => {
+            const prompt = buildKanbanBatchPrompt('planner', makePlans(1), {});
+            assert.ok(!prompt.includes('RESEARCH WHEN UNSURE:'), 'Should NOT include research directive');
+        });
+    });
+
     suite('buildKanbanBatchPrompt — code_researcher role', () => {
         test('injects PHASE 5 Plan Update instructions', () => {
             const prompt = buildKanbanBatchPrompt('code_researcher', makePlans(1), {});

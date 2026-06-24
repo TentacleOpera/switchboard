@@ -303,22 +303,12 @@ export const INLINE_CHALLENGE_DIRECTIVE = `For each plan, before implementation:
 export const SPLIT_PLAN_DIRECTIVE = `SPLIT PLAN MODE: Produce TWO files per plan. Original file = Complex / Risky only. Companion file (\`<stem>_routine.md\`) = Routine only. Both files must include full shared context (Goal, Metadata, Current State, Edge-Case audit, Dependencies). Original file notes: "Assume Routine items implemented by Coder agent." Read the full original file before writing either output. Create both files in the same directory as the original.`;
 export const SKIP_COMPILATION_DIRECTIVE = `SKIP COMPILATION: Do NOT run any project compilation step (e.g. tsc, mvn compile, gradle build, make) as part of the verification plan. The project is assumed to be in a pre-compiled or compilation-free state for this session.`;
 export const SKIP_TESTS_DIRECTIVE = `SKIP TESTS: Do NOT run automated tests (unit, integration, or e2e) as part of the verification plan. The test suite will be run separately by the user.`;
-// Mirrors the research-prompt structure in src/webview/planning.js generateResearchPrompt() (≈5035-5067).
-// Keep both in sync — they cannot share a function across the webview/extension boundary.
-export const ADVISE_RESEARCH_DIRECTIVE = `RESEARCH WHEN UNSURE: As you plan, track every assumption, factual claim, API/behavior, or library detail you are NOT 100% certain about. If any exist, append a section titled "## Recommended Research" to your output containing a ready-to-run research prompt that covers ONLY those uncertainties. Structure that research prompt the same way the Switchboard research tool does:
-- ROLE definition for the research analyst
-- CONTEXT describing the domain and audience
-- CENTRAL QUESTION
-- 4-6 targeted SUB-QUESTIONS derived from your specific uncertainties
-- SOURCE GUIDANCE (authoritative sources, date-checking, separate required/recommended/opinion)
-- SCOPE boundaries
-- OUTPUT format:
-  - A short H1 document title (fewer than 10 words, no colons or extra statements) — this is the title of the research document, not "Executive Summary"
-  - "Executive Summary" as an H2 section heading beneath the title
-  - Tiered findings, trade-off evaluation, glossary, and source list as subsequent sections
-- CITATIONS: Do NOT include inline source URLs or citations in the body of the report. Attach all references as a single consolidated list at the END of the report only
-- DEPTH level with a source count target of at least 50 authoritative sources
-Then advise the user to run that prompt through Google AI Studio (search grounding enabled), Claude, or their research agent of choice, and to feed the findings back before implementation. If you are confident about everything, state that no research is needed and omit the section.`;
+// The full research-prompt template now lives in .agents/skills/advise_research/SKILL.md (the
+// canonical source). The generateResearchPrompt() function in src/webview/planning.js is a separate
+// UI-driven code path (Research tab) and remains independent — it embeds the same structure for the
+// webview and cannot read the extension-side skill file at runtime. Both share the template structure
+// via the skill file as canonical source.
+export const ADVISE_RESEARCH_DIRECTIVE = `RESEARCH WHEN UNSURE: As you plan, track every assumption, factual claim, API/behavior, or library detail you are NOT 100% certain about. If any exist, read the skill file .agents/skills/advise_research/SKILL.md and follow its template to append a "## Recommended Research" section to your output. If you are confident about everything, state that no research is needed and omit the section.`;
 export const CAVEMAN_OUTPUT_DIRECTIVE = `CAVEMAN MODE: Talk like caveman. Drop filler, keep substance. Use fragments. Technical terms exact. Code unchanged. Pattern: [thing] [action] [reason]. [next step].`;
 export const SUPPRESS_WALKTHROUGH_DIRECTIVE = `SUPPRESS WALKTHROUGH: Do NOT generate a walkthrough.md artifact at the end of this task. Omit the walkthrough creation step entirely.`;
 

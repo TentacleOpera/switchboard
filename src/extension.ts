@@ -444,6 +444,28 @@ export async function activate(context: vscode.ExtensionContext) {
         } catch (err) {
             console.error('[Switchboard] AGENTS.md migration failed, continuing activation:', err);
         }
+
+        // Activation-time skill seeding: copy any new skill files to workspace that don't already exist.
+        try {
+            const bundledSkillsUri = vscode.Uri.joinPath(context.extensionUri, '.agents', 'skills');
+            const skillFiles = await crawlDirectory(bundledSkillsUri);
+            for (const relativePath of skillFiles) {
+                const destUri = vscode.Uri.joinPath(vscode.Uri.file(workspaceRoot), '.agents', 'skills', relativePath);
+                try {
+                    await vscode.workspace.fs.stat(destUri); // exists → skip to preserve user customizations
+                } catch {
+                    // Ensure destination parent directory exists
+                    await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(destUri.fsPath)));
+                    await vscode.workspace.fs.copy(
+                        vscode.Uri.joinPath(bundledSkillsUri, relativePath),
+                        destUri,
+                        { overwrite: false }
+                    );
+                }
+            }
+        } catch (err) {
+            console.error('[Switchboard] Skill-file seed failed, continuing activation:', err);
+        }
     }
 
     const globalPlanWatcher = new GlobalPlanWatcherService(
