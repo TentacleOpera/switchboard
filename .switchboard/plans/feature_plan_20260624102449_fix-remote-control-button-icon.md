@@ -136,3 +136,44 @@ No automated tests required. This is a visual-only icon change with no logic to 
 ---
 
 **Recommendation:** Complexity is 2/10 → **Send to Intern**. This is a trivial two-line change with no logic, no data migration, and no risk to existing functionality.
+
+---
+
+## Reviewer Pass — 2026-06-24
+
+### Stage 1: Grumpy Findings
+
+| ID | Severity | File:Line | Finding |
+|---|---|---|---|
+| — | CRITICAL | — | None. |
+| — | MAJOR | — | None. |
+| NIT-1 | NIT | `KanbanProvider.ts:7412` | Plan's proposed code block showed a `// NEW` trailing comment; implementation correctly omitted it (no other iconMap entries are commented). No action — noted to prevent "restoration." |
+| NIT-2 | NIT | `KanbanProvider.ts:7411` | Pre-existing: `{{ICON_28}}` maps to `icons-24.png` (misleading name). Explicitly out of scope; 2 shipped call sites (Jules/Splitter) depend on it. Defer. |
+
+### Stage 2: Balanced Synthesis
+
+No code fixes required. The implementation matches the plan exactly:
+- `{{ICON_REMOTE}}` → `icons-28.png` added at `KanbanProvider.ts:7412`.
+- Remote control button `src` swapped at `kanban.html:2494`.
+- Jules (`kanban.html:3816`) and Splitter (`kanban.html:3817`) still use `{{ICON_28}}` → `icons-24.png`, rendered dynamically at lines 4554 and 4564. Unchanged.
+- Regex loop (`KanbanProvider.ts:7432-7434`) iterates `Object.entries(iconMap)` — new token picked up automatically.
+
+### Files Changed (Verified)
+
+- `src/services/KanbanProvider.ts` — line 7412: new `{{ICON_REMOTE}}` iconMap entry.
+- `src/webview/kanban.html` — line 2494: `src` changed from `{{ICON_28}}` to `{{ICON_REMOTE}}`.
+
+### Validation Results
+
+- **Grep `ICON_REMOTE`:** 2 matches (iconMap + button) — correct, no orphan references.
+- **Grep `ICON_28`:** 3 matches (iconMap + Jules + Splitter) — unchanged, correct.
+- **Icon file existence:** `icons/25-1-100 Sci-Fi Flat icons-28.png` — 14,335 bytes, dated Mar 24 08:33. Confirmed.
+- **Icon file existence:** `icons/25-1-100 Sci-Fi Flat icons-24.png` — 18,662 bytes. Confirmed (Jules/Splitter still resolve here).
+- **Single `btn-remote-control`:** one button in file (line 2493); state toggle at line 6820 only touches CSS class, never `src`.
+- **Compilation:** skipped per session directives.
+- **Tests:** skipped per session directives.
+
+### Remaining Risks
+
+- **None material.** The change is purely cosmetic and isolated.
+- **Deferred tech debt:** `{{ICON_28}}` naming is misleading but out of scope; touching it would affect 2 shipped buttons (Jules, Splitter).
