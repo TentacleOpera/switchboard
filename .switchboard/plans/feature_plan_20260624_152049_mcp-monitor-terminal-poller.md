@@ -186,3 +186,30 @@ If the repo has unit coverage for `GlobalIntegrationConfigService`, add tests fo
 ## Recommendation
 
 **Complexity: 6 → Send to Coder.** The work is majority-routine (config accessor, UI dropdown, message handler, role registration) with two well-scoped moderate risks (the dedicated-queue independence invariant and the in-flight overrun guard). The adversarial review added four surgical refinements — dedicated `_mcpMonitorTickQueue`, in-flight boolean guard, `mcp_monitor` monitor-only dispatch guard, and a corrected line reference — none of which expand the product scope. A coder can execute this plan directly; no lead-level architectural decisions remain open.
+
+## Post-Implementation Review (Reviewer Pass)
+
+### Files Changed by Reviewer
+- `src/webview/kanban.html` — Added missing `break;` statement at line 6514 before `case 'updateMcpMonitorConfig':` (was falling through from `case 'startupCommands':`, clobbering `isMcpMonitorTerminalRunning` to `false` on every agent-config message).
+
+### Findings
+
+| Severity | Finding | File:Line | Status |
+|----------|---------|-----------|--------|
+| CRITICAL | Missing `break` in `startupCommands` switch case → fall-through into `updateMcpMonitorConfig` resets `isMcpMonitorTerminalRunning` to `false` and triggers spurious `renderAutobanPanel()` on every agent-config message | `src/webview/kanban.html:6513` | **FIXED** — added `break;` |
+| NIT | `_isMcpMonitorTerminalRunning(targetRole)` and `_mcpMonitorTick()` accept `targetRole`/`cfg.targetRole` but hardcode `'MCP Monitor'` for terminal resolution. Works via normalization equivalence (`_normalizeAgentKey('MCP Monitor')` === `_normalizeAgentKey('mcp_monitor')`) but parameter is misleading dead weight | `src/services/TaskViewerProvider.ts:19084,19158` | Deferred — UI doesn't expose `targetRole`; safe |
+| NIT | Source checklist checkbox labels render full `SOURCE_PRESETS` descriptions (e.g. "Slack: unread direct messages and @-mentions across my channels.") instead of short names ("Slack") | `src/webview/kanban.html:7410` | Deferred — cosmetic; consistent with plan's "labels come from SOURCE_PRESETS" requirement |
+
+### Verification Results
+- **Independence invariant verified:** `_stopAutobanEngine()` (line 8001-8015) resets `_autobanTickQueue` but NOT `_mcpMonitorTickQueue`. `_startMcpMonitorLoop`/`_stopMcpMonitorLoop` are never called from autoban start/stop/pause/reset handlers. `dispose()` correctly calls `_stopMcpMonitorLoop()`.
+- **Monitor-only safety guard verified:** `mcp_monitor` added to the dispatch block at `TaskViewerProvider.ts:15469` alongside `jules_monitor` — prevents plan-execution dispatches into the read-only monitor terminal.
+- **Config accessor verified:** `GlobalIntegrationConfigService` correctly clamps `intervalMinutes` to ≥1, merges over defaults, preserves unknown keys via round-trip. Both sync and async accessors present.
+- **Prompt composer verified:** `_buildMcpMonitorPrompt` correctly composes from `SOURCE_PRESETS`, skips unknown keys, returns empty string when no sources resolve, uses `normalizeNewlines` from `agentPromptBuilder.ts`.
+- **UI placement verified:** MCP Monitor row is inserted after `modeRow` and before `modeHelpText`, not gated by `currentAutomationMode` — shows in all three modes.
+- **Role registration verified:** `mcp_monitor` added to agent grid with display name "MCP Monitor", visibility toggle in `sharedDefaults.js`, startup-command fallback with permission-bypass flags at `TaskViewerProvider.ts:3520`.
+- **Compilation/tests:** Skipped per session instructions.
+
+### Remaining Risks
+1. **`targetRole` hardcoded** — if a user manually edits `~/.switchboard/integration-config.json` to set a custom `targetRole`, the terminal resolution won't follow (hardcoded `'MCP Monitor'`). Low risk since the field is not UI-exposed.
+2. **Clipboard disruption** — inherited from `sendRobustText` for prompts >100 chars; documented as known edge case in plan. No fix in this iteration.
+3. **Full-preset checkbox labels** — cosmetic UX issue; checkboxes show long descriptions rather than short names. Defer to a future polish pass.

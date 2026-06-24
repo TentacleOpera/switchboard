@@ -6511,6 +6511,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     updateJulesButtonVisibility();
                     updateSplitterButtonVisibility();
                   }
+                  break;
+                }
                 case 'updateMcpMonitorConfig': {
                   mcpMonitorConfig = msg.config || mcpMonitorConfig;
                   isMcpMonitorTerminalRunning = !!msg.isMcpMonitorRunning;

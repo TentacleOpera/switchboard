@@ -11,7 +11,7 @@ On the Kanban board (`kanban.html`), pressing **"Advance all"** on the **NEW** c
 
 So plans only "stick" once the actual dispatch completes. And because batch planner dispatch with extra terminals is **very laggy** (the slow, fully-serialized `/clear` + send chain — see the companion plan [feature_plan_20260624210142_batch-planner-extra-terminals-lag.md](feature_plan_20260624210142_batch-planner-extra-terminals-lag.md)), the reverted state lingers so long that it can effectively time out and the **NEW column reclaims the plans permanently**.
 
-The goal: a plan's column move must **persist immediately and stay put the instant the button is pressed**, completely independent of whether/when the prompt is dispatched to a terminal.
+The goal: a plan's column move must **persist immediately and stay put the instant the button is pressed**, completely independent of whether/when the prompt is dispatched to a terminal — and the board must update via **targeted card deltas, never a whole-board redraw**, so every move is snappy.
 
 ### Problem Analysis & Root Cause
 
@@ -57,9 +57,22 @@ if (idsToMove.has(card.sessionId)) { ... }   // matches sessionId ONLY
 
 But the dispatch sends `planId`-primary ids (`_cardId` → `planId || sessionId`), and **file-based plans have an empty `session_id`** (per the fallback at [KanbanDatabase.ts:2514](../../src/services/KanbanDatabase.ts#L2514)). Freshly-created NEW plans are exactly these. So the one message designed to authoritatively confirm the move is a no-op for them, leaving the board even more dependent on the slow trailing `_refreshBoard` to ever correct itself.
 
+### Why the board-wide refresh exists (and why it shouldn't re-render)
+
+The full `_refreshBoard` at the start of `moveAll` has exactly **one** legitimate job, and the board re-render is not it. The two advance handlers enumerate their targets differently:
+
+- **`moveSelected`** ([KanbanProvider.ts:5506](../../src/services/KanbanProvider.ts#L5506)) receives explicit `msg.sessionIds` and filters `this._lastCards` directly — **no start-refresh**.
+- **`moveAll`** receives only the column *name*, so the backend must work out which cards live in that column. It does so by calling `await this._refreshBoard()` then filtering `this._lastCards` by column ([5602](../../src/services/KanbanProvider.ts#L5602)).
+
+So the only reason for the start-refresh is *"get a fresh server-side list of the cards in this column"* — a **data read**. But `_refreshBoard` is one fat function that does the read **and** posts `updateBoard`, which redraws the whole board from the DB (where the plans are still in NEW), reverting the optimistic move. The lag is that same function re-running the entire pipeline just to answer "which cards are in NEW": custom-agents lookup, custom-columns, visible-agents, the DB board query, a per-plan `fs.existsSync` ghost-plan filter ([1977-2098](../../src/services/KanbanProvider.ts#L1977-L2098)), completed-plans query, and projects list.
+
+It is weaker than it looks: `this._lastCards` was *just* populated by the render of the board the user clicked on, so the webview and `_lastCards` already agree on what's in NEW. The re-read only guards a narrow race (a watcher mutating the column in the gap) and pays a full recompute + full redraw for it on every "advance all".
+
+**A column move never needs a whole-board redraw.** The webview's `renderBoard` recomputes column counts and empty-states from the cards array it is handed ([kanban.html:5116](../../src/webview/kanban.html#L5116)), so a targeted `moveCards` delta updates counts correctly on its own. A full `_refreshBoard` is only warranted for **structural** change — columns added/removed, workspace/project switch, plans created/deleted/completed externally, complexity re-scored — none of which happen during an advance. Everywhere on the advance path a full refresh is used purely to "move some cards", it can be a `moveCards` delta instead, which is the snappy path.
+
 ### Root cause, stated plainly
 
-The column move is **not an immediate, standalone, persisted operation**. It is entangled with the dispatch: a stale full-board refresh fires before the move, the actual DB write + echo are sequenced behind the slow `/clear`+send chain, and the only reliable correction is a refresh that runs after dispatch finishes. The fix is to **persist the move and emit the authoritative echo up front — before any dispatch — and stop pushing stale full-board refreshes that revert optimistic UI.**
+The column move is **not an immediate, standalone, persisted operation**. It is entangled with the dispatch: a stale full-board refresh fires before the move, the actual DB write + echo are sequenced behind the slow `/clear`+send chain, and the only reliable correction is a refresh that runs after dispatch finishes. The fix is to **persist the move and emit the authoritative echo up front — before any dispatch — and replace board-wide refreshes on the advance path with targeted `moveCards` deltas so the board stays snappy.**
 
 ## Metadata
 
@@ -98,7 +111,17 @@ const sourceCards = this._lastCards.filter(card => card.workspaceRoot === worksp
 
 Introduce `_reloadLastCards(workspaceRoot)` by factoring the card-loading half of `_refreshBoardImpl` ([1977-2098](../../src/services/KanbanProvider.ts#L1977-L2098)) out from the `postMessage` half, so it can be called for data only.
 
-**1c. Make the trailing `_refreshBoard` confirm, not contend.** The post-dispatch `_refreshBoard` at [5671](../../src/services/KanbanProvider.ts#L5671) / [5686](../../src/services/KanbanProvider.ts#L5686) is correct *as a final confirmation* (DB now has the moved rows). Keep it, but since the persist+echo already moved the cards immediately, this becomes a harmless reconciling refresh rather than the first time the move becomes visible. Confirm it runs regardless of dispatch success (e.g. wrap dispatch in try/finally) so a thrown/slow dispatch can never strand the board in the reverted state.
+**1c. Replace the trailing `_refreshBoard` with a targeted confirmation delta.** The post-dispatch `_refreshBoard` at [5671](../../src/services/KanbanProvider.ts#L5671) / [5686](../../src/services/KanbanProvider.ts#L5686) exists to reconcile the DB truth after the move. But since the persist already happened and the per-card target columns are known server-side, this does not need a whole-board redraw — emit a `moveCards` delta with the final `{sessionIds, targetColumn}` instead:
+
+```js
+// After persisting, confirm with a targeted delta — NOT a board-wide refresh.
+this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn: nextCol });
+// (omit the trailing await this._refreshBoard(workspaceRoot) on the advance path)
+```
+
+Wrap the dispatch in `try/finally` so the confirming delta is posted regardless of dispatch success — a thrown/slow dispatch can never strand the board in the reverted state. Reserve a real `_refreshBoard` only for the structural cases (complexity routing that splits a batch across multiple target columns can post one delta per target column; that is still N small deltas, not a full redraw).
+
+**1e. Apply the same delta-not-redraw treatment to the other advance entry points.** The drag-advance handlers `moveCardForward` / `moveCardBackwards` ([5034-5057](../../src/services/KanbanProvider.ts#L5034-L5057)) call `this._scheduleBoardRefresh(workspaceRoot)` after persisting. Replace those with a `moveCards` delta as well (they already know the `targetColumn` and `sessionIds`). Keep `_scheduleBoardRefresh` for watcher-driven/structural change only. This makes *every* user-initiated card move a targeted delta, eliminating full-board recompute from the interactive path.
 
 **1d. Surface failed persists.** Capture `moveCardToColumn`'s currently-discarded boolean in the pre-move loop ([3394](../../src/services/KanbanProvider.ts#L3394)); if a write returns `false`, post a `moveCardsFailed` message (File 2, 2b) for that id so the card visibly reverts *with a reason* instead of silently.
 
@@ -159,6 +182,10 @@ case 'moveCardsFailed': {
 
 **Step 5 — Limit toggle.** With "Limit dispatches to number of available terminals" ON and more NEW plans than terminals, confirm only the dispatched (oldest N) plans advance and persist, the rest correctly remain in NEW (and are not flagged as failures).
 
-**Step 6 — Regression sweep.** Re-verify drag-drop advance, `moveSelected`, per-card advance, custom-user column advance, PLAN REVIEWED complexity routing, and epic cascade — each must move and persist with no bounce.
+**Step 6 — Snappiness.** Confirm that advancing cards (drag, per-card, advance-selected, advance-all) no longer triggers a whole-board redraw: in the Extension Host log, a move should produce a `moveCards` delta and **no** `_refreshBoardImpl` / `getBoard` / ghost-plan-filter log lines. Visually, only the affected cards and their column counts change; the rest of the board does not flicker/relayout. Compare wall-clock responsiveness on a board with many cards before/after.
 
-**Step 7 — Build & install.** Build, reload, and re-run Steps 1–2 against the installed extension (not `dist/`) to confirm the source change is what's exercised. Land alongside the companion lag fix for the complete remedy.
+**Step 7 — Structural refresh still works.** Confirm a *real* full refresh still fires when it should: creating/deleting a plan, switching workspace/project, adding/removing a column, or a watcher-driven external change must still redraw the board correctly (these paths must NOT have been downgraded to deltas).
+
+**Step 8 — Regression sweep.** Re-verify drag-drop advance, `moveSelected`, per-card advance, custom-user column advance, PLAN REVIEWED complexity routing (batch split across target columns → one delta per column), and epic cascade — each must move and persist with no bounce.
+
+**Step 9 — Build & install.** Build, reload, and re-run Steps 1–2 against the installed extension (not `dist/`) to confirm the source change is what's exercised. Land alongside the companion lag fix for the complete remedy.
