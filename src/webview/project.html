@@ -97,7 +97,7 @@
         /* Claudify: remove neon glow from base (non-cyber) interactive states */
         body.theme-claudify .kanban-plan-item.selected,
         body.theme-claudify .epic-plan-item.selected,
-        body.theme-claudify .constitution-file-item.selected { box-shadow: none; }
+        body.theme-claudify .constitution-file-item.selected, body.theme-claudify .system-file-item.selected { box-shadow: none; }
 
         /* Claudify: cards/sidebar items = an exact copy of implementation.html's .secondary-btn
            (the COMPLETE/COPY/CREATE buttons): solid --panel-bg2 fill, --border-color border,
@@ -105,6 +105,7 @@
         body.theme-claudify .kanban-plan-item,
         body.theme-claudify .epic-plan-item,
         body.theme-claudify .constitution-file-item,
+        body.theme-claudify .system-file-item,
         body.theme-claudify .insight-item {
             background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
             border: 1px solid #333333 !important;
@@ -114,6 +115,7 @@
         body.theme-claudify .kanban-plan-item:hover,
         body.theme-claudify .epic-plan-item:hover,
         body.theme-claudify .constitution-file-item:hover,
+        body.theme-claudify .system-file-item:hover,
         body.theme-claudify .insight-item:hover {
             background: linear-gradient(180deg, color-mix(in srgb, #ffffff 9%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
             border-color: #555555 !important;
@@ -127,7 +129,9 @@
         body.theme-claudify .epic-plan-item.selected,
         body.theme-claudify .epic-plan-item.selected:hover,
         body.theme-claudify .constitution-file-item.selected,
+        body.theme-claudify .system-file-item.selected,
         body.theme-claudify .constitution-file-item.selected:hover,
+        body.theme-claudify .system-file-item.selected:hover,
         body.theme-claudify .insight-item.selected,
         body.theme-claudify .insight-item.selected:hover {
             background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
@@ -305,16 +309,16 @@
             font-style: italic;
         }
         /* Kanban specific plan items */
-        .kanban-plan-item, .epic-plan-item, .constitution-file-item, .insight-item {
+        .kanban-plan-item, .epic-plan-item, .constitution-file-item, .system-file-item, .insight-item {
             padding: 12px;
             border-bottom: 1px solid var(--border-color);
             cursor: pointer;
             transition: background 0.15s;
         }
-        .kanban-plan-item:hover, .epic-plan-item:hover, .constitution-file-item:hover, .insight-item:hover {
+        .kanban-plan-item:hover, .epic-plan-item:hover, .constitution-file-item:hover, .system-file-item:hover, .insight-item:hover {
             background: var(--card-bg-hover);
         }
-        .kanban-plan-item.selected, .epic-plan-item.selected, .constitution-file-item.selected, .insight-item.selected {
+        .kanban-plan-item.selected, .epic-plan-item.selected, .constitution-file-item.selected, .system-file-item.selected, .insight-item.selected {
             background: color-mix(in srgb, var(--accent-teal) 8%, #0f0f0f);
             border-left: 3px solid var(--accent-teal);
         }
@@ -385,7 +389,7 @@
                         inset 0 0 6px color-mix(in srgb, var(--accent-teal) 15%, transparent);
         }
 
-        .constitution-file-item {
+        .constitution-file-item, .system-file-item {
             padding: 12px;
             border-bottom: 1px solid var(--border-color);
             cursor: pointer;
@@ -396,13 +400,13 @@
             background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
             border-left: 3px solid var(--accent-teal-dim);
         }
-        .constitution-file-item:hover {
+        .constitution-file-item:hover, .system-file-item:hover {
             background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
             border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
             border-left-color: var(--accent-teal);
             box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
         }
-        .constitution-file-item.selected {
+        .constitution-file-item.selected, .system-file-item.selected {
             background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
             border-color: var(--accent-teal);
             border-left-color: var(--accent-teal);
@@ -410,10 +414,10 @@
                         inset 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
             color: var(--accent-teal);
         }
-        .cyber-theme-enabled .constitution-file-item:hover {
+        .cyber-theme-enabled .constitution-file-item:hover, .cyber-theme-enabled .system-file-item:hover {
             box-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 30%, transparent);
         }
-        .cyber-theme-enabled .constitution-file-item.selected {
+        .cyber-theme-enabled .constitution-file-item.selected, .cyber-theme-enabled .system-file-item.selected {
             box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 40%, transparent),
                         inset 0 0 6px color-mix(in srgb, var(--accent-teal) 15%, transparent);
         }
@@ -818,6 +822,7 @@
         .cyber-theme-enabled #kanban-preview-content code,
         .cyber-theme-enabled #epics-preview-content code,
         .cyber-theme-enabled #constitution-preview-content code,
+        .cyber-theme-enabled #system-preview-content code,
         .cyber-theme-enabled #tuning-preview-content code {
             box-shadow: 0 0 6px color-mix(in srgb, var(--accent-teal) 25%, transparent);
         }
@@ -826,6 +831,7 @@
         .cyber-theme-enabled #kanban-preview-content pre,
         .cyber-theme-enabled #epics-preview-content pre,
         .cyber-theme-enabled #constitution-preview-content pre,
+        .cyber-theme-enabled #system-preview-content pre,
         .cyber-theme-enabled #tuning-preview-content pre {
             box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent),
                          inset 0 0 12px rgba(0, 0, 0, 0.3);
@@ -835,6 +841,7 @@
         .cyber-theme-enabled #kanban-preview-content blockquote,
         .cyber-theme-enabled #epics-preview-content blockquote,
         .cyber-theme-enabled #constitution-preview-content blockquote,
+        .cyber-theme-enabled #system-preview-content blockquote,
         .cyber-theme-enabled #tuning-preview-content blockquote {
             border-left-color: var(--accent-teal);
             box-shadow: -4px 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent);
@@ -851,10 +858,12 @@
         body.theme-claudify #kanban-content,
         body.theme-claudify #epics-content,
         body.theme-claudify #constitution-content,
+        body.theme-claudify #system-content,
         body.theme-claudify #tuning-content,
         body.theme-claudify #kanban-preview-pane,
         body.theme-claudify #epics-preview-pane,
         body.theme-claudify #constitution-preview-pane,
+        body.theme-claudify #system-preview-pane,
         body.theme-claudify #tuning-preview-pane {
             background-color: #1F1C1A;   /* lifted from near-black (#14110F) to soften text/background contrast (claudify has no glass overlay) */
             background-image:
@@ -867,6 +876,7 @@
         body.theme-claudify #kanban-preview-content h1,
         body.theme-claudify #epics-preview-content h1,
         body.theme-claudify #constitution-preview-content h1,
+        body.theme-claudify #system-preview-content h1,
         body.theme-claudify #tuning-preview-content h1 {
             font-family: 'GeistPixel', var(--font-family);
             letter-spacing: -0.05em;
@@ -878,6 +888,7 @@
         body.theme-claudify #kanban-preview-content h2, body.theme-claudify #kanban-preview-content h3, body.theme-claudify #kanban-preview-content h4, body.theme-claudify #kanban-preview-content h5, body.theme-claudify #kanban-preview-content h6,
         body.theme-claudify #epics-preview-content h2, body.theme-claudify #epics-preview-content h3, body.theme-claudify #epics-preview-content h4, body.theme-claudify #epics-preview-content h5, body.theme-claudify #epics-preview-content h6,
         body.theme-claudify #constitution-preview-content h2, body.theme-claudify #constitution-preview-content h3, body.theme-claudify #constitution-preview-content h4, body.theme-claudify #constitution-preview-content h5, body.theme-claudify #constitution-preview-content h6,
+        body.theme-claudify #system-preview-content h2, body.theme-claudify #system-preview-content h3, body.theme-claudify #system-preview-content h4, body.theme-claudify #system-preview-content h5, body.theme-claudify #system-preview-content h6,
         body.theme-claudify #tuning-preview-content h2, body.theme-claudify #tuning-preview-content h3, body.theme-claudify #tuning-preview-content h4, body.theme-claudify #tuning-preview-content h5, body.theme-claudify #tuning-preview-content h6 {
             font-family: 'Poppins', var(--font-family);
             letter-spacing: normal;
@@ -888,11 +899,20 @@
         body.theme-afterburner-pro #kanban-preview-content h1,
         body.theme-afterburner-pro #epics-preview-content h1,
         body.theme-afterburner-pro #constitution-preview-content h1,
+        body.theme-afterburner-pro #system-preview-content h1,
         body.theme-afterburner-pro #tuning-preview-content h1 {
             color: var(--accent-primary);
         }
 
-
+        body.theme-afterburner-pro #kanban-preview-content h2, body.theme-afterburner-pro #kanban-preview-content h3, body.theme-afterburner-pro #kanban-preview-content h4, body.theme-afterburner-pro #kanban-preview-content h5, body.theme-afterburner-pro #kanban-preview-content h6,
+        body.theme-afterburner-pro #epics-preview-content h2, body.theme-afterburner-pro #epics-preview-content h3, body.theme-afterburner-pro #epics-preview-content h4, body.theme-afterburner-pro #epics-preview-content h5, body.theme-afterburner-pro #epics-preview-content h6,
+        body.theme-afterburner-pro #constitution-preview-content h2, body.theme-afterburner-pro #constitution-preview-content h3, body.theme-afterburner-pro #constitution-preview-content h4, body.theme-afterburner-pro #constitution-preview-content h5, body.theme-afterburner-pro #constitution-preview-content h6,
+        body.theme-afterburner-pro #system-preview-content h2, body.theme-afterburner-pro #system-preview-content h3, body.theme-afterburner-pro #system-preview-content h4, body.theme-afterburner-pro #system-preview-content h5, body.theme-afterburner-pro #system-preview-content h6,
+        body.theme-afterburner-pro #tuning-preview-content h2, body.theme-afterburner-pro #tuning-preview-content h3, body.theme-afterburner-pro #tuning-preview-content h4, body.theme-afterburner-pro #tuning-preview-content h5, body.theme-afterburner-pro #tuning-preview-content h6 {
+            font-family: var(--display-font), var(--font-family);
+            letter-spacing: var(--display-letter-spacing);
+            font-stretch: var(--display-font-stretch);
+        }
 
         /* Unified Markdown Preview Styling (Kanban, Epics & Constitution) */
         #kanban-preview-content,
@@ -914,6 +934,7 @@
         #kanban-preview-content h1, #kanban-preview-content h2, #kanban-preview-content h3, #kanban-preview-content h4, #kanban-preview-content h5, #kanban-preview-content h6,
         #epics-preview-content h1, #epics-preview-content h2, #epics-preview-content h3, #epics-preview-content h4, #epics-preview-content h5, #epics-preview-content h6,
         #constitution-preview-content h1, #constitution-preview-content h2, #constitution-preview-content h3, #constitution-preview-content h4, #constitution-preview-content h5, #constitution-preview-content h6,
+        #system-preview-content h1, #system-preview-content h2, #system-preview-content h3, #system-preview-content h4, #system-preview-content h5, #system-preview-content h6,
         #tuning-preview-content h1, #tuning-preview-content h2, #tuning-preview-content h3, #tuning-preview-content h4, #tuning-preview-content h5, #tuning-preview-content h6 {
             margin-top: 24px;
             margin-bottom: 12px;
@@ -926,6 +947,7 @@
         body.cyber-theme-enabled #kanban-preview-content h1, body.cyber-theme-enabled #kanban-preview-content h2, body.cyber-theme-enabled #kanban-preview-content h3, body.cyber-theme-enabled #kanban-preview-content h4, body.cyber-theme-enabled #kanban-preview-content h5, body.cyber-theme-enabled #kanban-preview-content h6,
         body.cyber-theme-enabled #epics-preview-content h1, body.cyber-theme-enabled #epics-preview-content h2, body.cyber-theme-enabled #epics-preview-content h3, body.cyber-theme-enabled #epics-preview-content h4, body.cyber-theme-enabled #epics-preview-content h5, body.cyber-theme-enabled #epics-preview-content h6,
         body.cyber-theme-enabled #constitution-preview-content h1, body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6,
+        body.cyber-theme-enabled #system-preview-content h1, body.cyber-theme-enabled #system-preview-content h2, body.cyber-theme-enabled #system-preview-content h3, body.cyber-theme-enabled #system-preview-content h4, body.cyber-theme-enabled #system-preview-content h5, body.cyber-theme-enabled #system-preview-content h6,
         body.cyber-theme-enabled #tuning-preview-content h1, body.cyber-theme-enabled #tuning-preview-content h2, body.cyber-theme-enabled #tuning-preview-content h3, body.cyber-theme-enabled #tuning-preview-content h4, body.cyber-theme-enabled #tuning-preview-content h5, body.cyber-theme-enabled #tuning-preview-content h6 {
             font-family: var(--display-font), var(--font-family);
             letter-spacing: var(--display-letter-spacing);
@@ -936,6 +958,7 @@
         body.cyber-theme-enabled #kanban-preview-content h2, body.cyber-theme-enabled #kanban-preview-content h3, body.cyber-theme-enabled #kanban-preview-content h4, body.cyber-theme-enabled #kanban-preview-content h5, body.cyber-theme-enabled #kanban-preview-content h6,
         body.cyber-theme-enabled #epics-preview-content h2, body.cyber-theme-enabled #epics-preview-content h3, body.cyber-theme-enabled #epics-preview-content h4, body.cyber-theme-enabled #epics-preview-content h5, body.cyber-theme-enabled #epics-preview-content h6,
         body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6,
+        body.cyber-theme-enabled #system-preview-content h2, body.cyber-theme-enabled #system-preview-content h3, body.cyber-theme-enabled #system-preview-content h4, body.cyber-theme-enabled #system-preview-content h5, body.cyber-theme-enabled #system-preview-content h6,
         body.cyber-theme-enabled #tuning-preview-content h2, body.cyber-theme-enabled #tuning-preview-content h3, body.cyber-theme-enabled #tuning-preview-content h4, body.cyber-theme-enabled #tuning-preview-content h5, body.cyber-theme-enabled #tuning-preview-content h6 {
             color: var(--accent-primary);
         }
@@ -943,6 +966,7 @@
         #kanban-preview-content h1,
         #epics-preview-content h1,
         #constitution-preview-content h1,
+        #system-preview-content h1,
         #tuning-preview-content h1 {
             font-size: 2em; /* 2em relative to 13px base = 26px */
             margin-top: 0;
@@ -956,6 +980,7 @@
         #kanban-preview-content h2,
         #epics-preview-content h2,
         #constitution-preview-content h2,
+        #system-preview-content h2,
         #tuning-preview-content h2 {
             font-size: 1.5em; /* 1.5em relative to 13px base = 19.5px */
             padding-bottom: 0.3em;
@@ -969,18 +994,22 @@
         #kanban-preview-content h3,
         #epics-preview-content h3,
         #constitution-preview-content h3,
+        #system-preview-content h3,
         #tuning-preview-content h3,
         #kanban-preview-content h4,
         #epics-preview-content h4,
         #constitution-preview-content h4,
+        #system-preview-content h4,
         #tuning-preview-content h4,
         #kanban-preview-content h5,
         #epics-preview-content h5,
         #constitution-preview-content h5,
+        #system-preview-content h5,
         #tuning-preview-content h5,
         #kanban-preview-content h6,
         #epics-preview-content h6,
         #constitution-preview-content h6,
+        #system-preview-content h6,
         #tuning-preview-content h6 {
             text-transform: uppercase;
             color: var(--accent-teal);
@@ -989,6 +1018,7 @@
         #kanban-preview-content h3,
         #epics-preview-content h3,
         #constitution-preview-content h3,
+        #system-preview-content h3,
         #tuning-preview-content h3 {
             font-size: 1.25em; /* 1.25em relative to 13px base = 16.25px */
         }
@@ -996,6 +1026,7 @@
         #kanban-preview-content h4,
         #epics-preview-content h4,
         #constitution-preview-content h4,
+        #system-preview-content h4,
         #tuning-preview-content h4 {
             font-size: 1em;
         }
@@ -1003,6 +1034,7 @@
         #kanban-preview-content h5,
         #epics-preview-content h5,
         #constitution-preview-content h5,
+        #system-preview-content h5,
         #tuning-preview-content h5 {
             font-size: 0.875em;
         }
@@ -1010,6 +1042,7 @@
         #kanban-preview-content h6,
         #epics-preview-content h6,
         #constitution-preview-content h6,
+        #system-preview-content h6,
         #tuning-preview-content h6 {
             font-size: 0.85em;
         }
@@ -1017,6 +1050,7 @@
         #kanban-preview-content p,
         #epics-preview-content p,
         #constitution-preview-content p,
+        #system-preview-content p,
         #tuning-preview-content p {
             margin-bottom: 16px;
             line-height: inherit; /* Inherits from container's 1.5 */
@@ -1027,6 +1061,7 @@
         #kanban-preview-content li,
         #epics-preview-content li,
         #constitution-preview-content li,
+        #system-preview-content li,
         #tuning-preview-content li {
             margin-bottom: 6px; /* Tighter list item spacing */
             line-height: inherit;
@@ -1037,6 +1072,7 @@
         #kanban-preview-content li p,
         #epics-preview-content li p,
         #constitution-preview-content li p,
+        #system-preview-content li p,
         #tuning-preview-content li p {
             margin-bottom: 0; /* Paragraphs inside list items: zero extra margin (li already spaced) */
         }
@@ -1044,6 +1080,7 @@
         #kanban-preview-content pre,
         #epics-preview-content pre,
         #constitution-preview-content pre,
+        #system-preview-content pre,
         #tuning-preview-content pre {
             background-color: var(--vscode-textCodeBlock-background, rgba(255,255,255,0.04));
             border: 1px solid var(--vscode-widget-border, rgba(127, 127, 127, 0.35));
@@ -1056,6 +1093,7 @@
         #kanban-preview-content pre code,
         #epics-preview-content pre code,
         #constitution-preview-content pre code,
+        #system-preview-content pre code,
         #tuning-preview-content pre code {
             background: none;
             padding: 0;
@@ -1068,6 +1106,7 @@
         #kanban-preview-content code,
         #epics-preview-content code,
         #constitution-preview-content code,
+        #system-preview-content code,
         #tuning-preview-content code {
             font-family: var(--vscode-editor-font-family, 'SF Mono', Monaco, Menlo, Consolas, monospace);
             font-size: 1em; /* Match VS Code: inline code is same size as surrounding text */
@@ -1082,6 +1121,7 @@
         #kanban-preview-content blockquote,
         #epics-preview-content blockquote,
         #constitution-preview-content blockquote,
+        #system-preview-content blockquote,
         #tuning-preview-content blockquote {
             margin: 0;
             padding: 0 16px 0 10px; /* Match VS Code's markdown.css */
@@ -1094,6 +1134,7 @@
         #kanban-preview-content ul, #kanban-preview-content ol,
         #epics-preview-content ul, #epics-preview-content ol,
         #constitution-preview-content ul, #constitution-preview-content ol,
+        #system-preview-content ul, #system-preview-content ol,
         #tuning-preview-content ul, #tuning-preview-content ol {
             margin-bottom: 16px; /* Match VS Code's tighter list spacing */
             padding-left: 2em;
@@ -1103,6 +1144,7 @@
         #kanban-preview-content table,
         #epics-preview-content table,
         #constitution-preview-content table,
+        #system-preview-content table,
         #tuning-preview-content table {
             border-collapse: collapse;
             margin-bottom: 0.7em;
@@ -1112,6 +1154,7 @@
         #kanban-preview-content th,
         #epics-preview-content th,
         #constitution-preview-content th,
+        #system-preview-content th,
         #tuning-preview-content th {
             text-align: left;
             border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.69));
@@ -1122,6 +1165,7 @@
         #kanban-preview-content td,
         #epics-preview-content td,
         #constitution-preview-content td,
+        #system-preview-content td,
         #tuning-preview-content td {
             padding: 5px 10px;
             border-top: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
@@ -1131,6 +1175,7 @@
         #kanban-preview-content tr:hover td,
         #epics-preview-content tr:hover td,
         #constitution-preview-content tr:hover td,
+        #system-preview-content tr:hover td,
         #tuning-preview-content tr:hover td {
             background: var(--vscode-list-hoverBackground, var(--card-bg-hover));
         }
@@ -1138,6 +1183,7 @@
         #kanban-preview-content .table-wrapper,
         #epics-preview-content .table-wrapper,
         #constitution-preview-content .table-wrapper,
+        #system-preview-content .table-wrapper,
         #tuning-preview-content .table-wrapper {
             overflow-x: auto;
             max-width: 100%;
@@ -1148,6 +1194,7 @@
         #kanban-preview-content a,
         #epics-preview-content a,
         #constitution-preview-content a,
+        #system-preview-content a,
         #tuning-preview-content a {
             color: var(--vscode-textLink-foreground, var(--accent-teal));
             text-decoration: none;
@@ -1156,6 +1203,7 @@
         #kanban-preview-content a:hover,
         #epics-preview-content a:hover,
         #constitution-preview-content a:hover,
+        #system-preview-content a:hover,
         #tuning-preview-content a:hover {
             color: var(--vscode-textLink-activeForeground, var(--accent-teal-bright));
             text-decoration: underline;
@@ -1164,6 +1212,7 @@
         #kanban-preview-content hr,
         #epics-preview-content hr,
         #constitution-preview-content hr,
+        #system-preview-content hr,
         #tuning-preview-content hr {
             border: 0;
             height: 1px;
@@ -1173,6 +1222,7 @@
         #kanban-preview-content img,
         #epics-preview-content img,
         #constitution-preview-content img,
+        #system-preview-content img,
         #tuning-preview-content img {
             max-width: 100%;
             max-height: 100%;
@@ -1184,6 +1234,7 @@
         #kanban-preview-content .empty-state,
         #epics-preview-content .empty-state,
         #constitution-preview-content .empty-state,
+        #system-preview-content .empty-state,
         #tuning-preview-content .empty-state {
             display: flex;
             align-items: center;

@@ -226,6 +226,76 @@ Key risks: (1) state-bifurcation bugs where the System tab's edit/dirty tracker 
 - [ ] Constitution-only controls (Build via Planner, Enable as Planning Reference, ⚙ set path, active-doc-banner) do NOT appear in the System tab.
 - [ ] Markdown preview styling (headings, code blocks, tables, blockquotes) renders correctly in `#system-preview-content`.
 
+## Reviewer Pass (2026-06-24)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> **CRITICAL — `body.theme-afterburner-pro #...-preview-content h2..h6` rule DELETED from project.html, design.html, AND planning.html.**
+> What kind of blindfolded vandalism is this? The plan said "add `#system-preview-content` to each selector list." Instead, the coder DELETED the entire afterburner-pro h2-h6 display-font rule from project.html — a rule that styled headings in ALL four existing tabs (kanban, epics, constitution, tuning). And then, like a burglar who breaks into the wrong house, they did the same to `design.html` and `planning.html` — files that have NOTHING to do with this plan! The design panel's `#markdown-preview-briefs`/`#markdown-preview-design` and the planning panel's `#markdown-preview`/`#markdown-preview-tickets` all lost their h2-h6 display font styling in the afterburner-pro theme. This is a regression in THREE files, only ONE of which was in scope. Unacceptable.
+>
+> **CRITICAL — `#system-preview-content` CSS almost entirely missing.** The plan explicitly says "For each rule like `#constitution-preview-content h1, …` add a parallel `#system-preview-content h1, …` entry." There are ~40 CSS rules targeting `#constitution-preview-content`. The implementation added `#system-preview-content` to exactly TWO of them (the `.edit-mode` hide rule and the base container rule). The other ~38 rules — headings, code blocks, tables, blockquotes, links, lists, images, hr — were silently ignored. The System tab's markdown preview would render as unstyled black text on transparent background. Did anyone even look at the plan's CSS section?
+>
+> **MAJOR — `.system-file-item` CSS class used but never defined.** `renderSystemWorkspaceList()` creates items with `className = 'system-file-item'`. The Constitution tab uses `.constitution-file-item` which has ~12 CSS rules (padding, border, hover, selected, cyber-theme overrides, claudify-theme overrides). Zero of those rules were extended to include `.system-file-item`. The System tab's workspace list would be a borderless, paddingless, hoverless wall of text.
+>
+> **MAJOR — `#system-content` and `#system-preview-pane` missing from claudify background rule.** The `body.theme-claudify #...-content, #...-preview-pane` rule (which sets the claudify background color and grid) was not extended with `#system-content` and `#system-preview-pane`. In the claudify theme, the System tab would have the wrong background.
+>
+> **NIT — `_constitutionSelectedGovKey` race guard is dead code.** Line 511: `if (_constitutionSelectedGovKey !== 'constitution') { break; }`. After the split, `_constitutionSelectedGovKey` is initialized to `'constitution'` and never changed (the `.gov-file-btn` handler now only modifies `_systemSelectedGovKey`). This guard can never fire. Harmless but dead.
+>
+> **NIT — `renderSystemWorkspaceList` missing `else` fallback for non-array `ws.governance`.** The Constitution version has a fallback at line 1373-1376 for when `ws.governance` is not an array. The System version omits this. Unlikely to matter (the backend always returns an array) but inconsistent.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is (correct implementation):**
+- State bifurcation (`_system*` variables, `state.editMode.system`, `state.dirtyFlags.system`, etc.) — fully parallel, no shared state.
+- Tab-switch handler — `system` branch correctly added for sidebar state and load message.
+- `governanceFileChanged` handler — correctly checks both tabs independently with per-tab `editMode` guards.
+- `constitutionFileRead` / `constitutionFileDeleted` handlers — correctly branched on `govFile`, with parallel `externalChangePending.system` guard.
+- `fileSaved` handler — correctly branches on `msg.governanceFile` to call `exitEditMode('system')` vs `exitEditMode('constitution')`.
+- `.gov-file-btn` handler — correctly scoped to System tab only, uses `#system-file-tabs` for active class removal.
+- `enterEditMode`/`exitEditMode` — generic `${tab}-*` ID convention works for `'system'` out of the box.
+- System tab HTML structure — correct: sub-tab bar with CLAUDE.md/AGENTS.md, controls strip with Edit/Save/Cancel/Delete only, no constitution-only controls.
+- No `confirm()` dialogs (compliant with CLAUDE.md rules).
+- `node --check src/webview/project.js` passes.
+
+**Fixed now (CRITICAL/MAJOR):**
+1. **Restored deleted `body.theme-afterburner-pro #...-preview-content h2..h6` rule in `project.html`** — with `#system-preview-content` added to the selector list.
+2. **Restored deleted `body.theme-afterburner-pro #markdown-preview-* h2..h6` rule in `design.html`** — exact original rule restored.
+3. **Restored deleted `body.theme-afterburner-pro #markdown-preview-* h2..h6` rule in `planning.html`** — exact original rule restored.
+4. **Added `#system-preview-content` to all ~38 remaining CSS rules** that target `#constitution-preview-content` (headings, code blocks, tables, blockquotes, links, lists, images, hr, empty-state, cyber-theme overrides, claudify theme overrides).
+5. **Added `.system-file-item` to all ~12 CSS rules** that target `.constitution-file-item` (base, hover, selected, cyber-theme overrides, claudify-theme overrides).
+6. **Added `#system-content` and `#system-preview-pane` to the claudify background rule.**
+7. **Removed duplicate `.edit-mode #system-preview-content` and `#system-preview-content` selector lines** (artifacts of the script-based fix overlapping with the implementation's existing additions).
+
+**Can defer (NIT):**
+- Dead `_constitutionSelectedGovKey !== 'constitution'` guard at line 511 — harmless defensive code.
+- Missing `else` fallback in `renderSystemWorkspaceList` for non-array `ws.governance` — backend always returns an array.
+
+### Files Changed by Review
+
+| File | Changes |
+|------|---------|
+| `src/webview/project.html` | Restored deleted afterburner-pro h2-h6 rule (with `#system-preview-content`); added `#system-preview-content` to ~38 CSS rules; added `.system-file-item` to ~12 CSS rules; added `#system-content`/`#system-preview-pane` to claudify background rule; removed 2 duplicate selector lines |
+| `src/webview/design.html` | Restored deleted afterburner-pro h2-h6 rule for `#markdown-preview-briefs`/`#markdown-preview-design` |
+| `src/webview/planning.html` | Restored deleted afterburner-pro h2-h6 rule for `#markdown-preview`/`#markdown-preview-tickets` |
+
+### Validation Results
+
+- `node --check src/webview/project.js` — **PASS** (no syntax errors)
+- CSS brace balance in `project.html` — **PASS** (182/182)
+- CSS brace balance in `design.html` — off by 1 (528/527) — **pre-existing**, not introduced by this commit or review fixes
+- CSS brace balance in `planning.html` — off by 1 (527/526) — **pre-existing**, not introduced by this commit or review fixes
+- No duplicate adjacent `#system-*` selector lines remaining
+- All 40 `#constitution-preview-content` CSS rules now have parallel `#system-preview-content` variants
+- All 13 `.constitution-file-item` CSS rules now have parallel `.system-file-item` variants
+- Compilation: **SKIPPED** per session directive
+- Tests: **SKIPPED** per session directive
+
+### Remaining Risks
+
+1. **Pre-existing CSS brace imbalance** in `design.html` and `planning.html` (off by 1) — not caused by this plan or review fixes; likely a stray `{` in a CSS string or comment. Low risk but should be investigated separately.
+2. **Out-of-scope changes in `src/extension.ts`** — the commit included changes to `ensureAgentsProtocol` (duplicate marker collapsing) and `AGENTS.md` (duplicate end marker removal, memo text update). These are unrelated to the Constitution/System tab split but appear to be valid bugfixes. No action needed but noting for traceability.
+3. **Manual verification still required** — the checklist items above need to be verified in a running VS Code instance with the afterburner-pro, claudify, and cyber themes to confirm the System tab's markdown preview and workspace list render with correct styling.
+
 ## Recommendation
 
 Complexity 5 → **Send to Coder**. The work is majority routine UI relocation but the state bifurcation and live-reload coordination require careful, well-scoped changes to `project.js` message handlers — a competent coder following this plan step-by-step can execute it without architectural guidance.
