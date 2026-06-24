@@ -1,11 +1,8 @@
 # Remove `@` Prefix from All Copy-Link Clipboard Operations
 
-## Metadata
-
-**Complexity:** 3
-**Tags:** frontend, backend, bugfix, ui, ux
-
 ## Goal
+
+Remove the `@` prefix that is prepended to absolute file paths in every "Copy Link" clipboard operation across Switchboard's webviews and extension host, so that pasted paths are clean absolute paths that do not trigger CLI file-reference mechanisms.
 
 ### Problem
 
@@ -27,92 +24,199 @@ The `@` prefix is added in two layers:
 
 When the user pastes the copied path into a CLI, the `@` activates a command/mention mechanism in the target CLI — which is not always desired. The user wants a clean absolute path with no prefix, so the path is a plain path that can be used freely without triggering unintended CLI commands.
 
+## Metadata
+
+**Tags:** frontend, backend, bugfix, ui, ux
+**Complexity:** 3
+
+## User Review Required
+
+Yes — this changes the behavior of every "Copy Link" button in the extension. Users who rely on the `@` prefix for AI CLI file-referencing will notice the change. Confirm that clean paths (no `@`) are the desired default behavior.
+
+## Complexity Audit
+
+### Routine
+- Removing `'@' + ` string concatenation from 5 backend locations — each is a single-line edit.
+- Changing `toAgentRef()` to a passthrough — 1-line logic change + JSDoc update.
+- Updating 1 regression test assertion from positive to negative check.
+- All changes follow the same pattern: remove prefix, keep the rest of the logic intact.
+
+### Complex / Risky
+- None
+
+## Edge-Case & Dependency Audit
+
+**Race Conditions:** None. All clipboard operations are synchronous single-write calls. No concurrent access to shared state.
+
+**Security:** None. Removing a prefix from a file path does not expose or leak any additional information. The paths written to the clipboard are already absolute filesystem paths.
+
+**Side Effects:**
+- Toast/notification messages that display the copied ref (e.g., `Document path copied to clipboard: ${docRef}`) will now show the clean path without `@`. This is the desired behavior.
+- The `toAgentRef` function name becomes a misnomer (it no longer creates an "agent ref"). This is acceptable technical debt — renaming would expand scope to all call sites and any external references. The JSDoc will be updated to clarify the passthrough behavior.
+- No data migration needed — this only affects future copy operations. Previously copied clipboard content is transient and not stored.
+
+**Dependencies & Conflicts:** None. No other modules depend on the `@` prefix being present in clipboard output. The out-of-scope `@` usages (ClickUp mentions, prompt generation) are independent code paths.
+
+## Dependencies
+
+None — this is a self-contained change with no prerequisite plans.
+
+## Adversarial Synthesis
+
+Key risks: stale line numbers in the original plan would have led an implementer to edit the wrong lines — mitigated by replacing all line references with searchable code patterns. The `toAgentRef` function name becomes a misnomer after the passthrough change, but renaming would expand scope unnecessarily — mitigated by updating the JSDoc. No race conditions, security issues, or data migration concerns exist.
+
 ## Scope
 
 ### In Scope — All clipboard copy-link operations that prepend `@` to file paths
 
-| # | File | Line(s) | Function / Context | Current Behavior |
-|---|------|---------|--------------------|------------------|
-| 1 | `src/webview/sharedUtils.js` | 6–9 | `toAgentRef()` | Returns `'@' + absPath` if not already prefixed |
-| 2 | `src/webview/planning.js` | 5587 | Kanban plan "Copy Link" button click handler | Calls `toAgentRef(planFile)` before `clipboard.writeText()` |
-| 3 | `src/webview/project.js` | 915 | Kanban plan "Copy Link" button click handler | Calls `toAgentRef(path)` before `clipboard.writeText()` |
-| 4 | `src/services/PlanningPanelProvider.ts` | 4541 | `copyToClipboard` handler — ticket link (per-id) | `paths.push('@' + filePath)` |
-| 5 | `src/services/PlanningPanelProvider.ts` | 4557 | `copyToClipboard` handler — ticket link (join) | `paths.map(p => p.startsWith('@') ? p : '@' + p)` |
-| 6 | `src/services/PlanningPanelProvider.ts` | 5456 | `copyInsightLink` handler | `link.startsWith('@') ? link : '@' + link` |
-| 7 | `src/services/PlanningPanelProvider.ts` | 5621 | `linkToDocument` handler (`_handleLinkToDocument`) | `docPath.startsWith('@') ? docPath : '@' + docPath` |
-| 8 | `src/services/DesignPanelProvider.ts` | 1469 | `linkToDocument` handler | `linkPath.startsWith('@') ? linkPath : '@' + linkPath` |
+| # | File | Searchable Pattern | Function / Context | Current Behavior |
+|---|------|--------------------|--------------------|------------------|
+| 1 | `src/webview/sharedUtils.js` | `function toAgentRef(absPath)` | `toAgentRef()` | Returns `'@' + absPath` if not already prefixed |
+| 2 | `src/webview/planning.js` | `toAgentRef(planFile)` in Copy Link handler | Kanban plan "Copy Link" button click handler | Calls `toAgentRef(planFile)` before `clipboard.writeText()` |
+| 3 | `src/webview/project.js` | `toAgentRef(path)` in Copy Link handler | Kanban plan "Copy Link" button click handler | Calls `toAgentRef(path)` before `clipboard.writeText()` |
+| 4 | `src/services/PlanningPanelProvider.ts` | `paths.push('@' + filePath)` | `copyToClipboard` handler — ticket link (per-id) | Pushes `'@' + filePath` into paths array |
+| 5 | `src/services/PlanningPanelProvider.ts` | `paths.map(p => p.startsWith('@') ? p : '@' + p)` | `copyToClipboard` handler — ticket link (join) | Maps paths to add `@` prefix before join |
+| 6 | `src/services/PlanningPanelProvider.ts` | `link.startsWith('@') ? link : '@' + link` in `copyInsightLink` | `copyInsightLink` handler | Prepends `@` to insight link |
+| 7 | `src/services/PlanningPanelProvider.ts` | `docPath.startsWith('@') ? docPath : '@' + docPath` in `_handleLinkToDocument` | `linkToDocument` handler | Prepends `@` to document path |
+| 8 | `src/services/DesignPanelProvider.ts` | `linkPath.startsWith('@') ? linkPath : '@' + linkPath` | `linkToDocument` handler | Prepends `@` to stitch asset path |
 
 ### Out of Scope — `@` usage that is NOT a clipboard copy-link operation
 
-| File | Line(s) | Why Excluded |
-|------|---------|--------------|
-| `src/services/ClickUpSyncService.ts` | 1671, 1740 | These are ClickUp **user @mentions** in comment text parsing, not file-path clipboard operations. |
-| `src/test/context-map-batching-regression.test.js` | 79 | Asserts `@${planFile}` in `TaskViewerProvider._buildBatchAnalystMapPrompt` — this is **internal prompt generation** for an AI analyst agent, not a clipboard copy. The `@` there is part of the prompt text sent to the agent. |
-| `src/services/TaskViewerProvider.ts` | 13697–13702 | `_handleCopyPlanLink` copies a **generated prompt** (via `generateUnifiedPrompt`), not a raw file path. No `@` prefix is added. |
-| `src/services/KanbanProvider.ts` | various | All `clipboard.writeText` calls copy **prompts** (planner, coder, lead, chat, etc.), not file paths. No `@` prefix. |
-| `src/services/PlanningPanelProvider.ts` | 5672 | `_handleLinkToFolder` copies `resolvedFolder` **without** `@` prefix — already clean. |
-| `src/webview/kanban.html` | 6212 | Copies an antigravity **prompt**, not a file path. |
-| `src/webview/implementation.html` | 3409 | Copies a sprint **prompt**, not a file path. |
+| File | Searchable Pattern | Why Excluded |
+|------|--------------------|--------------|
+| `src/services/ClickUpSyncService.ts` | `@` in comment parsing | ClickUp **user @mentions** in comment text parsing, not file-path clipboard operations. |
+| `src/test/context-map-batching-regression.test.js` | `@${planFile}` assertion | Asserts `@${planFile}` in `TaskViewerProvider._buildBatchAnalystMapPrompt` — **internal prompt generation** for an AI analyst agent, not a clipboard copy. |
+| `src/services/TaskViewerProvider.ts` | `_handleCopyPlanLink` | Copies a **generated prompt** (via `generateUnifiedPrompt`), not a raw file path. No `@` prefix is added. |
+| `src/services/KanbanProvider.ts` | `clipboard.writeText` calls | All copy **prompts** (planner, coder, lead, chat, etc.), not file paths. No `@` prefix. |
+| `src/services/PlanningPanelProvider.ts` | `_handleLinkToFolder` → `clipboard.writeText(resolvedFolder)` | Copies `resolvedFolder` **without** `@` prefix — already clean. |
+| `src/webview/kanban.html` | `clipboard.writeText` in prompt copy | Copies an antigravity **prompt**, not a file path. |
+| `src/webview/implementation.html` | `clipboard.writeText` in sprint copy | Copies a sprint **prompt**, not a file path. |
 
-## Implementation Plan
+## Proposed Changes
 
-### Step 1 — Fix the shared utility (`sharedUtils.js`)
+### `src/webview/sharedUtils.js`
 
-**File:** `src/webview/sharedUtils.js`, lines 4–9
+**Context:** The `toAgentRef()` function is defined at the top of `sharedUtils.js` and is loaded globally in all webviews. It is called from exactly 2 locations (planning.js and project.js Copy Link handlers).
 
-Change `toAgentRef()` to return the path unchanged (no `@` prefix). The function signature and call sites remain the same — only the prefix logic is removed.
+**Logic:** Change the function to return `absPath` unchanged — a passthrough. This preserves the call-site contract so no caller needs to change.
 
-- Remove the `@` prepend logic.
-- Update the JSDoc comment to reflect that it now returns the path as-is (or simply remove the function and replace call sites with direct path usage — but keeping the function as a no-op passthrough is lower-risk since it preserves the call-site contract).
+**Implementation:**
+```javascript
+// Passthrough: returns the path as-is (no prefix).
+// Kept as a function for call-site compatibility; the @ prefix was removed
+// because users want clean absolute paths on clipboard copy.
+function toAgentRef(absPath) {
+    if (!absPath) return absPath;
+    return absPath;
+}
+```
 
-**Decision:** Keep the function as a passthrough (return `absPath` unchanged). This avoids touching every call site and keeps the function available if prefix logic is ever needed again. Update the comment to say it returns the path as-is.
+**Edge Cases:** If `absPath` is falsy (`null`, `undefined`, `''`), the existing guard returns it unchanged. No change needed to the guard.
 
-### Step 2 — Fix `PlanningPanelProvider.ts` (4 locations)
+### `src/webview/planning.js`
 
-**File:** `src/services/PlanningPanelProvider.ts`
+**Context:** The Kanban plan "Copy Link" button handler calls `toAgentRef(planFile)` before writing to clipboard. Since `toAgentRef` is now a passthrough, no change is needed here — the call remains and returns the clean path.
 
-1. **Line 4541** — Remove `'@' + ` prefix: change `paths.push('@' + filePath)` to `paths.push(filePath)`. Remove the `// agent-safe prefix` comment.
-2. **Line 4557** — Remove the `@` mapping: change `const ticketRefs = paths.map(p => p.startsWith('@') ? p : '@' + p)` to just use `paths` directly (or `const ticketRefs = paths` if a local is preferred for clarity). Update the `writeText` call to use `ticketRefs.join('\n')` or `paths.join('\n')`.
-3. **Line 5456** — Remove `@` prefix: change `const linkRef = link.startsWith('@') ? link : '@' + link` to `const linkRef = link`. The `writeText(linkRef)` call remains.
-4. **Line 5621** — Remove `@` prefix: change `const docRef = docPath.startsWith('@') ? docPath : '@' + docPath` to `const docRef = docPath`. The `writeText(docRef)` and `showInformationMessage` calls remain.
+**Implementation:** No code change required. The passthrough in `sharedUtils.js` handles this automatically.
 
-### Step 3 — Fix `DesignPanelProvider.ts` (1 location)
+### `src/webview/project.js`
 
-**File:** `src/services/DesignPanelProvider.ts`, line 1469
+**Context:** Same as planning.js — the Kanban plan "Copy Link" button handler calls `toAgentRef(path)`. No change needed.
 
-Remove `@` prefix: change `const linkRef = linkPath.startsWith('@') ? linkPath : '@' + linkPath` to `const linkRef = linkPath`. The `writeText(linkRef)` and `showInformationMessage` calls remain.
+**Implementation:** No code change required. The passthrough in `sharedUtils.js` handles this automatically.
 
-### Step 4 — Update the regression test
+### `src/services/PlanningPanelProvider.ts` (4 locations)
 
-**File:** `src/test/tickets-link-to-ticket-regression.test.js`, lines 17–21
+**Context:** Four separate message handlers in `PlanningPanelProvider.ts` prepend `@` to file paths before clipboard writes. Each is an independent code path.
 
-The test currently asserts that `PlanningPanelProvider.ts` contains `'@' + filePath`. After the fix, this assertion will fail. Update the test to assert the **absence** of the `@` prefix:
+**Implementation:**
 
-- Replace the assertion at lines 17–21 to verify that the copied path does NOT include `'@' + filePath`.
-- Optionally assert that `paths.push(filePath)` (without `@`) is present instead.
+1. **Ticket link per-id** — Find `paths.push('@' + filePath); // agent-safe prefix` and change to:
+   ```typescript
+   paths.push(filePath);
+   ```
 
-### Step 5 — Verify no other `@`-prefix clipboard operations were missed
+2. **Ticket link join** — Find `const ticketRefs = paths.map(p => p.startsWith('@') ? p : '@' + p);` and change to:
+   ```typescript
+   const ticketRefs = paths;
+   ```
+   The `writeText(ticketRefs.join('\n'))` call remains unchanged.
 
-After making the changes, run a final grep for `toAgentRef`, `'@' +`, and `startsWith('@')` across `src/webview/` and `src/services/` to confirm no remaining clipboard-related `@` prefixing exists (excluding the out-of-scope items listed above).
+3. **copyInsightLink** — Find `const linkRef = link.startsWith('@') ? link : '@' + link;` and change to:
+   ```typescript
+   const linkRef = link;
+   ```
+   The `writeText(linkRef)` call remains unchanged.
 
-## Edge Cases & Risks
+4. **linkToDocument** — Find `const docRef = docPath.startsWith('@') ? docPath : '@' + docPath;` and change to:
+   ```typescript
+   const docRef = docPath;
+   ```
+   The `writeText(docRef)` and `showInformationMessage` calls remain unchanged.
 
-1. **Existing clipboard content with `@`:** If a user has previously copied a path with `@` and pastes it somewhere that stored it, there's no migration needed — this only affects future copy operations.
-2. **`toAgentRef` callers:** Only two call sites use `toAgentRef()` (planning.js line 5587, project.js line 915). Both are "Copy Link" buttons for Kanban plans. Making the function a passthrough is safe.
-3. **`linkToDocument` in DesignPanelProvider:** The `copyStitchAssetLink` function in `design.js` sends a `linkToDocument` message to the backend, which is handled by `DesignPanelProvider.ts` line 1469. This is the "Copy Link" button for stitch screen PNGs. The fix in Step 3 covers this.
-4. **`copyInsightLink` in project.js:** The "Copy Link" button for tuning insights in the project panel sends `copyInsightLink` to `PlanningPanelProvider.ts` line 5456. The fix in Step 2 covers this.
-5. **Toast messages:** Several `showInformationMessage` calls display the copied ref (e.g., `Document path copied to clipboard: ${docRef}`). After the fix, these will show the clean path without `@` — this is the desired behavior.
-6. **Test file `context-map-batching-regression.test.js`:** This test checks for `@${planFile}` in `TaskViewerProvider._buildBatchAnalystMapPrompt`. This is **not** a clipboard operation — it's internal prompt generation. Do NOT touch this test.
+**Edge Cases:** None. Each handler independently resolves the path before the prefix step. Removing the prefix does not affect path resolution logic.
 
-## Verification
+### `src/services/DesignPanelProvider.ts` (1 location)
 
-1. Run `npm run compile` to confirm no TypeScript errors.
-2. Run the regression tests: `node src/test/tickets-link-to-ticket-regression.test.js` — should pass with updated assertions.
-3. Run `node src/test/context-map-batching-regression.test.js` — should pass unchanged (out of scope).
-4. Manual verification (via installed VSIX):
-   - Planning panel Kanban tab: click "Copy Link" on a plan → paste into a text editor → confirm no `@` prefix.
-   - Project panel Kanban tab: click "Copy Link" on a plan → paste → confirm no `@` prefix.
-   - Planning panel Tickets tab: click "Link all" or individual ticket link → paste → confirm no `@` prefix.
-   - Planning panel Documents tab: click "Copy Link" on a document → paste → confirm no `@` prefix.
-   - Project panel Tuning tab: click "Copy Link" on an insight → paste → confirm no `@` prefix.
-   - Design panel: click "Copy Link" on a stitch screen PNG → paste → confirm no `@` prefix.
+**Context:** The `linkToDocument` handler in `DesignPanelProvider.ts` prepends `@` to the stitch asset path before clipboard write.
+
+**Implementation:** Find `const linkRef = linkPath.startsWith('@') ? linkPath : '@' + linkPath;` and change to:
+```typescript
+const linkRef = linkPath;
+```
+The `writeText(linkRef)` and `showInformationMessage` calls remain unchanged.
+
+### `src/test/tickets-link-to-ticket-regression.test.js`
+
+**Context:** The test at lines 17–21 currently asserts that `PlanningPanelProvider.ts` contains `'@' + filePath`. After the fix, this assertion will fail.
+
+**Implementation:** Replace the assertion block:
+```javascript
+    // (b) The copied path uses '@' + prefix
+    assert.ok(
+        planningProviderSource.includes("'@' + filePath"),
+        "Expected PlanningPanelProvider.ts to prefix copied path with '@'"
+    );
+```
+with:
+```javascript
+    // (b) The copied path does NOT use '@' + prefix
+    assert.ok(
+        !planningProviderSource.includes("'@' + filePath"),
+        "Expected PlanningPanelProvider.ts to NOT prefix copied path with '@'"
+    );
+    assert.ok(
+        planningProviderSource.includes("paths.push(filePath)"),
+        "Expected PlanningPanelProvider.ts to push filePath without '@' prefix"
+    );
+```
+
+**Edge Cases:** The test reads the source file as text and checks for string inclusion. The new assertions verify both the absence of the old pattern and the presence of the new pattern.
+
+## Verification Plan
+
+### Automated Tests
+
+> **Note:** Per session directives, automated tests are NOT run during this planning session. The user will run them separately.
+
+- `node src/test/tickets-link-to-ticket-regression.test.js` — should pass with updated assertions.
+- `node src/test/context-map-batching-regression.test.js` — should pass unchanged (out of scope, no changes to that file).
+
+### Manual Verification (via installed VSIX)
+
+> **Note:** Per session directives, compilation is NOT run during this planning session. The user will compile and install the VSIX separately.
+
+1. Planning panel Kanban tab: click "Copy Link" on a plan → paste into a text editor → confirm no `@` prefix.
+2. Project panel Kanban tab: click "Copy Link" on a plan → paste → confirm no `@` prefix.
+3. Planning panel Tickets tab: click "Link all" or individual ticket link → paste → confirm no `@` prefix.
+4. Planning panel Documents tab: click "Copy Link" on a document → paste → confirm no `@` prefix.
+5. Project panel Tuning tab: click "Copy Link" on an insight → paste → confirm no `@` prefix.
+6. Design panel: click "Copy Link" on a stitch screen PNG → paste → confirm no `@` prefix.
+
+### Final Grep Verification
+
+After making all changes, run a final grep for `toAgentRef`, `'@' +`, and `startsWith('@')` across `src/webview/` and `src/services/` to confirm no remaining clipboard-related `@` prefixing exists (excluding the out-of-scope items listed above).
+
+## Recommendation
+
+Complexity is 3 (routine, single-concept change across multiple files, all following the same pattern). **Send to Coder.**

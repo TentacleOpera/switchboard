@@ -3384,6 +3384,14 @@ Please format the updated output document strictly as follows:
                 // Re-read file and load
                 await this._handleMessage({ type: 'readConstitutionFile', workspaceRoot: wsRoot }, true);
                 await this._handleMessage({ type: 'loadConstitutionFiles', requestId: Date.now() }, true);
+                // Refresh the Manage Paths modal + sidebar active-path button so the
+                // "(active)" marker and sidebar label update after an Activate click.
+                // (addConstitutionPath/removeConstitutionPath also broadcast after their
+                //  inner setConstitutionPath call; the duplicate is idempotent and harmless.)
+                this._projectPanel?.webview.postMessage({
+                    type: 'constitutionPaths', workspaceRoot: wsRoot,
+                    paths: this._getConstitutionPathList(wsRoot), active: this._activeConstitutionRel(wsRoot),
+                });
                 break;
             }
             case 'saveFileContent': {

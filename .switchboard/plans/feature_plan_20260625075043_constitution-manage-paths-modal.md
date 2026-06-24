@@ -364,3 +364,41 @@ No automated tests are run as part of this session (per session directive — th
 **Complexity: 6/10 → Send to Coder.**
 
 The change is majority-routine (HTML/CSS port, element lookups, modal open/close) with two well-scoped moderate risks (lazy-seed consistency and active-vs-list re-pointing on remove) that extend existing patterns rather than introducing new architecture. A coder can execute this plan directly, provided the load-bearing `_setConstitutionPathList` append inside `setConstitutionPath` is not omitted.
+
+---
+
+## Reviewer Pass (2026-06-25)
+
+### Stage 1 — Adversarial Findings
+
+- **[MAJOR] Activate button does not refresh modal/sidebar UI.** `src/services/PlanningPanelProvider.ts:3361` (`setConstitutionPath` handler) updated the active path, appended to the candidate list, refreshed the watcher, and re-read the file — but did **not** post a `constitutionPaths` message back to the webview. Only `getConstitutionPaths`, `addConstitutionPath`, and `removeConstitutionPath` broadcast that payload. The Activate button in the modal (`src/webview/project.js:1721`) sends `setConstitutionPath` directly with no follow-up broadcast, so the `(active)` marker stayed on the old row and the sidebar `active-constitution-path-btn` did not update after an Activate click. The preview reloaded correctly, but the modal lied about which row was active until close/reopen.
+- **[NIT] Validation asymmetry.** `addConstitutionPath` (`:3329`) rejects `rel.startsWith('..')`; `setConstitutionPath` (`:3365`) rejects `rel.includes('..')`. The setter is stricter. Harmless because Add routes through the setter (defense in depth wins). Deferred.
+- **[NIT] Double-broadcast on Add/Remove after the Major fix.** `addConstitutionPath`/`removeConstitutionPath` broadcast `constitutionPaths` after their inner `setConstitutionPath` call; with the fix, `setConstitutionPath` also broadcasts, so Add/Remove broadcast twice. Idempotent and harmless. Deferred.
+
+### Stage 2 — Balanced Synthesis & Fixes Applied
+
+- **Kept as-is:** HTML modal markup (`project.html:1641`), CSS port (`project.html:1261-1414` with source-pointer comment), element lookups (`project.js:236-238`), enable/disable wiring (`project.js:605,629`), `openConstitutionPathsModal` (`project.js:1672`), `renderConstitutionPathsModal` (`project.js:1687`), `_getConstitutionPathList`/`_setConstitutionPathList`/`_activeConstitutionRel` (`PlanningPanelProvider.ts:929-950`), `getConstitutionPaths`/`addConstitutionPath`/`removeConstitutionPath` handlers, the load-bearing append (`PlanningPanelProvider.ts:3374-3379`, commented), no confirm dialogs, seeding + remove-active repoint logic.
+- **Fixed (MAJOR):** Added a `constitutionPaths` broadcast at the end of the `setConstitutionPath` handler (`PlanningPanelProvider.ts:3387-3394`) so the Activate button refreshes the modal's `(active)` marker and the sidebar active-path button. The duplicate broadcast from Add/Remove is intentionally retained (idempotent, safer than removing).
+- **Deferred (NIT):** Validation asymmetry and double-broadcast — both harmless.
+
+### Files Changed in Review
+
+- `src/services/PlanningPanelProvider.ts` — added 8-line `constitutionPaths` broadcast at the end of the `setConstitutionPath` case (lines 3387-3394).
+
+### Validation Results
+
+- **Compilation:** Skipped per session directive.
+- **Automated tests:** Skipped per session directive (suite run separately by user).
+- **Read-only verification performed:**
+  - Confirmed `btn-set-constitution-path` / `btnSetConstitutionPath` / `openSetConstitutionPath` are fully purged from `project.html`, `project.js`, and `PlanningPanelProvider.ts`.
+  - Confirmed `.folder-modal` / `.active-path-btn` / `.folder-list-*` CSS rules are present in `project.html` with a source-pointer comment.
+  - Confirmed the load-bearing append in `setConstitutionPath` is present and commented.
+  - Confirmed `_handleMessage(msg, true)` signature routes to the project panel (correct internal re-entry for Add/Remove).
+  - Confirmed `git diff` is limited to the single 8-line fix in `PlanningPanelProvider.ts`.
+
+### Remaining Risks
+
+- **Auto-activate on Add (open product decision, flagged in User Review Required):** `addConstitutionPath` immediately activates the newly-picked file. Confirmed desired before release, or change to "add only catalogs; user clicks Activate separately."
+- **CSS maintenance fork:** `.folder-modal` styles are now duplicated between `planning.html` and `project.html`. Acceptable short-term; a shared CSS refactor is a future cleanup.
+- **Lazy-seed not persisted on first read:** Safe only because `setConstitutionPath` appends the activated path to the candidate list (load-bearing line present and commented). If that line is ever removed, previously-active paths can silently vanish from the candidate list after switching.
+- **Manual verification steps 1-10 in the Verification Plan still apply** (VSIX install, migration/seeding, picker reject paths, activate/remove flows, downstream consumers, separation from the planning-reference banner, no confirm dialogs).
