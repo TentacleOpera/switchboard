@@ -88,13 +88,13 @@ The column move is **not an immediate, standalone, persisted operation**. It is 
 - **Tags:** `bugfix`, `frontend`, `backend`, `ui`, `reliability`, `performance`
 - **Complexity:** 6/10
 
-## User Review Required
+## Decisions (resolved with user)
 
-Yes. This change reorders the persist/dispatch/refresh sequence in the shared advance hot path (`moveAll` / `moveSelected` / `_distributePlannerDispatch`) and removes full-board refreshes that other logic may implicitly depend on. The user should confirm:
+The three review questions raised during improve-plan have been answered. Decisions are binding for implementation:
 
-1. **Acceptance of the dropped start-refresh race guard.** Removing the start `_refreshBoard` at `moveAll:5601` means `sourceCards` is derived from `this._lastCards` (last rendered board) rather than a fresh DB read — exactly as `moveSelected` already does. The only risk is a watcher mutating the column in the ~ms gap between render and click. `moveSelected` has shipped with this trade-off; confirm it is acceptable for `moveAll` too.
-2. **Scope of the `moveCardsFailed` feature (1d).** `moveCardToColumn` returns a bare `boolean` with no reason string. Confirm whether to (a) ship a generic "database update failed" reason, (b) thread a real reason out of `KanbanDatabase.updateColumnByPlanFile`, or (c) cut the `moveCardsFailed` handler entirely and rely on the existing silent-revert + status message.
-3. **Whether `promptOnDrop` (5359) and `julesLowComplexity` (5488)** — two other handlers with the identical start-refresh-bounce pattern — should be fixed in this same plan or deferred.
+1. **Dropped start-refresh race guard — ACCEPTED (Option A).** `moveAll` will derive `sourceCards` by filtering `this._lastCards` directly, with no start `_refreshBoard`, exactly as `moveSelected` already ships. The sub-millisecond watcher race is acceptable (it is the same trade-off `moveSelected` has shipped without issue); the trailing confirmation delta plus the next structural/watcher refresh reconciles any such case. No fresh-DB read, no `_reloadLastCards` factoring. → see 1b (Option A).
+2. **`moveCardsFailed` scope — SHIP IT, generic reason (Option a).** Keep the `moveCardsFailed` handler with a generic `reason` string (e.g. `'couldn't save — board may be out of sync'`). **Cutting it (option c) is NOT safe under this plan**, because this plan removes the trailing `_refreshBoard` that previously silently reverted a failed persist; without `moveCardsFailed`, a failed write would leave a card optimistically moved with nothing to correct it. Threading a real reason out of `KanbanDatabase` (option b) is deferred as a future nicety — not in scope. → see 1d.
+3. **`promptOnDrop` (5359) and `julesLowComplexity` (5488) — FIX THE START-REFRESH BOUNCE HERE.** Both share the identical start-refresh bounce defect; the fix is the same Option A one-liner. Their **start-refresh removal is in scope for this plan** (1f). Their separate **trailing-refresh → delta** conversion (pure snappiness, not the bounce) remains in the hot-path Part 1 plan ([feature_plan_20260624212729_kanban-refresh-to-delta-hotpath.md](feature_plan_20260624212729_kanban-refresh-to-delta-hotpath.md)), which already lists `promptOnDrop`. This boundary keeps the two plans from colliding.
 
 ## Complexity Audit
 

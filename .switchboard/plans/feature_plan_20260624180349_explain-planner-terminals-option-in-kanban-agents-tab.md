@@ -56,3 +56,37 @@ This is a single-line edit. The second sentence is appended within the same `<di
 1. **Visual check**: Open the Kanban board in VS Code, navigate to the Agents tab, and confirm the Planner row's description now shows two sentences, with the second sentence explaining the terminals option.
 2. **Layout check**: Verify the description text wraps naturally and does not break the layout of the Terminals row below it.
 3. **No regressions**: Confirm all other agent descriptions remain unchanged and the terminals dropdown / limit-dispatch checkbox still function as before.
+
+---
+
+## Review Results (Reviewer-Executor Pass)
+
+### Implementation Status: COMPLETE — no code fixes required
+
+The edit at `src/webview/kanban.html` line 2688 matches the plan's "After" block character-for-character. The second sentence is appended within the same `<div class="agent-description">`, inheriting existing styling. No JavaScript, CSS, or logic was touched.
+
+### Files Changed
+
+- `src/webview/kanban.html` — line 2688 (the only change; committed in `eb1c5d3`)
+
+### Findings
+
+| # | Severity | Finding | File:Line | Disposition |
+|---|----------|---------|-----------|-------------|
+| 1 | NIT | `ROLE_DESCRIPTIONS.planner` (JS object feeding the Prompts tab's `#roleDescription` div) still contains the old one-sentence description, creating a minor inconsistency between the Agents tab and Prompts tab for the same role. | `src/webview/kanban.html:3182` | **Defer.** The Prompts tab does not expose a terminals dropdown, so adding the terminals sentence there would describe a control the user cannot see. Leaving the old text is the correct UX call. |
+| 2 | NIT | The plan's Edge-Case & Dependency Audit states the `.agent-description` text is "not read by any JavaScript" — accurate for line 2688, but the audit did not acknowledge the JS-driven parallel description (`ROLE_DESCRIPTIONS`) that exists elsewhere in the same file. | Plan section: Edge-Case Audit | **Defer.** Documentation gap in the plan, not a code defect. |
+
+No CRITICAL or MAJOR findings. No code fixes were applied.
+
+### Validation Results
+
+- **Text match**: Line 2688 matches plan "After" block exactly (both sentences, same `<div>`, same class). ✓
+- **Scope isolation**: grep confirmed no other `.agent-description` divs were modified. ✓
+- **Styling**: Second sentence inherits `.agent-description` CSS — no CSS changes needed. ✓
+- **No regressions**: Other agent descriptions (gatherer L2686, code_researcher L2704, splitter L2706, lead L2708, coder L2709) unchanged. ✓
+- **Compilation**: Skipped per session instructions.
+- **Tests**: Skipped per session instructions.
+
+### Remaining Risks
+
+- **Low**: The Prompts tab (`#roleDescription` via `ROLE_DESCRIPTIONS.planner`) shows a different (shorter) Planner description than the Agents tab. This is intentional — the Prompts tab has no terminals control, so the terminals sentence would be out of context there. If a future change adds terminals configuration to the Prompts tab, `ROLE_DESCRIPTIONS.planner` should be updated to match.
