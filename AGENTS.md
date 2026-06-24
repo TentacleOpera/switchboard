@@ -18,7 +18,7 @@ This project relies on **Switchboard Workflows** defined in `.agents/workflows`.
 | `/accuracy` | **`accuracy.md`** | High accuracy mode with self-review (Standard Protocol). |
 | `/improve-plan` | **`improve-plan.md`** | Deep planning with optional dependency checks and adversarial review. |
 | `/chat` | **`chat.md`** | Activate chat consultation workflow. |
-| `/memo` | **`memo.md`** | Memo capture mode — append-only, no analysis, no exit. |
+| `/memo` | **`memo.md`** | Memo capture mode — append-only, no analysis. Exit with `process memo`. |
 
 
 ### ⚠️ MANDATORY PRE-FLIGHT CHECK
@@ -97,7 +97,7 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 
 ### 📌 Memo Capture Mode — Priority Rule
 
-While `/memo` capture mode is active, capture mode takes precedence over the default "analyze and act" behavior. The agent appends each user message to `.switchboard/memo.md` and does NOT analyze, plan, or write code. Every capture-mode reply begins with `[MEMO CAPTURE ACTIVE]`. There are no exit triggers — capture mode is permanent for the conversation; the user clears the conversation to leave. To process captured entries into plan files, use the Memo modal in the Kanban panel (send/copy buttons). For guaranteed capture that no host system prompt can override, use the Memo modal.
+While `/memo` capture mode is active, capture mode takes precedence over the default "analyze and act" behavior. The agent appends each user message to `.switchboard/memo.md` and does NOT analyze, plan, or write code. Every capture-mode reply begins with `[MEMO CAPTURE ACTIVE]` and ends by advising the command `process memo`. The sole exit trigger is the exact command `process memo` (case-insensitive, as the entire message) — it exits capture mode and processes all entries into plan files (one per entry). To leave without processing, clear the conversation. The Memo modal in the Kanban panel remains as an alternative processing path (backend-driven, immune to host system prompt overrides).
 See `.agents/workflows/memo.md` for the full protocol.
 
 ### 📝 Plan Authoring & Problem Analysis Protocol

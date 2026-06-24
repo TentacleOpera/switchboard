@@ -176,3 +176,65 @@ The "omits source column label when not provided" tests (lines 35, 59) already a
 ---
 
 **Recommendation:** Complexity is 2/10 → **Send to Intern**.
+
+---
+
+## Reviewer Pass (in-place, 2026-06-24)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*cracks knuckles, glares at the diff*
+
+Alright, let's see what the intern actually shipped for this "drop two words from a string" task. Complexity 2/10. Should be impossible to screw up. Let's find out if they managed anyway.
+
+**NIT — `instruction` JSDoc still name-drops `'low-complexity'`** (`agentPromptBuilder.ts:94`): The `instruction?: string` option's doc comment still reads `/** Base instruction hint (e.g. 'enhance', 'low-complexity', 'implement-all'). */`. The `'low-complexity'` value is now a dead input as far as the prompt builder is concerned — it flows in from `handleBatchDispatchLow` and is silently ignored. The plan explicitly chose NOT to deprecate `instruction` (only `sourceColumnLabel` got the `@deprecated` tag), and the example list is technically still accurate as "values callers may pass", so this is cosmetic. But a future maintainer reading line 94 will reasonably assume `low-complexity` still does something. Not a defect against the plan; flagging for awareness. **Severity: NIT.**
+
+**NIT — Test name collision** (`agentPromptBuilder.test.ts:27` and `:54`): Both the coder suite and the lead suite now have a test literally named `'omits source column label even when provided'`. The plan spec literally prescribed this exact duplication (it gave the same rename for both line 27 and line 52), so the intern followed orders. But two tests with identical names in different `suite()` blocks is a mild smell — if one fails, the test runner output is ambiguous about which role broke. Mocha namespaces by suite so it's resolvable, but `omits source column label even when provided (coder)` / `… (lead)` would have been kinder. **Severity: NIT.** Not fixing — the plan dictated the names verbatim and deviating would violate "treat the plan as source of truth."
+
+**Observation — `instruction` option is now fully inert in the builder.** With the `baseInstruction === 'low-complexity'` ternary gone, `options.instruction` is no longer read anywhere in `buildKanbanBatchPrompt`. The plan acknowledged this ("leaving it flowing in is harmless") and deliberately did NOT deprecate the field. Correct call for blast-radius containment. No action. Just noting that the builder now has two deprecated-by-behavior options (`instruction`, `sourceColumnLabel`) where only the latter is marked. Acceptable per plan scope.
+
+**Observation — `kanban-prompt-generation-unit.test.js` confirmed untouched.** Grep confirms no `from the … column` or `low-complexity plans` assertions exist in that file; it only mocks the plumbing. Plan said "no update needed" — verified correct.
+
+**Observation — no other role intros regressed.** `intern`/`analyst` use `Please process the following N plans.` (unchanged); `reviewer`/`tester` use their own execution intros (unchanged). Only `lead` (line 778) and `coder` (line 791) were touched, exactly as scoped.
+
+*leans back* Honestly? This is clean. The intern did the boring thing correctly. No CRITICAL, no MAJOR. Two NITs, both inherited from the plan's own spec rather than introduced by the implementer. Ship it.
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| `instruction` JSDoc still cites `'low-complexity'` as a live value | NIT | **Defer.** Plan explicitly scoped `instruction` as out-of-bounds for deprecation. Touching it now expands scope. Log for a future "option hygiene" pass. |
+| Duplicate test name across coder/lead suites | NIT | **Keep as-is.** Plan dictated the exact names verbatim. Renaming would deviate from the source-of-truth spec. Mocha suite namespacing makes failures resolvable. |
+| Dead locals `baseInstruction` / `sourceColumnLabel` / `sourceSuffix` | (none — already fixed) | **Verified removed.** Grep confirms zero remaining declarations. |
+| `sourceColumnLabel` field deprecated in place | (none — already done) | **Verified.** `@deprecated` JSDoc present at line 136–138; field retained at line 139. |
+| Coder/lead intros cleaned | (none — already done) | **Verified.** Lines 778 and 791 both emit `Please execute the following ${plans.length} plans.` with no suffix or complexity word. |
+| Other roles untouched | (none) | **Verified.** Only lead + coder intros changed. |
+
+**Verdict:** No CRITICAL or MAJOR findings. No code fixes required — the implementation matches the plan exactly. Both NITs are plan-inherited, not implementer-introduced, and fixing either would violate the plan's explicit scope boundaries.
+
+### Code Fixes Applied
+
+None. The implementation was already correct against the plan spec.
+
+### Verification Results
+
+Per session directives: compilation (`npm run compile`) and automated tests were **skipped**. The following read-only checks were run:
+
+1. **grep — dead locals removed:** `const baseInstruction = | const sourceColumnLabel = | const sourceSuffix =` → **0 matches** in `agentPromptBuilder.ts`. ✅
+2. **grep — no residual intro provenance:** `from the ${...} column` / `low-complexity plans` in production intro code → **0 matches** (only the `instruction` JSDoc example at line 94 mentions `low-complexity`, which is documentation, not intro text). ✅
+3. **grep — clean intros:** `Please execute the following` → exactly 2 matches (lines 778 lead, 791 coder), both clean. ✅
+4. **grep — `sourceColumnLabel` consumption:** appears only at line 139 (the deprecated field declaration). No reads inside `buildKanbanBatchPrompt`. ✅
+5. **Test file review:** three tests renamed and flipped per spec (lines 27, 42, 54); negative assertions lock in the new contract; the two "when not provided" tests (lines 36, 62) remain canonical. ✅
+6. **`kanban-prompt-generation-unit.test.js`:** confirmed no assertions on removed phrases; no update needed (matches plan). ✅
+7. **Lint (unused-var):** dead locals are gone, so no unused-variable warnings will fire for the removed declarations. The retained `sourceColumnLabel` field is a class/interface member, not a local, so it does not trigger unused-local lint. ✅ (static reasoning; linter not executed per skip directives)
+
+### Files Changed (by implementer, pre-review)
+
+- `src/services/agentPromptBuilder.ts` — coder intro collapsed (line 791), lead intro suffix dropped (line 778), dead locals removed (formerly lines 435, 445, 742, 791), `@deprecated` JSDoc added to `sourceColumnLabel` (lines 136–138).
+- `src/services/__tests__/agentPromptBuilder.test.ts` — three tests renamed and flipped (lines 27, 42, 54); two canonical "when not provided" tests retained (lines 36, 62).
+
+### Remaining Risks
+
+- **`instruction` option is now behaviorally dead in the builder** but not marked deprecated. A future maintainer could waste time tracing why passing `instruction: 'low-complexity'` does nothing. Low impact; deferred to a future option-hygiene pass.
+- **Duplicate test names** across coder/lead suites (`'omits source column label even when provided'`). Resolvable via Mocha suite namespacing but slightly ambiguous in flat test output. Inherited from plan spec.
+- **No automated test run this session** (skipped per directive). The user should run the `agentPromptBuilder.test.ts` suite to confirm the flipped assertions pass against the compiled builder.
