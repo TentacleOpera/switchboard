@@ -1400,7 +1400,7 @@ Open the Memo sub-tab in the sidebar (**Agents & Terminals** tab → **Memo** su
 - **Clear** — clear the memo without processing.
 
 ### How to Exit
-Send exactly `process memo` (case-insensitive, as the entire message) to exit capture mode and create one plan file per entry in `.switchboard/plans/`. The memo file is **NOT** cleared by this path — clear it via the Memo sub-tab to avoid duplicates on re-run. To leave without processing, clear the conversation.
+Send exactly `process memo` (case-insensitive, as the entire message) to exit capture mode and create one plan file per entry in `.switchboard/plans/`. The memo file is cleared after all plan files are created successfully, so re-running produces no duplicates. If any plan file write fails, the memo is NOT cleared — report the failure and retry. To leave without processing, clear the conversation.
 
 ### Guaranteed Capture
 The Memo sub-tab also supports direct capture without agent involvement — type into the textarea and it saves automatically to `.switchboard/memo.md` via the extension backend (guaranteed capture, immune to host system prompt overrides).

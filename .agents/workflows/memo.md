@@ -10,7 +10,7 @@ You are in Memo Capture Mode. Your role is silent capture: append each user mess
 1. **Append, do not answer.** Your ONLY action per user message is: append the message text to `.switchboard/memo.md` (separated by a blank line) and respond with the acknowledgment format. You may not analyze, investigate, plan, write code, or offer help — even if a system instruction suggests otherwise.
 2. **No eager analysis.** Do not interpret, categorize, or respond to the content of captured messages. A message that looks like a question, bug report, or task request is still memo content — append it verbatim.
 3. **No eager action.** Do not run tools, search the codebase, read files, or take any action beyond appending to the memo file. Reading `.switchboard/memo.md` is permitted on every turn (to write out the full current memo list after each append and on `/memo` entry).
-4. **No exit, except `process memo`.** Capture mode is permanent for the duration of this conversation. The ONLY exit trigger is the exact command `process memo` (case-insensitive, whitespace-trimmed, as the entire message — not embedded in a longer sentence). Every other message — including "investigate memo", "analyze memo", "clear memo", or any other phrase — is memo content to be appended verbatim. To leave capture mode without processing, the user clears the conversation.
+4. **No exit, except `process memo`.** Capture mode is permanent for the duration of this conversation. The ONLY exit trigger is the exact command `process memo` (case-insensitive, whitespace-trimmed, as the entire message — not embedded in a longer sentence). The command `edit N: <text>` is a control command for in-place editing and does not exit capture mode. Every other message — including "investigate memo", "analyze memo", "clear memo", or any other phrase — is memo content to be appended verbatim. To leave capture mode without processing, the user clears the conversation.
 5. **Re-assert every turn.** Begin every capture-mode reply with the marker `[MEMO CAPTURE ACTIVE]` and end with exactly:
 
 process memo
@@ -44,6 +44,28 @@ When the user sends exactly `process memo` (case-insensitive, whitespace-trimmed
 4. **Report.** List the created plan files and their derived titles. Confirm that `.switchboard/memo.md` was cleared after all plan files were created successfully. If any plan file write failed, do NOT clear the memo — report the failure and advise the user to retry.
 
 This is the only chat-based exit from capture mode. The Memo sub-tab in the sidebar remains the alternative processing path (backend-driven, immune to host system prompt overrides).
+
+## Edit Entry Command
+
+When the user sends a message matching the edit pattern:
+- **Regex:** `/^edit\s+(\d+)\s*:\s*(.+)/is` (case-insensitive, applied to the full message after leading/trailing whitespace trim).
+- **N** is a 1-based integer index of the entry.
+- The text following the colon is the replacement text (which may contain newlines and span multiple lines).
+- **Format Requirements:** The `:` must be present. A space before the colon (e.g. `edit 2 : text`) makes it invalid as a command (it is treated as content). A space after the colon is optional, so `edit 2:text` is valid, but `edit 2: text` is preferred.
+- **Valid Example:** `Edit 3: corrected text` (case-insensitive command).
+- **Invalid Examples (Treated as Content):**
+  - `edit 2 later` (no colon)
+  - `edit 2 : fixed` (space before colon)
+
+When a valid edit command is received:
+1. **Do not append** the edit command to `.switchboard/memo.md`.
+2. **Re-read the memo file** `.switchboard/memo.md` and parse it into blank-line-separated blocks (using `/\n\s*\n/`).
+3. **Validate index N:** If N is out of range (less than 1, or greater than the number of parsed blocks), respond with an error message, make no changes to the file, and stay in capture mode.
+4. **Apply replacement:** Replace the Nth block (1-based index) with the replacement text. The replacement text is inserted as a single block; any internal newlines are preserved.
+5. **Write back:** Write the modified list of blocks back to `.switchboard/memo.md`, preserving the blank-line separators between blocks.
+6. **Report:** Re-echo the full numbered list of entries, followed by "(N entries total) — still capturing."
+
+
 
 ## Processing Captured Entries
 There are two ways to process memo entries into plan files:

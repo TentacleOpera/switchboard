@@ -94,3 +94,51 @@ No automated tests — this is a workflow/documentation change with no source-co
 ---
 
 **Recommendation:** Complexity is 2 → **Send to Intern**. This is a straightforward documentation/workflow change across two files (`memo.md` and `AGENTS.md`) with no source-code or data-migration impact.
+
+---
+
+## Reviewer Pass — 2026-06-24
+
+### Stage 1 — Grumpy Principal Engineer
+
+Oh, how *delightful*. A two-file documentation change that couldn't even be bothered to grep the rest of the repository. Let me tear this apart.
+
+**CRITICAL — None.** The core change is actually applied correctly. I'll grudgingly admit that.
+
+**MAJOR — User-facing manual contradicts the new behaviour.** `docs/switchboard_user_manual.md:1403` (the "How to Exit" section under the Memo chapter) still blares, in bold: *"The memo file is **NOT** cleared by this path — clear it via the Memo sub-tab to avoid duplicates on re-run."* This is the EXACT footgun this plan exists to kill, and it's sitting in the user manual actively instructing users to manually clear because the chat path "doesn't." So we shipped a behaviour change and left the manual re-introducing the confusion. The plan's "Edge-Case & Dependency Audit" listed the `AGENTS.md` / `memo.md` lockstep dependency but completely missed that the sibling plan `update-readme-and-tutorial-docs-with-latest-features` had already baked the "NOT cleared" language into the manual at line 1403. Scope miss. The plan even has the audacity to claim "No source-code changes required" — true, but it forgot "no OTHER doc changes required" was also false.
+
+**NIT — README/tutorial brevity is fine.** `README.md:179` and `docs/how_to_use_switchboard.md:21` mention `process memo` but don't state the clear behaviour either way. Not a contradiction, just silent. Acceptable — they don't actively mislead.
+
+**NIT — "Memo modal" → "Memo sub-tab" rename piggybacked.** The diff also renamed "Memo modal in the Kanban panel" → "Memo sub-tab in the sidebar" across `memo.md` and `AGENTS.md`. This is technically a separate concern (the sub-tab rename) but it's consistent and harmless — it aligns terminology with the actual UI. Not a defect, just noting it rode along in the same change.
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Severity | Verdict |
+|---|---|---|
+| Manual line 1403 says "NOT cleared" | MAJOR | **Fix now** — directly contradicts the plan's purpose and misleads users. |
+| README/tutorial silent on clear | NIT | Defer — no active contradiction. |
+| "Memo sub-tab" rename piggyback | NIT | Keep — consistent, no harm. |
+| `memo.md` step 4 / step 5 removal / Processing Captured Entries / `AGENTS.md` | — | All correctly applied. Keep. |
+
+The plan's four scoped changes are all present and correct in the working tree (verified via `git diff 45d2027 HEAD`). The single material gap is the user manual, which the plan's dependency audit missed.
+
+### Fixes Applied
+
+- **`docs/switchboard_user_manual.md:1403`** — Replaced "The memo file is **NOT** cleared by this path — clear it via the Memo sub-tab to avoid duplicates on re-run." with "The memo file is cleared after all plan files are created successfully, so re-running produces no duplicates. If any plan file write fails, the memo is NOT cleared — report the failure and retry." This brings the manual into lockstep with `memo.md` and `AGENTS.md`, and preserves the partial-failure safety semantics.
+
+### Verification Results
+
+- `grep` for `NOT cleared` / `not cleared` across all live docs (`memo.md`, `AGENTS.md`, `README.md`, `docs/how_to_use_switchboard.md`, `docs/switchboard_user_manual.md`): the ONLY remaining occurrence is the intentional partial-failure clause in the manual (correct behaviour). No stale "NOT cleared" contradictions remain.
+- `grep` for `Memo modal` / `Kanban panel` in `memo.md` and `AGENTS.md`: zero matches — the sub-tab rename is complete and consistent in the scoped files.
+- No compilation or test steps run (per session instructions: SKIP COMPILATION, SKIP TESTS).
+- No git state-mutating commands run (per GIT POLICY).
+
+### Files Changed by This Review
+
+- `docs/switchboard_user_manual.md` (line 1403) — corrected the "How to Exit" section to match clear-on-success behaviour.
+
+### Remaining Risks
+
+1. **Partial-failure detection is LLM-dependent.** The "do NOT clear on failure" instruction relies on the agent correctly detecting a plan-file write failure. This is imperfect for prose-instruction workflows but is the best available mitigation. Documented in the plan's own Adversarial Synthesis — no further action.
+2. **Narrow interruption window.** A mid-processing crash (session killed, terminal closed) can leave some plan files created with the memo not yet cleared, producing duplicates on retry. This is a strict improvement over the prior infinite window and is documented in the plan's Edge-Case audit.
+3. **Stale "Memo modal" / "Kanban panel" terminology in non-scoped files.** 36 files (mostly historical plan artifacts, plus `src/services/KanbanProvider.ts:871`) still reference "Memo modal" or "Kanban panel". These are out of this plan's scope (the sub-tab rename is a separate concern) and historical plan files are immutable artifacts. Flagging only for awareness — not a defect of this plan.

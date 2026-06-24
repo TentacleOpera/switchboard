@@ -25,6 +25,7 @@ sb_api_call POST /diagram/generate \
     "diagramType": "flowchart",
     "maxNodes": 30,
     "focusPath": "src/services/",
+    "detailLevel": "summary",
     "targetId": "task123456",
     "platform": "clickup"
   }'
@@ -34,6 +35,7 @@ sb_api_call POST /diagram/generate \
 - **diagramType** (required): "flowchart", "sequence", or "component"
 - **maxNodes** (optional): Maximum nodes to include (default: 50)
 - **focusPath** (optional): Relative path to focus analysis on
+- **detailLevel** (optional): "summary" (grouped) or "detailed" (expanded)
 - **targetId** (optional): Task/issue ID to upload to
 - **platform** (optional): "clickup" or "linear" (required if targetId provided)
 
