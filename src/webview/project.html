@@ -1257,6 +1257,161 @@
             from { opacity: 0; transform: translateY(8px); }
             to   { opacity: 1; transform: translateY(0); }
         }
+
+        /* Folder Modal (Ported from planning.html) */
+        .folder-modal {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .folder-modal .modal-content {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+        }
+        .folder-modal .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .folder-modal .modal-header h3 {
+            margin: 0;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .folder-modal .modal-close-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 24px;
+            cursor: pointer;
+            padding: 0;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            transition: all 0.15s;
+        }
+        .folder-modal .modal-close-btn:hover {
+            background: var(--card-bg-hover);
+            color: var(--text-primary);
+        }
+        .folder-modal .modal-body {
+            padding: 20px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        .folder-modal .modal-section {
+            margin-bottom: 20px;
+        }
+        .folder-modal .modal-section:last-child {
+            margin-bottom: 0;
+        }
+        .folder-modal .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+        .folder-modal .section-title {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+        }
+        .folder-modal .section-actions {
+            display: flex;
+            gap: 8px;
+        }
+        .folder-modal .folder-list {
+            max-height: none;
+        }
+
+        .folder-list {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            max-height: 250px;
+            overflow-y: auto;
+            margin-top: 4px;
+        }
+
+        .folder-list-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--panel-bg2);
+            padding: 3px 6px;
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            font-size: 11px;
+            gap: 8px;
+        }
+
+        .folder-path {
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: var(--text-primary);
+        }
+
+        .folder-list-remove-btn {
+            background: transparent;
+            border: none;
+            color: #ff5555;
+            cursor: pointer;
+            font-size: 10px;
+            padding: 2px 4px;
+            border-radius: 2px;
+        }
+
+        .folder-list-remove-btn:hover {
+            background: rgba(255, 85, 85, 0.1);
+        }
+
+        .folder-list-empty {
+            font-size: 11px;
+            color: var(--text-secondary);
+            padding: 6px;
+            text-align: center;
+            font-style: italic;
+        }
+
+        .active-path-btn {
+            display: block;
+            width: calc(100% - 16px);
+            text-align: left;
+            background: var(--panel-bg2, #0a0a0a);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            font-family: var(--font-mono);
+            font-size: 10px;
+            padding: 4px 8px;
+            margin: 0 8px 6px 8px;
+            cursor: pointer;
+            box-sizing: border-box;
+        }
+        .active-path-btn:hover { border-color: var(--accent-teal, #00e5ff); }
     </style>
     <!-- Poppins via Google Fonts CDN (online, temporary — bundled local @font-face also exists above).
          Declared last so this definition wins for the markdown-preview headings. -->
@@ -1365,13 +1520,14 @@
                 <button id="btn-save-constitution" class="strip-btn" style="display:none;">Save</button>
                 <button id="btn-cancel-constitution" class="strip-btn" style="display:none;">Cancel</button>
                 <button id="btn-delete-constitution" class="strip-btn" style="display:none; color: #ff6b6b;">Delete</button>
-                <button id="btn-set-constitution-path" class="strip-btn" title="Change constitution file path" disabled>⚙</button>
+                <button id="btn-manage-constitution-paths" class="strip-btn" title="Manage constitution file paths" disabled>Manage Paths</button>
             </div>
             <div class="content-row">
                 <div id="constitution-list-pane">
                     <div class="sidebar-toggle-row">
                         <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
                     </div>
+                    <button id="active-constitution-path-btn" class="active-path-btn" title="Active constitution file — click to manage paths" style="display:none;"></button>
                     <div class="empty-state">Loading docs...</div>
                 </div>
                 <div class="preview-panel-wrapper">
@@ -1392,6 +1548,8 @@
                 <select id="system-workspace-filter">
                     <option value="">All Workspaces</option>
                 </select>
+                <button id="btn-build-system" class="strip-btn" disabled>Build via Planner</button>
+                <button id="btn-copy-system-prompt" class="strip-btn" disabled>Copy Build Prompt</button>
                 <button id="btn-edit-system" class="strip-btn" disabled>Edit</button>
                 <button id="btn-save-system" class="strip-btn" style="display:none;">Save</button>
                 <button id="btn-cancel-system" class="strip-btn" style="display:none;">Cancel</button>
@@ -1475,6 +1633,29 @@
             <div class="kanban-log-close" style="display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px;">
                 <button id="btn-new-epic-cancel" class="strip-btn">Cancel</button>
                 <button id="btn-new-epic-submit" class="strip-btn" style="border-color: var(--accent-teal);">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Manage Constitution Paths Modal -->
+    <div class="folder-modal" id="constitution-paths-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="constitution-paths-modal-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="constitution-paths-modal-title">Manage Constitution Paths</h3>
+                <button class="modal-close-btn" id="btn-close-constitution-paths-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-section">
+                    <div class="section-header">
+                        <span class="section-title">Configured Paths</span>
+                        <div class="section-actions">
+                            <button id="btn-add-constitution-path-modal" class="strip-btn">Add Path</button>
+                        </div>
+                    </div>
+                    <div id="constitution-paths-list-modal" class="folder-list">
+                        <!-- rows rendered by JS -->
+                    </div>
+                </div>
             </div>
         </div>
     </div>

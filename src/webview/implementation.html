@@ -83,8 +83,7 @@
         body.theme-claudify .orchestrator-controls .action-btn.stop-btn:hover:not(:disabled),
         body.theme-claudify .secondary-btn.is-cyan:hover,
         body.theme-claudify .secondary-btn.is-orange:hover:not(:disabled),
-        body.theme-claudify .secondary-btn.is-teal:hover,
-        body.theme-claudify .tiny-dot.green { box-shadow: none; }
+        body.theme-claudify .secondary-btn.is-teal:hover { box-shadow: none; }
 
         /* Claudify: stop the pulsing/sweep glow animations (animations outrank static box-shadow) */
         body.theme-claudify .status-dot.green-pulse,
@@ -774,44 +773,7 @@
             background: var(--vscode-scrollbarSlider-hoverBackground, var(--border-bright));
         }
 
-        /* Status Bar (Bottom) */
-        .status-footer {
-            padding: 6px 12px;
-            background: var(--vscode-statusBar-background, var(--bg-color));
-            border-top: 1px solid var(--border-color);
-            display: flex;
-            justify-content: space-between;
-            font-size: 10px;
-            color: var(--text-secondary);
-            font-family: var(--font-mono);
-            letter-spacing: 0.5px;
-        }
 
-        .status-indicator {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        .tiny-dot {
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: var(--text-secondary);
-        }
-
-        .tiny-dot.green {
-            background: var(--accent-green);
-            box-shadow: 0 0 4px color-mix(in srgb, var(--accent-green) 35%, transparent);
-        }
-
-        .tiny-dot.orange {
-            background: var(--accent-orange);
-        }
-
-        .tiny-dot.red {
-            background: var(--accent-red);
-        }
 
         /* Setup / System Section */
         .system-section {
@@ -1656,13 +1618,7 @@
                 MORE</button>
         </div>
 
-        <!-- STATUS FOOTER -->
-        <div class="status-footer">
-            <div class="status-indicator" id="system-status">
-                <div class="tiny-dot green"></div>
-                <span>SYSTEM ONLINE</span>
-            </div>
-        </div>
+
     </div>
 
 

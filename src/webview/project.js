@@ -233,7 +233,9 @@
     const btnCopyUpdatePrompt = document.getElementById('btn-copy-update-prompt');
     const btnEnableConstitution = document.getElementById('btn-enable-constitution');
     const btnDeleteConstitution = document.getElementById('btn-delete-constitution');
-    const btnSetConstitutionPath = document.getElementById('btn-set-constitution-path');
+    const btnManageConstitutionPaths = document.getElementById('btn-manage-constitution-paths');
+    const activeConstitutionPathBtn = document.getElementById('active-constitution-path-btn');
+    const constitutionPathsModal = document.getElementById('constitution-paths-modal');
     const activeConstitutionBanner = document.getElementById('active-constitution-banner');
     const btnDisableConstitution = document.getElementById('btn-disable-constitution');
     const btnEditConstitution = document.getElementById('btn-edit-constitution');
@@ -246,6 +248,8 @@
     const constitutionEditor = document.getElementById('constitution-editor');
 
     // System tab elements
+    const btnBuildSystem = document.getElementById('btn-build-system');
+    const btnCopySystemPrompt = document.getElementById('btn-copy-system-prompt');
     const btnEditSystem = document.getElementById('btn-edit-system');
     const btnSaveSystem = document.getElementById('btn-save-system');
     const btnCancelSystem = document.getElementById('btn-cancel-system');
@@ -423,6 +427,9 @@
                 renderConstitutionDocList();
                 renderSystemDocList();
                 break;
+            case 'constitutionPaths':
+                renderConstitutionPathsModal(msg);
+                break;
             case 'constitutionStatus':
                 if (_constitutionSelectedWorkspace && _constitutionSelectedWorkspace.workspaceRoot === msg.workspaceRoot) {
                     const isEnabled = !!msg.enabled;
@@ -502,6 +509,18 @@
                 }
                 break;
             }
+            case 'systemPromptCopied': {
+                if (btnCopySystemPrompt) {
+                    const oldText = btnCopySystemPrompt.textContent;
+                    btnCopySystemPrompt.textContent = 'Copied!';
+                    btnCopySystemPrompt.disabled = true;
+                    setTimeout(() => {
+                        btnCopySystemPrompt.textContent = oldText;
+                        btnCopySystemPrompt.disabled = false;
+                    }, 2000);
+                }
+                break;
+            }
             case 'constitutionFileDeleted': {
                 const govFile = msg.governanceFile || 'constitution';
                 if (govFile === 'constitution') {
@@ -543,13 +562,15 @@
                         systemPreviewContent.innerHTML = `
                             <div class="constitution-onboarding">
                                 <p class="constitution-onboarding-title">No ${filename} found for this workspace.</p>
-                                <p>You can create one by clicking <strong>Edit</strong> or writing it from the terminal/editor.</p>
+                                <p>Use <strong>Build via Planner</strong> above to generate one for this workspace, or <strong>Copy Build Prompt</strong> to run it yourself.</p>
                             </div>
                         `;
                         state.editOriginalContent.system = '';
                         _systemSelectedFile = null;
                         if (btnEditSystem) btnEditSystem.disabled = false;
                         if (btnDeleteSystem) btnDeleteSystem.style.display = 'none';
+                        if (btnBuildSystem) { btnBuildSystem.style.display = ''; btnBuildSystem.disabled = false; }
+                        if (btnCopySystemPrompt) { btnCopySystemPrompt.style.display = ''; btnCopySystemPrompt.disabled = false; }
                     }
                 }
                 break;
@@ -581,7 +602,7 @@
                                     btnCopyUpdatePrompt.disabled = false;
                                 }
                                 if (btnDeleteConstitution) btnDeleteConstitution.style.display = '';
-                                if (btnSetConstitutionPath) btnSetConstitutionPath.disabled = false;
+                                if (btnManageConstitutionPaths) btnManageConstitutionPaths.disabled = false;
                             } else {
                                 constitutionPreviewContent.innerHTML = `
                                     <div class="constitution-onboarding">
@@ -605,7 +626,7 @@
                                 if (btnUpdateViaPlanner) btnUpdateViaPlanner.style.display = 'none';
                                 if (btnCopyUpdatePrompt) btnCopyUpdatePrompt.style.display = 'none';
                                 if (btnDeleteConstitution) btnDeleteConstitution.style.display = 'none';
-                                if (btnSetConstitutionPath) btnSetConstitutionPath.disabled = true;
+                                if (btnManageConstitutionPaths) btnManageConstitutionPaths.disabled = true;
                             }
                         }
                     }
@@ -623,18 +644,22 @@
                                 _systemSelectedFile = msg.filePath;
                                 if (btnEditSystem) btnEditSystem.disabled = false;
                                 if (btnDeleteSystem) btnDeleteSystem.style.display = '';
+                                if (btnBuildSystem) btnBuildSystem.style.display = 'none';
+                                if (btnCopySystemPrompt) btnCopySystemPrompt.style.display = 'none';
                             } else {
                                 const filename = _systemSelectedGovKey === 'claude' ? 'CLAUDE.md' : 'AGENTS.md';
                                 systemPreviewContent.innerHTML = `
                                     <div class="constitution-onboarding">
                                         <p class="constitution-onboarding-title">No ${filename} found for this workspace.</p>
-                                        <p>You can create one by clicking <strong>Edit</strong> or writing it from the terminal/editor.</p>
+                                        <p>Use <strong>Build via Planner</strong> above to generate one for this workspace, or <strong>Copy Build Prompt</strong> to run it yourself.</p>
                                     </div>
                                 `;
                                 state.editOriginalContent.system = '';
                                 _systemSelectedFile = null;
                                 if (btnEditSystem) btnEditSystem.disabled = false;
                                 if (btnDeleteSystem) btnDeleteSystem.style.display = 'none';
+                                if (btnBuildSystem) { btnBuildSystem.style.display = ''; btnBuildSystem.disabled = false; }
+                                if (btnCopySystemPrompt) { btnCopySystemPrompt.style.display = ''; btnCopySystemPrompt.disabled = false; }
                             }
                         }
                     }
@@ -1520,6 +1545,10 @@
             workspaceRoot: ws.workspaceRoot,
             governanceFile: _constitutionSelectedGovKey
         });
+        vscode.postMessage({
+            type: 'getConstitutionPaths',
+            workspaceRoot: ws.workspaceRoot
+        });
     }
 
     // =========================================================================
@@ -1640,9 +1669,70 @@
         });
     }
 
-    if (btnSetConstitutionPath) {
-        btnSetConstitutionPath.addEventListener('click', () => {
-            vscode.postMessage({ type: 'openSetConstitutionPath', workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot });
+    function openConstitutionPathsModal() {
+        if (!_constitutionSelectedWorkspace) return;
+        constitutionPathsModal.style.display = 'flex';
+        vscode.postMessage({ type: 'getConstitutionPaths', workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot });
+    }
+    if (btnManageConstitutionPaths) btnManageConstitutionPaths.addEventListener('click', openConstitutionPathsModal);
+    if (activeConstitutionPathBtn) activeConstitutionPathBtn.addEventListener('click', openConstitutionPathsModal);
+    document.getElementById('btn-close-constitution-paths-modal')?.addEventListener('click', () => {
+        constitutionPathsModal.style.display = 'none';
+    });
+    document.getElementById('btn-add-constitution-path-modal')?.addEventListener('click', () => {
+        if (!_constitutionSelectedWorkspace) return;
+        vscode.postMessage({ type: 'addConstitutionPath', workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot });
+    });
+
+    function renderConstitutionPathsModal(payload) {
+        const list = document.getElementById('constitution-paths-list-modal');
+        const paths = (payload && payload.paths) || [];
+        const active = payload && payload.active;
+        // Sidebar active-path button
+        if (activeConstitutionPathBtn) {
+            if (active) {
+                activeConstitutionPathBtn.textContent = '📄 ' + active;
+                activeConstitutionPathBtn.style.display = 'block';
+            } else {
+                activeConstitutionPathBtn.style.display = 'none';
+            }
+        }
+        if (!list) return;
+        list.innerHTML = '';
+        if (paths.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'folder-list-empty';
+            empty.textContent = 'No paths configured.';
+            list.appendChild(empty);
+            return;
+        }
+        paths.forEach(rel => {
+            const row = document.createElement('div');
+            row.className = 'folder-list-item';
+            const label = document.createElement('span');
+            label.className = 'folder-path';
+            label.textContent = rel + (rel === active ? '  (active)' : '');
+            const actions = document.createElement('div');
+            actions.className = 'section-actions';
+            if (rel !== active) {
+                const activateBtn = document.createElement('button');
+                activateBtn.className = 'strip-btn';
+                activateBtn.textContent = 'Activate';
+                activateBtn.addEventListener('click', () => {
+                    vscode.postMessage({ type: 'setConstitutionPath', workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot, relativePath: rel });
+                });
+                actions.appendChild(activateBtn);
+            }
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'folder-list-remove-btn';
+            removeBtn.textContent = 'Remove';
+            removeBtn.addEventListener('click', () => {
+                vscode.postMessage({ type: 'removeConstitutionPath', workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot, relativePath: rel });
+            });
+            actions.appendChild(removeBtn);
+            row.appendChild(label);
+            row.appendChild(actions);
+            list.appendChild(row);
         });
     }
 
@@ -1783,6 +1873,26 @@
                 type: 'deleteConstitutionFile',
                 workspaceRoot: _systemSelectedWorkspace.workspaceRoot,
                 governanceFile: _systemSelectedGovKey
+            });
+        });
+    }
+    if (btnBuildSystem) {
+        btnBuildSystem.addEventListener('click', () => {
+            if (!_systemSelectedWorkspace) return;
+            vscode.postMessage({
+                type: 'invokeSystemBuilder',
+                workspaceRoot: _systemSelectedWorkspace.workspaceRoot,
+                governanceFile: _systemSelectedGovKey,
+            });
+        });
+    }
+    if (btnCopySystemPrompt) {
+        btnCopySystemPrompt.addEventListener('click', () => {
+            if (!_systemSelectedWorkspace) return;
+            vscode.postMessage({
+                type: 'copySystemBuildPrompt',
+                workspaceRoot: _systemSelectedWorkspace.workspaceRoot,
+                governanceFile: _systemSelectedGovKey,
             });
         });
     }

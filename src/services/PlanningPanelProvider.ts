@@ -926,6 +926,29 @@ export class PlanningPanelProvider {
         return getConstitutionPath(this._context, workspaceRoot);
     }
 
+    private _getConstitutionPathList(workspaceRoot: string): string[] {
+        const store = this._context.globalState;
+        const byRoot = store.get<Record<string, string[]>>('switchboard.constitutionPathsByRoot', {}) || {};
+        let list = byRoot[workspaceRoot];
+        if (!Array.isArray(list) || list.length === 0) {
+            // Seed from the existing active path (shipped key) or the default.
+            const active = path.relative(workspaceRoot, this._getConstitutionPath(workspaceRoot)) || 'CONSTITUTION.md';
+            list = [active];
+        }
+        return list;
+    }
+
+    private async _setConstitutionPathList(workspaceRoot: string, list: string[]): Promise<void> {
+        const store = this._context.globalState;
+        const byRoot = store.get<Record<string, string[]>>('switchboard.constitutionPathsByRoot', {}) || {};
+        byRoot[workspaceRoot] = Array.from(new Set(list));   // dedupe
+        await store.update('switchboard.constitutionPathsByRoot', byRoot);
+    }
+
+    private _activeConstitutionRel(workspaceRoot: string): string {
+        return path.relative(workspaceRoot, this._getConstitutionPath(workspaceRoot)) || 'CONSTITUTION.md';
+    }
+
     private _getGovernanceFilePath(workspaceRoot: string, key: GovernanceFileKey = 'constitution'): string {
         const { getGovernanceFilePath } = require('./constitutionUtils');
         return getGovernanceFilePath(this._context, workspaceRoot, key);
@@ -3226,6 +3249,46 @@ Please format the updated output document strictly as follows:
                 await sendRobustText(terminal, promptText);
                 break;
             }
+            case 'invokeSystemBuilder': {
+                const wsRoot = msg.workspaceRoot;
+                if (!allRoots.includes(wsRoot)) { break; }
+                const key = msg.governanceFile === 'agents' ? 'agents' : 'claude';
+                const filename = key === 'agents' ? 'AGENTS.md' : 'CLAUDE.md';
+                const audience = key === 'agents'
+                    ? 'coding agents working in this repository'
+                    : 'Claude Code and other AI assistants working in this repository';
+                const terminal = vscode.window.terminals.find(t =>
+                        t.name.toLowerCase().includes('planner') || t.name.toLowerCase().includes('lead'))
+                    || vscode.window.createTerminal({ name: 'System Builder', cwd: wsRoot });
+                terminal.show();
+                const promptText =
+                    `Inspect this codebase, then create a ${filename} file at the project root for ${audience}. ` +
+                    `Document: a concise architecture overview, the key build/test/lint commands, the directory layout, ` +
+                    `and any project-specific conventions or gotchas an agent must follow. Keep it tight and high-signal.`;
+                const { sendRobustText } = require('./terminalUtils');
+                await sendRobustText(terminal, promptText);
+                break;
+            }
+            case 'copySystemBuildPrompt': {
+                const wsRoot = msg.workspaceRoot;
+                if (!allRoots.includes(wsRoot)) { break; }
+                const key = msg.governanceFile === 'agents' ? 'agents' : 'claude';
+                const filename = key === 'agents' ? 'AGENTS.md' : 'CLAUDE.md';
+                const audience = key === 'agents'
+                    ? 'coding agents working in this repository'
+                    : 'Claude Code and other AI assistants working in this repository';
+                const promptText =
+                    `Inspect the codebase at ${wsRoot}, then create a ${filename} file at its root for ${audience}.\n` +
+                    `Include:\n` +
+                    `1. A concise architecture overview (what the project is, main components).\n` +
+                    `2. Key commands: build, test, lint, run.\n` +
+                    `3. Directory layout — where the important code lives.\n` +
+                    `4. Project-specific conventions, invariants, and gotchas an agent must respect.\n` +
+                    `Keep it tight and high-signal; do not pad.`;
+                await vscode.env.clipboard.writeText(promptText);
+                this._projectPanel?.webview.postMessage({ type: 'systemPromptCopied' });
+                break;
+            }
             case 'deleteConstitutionFile': {
                 const wsRoot = msg.workspaceRoot;
                 const key = msg.governanceFile ?? 'constitution';
@@ -3240,23 +3303,59 @@ Please format the updated output document strictly as follows:
                 }
                 break;
             }
-            case 'openSetConstitutionPath': {
+            case 'getConstitutionPaths': {
                 const wsRoot = msg.workspaceRoot;
                 if (!allRoots.includes(wsRoot)) { break; }
-                const filePath = this._getConstitutionPath(wsRoot);
-                const currentRelativePath = path.relative(wsRoot, filePath);
-                const result = await vscode.window.showInputBox({
-                    prompt: 'Enter relative path for constitution file',
-                    value: currentRelativePath,
-                    placeHolder: 'CONSTITUTION.md'
+                this._projectPanel?.webview.postMessage({
+                    type: 'constitutionPaths',
+                    workspaceRoot: wsRoot,
+                    paths: this._getConstitutionPathList(wsRoot),
+                    active: this._activeConstitutionRel(wsRoot),
                 });
-                if (result !== undefined) {
-                    await this._handleMessage({
-                        type: 'setConstitutionPath',
-                        workspaceRoot: wsRoot,
-                        relativePath: result.trim()
-                    }, true);
+                break;
+            }
+            case 'addConstitutionPath': {
+                const wsRoot = msg.workspaceRoot;
+                if (!allRoots.includes(wsRoot)) { break; }
+                const picked = await vscode.window.showOpenDialog({
+                    canSelectFiles: true, canSelectFolders: false, canSelectMany: false,
+                    defaultUri: vscode.Uri.file(wsRoot),
+                    filters: { Markdown: ['md'] },
+                    openLabel: 'Use as Constitution',
+                });
+                if (!picked || picked.length === 0) { break; }
+                const abs = picked[0].fsPath;
+                const rel = path.relative(wsRoot, abs);
+                if (rel.startsWith('..') || path.isAbsolute(rel) || !rel.endsWith('.md')) {
+                    vscode.window.showErrorMessage('Constitution file must be a .md file inside the workspace root.');
+                    break;
                 }
+                const list = this._getConstitutionPathList(wsRoot);
+                if (!list.includes(rel)) { list.push(rel); }
+                await this._setConstitutionPathList(wsRoot, list);
+                // Activate the newly added path (routes through existing validated handler + watcher refresh).
+                await this._handleMessage({ type: 'setConstitutionPath', workspaceRoot: wsRoot, relativePath: rel }, true);
+                this._projectPanel?.webview.postMessage({
+                    type: 'constitutionPaths', workspaceRoot: wsRoot,
+                    paths: this._getConstitutionPathList(wsRoot), active: this._activeConstitutionRel(wsRoot),
+                });
+                break;
+            }
+            case 'removeConstitutionPath': {
+                const wsRoot = msg.workspaceRoot;
+                if (!allRoots.includes(wsRoot)) { break; }
+                const rel = String(msg.relativePath || '');
+                let list = this._getConstitutionPathList(wsRoot).filter(p => p !== rel);
+                if (list.length === 0) { list = ['CONSTITUTION.md']; }
+                await this._setConstitutionPathList(wsRoot, list);
+                // If we removed the active path, re-point active to the first remaining entry.
+                if (this._activeConstitutionRel(wsRoot) === rel) {
+                    await this._handleMessage({ type: 'setConstitutionPath', workspaceRoot: wsRoot, relativePath: list[0] }, true);
+                }
+                this._projectPanel?.webview.postMessage({
+                    type: 'constitutionPaths', workspaceRoot: wsRoot,
+                    paths: this._getConstitutionPathList(wsRoot), active: this._activeConstitutionRel(wsRoot),
+                });
                 break;
             }
             case 'setConstitutionPath': {
@@ -3271,6 +3370,13 @@ Please format the updated output document strictly as follows:
                 const paths = store.get<Record<string, string>>('switchboard.constitutionPaths', {}) || {};
                 paths[wsRoot] = rel;
                 await store.update('switchboard.constitutionPaths', paths);
+
+                // Load-bearing append to keep the active path in the candidate list
+                const list = this._getConstitutionPathList(wsRoot);
+                if (!list.includes(rel)) {
+                    list.push(rel);
+                    await this._setConstitutionPathList(wsRoot, list);
+                }
 
                 // Update the file watcher
                 this._setupConstitutionWatcher();

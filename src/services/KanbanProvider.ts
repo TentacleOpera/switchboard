@@ -3475,10 +3475,15 @@ This step is what moves the plan forward in the Switchboard pipeline.
         // persisted rotation cursor for this terminal set. A batch of N fans out
         // one-per-terminal (cursor..cursor+N-1); sequential single moves continue
         // the rotation instead of always restarting at terminal 0.
-        const picked = await this._nextPlannerTerminals(workspaceRoot, plans.length);
+        // NOTE: reuse the terminals/locationKey already fetched above (line ~3411)
+        // instead of re-calling getRoleTerminalSet — that helper runs
+        // _getAliveAutobanTerminalRegistry (a Promise.all over PID resolution with
+        // up to 1s timeout per terminal), so a second call would double the
+        // terminal-enumeration cost on every batch dispatch.
+        const cursor = tvp.getPlannerRotationCursor(locationKey);
         const buckets = new Map<string, string[]>();
         plans.forEach((card, i) => {
-            const term = picked ? picked[i] : terminals[i % terminals.length];
+            const term = terminals[(cursor + i) % terminals.length];
             if (!buckets.has(term)) buckets.set(term, []);
             buckets.get(term)!.push(this._cardId(card));
         });
@@ -3506,6 +3511,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 console.error(`[KanbanProvider] Distribute dispatch to '${terminalName}' failed:`, r.reason);
             }
         });
+
+        // Advance the rotation so the next move continues after the last plan's terminal.
+        await tvp.advancePlannerRotationCursor(locationKey, plans.length);
 
         const limitSuffix = limit && ordered.length > terminals.length
             ? ` (${ordered.length - terminals.length} plan(s) held — limit ON)`

@@ -170,3 +170,54 @@ The optimistic pre-move and `moveCards` echo ([3406-3428](../../src/services/Kan
 ---
 
 **Recommendation:** Complexity 5/10 → **Send to Coder.** The change is a single localized concurrency refactor with a verified-safe invariant, but the timing-sensitive terminal-send context and the need to set realistic speedup expectations warrant a coder (not intern) implementer.
+
+---
+
+## Reviewer Pass (2026-06-25)
+
+### Stage 1 — Grumpy Principal Engineer
+
+Oh, you wrote a *performance* plan and then shipped a redundant terminal-enumeration call on the hot path. **Brilliant.** Let me count the ways this implementation found to undermine its own thesis.
+
+**CRITICAL — none.** The core change is actually fine. Annoying.
+
+**MAJOR — `_distributePlannerDispatch` calls `getRoleTerminalSet` TWICE per batch dispatch.** [KanbanProvider.ts:3411] fetches `{ terminals, locationKey }` for the limit check and no-terminals fallback. Then the implementer factored the cursor read+advance into a shiny new `_nextPlannerTerminals` helper [3385-3397] and called it at [3478] — which calls `getRoleTerminalSet` *again* internally [3388]. Each `getRoleTerminalSet` runs `_getAliveAutobanTerminalRegistry` ([TaskViewerProvider.ts:6080]), which does a `Promise.all` over PID resolution for **every** active terminal with a **1000 ms timeout each** ([6096-6100]). So your "make dispatch faster" plan added a second full round of PID resolution to every batch dispatch. The irony is thick enough to spread on toast. This is the kind of thing that happens when you refactor for "clean code" without checking what the helper actually costs.
+
+**NIT — Cursor advance silently moved before the dispatch.** The plan explicitly says "The rotation-cursor advance also stays after the `allSettled` await." The implementation moved it *into* `_nextPlannerTerminals`, which is called *before* the `allSettled`. Functionally equivalent (the cursor value for this dispatch is read before bucketing either way; the advance only affects the *next* dispatch's start), but it deviates from the plan's stated ordering for no stated reason. Sloppy.
+
+**NIT — Dead fallback branch.** `picked ? picked[i] : terminals[i % terminals.length]` — the null branch is unreachable. `tvp` is null-checked at [3406], `terminals.length === 0` returns early at [3412], and `_nextPlannerTerminals` only returns null when `tvp` is null or terminals is empty. So `picked` is never null here. Dead code masquerading as defensive programming. Remove it.
+
+**Correct and matching plan (grudgingly acknowledged):** The `Promise.allSettled` parallelization itself is exactly right — failure isolation preserved via per-bucket rejection capture, optimistic pre-move and toast ordering unchanged, the optional documentation comment in `_attemptDirectTerminalPush` ([TaskViewerProvider.ts:15410-15415]) matches File 2. Fine.
+
+**Out-of-scope changes bundled into the same commit (not this plan's criteria, noted for hygiene):** `targetTerminalOverride` plumbing in the single-dispatch paths (moveSelected [5060-5064], moveAll [5109-5113]) and the `moveCardToColumn` refactor replacing direct `db.updateColumn` ([6053-6075], [6075-6090]) are not in this plan's Proposed Changes. They appear to belong to the related bounce-back plan (`feature_plan_20260624210141`). They are internally consistent and well-formed, but they should not have been silently merged into this plan's commit. Separate concerns, separate commits.
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Severity | Verdict |
+|:---|:---|:---|
+| Redundant `getRoleTerminalSet` call (double PID resolution per batch) | MAJOR | **Fix now** — inline the cursor read+advance using the already-fetched `terminals`/`locationKey`; eliminates the second enumeration call. |
+| Cursor advance moved before dispatch (deviates from plan ordering) | NIT | **Fix now** (rides along with the MAJOR fix) — restore advance after `allSettled` await, matching the plan. |
+| Dead fallback branch `picked ? ... : terminals[...]` | NIT | **Fix now** (rides along) — removed by inlining. |
+| Out-of-scope `targetTerminalOverride` / `moveCardToColumn` changes in commit | NIT | **Defer** — not this plan's criteria; note for commit hygiene. The changes are consistent and correct. |
+
+**Keep:** The `Promise.allSettled` core change, the rejection-capture logging, the optimistic pre-move, the toast ordering, the `_attemptDirectTerminalPush` documentation comment. All correct.
+
+**Fix applied:** Replaced the `_nextPlannerTerminals(workspaceRoot, plans.length)` call in `_distributePlannerDispatch` with inlined cursor logic (`tvp.getPlannerRotationCursor(locationKey)` + `terminals[(cursor + i) % terminals.length]`), and moved `tvp.advancePlannerRotationCursor(locationKey, plans.length)` back to after the `allSettled` await. This removes the redundant `getRoleTerminalSet` call, restores the plan's stated cursor-advance ordering, and eliminates the dead fallback branch. `_nextPlannerTerminals` is retained — it is still used by the two single-dispatch paths ([5070], [5113]).
+
+### Files Changed (Reviewer Pass)
+
+- **`src/services/KanbanProvider.ts`** — `_distributePlannerDispatch` (~3474-3516): inlined cursor read+advance, removed redundant `getRoleTerminalSet` call, restored cursor advance after `allSettled`, removed dead fallback branch.
+
+### Validation Results
+
+- **Compilation:** Skipped per session directives (`SKIP COMPILATION`).
+- **Automated tests:** Skipped per session directives (`SKIP TESTS`). The existing `src/test/review-comment-transport-regression.test.js` covers `sendRobustText` import shape and is unaffected by the KanbanProvider dispatch-loop change.
+- **TypeScript sanity (manual):** `tvp.getPlannerRotationCursor(locationKey)` and `tvp.advancePlannerRotationCursor(locationKey, plans.length)` are the same calls the original (pre-implementation) code made; `terminals` and `locationKey` are in scope from [3411]; `cursor` is numeric. No new types introduced. The `_nextPlannerTerminals` helper is retained and still referenced at [5070] and [5113] — not orphaned.
+- **Behavioral verification (Steps 1–6 in Verification Plan):** Not run this session (requires a live VS Code instance with planner terminals). The fix is structurally equivalent to the plan's proposed change plus the redundant-call elimination; the expected ~2.5–3× speedup bound (clipboard-mutex-limited) is unchanged.
+
+### Remaining Risks
+
+1. **Untested behavioral timing** — the ~8–10 s expectation for 4 terminals (Steps 1–2) is unverified this session; user must run it against an installed VSIX.
+2. **Clipboard-integrity under concurrency (Step 6)** — unverified this session; the `_clipboardLock` save/restore in `pasteTextViaClipboard` is trusted to hold, but concurrent dispatch stress has not been exercised.
+3. **Commit hygiene** — the `targetTerminalOverride` single-dispatch plumbing and `moveCardToColumn` refactor are bundled in the same commit but belong to the related bounce-back plan. Recommend the user separate them at commit time if still possible, or note the bundling in the bounce-back plan's review.
+4. **`_nextPlannerTerminals` double-call in single-dispatch paths** — the two single-dispatch callers ([5070], [5113]) each call `_nextPlannerTerminals` which calls `getRoleTerminalSet`. These paths were not part of this plan and were not modified by the reviewer, but they carry the same redundant-enumeration cost if `getRoleTerminalSet` was already called earlier in their flow. Out of scope for this fix; noted for a future pass.
