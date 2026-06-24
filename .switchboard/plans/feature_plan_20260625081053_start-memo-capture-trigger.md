@@ -228,3 +228,80 @@ No automated tests are applicable. This plan touches only documentation, skill m
 ---
 
 **Recommendation:** Complexity is 4/10 → **Send to Coder**.
+
+## Reviewer Pass (2026-06-25)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*Alright, let me see what passes for "done" around here.*
+
+**Source-of-truth routing.** I'll give credit where it's due — the edits landed in `.agents/workflows/memo.md` and `AGENTS.md`, NOT in the generated `.claude/skills/memo/SKILL.md` or `CLAUDE.md` by hand. The one failure mode that killed every prior attempt at this directive, and you actually dodged it. The generated layer was regenerated and matches the source byte-for-byte (verified via `diff`). Fine. You get one gold star. Don't let it go to your head.
+
+**The frontmatter description.** `.agents/workflows/memo.md:2` — the load-bearing edit. The description now leads with "Enter by saying \"start memo capture\"" which is exactly the semantic prominence the research said was needed. The generated `SKILL.md:3` has it YAML-escaped via `JSON.stringify()` (double-quoted, inner quotes escaped). I checked `escapeYamlValue` at `ClaudeCodeMirrorService.ts:199-205` — it detects `"` and `:` and wraps correctly. The escaping is right. Moving on.
+
+**Process step #1.** `.agents/workflows/memo.md:41` — "On `/memo` — or when the user asks to **start memo capture** (that phrase or a close variant, as a request to begin)". Good. The "close variant" hedge is deliberate and matches the plan's design decision. The model-invoked nature is documented, not pretending to be a regex.
+
+**"Entering Capture Mode" section.** Inserted at `.agents/workflows/memo.md:7-13`, right after the title and before the intro paragraph. Both entry paths documented, exit semantics restated. Clean insertion, no surrounding content displaced.
+
+**AGENTS.md — all four surfaces.**
+- Registry row (line 22): trigger words column now reads `/memo`, "start memo capture". Description updated. ✅
+- Pre-flight rule (line 30): the "do not auto-trigger on generic language" clause now has the exception "or uses a recognized natural-language trigger listed in the table above (e.g. \"start memo capture\")". This is the reconciliation the plan demanded — without it, the pre-flight rule and the new description would contradict each other. ✅
+- Skills table (line 92): "User invokes `/memo` or says \"start memo capture\"". ✅
+- Priority rule (line 101): "Capture mode is entered by `/memo` or the natural-language request \"start memo capture\"". ✅
+
+**CLAUDE.md managed block.** Matches AGENTS.md content exactly (verified via `diff` — the only delta is the outer `claude-protocol:end` wrapper, which is expected). The Claude preamble is prepended correctly. ✅
+
+**Tip text.** `src/webview/implementation.html:1592` — "Tip: you can also use 'start memo capture' in an agent chat." Exact wording from the plan. The `<p>` element and inline styles are untouched. ✅
+
+**No stale `/memo`-only language.** I searched every source surface. The only remaining "use the /memo skill to start" string is in THIS plan file (the "Before" examples). `setup.html:559` mentions `/memo` as a slash command example — that's describing what Claude Code generates, not the only entry path, so it's fine. `ClaudeCodeMirrorService.ts:133` lists `/memo` in the Claude preamble as a slash command example — also fine. No source surface presents `/memo` as the *only* way in. ✅
+
+**Now the nits.** And I do mean nits, because you actually did the work right.
+
+**NIT-1:** `.agents/workflows/memo.md:20` — Hard Rule #3 says "on `/memo` entry" when describing when reading `.switchboard/memo.md` is permitted. Entry can now also happen via "start memo capture", so this is technically stale. But Hard Rule #3 is about *read permissions*, not entry triggers, and Process step #1 (line 41) is the authoritative entry procedure. Behavior is unaffected. The plan didn't scope this edit. Leave it or fix it — it's cosmetic.
+
+**NIT-2:** The regeneration propagated AGENTS.md's pre-existing duplicate `<!-- switchboard:agents-protocol:start/end -->` markers into CLAUDE.md (lines 33-34 and 156-157). Before this change, CLAUDE.md had single markers; after, it has duplicates. The plan explicitly documented this as a pre-existing condition in AGENTS.md and said `ensureProtocolFile` handles it by collapsing first-start to last-end. Functionally harmless — the collapse logic treats everything between the first `start` and the last `end` as the managed block, so the content is correct. It's just cosmetically messier than before. Self-healing on the next scaffold pass.
+
+**Verdict:** No CRITICAL findings. No MAJOR findings. Two NITs, both cosmetic, neither affecting behavior. The implementation matches the plan specification exactly across all five files. Ship it.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep (no changes needed):**
+- All source-of-truth edits (`.agents/workflows/memo.md` frontmatter, Process step, Entering Capture Mode section) — correct and complete.
+- All `AGENTS.md` surfaces (registry, pre-flight rule, skills table, priority rule) — correctly reconciled.
+- Generated layer (`.claude/skills/memo/SKILL.md`, `CLAUDE.md` managed block) — faithfully regenerated, YAML escaping correct.
+- Tip text in `src/webview/implementation.html` — exact user wording, no markup breakage.
+
+**Fix now:** None. No CRITICAL or MAJOR findings to fix.
+
+**Defer (optional, cosmetic):**
+- NIT-1: Hard Rule #3 "on `/memo` entry" → could generalize to "on entry" in a future pass. Not scoped by this plan; behavior unaffected.
+- NIT-2: Duplicate markers in CLAUDE.md — self-healing on next scaffold pass via `ensureProtocolFile` collapse logic. No action needed.
+
+### Code Fixes Applied
+
+None. No valid CRITICAL or MAJOR findings to fix.
+
+### Validation Results
+
+- **Source-to-generated body diff:** `diff <(tail -n +5 .agents/workflows/memo.md) <(tail -n +6 .claude/skills/memo/SKILL.md)` → exit code 0 (identical). ✅
+- **AGENTS.md-to-CLAUDE.md managed block diff:** `diff <(tail -n +1 AGENTS.md) <(sed -n '33,158p' CLAUDE.md)` → only delta is the outer `claude-protocol:end` wrapper (expected). ✅
+- **YAML escaping:** Generated `description` is double-quoted with inner `\"` escaping, matching `escapeYamlValue`'s `JSON.stringify()` behavior for values containing `"` and `:`. ✅
+- **No stale `/memo`-only language:** `grep` across `src/` and `.agents/` confirms no source surface presents `/memo` as the sole entry path. ✅
+- **Tip text:** `src/webview/implementation.html:1592` matches the plan's exact proposed wording. ✅
+- **Compilation/tests:** Skipped per review instructions (pre-compiled state; tests run separately by user).
+
+### Files Changed (by implementation, commit 7ac4b01)
+
+| File | Role | Change |
+|------|------|--------|
+| `.agents/workflows/memo.md` | Source of truth | Frontmatter description, Process step #1, new "Entering Capture Mode" section |
+| `AGENTS.md` | Shipped source | Registry row, pre-flight rule, skills table, priority rule |
+| `src/webview/implementation.html` | UI tip | Line 1592 tip text |
+| `.claude/skills/memo/SKILL.md` | Generated (regenerated) | Mirrors `.agents/workflows/memo.md` |
+| `CLAUDE.md` | Generated (regenerated) | Managed block mirrors `AGENTS.md` |
+
+### Remaining Risks
+
+1. **Behavioral non-determinism (inherent, documented).** "start memo capture" is a model-invocation trigger via semantic matching against the skill `description`, not a deterministic parse. Research confirms ~53% auto-invocation reliability in complex multi-file sessions due to context-window degradation; higher in short/fresh sessions. This is the best available mechanism for host-independent entry. No code-level fix possible.
+2. **NIT-1 (deferred):** Hard Rule #3's "on `/memo` entry" reference is technically stale but behaviorally harmless.
+3. **NIT-2 (self-healing):** Duplicate managed-block markers in CLAUDE.md will collapse on the next `ensureProtocolFile` scaffold pass.

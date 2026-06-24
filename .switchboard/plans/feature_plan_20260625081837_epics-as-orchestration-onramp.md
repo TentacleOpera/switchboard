@@ -21,6 +21,16 @@ There are two legitimate ways to action an epic, and the confusion comes from tr
 - **Removal of the kanban epic-manage modal**, with its still-needed capabilities (epic delete, add/remove subtask, config) relocated to the Epics tab so nothing is lost.
 - Migration of the legacy global keys into the orchestrator role config, killing the "per-epic UI saving global state" smell.
 
+### Epic execution modes (split mode is the primary workflow)
+
+The board and the Epics tab are independent surfaces that **compose**, giving three ways to run an epic — no mode toggle, no stage-gating, the user controls timing:
+
+- **Step mode** — drag the epic column-to-column; each column's agent batch-processes all subtasks (with the epic-mode subagent directive). Full manual control per stage.
+- **Orchestrate mode** — from the Epics tab, click **Orchestrate**; one orchestrator agent runs the whole epic end-to-end with native subagents. Good for a cold epic you want done in one shot.
+- **Split mode (the primary expected workflow)** — drag the epic to the **Planner** column so the planner improves *each* subtask plan using subagents, **then** click **Orchestrate** in the Epics tab to hand the improved epic to the orchestrator to implement. Plan with one agent, implement with another.
+
+Split mode needs **no new mechanism**: dragging an epic to the planner column already expands it to subtasks and prepends `EPIC_ORCHESTRATION_DIRECTIVE` (verified: `generateUnifiedPrompt` sets `epicMode` from `plans.some(p => p.isSubtask)`, role-agnostically — `KanbanProvider.ts:~2896`), and Epics-tab Orchestrate is Phase 2. The only design consequence is Decision #9 (orchestrator default prompt is implementation-oriented).
+
 ## Relationship to the drafted epic plans (dependencies, not overlaps)
 
 **Depends on (land after):**
@@ -43,7 +53,7 @@ This plan adds the orchestrate-it path + the orchestrator role + the modal remov
 
 ## Decisions (made, not deferred)
 
-1. **Orchestration lives ONLY in the Epics tab.** No orchestrator board column, no on-board orchestrate toggle. The board keeps the traveller + focus model untouched.
+1. **Orchestration lives ONLY in the Epics tab.** No orchestrator board column, no on-board orchestrate toggle. The board keeps the epic-as-traveller model; on-board focus mode is removed (Decision #8).
 2. **New `orchestrator` role, full role but with NO kanban column.** Register it across **all** role enumerations (below) so (a) its prompt edits "with everyone else" in the per-role modal, (b) the user can configure its **startup command and spawn its terminal in the same agent-setup area as every other agent** (this is why it must be a full role, not an Epics-tab-local config — confirmed), and (c) it is a dispatch-by-role target. But do **not** add it to `DEFAULT_KANBAN_COLUMNS`. No column references `role:'orchestrator'`, so no lane appears. This means the previously-"conditional" terminal touch-points are now **required**: the built-in agent grid (`extension.ts:2626-2633`) and the setup agents list must include orchestrator so its terminal is configurable/spawnable.
 3. **The orchestration prompt is GLOBAL** — it is the orchestrator role's prompt (base branch in `agentPromptBuilder.ts` + the per-role override from setup). The Epics tab only *triggers and previews* it for a chosen epic. This resolves the per-epic-vs-global smell.
 4. **Migrate the legacy global keys.** On first read, import `epic_prompt_template` → orchestrator role prompt override and `epic_max_subtasks` → an orchestrator config/addon; keep reading the legacy keys as fallback (shipped keys — never drop, per CLAUDE.md). `epic_lock_columns` is dormant (its default `IN PROGRESS,CODE REVIEW,REVIEWED,DONE` matches no real column id) — treat the stale default as unset; preserve any non-default user value.
@@ -52,6 +62,8 @@ This plan adds the orchestrate-it path + the orchestrator role + the modal remov
 7. **Per-CLI keyword injection is an optional later phase** (Phase 4), implemented as an orchestrator addon with a fail-safe map (unknown CLI → inject nothing), deriving the target CLI from the role's startup-command binary (`TaskViewerProvider.ts:6671`). The universal `EPIC_ORCHESTRATION_DIRECTIVE` stays agnostic.
 
 8. **Remove on-board epic focus mode; the Epics tab is the focus surface.** Subtasks are a **rigid unit** with their epic — they always share its column, cascade on every move, and **never render as individual board cards** (the `displayCards.filter(card => !card.epicId)` exclusion at `kanban.html:~5086` becomes unconditional). Rejecting subtask-stage-divergence removes the only thing focus mode did, so `enterEpicFocusMode`/`clearEpicFocusMode`/`currentFocusedEpicId` and the focus banner are removed from `kanban.html`. To inspect or manage an epic's subtasks, the user opens the **Epics tab** (reached via the Review button per dependency plan #1). This **amends drafted plans #2 (drop §3) and #3 (reject focus-first-class; keep worktree-to-tab)** — see "Amends" above.
+
+9. **Support three execution modes; split mode is primary.** Step / orchestrate / split (see "Epic execution modes"). No mode toggle and no stage-gating — modes emerge from composing the board (planning) with the Epics tab (orchestration); the user decides when to click Orchestrate. The **orchestrator role's default prompt is implementation-oriented** — it assumes the subtask plans may already have been improved (split mode) and implements them, refining a subtask plan only if it is clearly insufficient — while still working standalone on a cold epic. Users tune it via the role's prompt override "with everyone else."
 
 ## User Review Required
 
@@ -88,13 +100,13 @@ None — all forks decided. One product note: Decision #1 deliberately keeps the
 - `agentConfig.ts`: add `'orchestrator'` to `BuiltInAgentRole` (`:1`) and `orchestrator: 'Orchestrator'` to `BUILT_IN_AGENT_LABELS` (`:87-99`). **Do not** touch `DEFAULT_KANBAN_COLUMNS`.
 - `sharedDefaults.js`: add orchestrator to the webview `BUILT_IN_AGENT_LABELS` list, `DEFAULT_VISIBLE_AGENTS`, `DEFAULT_ROLE_CONFIG`, `ROLE_ADDONS` (include an `epicMaxSubtasks` and, later, per-CLI keyword addon).
 - `TaskViewerProvider.ts:3600-3615` and `PlanningPanelProvider.ts:7716-7721`: add `orchestrator` to visible-agent defaults.
-- `agentPromptBuilder.ts`: add an `if (role === 'orchestrator')` base-instruction branch in `buildKanbanBatchPrompt` (`:494-1193`) and add `orchestrator` to the unknown-role error list (`:1193`). The branch assembles orchestrator base + `EPIC_ORCHESTRATION_DIRECTIVE` + subtask list (+ optional CLI keyword in Phase 4).
+- `agentPromptBuilder.ts`: add an `if (role === 'orchestrator')` base-instruction branch in `buildKanbanBatchPrompt` (`:494-1193`) and add `orchestrator` to the unknown-role error list (`:1193`). The branch assembles orchestrator base + `EPIC_ORCHESTRATION_DIRECTIVE` + subtask list (+ optional CLI keyword in Phase 4). Per Decision #9 the **base is implementation-oriented** ("the subtask plans may already be improved — implement them with native subagents; refine a plan only if clearly insufficient").
 - `KanbanProvider.ts`: add `'orchestrator'` to the `_getDefaultPromptOverrides` roles array (`:2517`) and an `orchestratorConfig` in the role-config snapshot (`:2923-2935`).
 - **Migration:** on first orchestrator-config read, import legacy `epic_prompt_template` → orchestrator prompt override and `epic_max_subtasks` → orchestrator `epicMaxSubtasks`; keep reading legacy keys as fallback.
 
 ### Phase 2 — Epics-tab orchestration + relocate epic management (`project.html` / `project.js` / `PlanningPanelProvider.ts`)
 - Add an **"Orchestrate"** button per epic (and/or in the preview meta-bar). On click, request a backend-assembled orchestration prompt (`previewEpicPrompt`-style) and copy it; optional "Send to Orchestrator" → `dispatchCustomPromptToRole('orchestrator', …)`.
-- Add a **live preview** pane and a short "How epics work" explainer (step-on-the-board vs orchestrate-here).
+- Add a **live preview** pane and a short "How epics work" explainer documenting the three execution modes (step / orchestrate / **split**), featuring split mode: "drag the epic to the Planner column to improve every subtask plan, then click Orchestrate here to implement."
 - Add **epic delete** and **add-subtask** UI to the Epics tab (send existing `deleteEpic` / `addSubtaskToEpic`); `removeSubtaskFromEpic` already wired (`project.js:1377-1386`).
 - Backend: `PlanningPanelProvider` already handles `getEpicDetails`/`updateEpicConfig`/`addSubtaskToEpic`/`removeSubtaskFromEpic`/`deleteEpic`; add a `previewEpicPrompt` (or reuse `getEpicDetails`) that returns the assembled orchestrator prompt for the chosen epic via the same builder the dispatch uses.
 
@@ -120,11 +132,12 @@ This plan's only stake here is the **consequence**: with focus mode gone, the **
 1. **Role registration:** orchestrator appears in the per-role "Customize Default Prompts" modal; its prompt saves/loads; `buildKanbanBatchPrompt('orchestrator', …)` does not throw. Confirm **no** new kanban column appears and no phantom lane is synthesized.
 2. **Migration:** seed legacy `epic_prompt_template`/`epic_max_subtasks` → confirm they import into the orchestrator prompt/limit; legacy `epic_lock_columns` stale default treated as unset.
 3. **Epics-tab orchestrate:** open an epic, click Orchestrate → assembled prompt (orchestrator base + directive + subtasks, capped at max) is copied; optional send-to-terminal dispatches to the orchestrator. Preview matches the dispatched prompt exactly.
-4. **Capability parity after removal:** delete an epic from the Epics tab; add and remove subtasks from the Epics tab — all work. The board's EPIC strip button still converts/bulk-adds.
-5. **Board traveller intact, focus gone:** the epic still advances as a unit and cascades to all subtasks on **every** move; column dispatch still batch-processes subtasks; subtasks **never** appear as individual board cards; no focus banner/affordance exists; Review on an epic lands in the Epics tab (plan #1). Drag-drop and the main board render are not regressed by the focus-machinery deletion.
-6. **Modal gone:** no epic-manage modal opens from the board; no dead listeners or `kanbanEpicDetails` traffic.
-7. **Worktree salvage:** per-epic worktree creation works from the Worktrees tab; the epic card's chip is a read-only branch label; subtask dispatch still runs in the epic's worktree (routing by `epic_id` unchanged).
-8. **(Phase 4)** keyword injected only for a mapped CLI; absent/unknown CLI → directive only.
+4. **Split mode (primary workflow):** drag an epic to the Planner column → the planner receives all subtask plans with the subagent directive and improves each; the epic stays a single board card and advances as a unit (no per-subtask cards). Then click **Orchestrate** in the Epics tab → the orchestrator receives the now-improved subtask plans to implement. Confirm the two stages chain cleanly and the orchestrator prompt reflects the improved plan files.
+5. **Capability parity after removal:** delete an epic from the Epics tab; add and remove subtasks from the Epics tab — all work. The board's EPIC strip button still converts/bulk-adds.
+6. **Board traveller intact, focus gone:** the epic still advances as a unit and cascades to all subtasks on **every** move; column dispatch still batch-processes subtasks; subtasks **never** appear as individual board cards; no focus banner/affordance exists; Review on an epic lands in the Epics tab (plan #1). Drag-drop and the main board render are not regressed by the focus-machinery deletion.
+7. **Modal gone:** no epic-manage modal opens from the board; no dead listeners or `kanbanEpicDetails` traffic.
+8. **Worktree salvage:** per-epic worktree creation works from the Worktrees tab; the epic card's chip is a read-only branch label; subtask dispatch still runs in the epic's worktree (routing by `epic_id` unchanged).
+9. **(Phase 4)** keyword injected only for a mapped CLI; absent/unknown CLI → directive only.
 
 ## Uncertain Assumptions
 

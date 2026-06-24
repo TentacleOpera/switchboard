@@ -27,7 +27,7 @@ Routine. No schema changes — `updateColumnWithEpicCascade` and `getSubtasksByE
 
 ## Edge-Case & Dependency Audit
 
-- **Subtask carries its own column independent of the epic** — by design (subtasks can progress in focus mode). The fix does NOT force-sync columns; it only (i) excludes subtasks from loose-column ops and (ii) cascades the *container* moves (backlog/activate).
+- **Subtask rows still carry their own `kanban_column` in the DB** — a legacy of the schema, not a feature (with focus mode removed, subtasks never render as cards, so the stored column is never user-facing). The fix does NOT rely on that column for display; it (i) excludes subtasks from loose-column ops and (ii) cascades the *container*'s moves so each subtask's stored column stays in lockstep with its epic on **every** move.
 - **No focus-mode exception (model change).** On-board epic-focus mode is being removed (`kanban-epic-focus-worktree-decouple.md`), so the `!card.epicId` exclusion is now **unconditional** and correct — subtasks never appear as column cards, so there is no focus-mode Advance-All to preserve. The focus-aware column-button work this plan originally proposed (§3) is therefore dropped.
 - **Selection-based handlers must NOT exclude subtasks.** Explicit `msg.sessionIds` / `_cardMatchesIds` handlers (drag-drop move, `moveSelected`, `promptSelected`, chat copy, lead pair-programming) trust the IDs the user picked. Leave them untouched.
 - **Epic card itself is not a subtask** (`epicId` empty, `isEpic` true), so `!card.epicId` keeps epic cards in column ops; advancing a column containing an epic still cascades via `moveCardToColumn`.
@@ -74,7 +74,7 @@ This step originally added a focus-mode branch to the column-action handler so f
    - Send the epic to BACKLOG → confirm **all** subtasks follow it to BACKLOG (DB: `SELECT kanban_column FROM plans WHERE epic_id=?`).
    - Send the epic back to New → subtasks return to CREATED.
    - With the epic in BACKLOG and 2 loose standalone plans in CREATED, click **Advance All** on CREATED → only the 2 standalone plans dispatch; no subtasks.
-   - (Worktree users) Link a worktree, focus the epic, Advance All a column → that epic's subtasks advance.
+   - Advance an epic (with subtasks) forward a column → **all** its subtasks cascade with it (DB: `SELECT kanban_column FROM plans WHERE epic_id=?` all match the epic's new column); subtasks never appear as separate column cards.
 4. **DB cross-check** for the original repro (epic `3051b25c`): after backlog, no subtask of that epic should remain in CREATED/PLAN REVIEWED.
 
 ## Status
