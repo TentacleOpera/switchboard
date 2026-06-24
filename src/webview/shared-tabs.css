@@ -57,7 +57,7 @@
 }
 
 .cyber-theme-enabled .shared-tab-bar {
-  background: rgba(10, 10, 10, 0.65);
+  background: var(--panel-bg);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
 }

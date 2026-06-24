@@ -23,13 +23,17 @@ There are two legitimate ways to action an epic, and the confusion comes from tr
 
 ## Relationship to the drafted epic plans (dependencies, not overlaps)
 
-This plan **depends on** and must land after:
+**Depends on (land after):**
 
-- **`feature_plan_20260625120001_review-epic-opens-kanban-tab-not-epic-tab.md`** — routes the epic **Review** button to the **Epics tab**. This plan relies on that: the Epics tab is where orchestration lives, and Review is the navigation into it. (Do **not** re-spec this routing here.)
-- **`kanban-epic-subtask-column-leak-and-backlog-cascade.md`** — establishes epic = one unit on the board (cascade + subtasks hidden). The traveller/step-it path this plan preserves *is* that model. (§1 already implemented in the working tree.)
-- **`kanban-epic-focus-worktree-decouple.md`** — focus mode as the first-class way to drop into an epic's subtasks on the board. Orthogonal to orchestration; untouched here.
+- **`feature_plan_20260625120001_review-epic-opens-kanban-tab-not-epic-tab.md`** — routes the epic **Review** button to the **Epics tab**. This plan relies on that: the Epics tab is where orchestration *and* epic management live, and Review is the navigation into it. (Do **not** re-spec this routing here.)
+- **`kanban-epic-subtask-column-leak-and-backlog-cascade.md`** §1 + §2 — epic = one rigid unit on the board (subtasks excluded from loose-column ops; cascade on move). The traveller this plan preserves *is* that model. (§1 already implemented in the working tree.)
 
-This plan adds **only** the orchestrate-it path + the role + the modal removal. It does not change board dispatch, cascade, or focus behavior.
+**Amends (these drafted plans must change to match Decision #8 — confirm before either is executed):**
+
+- **`kanban-epic-subtask-column-leak-and-backlog-cascade.md`** §3 (focus-aware column buttons) → **dropped**: with focus mode removed there is no focused-subtask column path to support. §2's cascade should generalize so **every** epic move cascades to its subtasks (not only backlog/activate).
+- **`kanban-epic-focus-worktree-decouple.md`** → **headline goal rejected**: do *not* make focus mode first-class; **remove** on-board focus mode instead. Salvage only its worktree half — move per-epic worktree creation into the Worktrees tab and demote the epic card's worktree chip to a read-only branch label. The plan effectively becomes "worktree cleanup."
+
+This plan adds the orchestrate-it path + the orchestrator role + the modal removal, **and** the focus-mode removal (Decision #8). It does not change cascade semantics beyond generalizing them, and does not touch dispatch routing (which is by `epic_id`, independent of focus).
 
 ## Metadata
 
@@ -40,12 +44,14 @@ This plan adds **only** the orchestrate-it path + the role + the modal removal. 
 ## Decisions (made, not deferred)
 
 1. **Orchestration lives ONLY in the Epics tab.** No orchestrator board column, no on-board orchestrate toggle. The board keeps the traveller + focus model untouched.
-2. **New `orchestrator` role, with NO kanban column.** Register it across the role enumerations (below) so its prompt edits "with everyone else" and it is a dispatch-by-role target — but do **not** add it to `DEFAULT_KANBAN_COLUMNS`. No column references `role:'orchestrator'`, so no lane appears.
+2. **New `orchestrator` role, full role but with NO kanban column.** Register it across **all** role enumerations (below) so (a) its prompt edits "with everyone else" in the per-role modal, (b) the user can configure its **startup command and spawn its terminal in the same agent-setup area as every other agent** (this is why it must be a full role, not an Epics-tab-local config — confirmed), and (c) it is a dispatch-by-role target. But do **not** add it to `DEFAULT_KANBAN_COLUMNS`. No column references `role:'orchestrator'`, so no lane appears. This means the previously-"conditional" terminal touch-points are now **required**: the built-in agent grid (`extension.ts:2626-2633`) and the setup agents list must include orchestrator so its terminal is configurable/spawnable.
 3. **The orchestration prompt is GLOBAL** — it is the orchestrator role's prompt (base branch in `agentPromptBuilder.ts` + the per-role override from setup). The Epics tab only *triggers and previews* it for a chosen epic. This resolves the per-epic-vs-global smell.
 4. **Migrate the legacy global keys.** On first read, import `epic_prompt_template` → orchestrator role prompt override and `epic_max_subtasks` → an orchestrator config/addon; keep reading the legacy keys as fallback (shipped keys — never drop, per CLAUDE.md). `epic_lock_columns` is dormant (its default `IN PROGRESS,CODE REVIEW,REVIEWED,DONE` matches no real column id) — treat the stale default as unset; preserve any non-default user value.
 5. **Remove the kanban epic-manage modal entirely**, relocating its still-needed capabilities to the Epics tab FIRST (no capability regression): epic **delete** (Epics tab has none today), **add-subtask** (only bulk-add via the EPIC strip button survives on the board), and config (now the orchestrator role prompt + Epics-tab orchestration settings). Preserve shared messages used elsewhere.
 6. **Orchestrate action = copy prompt by default, optional send-to-terminal.** Baseline: assemble and copy to clipboard (works regardless of terminal state). Optional: dispatch to the orchestrator terminal via `dispatchCustomPromptToRole('orchestrator', …)`.
 7. **Per-CLI keyword injection is an optional later phase** (Phase 4), implemented as an orchestrator addon with a fail-safe map (unknown CLI → inject nothing), deriving the target CLI from the role's startup-command binary (`TaskViewerProvider.ts:6671`). The universal `EPIC_ORCHESTRATION_DIRECTIVE` stays agnostic.
+
+8. **Remove on-board epic focus mode; the Epics tab is the focus surface.** Subtasks are a **rigid unit** with their epic — they always share its column, cascade on every move, and **never render as individual board cards** (the `displayCards.filter(card => !card.epicId)` exclusion at `kanban.html:~5086` becomes unconditional). Rejecting subtask-stage-divergence removes the only thing focus mode did, so `enterEpicFocusMode`/`clearEpicFocusMode`/`currentFocusedEpicId` and the focus banner are removed from `kanban.html`. To inspect or manage an epic's subtasks, the user opens the **Epics tab** (reached via the Review button per dependency plan #1). This **amends drafted plans #2 (drop §3) and #3 (reject focus-first-class; keep worktree-to-tab)** — see "Amends" above.
 
 ## User Review Required
 
@@ -59,7 +65,8 @@ None — all forks decided. One product note: Decision #1 deliberately keeps the
 - Adding the orchestrator role to the dynamic per-role prompt UI — free once it is in `BUILT_IN_AGENT_LABELS` (`setup.html:1643` filters that list).
 
 ### Complex / Risky
-- **New role across many enumerations.** A role must be added in lockstep to: `BuiltInAgentRole` (`agentConfig.ts:1`), `BUILT_IN_AGENT_LABELS` (`agentConfig.ts:87-99` **and** the webview copy in `sharedDefaults.js`), `DEFAULT_VISIBLE_AGENTS` (`sharedDefaults.js:2-18`), `DEFAULT_ROLE_CONFIG` + `ROLE_ADDONS` (`sharedDefaults.js`), `getVisibleAgents` defaults (`TaskViewerProvider.ts:3600-3615`), `PlanningPanelProvider` visible-agent defaults (`:7716-7721`), the `buildKanbanBatchPrompt` role branch + the "unknown role" error list (`agentPromptBuilder.ts:494-1193`), `_getDefaultPromptOverrides` roles array (`KanbanProvider.ts:2517`), and the role-config snapshot (`KanbanProvider.ts:2923-2935`). **Miss one and the role silently misbehaves.** Note: `columnToPromptRole` (`agentPromptBuilder.ts:1200-1218`) needs NO entry since there is no orchestrator column.
+- **New role across many enumerations.** A role must be added in lockstep to: `BuiltInAgentRole` (`agentConfig.ts:1`), `BUILT_IN_AGENT_LABELS` (`agentConfig.ts:87-99` **and** the webview copy in `sharedDefaults.js`), `DEFAULT_VISIBLE_AGENTS` (`sharedDefaults.js:2-18`), `DEFAULT_ROLE_CONFIG` + `ROLE_ADDONS` (`sharedDefaults.js`), `getVisibleAgents` defaults (`TaskViewerProvider.ts:3600-3615`), `PlanningPanelProvider` visible-agent defaults (`:7716-7721`), the `buildKanbanBatchPrompt` role branch + the "unknown role" error list (`agentPromptBuilder.ts:494-1193`), `_getDefaultPromptOverrides` roles array (`KanbanProvider.ts:2517`), and the role-config snapshot (`KanbanProvider.ts:2923-2935`). **Required for terminal setup (Decision #2):** the built-in agent grid `allBuiltInAgents` (`extension.ts:2626-2633`), `validRoles` (`extension.ts:347`), `rolePriority` (`extension.ts:2497`), and the setup.html agents/terminal list so its startup command is configurable and its terminal spawnable. **Miss one and the role silently misbehaves.** Note: `columnToPromptRole` (`agentPromptBuilder.ts:1200-1218`) needs NO entry since there is no orchestrator column.
+- **Removing focus mode is a deletion across a hot webview.** `enterEpicFocusMode`/`clearEpicFocusMode`/`currentFocusedEpicId`/`renderFocusBanner` and every reference (`kanban.html:3738,4992-5021,5077-5087,6152-6184,9301-9307`) must be removed cleanly, and the subtask-hiding filter made unconditional. Regression surface: the main board render and drag-drop. Must not strand the worktree-chip rendering that plan #3's salvaged half still needs.
 - **Orchestrator base prompt branch.** `buildKanbanBatchPrompt` throws on unknown roles — the orchestrator needs a real base-instruction branch (assemble: orchestrator base + `EPIC_ORCHESTRATION_DIRECTIVE` + subtask list + optional CLI keyword).
 - **Migrating shipped config keys.** `epic_prompt_template` / `epic_max_subtasks` exist on released installs (written by both `KanbanProvider.updateEpicConfig` and `PlanningPanelProvider`). Import-then-supersede; never drop.
 - **Modal removal without capability loss.** The board modal is the ONLY current UI for epic delete and dropdown add-subtask; those must exist in the Epics tab before/as the modal is removed.
@@ -96,6 +103,12 @@ None — all forks decided. One product note: Decision #1 deliberately keeps the
 - Remove the modal-open path on the EPIC strip button (`:9335-9340`) while **keeping** its convert-to-epic / bulk-add-subtask path (`:9341-9356`).
 - Remove the `kanbanEpicDetails` message (sender `KanbanProvider.ts:7466-7469` `source:'kanban'` branch; receiver `kanban.html:6600-6601`). Keep `getEpicDetails`/`updateEpicConfig`/`addSubtaskToEpic`/`removeSubtaskFromEpic`/`deleteEpic` handlers (shared / relocated).
 
+### Phase 3b — Remove on-board focus mode; make subtasks a rigid unit (`kanban.html`; amends drafted plans #2/#3)
+- Make the subtask exclusion unconditional: `displayCards.filter(card => !card.epicId)` (`kanban.html:~5086`) always applied — drop the `currentFocusedEpicId` branch (`:5077-5087`).
+- Delete focus machinery: `currentFocusedEpicId` (`:3738`), `enterEpicFocusMode`/`clearEpicFocusMode` (`:4992-5021`), `renderFocusBanner`, the badge/chip focus triggers (`:9301-9307`), and focus-conditional render branches (`:6152-6184`).
+- Generalize cascade: ensure **every** epic move cascades to subtasks (`moveCardToColumn` already does via `updateColumnWithEpicCascade`; confirm all board move paths route through it). Drop plan #2 §3 (focus-aware column buttons) as moot.
+- Salvage plan #3's worktree half: per-epic worktree creation → Worktrees tab; epic card's worktree chip → read-only branch label. (Dispatch routing by `epic_id` unchanged.)
+
 ### Phase 4 (optional) — Per-CLI orchestration keyword
 - Add `targetCli`/`epicCliKeyword` to `PromptBuilderOptions`; in the orchestrator branch, append a delimited keyword line only when a keyword is mapped. In the dispatch path, derive the CLI binary from `getStartupCommands(workspaceRoot)['orchestrator']` first token; look up an `epic_cli_keywords` config map; unknown → inject nothing.
 
@@ -107,9 +120,10 @@ None — all forks decided. One product note: Decision #1 deliberately keeps the
 2. **Migration:** seed legacy `epic_prompt_template`/`epic_max_subtasks` → confirm they import into the orchestrator prompt/limit; legacy `epic_lock_columns` stale default treated as unset.
 3. **Epics-tab orchestrate:** open an epic, click Orchestrate → assembled prompt (orchestrator base + directive + subtasks, capped at max) is copied; optional send-to-terminal dispatches to the orchestrator. Preview matches the dispatched prompt exactly.
 4. **Capability parity after removal:** delete an epic from the Epics tab; add and remove subtasks from the Epics tab — all work. The board's EPIC strip button still converts/bulk-adds.
-5. **Board untouched:** the traveller still advances an epic as a unit with cascade; focus mode still works; column dispatch still batch-processes subtasks. Review on an epic still lands in the Epics tab (plan #1).
+5. **Board traveller intact, focus gone:** the epic still advances as a unit and cascades to all subtasks on **every** move; column dispatch still batch-processes subtasks; subtasks **never** appear as individual board cards; no focus banner/affordance exists; Review on an epic lands in the Epics tab (plan #1). Drag-drop and the main board render are not regressed by the focus-machinery deletion.
 6. **Modal gone:** no epic-manage modal opens from the board; no dead listeners or `kanbanEpicDetails` traffic.
-7. **(Phase 4)** keyword injected only for a mapped CLI; absent/unknown CLI → directive only.
+7. **Worktree salvage:** per-epic worktree creation works from the Worktrees tab; the epic card's chip is a read-only branch label; subtask dispatch still runs in the epic's worktree (routing by `epic_id` unchanged).
+8. **(Phase 4)** keyword injected only for a mapped CLI; absent/unknown CLI → directive only.
 
 ## Uncertain Assumptions
 
