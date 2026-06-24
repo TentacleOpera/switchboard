@@ -162,3 +162,57 @@ Add a hover style for the clickable subtask link so users discover it's interact
    - **Edit-mode guard:** Enter edit mode on the epic, then click a subtask → confirm edit mode exits and the subtask preview loads (no stale editor content).
    - **No planFile:** If a subtask with an empty `planFile` exists, clicking it shows a toast error instead of a blank preview.
 3. **Regression:** Confirm the Kanban tab preview still works (it uses a separate `_kanbanSelectedPlan` check, untouched).
+
+---
+
+## Review Pass — 2026-06-24
+
+### Stage 1: Grumpy Adversarial Findings
+
+| # | Severity | Finding | Location |
+|:--|:---------|:--------|:---------|
+| 1 | NIT | Redundant Edit-button display toggle: `exitEditMode('epics')` re-shows Edit button (line 1680), then subtask click handler immediately hides it (line 1348). Two DOM writes for one visual outcome. | `project.js:1338` + `project.js:1348` |
+| 2 | NIT | `kanbanPlanPreviewReady` handler sets `disabled = false` on the Edit button even when a subtask is being previewed (button is `display:none` so unreachable, but semantically sloppy). | `project.js:331` |
+| 3 | NIT | CSS hover rule `.epic-subtask-link:hover` placed after `.epic-remove-subtask-btn` (line 602) instead of directly after `.epic-subtask-item` (line 594) as the plan specified. No cascade/specificity impact. | `project.html:602` |
+
+### Stage 2: Balanced Synthesis
+
+- **No CRITICAL or MAJOR findings.** All three NITs are cosmetic with zero functional impact.
+- **All deferred** — fixing would add branching complexity for no user-visible benefit.
+- All six plan requirements (1a–1e + CSS) implemented correctly.
+- All seven edge cases from the plan handled correctly.
+
+### Code Fixes Applied
+
+**None.** No CRITICAL/MAJOR findings to fix.
+
+### Files Changed (Implementation)
+
+- `src/webview/project.js` — lines 167, 324, 1263, 1322–1350 (variable, handler, selectEpic, subtask click wiring)
+- `src/webview/project.html` — lines 602–605 (`.epic-subtask-link:hover` CSS)
+
+### Validation Results
+
+| Check | Result |
+|:------|:-------|
+| `node --check src/webview/project.js` | ✅ SYNTAX OK |
+| Compilation (`npm run compile`) | ⏭️ Skipped per review instructions |
+| Automated tests | ⏭️ Skipped per review instructions |
+| Plan req 1a: `_epicPreviewFilePath` variable | ✅ `project.js:167` |
+| Plan req 1b: Set in `selectEpic()` | ✅ `project.js:1263` |
+| Plan req 1c: `kanbanPlanPreviewReady` uses `_epicPreviewFilePath` | ✅ `project.js:324` |
+| Plan req 1d: Click handler + cursor styling | ✅ `project.js:1322–1350` |
+| Plan req 1e: Edit button re-shown on epic re-select | ✅ Via `renderEpicMetaBar` in `selectEpic` (`project.js:1265`) |
+| CSS hover style (File 2) | ✅ `project.html:602–605` |
+| Edge case: empty `planFile` guard | ✅ `project.js:1334–1337` |
+| Edge case: edit-mode guard | ✅ `project.js:1338` |
+| Edge case: `stopPropagation` | ✅ `project.js:1332` |
+| Edge case: Remove button independence | ✅ `project.js:1352–1360` |
+| Edge case: Edit button hidden during subtask preview | ✅ `project.js:1347–1348` |
+| Regression: Kanban tab handler untouched | ✅ `project.js:310` uses `_kanbanSelectedPlan.planFile` |
+
+### Remaining Risks
+
+1. **Manual testing not performed in this review** — the verification plan's manual test steps (clicking subtasks in a live VSIX) must be run by the user to confirm end-to-end behavior.
+2. **`state.editOriginalContent.epics` is set to subtask content during subtask preview** — harmless because the Edit button is hidden (can't enter edit mode), and clicking back to the epic overwrites it. Noted for awareness, not a defect.
+3. **No backend changes** — confirmed none needed; backend already passes `planFile` in subtask records.
