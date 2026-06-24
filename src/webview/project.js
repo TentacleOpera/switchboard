@@ -165,6 +165,20 @@
     let _systemSelectedFile = null;
     let _systemSelectedGovKey = 'claude';
 
+    // Workspace filter selections for the governance tabs ('' = All Workspaces).
+    // The sidebar lists docs; these dropdowns only narrow which workspaces' docs show.
+    let _constitutionWsFilter = '';
+    let _systemWsFilter = '';
+
+    function govExists(ws, key) {
+        if (ws.governance && Array.isArray(ws.governance)) {
+            const entry = ws.governance.find(g => g.key === key);
+            if (entry) return !!entry.exists;
+        }
+        if (key === 'constitution') return !!ws.hasConstitution;
+        return false;
+    }
+
     // Elements
     const kanbanWorkspaceFilter = document.getElementById('kanban-workspace-filter');
     const kanbanProjectFilter = document.getElementById('kanban-project-filter');
@@ -311,10 +325,11 @@
                     workspaceRoot: msg.workspaceRoot || ''
                 };
                 _pendingAutoEdit = msg.autoEdit === true;
-                // Point the filters at the target plan's workspace and clear the column/
-                // project filters so the plan is guaranteed to be in the rendered list.
-                kanbanFilters.workspaceRoot = msg.workspaceRoot || '';
-                if (kanbanWorkspaceFilter) kanbanWorkspaceFilter.value = msg.workspaceRoot || '';
+                // Clear all filters so the target plan is guaranteed to be in the rendered
+                // list regardless of workspace mapping (card.workspaceRoot is the actual
+                // child folder but plan.workspaceRoot in the cache is the mapped parent).
+                kanbanFilters.workspaceRoot = '';
+                if (kanbanWorkspaceFilter) kanbanWorkspaceFilter.value = '';
                 kanbanFilters.column = '';
                 if (kanbanColumnFilter) kanbanColumnFilter.value = '';
                 kanbanFilters.project = '';
@@ -386,13 +401,12 @@
                 break;
             case 'constitutionFilesLoaded':
                 _constitutionWorkspaces = msg.workspaces || [];
-                // Populate dropdowns (and auto-select first workspace) BEFORE rendering the
-                // sidebar lists, so the sidebar render sees the selected workspace and marks
-                // the correct card with `.selected`. Otherwise auto-selection sets the
-                // dropdown value but leaves the sidebar with no highlighted card.
-                populateConstitutionWorkspaceDropdowns();
-                renderConstitutionWorkspaceList();
-                renderSystemWorkspaceList();
+                // The dropdowns are pure workspace filters (default "All Workspaces"); the
+                // sidebar lists the actual docs. Populate the filters, then render the lists,
+                // which auto-select the first doc when nothing is selected yet.
+                populateGovernanceFilters();
+                renderConstitutionDocList();
+                renderSystemDocList();
                 break;
             case 'constitutionStatus':
                 if (_constitutionSelectedWorkspace && _constitutionSelectedWorkspace.workspaceRoot === msg.workspaceRoot) {
@@ -637,10 +651,10 @@
                     } else if (msg.tab === 'constitution') {
                         if (msg.governanceFile === 'claude' || msg.governanceFile === 'agents') {
                             exitEditMode('system');
-                            if (_systemSelectedWorkspace) selectSystemWorkspace(_systemSelectedWorkspace);
+                            if (_systemSelectedWorkspace) selectSystemDoc(_systemSelectedWorkspace, _systemSelectedGovKey);
                         } else {
                             exitEditMode('constitution');
-                            if (_constitutionSelectedWorkspace) selectConstitutionWorkspace(_constitutionSelectedWorkspace);
+                            if (_constitutionSelectedWorkspace) selectConstitutionDoc(_constitutionSelectedWorkspace);
                         }
                     } else if (msg.tab === 'epics') {
                         exitEditMode('epics');
@@ -1350,20 +1364,73 @@
     // =========================================================================
     // CONSTITUTION TAB
     // =========================================================================
-    function renderConstitutionWorkspaceList() {
-        if (!constitutionListPane) return;
-        constitutionListPane.innerHTML = '';
+    // The governance tabs (Constitution, System) follow the Kanban/Epics pattern:
+    // the workspace dropdown is a pure filter, and the sidebar lists the DOCS. Each
+    // sidebar row is one governance file — Constitution lists its single file per
+    // workspace; System lists CLAUDE.md and AGENTS.md per workspace.
 
-        // NEW: Create toggle button (present even when empty)
+    function buildSidebarToggleRow(collapsed) {
         const toggleRow = document.createElement('div');
         toggleRow.className = 'sidebar-toggle-row';
         const toggleBtn = document.createElement('button');
         toggleBtn.className = 'sidebar-toggle-btn';
         toggleBtn.title = 'Toggle sidebar';
-        toggleBtn.textContent = state.constitutionListCollapsed ? '»' : '«';
+        toggleBtn.textContent = collapsed ? '»' : '«';
         toggleBtn.addEventListener('click', toggleSidebarCollapsed);
         toggleRow.appendChild(toggleBtn);
-        constitutionListPane.appendChild(toggleRow);
+        return toggleRow;
+    }
+
+    // One doc row: doc name on top, workspace label + existence marker below.
+    function buildGovDocRow(className, title, ws, exists, selected, onClick) {
+        const itemDiv = document.createElement('div');
+        itemDiv.className = className;
+        itemDiv.dataset.ws = ws.workspaceRoot;
+        if (selected) itemDiv.classList.add('selected');
+        const marker = exists
+            ? '<span style="color: var(--accent-teal); font-weight: bold;">✓</span>'
+            : '<span style="color: var(--text-secondary); opacity: 0.5;">•</span>';
+        itemDiv.innerHTML = `
+            <div style="font-weight: 500;">${escapeHtml(title)}</div>
+            <div style="font-size: 11px; color: var(--text-secondary); margin-top: 4px;">${escapeHtml(ws.label)} &nbsp;${marker}</div>
+        `;
+        itemDiv.addEventListener('click', onClick);
+        return itemDiv;
+    }
+
+    function filteredGovWorkspaces(filter) {
+        return filter
+            ? _constitutionWorkspaces.filter(w => w.workspaceRoot === filter)
+            : _constitutionWorkspaces;
+    }
+
+    function populateGovernanceFilters() {
+        const fill = (sel, current) => {
+            if (!sel) return;
+            sel.innerHTML = '';
+            const allOpt = document.createElement('option');
+            allOpt.value = '';
+            allOpt.textContent = 'All Workspaces';
+            sel.appendChild(allOpt);
+            _constitutionWorkspaces.forEach(ws => {
+                const opt = document.createElement('option');
+                opt.value = ws.workspaceRoot;
+                opt.textContent = ws.label;
+                sel.appendChild(opt);
+            });
+            sel.value = current || '';
+        };
+        fill(constitutionWorkspaceFilter, _constitutionWsFilter);
+        fill(systemWorkspaceFilter, _systemWsFilter);
+    }
+
+    // =========================================================================
+    // CONSTITUTION TAB
+    // =========================================================================
+    function renderConstitutionDocList() {
+        if (!constitutionListPane) return;
+        constitutionListPane.innerHTML = '';
+        constitutionListPane.appendChild(buildSidebarToggleRow(state.constitutionListCollapsed));
 
         if (_constitutionWorkspaces.length === 0) {
             const emptyState = document.createElement('div');
@@ -1373,81 +1440,41 @@
             return;
         }
 
-        _constitutionWorkspaces.forEach(ws => {
-            const itemDiv = document.createElement('div');
-            itemDiv.className = 'constitution-file-item';
-            if (_constitutionSelectedWorkspace && _constitutionSelectedWorkspace.workspaceRoot === ws.workspaceRoot) {
-                itemDiv.classList.add('selected');
-            }
-
-            let statusHtml = '';
-            if (ws.governance && Array.isArray(ws.governance)) {
-                const badges = ws.governance.map(g => {
-                    const label = g.key === 'constitution' ? 'C' : (g.key === 'claude' ? 'Cl' : 'A');
-                    const color = g.exists ? 'var(--accent-teal)' : 'var(--text-secondary)';
-                    const opacity = g.exists ? '1' : '0.4';
-                    return `<span style="color: ${color}; opacity: ${opacity}; font-weight: bold; margin-right: 6px;">${label}</span>`;
-                }).join('');
-                statusHtml = `<div style="font-size: 11px; margin-top: 4px;">${badges}</div>`;
-            } else {
-                const status = ws.hasConstitution ? '✓ Has Constitution' : '• No Constitution';
-                statusHtml = `<div style="font-size: 11px; color: var(--text-secondary); margin-top: 4px;">${escapeHtml(status)}</div>`;
-            }
-            itemDiv.innerHTML = `
-                <div style="font-weight: 500;">${escapeHtml(ws.label)}</div>
-                ${statusHtml}
-            `;
-
-            itemDiv.addEventListener('click', () => {
-                if (state.dirtyFlags.constitution) exitEditMode('constitution');
-                document.querySelectorAll('.constitution-file-item').forEach(el => el.classList.remove('selected'));
-                itemDiv.classList.add('selected');
-                selectConstitutionWorkspace(ws);
-            });
-
-            constitutionListPane.appendChild(itemDiv);
+        const wss = filteredGovWorkspaces(_constitutionWsFilter);
+        wss.forEach(ws => {
+            const selected = _constitutionSelectedWorkspace
+                && _constitutionSelectedWorkspace.workspaceRoot === ws.workspaceRoot;
+            const row = buildGovDocRow('constitution-file-item', 'Constitution', ws,
+                govExists(ws, 'constitution'), selected, () => {
+                    if (state.dirtyFlags.constitution) exitEditMode('constitution');
+                    constitutionListPane.querySelectorAll('.constitution-file-item')
+                        .forEach(el => el.classList.remove('selected'));
+                    row.classList.add('selected');
+                    selectConstitutionDoc(ws);
+                });
+            constitutionListPane.appendChild(row);
         });
-    }
 
-    function populateConstitutionWorkspaceDropdowns() {
-        const fill = (sel, selectedWs) => {
-            if (!sel) return;
-            sel.innerHTML = '';
-            _constitutionWorkspaces.forEach(ws => {
-                const opt = document.createElement('option');
-                opt.value = ws.workspaceRoot;
-                opt.textContent = ws.label;
-                sel.appendChild(opt);
-            });
-            if (selectedWs) sel.value = selectedWs.workspaceRoot;
-        };
-        fill(constitutionWorkspaceFilter, _constitutionSelectedWorkspace);
-        fill(systemWorkspaceFilter, _systemSelectedWorkspace);
-        // Auto-select first workspace if none selected
-        if (!_constitutionSelectedWorkspace && _constitutionWorkspaces.length > 0) {
-            selectConstitutionWorkspace(_constitutionWorkspaces[0]);
-        }
-        if (!_systemSelectedWorkspace && _constitutionWorkspaces.length > 0) {
-            selectSystemWorkspace(_constitutionWorkspaces[0]);
+        // Auto-select the first visible doc when the current selection isn't shown.
+        const rows = constitutionListPane.querySelectorAll('.constitution-file-item');
+        const stillVisible = _constitutionSelectedWorkspace
+            && [...rows].some(r => r.dataset.ws === _constitutionSelectedWorkspace.workspaceRoot);
+        if (!stillVisible && rows.length > 0) {
+            rows[0].classList.add('selected');
+            selectConstitutionDoc(wss[0]);
         }
     }
 
     if (constitutionWorkspaceFilter) {
         constitutionWorkspaceFilter.addEventListener('change', () => {
-            const ws = _constitutionWorkspaces.find(w => w.workspaceRoot === constitutionWorkspaceFilter.value);
-            if (!ws) return;
             if (state.dirtyFlags.constitution) exitEditMode('constitution');
-            document.querySelectorAll('.constitution-file-item').forEach(el => el.classList.remove('selected'));
-            const idx = _constitutionWorkspaces.indexOf(ws);
-            const card = constitutionListPane?.querySelectorAll('.constitution-file-item')[idx];
-            if (card) card.classList.add('selected');
-            selectConstitutionWorkspace(ws);
+            _constitutionWsFilter = constitutionWorkspaceFilter.value;
+            renderConstitutionDocList();
         });
     }
 
-    function selectConstitutionWorkspace(ws) {
+    function selectConstitutionDoc(ws) {
         _constitutionSelectedWorkspace = ws;
-        if (constitutionWorkspaceFilter) constitutionWorkspaceFilter.value = ws.workspaceRoot;
         if (constitutionPreviewContent) constitutionPreviewContent.innerHTML = '<div class="empty-state">Loading...</div>';
         vscode.postMessage({
             type: 'readConstitutionFile',
@@ -1459,19 +1486,15 @@
     // =========================================================================
     // SYSTEM TAB
     // =========================================================================
-    function renderSystemWorkspaceList() {
+    const SYSTEM_DOCS = [
+        { key: 'claude', title: 'CLAUDE.md' },
+        { key: 'agents', title: 'AGENTS.md' }
+    ];
+
+    function renderSystemDocList() {
         if (!systemListPane) return;
         systemListPane.innerHTML = '';
-
-        const toggleRow = document.createElement('div');
-        toggleRow.className = 'sidebar-toggle-row';
-        const toggleBtn = document.createElement('button');
-        toggleBtn.className = 'sidebar-toggle-btn';
-        toggleBtn.title = 'Toggle sidebar';
-        toggleBtn.textContent = state.systemListCollapsed ? '»' : '«';
-        toggleBtn.addEventListener('click', toggleSidebarCollapsed);
-        toggleRow.appendChild(toggleBtn);
-        systemListPane.appendChild(toggleRow);
+        systemListPane.appendChild(buildSidebarToggleRow(state.systemListCollapsed));
 
         if (_constitutionWorkspaces.length === 0) {
             const emptyState = document.createElement('div');
@@ -1481,82 +1504,55 @@
             return;
         }
 
-        _constitutionWorkspaces.forEach(ws => {
-            const itemDiv = document.createElement('div');
-            itemDiv.className = 'system-file-item';
-            if (_systemSelectedWorkspace && _systemSelectedWorkspace.workspaceRoot === ws.workspaceRoot) {
-                itemDiv.classList.add('selected');
-            }
-
-            let statusHtml = '';
-            if (ws.governance && Array.isArray(ws.governance)) {
-                const badges = ws.governance
-                    .filter(g => g.key === 'claude' || g.key === 'agents')
-                    .map(g => {
-                        const label = g.key === 'claude' ? 'Cl' : 'A';
-                        const color = g.exists ? 'var(--accent-teal)' : 'var(--text-secondary)';
-                        const opacity = g.exists ? '1' : '0.4';
-                        return `<span style="color: ${color}; opacity: ${opacity}; font-weight: bold; margin-right: 6px;">${label}</span>`;
-                    }).join('');
-                statusHtml = `<div style="font-size: 11px; margin-top: 4px;">${badges}</div>`;
-            }
-            itemDiv.innerHTML = `
-                <div style="font-weight: 500;">${escapeHtml(ws.label)}</div>
-                ${statusHtml}
-            `;
-
-            itemDiv.addEventListener('click', () => {
-                if (state.dirtyFlags.system) exitEditMode('system');
-                document.querySelectorAll('.system-file-item').forEach(el => el.classList.remove('selected'));
-                itemDiv.classList.add('selected');
-                selectSystemWorkspace(ws);
+        const wss = filteredGovWorkspaces(_systemWsFilter);
+        wss.forEach(ws => {
+            SYSTEM_DOCS.forEach(doc => {
+                const selected = _systemSelectedWorkspace
+                    && _systemSelectedWorkspace.workspaceRoot === ws.workspaceRoot
+                    && _systemSelectedGovKey === doc.key;
+                const row = buildGovDocRow('system-file-item', doc.title, ws,
+                    govExists(ws, doc.key), selected, () => {
+                        if (state.dirtyFlags.system) exitEditMode('system');
+                        systemListPane.querySelectorAll('.system-file-item')
+                            .forEach(el => el.classList.remove('selected'));
+                        row.classList.add('selected');
+                        selectSystemDoc(ws, doc.key);
+                    });
+                row.dataset.gov = doc.key;
+                systemListPane.appendChild(row);
             });
-
-            systemListPane.appendChild(itemDiv);
         });
+
+        // Auto-select the first visible doc when the current selection isn't shown.
+        const rows = systemListPane.querySelectorAll('.system-file-item');
+        const stillVisible = _systemSelectedWorkspace && [...rows].some(r =>
+            r.dataset.ws === _systemSelectedWorkspace.workspaceRoot && r.dataset.gov === _systemSelectedGovKey);
+        if (!stillVisible && rows.length > 0) {
+            const first = rows[0];
+            first.classList.add('selected');
+            const firstWs = _constitutionWorkspaces.find(w => w.workspaceRoot === first.dataset.ws);
+            if (firstWs) selectSystemDoc(firstWs, first.dataset.gov);
+        }
     }
 
     if (systemWorkspaceFilter) {
         systemWorkspaceFilter.addEventListener('change', () => {
-            const ws = _constitutionWorkspaces.find(w => w.workspaceRoot === systemWorkspaceFilter.value);
-            if (!ws) return;
             if (state.dirtyFlags.system) exitEditMode('system');
-            document.querySelectorAll('.system-file-item').forEach(el => el.classList.remove('selected'));
-            const idx = _constitutionWorkspaces.indexOf(ws);
-            const card = systemListPane?.querySelectorAll('.system-file-item')[idx];
-            if (card) card.classList.add('selected');
-            selectSystemWorkspace(ws);
+            _systemWsFilter = systemWorkspaceFilter.value;
+            renderSystemDocList();
         });
     }
 
-    function selectSystemWorkspace(ws) {
+    function selectSystemDoc(ws, govKey) {
         _systemSelectedWorkspace = ws;
-        if (systemWorkspaceFilter) systemWorkspaceFilter.value = ws.workspaceRoot;
+        _systemSelectedGovKey = govKey;
         if (systemPreviewContent) systemPreviewContent.innerHTML = '<div class="empty-state">Loading...</div>';
         vscode.postMessage({
             type: 'readConstitutionFile',
             workspaceRoot: ws.workspaceRoot,
-            governanceFile: _systemSelectedGovKey
+            governanceFile: govKey
         });
     }
-
-    // Wire up governance tab buttons
-    document.querySelectorAll('.gov-file-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const key = btn.dataset.gov;
-            if (key === _systemSelectedGovKey) return;
-            if (state.dirtyFlags.system) {
-                exitEditMode('system');
-            }
-            document.querySelectorAll('#system-file-tabs .gov-file-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            _systemSelectedGovKey = key;
-
-            if (_systemSelectedWorkspace) {
-                selectSystemWorkspace(_systemSelectedWorkspace);
-            }
-        });
-    });
 
     if (btnBuildViaPlanner) {
         btnBuildViaPlanner.addEventListener('click', () => {

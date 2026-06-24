@@ -1,5 +1,17 @@
 import * as originalFs from 'fs';
 import { KanbanDatabase } from './KanbanDatabase';
+import { GlobalIntegrationConfigService, AgentGlobalKey } from './GlobalIntegrationConfigService';
+
+/**
+ * Agent-config state keys that are MACHINE-GLOBAL, not per-workspace. They live
+ * in ~/.switchboard (via GlobalIntegrationConfigService), shared across every
+ * workspace AND every IDE on the machine — an "agent" (the CLI you launch, its
+ * visibility, custom definitions) is the same regardless of which repo/editor
+ * opened it. Routing them here means EVERY state.json read/write path (the ~40
+ * legacy call sites and every updateState() batch) is covered at the choke
+ * point, instead of patching each handler individually.
+ */
+const AGENT_GLOBAL_FILE_KEYS = new Set<string>(['startupCommands', 'visibleAgents', 'customAgents']);
 
 /**
  * Bridge that redirects legacy `.switchboard/state.json` reads/writes to the
@@ -58,6 +70,14 @@ export function getWorkspaceRootFromStatePath(filePath: unknown): string | null 
 function synthesizeStateJson(db: KanbanDatabase): string {
     const state: Record<string, unknown> = {};
     for (const [stateKey, configKey] of Object.entries(STATE_KEY_TO_CONFIG)) {
+        if (AGENT_GLOBAL_FILE_KEYS.has(stateKey)) {
+            // Machine-global, cross-IDE: read from ~/.switchboard, not the per-workspace db.
+            const globalValue = GlobalIntegrationConfigService.getAgentConfigSync(stateKey as AgentGlobalKey);
+            if (globalValue !== undefined) {
+                state[stateKey] = globalValue;
+            }
+            continue;
+        }
         const value = db.getConfigJsonSync(configKey, CONTAINER_DEFAULTS[stateKey]);
         if (value !== undefined) {
             state[stateKey] = value;
@@ -69,9 +89,18 @@ function synthesizeStateJson(db: KanbanDatabase): string {
 async function writeStateToDb(db: KanbanDatabase, content: string): Promise<void> {
     const state = JSON.parse(content);
     for (const [stateKey, configKey] of Object.entries(STATE_KEY_TO_CONFIG)) {
-        if (state[stateKey] !== undefined) {
-            await db.setConfigJson(configKey, state[stateKey]);
+        if (state[stateKey] === undefined) continue;
+        if (AGENT_GLOBAL_FILE_KEYS.has(stateKey)) {
+            // Machine-global, cross-IDE: write to ~/.switchboard, not the per-workspace db.
+            // Only when changed, to avoid pointless rewrites (and cross-workspace clobber
+            // windows) when an unrelated state slice is what actually changed.
+            const current = GlobalIntegrationConfigService.getAgentConfigSync(stateKey as AgentGlobalKey);
+            if (JSON.stringify(current) !== JSON.stringify(state[stateKey])) {
+                await GlobalIntegrationConfigService.setAgentConfig(stateKey as AgentGlobalKey, state[stateKey]);
+            }
+            continue;
         }
+        await db.setConfigJson(configKey, state[stateKey]);
     }
 }
 

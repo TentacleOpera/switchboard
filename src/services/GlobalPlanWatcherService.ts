@@ -51,6 +51,21 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
         setTimeout(() => this._recentRenames.delete(normalized), 2000);
     }
 
+    /**
+     * Live resolver into the authoritative displayed-project source (KanbanProvider).
+     * Given the raw watched workspace root, returns the project currently shown on that
+     * board, or null. This is the source of truth at import time — the _currentProjects
+     * map below is only a fallback for when the provider is unavailable. Reading the live
+     * value avoids the sync gaps that left newly-created plans unassigned (restored filter
+     * bypassing setProjectFilter, map cleared on mappings change, import racing the first
+     * board refresh).
+     */
+    private _resolveDisplayedProject?: (watchedRoot: string) => string | null;
+
+    public setDisplayedProjectResolver(fn: (watchedRoot: string) => string | null): void {
+        this._resolveDisplayedProject = fn;
+    }
+
     public setCurrentProject(workspaceRoot: string, project: string | null): void {
         // Translate sentinel to empty string — the sentinel '__unassigned__' is a UI filter value
         // and must never be stored as a plan's project name.
@@ -507,7 +522,12 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 if (effectiveRoot !== workspaceRoot) {
                     this._outputChannel?.appendLine(`[GlobalPlanWatcher] _handlePlanFile: resolved ${workspaceRoot} → ${effectiveRoot} for project lookup`);
                 }
-                const project = metadata.project || this._currentProjects.get(effectiveRoot) || '';
+                // Prefer the live displayed project from the board provider (source of truth),
+                // then the in-memory mirror as fallback. Pass the RAW watched root so the
+                // provider applies its own effective-root resolution (incl. explicit
+                // control-plane root, which the bare mappings resolver above does not honor).
+                const liveProject = this._resolveDisplayedProject?.(workspaceRoot) || '';
+                const project = metadata.project || liveProject || this._currentProjects.get(effectiveRoot) || '';
                 // New plan - parse and insert (sessionId left empty; plan_file+workspace_id is the unique key)
                 //
                 // For epic files named `epic-<uuid>.md`, reuse the embedded UUID as the

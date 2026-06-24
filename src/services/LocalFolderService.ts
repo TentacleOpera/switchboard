@@ -241,6 +241,8 @@ export class LocalFolderService {
         parentId?: string;
         sourceFolder: string;
         title?: string;
+        createdMs?: number;
+        mtimeMs?: number;
     }>> {
         const folderPaths = this.getFolderPaths();
         if (folderPaths.length === 0) { return []; }
@@ -253,6 +255,8 @@ export class LocalFolderService {
             parentId?: string;
             sourceFolder: string;
             title?: string;
+            createdMs?: number;
+            mtimeMs?: number;
         }> = [];
 
         const seenAbsolutePaths = new Set<string>();
@@ -281,6 +285,8 @@ export class LocalFolderService {
             parentId?: string;
             sourceFolder: string;
             title?: string;
+            createdMs?: number;
+            mtimeMs?: number;
         }>,
         parentId: string | null,
         folderIndex: number,
@@ -324,13 +330,25 @@ export class LocalFolderService {
                     this._scanFolder(root, fullPath, results, relativePath, folderIndex, seenAbsolutePaths, depth + 1)
                 );
             } else if (entry.isFile() && this._isTextFile(entry.name)) {
+                // Capture creation time for descending-creation-date sorting in the docs tree.
+                // birthtime is reliable on macOS (APFS) / Windows; where it's unavailable (0 or
+                // older Linux filesystems) fall back to mtime so ordering is still sensible.
+                let createdMs = 0;
+                let mtimeMs = 0;
+                try {
+                    const st = await fs.promises.stat(fullPath);
+                    mtimeMs = st.mtimeMs;
+                    createdMs = (st.birthtimeMs && st.birthtimeMs > 0) ? st.birthtimeMs : st.mtimeMs;
+                } catch { /* stat failure is non-critical */ }
                 results.push({
                     id,
                     name: entry.name,
                     relativePath,
                     isFolder: false,
                     parentId: parentIdVal,
-                    sourceFolder: root
+                    sourceFolder: root,
+                    createdMs,
+                    mtimeMs
                 });
                 if (results.length <= LocalFolderService._TITLE_EXTRACTION_FILE_LIMIT) {
                     try {

@@ -20,6 +20,7 @@ import {
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
 import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions } from './agentPromptBuilder';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord } from './KanbanDatabase';
+import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { KanbanMigration } from './KanbanMigration';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
@@ -2659,6 +2660,12 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     private async _saveStartupCommands(workspaceRoot: string, msg: any): Promise<void> {
+        // Persist startup commands to the machine-global, cross-IDE store (the
+        // authoritative source read by getStartupCommands). Shared across every
+        // workspace AND every IDE on the machine.
+        if (msg.commands) {
+            await GlobalIntegrationConfigService.setAgentStartupCommands(msg.commands);
+        }
         if (this._taskViewerProvider) {
             await this._taskViewerProvider.updateState(async (state: any) => {
                 if (msg.commands) {
@@ -4226,6 +4233,25 @@ This step is what moves the plan forward in the Switchboard pipeline.
     }
     public getProjectFilter(): string | null {
         return this._projectFilter;
+    }
+
+    /**
+     * Returns the project currently shown on the board for the given watched workspace
+     * root, or null if the board isn't showing that workspace or is unfiltered/unassigned.
+     * This is the authoritative answer to "what project board is open" — read live by the
+     * plan watcher at import time so newly-created plans are stamped with the displayed
+     * project deterministically, instead of relying on the easily-stale _currentProjects
+     * mirror. Compares via resolveEffectiveWorkspaceRoot so a child repo, the parent, and
+     * an explicit control-plane root all match the same board.
+     */
+    public getDisplayedProjectForRoot(watchedRoot: string): string | null {
+        if (!this._currentWorkspaceRoot) return null;
+        if (this.resolveEffectiveWorkspaceRoot(watchedRoot) !== this.resolveEffectiveWorkspaceRoot(this._currentWorkspaceRoot)) {
+            return null;
+        }
+        const filter = this._projectFilter;
+        if (!filter || filter === KanbanDatabase.UNASSIGNED_PROJECT_FILTER) return null;
+        return filter;
     }
 
     public setProjectFilter(filter: string | null): void {

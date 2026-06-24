@@ -457,6 +457,13 @@
         const toggleRow = document.createElement('div');
         toggleRow.className = 'sidebar-toggle-row';
 
+        const foldersBtn = document.createElement('button');
+        foldersBtn.className = 'sidebar-folders-btn';
+        foldersBtn.title = 'Manage Folders';
+        foldersBtn.textContent = 'Manage Folders';
+        foldersBtn.addEventListener('click', () => openFoldersModal('design'));
+        toggleRow.appendChild(foldersBtn);
+
         const toggleBtn = document.createElement('button');
         toggleBtn.className = 'sidebar-toggle-btn';
         toggleBtn.title = 'Toggle sidebar';
@@ -519,6 +526,13 @@
 
         const toggleRow = document.createElement('div');
         toggleRow.className = 'sidebar-toggle-row';
+
+        const foldersBtn = document.createElement('button');
+        foldersBtn.className = 'sidebar-folders-btn';
+        foldersBtn.title = 'Manage Folders';
+        foldersBtn.textContent = 'Manage Folders';
+        foldersBtn.addEventListener('click', () => openFoldersModal('briefs'));
+        toggleRow.appendChild(foldersBtn);
 
         const toggleBtn = document.createElement('button');
         toggleBtn.className = 'sidebar-toggle-btn';
@@ -604,6 +618,13 @@
         const toggleRow = document.createElement('div');
         toggleRow.className = 'sidebar-toggle-row';
 
+        const foldersBtn = document.createElement('button');
+        foldersBtn.className = 'sidebar-folders-btn';
+        foldersBtn.title = 'Manage Folders';
+        foldersBtn.textContent = 'Manage Folders';
+        foldersBtn.addEventListener('click', () => openFoldersModal('html'));
+        toggleRow.appendChild(foldersBtn);
+
         const toggleBtn = document.createElement('button');
         toggleBtn.className = 'sidebar-toggle-btn';
         toggleBtn.title = 'Toggle sidebar';
@@ -669,6 +690,13 @@
 
         const toggleRow = document.createElement('div');
         toggleRow.className = 'sidebar-toggle-row';
+
+        const foldersBtn = document.createElement('button');
+        foldersBtn.className = 'sidebar-folders-btn';
+        foldersBtn.title = 'Manage Folders';
+        foldersBtn.textContent = 'Manage Folders';
+        foldersBtn.addEventListener('click', () => openFoldersModal('images'));
+        toggleRow.appendChild(foldersBtn);
 
         const toggleBtn = document.createElement('button');
         toggleBtn.className = 'sidebar-toggle-btn';
@@ -844,34 +872,8 @@
         state.previewRequestId++;
 
         if (sourceId === 'html-folder') {
-            const openBtn = document.getElementById('btn-open-browser-html');
-            const copyBtn = document.getElementById('btn-copy-link-html');
-            const isHtmlFile = /\.html?$/i.test(docName || docId || '');
-            if (openBtn) {
-                openBtn.disabled = !isHtmlFile;
-                openBtn.onclick = !isHtmlFile ? null : () => {
-                    vscode.postMessage({
-                        type: 'serveAndOpenHtml',
-                        docId,
-                        docName,
-                        absolutePath: wrapper ? wrapper.dataset.absolutePath : undefined,
-                        sourceFolder
-                    });
-                };
-            }
-            if (copyBtn) {
-                copyBtn.disabled = false;
-                copyBtn.onclick = () => {
-                    vscode.postMessage({
-                        type: 'linkToDocument',
-                        sourceId,
-                        docId,
-                        docName,
-                        sourceFolder
-                    });
-                };
-            }
-
+            // Copy Link / Open in Browser live on each file's sidebar card (Link / Open),
+            // not in the top bar — no top-bar buttons to wire here.
             const statusHtml = document.getElementById('status-html');
             if (statusHtml) statusHtml.textContent = 'Loading...';
 
@@ -893,20 +895,6 @@
                 sourceFolder
             });
         } else if (sourceId === 'images-folder') {
-            const copyBtn = document.getElementById('btn-copy-link-images');
-            if (copyBtn) {
-                copyBtn.disabled = false;
-                copyBtn.onclick = () => {
-                    vscode.postMessage({
-                        type: 'linkToDocument',
-                        sourceId: 'html-folder',
-                        docId,
-                        docName,
-                        sourceFolder
-                    });
-                };
-            }
-
             const statusImages = document.getElementById('status-images');
             if (statusImages) statusImages.textContent = 'Loading...';
 
@@ -1034,7 +1022,8 @@
             }
             const statusHtml = document.getElementById('status-html');
             if (statusHtml) {
-                statusHtml.textContent = isAutoRefreshed ? `${docName || 'Loaded'} — auto-refreshed` : (docName || 'Loaded');
+                // Filename is shown on the selected sidebar card — don't echo it here.
+                statusHtml.textContent = isAutoRefreshed ? 'Auto-refreshed' : '';
                 statusHtml.style.color = 'var(--accent-teal)';
             }
         } else if (sourceId === 'images-folder') {
@@ -1066,7 +1055,8 @@
             }
             const statusImages = document.getElementById('status-images');
             if (statusImages) {
-                statusImages.textContent = docName || 'Loaded';
+                // Filename is shown on the selected sidebar card — don't echo it here.
+                statusImages.textContent = '';
                 statusImages.style.color = 'var(--accent-teal)';
             }
         } else if (sourceId === 'design-folder') {
@@ -2793,10 +2783,10 @@
                         statusHtml.textContent = 'Script failed: ' + msg.failedScripts[msg.failedScripts.length - 1].split('/').pop();
                         statusHtml.style.color = '#ff6b6b';
                     } else if (msg.rootChildren !== undefined && msg.rootChildren > 0) {
-                        statusHtml.textContent = (state.activeDocName || 'Loaded') + ' — rendered (' + msg.rootChildren + ' elements)';
+                        statusHtml.textContent = 'Rendered (' + msg.rootChildren + ' elements)';
                         statusHtml.style.color = 'var(--accent-teal)';
                     } else if (msg.loadedScripts && msg.loadedScripts.length > 0) {
-                        statusHtml.textContent = (state.activeDocName || 'Loaded') + ' — ' + msg.loadedScripts.length + ' scripts loaded';
+                        statusHtml.textContent = msg.loadedScripts.length + ' scripts loaded';
                         statusHtml.style.color = 'var(--accent-teal)';
                     }
                 }
@@ -3462,10 +3452,8 @@
         }
     });
 
-    document.getElementById('btn-manage-folders-design')?.addEventListener('click', () => openFoldersModal('design'));
-    document.getElementById('btn-manage-folders-html')?.addEventListener('click', () => openFoldersModal('html'));
-    document.getElementById('btn-manage-folders-images')?.addEventListener('click', () => openFoldersModal('images'));
-    document.getElementById('btn-manage-folders-briefs')?.addEventListener('click', () => openFoldersModal('briefs'));
+    // Manage Folders buttons now live in each tab's sidebar toggle row (wired in the
+    // render* functions), matching planning.html — no top-bar buttons to bind here.
 
     document.getElementById('btn-close-folder-modal')?.addEventListener('click', () => {
         const modal = document.getElementById('folder-modal');

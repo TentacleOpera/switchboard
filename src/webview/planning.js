@@ -76,14 +76,29 @@
     }
 
     // NEW helper — single source of truth for the Docs tab workspace filter.
-    // Restored/persisted specific roots win only if still present; otherwise "All Workspaces" ('').
+    // Default is the first workspace, NOT "All Workspaces" (aggregate is a browse-only view).
+    // An explicit prior All-Workspaces choice ('') is still honored; only the *absence* of a
+    // selection defaults to a specific workspace. The backend omits unset keys entirely, so an
+    // empty string here means the user deliberately picked All Workspaces.
     function resolveDocsWorkspaceFilter(workspaceItems) {
-        const restored = _restoredPanelState.panel['docs.root'] || '';
-        const valid = restored === '' || (workspaceItems || []).some(item => item.workspaceRoot === restored);
-        state.docsWorkspaceRootFilter = valid ? restored : '';
+        const items = workspaceItems || [];
+        const panel = _restoredPanelState.panel || {};
+        const hasRestored = Object.prototype.hasOwnProperty.call(panel, 'docs.root') && panel['docs.root'] !== undefined;
+        const restored = hasRestored ? panel['docs.root'] : null;
+
+        let resolved;
+        if (restored === '') {
+            resolved = ''; // user explicitly chose All Workspaces previously
+        } else if (restored && items.some(item => item.workspaceRoot === restored)) {
+            resolved = restored; // restored specific root still present
+        } else {
+            resolved = items[0] ? items[0].workspaceRoot : ''; // default to first workspace
+        }
+
+        state.docsWorkspaceRootFilter = resolved;
         const dropdown = document.getElementById('docs-workspace-filter');
-        if (dropdown) dropdown.value = state.docsWorkspaceRootFilter;
-        return state.docsWorkspaceRootFilter;
+        if (dropdown) dropdown.value = resolved;
+        return resolved;
     }
 
     const _debounceTimers = {};
@@ -207,8 +222,8 @@
         
         const currentPaths = getCurrentFolderPaths(state.localFolderPathsByRoot, researchWorkspaceRoot);
         populateResearchFolderSelect(currentPaths);
-        
-        if (!state.localFolderPathsByRoot[researchWorkspaceRoot] || state.localFolderPathsByRoot[researchWorkspaceRoot].length === 0) {
+
+        if (currentPaths.length === 0) {
             vscode.postMessage({ type: 'listLocalFolders', workspaceRoot: researchWorkspaceRoot });
         }
     }
@@ -1051,9 +1066,6 @@
         if (!select) return;
         const current = selectedValue || '';
         select.innerHTML = '';
-        if (includeAllOption) {
-            select.innerHTML = '<option value="">All Workspaces</option>';
-        }
         for (const item of workspaceItems) {
             const option = document.createElement('option');
             option.value = item.workspaceRoot;
@@ -1062,6 +1074,16 @@
                 option.selected = true;
             }
             select.appendChild(option);
+        }
+        // "All Workspaces" is an aggregate browse view, not the default — list it last.
+        if (includeAllOption) {
+            const allOption = document.createElement('option');
+            allOption.value = '';
+            allOption.textContent = 'All Workspaces';
+            if (current === '') {
+                allOption.selected = true;
+            }
+            select.appendChild(allOption);
         }
     }
 
@@ -1859,15 +1881,55 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         });
     }
 
+    // Normalize a filesystem path for comparison. The backend keys folderPathsByRoot and
+    // tags nodes with RAW workspace roots, while the workspace dropdown value is a resolved
+    // (and sometimes mapping-parent) path — so exact-string compares miss. Strip trailing
+    // slashes so the two forms match.
+    function normalizeFsPath(p) {
+        return String(p || '').replace(/[\\/]+$/, '');
+    }
+
     function getCurrentFolderPaths(map, filter) {
-        // De-dupe: the same folder can be registered under multiple workspace roots
-        if (filter && map[filter]) {
-            return [...new Set(map[filter])];
-        }
+        // De-dupe: the same folder can be registered under multiple workspace roots.
+        // Match the filter against map keys by normalized path (raw-vs-resolved tolerant).
         if (filter) {
-            return [];
+            const normFilter = normalizeFsPath(filter);
+            const matched = Object.entries(map || {})
+                .filter(([root]) => normalizeFsPath(root) === normFilter)
+                .flatMap(([, paths]) => paths || []);
+            return [...new Set(matched)];
         }
         return [...new Set(Object.values(map || {}).flat())];
+    }
+
+    // Build folder entries for the Manage Folders modal, keeping each folder's owning
+    // workspace root(s) so Remove can target the correct config. Map keys are the raw
+    // backend workspace roots; the dropdown filter value may be a resolved/mapped path,
+    // so match by normalized path (trailing-slash tolerant) rather than exact string.
+    // Paths configured under multiple roots are deduped to one row carrying every owner.
+    function getFolderModalEntries(map, filter) {
+        const normFilter = normalizeFsPath(filter);
+        const byPath = new Map(); // normalizedPath -> { path, roots: Set }
+        for (const [root, paths] of Object.entries(map || {})) {
+            if (normFilter && normalizeFsPath(root) !== normFilter) continue;
+            for (const p of (paths || [])) {
+                const key = normalizeFsPath(p);
+                if (!key) continue;
+                if (!byPath.has(key)) byPath.set(key, { path: p, roots: new Set() });
+                byPath.get(key).roots.add(root);
+            }
+        }
+        return [...byPath.values()].map(e => ({ path: e.path, roots: [...e.roots] }));
+    }
+
+    // Human-readable label for a backend workspace root key (normalized match against
+    // the dropdown items). Falls back to the folder basename so stale/closed roots are
+    // still identifiable instead of appearing as phantom, unattributable folders.
+    function labelForWorkspaceRoot(root) {
+        const item = (_workspaceItems || []).find(w => normalizeFsPath(w.workspaceRoot) === normalizeFsPath(root));
+        if (item) return item.label;
+        const base = normalizeFsPath(root).split(/[\\/]/).filter(Boolean).pop();
+        return base ? base + ' (not open)' : root;
     }
 
     function renderFolderListModal() {
@@ -1875,49 +1937,78 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         if (!folderListModal) return;
         folderListModal.innerHTML = '';
 
-        let folderPaths = [];
-        if (folderModalScope === 'tickets') {
-            folderPaths = getCurrentFolderPaths(state.ticketsFolderPathsByRoot || {}, state.docsWorkspaceRootFilter);
-        } else if (folderModalScope === 'research') {
-            folderPaths = getCurrentFolderPaths(state.localFolderPathsByRoot, researchWorkspaceRoot);
-        } else {
-            folderPaths = getCurrentFolderPaths(state.localFolderPathsByRoot, state.docsWorkspaceRootFilter);
+        const isTickets = folderModalScope === 'tickets';
+        const map = isTickets ? (state.ticketsFolderPathsByRoot || {}) : (state.localFolderPathsByRoot || {});
+        const filter = folderModalScope === 'research' ? researchWorkspaceRoot : state.docsWorkspaceRootFilter;
+        const removeType = isTickets ? 'removeTicketsFolder' : 'removeLocalFolder';
+        const entries = getFolderModalEntries(map, filter);
+        // "All Workspaces" (no specific workspace selected) is a browse-only aggregate: a folder
+        // can't be unambiguously added/removed against a specific workspace's config here. Show
+        // attribution and gate management behind selecting a specific workspace.
+        const isAggregate = !filter;
+        const showWorkspaceLabel = isAggregate;
+
+        // Add Folder is meaningless without a target workspace — disable it in aggregate mode.
+        const addBtn = document.getElementById('btn-add-folder-modal');
+        if (addBtn) {
+            addBtn.disabled = isAggregate;
+            addBtn.title = isAggregate ? 'Select a specific workspace to add a folder' : '';
+            addBtn.style.opacity = isAggregate ? '0.5' : '';
         }
 
-        if (folderPaths.length === 0) {
+        if (isAggregate) {
+            const hint = document.createElement('div');
+            hint.className = 'folder-list-hint';
+            hint.style.cssText = 'padding: 8px 4px; font-size: 11px; color: var(--text-secondary); opacity: 0.85;';
+            hint.textContent = 'Viewing all workspaces. Select a specific workspace to add or remove folders.';
+            folderListModal.appendChild(hint);
+        }
+
+        if (entries.length === 0) {
             const empty = document.createElement('div');
             empty.className = 'folder-list-empty';
-            empty.textContent = 'No folders configured. Click Add Folder to get started.';
+            empty.textContent = isAggregate
+                ? 'No folders configured in any workspace.'
+                : 'No folders configured. Click Add Folder to get started.';
             folderListModal.appendChild(empty);
             return;
         }
 
-        folderPaths.forEach(path => {
+        entries.forEach(entry => {
             const row = document.createElement('div');
             row.className = 'folder-list-item';
 
             const pathSpan = document.createElement('span');
             pathSpan.className = 'folder-path';
-            pathSpan.textContent = path;
-            pathSpan.title = path;
+            pathSpan.textContent = entry.path;
+            if (showWorkspaceLabel) {
+                const wsLabel = entry.roots.map(labelForWorkspaceRoot).join(', ');
+                pathSpan.title = `${entry.path}\nWorkspace: ${wsLabel}`;
+                const badge = document.createElement('span');
+                badge.className = 'folder-workspace-badge';
+                badge.style.cssText = 'margin-left: 8px; font-size: 11px; color: var(--text-secondary); opacity: 0.8;';
+                badge.textContent = wsLabel;
+                pathSpan.appendChild(badge);
+            } else {
+                pathSpan.title = entry.path;
+            }
 
             const removeBtn = document.createElement('button');
             removeBtn.className = 'folder-list-remove-btn';
             removeBtn.textContent = 'Remove';
-            removeBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                let workspaceRoot;
-                if (folderModalScope === 'tickets') {
-                    workspaceRoot = state.docsWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '';
-                    vscode.postMessage({ type: 'removeTicketsFolder', folderPath: path, workspaceRoot });
-                } else if (folderModalScope === 'research') {
-                    workspaceRoot = researchWorkspaceRoot || _workspaceItems[0]?.workspaceRoot || '';
-                    vscode.postMessage({ type: 'removeLocalFolder', folderPath: path, workspaceRoot });
-                } else {
-                    workspaceRoot = state.docsWorkspaceRootFilter || _workspaceItems[0]?.workspaceRoot || '';
-                    vscode.postMessage({ type: 'removeLocalFolder', folderPath: path, workspaceRoot });
-                }
-            });
+            if (isAggregate) {
+                removeBtn.disabled = true;
+                removeBtn.title = 'Select a specific workspace to remove its folders';
+                removeBtn.style.opacity = '0.5';
+            } else {
+                removeBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    // Target every owning root so the folder is fully removed.
+                    entry.roots.forEach(workspaceRoot => {
+                        vscode.postMessage({ type: removeType, folderPath: entry.path, workspaceRoot });
+                    });
+                });
+            }
 
             row.appendChild(pathSpan);
             row.appendChild(removeBtn);
@@ -1951,6 +2042,18 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             btnSync.style.display = 'none';
             btnSync.disabled = true;
         }
+    }
+
+    // Sort docs by creation time, newest first. createdMs comes from the backend file scan
+    // (birthtime, falling back to mtime). Ties (or missing timestamps) fall back to title/name
+    // so ordering stays stable instead of jumping around between renders.
+    function sortDocsByCreatedDesc(docs) {
+        return [...docs].sort((a, b) => {
+            const ta = Number(a.metadata?.createdMs) || 0;
+            const tb = Number(b.metadata?.createdMs) || 0;
+            if (tb !== ta) return tb - ta;
+            return String(a.title || a.name || '').localeCompare(String(b.title || b.name || ''));
+        });
     }
 
     function renderUnifiedDocs(localRoots, onlineRoots, enabledSources) {
@@ -2196,7 +2299,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         
                         contentDiv.appendChild(subheader);
                         
-                        folderDocsInSource.forEach(doc => {
+                        sortDocsByCreatedDesc(folderDocsInSource).forEach(doc => {
                             if (doc.name && state.importedDocs.has(doc.name)) {
                                 return;
                             }
@@ -2204,8 +2307,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                             contentDiv.appendChild(wrapper);
                         });
                     });
-                    
-                    rootDocs.forEach(doc => {
+
+                    sortDocsByCreatedDesc(rootDocs).forEach(doc => {
                         if (doc.name && state.importedDocs.has(doc.name)) {
                             return;
                         }
@@ -2362,13 +2465,19 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             sourceId: state._lastLocalDocsMsg.sourceId || 'local-folder',
             nodes: state.docsWorkspaceRootFilter
                 ? (() => {
-                    // Fallback set built once per filter call (not per node): a file may be
-                    // tagged to a different root by cross-root dedup, but its sourceFolder is
-                    // configured under the selected root.
-                    const rootFolders = new Set(state.localFolderPathsByRoot?.[state.docsWorkspaceRootFilter] || []);
+                    // Match by normalized path: the backend tags nodes with RAW roots /
+                    // sourceFolders, but the dropdown filter is a resolved (or mapping-parent)
+                    // path. A file may also be tagged to a different root by cross-root dedup,
+                    // but its sourceFolder is configured under the selected root.
+                    const normFilter = normalizeFsPath(state.docsWorkspaceRootFilter);
+                    const rootFolders = new Set(
+                        Object.entries(state.localFolderPathsByRoot || {})
+                            .filter(([root]) => normalizeFsPath(root) === normFilter)
+                            .flatMap(([, paths]) => (paths || []).map(normalizeFsPath))
+                    );
                     return (state._lastLocalDocsMsg.nodes || []).filter(n =>
-                        n.metadata?.root === state.docsWorkspaceRootFilter ||
-                        rootFolders.has(n.metadata?.sourceFolder)
+                        normalizeFsPath(n.metadata?.root) === normFilter ||
+                        rootFolders.has(normalizeFsPath(n.metadata?.sourceFolder))
                     );
                   })()
                 : (state._lastLocalDocsMsg.nodes || []),
@@ -3441,7 +3550,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 }
                 _restoredPanelState.panel['notebook.root'] = notebookWorkspaceRoot;
 
-                // Restore Docs workspace filter (single source of truth; "All Workspaces" by default)
+                // Restore Docs workspace filter (single source of truth; first workspace by default)
                 resolveDocsWorkspaceFilter(_workspaceItems);
 
                 // Restore Kanban filters

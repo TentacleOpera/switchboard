@@ -8,7 +8,49 @@ export interface GlobalConfig {
     linear?: any;
     notion?: any;
     ticketsAutoSync?: boolean;
+    /**
+     * MCP Monitor settings that are global to the MACHINE — shared across every
+     * workspace and IDE, because MCP servers are account-scoped.
+     */
+    mcpMonitor?: {
+        enabled?: boolean;
+        intervalMinutes?: number;
+        targetRole?: string;
+        sources?: string[];
+        customInstruction?: string;
+    };
+    /**
+     * Agent settings that are global to the MACHINE — shared across every
+     * workspace AND every IDE (VS Code, Cursor, Windsurf, …), because they
+     * live in a single ~/.switchboard file rather than per-workspace DBs or
+     * per-IDE globalState. Startup commands belong here: an "agent" (the CLI
+     * you launch) is the same tool regardless of which repo or editor opened it.
+     */
+    agents?: {
+        startupCommands?: Record<string, string>;
+        visibleAgents?: Record<string, boolean>;
+        customAgents?: any[];
+    };
 }
+
+/** Agent-config keys that are stored machine-globally (cross-workspace, cross-IDE). */
+export type AgentGlobalKey = 'startupCommands' | 'visibleAgents' | 'customAgents';
+
+export interface McpMonitorConfig {
+    enabled: boolean;
+    intervalMinutes: number;
+    targetRole: string;
+    sources: string[];
+    customInstruction: string;
+}
+
+export const DEFAULT_MCP_MONITOR_CONFIG: McpMonitorConfig = {
+    enabled: false,
+    intervalMinutes: 5,
+    targetRole: 'mcp_monitor',
+    sources: ['slack'],
+    customInstruction: '',
+};
 
 export class GlobalIntegrationConfigService {
     private static getFilePath(): string {
@@ -101,6 +143,38 @@ export class GlobalIntegrationConfigService {
         await this.saveGlobal(globalConfig);
     }
 
+    /**
+     * Machine-global startup commands (role → command), shared across all
+     * workspaces and IDEs. Returns `undefined` when never written, so callers
+     * can fall back to legacy per-IDE/per-workspace stores during migration.
+     */
+    public static getAgentConfigSync<T = any>(key: AgentGlobalKey): T | undefined {
+        return this.loadGlobalSync().agents?.[key] as T | undefined;
+    }
+
+    public static async getAgentConfig<T = any>(key: AgentGlobalKey): Promise<T | undefined> {
+        return (await this.loadGlobal()).agents?.[key] as T | undefined;
+    }
+
+    public static async setAgentConfig(key: AgentGlobalKey, value: unknown): Promise<void> {
+        const globalConfig = await this.loadGlobal();
+        globalConfig.agents = { ...(globalConfig.agents || {}), [key]: value };
+        await this.saveGlobal(globalConfig);
+    }
+
+    // Convenience wrappers (startup commands are the most-read agent config).
+    public static getAgentStartupCommandsSync(): Record<string, string> | undefined {
+        return this.getAgentConfigSync<Record<string, string>>('startupCommands');
+    }
+
+    public static async getAgentStartupCommands(): Promise<Record<string, string> | undefined> {
+        return this.getAgentConfig<Record<string, string>>('startupCommands');
+    }
+
+    public static async setAgentStartupCommands(commands: Record<string, string>): Promise<void> {
+        await this.setAgentConfig('startupCommands', commands);
+    }
+
     public static async getTicketsAutoSync(): Promise<boolean> {
         const globalConfig = await this.loadGlobal();
         return globalConfig.ticketsAutoSync === true;
@@ -109,6 +183,43 @@ export class GlobalIntegrationConfigService {
     public static async setTicketsAutoSync(enabled: boolean): Promise<void> {
         const globalConfig = await this.loadGlobal();
         globalConfig.ticketsAutoSync = enabled;
+        await this.saveGlobal(globalConfig);
+    }
+
+    public static getMcpMonitorConfigSync(): McpMonitorConfig {
+        const globalConfig = this.loadGlobalSync();
+        const cfg = globalConfig.mcpMonitor || {};
+        return {
+            enabled: cfg.enabled ?? DEFAULT_MCP_MONITOR_CONFIG.enabled,
+            intervalMinutes: Math.max(cfg.intervalMinutes ?? DEFAULT_MCP_MONITOR_CONFIG.intervalMinutes, 1),
+            targetRole: cfg.targetRole ?? DEFAULT_MCP_MONITOR_CONFIG.targetRole,
+            sources: cfg.sources ?? DEFAULT_MCP_MONITOR_CONFIG.sources,
+            customInstruction: cfg.customInstruction ?? DEFAULT_MCP_MONITOR_CONFIG.customInstruction,
+        };
+    }
+
+    public static async getMcpMonitorConfig(): Promise<McpMonitorConfig> {
+        const globalConfig = await this.loadGlobal();
+        const cfg = globalConfig.mcpMonitor || {};
+        return {
+            enabled: cfg.enabled ?? DEFAULT_MCP_MONITOR_CONFIG.enabled,
+            intervalMinutes: Math.max(cfg.intervalMinutes ?? DEFAULT_MCP_MONITOR_CONFIG.intervalMinutes, 1),
+            targetRole: cfg.targetRole ?? DEFAULT_MCP_MONITOR_CONFIG.targetRole,
+            sources: cfg.sources ?? DEFAULT_MCP_MONITOR_CONFIG.sources,
+            customInstruction: cfg.customInstruction ?? DEFAULT_MCP_MONITOR_CONFIG.customInstruction,
+        };
+    }
+
+    public static async setMcpMonitorConfig(config: Partial<McpMonitorConfig>): Promise<void> {
+        const globalConfig = await this.loadGlobal();
+        const current = globalConfig.mcpMonitor || {};
+        globalConfig.mcpMonitor = {
+            enabled: config.enabled ?? current.enabled ?? DEFAULT_MCP_MONITOR_CONFIG.enabled,
+            intervalMinutes: Math.max(config.intervalMinutes ?? current.intervalMinutes ?? DEFAULT_MCP_MONITOR_CONFIG.intervalMinutes, 1),
+            targetRole: config.targetRole ?? current.targetRole ?? DEFAULT_MCP_MONITOR_CONFIG.targetRole,
+            sources: config.sources ?? current.sources ?? DEFAULT_MCP_MONITOR_CONFIG.sources,
+            customInstruction: config.customInstruction ?? current.customInstruction ?? DEFAULT_MCP_MONITOR_CONFIG.customInstruction,
+        };
         await this.saveGlobal(globalConfig);
     }
 }

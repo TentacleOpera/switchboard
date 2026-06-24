@@ -58,7 +58,7 @@ let LinearDocsAdapterClass: any;
 import { LocalFolderService } from './LocalFolderService';
 import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 import { LocalApiServer } from './LocalApiServer';
-import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
+import { GlobalIntegrationConfigService, AgentGlobalKey } from './GlobalIntegrationConfigService';
 import { MultiRepoScaffoldingService } from './MultiRepoScaffoldingService';
 import { KanbanDatabase, KanbanPlanRecord, WorkspaceDatabaseMapping } from './KanbanDatabase';
 import { KanbanMigration } from './KanbanMigration';
@@ -391,6 +391,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (!migrated) {
             void this._runPhase0Migration();
         }
+        void this._migrateStartupCommandsToGlobalFile();
         this._pipeline = new PipelineOrchestrator(
             () => this._postPipelineState(),
             async (role, sessionId, instruction) => {
@@ -743,6 +744,107 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         } catch (e) {
             console.error('[TaskViewerProvider] Phase 0 migration failed:', e);
         }
+    }
+
+    /**
+     * One-time backfill of the machine-global agent config (startup commands,
+     * visible agents, custom agents) into the cross-IDE file (~/.switchboard).
+     * Existing installs stored these per-workspace (kanban.db) or per-IDE
+     * (globalState). This collapses N per-workspace configs into one global
+     * config WITHOUT losing the user's real setup on upgrade:
+     *   (a) seed from the workspace the user is actually in (its db) first, then
+     *       other open workspaces, then the (clobber-prone) globalState mirror;
+     *   (b) NEVER overwrite a config the global file already has — upgrades must
+     *       not make existing settings vanish;
+     *   (c) among candidate sources, pick the most-populated one (and on ties,
+     *       the higher-priority source from (a)), so a thin/empty workspace can't
+     *       win over a fully-configured one.
+     * Per-workspace dbs are never deleted, so a wrong collapse is always
+     * recoverable. The flag is per-IDE: each IDE seeds the file once.
+     */
+    private async _migrateStartupCommandsToGlobalFile(): Promise<void> {
+        try {
+            if (this._context.globalState.get<boolean>('switchboard.agents.globalFileSeed.v2')) {
+                return;
+            }
+
+            const keys: Array<{ stateKey: AgentGlobalKey; globalKey: string; configKey: string }> = [
+                { stateKey: 'startupCommands', globalKey: 'switchboard.agents.startupCommands', configKey: 'agents.startupCommands' },
+                { stateKey: 'visibleAgents', globalKey: 'switchboard.agents.visibleAgents', configKey: 'agents.visibleAgents' },
+                { stateKey: 'customAgents', globalKey: 'switchboard.agents.customAgents', configKey: 'agents.customAgents' },
+            ];
+
+            // (a) Candidate workspace roots in priority order: active first, then
+            // any other folder open in this window. De-duped.
+            const roots: string[] = [];
+            const activeRoot = this._resolveWorkspaceRoot() ?? undefined;
+            if (activeRoot) roots.push(activeRoot);
+            for (const folder of vscode.workspace.workspaceFolders ?? []) {
+                const r = folder.uri.fsPath;
+                if (r && !roots.includes(r)) roots.push(r);
+            }
+
+            for (const { stateKey, globalKey, configKey } of keys) {
+                // (b) Never overwrite an existing non-empty global value.
+                if (this._isNonEmptyAgentConfig(GlobalIntegrationConfigService.getAgentConfigSync(stateKey))) {
+                    continue;
+                }
+
+                // Collect candidates in priority order (lower priority index = preferred).
+                const candidates: Array<{ value: unknown; score: number; priority: number }> = [];
+                let priority = 0;
+                for (const r of roots) {
+                    let v: unknown;
+                    try {
+                        // Read the db DIRECTLY — the state.json bridge now routes these keys
+                        // to the file, so it can no longer surface the legacy per-workspace value.
+                        v = KanbanDatabase.forWorkspace(r).getConfigJsonSync<unknown>(configKey, undefined);
+                    } catch { /* db not ready / unreadable — skip */ }
+                    if (this._isNonEmptyAgentConfig(v)) {
+                        candidates.push({ value: v, score: this._agentConfigScore(v), priority });
+                    }
+                    priority++;
+                }
+                const gs = this._context.globalState.get(globalKey);
+                if (this._isNonEmptyAgentConfig(gs)) {
+                    candidates.push({ value: gs, score: this._agentConfigScore(gs), priority });
+                }
+
+                if (candidates.length === 0) continue; // nothing to seed → getter falls back
+
+                // (c) most-populated wins; (a) higher-priority source breaks ties.
+                candidates.sort((x, y) => (y.score - x.score) || (x.priority - y.priority));
+                await GlobalIntegrationConfigService.setAgentConfig(stateKey, candidates[0].value);
+            }
+
+            await this._context.globalState.update('switchboard.agents.globalFileSeed.v2', true);
+        } catch (e) {
+            console.error('[TaskViewerProvider] agent-config global-file migration failed:', e);
+        }
+    }
+
+    /** Structural emptiness: an array with items, or an object with at least one key. */
+    private _isNonEmptyAgentConfig(value: unknown): boolean {
+        if (Array.isArray(value)) return value.length > 0;
+        if (value && typeof value === 'object') return Object.keys(value as object).length > 0;
+        return false;
+    }
+
+    /**
+     * "Populated" score for ranking candidate configs: array length, or the count
+     * of meaningfully-set entries in an object (non-blank strings, `true` booleans,
+     * present objects) — so {lead:'agy', coder:''} scores 1, not 2.
+     */
+    private _agentConfigScore(value: unknown): number {
+        if (Array.isArray(value)) return value.length;
+        if (value && typeof value === 'object') {
+            return Object.values(value as Record<string, unknown>).filter((v) => {
+                if (v === undefined || v === null || v === false) return false;
+                if (typeof v === 'string') return v.trim() !== '';
+                return true;
+            }).length;
+        }
+        return 0;
     }
 
     public async copyDbSettingsToGlobal(workspaceRoot?: string): Promise<{ copied: number }> {
@@ -1728,16 +1830,31 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 const content = await fs.promises.readFile(statePath, 'utf8');
                 const state = JSON.parse(content);
 
+                // Snapshot the pre-updater value of every mirrored key. The read above
+                // came from the CURRENT workspace's per-workspace DB, so these snapshots
+                // are that workspace's copy — NOT the authoritative globalState value.
+                const preMirror = new Map<string, string | undefined>();
+                for (const [, stateKey] of TaskViewerProvider._GLOBAL_TO_STATE_KEY) {
+                    preMirror.set(stateKey, JSON.stringify(state[stateKey]));
+                }
+
                 // Update
                 for (const updater of updaters) {
                     await updater(state);
                 }
 
-                // Unify to globalState (written before the DB mirror so globalState-first reads are never stale)
+                // Unify to globalState (written before the DB mirror so globalState-first
+                // reads are never stale). Only push keys this batch ACTUALLY changed.
+                // These keys (startupCommands, visibleAgents, customAgents, …) are global
+                // by design — globalState is the source of truth. Mirroring an unchanged
+                // key would push the current workspace's per-workspace DB copy up into the
+                // global store, so an unrelated updateState() in workspace B would clobber
+                // workspace A's settings, making a global per-agent setting behave like a
+                // per-workspace one. Change-detection keeps incidental writes from leaking.
                 for (const [globalKey, stateKey] of TaskViewerProvider._GLOBAL_TO_STATE_KEY) {
-                    if (state[stateKey] !== undefined) {
-                        await this._context.globalState.update(globalKey, state[stateKey]);
-                    }
+                    if (state[stateKey] === undefined) continue;
+                    if (JSON.stringify(state[stateKey]) === preMirror.get(stateKey)) continue;
+                    await this._context.globalState.update(globalKey, state[stateKey]);
                 }
 
                 // Write only if state actually changed
@@ -3339,9 +3456,23 @@ Each plan file must include:
     }
 
     public async getStartupCommands(workspaceRoot?: string): Promise<Record<string, string>> {
+        // Custom agents are also machine-global (read from the same ~/.switchboard file).
+        const customAgentsGlobal = await this.getCustomAgents(workspaceRoot);
+
+        // Machine-global, cross-IDE source of truth (~/.switchboard/integration-config.json).
+        // Shared by every workspace AND every IDE on the machine.
+        const fileCommands = await GlobalIntegrationConfigService.getAgentStartupCommands();
+        if (fileCommands !== undefined) {
+            const startupCommands = { ...fileCommands };
+            for (const agent of parseCustomAgents(customAgentsGlobal)) {
+                startupCommands[agent.role] = agent.startupCommand;
+            }
+            return startupCommands;
+        }
+
+        // Legacy fallbacks (used until the one-time backfill populates the global file):
+        // per-IDE globalState, then the per-workspace DB.
         const globalValue = this._context.globalState.get<Record<string, string>>('switchboard.agents.startupCommands');
-        const customAgentsGlobal = this._context.globalState.get<any[]>('switchboard.agents.customAgents');
-        
         if (globalValue !== undefined) {
             const startupCommands = { ...globalValue };
             for (const agent of parseCustomAgents(customAgentsGlobal)) {
@@ -3413,9 +3544,18 @@ Each plan file must include:
             splitter: false
         };
 
-        const globalValue = this._context.globalState.get<Record<string, boolean>>('switchboard.agents.visibleAgents');
-        const customAgentsGlobal = this._context.globalState.get<any[]>('switchboard.agents.customAgents');
+        const customAgentsGlobal = await this.getCustomAgents(workspaceRoot);
 
+        // Machine-global, cross-IDE source of truth (~/.switchboard).
+        const fileValue = await GlobalIntegrationConfigService.getAgentConfig<Record<string, boolean>>('visibleAgents');
+        if (fileValue !== undefined) {
+            for (const agent of parseCustomAgents(customAgentsGlobal)) {
+                defaults[agent.role] = true;
+            }
+            return { ...defaults, ...fileValue };
+        }
+
+        const globalValue = this._context.globalState.get<Record<string, boolean>>('switchboard.agents.visibleAgents');
         if (globalValue !== undefined) {
             for (const agent of parseCustomAgents(customAgentsGlobal)) {
                 defaults[agent.role] = true;
@@ -3438,6 +3578,12 @@ Each plan file must include:
     }
 
     public async getCustomAgents(workspaceRoot?: string): Promise<CustomAgentConfig[]> {
+        // Machine-global, cross-IDE source of truth (~/.switchboard).
+        const fileValue = await GlobalIntegrationConfigService.getAgentConfig<CustomAgentConfig[]>('customAgents');
+        if (fileValue !== undefined) {
+            return parseCustomAgents(fileValue);
+        }
+
         const globalValue = this._context.globalState.get<CustomAgentConfig[]>('switchboard.agents.customAgents');
         if (globalValue !== undefined) {
             return parseCustomAgents(globalValue);
@@ -7286,6 +7432,14 @@ Each plan file must include:
 
 
                 });
+            }
+
+            // Persist startup commands to the machine-global, cross-IDE store so they
+            // are shared across every workspace AND every IDE (the authoritative source
+            // read by getStartupCommands). The updateState() write above keeps the legacy
+            // globalState/DB copies in sync for older code paths.
+            if (data.commands) {
+                await GlobalIntegrationConfigService.setAgentStartupCommands(data.commands);
             }
 
             if (visibleAgentsPatch) {

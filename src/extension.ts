@@ -478,6 +478,13 @@ export async function activate(context: vscode.ExtensionContext) {
     // Wire the watcher into the already-created KanbanProvider
     await kanbanProvider!.setGlobalPlanWatcher(globalPlanWatcher);
 
+    // Let the watcher read the live displayed project at plan-import time, so a plan
+    // created while a project board is open is stamped with that project deterministically
+    // (rather than relying on the easily-stale _currentProjects mirror).
+    globalPlanWatcher.setDisplayedProjectResolver(
+        (watchedRoot: string) => kanbanProvider?.getDisplayedProjectForRoot(watchedRoot) ?? null
+    );
+
     const workspaceModeSetting = getEnforcedSwitchboardBooleanSetting('runtime.workspaceMode', false);
 
     // Workspace exclusion management (replaces legacy _runGitignoreMigrationV1)

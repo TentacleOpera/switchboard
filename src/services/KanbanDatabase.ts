@@ -1293,18 +1293,40 @@ export class KanbanDatabase {
     public async insertFileDerivedPlan(record: KanbanPlanRecord): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
         const relativePlanFile = this._ensureRelativePlanFile(record.planFile);
+
+        // Resolve project_id from the denormalized project name. The kanban board's
+        // project filter JOINs on project_id (NOT the `project` text column), so a plan
+        // imported with only `project` set and project_id NULL never appears on its
+        // project board — it drops to the unassigned/base board. This historically
+        // affected every file-watcher import (the old INSERT omitted project_id entirely).
+        let resolvedProjectId: number | null = record.projectId ?? null;
+        if (resolvedProjectId === null && record.project) {
+            const psel = this._db.prepare(
+                'SELECT id FROM projects WHERE name = ? AND workspace_id = ?',
+                [record.project, record.workspaceId]
+            );
+            try {
+                if (psel.step()) {
+                    resolvedProjectId = Number(psel.getAsObject().id);
+                }
+            } finally {
+                psel.free();
+            }
+        }
+
         const sql = `
             INSERT INTO plans (
                 plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
-                repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
+                repo_scope, project, project_id, workspace_id, created_at, updated_at, last_action, source_type,
                 brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
                 clickup_task_id, linear_issue_id, workspace_name
-            ) VALUES (?, ?, ?, ?, 'CREATED', 'active', ?, ?, '', ?, ?, ?, ?, '', ?, '', '', '', '', '', '', '', ?)
+            ) VALUES (?, ?, ?, ?, 'CREATED', 'active', ?, ?, '', ?, ?, ?, ?, ?, '', ?, '', '', '', '', '', '', '', ?)
             ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
                 topic = excluded.topic,
                 complexity = excluded.complexity,
                 tags = excluded.tags,
                 project = excluded.project,
+                project_id = COALESCE(excluded.project_id, plans.project_id),
                 updated_at = excluded.updated_at
         `;
         try {
@@ -1317,6 +1339,7 @@ export class KanbanDatabase {
                 record.complexity,
                 record.tags || '',
                 record.project || '',
+                resolvedProjectId,
                 record.workspaceId,
                 record.createdAt,
                 record.updatedAt,
@@ -4806,6 +4829,29 @@ export class KanbanDatabase {
         const v37 = await this.getMigrationVersion();
         if (v37 < 37) {
             await this._runMigrationV37();
+        }
+
+        // V38: Re-run the project_id backfill. The file-import path (insertFileDerivedPlan)
+        // historically never wrote project_id, so any plan imported after the one-time V35
+        // backfill desynced again — `project` text set, project_id NULL — and silently
+        // vanished from the kanban project board (which filters on project_id). The insert
+        // path now resolves project_id; this heals rows that desynced in the gap.
+        const v38 = await this.getMigrationVersion();
+        if (v38 < 38) {
+            console.log('[KanbanDatabase] Running V38 project_id backfill repair...');
+            try {
+                this._db.run('BEGIN TRANSACTION');
+                this._db.exec(`UPDATE plans SET project_id = (
+                    SELECT id FROM projects WHERE projects.name = plans.project AND projects.workspace_id = plans.workspace_id
+                ) WHERE project != '' AND (project_id IS NULL OR project_id = 0)`);
+                this._db.run('COMMIT');
+                await this.setMigrationVersion(38);
+                console.log('[KanbanDatabase] V38 backfill completed.');
+            } catch (e) {
+                try { this._db.run('ROLLBACK'); } catch { /* ignore */ }
+                console.error('[KanbanDatabase] V38 backfill failed:', e);
+                // Do NOT stamp version — retry on next init
+            }
         }
     }
 

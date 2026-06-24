@@ -31,7 +31,7 @@ The command `process memo` is the sole exception: it must be the entire message,
 
 ## Process
 1. **Initialize:** On `/memo`, read `.switchboard/memo.md` (create if absent). Write out the FULL current memo as a numbered list (one number per blank-line-separated entry), then state the total count. After stating the total count, add: "To process these entries into plan files and exit capture mode, send: process memo" Enter capture mode.
-2. **Capture:** For each subsequent message — every message, no exceptions — append verbatim to `.switchboard/memo.md`, separated from previous entries by a blank line. Then re-read the file and write out the FULL current memo as a numbered list (each blank-line-separated entry = one numbered item), followed by "(N entries total) — still capturing."
+2. **Capture:** For each subsequent message — append verbatim to `.switchboard/memo.md`, separated from previous entries by a blank line. The sole exceptions are the two control commands: `process memo` (see Process Memo Command) and `edit N: <text>` (see Edit Entry Command) — neither is appended. Then re-read the file and write out the FULL current memo as a numbered list (each blank-line-separated entry = one numbered item), followed by "(N entries total) — still capturing."
 3. Do NOT analyze, investigate, plan, or write code — just capture and echo the list.
 
 ## Process Memo Command
@@ -39,16 +39,17 @@ The command `process memo` is the sole exception: it must be the entire message,
 When the user sends exactly `process memo` (case-insensitive, whitespace-trimmed, as the entire message — not embedded in a longer sentence):
 
 1. **Exit capture mode.** Stop appending to `.switchboard/memo.md`. This message is NOT appended.
-2. **Read the full memo.** Read `.switchboard/memo.md` and parse entries (blank-line-separated blocks).
-3. **Create one plan per entry.** For each blank-line-separated block, create a separate plan file in `.switchboard/plans/` following the standard Switchboard plan format (Goal, Metadata, Complexity Audit, Edge-Case & Dependency Audit, Proposed Changes, Verification Plan). Use the naming convention `feature_plan_<timestamp>_<slug>.md`. Treat each block as one entry regardless of whether it reads as a clean "issue" — non-actionable entries still produce a plan file the user can delete.
-4. **Report.** List the created plan files and their derived titles. Confirm that `.switchboard/memo.md` was cleared after all plan files were created successfully. If any plan file write failed, do NOT clear the memo — report the failure and advise the user to retry.
+2. **Read and echo the full memo.** Read `.switchboard/memo.md`, parse entries (blank-line-separated blocks), and write out EVERY entry as a numbered list in your reply. This echo is mandatory — it durably preserves the memo content in the conversation transcript before the file is cleared, so nothing is lost if a later step fails.
+3. **Clear the memo NOW.** Immediately write an empty string to `.switchboard/memo.md` — before creating any plans. Clearing first (while still on-script) is deliberate: it is the single most-skipped step when left to the end, and the host system prompt is most likely to derail you during the long plan-writing stretch that follows. The entries are already safe in your context from step 2.
+4. **Create one plan per entry.** For each block captured in step 2, create a separate plan file in `.switchboard/plans/` following the standard Switchboard plan format (Goal, Metadata, Complexity Audit, Edge-Case & Dependency Audit, Proposed Changes, Verification Plan). Use the naming convention `feature_plan_<timestamp>_<slug>.md`. Treat each block as one entry regardless of whether it reads as a clean "issue" — non-actionable entries still produce a plan file the user can delete.
+5. **Report, and restore on failure.** List the created plan files and their derived titles, and confirm the memo was cleared. If any plan file write failed, **re-write the un-planned entries back into `.switchboard/memo.md`** verbatim from the numbered list you echoed in step 2 (preserving blank-line separators), then report the failure and advise the user to retry. This restores the "no memos lost on failure" guarantee even though the clear happened up front.
 
 This is the only chat-based exit from capture mode. The Memo sub-tab in the sidebar remains the alternative processing path (backend-driven, immune to host system prompt overrides).
 
 ## Edit Entry Command
 
 When the user sends a message matching the edit pattern:
-- **Regex:** `/^edit\s+(\d+)\s*:\s*(.+)/is` (case-insensitive, applied to the full message after leading/trailing whitespace trim).
+- **Regex:** `/^edit\s+(\d+):\s*(.+)/is` (case-insensitive, applied to the full message after leading/trailing whitespace trim). No whitespace is permitted between the number and the colon, so `edit 2 : text` (space before colon) does not match and is treated as content.
 - **N** is a 1-based integer index of the entry.
 - The text following the colon is the replacement text (which may contain newlines and span multiple lines).
 - **Format Requirements:** The `:` must be present. A space before the colon (e.g. `edit 2 : text`) makes it invalid as a command (it is treated as content). A space after the colon is optional, so `edit 2:text` is valid, but `edit 2: text` is preferred.
@@ -65,12 +66,10 @@ When a valid edit command is received:
 5. **Write back:** Write the modified list of blocks back to `.switchboard/memo.md`, preserving the blank-line separators between blocks.
 6. **Report:** Re-echo the full numbered list of entries, followed by "(N entries total) — still capturing."
 
-
-
 ## Processing Captured Entries
 There are two ways to process memo entries into plan files:
 
-1. **Chat command:** Send exactly `process memo` to exit capture mode and have the agent create one plan file per entry. The memo file is cleared after all plan files are created successfully, so re-running produces no duplicates.
+1. **Chat command:** Send exactly `process memo` to exit capture mode and have the agent create one plan file per entry. The memo is echoed into the chat and cleared up front, before plans are written, so re-running produces no duplicates; if a plan write fails the un-planned entries are restored to the file for retry.
 2. **Memo sub-tab (sidebar):** The sub-tab's "send" button dispatches entries to the planner and clears the memo; the "copy" button copies the planner prompt to clipboard and clears the memo. This path is backend-driven and immune to host system prompt overrides.
 
 ## Guaranteed Capture Alternative

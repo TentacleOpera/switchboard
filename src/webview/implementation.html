@@ -1624,10 +1624,13 @@
                     <p style="font-size: 11px; color: var(--text-secondary); margin: 0 0 4px;">
                         Jot down bugs, thoughts, or issues — one per line or paragraph. Saved automatically.
                         Send to an agent via Copy Prompt / Send to Planner to create
-                        <strong>one plan per issue</strong>.
+                        one plan per issue.
+                    </p>
+                    <p style="font-size: 11px; color: var(--text-secondary); margin: 0 0 4px;">
+                        Tip: use the /memo skill to start memo capture.
                     </p>
                     <textarea id="memo-textarea" class="modal-textarea"
-                              placeholder="Bug: login button overlaps on mobile&#10;Thought: maybe cache the user profile&#10;Issue: API returns 500 on empty payload...&#10;Tip: use the /memo skill to dictate memo entries to an agent"
+                              placeholder="Bug: login button overlaps on mobile&#10;Thought: maybe cache the user profile&#10;Issue: API returns 500 on empty payload..."
                               style="width: 100%; min-height: 240px; resize: vertical; font-family: var(--font-mono, monospace); font-size: 13px;"></textarea>
                     <span id="memo-status" style="font-size: 11px; color: var(--text-secondary); min-height: 14px;"></span>
                     <button id="memo-clear-btn" class="secondary-btn w-full">Clear</button>
@@ -2489,13 +2492,30 @@
                 case 'switchboardThemeNameSetting':
                 case 'switchboardThemeChanged': {
                     if (message.theme) {
-                        document.body.classList.remove('theme-claudify', 'theme-afterburner-pro', 'cyber-theme-enabled');
+                        // Compute the desired theme class set without touching unrelated classes
+                        // (e.g. kanban-icons-colour, cyber-animation-disabled) that may have been
+                        // injected server-side by applyThemeBodyClass().
+                        const allThemeClasses = ['theme-claudify', 'theme-afterburner-pro', 'cyber-theme-enabled'];
+                        const desired = new Set();
                         if (message.theme === 'afterburner') {
-                            document.body.classList.add('cyber-theme-enabled');
+                            desired.add('cyber-theme-enabled');
                         } else if (message.theme === 'claudify') {
-                            document.body.classList.add('theme-claudify');
+                            desired.add('theme-claudify');
                         } else if (message.theme === 'afterburner-professional') {
-                            document.body.classList.add('theme-claudify', 'theme-afterburner-pro');
+                            desired.add('theme-claudify');
+                            desired.add('theme-afterburner-pro');
+                        }
+                        // Remove only theme classes that should NOT be present — leave the
+                        // correct ones in place so there is no flash if they were already
+                        // injected by applyThemeBodyClass at HTML generation time.
+                        for (const cls of allThemeClasses) {
+                            if (!desired.has(cls)) {
+                                document.body.classList.remove(cls);
+                            }
+                        }
+                        // Add any desired classes that are not yet present.
+                        for (const cls of desired) {
+                            document.body.classList.add(cls);
                         }
                     }
                     break;

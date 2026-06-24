@@ -22,6 +22,7 @@ import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService
 import { buildKanbanColumns, KanbanColumnDefinition, CustomKanbanColumnConfig, CustomAgentConfig, parseCustomAgents } from './agentConfig';
 import { ReviewCommentRequest, ReviewCommentResult } from './reviewTypes';
 import { isValidComplexityValue, legacyToScore } from './complexityScale';
+import { applyManualComplexityOverride } from './planMetadataUtils';
 import { formatReviewLogEntries } from './reviewLogUtils';
 import { PanelStateStore } from './PanelStateStore';
 import { buildWorkspaceItems } from './workspaceUtils';
@@ -2640,6 +2641,29 @@ export class PlanningPanelProvider {
                 try {
                     const db = KanbanDatabase.forWorkspace(wsRoot);
                     await db.updateComplexityByPlanId(planId, normalizedComplexity);
+                    // Persist the choice into the plan file as a Manual Complexity
+                    // Override. The DB update alone does NOT stick: the plan watcher
+                    // re-derives complexity from the file's **Complexity:** line on the
+                    // next file event and overwrites the DB. The override marker is the
+                    // highest-priority source for both parsers, so writing it makes the
+                    // dropdown change survive re-import.
+                    try {
+                        const planRecord = await db.getPlanByPlanId(planId);
+                        const relPlanFile = planRecord?.planFile;
+                        if (relPlanFile) {
+                            const absPlanFile = path.isAbsolute(relPlanFile)
+                                ? relPlanFile
+                                : path.resolve(wsRoot, relPlanFile);
+                            const nfs = require('fs') as typeof import('fs');
+                            const content = await nfs.promises.readFile(absPlanFile, 'utf8');
+                            const updated = applyManualComplexityOverride(content, normalizedComplexity);
+                            if (updated !== content) {
+                                await nfs.promises.writeFile(absPlanFile, updated, 'utf8');
+                            }
+                        }
+                    } catch (fileErr) {
+                        console.warn('[PlanningPanelProvider] Failed to persist complexity override to plan file:', fileErr);
+                    }
                     const allPlans = await this._getKanbanPlans(wsRoot);
                     this._projectPanel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, requestId: Date.now() });
                     this._projectPanel?.webview.postMessage({ type: 'kanbanPlanComplexityChanged', success: true });
@@ -5897,6 +5921,33 @@ Read the existing ticket content from the local file if it exists. Determine wha
      * sourceFolder configured. Prioritizes the active workspace root when
      * multiple roots configure the same folder path.
      */
+    /**
+     * Resolve which workspace root actually owns `folderPath`. Mirrors the scan order of
+     * _getLocalFolderServiceForFolder (active root first, then all roots). Used by writers that
+     * need the owning root (not just the service) — e.g. clipboard research import, which targets
+     * a folder that may belong to a non-primary root in a multi-root workspace.
+     * Falls back to `fallbackRoot` when the folder matches no configured root.
+     */
+    private _getWorkspaceRootForFolder(
+        folderPath: string | undefined,
+        fallbackRoot: string
+    ): { root: string; resolvedFolder?: string } {
+        if (!folderPath) { return { root: fallbackRoot }; }
+        const allRoots = this._getWorkspaceRoots();
+        const activeRoot = this._getWorkspaceRoot();
+        const ordered = activeRoot
+            ? [activeRoot, ...allRoots.filter(r => path.resolve(r) !== path.resolve(activeRoot))]
+            : allRoots;
+        for (const root of ordered) {
+            const service = this._getLocalFolderService(root);
+            const resolved = service.resolveFolderPath(folderPath);
+            if (service.getFolderPaths().includes(resolved)) {
+                return { root, resolvedFolder: resolved };
+            }
+        }
+        return { root: fallbackRoot };
+    }
+
     private _getLocalFolderServiceForFolder(
         sourceFolder: string | undefined,
         workspaceRoot: string,
@@ -5935,6 +5986,7 @@ Read the existing ticket content from the local file if it exists. Determine wha
         id: string; name: string; relativePath: string;
         isFolder?: boolean; parentId?: string;
         _root?: string; sourceFolder?: string; title?: string;
+        createdMs?: number; mtimeMs?: number;
     }>): TreeNode[] {
         return files.map(f => ({
             id: f.id,
@@ -5946,7 +5998,9 @@ Read the existing ticket content from the local file if it exists. Determine wha
             metadata: {
                 ...(f._root ? { root: f._root } : {}),
                 ...(f.sourceFolder ? { sourceFolder: f.sourceFolder } : {}),
-                ...(f.sourceFolder && f.relativePath ? { absolutePath: path.resolve(f.sourceFolder, f.relativePath) } : {})
+                ...(f.sourceFolder && f.relativePath ? { absolutePath: path.resolve(f.sourceFolder, f.relativePath) } : {}),
+                ...(typeof f.createdMs === 'number' ? { createdMs: f.createdMs } : {}),
+                ...(typeof f.mtimeMs === 'number' ? { mtimeMs: f.mtimeMs } : {})
             }
         }));
     }
@@ -5954,7 +6008,7 @@ Read the existing ticket content from the local file if it exists. Determine wha
     private async _sendLocalDocsReady(force: boolean = false): Promise<void> {
         try {
             const allRoots = this._getWorkspaceRoots();
-            const allFiles: Array<{ id: string; name: string; relativePath: string; isFolder?: boolean; parentId?: string; _root?: string; sourceFolder?: string; title?: string }> = [];
+            const allFiles: Array<{ id: string; name: string; relativePath: string; isFolder?: boolean; parentId?: string; _root?: string; sourceFolder?: string; title?: string; createdMs?: number; mtimeMs?: number }> = [];
             const scannedPaths = new Set<string>();
             const activeRoot = this._getWorkspaceRoot();
             const configuredFolderPathsByRoot: Record<string, string[]> = {};
@@ -7003,12 +7057,18 @@ Read the existing ticket content from the local file if it exists. Determine wha
                 contentToWrite = `# ${finalDocTitle}\n\n${bodyWithoutFrontMatter}`;
             }
 
+            // In a multi-root workspace the clicked folder may belong to a non-primary root.
+            // Resolve the owning root (and its canonical folder path) so the write targets the
+            // correct LocalFolderService — otherwise writeContentToDocsDir throws "Target folder
+            // is not a configured local docs folder" against the wrong root's path list.
+            const { root: effectiveRoot, resolvedFolder } = this._getWorkspaceRootForFolder(folderPath, workspaceRoot);
+
             const writeResult = await this._plannerPromptWriter.writeContentToDocsDir(
-                workspaceRoot,
+                effectiveRoot,
                 contentToWrite,
                 finalDocTitle,
                 'research-clipboard',
-                { skipDesignDocLink: true, targetFolder: folderPath }
+                { skipDesignDocLink: true, targetFolder: resolvedFolder ?? folderPath }
             );
 
             this._lastPanelWriteTimestamp = Date.now();
@@ -7028,7 +7088,7 @@ Read the existing ticket content from the local file if it exists. Determine wha
                         .slice(0, 60) || 'research-clipboard';
                     const contentWithoutFrontMatter = content.replace(/^---\n[\s\S]*?\n---\n*/, '');
                     const contentHash = crypto.createHash('sha256').update(contentWithoutFrontMatter).digest('hex');
-                    const workspaceId = await this._getWorkspaceId(workspaceRoot);
+                    const workspaceId = await this._getWorkspaceId(effectiveRoot);
                     await this._cacheService.registerImport('research-clipboard', finalDocTitle, finalDocTitle, rawSlug, {
                         remoteContentHash: contentHash,
                         workspaceId,
@@ -7046,8 +7106,10 @@ Read the existing ticket content from the local file if it exists. Determine wha
                 savedPath: writeResult.savedPath
             });
 
-            await this._handleFetchImportedDocs(workspaceRoot);
-            await this._sendLocalDocsReady();
+            await this._handleFetchImportedDocs(effectiveRoot);
+            // Force the tree to re-render even if the dedup signature looks unchanged, so the
+            // freshly imported doc appears immediately (it sorts to the top by creation time).
+            await this._sendLocalDocsReady(true);
 
         } catch (err) {
             this._panel?.webview.postMessage({ type: 'importResearchDocResult', error: String(err) });

@@ -1,10 +1,15 @@
 # Advise Research If Unsure
 
-When planning, track every assumption, factual claim, API/behavior, or library detail you are NOT 100% certain about. If any exist, append a section titled "## Recommended Research" to your output containing a ready-to-run research prompt that covers ONLY those uncertainties.
+When planning, track every assumption, factual claim, API/behavior, or library detail you are NOT 100% certain about. If any exist:
+
+1. **In the plan file:** Add a brief section titled "## Uncertain Assumptions" that lists ONLY those uncertainties and states that the user was advised to run web research to confirm them before implementation. Do NOT put the research prompt itself in the plan file.
+2. **In your chat summary:** At the very END of your summary to the user (after everything else), supply the ready-to-run research prompt so they can trigger web research.
+
+If you are confident about everything, state that no research is needed and omit both the section and the prompt.
 
 ## Research Prompt Structure
 
-Structure the research prompt as follows:
+Structure the research prompt (delivered in chat, not the plan) as follows:
 - ROLE definition for the research analyst
 - CONTEXT describing the domain and audience
 - CENTRAL QUESTION
@@ -20,4 +25,4 @@ Structure the research prompt as follows:
 
 ## After Generating
 
-Advise the user to run that prompt through Google AI Studio (search grounding enabled), Claude, or their research agent of choice, and to feed the findings back before implementation. If you are confident about everything, state that no research is needed and omit the section.
+Advise the user to run that prompt through Google AI Studio (search grounding enabled), Claude, or their research agent of choice, and to feed the findings back before implementation.

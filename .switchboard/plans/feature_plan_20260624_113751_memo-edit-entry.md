@@ -99,3 +99,51 @@ Not applicable — this plan modifies workflow documentation files (`.agents/wor
 - [ ] After an edit, `process memo` → produces plans from the corrected entries (no stale duplicate).
 - [ ] `process memo` still exits capture mode normally.
 - [ ] AGENTS.md Workflow Registry table (line 21) and Priority Rule paragraph (line 100) both mention the edit command.
+
+---
+
+## Code Review — Reviewer Pass (2026-06-24)
+
+### Stage 1: Grumpy Adversarial Findings
+
+| # | Severity | File:Line | Finding |
+|---|----------|-----------|---------|
+| 1 | CRITICAL | `.agents/workflows/memo.md:51` | Regex `/^edit\s+(\d+)\s*:\s*(.+)/is` contains `\s*` **before** the colon, which matches `edit 2 : fixed` (space before colon). This directly contradicts the anti-example at lines 56-58 and the Format Requirements at line 54, both of which state space-before-colon is **invalid** (treated as content). Verified in Node: the original regex matched `edit 2 : fixed` as a valid edit. An agent following the regex would replace entry 2; an agent following the prose would append it as content — a coin-flip built into the protocol. |
+| 2 | MAJOR | `.agents/workflows/memo.md:34` | Process section step 2 said "every message, no exceptions — append verbatim," directly contradicting the edit command (a control command that must NOT be appended). An agent reading the capture loop as its operating instructions would append `edit 2: fixed` as a new entry. |
+| 3 | NIT | `.agents/workflows/memo.md:67-69` | Triple blank lines between Edit Entry Command and Processing Captured Entries sections; document convention is one blank line. |
+| 4 | NIT | `.agents/workflows/memo.md:18-30` | Anti-Example section only covers `process memo` embedded-trigger misclassification; does not mention the edit command. Inline anti-examples in the Edit Entry Command section suffice. Deferred. |
+
+### Stage 2: Balanced Synthesis & Fixes Applied
+
+**Fixed now:**
+- **CRITICAL-1 fix:** Regex changed to `/^edit\s+(\d+):\s*(.+)/is` (removed `\s*` before colon). Now `edit 2 : fixed` fails to match and falls through to content, consistent with the anti-examples. Added an explanatory clause inline. Verified against all 10 test cases (valid edits, invalid forms, multi-line, case-insensitivity, out-of-range N) — all pass.
+- **MAJOR-1 fix:** Process step 2 rewritten to explicitly exclude the two control commands (`process memo` and `edit N: <text>`) from "append verbatim," with cross-references to their respective sections.
+- **NIT-3 fix:** Collapsed triple blank lines to a single blank line.
+
+**Deferred:**
+- NIT-4 (Anti-Example section scope) — inline anti-examples are sufficient; no behavioral risk.
+
+**Confirmed correct (no change needed):**
+- AGENTS.md Workflow Registry table (line 21): description updated with edit command. ✅
+- AGENTS.md Priority Rule paragraph (line 100): edit-command sentence inserted after "clears the memo file on success." ✅
+- Hard Rule #4 (memo.md:13): amended to note edit command is a control command that does not exit capture mode. ✅
+- Backend `_parseMemoEntries` (TaskViewerProvider.ts:2537): uses `/\n\s*\n/` paragraph split — confirmed compatible with in-place edited blocks. No backend change required, as the plan stated. ✅
+- Multi-line replacement note (memo.md:53): present. ✅
+- Case-insensitivity: regex `i` flag + `Edit 3:` valid example. ✅
+
+### Validation Results
+
+- **Regex behavior test:** Node script executed against 10 cases covering the full manual verification checklist (valid edits, no-colon, space-before-colon, case-insensitive, multi-line, no-space-after-colon, out-of-range N, missing number, empty replacement). **ALL PASS.**
+- **Compilation:** Skipped per session instructions (documentation-only change; no TypeScript source modified).
+- **Automated tests:** Skipped per session instructions (no source code changed; plan is workflow-documentation-only).
+- **Manual verification checklist:** Items 1-9 are covered by the regex test above; item 10 (AGENTS.md mentions) confirmed by direct file inspection.
+
+### Files Changed
+
+- `.agents/workflows/memo.md` — regex fix (line 51), Process step 2 rewrite (line 34), blank-line cleanup (line 67).
+
+### Remaining Risks
+
+- **Agent adherence:** The edit command is enforced purely by workflow documentation read by the host LLM. A host whose system prompt overrides the workflow could still misbehave — but this is an inherent limitation of the chat-based memo path, shared with the existing `process memo` command, and the Memo sub-tab (backend-driven) remains the guaranteed path.
+- **No `delete N` or `show N`:** Intentionally out of scope per plan. A user who wants to remove an entry must edit it to empty-ish content or clear the conversation.
+- **Edit response markers:** The Edit Entry Command section does not restate Hard Rule #5's `[MEMO CAPTURE ACTIVE]` / `process memo` footer requirement for the edit response. Hard Rule #5 applies globally to "every capture-mode reply," so a compliant agent includes them — but this relies on the agent treating Hard Rules as globally binding rather than section-local. Low risk; not fixed to avoid over-specifying.

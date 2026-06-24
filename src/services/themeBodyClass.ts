@@ -10,6 +10,9 @@ import * as vscode from 'vscode';
  * Injecting this at HTML-generation time prevents the "flash of afterburner"
  * before the switchboardThemeChanged message arrives, and stops panels whose
  * <body> had a hardcoded (or missing) class from starting on the wrong theme.
+ *
+ * NOTE: Keep the client-side theme-class handlers (e.g. inside implementation.html's
+ * switchboardThemeChanged event handler) in sync with the classes returned here.
  */
 /**
  * Resolve the effective value of `switchboard.theme.colourKanbanIcons`,

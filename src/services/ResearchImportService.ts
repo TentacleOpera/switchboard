@@ -21,7 +21,7 @@ export interface TreeNode {
     hasChildren: boolean;
     url?: string;
     spaceId?: string;                          // NEW: breadcrumb tracking
-    metadata?: Record<string, string>;          // NEW: adapter-specific data (e.g. _pageId, _docId)
+    metadata?: Record<string, string | number>; // NEW: adapter-specific data (e.g. _pageId, _docId, createdMs)
     title?: string;                             // NEW: extracted H1/HTML title for display
 }
 

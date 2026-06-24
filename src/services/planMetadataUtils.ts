@@ -128,3 +128,52 @@ export async function parsePlanMetadata(content: string, planFile: string): Prom
         project
     };
 }
+
+/**
+ * Insert or update a `**Manual Complexity Override:** <value>` marker in a plan
+ * file's content.
+ *
+ * This marker is the HIGHEST-priority complexity source for both parsePlanMetadata()
+ * (used by the plan watcher) and KanbanProvider.getComplexityFromPlan(). Writing it
+ * is what makes a user's dropdown choice survive plan-file re-imports — without it,
+ * the watcher re-derives complexity from the plan's `**Complexity:**` line on the
+ * next file event and clobbers the DB value the dropdown just set.
+ *
+ * Always emits the `**Manual Complexity Override:** N` form (colon INSIDE the
+ * asterisks) — that is the single format both parsers accept.
+ */
+export function applyManualComplexityOverride(content: string, complexity: string): string {
+    const normalized = content.replace(/\r\n/g, '\n');
+    const overrideLine = `**Manual Complexity Override:** ${complexity}`;
+
+    // Replace an existing override line in place.
+    const existingRegex = /^[ \t>*\-]*\*\*Manual Complexity Override:\*\*[^\n]*$/im;
+    if (existingRegex.test(normalized)) {
+        return normalized.replace(existingRegex, overrideLine);
+    }
+
+    // Otherwise insert it right after the **Complexity:** metadata line if present,
+    // so the override sits alongside the value it overrides.
+    const complexityLine = normalized.match(/^[ \t>*\-]*\*\*Complexity:\*\*[^\n]*$/im);
+    if (complexityLine && complexityLine.index !== undefined) {
+        const insertPos = complexityLine.index + complexityLine[0].length;
+        return `${normalized.slice(0, insertPos)}\n${overrideLine}${normalized.slice(insertPos)}`;
+    }
+
+    // Failing that, after the ## Metadata heading...
+    const metadataHeading = normalized.match(/^#{1,4}\s+Metadata\b[^\n]*$/im);
+    if (metadataHeading && metadataHeading.index !== undefined) {
+        const insertPos = metadataHeading.index + metadataHeading[0].length;
+        return `${normalized.slice(0, insertPos)}\n\n${overrideLine}${normalized.slice(insertPos)}`;
+    }
+
+    // ...then after the first H1 title...
+    const title = normalized.match(/^#\s+[^\n]+$/m);
+    if (title && title.index !== undefined) {
+        const insertPos = title.index + title[0].length;
+        return `${normalized.slice(0, insertPos)}\n\n${overrideLine}\n${normalized.slice(insertPos)}`;
+    }
+
+    // ...else prepend.
+    return `${overrideLine}\n\n${normalized}`;
+}

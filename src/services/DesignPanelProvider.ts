@@ -72,6 +72,8 @@ export class DesignPanelProvider implements vscode.Disposable {
     ];
     private _lastWebviewRootsSignature?: string;
     private _themeListenersRegistered = false;
+    private _activeHtmlPreview: { sourceFolder: string; docId: string; sourceId: string } | null = null;
+    private _autoRefreshDebounce?: NodeJS.Timeout;
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
@@ -284,6 +286,10 @@ export class DesignPanelProvider implements vscode.Disposable {
         this._htmlServerCreationPromises.clear();
         this._disposables.forEach(disposable => disposable.dispose());
         this._disposables = [];
+        if (this._autoRefreshDebounce) {
+            clearTimeout(this._autoRefreshDebounce);
+            this._autoRefreshDebounce = undefined;
+        }
     }
 
     private disposeWatchers(): void {
@@ -399,7 +405,10 @@ export class DesignPanelProvider implements vscode.Disposable {
                     if (fs.existsSync(p)) {
                         const pattern = new vscode.RelativePattern(p, '**/*');
                         const watcher = vscode.workspace.createFileSystemWatcher(pattern);
-                        watcher.onDidChange(() => this._sendHtmlDocsReady());
+                        watcher.onDidChange((uri) => {
+                            this._sendHtmlDocsReady();
+                            this._autoRefreshHtmlPreview(uri);
+                        });
                         watcher.onDidCreate(() => this._sendHtmlDocsReady());
                         watcher.onDidDelete(() => this._sendHtmlDocsReady());
                         this._htmlFolderWatchers.push(watcher);
@@ -1306,6 +1315,9 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             }
             case 'activeTabChanged': {
                 this._activeTab = message.tab;
+                if (message.tab !== 'html-preview') {
+                    this._activeHtmlPreview = null;
+                }
                 if (this._isPolledTab(message.tab) && this._panel?.visible) {
                     this._startExternalFilePoll();
                 } else {
@@ -1425,104 +1437,23 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             }
 
             case 'fetchPreview': {
-                try {
-                    const sourceFolder = message.sourceFolder;
-                    if (!sourceFolder) throw new Error('sourceFolder is required');
-
-                    // Tree node ids are `${folderIndex}:${relativePath}` — strip the prefix.
-                    const rawDocId = String(message.docId || '');
-                    const relativePath = rawDocId.includes(':')
-                        ? rawDocId.substring(rawDocId.indexOf(':') + 1)
-                        : rawDocId;
-
-                    // Only configured design/html/briefs/images folders may be read from.
-                    const allowedFolders = new Set<string>();
-                    for (const root of this._getWorkspaceRoots()) {
-                        try {
-                            const svc = this._getLocalFolderService(root);
-                            svc.getDesignFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
-                            svc.getHtmlFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
-                            svc.getBriefsFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
-                            svc.getImagesFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
-                        } catch {}
-                    }
-                    const resolvedFolder = path.resolve(sourceFolder);
-                    if (!allowedFolders.has(resolvedFolder)) {
-                        throw new Error('sourceFolder is not a configured design/html/briefs/images folder');
-                    }
-                    const absPath = path.resolve(resolvedFolder, relativePath);
-                    if (absPath !== resolvedFolder && !absPath.startsWith(resolvedFolder + path.sep)) {
-                        throw new Error('Invalid file path');
-                    }
-
-                    const fileExt = path.extname(relativePath).toLowerCase();
-                    const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(fileExt);
-
-                    const isHtmlFile = fileExt === '.html' || fileExt === '.htm';
-
-                    let fileContent = '';
-                    let webviewUri: string | undefined;
-                    if (isImage) {
-                        webviewUri = this._panel?.webview.asWebviewUri(vscode.Uri.file(absPath)).toString();
-                    } else {
-                        fileContent = await fs.promises.readFile(absPath, 'utf8');
-                        if (isHtmlFile) {
-                            webviewUri = this._panel?.webview.asWebviewUri(vscode.Uri.file(absPath)).toString();
-                        }
-                    }
-
-                    // HTML previews are served from a localhost server so the iframe gets a
-                    // real http origin — srcdoc (htmlContent) is only the fallback.
-                    let iframeSrc: string | undefined;
-                    if (isHtmlFile) {
-                        try {
-                            const serverEntry = await this._getOrCreateHtmlServer(resolvedFolder);
-                            iframeSrc = this._buildLocalhostUrl(serverEntry, resolvedFolder, absPath);
-                        } catch {
-                            iframeSrc = undefined;
-                        }
-                    }
-
-                    // Map extensions to the preview categories design.js switches on
-                    // ('json' / 'yaml' / everything else renders as markdown).
-                    const fileTypeMap: Record<string, string> = {
-                        '.json': 'json',
-                        '.yaml': 'yaml', '.yml': 'yaml',
-                        '.md': 'markdown', '.markdown': 'markdown', '.txt': 'markdown'
+                const rawDocId = String(message.docId || '');
+                if (message.sourceId === 'html-folder' && message.sourceFolder) {
+                    this._activeHtmlPreview = {
+                        sourceFolder: path.resolve(message.sourceFolder),
+                        docId: rawDocId,
+                        sourceId: message.sourceId
                     };
-                    const fileType = isImage ? 'image' : (fileTypeMap[fileExt] || 'text');
-
-                    // YAML is parsed host-side; the webview renders the tree from parsedJson.
-                    let parsedJson: any = undefined;
-                    if (fileType === 'yaml') {
-                        try {
-                            const yaml = require('js-yaml');
-                            parsedJson = yaml.load(fileContent);
-                        } catch {}
-                    }
-
-                    this.postMessage({
-                        type: 'previewReady',
-                        sourceId: message.sourceId,
-                        requestId: message.requestId,
-                        content: isImage ? '' : fileContent,
-                        docName: path.basename(relativePath),
-                        filePath: absPath,
-                        fileType,
-                        parsedJson,
-                        isImage,
-                        webviewUri,
-                        iframeSrc,
-                        htmlContent: isHtmlFile ? this._injectLocalCsp(fileContent) : undefined
-                    });
-                } catch (err: any) {
-                    this.postMessage({
-                        type: 'previewError',
-                        sourceId: message.sourceId,
-                        requestId: message.requestId,
-                        error: err.message || String(err)
-                    });
+                } else {
+                    this._activeHtmlPreview = null;
                 }
+                await this._buildAndSendPreview({
+                    sourceId: message.sourceId,
+                    sourceFolder: message.sourceFolder,
+                    docId: rawDocId,
+                    requestId: message.requestId,
+                    isAutoRefreshed: false
+                });
                 break;
             }
 
@@ -2913,5 +2844,133 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             results.push(...sf);
         }
         return results;
+    }
+
+    private async _buildAndSendPreview(opts: {
+        sourceId: string;
+        sourceFolder?: string;
+        docId: string;
+        requestId: number;
+        isAutoRefreshed?: boolean;
+    }): Promise<void> {
+        const { sourceId, sourceFolder, docId, requestId, isAutoRefreshed } = opts;
+        try {
+            if (!sourceFolder) throw new Error('sourceFolder is required');
+            const relativePath = docId.includes(':')
+                ? docId.substring(docId.indexOf(':') + 1)
+                : docId;
+
+            // Only configured design/html/briefs/images folders may be read from.
+            const allowedFolders = new Set<string>();
+            for (const root of this._getWorkspaceRoots()) {
+                try {
+                    const svc = this._getLocalFolderService(root);
+                    svc.getDesignFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
+                    svc.getHtmlFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
+                    svc.getBriefsFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
+                    svc.getImagesFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
+                } catch {}
+            }
+            const resolvedFolder = path.resolve(sourceFolder);
+            if (!allowedFolders.has(resolvedFolder)) {
+                throw new Error('sourceFolder is not a configured design/html/briefs/images folder');
+            }
+            const absPath = path.resolve(resolvedFolder, relativePath);
+            if (absPath !== resolvedFolder && !absPath.startsWith(resolvedFolder + path.sep)) {
+                throw new Error('Invalid file path');
+            }
+
+            const fileExt = path.extname(relativePath).toLowerCase();
+            const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(fileExt);
+            const isHtmlFile = fileExt === '.html' || fileExt === '.htm';
+
+            let fileContent = '';
+            let webviewUri: string | undefined;
+            if (isImage) {
+                webviewUri = this._panel?.webview.asWebviewUri(vscode.Uri.file(absPath)).toString();
+            } else {
+                fileContent = await fs.promises.readFile(absPath, 'utf8');
+                if (isHtmlFile) {
+                    webviewUri = this._panel?.webview.asWebviewUri(vscode.Uri.file(absPath)).toString();
+                }
+            }
+
+            let iframeSrc: string | undefined;
+            if (isHtmlFile) {
+                try {
+                    const serverEntry = await this._getOrCreateHtmlServer(resolvedFolder);
+                    iframeSrc = this._buildLocalhostUrl(serverEntry, resolvedFolder, absPath);
+                } catch {
+                    iframeSrc = undefined;
+                }
+            }
+
+            const fileTypeMap: Record<string, string> = {
+                '.json': 'json',
+                '.yaml': 'yaml', '.yml': 'yaml',
+                '.md': 'markdown', '.markdown': 'markdown', '.txt': 'markdown'
+            };
+            const fileType = isImage ? 'image' : (fileTypeMap[fileExt] || 'text');
+
+            let parsedJson: any = undefined;
+            if (fileType === 'yaml') {
+                try {
+                    const yaml = require('js-yaml');
+                    parsedJson = yaml.load(fileContent);
+                } catch {}
+            }
+
+            this.postMessage({
+                type: 'previewReady',
+                sourceId,
+                requestId,
+                content: isImage ? '' : fileContent,
+                docName: path.basename(relativePath),
+                filePath: absPath,
+                fileType,
+                parsedJson,
+                isImage,
+                webviewUri,
+                iframeSrc,
+                htmlContent: isHtmlFile ? this._injectLocalCsp(fileContent) : undefined,
+                isAutoRefreshed: isAutoRefreshed || undefined
+            });
+        } catch (err: any) {
+            // Auto-refresh (requestId === -1) must fail silently — the file may be mid-write.
+            if (requestId === -1) return;
+            this.postMessage({
+                type: 'previewError',
+                sourceId,
+                requestId,
+                error: err.message || String(err)
+            });
+        }
+    }
+
+    private _autoRefreshHtmlPreview(changedUri: vscode.Uri): void {
+        if (!this._activeHtmlPreview || !this._panel) return;
+
+        const active = this._activeHtmlPreview;
+        const relativePath = active.docId.includes(':')
+            ? active.docId.substring(active.docId.indexOf(':') + 1)
+            : active.docId;
+        const activePath = path.resolve(active.sourceFolder, relativePath);
+
+        // Only refresh when the changed file IS the file currently previewed.
+        if (path.resolve(changedUri.fsPath) !== activePath) return;
+
+        // Debounce to match the 300ms tree-refresh and collapse rapid-save bursts.
+        if (this._autoRefreshDebounce) clearTimeout(this._autoRefreshDebounce);
+        this._autoRefreshDebounce = setTimeout(() => {
+            this._autoRefreshDebounce = undefined;
+            if (!this._activeHtmlPreview || !this._panel) return;
+            this._buildAndSendPreview({
+                sourceId: active.sourceId,
+                sourceFolder: active.sourceFolder,
+                docId: active.docId,
+                requestId: -1,            // frontend accepts -1 without request matching
+                isAutoRefreshed: true
+            });
+        }, 300);
     }
 }
