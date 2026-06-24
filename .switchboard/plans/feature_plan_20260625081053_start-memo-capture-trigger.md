@@ -11,104 +11,220 @@ Let a user enter Memo Capture mode by saying **"start memo capture"** in any age
 This is wrong on two levels:
 
 1. **The advertised entry path isn't universal.** The user's explicit, previously-given directive is that **"start memo capture"** must be the trigger, because *a slash command cannot be the trigger in every host* — some agent chats don't support custom slash commands. Pointing users at `/memo` strands anyone whose chat can't run it.
-2. **"start memo capture" does not actually trigger anything today.** A codebase-wide search (`grep -rni "start memo capture"`) finds the phrase in exactly one place: the tip text itself. It is wired into **no** trigger surface — not the skill description, not the workflow body, not the registry. The earlier directive to make it a trigger was never carried through to the mechanism; at most a tip was reworded. So the proposed "fix it to say 'start memo capture'" would point users at a phrase that does nothing.
+2. **"start memo capture" does not actually trigger anything today.** A codebase-wide search (`grep -rni "start memo capture"`) finds the phrase in exactly one place: the tip text itself (`src/webview/implementation.html:1592`). It is wired into **no** trigger surface — not the skill description, not the workflow body, not the registry. The earlier directive to make it a trigger was never carried through to the mechanism; at most a tip was reworded. So the proposed "fix it to say 'start memo capture'" would point users at a phrase that does nothing.
 
 **Root cause — how memo capture is actually triggered.** There is **no code-level string parser** for `/memo` anywhere in `src/` (confirmed: the only `src/` references to memo are the `ClaudeCodeMirrorService` mirror-manifest entry and the sidebar backend that writes `.switchboard/memo.md`). Entry into capture mode is driven entirely at the agent/LLM layer:
 
-- In **Claude Code**, the memo skill is registered with `invocation: 'default'` (`ClaudeCodeMirrorService.ts:43`), meaning the model auto-invokes it based on the skill's **frontmatter `description`**. That generated description is copied verbatim from the source workflow's frontmatter `description` (`ClaudeCodeMirrorService.ts:236` — `parsed.description || entry.descriptionFallback`). The current description — *"Memo capture mode — append-only, no analysis; exit with `process memo`"* — never names an entry phrase, so the model has no signal to fire on "start memo capture."
-- The workflow body's Process step #1 keys initialization on the literal *"On `/memo`"*.
-- `AGENTS.md` / `CLAUDE.md` document the trigger word as `/memo` only, and the MANDATORY PRE-FLIGHT CHECK explicitly says *"Do not auto-trigger on generic language,"* which actively discourages the model from treating a natural-language phrase as an entry trigger.
+- In **Claude Code**, the memo skill is registered with `invocation: 'default'` (`ClaudeCodeMirrorService.ts:43`), meaning the model auto-invokes it based on the skill's **frontmatter `description`** (confirmed by research: Claude Code uses progressive disclosure — only `name` + `description` are cached in the `<system-reminder>` block at session init; the model semantically matches user intent against these descriptions to decide auto-invocation). That generated description is copied verbatim from the source workflow's frontmatter `description` (`ClaudeCodeMirrorService.ts:236` — `parsed.description || entry.descriptionFallback || ''`). The current description — *"Memo capture mode — append-only, no analysis; exit with `process memo`"* (`.agents/workflows/memo.md:2`) — never names an entry phrase, so the model has no signal to fire on "start memo capture."
+- The workflow body's Process step #1 (`.agents/workflows/memo.md:33`) keys initialization on the literal *"On `/memo`"*.
+- `AGENTS.md` / `CLAUDE.md` document the trigger word as `/memo` only (`AGENTS.md:22` registry row, `AGENTS.md:92` skills table, `AGENTS.md:101` priority rule), and the MANDATORY PRE-FLIGHT CHECK (`AGENTS.md:29-30`) explicitly says *"Do not auto-trigger on generic language,"* which actively discourages the model from treating a natural-language phrase as an entry trigger.
 
 So the lever that makes "start memo capture" work is **naming it in the skill `description` and in the workflow/registry entry rules** — exactly the surfaces the slash command can't substitute for.
 
-**Source-of-truth constraint (critical — this is why prior attempts likely failed).** `.agents/` and the repo-root `AGENTS.md` are the **bundled source** shipped to user workspaces (`ControlPlaneMigrationService.ts`: `BUNDLED_AGENT_DIR = '.agents'`, `BUNDLED_AGENTS_FILE = 'AGENTS.md'`). The repo-root `CLAUDE.md` (managed-block markers at `CLAUDE.md:22` / `:156`) and every `.claude/skills/*/SKILL.md` are **GENERATED** from those sources by `ClaudeCodeMirrorService` and are overwritten on version refresh (invariant documented at `ClaudeCodeMirrorService.ts:12-22`). **Editing `.claude/skills/memo/SKILL.md` or `CLAUDE.md` by hand accomplishes nothing durable** — the change must be made in `.agents/workflows/memo.md` and `AGENTS.md`, then the generated layer regenerated.
+**Source-of-truth constraint (critical — this is why prior attempts likely failed).** `.agents/` and the repo-root `AGENTS.md` are the **bundled source** shipped to user workspaces (`ControlPlaneMigrationService.ts:94-95`: `BUNDLED_AGENT_DIR = '.agents'`, `BUNDLED_AGENTS_FILE = 'AGENTS.md'`). The repo-root `CLAUDE.md` (managed-block markers at `CLAUDE.md:22` / `:156`) and every `.claude/skills/*/SKILL.md` are **GENERATED** from those sources by `ClaudeCodeMirrorService` and are overwritten on version refresh (invariant documented at `ClaudeCodeMirrorService.ts:12-22`). **Editing `.claude/skills/memo/SKILL.md` or `CLAUDE.md` by hand accomplishes nothing durable** — the change must be made in `.agents/workflows/memo.md` and `AGENTS.md`, then the generated layer regenerated. Both `.claude/skills/memo/SKILL.md` and `CLAUDE.md` are checked into git (verified via `git ls-files`), so the dev-repo copies must be updated too.
 
 **Fix (summary).** Add "start memo capture" as a recognized natural-language entry trigger in the memo workflow source (frontmatter description + Process step + a short entry-mode note), mirror it into the `AGENTS.md` registry/skills-table/priority-rule and the pre-flight rule, regenerate the `.claude/` + `CLAUDE.md` layer, and update the Memo-tab tip to the user's exact wording. `/memo` keeps working — the new phrase is purely additive.
 
 ## Metadata
 
-- **Tags:** memo, trigger, skill-description, agents-md, claude-md, source-of-truth, implementation-html, ui-copy
+- **Tags:** docs, ui, feature
 - **Complexity:** 4/10
 - **Affected surface:** Memo capture entry path across all agent hosts; Memo sub-tab tip
 - **Files touched (source-of-truth):** 3 — `.agents/workflows/memo.md`, `AGENTS.md`, `src/webview/implementation.html`
 - **Files regenerated (do NOT hand-edit):** `.claude/skills/memo/SKILL.md`, `CLAUDE.md`
 
+## User Review Required
+
+- **Confirm the exact tip wording.** The plan proposes: `Tip: you can also use 'start memo capture' in an agent chat.` The user's previously-given directive used this exact phrasing. If the user wants different copy, this is the time to say so — the tip is a single-source string at `src/webview/implementation.html:1592`.
+- **Confirm the "close variant" entry semantics.** The plan proposes that "start memo capture (or a close variant, as a request to begin)" triggers entry, mirroring how `/memo` is described. This is deliberately fuzzy (model-invoked, not regex-parsed). If the user wants stricter or looser entry matching, specify before implementation.
+
 ## Complexity Audit
 
-**Complex / Risky-ish (4/10).** This is not a one-line copy change. The substance is documentation/skill-metadata, so there is no compiled code path or runtime logic to break — but correctness depends on getting the **source-of-truth routing** right and on the change actually influencing model behavior:
+### Routine
+- Editing the frontmatter `description` string in `.agents/workflows/memo.md:2` — one-line text change.
+- Editing the Process step #1 text in `.agents/workflows/memo.md:33` — one-line text change.
+- Adding a short "Entering Capture Mode" note to `.agents/workflows/memo.md` — pure documentation insertion.
+- Updating the `AGENTS.md` registry row (line 22), skills table row (line 92), and priority rule paragraph (line 101) — text edits in a markdown table and paragraph.
+- Reconciling the pre-flight rule at `AGENTS.md:29-30` — adding a clause to an existing sentence.
+- Updating the tip text at `src/webview/implementation.html:1592` — one-line text change.
+- Regenerating `.claude/skills/memo/SKILL.md` and `CLAUDE.md` from source — mechanical, via `generateClaudeMirror` + `ensureProtocolFile`.
 
-- **Routing risk (primary).** The intuitive edits (`.claude/skills/memo/SKILL.md`, `CLAUDE.md`, or just the tip) are exactly the ones that get silently overwritten or have no effect. The change must land in `.agents/workflows/memo.md` + `AGENTS.md`, then the generated layer must be refreshed. Mis-routing is the most likely failure and the reason the prior directive didn't stick.
-- **Behavioral risk (secondary).** "start memo capture" is a model-invocation trigger, not a deterministic parse. Reliability comes from naming the exact phrase in the frontmatter `description` and reconciling it with the pre-flight "do not auto-trigger on generic language" rule (otherwise the two instructions conflict and the model may decline to fire). This is inherent to how skills work in Claude Code and is the best available mechanism — the user's requirement explicitly rules out depending on a slash command.
-- **Low blast radius otherwise.** Purely additive: `/memo` and the sidebar Memo tab paths are untouched. No state, settings, or persisted format changes.
+### Complex / Risky
+- **Source-of-truth routing (primary risk).** The intuitive edits (`.claude/skills/memo/SKILL.md`, `CLAUDE.md`, or just the tip) are exactly the ones that get silently overwritten or have no effect. The change must land in `.agents/workflows/memo.md` + `AGENTS.md`, then the generated layer must be refreshed. Mis-routing is the most likely failure and the reason the prior directive didn't stick.
+- **Pre-flight rule reconciliation.** `AGENTS.md:30` says "Do not auto-trigger on generic language … unless the user explicitly asks to run that workflow." "start memo capture" must be enumerated as an **explicit** trigger (like `/memo`) so it is not mistaken for generic language. Without this reconciliation the new description and the pre-flight rule contradict each other.
+- **Behavioral reliability (inherent, partially mitigated).** "start memo capture" is a model-invocation trigger, not a deterministic parse. Research confirms Claude Code uses **semantic matching** (not regex/substring) against the `description` field for auto-invocation — naming the exact phrase there is the correct and only lever. However, community evaluations report auto-invocation success rates around **~53% in complex multi-file sessions** due to context-window degradation: as the conversation grows, system messages and tool logs crowd the `<system-reminder>` block where skill descriptions live, causing the model to miss matches. In short/fresh sessions reliability is higher. This is inherent to the progressive-disclosure architecture and is the best available mechanism — the user's requirement explicitly rules out depending on a slash command. **Mitigation:** the description should lead with the exact trigger phrase ("Enter by saying 'start memo capture'") so it is the most prominent semantic signal.
 
 ## Edge-Case & Dependency Audit
 
-- **Generated-file overwrite (must respect).** `.claude/skills/memo/SKILL.md` and `CLAUDE.md`'s managed block are regenerated by `ClaudeCodeMirrorService` and tracked in `.claude/.switchboard-generated.json`. Hand-edits to them are non-durable. **Action:** edit only the sources, then regenerate.
-- **Description propagation.** The generated skill `description` = source frontmatter `description` (`ClaudeCodeMirrorService.ts:236`). Because `.agents/workflows/memo.md` already ships a frontmatter `description`, editing that line propagates correctly into `.claude/skills/memo/SKILL.md` on regeneration — no `descriptionFallback` involved.
-- **Pre-flight conflict.** `AGENTS.md` / `CLAUDE.md` contain: *"Do not auto-trigger on generic language … unless the user explicitly asks to run that workflow."* "start memo capture" must be enumerated as an **explicit** trigger (like `/memo`) so it is not mistaken for generic language. Without this reconciliation the new description and the pre-flight rule contradict each other.
-- **Exit semantics unchanged.** The sole exit remains the exact message `process memo`; `edit N:` remains the in-place edit command. This change touches only **entry**. Do not alter exit/append rules.
-- **Embedded-phrase ambiguity (intentional, leave as-is).** The workflow already documents that trigger words inside a longer sentence are *content*, not commands (the "Anti-Example" section). The new entry trigger should follow the same spirit: "start memo capture" as a clear request to begin (whole-message or unambiguous intent) starts capture; the same words buried mid-sentence while already capturing are appended verbatim. The Process-step wording should say "start memo capture (or a close variant)" without promising exact-match parsing, mirroring how `/memo` is described.
-- **Published-extension propagation (per project migration rule).** ~4,000 installs on older versions. This is **not** a data migration — no state/file/setting format changes, nothing is deleted, and `/memo` still works, so it is fully backward compatible. The new source files reach existing workspaces only when the bundled `.agents/`/`AGENTS.md` refresh fires (`ControlPlaneMigrationService._shouldRefreshAgentVersion`, gated on extension version). **Action:** ensure the change ships under a version bump so the agent-version refresh carries it; no archival/import shim is needed.
-- **Tip is single-source.** The tip string occurs once in `src/` (`src/webview/implementation.html`, inside `#agent-list-memo`). The matching `dist/webview/implementation.html` line is a build artifact — do not hand-edit or flag it (project rule: `dist/` is not used in dev/testing).
-- **Tip honesty.** After this change the tip's promise ("you can also use 'start memo capture' in an agent chat") is backed by a real entry trigger, so the copy is accurate rather than aspirational.
+- **Race Conditions:** None. All edits are to static text files with no runtime concurrency.
+- **Security:** None. No secrets, credentials, or permission surfaces touched.
+- **Side Effects:**
+  - **Generated-file overwrite (must respect).** `.claude/skills/memo/SKILL.md` and `CLAUDE.md`'s managed block are regenerated by `ClaudeCodeMirrorService` and tracked in `.claude/.switchboard-generated.json`. Hand-edits to them are non-durable. **Action:** edit only the sources, then regenerate.
+  - **Description propagation.** The generated skill `description` = source frontmatter `description` (`ClaudeCodeMirrorService.ts:236`). Because `.agents/workflows/memo.md` already ships a frontmatter `description`, editing that line propagates correctly into `.claude/skills/memo/SKILL.md` on regeneration — no `descriptionFallback` involved.
+  - **YAML escaping.** The proposed description contains double quotes and colons. `escapeYamlValue` (`ClaudeCodeMirrorService.ts:199-205`) detects `/[:#"']/` and wraps the value via `JSON.stringify()`, producing valid double-quoted YAML in the generated SKILL.md. The source file's unquoted YAML is parsed only by the `parseSource` regex (`ClaudeCodeMirrorService.ts:173`), not a strict YAML parser, so embedded quotes are safe. **Caveat:** if a future edit adds a colon-space (`: `) to the unquoted source description, a real YAML parser would break — but `parseSource` would still work. Low risk; note for future maintainers.
+  - **Duplicate managed-block markers in AGENTS.md.** Lines 1-2 and 124-125 each contain duplicate `<!-- switchboard:agents-protocol:start/end -->` markers. `ensureProtocolFile` (`extension.ts:3084-3092`) handles this by collapsing first-start to last-end. Any content edit within the managed block will trigger a "collapsed duplicate markers" update on the next scaffold pass. This is a pre-existing condition, not caused by this plan, and is self-healing.
+- **Dependencies & Conflicts:**
+  - **Exit semantics unchanged.** The sole exit remains the exact message `process memo`; `edit N:` remains the in-place edit command. This change touches only **entry**. Do not alter exit/append rules.
+  - **Embedded-phrase ambiguity (intentional, leave as-is).** The workflow already documents that trigger words inside a longer sentence are *content*, not commands (the "Anti-Example" section, `.agents/workflows/memo.md:18-30`). The new entry trigger should follow the same spirit: "start memo capture" as a clear request to begin (whole-message or unambiguous intent) starts capture; the same words buried mid-sentence while already capturing are appended verbatim. The Process-step wording should say "start memo capture (or a close variant)" without promising exact-match parsing, mirroring how `/memo` is described.
+  - **Published-extension propagation (per project migration rule).** ~4,000 installs on older versions. This is **not** a data migration — no state/file/setting format changes, nothing is deleted, and `/memo` still works, so it is fully backward compatible. The new source files reach existing workspaces only when the bundled `.agents/`/`AGENTS.md` refresh fires (`ControlPlaneMigrationService._shouldRefreshAgentVersion`, gated on extension version). **Action:** ensure the change ships under a version bump so the agent-version refresh carries it; no archival/import shim is needed.
+  - **Tip is single-source.** The tip string occurs once in `src/` (`src/webview/implementation.html:1592`, inside `#agent-list-memo`). The matching `dist/webview/implementation.html` line is a build artifact — do not hand-edit or flag it (project rule: `dist/` is not used in dev/testing).
+  - **Tip honesty.** After this change the tip's promise ("you can also use 'start memo capture' in an agent chat") is backed by a real entry trigger, so the copy is accurate rather than aspirational.
+
+## Dependencies
+
+- `feature_plan_20260624112804_claude-code-native-discovery-mirror.md` — established the `ClaudeCodeMirrorService` mirror pipeline (`.agents/` → `.claude/skills/` + `CLAUDE.md` managed block) that this plan depends on for regeneration. The prior plan's resolution #3 ("keep `start memo capture`") intended this trigger but never carried it through to the source files.
+- No session dependencies. No blocking plans.
+
+## Research Findings
+
+Web research was conducted to confirm the Claude Code skill auto-invocation mechanism. Key findings:
+
+1. **CONFIRMED — `description` drives auto-invocation.** The `description` frontmatter field is the primary semantic signal Claude Code uses for model auto-invocation. Claude Code caches only skill metadata (`name` + `description`) into a persistent `<system-reminder>` block at session init (~60 tokens per skill via progressive disclosure). When user prompt intent matches a description, the full `SKILL.md` body is loaded on-demand. This validates the plan's core mechanism: naming "start memo capture" in the `description` field is the correct and only lever for making it a model-invoked trigger.
+
+2. **CONFIRMED — Semantic matching, not keyword parsing.** Claude Code does NOT run regex or exact substring matching on user prompts. The description is evaluated semantically by the model. This means "start memo capture" will match when the user says that phrase, but may also match on close variants like "let's start capturing memos" — and conversely may be missed in crowded context windows. This validates the plan's "close variant" design decision.
+
+3. **CONFIRMED — Hot-reload of SKILL.md mid-session.** Claude Code employs a native file watcher on `.claude/` directory. Changes to `SKILL.md` files are dynamically re-parsed mid-session — no CLI restart needed for skill updates. This simplifies verification: after regeneration, the new description is active immediately in any open Claude Code session.
+
+4. **Reliability caveat — ~53% success in complex sessions.** Community evaluations (Vercel agent evals) report auto-invocation success rates around 53% in complex multi-file sessions due to context-window degradation. In short/fresh sessions reliability is higher. This is inherent to the progressive-disclosure architecture and cannot be fixed at the plan level — it is the tradeoff for host-independent entry without slash commands.
+
+5. **Pre-existing codebase note — `user-invokable` spelling.** Research surfaced a Claude Code bug: the CLI runtime parser looks for `user-invocable` (with a "c"), but the VS Code extension validator flags that spelling and suggests `user-invokable` (with a "k"). The codebase uses `user-invokable` (`ClaudeCodeMirrorService.ts:248`) to avoid VS Code validator warnings, but this means the CLI may silently ignore the field for `no-user` invocation skills. **This is out of scope for this plan** (memo uses `invocation: 'default'`, not `no-user`), but should be tracked as a separate bugfix.
+
+## Adversarial Synthesis
+
+**Risk Summary:** Key risks: (1) source-of-truth mis-routing — editing generated files instead of `.agents/` sources, which is the exact failure that prevented the prior directive from sticking; (2) pre-flight rule contradiction — "do not auto-trigger on generic language" vs. a natural-language entry trigger, which must be reconciled by listing the phrase as an explicit recognized trigger; (3) behavioral non-determinism — research confirms `description`-driven semantic auto-invocation works but degrades to ~53% reliability in complex sessions due to context-window crowding; this is the best available mechanism given the user's requirement for host-independent entry. Mitigations: all edits land in the three source files only; the pre-flight rule is reconciled by tying the exception to the registry table; the description leads with the exact trigger phrase for maximum semantic prominence; regeneration path is specified concretely (Node script calling `generateClaudeMirror` + `buildManagedInner`). Low blast radius — purely additive, no state/format changes, `/memo` untouched.
 
 ## Proposed Changes
 
 ### 1. `.agents/workflows/memo.md` — source of truth for the memo skill (drives Claude Code model-invocation)
 
-**(a) Frontmatter `description`** — name the entry phrase so the generated skill description gives the model a signal to fire on. This is the load-bearing edit.
+**(a) Frontmatter `description` (line 2)** — name the entry phrase so the generated skill description gives the model a signal to fire on. This is the load-bearing edit.
 
-Before:
+Before (line 2):
 ```markdown
----
 description: Memo capture mode — append-only, no analysis; exit with `process memo`
----
 ```
-After:
+After (line 2):
 ```markdown
----
 description: Memo capture mode. Enter by saying "start memo capture" (or the /memo command) in chat; then append-only, no analysis; exit with `process memo`.
----
 ```
 
-**(b) Process step #1 — recognize the natural-language entry alongside `/memo`.**
+> **YAML escaping note:** The `parseSource` regex (`ClaudeCodeMirrorService.ts:173`) extracts the full line after `description: `, and `stripQuotes` does not fire (value starts with `M`, ends with `.`). The generated `.claude/skills/memo/SKILL.md` will have the description wrapped in double quotes via `JSON.stringify()` (because `escapeYamlValue` detects `"` and `:`), producing valid YAML. No manual escaping needed.
 
-Before:
+**(b) Process step #1 (line 33)** — recognize the natural-language entry alongside `/memo`.
+
+Before (line 33):
 ```markdown
-1. **Initialize:** On `/memo`, read `.switchboard/memo.md` (create if absent). ...
+1. **Initialize:** On `/memo`, read `.switchboard/memo.md` (create if absent). Write out the FULL current memo as a numbered list (one number per blank-line-separated entry), then state the total count. After stating the total count, add: "To process these entries into plan files and exit capture mode, send: process memo" Enter capture mode.
 ```
-After:
+After (line 33):
 ```markdown
-1. **Initialize:** On `/memo` — or when the user asks to **start memo capture** (that phrase or a close variant, as a request to begin) — read `.switchboard/memo.md` (create if absent). ...
+1. **Initialize:** On `/memo` — or when the user asks to **start memo capture** (that phrase or a close variant, as a request to begin) — read `.switchboard/memo.md` (create if absent). Write out the FULL current memo as a numbered list (one number per blank-line-separated entry), then state the total count. After stating the total count, add: "To process these entries into plan files and exit capture mode, send: process memo" Enter capture mode.
 ```
 
-**(c) Add a short "Entering Capture Mode" note** near the top of the body (above or beside the Process section) stating both entry paths and *why* the phrase exists: not every host supports custom slash commands, so "start memo capture" is the host-independent way in. Keep `process memo` as the only exit.
+**(c) Add a short "Entering Capture Mode" note** — insert a new section between the title (line 5) and the intro paragraph (line 7), stating both entry paths and *why* the phrase exists:
+
+```markdown
+## Entering Capture Mode
+
+There are two ways to enter Memo Capture Mode:
+1. **Slash command:** Send `/memo` in chat (available in hosts that support custom slash commands).
+2. **Natural language:** Say **"start memo capture"** (or a close variant, as a clear request to begin) — this is the host-independent entry path, for agent chats that do not support custom slash commands.
+
+Both paths initialize capture mode identically. The sole exit remains the exact command `process memo`.
+```
+
+Insert this after line 5 (`# Memo Capture Mode`) and before line 7 (the `You are in Memo Capture Mode` intro paragraph). The existing intro paragraph and all subsequent content (Hard Rules, Anti-Example, Process, etc.) remain unchanged.
 
 ### 2. `AGENTS.md` — shipped source that regenerates `CLAUDE.md`
 
-- **Workflow Registry row** (`AGENTS.md:22`): add the phrase to the Trigger Words column.
-  Before: `| `/memo` | **`memo.md`** | Memo capture mode — append-only, no analysis. Exit with `process memo`. ... |`
-  After: `| `/memo`, "start memo capture" | **`memo.md`** | Memo capture mode — append-only, no analysis. Enter via `/memo` or by saying "start memo capture". Exit with `process memo`. ... |`
-- **Skills table row** (`AGENTS.md:92`): change "User invokes `/memo` to enter…" → "User invokes `/memo` **or says \"start memo capture\"** to enter…".
-- **Memo Priority Rule paragraph** (`AGENTS.md:101`): add one sentence noting capture mode is entered by `/memo` **or the natural-language request "start memo capture"** (host-independent, for chats without slash commands).
-- **Reconcile the pre-flight rule:** in the MANDATORY PRE-FLIGHT CHECK, list "start memo capture" as an explicit recognized trigger so it is exempt from the "do not auto-trigger on generic language" guard.
+**(a) Workflow Registry row (line 22)** — add the phrase to the Trigger Words column and update the Description column.
+
+Before (line 22):
+```markdown
+| `/memo` | **`memo.md`** | Memo capture mode — append-only, no analysis. Exit with `process memo`. Edit entries with `edit N: <text>`. |
+```
+After (line 22):
+```markdown
+| `/memo`, "start memo capture" | **`memo.md`** | Memo capture mode — append-only, no analysis. Enter via `/memo` or by saying "start memo capture". Exit with `process memo`. Edit entries with `edit N: <text>`. |
+```
+
+**(b) Skills table row (line 92)** — update the "When to Use" description.
+
+Before (line 92):
+```markdown
+| `memo` | User invokes `/memo` to enter progressive capture mode — agent appends each user message to `.switchboard/memo.md` without analysis. |
+```
+After (line 92):
+```markdown
+| `memo` | User invokes `/memo` **or says "start memo capture"** to enter progressive capture mode — agent appends each user message to `.switchboard/memo.md` without analysis. |
+```
+
+**(c) Memo Priority Rule paragraph (line 101)** — add one sentence noting the natural-language entry path.
+
+Insert after the first sentence of the priority rule paragraph (after "...takes precedence over the default "analyze and act" behavior."):
+
+```markdown
+Capture mode is entered by `/memo` **or the natural-language request "start memo capture"** (host-independent, for chats without slash commands).
+```
+
+**(d) Reconcile the pre-flight rule (lines 29-30)** — tie the "generic language" exception to the registry table.
+
+Before (line 30):
+```markdown
+2. **Do not auto-trigger on generic language** (for example: "review this", "delegate this", "quick start") unless the user explicitly asks to run that workflow.
+```
+After (line 30):
+```markdown
+2. **Do not auto-trigger on generic language** (for example: "review this", "delegate this", "quick start") unless the user explicitly asks to run that workflow **or uses a recognized natural-language trigger listed in the table above** (e.g. "start memo capture").
+```
 
 ### 3. `src/webview/implementation.html` — the Memo sub-tab tip (user's exact wording)
 
-In the `#agent-list-memo` block, replace the tip text node:
-Before: `Tip: use the /memo skill to start memo capture.`
-After: `Tip: you can also use 'start memo capture' in an agent chat.`
-(Only the text changes; the `<p>` element and inline styles are untouched. Reference by string, not line number — the surrounding file shifts.)
+In the `#agent-list-memo` block (line 1592), replace the tip text node:
+
+Before (line 1592):
+```html
+                        Tip: use the /memo skill to start memo capture.
+```
+After (line 1592):
+```html
+                        Tip: you can also use 'start memo capture' in an agent chat.
+```
+
+Only the text changes; the `<p>` element and inline styles (line 1591) are untouched. Reference by string, not line number — the surrounding file shifts.
 
 ### 4. Regenerate the generated layer (do NOT hand-edit these)
 
-After editing the sources, regenerate so `.claude/skills/memo/SKILL.md` and the `CLAUDE.md` managed block pick up the new description/registry. This happens via the `ClaudeCodeMirrorService` scaffold/refresh path (e.g. on the next extension-version bump / control-plane bootstrap). Verify the regenerated `.claude/skills/memo/SKILL.md` frontmatter `description` matches the new source description, and that `CLAUDE.md`'s registry block matches `AGENTS.md`. If the dev-repo copies are checked in and must be current immediately, regenerate them via the same service rather than editing by hand.
+After editing the sources, regenerate so `.claude/skills/memo/SKILL.md` and the `CLAUDE.md` managed block pick up the new description/registry. **Concrete regeneration method:**
+
+Write a temporary Node script (e.g. `scripts/regen-claude-mirror.js`) that:
+1. Imports `generateClaudeMirror` and `buildManagedInner`, `CLAUDE_BLOCK_START`, `CLAUDE_BLOCK_END`, `CLAUDE_PREAMBLE` from `src/services/ClaudeCodeMirrorService.ts` (compile first or use `ts-node`/`tsx`).
+2. Calls `generateClaudeMirror(repoRoot, extensionVersion)` to regenerate `.claude/skills/memo/SKILL.md`.
+3. Reads the updated `AGENTS.md`, calls `buildManagedInner(source, CLAUDE_PREAMBLE)`, wraps with `CLAUDE_BLOCK_START` / `CLAUDE_BLOCK_END`, and writes the managed block back into `CLAUDE.md` (replacing the existing block between markers).
+4. Deletes the temporary script after use.
+
+Alternatively, launch VS Code with the Switchboard extension installed and open the repo — `scaffoldProtocolLayers` (`extension.ts:3204`) runs on activation and calls both `ensureClaudeProtocol` (updates CLAUDE.md managed block in-place) and `generateClaudeMirror` (regenerates `.claude/skills/`).
+
+**Verification after regeneration:**
+- `.claude/skills/memo/SKILL.md` frontmatter `description` matches the new source description (escaped via `JSON.stringify` — double-quoted with inner quotes escaped).
+- `CLAUDE.md` managed block (lines 22-156) matches `AGENTS.md` content (with the Claude preamble prepended).
+- No hand-edits left in generated files.
 
 ## Verification Plan
 
-1. **Source edits present.** `.agents/workflows/memo.md` frontmatter `description` and Process step #1 both name "start memo capture"; `AGENTS.md` registry row, skills row, priority rule, and pre-flight list all reference it. `grep -rni "start memo capture"` now returns the workflow, `AGENTS.md`, the (regenerated) `CLAUDE.md` + `.claude/skills/memo/SKILL.md`, and the tip — not the tip alone.
-2. **Generated layer matches source.** Regenerate, then confirm `.claude/skills/memo/SKILL.md` frontmatter `description` equals the new source description, and the `CLAUDE.md` managed block (lines 22 / 92 / priority rule) matches `AGENTS.md`. No hand-edits left in generated files.
+### Automated Tests
+
+No automated tests are applicable. This plan touches only documentation, skill metadata (YAML frontmatter), and a single HTML text string — there is no runtime logic, state machine, or data path to test programmatically. The `ClaudeCodeMirrorService` generation pipeline is exercised by its existing test coverage; the only new assertion would be that `parseSource` correctly extracts the updated description string, which is a trivial regex match already covered by the function's existing behavior.
+
+### Manual Verification
+
+1. **Source edits present.** `.agents/workflows/memo.md` frontmatter `description` (line 2) and Process step #1 (line 33) both name "start memo capture"; the new "Entering Capture Mode" section is inserted after line 5. `AGENTS.md` registry row (line 22), skills row (line 92), priority rule (line 101), and pre-flight rule (line 30) all reference it. `grep -rni "start memo capture"` now returns the workflow, `AGENTS.md`, the (regenerated) `CLAUDE.md` + `.claude/skills/memo/SKILL.md`, and the tip — not the tip alone.
+2. **Generated layer matches source.** Regenerate, then confirm `.claude/skills/memo/SKILL.md` frontmatter `description` equals the new source description (YAML-escaped), and the `CLAUDE.md` managed block (lines 22 / 53 / 123 / 130 / 132) matches `AGENTS.md`. No hand-edits left in generated files.
 3. **No stale `/memo`-only language.** Confirm no source surface still presents `/memo` as the *only* way into capture mode (registry, skills table, priority rule, tip).
-4. **Trigger behavior (manual, installed VSIX).** In a Claude Code agent chat with the scaffolded skills, send "start memo capture" as a whole message → the agent enters Memo Capture mode (replies `[MEMO CAPTURE ACTIVE]`, echoes the memo list, advises `process memo`). Then confirm `/memo` still enters capture mode, and `process memo` still exits and produces one plan per entry. Confirm a mid-sentence occurrence of the phrase while already capturing is appended as content, not re-triggered.
+4. **Trigger behavior (manual, installed VSIX).** In a Claude Code agent chat with the scaffolded skills, send "start memo capture" as a whole message → the agent enters Memo Capture mode (replies `[MEMO CAPTURE ACTIVE]`, echoes the memo list, advises `process memo`). Then confirm `/memo` still enters capture mode, and `process memo` still exits and produces one plan per entry. Confirm a mid-sentence occurrence of the phrase while already capturing is appended as content, not re-triggered. **Note:** Claude Code hot-reloads `SKILL.md` changes mid-session via its file watcher, so no CLI restart is needed after regeneration — the new description is active immediately. Test in a **fresh/short session** first (research shows ~53% auto-invocation reliability in complex multi-file sessions due to context-window degradation; reliability is higher in short sessions).
 5. **Tip render.** Open the sidebar → Agents panel → Memo sub-tab; the tip reads `Tip: you can also use 'start memo capture' in an agent chat.`, wraps cleanly above the textarea, with the single quotes rendering literally and no markup breakage.
 6. **Backward compatibility.** Confirm the sidebar Memo tab append path and the `/memo` path are unchanged, and that no persisted state/format was touched (pure docs/metadata + one HTML string).
+
+---
+
+**Recommendation:** Complexity is 4/10 → **Send to Coder**.

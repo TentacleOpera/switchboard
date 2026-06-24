@@ -3382,20 +3382,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
         }
     }
 
-    private async _nextPlannerTerminals(workspaceRoot: string, count = 1): Promise<string[] | null> {
-        const tvp = this._taskViewerProvider;
-        if (!tvp) return null;
-        const { terminals, locationKey } = await tvp.getRoleTerminalSet('planner', workspaceRoot);
-        if (terminals.length === 0) return null;
-        const cursor = tvp.getPlannerRotationCursor(locationKey);
-        const picked: string[] = [];
-        for (let i = 0; i < count; i++) {
-            picked.push(terminals[(cursor + i) % terminals.length]);
-        }
-        await tvp.advancePlannerRotationCursor(locationKey, count);
-        return picked;
-    }
-
     private async _distributePlannerDispatch(
         workspaceRoot: string,
         sourceCards: KanbanCard[],
@@ -5066,9 +5052,18 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     if (canRunConfiguredDispatch) {
                         const instruction = role === 'planner' ? 'improve-plan' : undefined;
                         let targetTerminalOverride: string | undefined;
-                        if (role === 'planner' && dispatchMode !== 'prompt') {
-                            const picked = await this._nextPlannerTerminals(workspaceRoot, 1);
-                            targetTerminalOverride = picked?.[0];
+                        // Pick the next planner terminal WITHOUT advancing — advance only after
+                        // successful dispatch (consistent with _distributePlannerDispatch and the
+                        // built-in single-card branch below).
+                        let plannerCursorLocationKey: string | undefined;
+                        const tvp = this._taskViewerProvider;
+                        if (role === 'planner' && dispatchMode !== 'prompt' && tvp) {
+                            const { terminals, locationKey } = await tvp.getRoleTerminalSet('planner', workspaceRoot);
+                            if (terminals.length > 0) {
+                                const cursor = tvp.getPlannerRotationCursor(locationKey);
+                                targetTerminalOverride = terminals[cursor % terminals.length];
+                                plannerCursorLocationKey = locationKey;
+                            }
                         }
                         const dispatched = await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(role, [sessionId], {
                             targetColumn,
@@ -5078,6 +5073,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             workspaceRoot: workspaceRoot || undefined,
                             targetTerminalOverride
                         });
+                        if (dispatched && plannerCursorLocationKey && tvp) {
+                            await tvp.advancePlannerRotationCursor(plannerCursorLocationKey, 1);
+                        }
                         if (dispatched && role === 'lead') {
                             const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
                             if (card && !this._isLowComplexity(card) && card.complexity !== 'Unknown') {
@@ -5109,12 +5107,27 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     } else {
                         const instruction = role === 'planner' ? 'improve-plan' : undefined;
                         let targetTerminalOverride: string | undefined;
-                        if (role === 'planner') {
-                            const picked = await this._nextPlannerTerminals(workspaceRoot, 1);
-                            targetTerminalOverride = picked?.[0];
+                        // Pick the next planner terminal from the shared rotation cursor WITHOUT
+                        // advancing yet — advance only after a successful dispatch so a failed
+                        // dispatch doesn't silently skip a terminal (mirrors _distributePlannerDispatch
+                        // which advances after Promise.allSettled, not before).
+                        let plannerCursorLocationKey: string | undefined;
+                        const tvp = this._taskViewerProvider;
+                        if (role === 'planner' && workspaceRoot && tvp) {
+                            const { terminals, locationKey } = await tvp.getRoleTerminalSet('planner', workspaceRoot);
+                            if (terminals.length > 0) {
+                                const cursor = tvp.getPlannerRotationCursor(locationKey);
+                                targetTerminalOverride = terminals[cursor % terminals.length];
+                                plannerCursorLocationKey = locationKey;
+                            }
                         }
                         const dispatched = await vscode.commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot, targetTerminalOverride);
                         if (dispatched && workspaceRoot) {
+                            // Advance the rotation cursor AFTER successful dispatch so a failed dispatch
+                            // doesn't skip a terminal (consistent with _distributePlannerDispatch).
+                            if (plannerCursorLocationKey && tvp) {
+                                await tvp.advancePlannerRotationCursor(plannerCursorLocationKey, 1);
+                            }
                             // Record dispatch identity (TaskViewerProvider does NOT call this for drag-drop
                             // because explicitTargetColumn is empty when triggerAgentFromKanban has no options)
                             await this._recordDispatchIdentity(workspaceRoot, sessionId, targetColumn, targetTerminalOverride);

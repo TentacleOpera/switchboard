@@ -23,42 +23,96 @@ The fix: rebuild the Remote tab markup to use a themed workspace dropdown + a th
 
 ## Metadata
 
-- **Tags:** `kanban`, `remote-control`, `linear`, `webview`, `ui`, `autosave`, `theming`
-- **Complexity:** 6/10
-- **Primary files:** `src/webview/kanban.html`, `src/services/KanbanProvider.ts`, `src/services/KanbanDatabase.ts` (read-only helper add), `src/services/RemoteControlService.ts` (no behavior change — already keys on `project || ''`)
+- **Tags:** `frontend`, `ui`, `ux`, `refactor`, `feature`
+- **Complexity:** 7/10
+- **Primary files:** `src/webview/kanban.html`, `src/services/KanbanProvider.ts`, `src/services/RemoteControlService.ts` (base-board preservation fix), `src/services/KanbanDatabase.ts` (read-only — no change)
+
+> Tags restricted to the allowed list per workflow. Previous ad-hoc tags (`kanban`, `remote-control`, `linear`, `webview`, `autosave`, `theming`) were not in the allowed set and have been replaced with the closest valid equivalents.
+
+## User Review Required
+
+Yes — this plan now includes a **backend behavior change** to `RemoteControlService` (preserving the empty-string base board in `getConfig`/`setConfig`) that the original plan incorrectly claimed was unnecessary. The user should confirm that preserving `''` in `RemoteConfig.boards` is acceptable before implementation, since it alters what gets persisted under the shipped `remote.config` key (additive only — never drops data previously stored).
 
 ## Complexity Audit
 
-**Complex/Risky** (not routine), for three reasons:
+### Routine
+- Replacing the bare `<select multiple>` with a themed checkbox list (pure DOM/CSS, reuses `--panel-bg2`, `--border-color`, `--text-primary`, `--font-mono`, `--accent-teal` already defined at `kanban.html:16-50`).
+- Converting the ping-mode `<select>` to a radio group.
+- Theming the number input and silent-sync checkbox with existing variables.
+- Removing the `SAVE REMOTE SETTINGS` button (`kanban.html:2585`) and its click handler (`kanban.html:6914`).
+- Adding the workspace `<select>` markup and the new CSS classes (`.remote-checkbox-list`, `.remote-checkbox-row`, `.remote-radio-row`, `.remote-number-input`) near `.column-select` (`kanban.html:775`).
 
-1. **Backend data-shape change.** `getRemoteConfig` currently returns `projects: string[]` for a single workspace. To render a workspace dropdown + per-workspace board checkboxes we need a richer payload (`workspaces: [{ workspaceRoot, label, boards: string[] }]`, where each `boards` list is prefixed with the base board). This must remain backward compatible with the existing `remoteConfig` message consumer.
-2. **Config semantics for the base board.** `RemoteConfig.boards: string[]` already stores board *names*; the base board is the empty string `''`. The UI must round-trip `''` correctly (a "No Project" checkbox whose value is `''`). Must verify `''` is not dropped by any `.filter(Boolean)`-style cleanup on save.
-3. **Autosave + multi-workspace selection.** Switching the workspace dropdown must not wipe selections for other workspaces — `config.boards` is a flat list of names, so two workspaces with same-named projects would collide. Scope decision below.
+### Complex / Risky
+- **Base-board `''` does NOT round-trip today (CRITICAL — original plan was wrong).** `RemoteControlService.getConfig` (`RemoteControlService.ts:86`) AND `setConfig` (`RemoteControlService.ts:100`) both call `.filter(Boolean)` on `boards`, which **drops the empty string**. The original plan's Edge-Case audit only inspected the webview save path (`kanban.html:6916`, which has no filter) and concluded `''` survives — it does not. Without fixing both backend methods, the "No Project" checkbox will never persist and `boardSet.has(p.project || '')` (`RemoteControlService.ts:186`) will never match base-board cards. This is a real backend behavior change, not "verify only."
+- **Autosave response wipes the board list (CRITICAL — original plan missed this).** `setRemoteConfig` (`KanbanProvider.ts:5008`) replies with `{ type: 'remoteConfig', config, active }` only — **no `projects`, `boardKeys`, or `workspaces`**. The webview handler at `kanban.html:6436` calls `renderRemoteConfig(msg.config, msg.projects)`. With the plan's new signature `renderRemoteConfig(config, payload)`, `payload.boardKeys` is undefined on every autosave round-trip, so the legacy fallback `['', ...((payload.projects) || [])]` reduces the checkbox list to **only "No Project"** — every project checkbox vanishes immediately after the first autosave. Must be fixed in the provider response or the webview render guard.
+- **Workspace-enumeration helper name was wrong.** The plan proposed `_getAllWorkspaceRoots()` / `_workspaceLabel()`, which **do not exist**. The correct existing helper is `_getWorkspaceItems()` (`KanbanProvider.ts:786`), which already returns `Array<{ label, workspaceRoot }>` honoring multi-root/mapped workspaces. The provider change must use it.
+- **Multi-workspace `boards` collision.** `RemoteConfig.boards` is a flat `string[]` of names; two workspaces each with a project named "Backend" are indistinguishable. Mitigated by per-workspace config (each workspace has its own `RemoteControlService` instance via `_getRemoteControl(workspaceRoot)` and its own `remote.config` DB row), so the dropdown switches the *entire* config context rather than merging. This is the existing architecture and is preserved.
 
-Everything else (radio group, theming, removing the Save button) is routine.
+## Uncertain Assumptions
+
+The following were assumptions in the original plan that I have now **verified against the source** and resolved; no web research is needed:
+- ~~`_getAllWorkspaceRoots()` / `_workspaceLabel()` exist~~ → verified absent; `_getWorkspaceItems()` is the correct helper.
+- ~~`''` round-trips through the save path~~ → verified FALSE; both `getConfig` and `setConfig` filter it out (now a required backend fix).
+- ~~`setRemoteConfig` response carries the board list~~ → verified FALSE; it does not (now a required provider/webview fix).
+
+No remaining uncertain assumptions require external web research.
 
 ## Edge-Case & Dependency Audit
 
-- **Migration / shipped state.** `RemoteConfig` (`boards`, `silentSync`, `pingMode`, `pingFrequencySeconds`) is persisted under the DB `config` key `remote.config` (`RemoteControlService.ts:41`) and **has shipped**. Per the repo migration rule, the new code MUST keep reading/writing the same shape. We are **not** changing `RemoteConfig`; `boards` stays a flat `string[]` of board names. No migration needed because the persisted shape is unchanged — only the UI rendering and the `getRemoteConfig` *response* payload change.
+- **Migration / shipped state.** `RemoteConfig` (`boards`, `silentSync`, `pingMode`, `pingFrequencySeconds`) is persisted under the DB `config` key `remote.config` (`RemoteControlService.ts:41`) and **has shipped**. Per the repo migration rule, the persisted shape (`RemoteConfig` interface) is unchanged — `boards` stays a flat `string[]`. The only persistence-layer behavior change is that `''` is no longer stripped by `.filter(Boolean)`; this is **additive** (it can only cause `''` to be *retained*, never to drop data that was previously stored), so it is migration-safe. Existing installs that never selected the base board are unaffected; installs that tried to select it (and silently failed) will now have it work as intended.
 - **Same-named boards across workspaces.** Because `boards` is a flat name list, selecting "Backend" in workspace A and an unrelated "Backend" in workspace B is indistinguishable. **Decision:** the Remote tab is scoped to a **single active workspace** (the existing behavior). The new workspace dropdown selects *which* workspace's boards you are configuring, but `RemoteControlService` is per-workspace already (`this._getRemoteControl(workspaceRoot)`), so each workspace has its **own** `remote.config`. Switching the dropdown re-fetches that workspace's config. This sidesteps the collision entirely and matches how RemoteControl is instantiated per-root.
 - **Empty workspace / no projects.** A workspace with zero project boards must still show the "No Project" (base board) checkbox. Render it unconditionally at the top of the checkbox list.
-- **`''` round-trip.** `Array.from(checkboxes).filter(c=>c.checked).map(c=>c.value)` must keep `''`. Do **not** use truthiness filters anywhere in the save path. Verified current save (`kanban.html:6916`) does `Array.from(selectedOptions).map(o=>o.value)` with no filter — preserve that property.
+- **`''` round-trip (CORRECTED).** The original plan claimed the webview save path had no truthiness filter and therefore `''` survived. That is true for the webview (`Array.from(selectedOptions).map(o=>o.value)`, `kanban.html:6916`) — but **false for the backend**: both `RemoteControlService.getConfig` (`:86`) and `setConfig` (`:100`) call `.filter(Boolean)`, which drops `''` on both read and write. The fix (see Proposed Changes §2) replaces `.filter(Boolean)` with an explicit "strip only non-string / null, keep `''`" normalization in both methods. After the fix, `''` survives the full round trip.
+- **Autosave echo must not wipe the board list (CORRECTED).** `setRemoteConfig` (`KanbanProvider.ts:5008`) replies with `{ type: 'remoteConfig', config, active }` only. The webview handler (`kanban.html:6436`) re-renders on every `remoteConfig` message. If `renderRemoteConfig` rebuilds the checkbox list from `payload.boardKeys` and that field is absent on the autosave echo, the list collapses to the legacy fallback (`['']`). Fix: either (a) have `setRemoteConfig` re-include `boardKeys` + `workspaces` in its response (preferred — symmetric with `getRemoteConfig`), or (b) guard the webview handler so a missing `boardKeys` skips the list rebuild and only updates scalar fields. The plan adopts (a) for symmetry and to keep the webview logic simple.
 - **No `confirm()` anywhere.** Per `CLAUDE.md`, do not add any confirmation dialog. Autosave is silent.
 - **VSIX bundling.** `kanban.html` is bundled into `dist/extension.js` by webpack; no new runtime imports are introduced (pure DOM + existing message passing), so no bundling risk.
-- **Theme classes already exist.** `.workspace-project-select` (`kanban.html:332`), `.column-select` (`kanban.html:775`), `.startup-row input[type="text"]` (`kanban.html:1131`) and the `:root` variables (`kanban.html:16`) are all available to reuse.
+- **Theme classes already exist.** `.workspace-project-select` (`kanban.html:332`), `.column-select` (`kanban.html:775`), `.startup-row input[type="text"]` (`kanban.html:1131`) and the `:root` variables (`kanban.html:16-50`) are all available to reuse.
 - **`getRemoteConfig` is also fired on tab open** (`kanban.html:3889`). The new payload must be handled by `renderRemoteConfig` without throwing if `workspaces` is absent (defensive fallback to the legacy `projects` array).
+- **Autosave debounce.** The Agents-tab autosave (`kanban.html:3629-3639`) fires synchronously on every `change`. The number-input `input` event fires on every keystroke. To avoid hammering `setRemoteConfig` (which writes the DB `config` row and may restart the ping timer via `setConfig` at `RemoteControlService.ts:107-112`), debounce the `input` handler for the frequency field (e.g. 400ms) while keeping `change` events (checkboxes/radios/select) immediate. The `change`-based controls are low-frequency and safe to fire immediately.
 
 ## Proposed Changes
 
-### 1. `src/services/KanbanDatabase.ts` — add a base-board-aware board list (optional helper)
+### 1. `src/services/KanbanDatabase.ts` — no change
 
-`getProjects` already returns project names. We do **not** modify it. Instead the provider will prepend the base board. No DB change strictly required, but document that the base board key is `''`.
+`getProjects` (`KanbanDatabase.ts:2197`) already returns `string[]` of project names. We do **not** modify it. The provider will prepend the base board (`''`). No DB change required.
 
-> No code change needed in `KanbanDatabase.ts` beyond what exists. (Listed for completeness so a future reader knows the base board is the empty-string project, not a DB row.)
+> Listed for completeness so a future reader knows the base board is the empty-string project, not a DB row.
 
-### 2. `src/services/KanbanProvider.ts` — enrich the `getRemoteConfig` response
+### 2. `src/services/RemoteControlService.ts` — preserve the empty-string base board (REQUIRED backend fix)
 
-Current (`KanbanProvider.ts:4972`):
+This is the fix the original plan incorrectly marked "no change." Both `getConfig` (`:86`) and `setConfig` (`:100`) currently do:
+
+```typescript
+boards: Array.isArray(parsed.boards) ? parsed.boards.map((b: unknown) => String(b)).filter(Boolean) : [],
+```
+
+`.filter(Boolean)` drops `''`, so the base board can never be persisted or read back. Replace the normalization in **both** methods with one that keeps `''` but still rejects `null`/`undefined`/non-strings. Add a small private helper and use it in both places:
+
+```typescript
+private _normalizeBoards(input: unknown): string[] {
+    if (!Array.isArray(input)) { return []; }
+    return input
+        .map((b: unknown) => (typeof b === 'string' ? b : String(b ?? '')))
+        .filter((b: string) => b !== '' ? true : true); // keep '' explicitly; reject only non-string junk above
+    // Simpler equivalent that keeps '': .filter((b): b is string => typeof b === 'string')
+}
+```
+
+In practice the cleanest replacement is:
+
+```typescript
+boards: Array.isArray(parsed.boards)
+    ? parsed.boards.filter((b): b is string => typeof b === 'string')
+    : [],
+```
+
+…and the same in `setConfig` for `config.boards`. This keeps `''`, rejects `null`/`undefined`/numbers, and no longer coerces with `String()` (board names are already strings from the UI; if a non-string sneaks in it is dropped rather than stringified — safer). Apply to **both** `getConfig` (`:86`) and `setConfig` (`:100`).
+
+**Behavior note:** `setConfig` (`:107`) starts the ping loop when `pingMode === 'constant' && boards.length > 0`. After the fix, selecting only "No Project" yields `boards: ['']` (length 1), so constant mode will correctly start. This is the intended behavior (the base board is a real board). No further change needed.
+
+### 3. `src/services/KanbanProvider.ts` — enrich `getRemoteConfig` AND `setRemoteConfig` responses
+
+Current `getRemoteConfig` (`KanbanProvider.ts:4989`):
 
 ```typescript
 case 'getRemoteConfig': {
@@ -75,7 +129,7 @@ case 'getRemoteConfig': {
 }
 ```
 
-Change to build a `boards` list that **includes the base board** and to also return the list of selectable workspaces (so the UI can offer the dropdown). Keep `projects` for backward compatibility.
+Change to build a `boardKeys` list that **includes the base board** and to return the list of selectable workspaces via the **existing** `_getWorkspaceItems()` helper (`KanbanProvider.ts:786`), which already returns `Array<{ label, workspaceRoot }>` and honors multi-root/mapped workspaces. Keep `projects` for backward compatibility.
 
 ```typescript
 case 'getRemoteConfig': {
@@ -91,11 +145,11 @@ case 'getRemoteConfig': {
     // Surface it explicitly so the UI can offer a "No Project" checkbox.
     const boardKeys = ['', ...projects];
 
-    // All open workspaces, so the UI can render a workspace dropdown.
-    const workspaces = this._getAllWorkspaceRoots().map(root => ({
-        workspaceRoot: root,
-        label: this._workspaceLabel(root),       // reuse existing label helper if present; else path.basename(root)
-        active: root === requested,
+    // All selectable workspaces via the existing helper (handles multi-root + mappings).
+    const workspaces = this._getWorkspaceItems().map(item => ({
+        workspaceRoot: item.workspaceRoot,
+        label: item.label,
+        active: item.workspaceRoot === requested,
     }));
 
     this._panel?.webview.postMessage({
@@ -111,11 +165,42 @@ case 'getRemoteConfig': {
 }
 ```
 
-> If `_getAllWorkspaceRoots()` / `_workspaceLabel()` do not exist under those exact names, use the existing workspace-enumeration the panel already uses to populate other workspace dropdowns (the same source the Kanban board filter uses). Confirm the helper name during implementation; fall back to `path.basename(root)` for the label.
+**`setRemoteConfig` (`KanbanProvider.ts:5001`) MUST also be updated** so its echo re-includes `boardKeys` + `workspaces` — otherwise every autosave wipes the checkbox list in the webview (see Edge-Case audit). After `rc.setConfig(...)` and re-reading `config`, rebuild the same `boardKeys`/`workspaces` and include them in the postMessage:
 
-`setRemoteConfig` (`KanbanProvider.ts:4984`) needs **no change** — it already persists the full `msg.config` per workspace. (When the UI switches workspace it will send `workspaceRoot` with the message; ensure `setRemoteConfig` resolves `msg.workspaceRoot` the same way — it already does via `_resolveWorkspaceRoot(msg.workspaceRoot)`.)
+```typescript
+case 'setRemoteConfig': {
+    const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+    if (workspaceRoot && msg.config) {
+        const rc = this._getRemoteControl(workspaceRoot);
+        await rc.setConfig(msg.config as RemoteConfig);
+        this._remoteControlActive = rc.isActive;
+        const config = await rc.getConfig();
+        const db = this._getKanbanDb(workspaceRoot);
+        const workspaceId = (await db.ensureReady()) ? (await db.getWorkspaceId() || '') : '';
+        const projects = workspaceId ? await db.getProjects(workspaceId) : [];
+        const boardKeys = ['', ...projects];
+        const workspaces = this._getWorkspaceItems().map(item => ({
+            workspaceRoot: item.workspaceRoot,
+            label: item.label,
+            active: item.workspaceRoot === workspaceRoot,
+        }));
+        this._panel?.webview.postMessage({
+            type: 'remoteConfig',
+            config,
+            projects,
+            boardKeys,
+            workspaceRoot,
+            workspaces,
+            active: rc.isActive,
+        });
+    }
+    break;
+}
+```
 
-### 3. `src/webview/kanban.html` — rebuild the Remote tab markup (lines 2550–2589)
+> To avoid duplicating the `boardKeys`/`workspaces` assembly, extract a private `_buildRemoteConfigPayload(workspaceRoot, config, rc)` helper and call it from both cases. This keeps the two responses symmetric and prevents future drift.
+
+### 4. `src/webview/kanban.html` — rebuild the Remote tab markup (lines 2550–2589)
 
 Replace the body of `#remote-tab-content` with themed controls. Add a workspace dropdown, a board-checkbox container, a radio group for ping mode, and **remove** the Save button.
 
@@ -209,7 +294,7 @@ Add CSS near the other component styles (e.g. after `.column-select` at `kanban.
 .remote-number-input:focus { outline: none; border-color: var(--accent-teal-dim); }
 ```
 
-### 4. `src/webview/kanban.html` — rewrite `renderRemoteConfig` (lines 6891–6913)
+### 5. `src/webview/kanban.html` — rewrite `renderRemoteConfig` (lines 6891–6913)
 
 Render the workspace dropdown and the board checkbox list (with "No Project" first). Defensive fallback to the legacy `projects` array.
 
@@ -267,9 +352,18 @@ function renderRemoteConfig(config, payload) {
 }
 ```
 
-Update the message handler that calls `renderRemoteConfig` to pass the whole payload (search for where `type === 'remoteConfig'` is handled and pass `msg` as the second arg, e.g. `renderRemoteConfig(msg.config, msg)`).
+Update the message handler at `kanban.html:6436` to pass the whole payload:
 
-### 5. `src/webview/kanban.html` — replace the Save button wiring with autosave (lines 6914–6926)
+```javascript
+case 'remoteConfig':
+    if (typeof msg.active === 'boolean') { remoteControlActive = msg.active; applyRemoteControlButtonState(); }
+    renderRemoteConfig(msg.config, msg);
+    break;
+```
+
+> Because `setRemoteConfig` now echoes `boardKeys` + `workspaces` (Proposed Changes §3), the autosave round-trip repopulates the list correctly. The legacy fallback (`['', ...projects]`) only triggers for older extension builds or unexpected payloads.
+
+### 6. `src/webview/kanban.html` — replace the Save button wiring with autosave (lines 6914–6926)
 
 Delete the `btn-save-remote-config` click handler entirely and add autosave on every control + a workspace-switch re-fetch. Mirror the Agents-tab autosave style (`kanban.html:3629`).
 
@@ -306,24 +400,47 @@ document.getElementById('remote-tab-content')?.addEventListener('change', (e) =>
     }
     remoteAutosave();
 });
-document.getElementById('remote-ping-frequency')?.addEventListener('input', remoteAutosave);
+// Debounce the frequency text input so rapid keystrokes don't spam setRemoteConfig
+// (each call writes the DB config row and may reschedule the ping timer).
+let _remoteFreqTimer;
+document.getElementById('remote-ping-frequency')?.addEventListener('input', () => {
+    clearTimeout(_remoteFreqTimer);
+    _remoteFreqTimer = setTimeout(remoteAutosave, 400);
+});
 ```
 
-Remove the `SAVE REMOTE SETTINGS` button (already removed from markup in step 3) and its handler.
+Remove the `SAVE REMOTE SETTINGS` button (already removed from markup in step 4) and its handler.
 
-### 6. `src/services/RemoteControlService.ts` — no change
+## Dependencies
 
-`boards` already keys on `project || ''` (`RemoteControlService.ts:186`), so a stored `''` board key correctly matches base-workspace cards. Verify only; no edit.
+- None. This is a self-contained UI + backend-normalization change. No other plan or session prerequisite blocks it.
+
+## Adversarial Synthesis
+
+Key risks: (1) the base-board `''` is silently stripped by `.filter(Boolean)` in both `getConfig`/`setConfig` — the original plan missed this and the "No Project" feature would have been dead on arrival; (2) the `setRemoteConfig` echo omits the board list, so autosave would wipe all project checkboxes after the first save; (3) the proposed workspace helpers didn't exist. Mitigations: replace `.filter(Boolean)` with a type-guarded filter that keeps `''` in both backend methods; make `setRemoteConfig` echo `boardKeys`/`workspaces` symmetric with `getRemoteConfig`; use the existing `_getWorkspaceItems()` helper. Complexity raised 6→7 due to the required backend behavior change.
 
 ## Verification Plan
 
-1. **Build:** `npm run compile` succeeds (webpack bundles `kanban.html`); produce a VSIX and install it (per repo rule, testing is via installed VSIX, not `dist/`).
-2. **Theming:** Open Kanban → Remote tab. Confirm the workspace dropdown, board checkbox list, ping-mode radios, and number input all render in the dark theme (no white boxes), matching other tabs.
-3. **Base board present:** With a workspace that has ≥1 project board, confirm the list shows **"No Project (base workspace board)"** first, then each project board, each with a checkbox. With a workspace that has **zero** projects, confirm "No Project" still appears alone.
-4. **Multi-select:** Check several boards including "No Project." Reload the panel; confirm selections persist (including the base board — verify `''` survives the round trip by checking the DB `config` row `remote.config` contains `""` in `boards`).
+> Per session directives: **skip compilation** (`npm run compile` is NOT run here — the user runs it separately) and **skip automated tests**. Verification below is manual, via an installed VSIX, performed by the user.
+
+### Automated Tests
+
+Skipped per session directive. The user will run the test suite separately. No new unit/integration/e2e tests are authored as part of this plan.
+
+### Manual Verification (user-run, via installed VSIX)
+
+1. **Theming:** Open Kanban → Remote tab. Confirm the workspace dropdown, board checkbox list, ping-mode radios, and number input all render in the dark theme (no white boxes), matching other tabs.
+2. **Base board present:** With a workspace that has ≥1 project board, confirm the list shows **"No Project (base workspace board)"** first, then each project board, each with a checkbox. With a workspace that has **zero** projects, confirm "No Project" still appears alone.
+3. **Multi-select + `''` round-trip (the critical backend fix):** Check several boards including "No Project." Reload the panel; confirm selections persist — **including the base board**. Verify `''` survives the round trip by inspecting the DB `config` row `remote.config` and confirming `boards` contains `""`. (This would have failed before the §2 backend fix.)
+4. **Autosave does not wipe the list (the critical echo fix):** Toggle a single board checkbox and watch the checkbox list immediately after the "Saved." status appears. Confirm all project checkboxes **remain visible** (the `setRemoteConfig` echo repopulates `boardKeys`). This is the regression test for the original plan's missed echo bug.
 5. **Workspace switch:** Open two workspaces. Switch the workspace dropdown; confirm the checkboxes repopulate for that workspace and reflect *its own* saved config (selections are per-workspace, not shared).
 6. **Radio ping mode:** Toggle Manual/Constant; reload; confirm the selection persists and `config.pingMode` is correct.
-7. **Autosave (no Save button):** Confirm there is no Save button. Toggle a checkbox, the silent-sync box, a radio, and edit the frequency — each change shows "Saved." and persists across reload with no extra click.
-8. **Frequency clamp:** Enter 10 and 999; confirm stored value clamps to 30 and 120 respectively.
-9. **Behavioral sync:** With "No Project" checked and pinging enabled, move a base-board card and confirm `RemoteControlService` still syncs it (the `boardSet.has(p.project || '')` path now has `''` in the set).
-10. **No confirm dialogs:** Confirm nothing in the new code introduces `confirm()`/`window.confirm()`/modal warnings (repo hard rule).
+7. **Autosave (no Save button):** Confirm there is no Save button. Toggle a checkbox, the silent-sync box, and a radio — each change shows "Saved." and persists across reload with no extra click.
+8. **Frequency debounce + clamp:** Type rapidly in the frequency field; confirm only one `setRemoteConfig` fires ~400ms after typing stops (observe the "Saved." text appears once, not per keystroke). Enter 10 and 999; confirm stored value clamps to 30 and 120 respectively.
+9. **Constant mode + base board:** With only "No Project" checked and ping mode = Constant, confirm the ping loop starts (previously `boards.length` was 0 because `''` was filtered, so constant mode would not start). This verifies the `setConfig` (`:107`) `boards.length > 0` gate now passes for the base board.
+10. **Behavioral sync:** With "No Project" checked and pinging enabled, move a base-board card and confirm `RemoteControlService` syncs it (the `boardSet.has(p.project || '')` path at `:186` now has `''` in the set).
+11. **No confirm dialogs:** Confirm nothing in the new code introduces `confirm()`/`window.confirm()`/modal warnings (repo hard rule).
+
+## Recommendation
+
+Complexity is **7/10** (backend behavior change + multi-file coordination + two critical correctness fixes the original plan missed). **Send to Lead Coder.**

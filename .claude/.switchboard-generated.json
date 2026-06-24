@@ -1,7 +1,7 @@
 {
   "generator": "ClaudeCodeMirrorService",
   "version": "1.7.4",
-  "generatedAt": "2026-06-24T19:59:44.466Z",
+  "generatedAt": "2026-06-24T23:15:00.027Z",
   "skills": [
     {
       "source": "workflows/memo.md",
@@ -136,11 +136,5 @@
     "Bash(sqlite3 *)",
     "Bash(duckdb *)"
   ],
-  "settingsAllowAdded": [
-    "Bash(curl *)",
-    "Bash(node *)",
-    "Bash(source *)",
-    "Bash(sqlite3 *)",
-    "Bash(duckdb *)"
-  ]
+  "settingsAllowAdded": []
 }

@@ -1,149 +1,120 @@
-# Epics as a CLI-Orchestration On-Ramp: EPIC Column + Prompt Builder Modal + Per-CLI Keyword Injection
+# Epic Orchestration in the Epics Tab — Orchestrator Role, No Board Column
 
 ## Goal
 
-Reframe epics from "cards that crawl through plan → code → review like any other plan" into a **distinct orchestration on-ramp**: a dedicated lane right after the first column where an epic + all its subtasks are dispatched as a single unit, explicitly activating the CLI's native subagent / worktree-per-plan orchestration. Make the feature legible (today it is "quite unclear how epics work") by giving the Epics tab a real **epic prompt builder modal**, and make the dispatch portable across CLIs by injecting the correct orchestration keyword **only** for the CLI actually targeted.
+Give epics **one legible way to be run end-to-end by the CLI's native subagent orchestration**, and put it **only in the Epics tab of `project.html`** — never on the kanban board. The board keeps the epic-as-traveller compaction model (an epic is one card; the column agents batch-process its subtasks stage-by-stage). Orchestration is a separate, explicit Epics-tab action so the board stays uncluttered and the two ways of running an epic don't visually collide. Introduce an `orchestrator` agent role whose prompt is edited **alongside every other role** (not in a bespoke per-epic modal), and **remove the confusing on-board epic-manage modal**.
 
-### Problems, background & root-cause analysis (verified against live code)
+### Problem analysis & root cause (verified against live code + the drafted epic plans)
 
-Three connected problems, all confirmed in source:
+There are two legitimate ways to action an epic, and the confusion comes from trying to host both on the board:
 
-1. **Epics have no home of their own on the board.** New epics land in `CREATED` (label **"New"**) alongside ordinary plans (`KanbanProvider.ts:7340-7343`, default `'CREATED'`). The board then expects every card to flow `CREATED → PLAN REVIEWED → …CODED → CODE REVIEWED → COMPLETED` (`agentConfig.ts:101-114`). But an epic is a *container* — it doesn't get "planned" then "coded" then "reviewed" as one card; its **subtasks** do. So epics sit awkwardly in a pipeline built for single plans. The user's insight: epics are really a way to **activate CLI orchestration** over a batch, not a pipeline stage.
+1. **Step it through columns (the traveller).** Today an epic rides the board as a single compaction card. When it is advanced/dispatched from a column, `_cardsToPromptPlans` (`KanbanProvider.ts:2407+`) expands it into epic + all subtasks and that column's agent (planner/lead/coder/…) receives one batch prompt covering every subtask, with `EPIC_ORCHESTRATION_DIRECTIVE` (`agentPromptBuilder.ts:320-325`) prepended. **This already gives "column agents action the epic with its subtask instructions"** — it is the value of the traveller, especially for small epics where one card grouping 3 subtasks reads far better than 3 loose cards in a 20-card column. The drafted plan **`kanban-epic-subtask-column-leak-and-backlog-cascade`** (epic = one rigid unit at board level; subtasks cascade and stay hidden) is the right model and is preserved — **with one correction (Decision #8): subtasks never diverge across stages and never render as individual board cards, so on-board epic *focus mode* is removed.** The "look inside an epic" surface is the **Epics tab**, not a board filter.
 
-2. **The epic configuration UI exists but is hidden and crude.** There is already an `epic-manage-modal` in the **board** webview (`kanban.html:3121-3147`) with a single-line `<input type="text">` "Prompt Template" field, a "Max Subtasks" field, and a legacy "Lock Columns" field. It is reachable only from a kanban card, not from the Epics tab where a user goes to *understand* epics. The `project.html` Epics tab (`project.html:1310-1344`) is render-only — it lists epics and previews markdown but cannot edit any epic dispatch config. The backend message round-trip is fully wired and unused by the Epics tab: `getEpicDetails` (with `source:'kanban'`) emits `kanbanEpicDetails {epic, subtasks, epicLockColumns, epicPromptTemplate, epicMaxSubtasks}` (`KanbanProvider.ts:7466-7469`); `updateEpicConfig` persists `epic_prompt_template` / `epic_max_subtasks` / `epic_lock_columns` to the DB `config` table (`KanbanProvider.ts:7478-7481`). **The pipes are in place; only the Epics-tab UI is missing.**
+2. **Orchestrate it (hand-off to one agent).** The alternative is to hand the *whole* epic to a single agent that uses its native subagents/worktrees to do every subtask in one shot — instead of the user manually stepping it column-to-column. This is the "activate the CLI orchestration features" use the board does not currently expose as a distinct, clear affordance.
 
-3. **`epic_lock_columns` is legacy/dormant and its default is wrong.** Its default is `'IN PROGRESS,CODE REVIEW,REVIEWED,DONE'` (`KanbanProvider.ts:7261`, `PlanningPanelProvider.ts:2764`) — **none of those strings are real column ids** in `DEFAULT_KANBAN_COLUMNS` (which uses `CREATED`, `PLAN REVIEWED`, `LEAD CODED`, `CODE REVIEWED`, `COMPLETED`, …). So the gate `if (lockColumns.includes(epic.kanbanColumn))` (`KanbanProvider.ts:7262`) is effectively never true on current installs. This stale field is the half-built ancestor of exactly the "epics shouldn't traverse the coding stages" idea — it should be **repurposed/migrated**, not duplicated.
+**Root cause of the confusion:** putting orchestration *on the board* (a dedicated column, or an on-card toggle) competes with the pipeline the epic is already travelling through, and the existing on-board **epic-manage modal** (`kanban.html:3121-3150`) makes it worse — it is opened per-epic-card but **saves global config** (`epic_prompt_template` / `epic_max_subtasks` / `epic_lock_columns` are DB `config` keys, not per-epic), so it reads as per-epic settings that silently aren't. The fix is to **take orchestration off the board entirely**: the board does step-it; the **Epics tab** does orchestrate-it; the orchestration *prompt* is a normal global role prompt edited with the other roles.
 
-4. **Orchestration keywords are per-CLI and collide with ordinary English (the portability problem).** The epic prompt already injects an agnostic directive — `EPIC_ORCHESTRATION_DIRECTIVE` (`agentPromptBuilder.ts:320-325`): *"Use your native subagent or orchestration capabilities…"* — which is correct and must stay. But a CLI-specific trigger word (e.g. Claude Code's `ultracode`) is a no-op or noise on the other CLIs across the ~4,000-install base, and a bare word like "goal" can be load-bearing in one CLI while meaning nothing in another. **Root cause:** the prompt is built **CLI-agnostically** — the builder (`buildKanbanBatchPrompt(role, plans, options)`, `agentPromptBuilder.ts:423`) never receives the target CLI identity, even though that identity is trivially derivable: the role's startup command's first token is already parsed into a display label at terminal init (`TaskViewerProvider.ts:6671-6673`), and `getStartupCommands(workspaceRoot)[role]` is reachable from the prompt builder's caller. The fix is to thread that identity in and gate any CLI-specific keyword behind a **fail-safe, per-CLI map** (unknown CLI → inject nothing).
+### What this delivers
 
-### What this plan delivers
+- A new **`orchestrator` role** (no kanban column) whose prompt is editable in the standard per-role "Customize Default Prompts" UI — confirmed auto-generated from `BUILT_IN_AGENT_LABELS` (`setup.html:1643`), so registering the role surfaces its prompt tab for free.
+- An **Epics-tab "Orchestrate" action** that assembles `orchestrator-prompt + this epic's subtasks` (reusing the existing epic-expansion path) and copies it / dispatches it to the orchestrator terminal.
+- **Removal of the kanban epic-manage modal**, with its still-needed capabilities (epic delete, add/remove subtask, config) relocated to the Epics tab so nothing is lost.
+- Migration of the legacy global keys into the orchestrator role config, killing the "per-epic UI saving global state" smell.
 
-- **Phase A — EPIC lane.** A new built-in `EPIC` column immediately after "New". User-disableable. By default it auto-appears when epics exist (content-driven, mirroring the existing `hideWhenNoAgent` occupancy precedent). Epics are the cards that live here; dispatching from this lane is the orchestration trigger.
-- **Phase B — Epic prompt builder modal in the Epics tab.** A proper modal (multi-line template, max-subtasks, orchestration toggles, and a **live preview** of the assembled epic prompt) wired to the already-existing `getEpicDetails`/`updateEpicConfig` round-trip. Plus inline "how epics work" copy to kill the confusion. Legacy `epic_lock_columns` migrated into the new model.
-- **Phase C — Per-CLI orchestration keyword injection.** Thread the target CLI into epic prompt building; inject the right keyword via a fail-safe map; surface the per-epic orchestration switches in the Phase-B modal.
+## Relationship to the drafted epic plans (dependencies, not overlaps)
 
-Each phase is independently shippable in the order A → B → C (B is most valuable for "clarity"; A gives epics a home; C is the portability hardening).
+This plan **depends on** and must land after:
+
+- **`feature_plan_20260625120001_review-epic-opens-kanban-tab-not-epic-tab.md`** — routes the epic **Review** button to the **Epics tab**. This plan relies on that: the Epics tab is where orchestration lives, and Review is the navigation into it. (Do **not** re-spec this routing here.)
+- **`kanban-epic-subtask-column-leak-and-backlog-cascade.md`** — establishes epic = one unit on the board (cascade + subtasks hidden). The traveller/step-it path this plan preserves *is* that model. (§1 already implemented in the working tree.)
+- **`kanban-epic-focus-worktree-decouple.md`** — focus mode as the first-class way to drop into an epic's subtasks on the board. Orthogonal to orchestration; untouched here.
+
+This plan adds **only** the orchestrate-it path + the role + the modal removal. It does not change board dispatch, cascade, or focus behavior.
 
 ## Metadata
 
-- **Tags:** `feature`, `epics`, `kanban`, `ui`, `frontend`, `orchestration`, `prompt`
-- **Complexity:** 8/10 (new built-in column + visibility model touching the shared column pipeline; a new modal mirroring an existing one across two webviews; a prompt-builder signature change with migration of a shipped config key)
-- **Depends on:** none landed; internally A → B → C sequencing recommended.
+- **Tags:** `feature`, `epics`, `orchestration`, `roles`, `project-panel`, `ui`, `prompt`
+- **Complexity:** 7/10 (new role across many enumeration touch-points; relocating management UI between two webviews; migrating shipped global config keys)
+- **Depends on:** `review-epic-opens-kanban-tab-not-epic-tab` (Review→Epics nav), `kanban-epic-subtask-column-leak-and-backlog-cascade` (epic-as-unit), `kanban-epic-focus-worktree-decouple` (focus mode). All three drafted; sequence after them.
 
 ## Decisions (made, not deferred)
 
-1. **EPIC column id/label/order.** `id: 'EPIC'`, `label: 'Epics'`, `order: 10` — between `CREATED` (order 0) and `CONTEXT GATHERER` (order 50). `kind: 'created'`-adjacent new kind `'epic'`; `source: 'built-in'`; `autobanEnabled: false`; `dragDropMode: 'prompt'` (dispatch = copy the orchestration prompt, no blind CLI auto-send).
-2. **Epics are NOT hard-blocked from other columns.** The EPIC lane is the *home and launch point*, not a cage. A user can still drag an epic elsewhere (existing flows must not break). "Epics don't belong in the coding columns" is expressed as a **default**, not an enforced lock — avoids regressing any install that currently parks epics elsewhere.
-3. **Default placement.** New epics land in `EPIC` instead of `CREATED` when the EPIC lane is enabled; fall back to `CREATED` when the lane is disabled (`KanbanProvider.ts:7340-7343` default changes from `'CREATED'` to a helper that respects the lane setting).
-4. **Disable + auto-appear semantics.** New DB config key `epic_lane_mode` ∈ `{auto, on, off}`, default `auto`. `auto` = show iff any `isEpic` card exists (occupancy-driven); `on` = always show; `off` = never show (epics fall back to `CREATED`). Modeled on `hideWhenNoAgent` + `_filterDynamicColumns` occupancy, extended for a card-type rather than a role.
-5. **Canonical config editor moves to the Epics tab.** The Phase-B modal in `project.html` becomes the primary editor. The existing `kanban.html` `epic-manage-modal` is upgraded in place to the same fields (shared field set, not a fork) so both entry points behave identically.
-6. **`epic_lock_columns` migration.** On first read, if `epic_lock_columns` still holds the stale default (`IN PROGRESS,CODE REVIEW,REVIEWED,DONE`) it is treated as unset (dormant value, never matched a real column) and superseded by `epic_lane_mode`. A non-default user value is preserved and surfaced as an "advanced: columns epics should not be dispatched into" field — **not dropped** (shipped key; CLAUDE.md migration rule).
-7. **Per-CLI keyword = explicit profile with binary prefill, fail-safe to nothing.** New DB config `epic_cli_keywords` (JSON map `{cliBinary: keywordText}`), plus a derived "detected CLI" hint from `getStartupCommands(workspaceRoot)[role]`'s first token. Unknown/undetected CLI → inject nothing. The universal `EPIC_ORCHESTRATION_DIRECTIVE` stays agnostic; the CLI keyword is an additive, clearly-delimited line appended only when the target CLI has a mapped keyword.
+1. **Orchestration lives ONLY in the Epics tab.** No orchestrator board column, no on-board orchestrate toggle. The board keeps the traveller + focus model untouched.
+2. **New `orchestrator` role, with NO kanban column.** Register it across the role enumerations (below) so its prompt edits "with everyone else" and it is a dispatch-by-role target — but do **not** add it to `DEFAULT_KANBAN_COLUMNS`. No column references `role:'orchestrator'`, so no lane appears.
+3. **The orchestration prompt is GLOBAL** — it is the orchestrator role's prompt (base branch in `agentPromptBuilder.ts` + the per-role override from setup). The Epics tab only *triggers and previews* it for a chosen epic. This resolves the per-epic-vs-global smell.
+4. **Migrate the legacy global keys.** On first read, import `epic_prompt_template` → orchestrator role prompt override and `epic_max_subtasks` → an orchestrator config/addon; keep reading the legacy keys as fallback (shipped keys — never drop, per CLAUDE.md). `epic_lock_columns` is dormant (its default `IN PROGRESS,CODE REVIEW,REVIEWED,DONE` matches no real column id) — treat the stale default as unset; preserve any non-default user value.
+5. **Remove the kanban epic-manage modal entirely**, relocating its still-needed capabilities to the Epics tab FIRST (no capability regression): epic **delete** (Epics tab has none today), **add-subtask** (only bulk-add via the EPIC strip button survives on the board), and config (now the orchestrator role prompt + Epics-tab orchestration settings). Preserve shared messages used elsewhere.
+6. **Orchestrate action = copy prompt by default, optional send-to-terminal.** Baseline: assemble and copy to clipboard (works regardless of terminal state). Optional: dispatch to the orchestrator terminal via `dispatchCustomPromptToRole('orchestrator', …)`.
+7. **Per-CLI keyword injection is an optional later phase** (Phase 4), implemented as an orchestrator addon with a fail-safe map (unknown CLI → inject nothing), deriving the target CLI from the role's startup-command binary (`TaskViewerProvider.ts:6671`). The universal `EPIC_ORCHESTRATION_DIRECTIVE` stays agnostic.
 
 ## User Review Required
 
-None — all forks above are decided. One product note (not a blocker): Decision #2 deliberately keeps epics draggable into coding columns. If you later want a hard guard, the migrated `epic_lock_columns` field (Decision #6) is the place to enforce it; this plan wires the data but does not enforce a block.
+None — all forks decided. One product note: Decision #1 deliberately keeps the epic a board traveller (your compaction rationale for small epics) and confines orchestration to the Epics tab. If you ever want orchestration discoverable from the board, the clean hook is a single "Open in Epics tab" affordance on the epic card (reusing the plan-#1 Review nav) — not an on-board column.
 
 ## Complexity Audit
 
 ### Routine
-- Adding the `EPIC` entry to `DEFAULT_KANBAN_COLUMNS` (`agentConfig.ts:101-114`) and a new `kind: 'epic'` to the `KanbanColumnDefinition` union (`agentConfig.ts:70-81`).
-- Building the Phase-B modal HTML/CSS by copying the established `.kanban-log-overlay`/`.kanban-log-modal` pattern (`project.html:1455-1480`) and the New-Epic open/close/submit JS (`project.js:1689-1723`).
-- Reusing the existing `getEpicDetails`/`updateEpicConfig`/`kanbanEpicDetails` messages — no new backend message types for Phase B config (only an added `source:'project'` branch so the Epics tab gets the config payload).
-- Upgrading the `kanban.html` `epic-manage-modal` "Prompt Template" from `<input>` to `<textarea>` and adding the orchestration toggles (same field set as Phase B).
+- Building the Epics-tab orchestration UI by following the established `.kanban-log-overlay`/`.kanban-log-modal` modal pattern (`project.html:1455-1480`) and the `vscode.postMessage` / `window.addEventListener('message')` convention (`project.js:277+`).
+- Relocating subtask add/remove + epic delete into the Epics tab — `removeSubtaskFromEpic` is already used there (`project.js:1377-1386`); `addSubtaskToEpic` and `deleteEpic` handlers already exist in both `KanbanProvider.ts` and `PlanningPanelProvider.ts`, so the Epics tab just needs to send them.
+- Adding the orchestrator role to the dynamic per-role prompt UI — free once it is in `BUILT_IN_AGENT_LABELS` (`setup.html:1643` filters that list).
 
 ### Complex / Risky
-- **New column visibility flag in a shared pipeline.** The EPIC column must flow through `buildKanbanColumns` (`agentConfig.ts:334-367`), `_filterVisibleColumns` (`TaskViewerProvider.ts:2063-2075`), and `_filterDynamicColumns` (`KanbanProvider.ts:2363-2376`). `_filterVisibleColumns` currently treats only `CREATED`/`COMPLETED` as always-fixed and keys visibility off `visibleAgents[role]`; EPIC has no role. Must add a card-type-aware branch (occupancy by `isEpic`) without disturbing the role-based logic for every other column. Regression surface: any change here re-renders **all** columns for **all** users.
-- **Default-placement change for epic creation.** Changing the `'CREATED'` fallback (`KanbanProvider.ts:7340-7343`) affects where every newly created epic lands. Must respect `epic_lane_mode` and not strand epics in a hidden column (if lane is `off`, must fall back to `CREATED`).
-- **Prompt builder signature change (Phase C).** Threading `targetCli` into `PromptBuilderOptions` (`agentPromptBuilder.ts:93-191`) and `generateUnifiedPrompt` (`KanbanProvider.ts:2783-2917`) touches a hot, widely-called path. Must be additive/optional so non-epic and non-CLI-aware callers are unaffected.
-- **Migration of a shipped config key.** `epic_lock_columns` exists on released installs; its handling must import-then-supersede, never silently drop (CLAUDE.md).
-- **Two webviews must not fork.** The Epics-tab modal and the board modal must share one field set and one save payload shape or they will drift.
+- **New role across many enumerations.** A role must be added in lockstep to: `BuiltInAgentRole` (`agentConfig.ts:1`), `BUILT_IN_AGENT_LABELS` (`agentConfig.ts:87-99` **and** the webview copy in `sharedDefaults.js`), `DEFAULT_VISIBLE_AGENTS` (`sharedDefaults.js:2-18`), `DEFAULT_ROLE_CONFIG` + `ROLE_ADDONS` (`sharedDefaults.js`), `getVisibleAgents` defaults (`TaskViewerProvider.ts:3600-3615`), `PlanningPanelProvider` visible-agent defaults (`:7716-7721`), the `buildKanbanBatchPrompt` role branch + the "unknown role" error list (`agentPromptBuilder.ts:494-1193`), `_getDefaultPromptOverrides` roles array (`KanbanProvider.ts:2517`), and the role-config snapshot (`KanbanProvider.ts:2923-2935`). **Miss one and the role silently misbehaves.** Note: `columnToPromptRole` (`agentPromptBuilder.ts:1200-1218`) needs NO entry since there is no orchestrator column.
+- **Orchestrator base prompt branch.** `buildKanbanBatchPrompt` throws on unknown roles — the orchestrator needs a real base-instruction branch (assemble: orchestrator base + `EPIC_ORCHESTRATION_DIRECTIVE` + subtask list + optional CLI keyword).
+- **Migrating shipped config keys.** `epic_prompt_template` / `epic_max_subtasks` exist on released installs (written by both `KanbanProvider.updateEpicConfig` and `PlanningPanelProvider`). Import-then-supersede; never drop.
+- **Modal removal without capability loss.** The board modal is the ONLY current UI for epic delete and dropdown add-subtask; those must exist in the Epics tab before/as the modal is removed.
+- **No-column role must not create a phantom lane or break visibility filters.** Confirm `_filterVisibleColumns` / `_filterDynamicColumns` never synthesize a column for a role that has none.
 
 ## Edge-Case & Dependency Audit
 
-- **Lane `off` + epics exist.** Epics must remain visible in `CREATED` (fallback), never vanish. `_filterDynamicColumns`/placement must guarantee no orphaned-in-hidden-column state.
-- **Lane `auto` + zero epics.** Column hidden — must not render an empty ghost lane or break drag-drop column indexing in `kanban.html` (`handleDrop` indexes `columns.indexOf(...)`).
-- **Subtasks never appear as EPIC-lane cards.** The board already hides `card.epicId` cards off the main board (`kanban.html:5077-5087`) and `_visibleColumnCards` excludes subtasks (`KanbanProvider.ts:360-364`). EPIC lane shows epic *containers* only; verify subtasks still roll up.
-- **Epic focus mode still works.** `currentFocusedEpicId` (`kanban.html:3738, 4993-5087`) filters the board to an epic + its subtasks. The EPIC lane and focus mode are orthogonal — focusing an epic from the EPIC lane must still expand subtasks across the pipeline.
-- **Order-override collisions.** `getKanbanOrderOverrides()` (consumed in `_buildKanbanColumnsForWorkspace`, `TaskViewerProvider.ts:2054-2061`) could reorder EPIC; ensure a sane default and that overrides can move it but it defaults to position-after-New.
-- **Migration: no double-stamp.** Don't assume a prior migration ran; `epic_lane_mode` absent → treat as `auto` (the desired default) so existing installs get the new behavior without a write.
-- **Per-CLI fail-safe.** Undetected binary, wrapper script, alias, or empty `epic_cli_keywords` → inject nothing. Never emit one CLI's keyword to another. The agnostic directive always remains.
-- **Clipboard vs CLI dispatch parity.** EPIC lane uses `dragDropMode: 'prompt'` (clipboard). Confirm the orchestration prompt (directive + template + per-CLI keyword + subtask list) is assembled identically whether dispatched via the lane's prompt-copy or any CLI-trigger path that also builds an epic prompt.
+- **Team-lead remnants:** none in active code (only stale docs/archived plans) — this is a genuinely new role, not a revival.
+- **Shared messages on modal removal:** `addSubtaskToEpic` is also sent by the EPIC strip button's bulk convert/add path (`kanban.html:9341-9356`) — keep the handler; only remove the modal's call site. `removeSubtaskFromEpic` is used by the Epics tab — keep. `updateEpicConfig` is also handled by `PlanningPanelProvider` — keep. `kanbanEpicDetails` is used ONLY by the board modal — safe to remove. `deleteEpic` is unique to the modal — relocate to the Epics tab, do not delete the handler.
+- **Orchestrator with no terminal:** if no orchestrator terminal exists, the Orchestrate action must still copy the prompt (don't hard-fail on missing dispatch target).
+- **Max-subtasks cap still applies** to the assembled orchestration prompt (reuse the existing `epic_max_subtasks`/addon limit + the `[WARNING: N subtasks …]` line).
+- **Preview = dispatch parity:** the Epics-tab preview must be assembled by the same code path the Orchestrate action dispatches, or it will drift.
+- **Per-CLI fail-safe (Phase 4):** undetected/wrapper/aliased binary or empty map → inject nothing; never emit one CLI's keyword to another; agnostic directive always remains.
+- **No confirmation dialogs** anywhere (project rule) — epic delete in the Epics tab executes immediately, like every other delete.
 
 ## Proposed Changes
 
-### Phase A — EPIC lane
+### Phase 1 — `orchestrator` role (no column) + prompt "with everyone else"
+- `agentConfig.ts`: add `'orchestrator'` to `BuiltInAgentRole` (`:1`) and `orchestrator: 'Orchestrator'` to `BUILT_IN_AGENT_LABELS` (`:87-99`). **Do not** touch `DEFAULT_KANBAN_COLUMNS`.
+- `sharedDefaults.js`: add orchestrator to the webview `BUILT_IN_AGENT_LABELS` list, `DEFAULT_VISIBLE_AGENTS`, `DEFAULT_ROLE_CONFIG`, `ROLE_ADDONS` (include an `epicMaxSubtasks` and, later, per-CLI keyword addon).
+- `TaskViewerProvider.ts:3600-3615` and `PlanningPanelProvider.ts:7716-7721`: add `orchestrator` to visible-agent defaults.
+- `agentPromptBuilder.ts`: add an `if (role === 'orchestrator')` base-instruction branch in `buildKanbanBatchPrompt` (`:494-1193`) and add `orchestrator` to the unknown-role error list (`:1193`). The branch assembles orchestrator base + `EPIC_ORCHESTRATION_DIRECTIVE` + subtask list (+ optional CLI keyword in Phase 4).
+- `KanbanProvider.ts`: add `'orchestrator'` to the `_getDefaultPromptOverrides` roles array (`:2517`) and an `orchestratorConfig` in the role-config snapshot (`:2923-2935`).
+- **Migration:** on first orchestrator-config read, import legacy `epic_prompt_template` → orchestrator prompt override and `epic_max_subtasks` → orchestrator `epicMaxSubtasks`; keep reading legacy keys as fallback.
 
-**File: `src/services/agentConfig.ts`**
-1. Extend the `KanbanColumnDefinition.kind` union (`:70-81`) with `'epic'`.
-2. Insert into `DEFAULT_KANBAN_COLUMNS` (`:101-114`) after `CREATED`:
-   ```ts
-   { id: 'EPIC', label: 'Epics', order: 10, kind: 'epic', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt', hideWhenNoEpics: true },
-   ```
-   Add the optional `hideWhenNoEpics?: boolean` field to the interface.
+### Phase 2 — Epics-tab orchestration + relocate epic management (`project.html` / `project.js` / `PlanningPanelProvider.ts`)
+- Add an **"Orchestrate"** button per epic (and/or in the preview meta-bar). On click, request a backend-assembled orchestration prompt (`previewEpicPrompt`-style) and copy it; optional "Send to Orchestrator" → `dispatchCustomPromptToRole('orchestrator', …)`.
+- Add a **live preview** pane and a short "How epics work" explainer (step-on-the-board vs orchestrate-here).
+- Add **epic delete** and **add-subtask** UI to the Epics tab (send existing `deleteEpic` / `addSubtaskToEpic`); `removeSubtaskFromEpic` already wired (`project.js:1377-1386`).
+- Backend: `PlanningPanelProvider` already handles `getEpicDetails`/`updateEpicConfig`/`addSubtaskToEpic`/`removeSubtaskFromEpic`/`deleteEpic`; add a `previewEpicPrompt` (or reuse `getEpicDetails`) that returns the assembled orchestrator prompt for the chosen epic via the same builder the dispatch uses.
 
-**File: `src/services/TaskViewerProvider.ts`**
-3. In `_filterVisibleColumns` (`:2063-2075`): when `epic_lane_mode === 'off'`, drop the `EPIC` column; otherwise keep it (occupancy handled by the dynamic filter). Read the mode via the kanban DB config (cache per refresh to avoid an await storm).
+### Phase 3 — Remove the kanban epic-manage modal (`kanban.html` / `KanbanProvider.ts`)
+- Delete the modal HTML (`:3121-3150`), `openEpicManageModal`/`closeEpicManageModal`/`populateEpicManageModal` (`:7218-7279`) and the modal listeners (`:9393-9439`).
+- Remove the modal-open path on the EPIC strip button (`:9335-9340`) while **keeping** its convert-to-epic / bulk-add-subtask path (`:9341-9356`).
+- Remove the `kanbanEpicDetails` message (sender `KanbanProvider.ts:7466-7469` `source:'kanban'` branch; receiver `kanban.html:6600-6601`). Keep `getEpicDetails`/`updateEpicConfig`/`addSubtaskToEpic`/`removeSubtaskFromEpic`/`deleteEpic` handlers (shared / relocated).
 
-**File: `src/services/KanbanProvider.ts`**
-4. In `_filterDynamicColumns` (`:2363-2376`): generalize the occupancy check so a column flagged `hideWhenNoEpics` is shown iff (`epic_lane_mode === 'on'`) OR any card with `isEpic` exists (for `auto`). Keep the existing `hideWhenNoAgent` branch untouched.
-5. Epic creation placement (`:7340-7343`): replace the hard `'CREATED'` fallback with `await this._defaultEpicColumn(workspaceRoot)` → returns `'EPIC'` when lane enabled (`auto`/`on`), else `'CREATED'`. Preserve the "earliest subtask column" behavior when the epic is created from existing subtasks.
-
-**File: `src/webview/kanban.html`**
-6. `renderColumns` (`:4466+`) already maps `columnDefinitions`; verify the new `kind:'epic'` renders (add a lane style/badge class). Confirm `handleDrop` column-index math tolerates the inserted column.
-
-### Phase B — Epic prompt builder modal (Epics tab)
-
-**File: `src/webview/project.html`**
-7. Add an `epic-builder-modal` using the `.kanban-log-overlay`/`.kanban-log-modal` pattern (model on `:1455-1480`). Fields: **multi-line** `<textarea>` prompt template, `max subtasks` number, orchestration toggles (use-subagents / worktrees-per-plan / no-subagents — mirroring `agentPromptBuilder.ts:443-462` addon semantics), the migrated advanced "do-not-dispatch columns" field, and a **read-only live preview** pane showing the assembled epic prompt. Add a short "How epics work" explainer block at the top of the Epics tab (`:1310-1344`).
-8. Add a "⚙ Configure dispatch" button on each epic row and/or in the preview meta-bar that opens the modal.
-
-**File: `src/webview/project.js`**
-9. On modal open, post `getEpicDetails {sessionId, workspaceRoot, source:'project'}`; handle a new `epicDetailsConfig`/reused `kanbanEpicDetails` (see backend change) to populate fields. On Save, post `updateEpicConfig {workspaceRoot, epicPromptTemplate, epicMaxSubtasks, epicLockColumns, epicOrchestration}` (existing message type). Reuse the `vscode.postMessage` + `window.addEventListener('message')` switch convention (`:277+`).
-10. Live preview: assemble client-side from the directive text + template + a sample subtask list, OR (preferred) request a backend-rendered preview so it is byte-identical to dispatch (add a `previewEpicPrompt` message — small, read-only).
-
-**File: `src/services/KanbanProvider.ts`**
-11. `getEpicDetails` (`:7445-7469`): add a `source === 'project'` branch that emits the same config payload to `project.html` (either reuse `kanbanEpicDetails` or a parallel `epicDetailsConfig`). `updateEpicConfig` (`:7465-7481`): extend to persist the new orchestration toggles (new config keys, see Phase C) alongside the existing three. Implement the `epic_lock_columns` migration (Decision #6): stale-default → treated as unset.
-12. Optional `previewEpicPrompt` handler: build via the same `generateUnifiedPrompt` epic path and return the string for the modal preview.
-
-**File: `src/webview/kanban.html`**
-13. Upgrade `epic-manage-modal` (`:3121-3147`): "Prompt Template" `<input>` → `<textarea>`; add the same orchestration toggles; keep `populateEpicManageModal` (`:7253`) and the save path (`:9418-9432`) in sync with the shared field set. No behavioral fork from the Epics-tab modal.
-
-### Phase C — Per-CLI orchestration keyword injection
-
-**File: `src/services/agentPromptBuilder.ts`**
-14. Add optional `targetCli?: string` and `epicCliKeyword?: string` to `PromptBuilderOptions` (`:93-191`). In the epic-mode block (`:485-490`), after the agnostic `EPIC_ORCHESTRATION_DIRECTIVE`, append a clearly-delimited line **only if** `epicCliKeyword` is non-empty (e.g. `\n\n<orchestration trigger>: ${epicCliKeyword}`). Keep the directive itself unchanged and agnostic. Add a `EPIC_CLI_KEYWORD_BLOCK` helper for the delimiter.
-
-**File: `src/services/KanbanProvider.ts`**
-15. In `generateUnifiedPrompt` (`:2783-2917`), when `epicMode` is set: derive the target CLI binary via `this._taskViewerProvider?.getStartupCommands(workspaceRoot)?.[role]` → first whitespace token → basename (mirror `TaskViewerProvider.ts:6671`). Look up the keyword from the `epic_cli_keywords` JSON config map; if found, set `resolvedOptions.epicCliKeyword`. **Unknown/empty → leave undefined (inject nothing).**
-
-**File: `src/services/KanbanDatabase.ts`**
-16. No schema change — `epic_cli_keywords` and `epic_lane_mode` are plain `config` rows via existing `getConfig`/`setConfig` (`:2857-2875`). (DB `config` table is the blessed home for state — consistent with project convention.)
+### Phase 4 (optional) — Per-CLI orchestration keyword
+- Add `targetCli`/`epicCliKeyword` to `PromptBuilderOptions`; in the orchestrator branch, append a delimited keyword line only when a keyword is mapped. In the dispatch path, derive the CLI binary from `getStartupCommands(workspaceRoot)['orchestrator']` first token; look up an `epic_cli_keywords` config map; unknown → inject nothing.
 
 ## Verification Plan
 
-> Manual verification against an installed VSIX (per project norm; `dist/` is not used in dev). Compile/tests run separately by the user.
+> Manual verification against an installed VSIX (per project norm). Compile/tests run separately.
 
-**Phase A**
-1. With no epics: EPIC lane hidden in `auto` (default). Create an epic → lane appears, epic lands in it, subtasks do not appear as lane cards.
-2. Set `epic_lane_mode='on'` → lane always visible even with zero epics; `'off'` → lane hidden and a new epic falls back to `CREATED` (never stranded).
-3. Drag an epic out of the lane into another column → still allowed (Decision #2), board re-renders correctly; drag-drop indices intact with the inserted column.
-4. Confirm every other column (role-based visibility, `hideWhenNoAgent`) is unchanged for a normal (non-epic) board.
-
-**Phase B**
-5. Open the Epics tab → "How epics work" copy present. Open the builder modal on an epic → existing `epic_prompt_template`/`epic_max_subtasks` load into the fields.
-6. Edit template (multi-line), toggle orchestration switches, Save → `updateEpicConfig` persists; reopen → values round-trip. Verify the board's `epic-manage-modal` shows the same values (no fork).
-7. Live preview matches the actual dispatched prompt (if backend-rendered, byte-identical).
-8. Legacy migration: seed `epic_lock_columns` with the stale default → modal treats it as unset; seed a custom value → preserved and shown in the advanced field.
-
-**Phase C**
-9. Configure `epic_cli_keywords` `{claude: "ultracode"}`. Dispatch an epic to a `claude`-started role → prompt contains the agnostic directive **and** the `ultracode` keyword line. Dispatch to a `gemini`-started role with no mapping → directive only, **no** keyword. Undetectable binary (wrapper script) → directive only.
-10. Confirm non-epic dispatches are completely unaffected by the new option.
+1. **Role registration:** orchestrator appears in the per-role "Customize Default Prompts" modal; its prompt saves/loads; `buildKanbanBatchPrompt('orchestrator', …)` does not throw. Confirm **no** new kanban column appears and no phantom lane is synthesized.
+2. **Migration:** seed legacy `epic_prompt_template`/`epic_max_subtasks` → confirm they import into the orchestrator prompt/limit; legacy `epic_lock_columns` stale default treated as unset.
+3. **Epics-tab orchestrate:** open an epic, click Orchestrate → assembled prompt (orchestrator base + directive + subtasks, capped at max) is copied; optional send-to-terminal dispatches to the orchestrator. Preview matches the dispatched prompt exactly.
+4. **Capability parity after removal:** delete an epic from the Epics tab; add and remove subtasks from the Epics tab — all work. The board's EPIC strip button still converts/bulk-adds.
+5. **Board untouched:** the traveller still advances an epic as a unit with cascade; focus mode still works; column dispatch still batch-processes subtasks. Review on an epic still lands in the Epics tab (plan #1).
+6. **Modal gone:** no epic-manage modal opens from the board; no dead listeners or `kanbanEpicDetails` traffic.
+7. **(Phase 4)** keyword injected only for a mapped CLI; absent/unknown CLI → directive only.
 
 ## Uncertain Assumptions
 
-None requiring web research. All anchors verified against live source: column model (`agentConfig.ts:70-114, 334-367`), visibility filters (`TaskViewerProvider.ts:2063-2075`; `KanbanProvider.ts:2363-2376`), epic placement (`KanbanProvider.ts:7340-7343`), epic config round-trip (`KanbanProvider.ts:7445-7481`), the dormant `epic_lock_columns` default and its mismatch with real column ids (`KanbanProvider.ts:7260-7262`, `PlanningPanelProvider.ts:2763-2765`), the existing board modal (`kanban.html:3121-3147, 7253, 9418-9432`), the Epics tab and New-Epic modal patterns (`project.html:1310-1344, 1455-1480`; `project.js:1689-1723`), the agnostic epic directive (`agentPromptBuilder.ts:320-325, 485-490`), the subagent-addon block (`agentPromptBuilder.ts:443-462`), and the binary-from-startup-command parse (`TaskViewerProvider.ts:6671-6673`).
+None requiring research. Touch-points verified: role enumerations (`agentConfig.ts:1,87-99`; `sharedDefaults.js`; `TaskViewerProvider.ts:3600-3615`; `PlanningPanelProvider.ts:7716-7721`; `agentPromptBuilder.ts:494-1193,1200-1218`; `KanbanProvider.ts:2517,2923-2935`), dynamic per-role prompt UI (`setup.html:1643`), epic expansion + directive (`KanbanProvider.ts:2407+`; `agentPromptBuilder.ts:320-325,485-490`), the board modal removal surface (`kanban.html:3121-3150,7218-7279,9335-9356,9393-9439,6600-6601`), shared message handlers (`KanbanProvider.ts` + `PlanningPanelProvider.ts` epic cases), legacy config keys and the dormant `epic_lock_columns` default (`KanbanProvider.ts:7260-7262`), and the CLI-binary parse (`TaskViewerProvider.ts:6671`).
 
 ---
 
-**Recommendation:** Ship in order **B → A → C**. B alone fixes "it's unclear how epics work" by surfacing the existing-but-hidden config in the Epics tab (lowest risk, highest clarity payoff). A gives epics a home and is the structural piece (touches the shared column pipeline — most regression-sensitive). C is portability hardening for the multi-CLI install base. Complexity 8/10 — consider running `/improve-plan` for an adversarial pass before execution, and splitting A into its own PR given it re-renders columns for all users.
+**Recommendation:** Sequence after the three drafted epic plans land (this plan assumes the Review→Epics nav and the epic-as-unit board model). Ship Phase 2 (Epics-tab orchestration + relocated management) and Phase 3 (modal removal) together so capabilities never regress; Phase 1 (role) underpins both; Phase 4 (per-CLI keyword) is optional polish. Complexity 7/10 — consider `/improve-plan` for an adversarial pass on the role-enumeration completeness before execution.

@@ -19,7 +19,7 @@ This project relies on **Switchboard Workflows** defined in `.agents/workflows`.
 | `/accuracy` | **`accuracy.md`** | High accuracy mode with self-review (Standard Protocol). |
 | `/improve-plan` | **`improve-plan.md`** | Deep planning with optional dependency checks and adversarial review. |
 | `/switchboard-chat` | **`switchboard-chat.md`** | Activate chat consultation workflow. (Trigger is `/switchboard-chat`, not `/chat`, to avoid clashing with native CLI `/chat` reset commands.) |
-| `/memo` | **`memo.md`** | Memo capture mode — append-only, no analysis. Exit with `process memo`. Edit entries with `edit N: <text>`. |
+| `/memo`, "start memo capture" | **`memo.md`** | Memo capture mode — append-only, no analysis. Enter via `/memo` or by saying "start memo capture". Exit with `process memo`. Edit entries with `edit N: <text>`. |
 
 
 ### ⚠️ MANDATORY PRE-FLIGHT CHECK
@@ -27,7 +27,7 @@ This project relies on **Switchboard Workflows** defined in `.agents/workflows`.
 Before EVERY response, you MUST:
 
 1. **Scan** the user's message for explicit workflow commands from the table above (prefer `/workflow` forms).
-2. **Do not auto-trigger on generic language** (for example: "review this", "delegate this", "quick start") unless the user explicitly asks to run that workflow.
+2. **Do not auto-trigger on generic language** (for example: "review this", "delegate this", "quick start") unless the user explicitly asks to run that workflow or uses a recognized natural-language trigger listed in the table above (e.g. "start memo capture").
 3. **If a command match is found**: Read the workflow file with `view_file .agents/workflows/[WORKFLOW].md` and execute it step-by-step. Do NOT improvise an alternative approach.
 4. **Fast Kanban Resolution**: If the user asks about plans in specific Kanban columns (e.g. "update all created plans"), you MUST use the `query_switchboard_kanban` skill (read `.switchboard/workspace-id` for ID and DB path, then query with sqlite3) to instantly identify the target plans.
 5. **If no match is found**: Respond normally.
@@ -89,7 +89,7 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | `linear_api` | Direct Linear API access via LocalApiServer proxy (replaces call_linear_api) |
 | `web_research` | User asks to "research X", "investigate Y", or needs authoritative sources |
 | `deep_planning` | User requests complex code changes requiring architecture understanding |
-| `memo` | User invokes `/memo` to enter progressive capture mode — agent appends each user message to `.switchboard/memo.md` without analysis. |
+| `memo` | User invokes `/memo` or says "start memo capture" to enter progressive capture mode — agent appends each user message to `.switchboard/memo.md` without analysis. |
 | `refine_ticket` | User clicks "Refine" on a ticket card to copy a prompt that produces a complete, agent-actionable specification (backend-consumed skill — not invocable via `skill: "refine_ticket"`) |
 
 **Usage**: Call `skill: "archive"` before performing archive operations to access detailed tool documentation and examples.
@@ -98,7 +98,7 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 
 ### 📌 Memo Capture Mode — Priority Rule
 
-While `/memo` capture mode is active, capture mode takes precedence over the default "analyze and act" behavior. The agent appends each user message to `.switchboard/memo.md` and does NOT analyze, plan, or write code. Every capture-mode reply begins with `[MEMO CAPTURE ACTIVE]` and ends by advising the command `process memo`. The sole exit trigger is the exact command `process memo` (case-insensitive, as the entire message) — it exits capture mode, processes all entries into plan files (one per entry) and clears the memo file on success. An in-place edit command `edit N: <text>` (where N is the 1-based entry number) replaces entry N without appending a new entry; it does not exit capture mode. To leave without processing, clear the conversation. The Memo sub-tab in the sidebar remains as an alternative processing path (backend-driven, immune to host system prompt overrides).
+While `/memo` capture mode is active, capture mode takes precedence over the default "analyze and act" behavior. Capture mode is entered by `/memo` or the natural-language request "start memo capture" (host-independent, for chats without slash commands). The agent appends each user message to `.switchboard/memo.md` and does NOT analyze, plan, or write code. Every capture-mode reply begins with `[MEMO CAPTURE ACTIVE]` and ends by advising the command `process memo`. The sole exit trigger is the exact command `process memo` (case-insensitive, as the entire message) — it exits capture mode, processes all entries into plan files (one per entry) and clears the memo file on success. An in-place edit command `edit N: <text>` (where N is the 1-based entry number) replaces entry N without appending a new entry; it does not exit capture mode. To leave without processing, clear the conversation. The Memo sub-tab in the sidebar remains as an alternative processing path (backend-driven, immune to host system prompt overrides).
 See `.agents/workflows/memo.md` for the full protocol.
 
 ### 📝 Plan Authoring & Problem Analysis Protocol

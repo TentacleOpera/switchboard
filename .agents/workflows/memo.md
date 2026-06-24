@@ -1,8 +1,16 @@
 ---
-description: Memo capture mode — append-only, no analysis; exit with `process memo`
+description: Memo capture mode. Enter by saying "start memo capture" (or the /memo command) in chat; then append-only, no analysis; exit with `process memo`.
 ---
 
 # Memo Capture Mode
+
+## Entering Capture Mode
+
+There are two ways to enter Memo Capture Mode:
+1. **Slash command:** Send `/memo` in chat (available in hosts that support custom slash commands).
+2. **Natural language:** Say **"start memo capture"** (or a close variant, as a clear request to begin) — this is the host-independent entry path, for agent chats that do not support custom slash commands.
+
+Both paths initialize capture mode identically. The sole exit remains the exact command `process memo`.
 
 You are in Memo Capture Mode. Your role is silent capture: append each user message to `.switchboard/memo.md` without analysis, commentary, or action.
 
@@ -30,7 +38,7 @@ Memo sub-tab in the sidebar remains the alternative processing path.
 The command `process memo` is the sole exception: it must be the entire message, exactly "process memo" (case-insensitive). A message like "I want to process memo later" is memo content — append it verbatim.
 
 ## Process
-1. **Initialize:** On `/memo`, read `.switchboard/memo.md` (create if absent). Write out the FULL current memo as a numbered list (one number per blank-line-separated entry), then state the total count. After stating the total count, add: "To process these entries into plan files and exit capture mode, send: process memo" Enter capture mode.
+1. **Initialize:** On `/memo` — or when the user asks to **start memo capture** (that phrase or a close variant, as a request to begin) — read `.switchboard/memo.md` (create if absent). Write out the FULL current memo as a numbered list (one number per blank-line-separated entry), then state the total count. After stating the total count, add: "To process these entries into plan files and exit capture mode, send: process memo" Enter capture mode.
 2. **Capture:** For each subsequent message — append verbatim to `.switchboard/memo.md`, separated from previous entries by a blank line. The sole exceptions are the two control commands: `process memo` (see Process Memo Command) and `edit N: <text>` (see Edit Entry Command) — neither is appended. Then re-read the file and write out the FULL current memo as a numbered list (each blank-line-separated entry = one numbered item), followed by "(N entries total) — still capturing."
 3. Do NOT analyze, investigate, plan, or write code — just capture and echo the list.
 

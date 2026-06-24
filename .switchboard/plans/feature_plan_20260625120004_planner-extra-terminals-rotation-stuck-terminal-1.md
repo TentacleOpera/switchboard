@@ -245,3 +245,53 @@ In `_nextPlannerTerminals` and `_distributePlannerDispatch`, bound the pool to `
 ## Recommendation
 
 Complexity is 5 / 10 (mixed: majority routine cursor reuse with one moderate, well-scoped risk around dispatch-identity recording on the hot drag-drop path). **Send to Coder.** Adopt **Option B** unless the user explicitly prefers Option A (in which case apply the double-record guard in Change 2).
+
+---
+
+## Code Review Results (Reviewer Pass — 2026-06-25)
+
+### Implementation Summary
+
+The implementer adopted **Option B** (add `targetTerminalOverride` to the single-card command path). Changes landed across three files:
+
+- **`src/extension.ts:1153-1155`** — `triggerAgentFromKanban` command registration extended with `targetTerminalOverride?: string` param, wrapped into `{ targetTerminalOverride } as any` and passed to `handleKanbanTrigger`.
+- **`src/services/TaskViewerProvider.ts`** — `handleKanbanTrigger` (line 2622) and `_handleTriggerAgentAction`/`_handleTriggerAgentActionInternal` (lines 15442/15452) accept `options?: Partial<ConfiguredKanbanDispatchOptions>`; `ConfiguredKanbanDispatchOptions` gained `targetTerminalOverride?: string` (line 164); `_handleTriggerAgentActionInternal` resolves the override first with `_isValidAgentName` validation (lines 15587-15591); `dispatchConfiguredKanbanColumnAction` threads the override through (line 2760).
+- **`src/services/KanbanProvider.ts`** — both the built-in planner `triggerAction` branch and the custom-user planner branch pick the next terminal from the rotation cursor and pass it as the override; `_recordDispatchIdentity` called with the override terminal name (line 5133). The batch path (`_distributePlannerDispatch`) was refactored to inline cursor read/advance (lines 3469/3502).
+
+### Stage 1 — Adversarial Findings
+
+| # | Severity | File:Line | Finding |
+|---|----------|-----------|---------|
+| 1 | **CRITICAL** | `KanbanProvider.ts:5113` (pre-fix) | Type error: `workspaceRoot` is `string \| null` (from `_resolveWorkspaceRoot`), used inside `if (canDispatch)` which does NOT narrow it. Passed to `_nextPlannerTerminals(workspaceRoot: string)` — fails under `"strict": true` in tsconfig.json. Plan's own code sample used `workspaceRoot!`; implementer dropped the assertion. |
+| 2 | **MAJOR** | `KanbanProvider.ts:3385-3397` vs `3483/3516` (pre-fix) | Duplicated cursor logic + timing inconsistency: `_nextPlannerTerminals` advanced cursor BEFORE dispatch (line 3395); `_distributePlannerDispatch` advanced AFTER dispatch (line 3516). A failed single-card dispatch would silently skip a terminal. Plan's Change 1 mandated a shared helper for "single source of truth" — not achieved. |
+| 3 | **NIT** | `KanbanProvider.ts:5158-5159` | `triggerBatchAction` planner batch-drag still calls `triggerBatchAgentFromKanban` with no override — all cards go to terminal 1. Documented in plan (line 37), scoped out. |
+| 4 | **NIT** | `extension.ts:1154` | `{ targetTerminalOverride } as any` cast bypasses type checking. Functionally correct but a code smell. |
+
+### Stage 2 — Balanced Synthesis & Fixes Applied
+
+**Fix 1 (CRITICAL — type error):** Removed the `_nextPlannerTerminals` helper entirely and inlined the cursor-read logic directly in both single-card branches with `&& workspaceRoot` guards that narrow the type. No `as any` or `!` needed — the `if (role === 'planner' && workspaceRoot && tvp)` condition narrows `workspaceRoot` to `string` within the block.
+
+**Fix 2 (MAJOR — timing inconsistency):** Both single-card paths (built-in planner at `KanbanProvider.ts:5107-5133` and custom-user planner at `KanbanProvider.ts:5052-5078`) now read the cursor and pick the terminal WITHOUT advancing, then advance the cursor ONLY after a successful dispatch (`if (dispatched && plannerCursorLocationKey && tvp)`). This mirrors `_distributePlannerDispatch` which advances after `Promise.allSettled`. A failed dispatch no longer silently skips a terminal.
+
+**Fix 3 (dead code):** Removed the now-unused `_nextPlannerTerminals` helper (was lines 3385-3397) since both callers were inlined.
+
+**Deferred (NITs):** `triggerBatchAction` planner gap (#3) and `as any` cast (#4) — noted, not fixed.
+
+### Files Changed (Reviewer Fixes)
+
+- `src/services/KanbanProvider.ts`:
+  - Removed `_nextPlannerTerminals` helper (dead code after inlining)
+  - Custom-user planner branch (`triggerAction`): inlined cursor read without advance; advance after successful dispatch only
+  - Built-in planner branch (`triggerAction`): inlined cursor read without advance; advance after successful dispatch only; fixed `string | null` → `string` type narrowing
+
+### Validation Results
+
+- **Compilation (`tsc`):** Skipped per session directives. Type error at former line 5113 resolved by `&& workspaceRoot` guard narrowing.
+- **Automated tests:** Skipped per session directives. `pair-programming-comprehensive.test.ts` calls `triggerAgentFromKanban` with 5 args (no 6th) — new param is optional, no breakage expected.
+- **Manual verification:** Not run in this session. The 10-step manual verification plan above remains valid. Key change from original implementation: cursor now advances AFTER successful dispatch (not before), so step 1 (sequential fan-out) and step 3 (shared cursor coherence) should be re-verified with attention to dispatch-failure edge cases.
+
+### Remaining Risks
+
+1. **`triggerBatchAction` planner batch-drag** (NIT #3): multi-card batch drags via `triggerBatchAction` still go to terminal 1. The Move All / Move Selected buttons work correctly via `_distributePlannerDispatch`. Fix requires routing `triggerBatchAction` through `_distributePlannerDispatch` for planner role — deferred.
+2. **`as any` cast in extension.ts** (NIT #4): the `{ targetTerminalOverride } as any` bypasses type checking at the command boundary. Could be replaced with a typed `Partial<ConfiguredKanbanDispatchOptions>` construction, but the command registration's variadic `any[]` args make this cosmetic.
+3. **Cursor advance on partial batch failure:** `_distributePlannerDispatch` advances the cursor by `plans.length` after `Promise.allSettled` even if some buckets rejected. This is pre-existing behaviour (not introduced by this fix) and means a failed bucket terminal is "skipped" in the rotation. The single-card fix above avoids this for single moves, but the batch path retains the pre-existing behaviour.
