@@ -111,3 +111,72 @@ No automated tests apply (pure CSS visual change). Verification is manual + grep
 6. **Broad grep audit (informational):** `grep -rn "rgba(10, 10, 10, 0.65)" src/webview` should now return only the 3 `.controls-strip` matches (project.html:735, design.html:2224, planning.html:2205) — these are out of scope and expected to remain. If any `shared-tab-bar` match appears, the fix is incomplete.
 
 > **Recommendation:** Send to Intern (complexity 2 — routine single-line CSS change replicated across files).
+
+## Reviewer Pass (2026-06-25)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*Theatrical mode ON. Squinting at the diff like it owes me money.*
+
+Oh, a **one-line CSS change** across six files. The kind of task that's *so* simple it's *exactly* the sort of thing someone botches by updating five files and forgetting the sixth. Let me poke at every corner.
+
+1. **[NIT] The blur is now a no-op.** `backdrop-filter: blur(10px)` over a fully opaque `var(--panel-bg)` (#000000) blurs *nothing* — there's no translucency for the backdrop to show through. You kept it "to minimize churn," which is a defensible call, but let's be honest: it's dead CSS wearing a tuxedo. Not worth fixing now (churn vs. payoff), but a future cleanup plan could strip it. **Keep as-is.**
+
+2. **[NIT] Token vs. literal — actually verified.** I checked: `--panel-bg` is defined *exactly once* per file in `:root` (`#000000`) and is **never** re-declared under `.cyber-theme-enabled` or any other theme selector. So `var(--panel-bg)` cannot drift to a lighter value in Afterburner context. The token choice is sound, not just cosmetic. Good.
+
+3. **[NIT] `implementation.html` was excluded — correctly.** I went looking for a seventh file to yell about. `implementation.html` defines `--panel-bg: #000000` but has **no** `.cyber-theme-enabled .shared-tab-bar` rule (grep confirms only 6 matches total). It references `cyber-theme-enabled` solely in JS theme-switching logic. So it either uses the base opaque rule or doesn't render a shared tab bar. Either way it's correctly out of scope. No gap here. *Disappointed, honestly — I wanted to find a miss.*
+
+4. **[NIT] The fix landed in an unrelated commit.** `git log -S` shows the `rgba → var(--panel-bg)` swap was bundled into commit `aa73349` ("Replace the Constitution Enter Relative Path Gear Menu..."). Sloppy commit hygiene — a CSS colour fix riding inside a modal-UI commit — but that's a process nit, not a code defect. The working tree is correct, which is what this review judges.
+
+5. **[CRITICAL] — just kidding, there are none.** All six files match the plan's prescribed diff *exactly*: `background: var(--panel-bg);` on the line immediately following `.cyber-theme-enabled .shared-tab-bar {`, blur lines preserved, active-tab glow rule (`box-shadow: ...color-mix...accent-teal...`) untouched in all six files. The grep audit returns exactly the 3 expected out-of-scope `.controls-strip` matches and zero stray `shared-tab-bar` matches.
+
+*Theatrical mode OFF.* This is a clean, complete, low-risk implementation. Nothing to fix.
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Severity | Disposition |
+| :-- | :-- | :-- |
+| Blur lines now visually inert over opaque fill | NIT | **Keep** — minimizes diff, preserves intent for future translucent redesign. Defer cleanup. |
+| Token resolves correctly (no theme override of `--panel-bg`) | NIT | **Verified, no action** — confirms the fix is robust, not just visually correct. |
+| `implementation.html` correctly excluded | NIT | **No action** — confirmed no `.shared-tab-bar` override exists there. |
+| Fix committed inside an unrelated commit | NIT | **No action** (process note only) — working tree is correct; commit hygiene is out of scope for a code review. |
+| All 6 files updated identically; active-tab glow intact | — | **Verified passing.** |
+
+**Verdict:** No CRITICAL or MAJOR findings. No code fixes required. The implementation satisfies every requirement in the Proposed Changes, Edge-Case Audit, and Verification Plan.
+
+### Code Fixes Applied
+
+None. The implementation was already correct.
+
+### Verification Results
+
+Per the Verification Plan (compilation and automated tests skipped per session instructions — this is a pure CSS change with no applicable test suite anyway):
+
+1. **Scoped grep audit** — `grep -rn "cyber-theme-enabled .shared-tab-bar" src/webview`:
+   - 6 matches (kanban.html:2446, planning.html:3340, design.html:3596, project.html:659, setup.html:481, shared-tabs.css:59).
+   - **Every** match is immediately followed by `background: var(--panel-bg);`. **PASS.**
+
+2. **Broad grep audit** — `grep -rn "rgba(10, 10, 10, 0.65)" src/webview`:
+   - 3 matches remain: `project.html:735`, `design.html:2224`, `planning.html:2205` — all on `.cyber-theme-enabled .controls-strip` (out of scope, explicitly noted in the plan). **PASS.**
+
+3. **Token resolution check** — `--panel-bg` defined once per file in `:root` as `#000000`; no theme-scoped override exists. `var(--panel-bg)` resolves to pure black in Afterburner. **PASS.**
+
+4. **Active-tab glow intact** — `.cyber-theme-enabled .shared-tab-btn.active` rule present and unchanged in all 6 files (kanban.html:2443, planning.html:3337, design.html:3593, project.html:656, setup.html:478, shared-tabs.css:55). **PASS.**
+
+5. **`implementation.html` scope check** — no `.cyber-theme-enabled .shared-tab-bar` rule present; correctly excluded from the fix set. **PASS.**
+
+6. **Visual A/B + all-panels + other-themes-unchanged** (manual checks #1–4) — not executable in this headless review session; deferred to the user. The code state guarantees these will pass given the opaque-token resolution confirmed above.
+
+### Files Changed (confirmed in working tree)
+
+- `src/webview/kanban.html:2447` — `background: var(--panel-bg);`
+- `src/webview/planning.html:3341` — `background: var(--panel-bg);`
+- `src/webview/design.html:3597` — `background: var(--panel-bg);`
+- `src/webview/project.html:660` — `background: var(--panel-bg);`
+- `src/webview/setup.html:482` — `background: var(--panel-bg);`
+- `src/webview/shared-tabs.css:60` — `background: var(--panel-bg);`
+
+### Remaining Risks
+
+- **None material.** The only residual items are NITs: the now-inert `backdrop-filter` lines (harmless, kept deliberately) and the out-of-scope `.controls-strip` translucent fills (project.html:735, design.html:2224, planning.html:2205) which exhibit the *same* lighter-grey-in-Afterburner symptom but are explicitly deferred to a future plan per the Edge-Case Audit.
+- **Manual visual confirmation** (Verification steps 1–4) still pending user execution; code state makes failure highly unlikely.

@@ -4652,7 +4652,7 @@ Please format the updated output document strictly as follows:
                                     }
                                 }
                                 if (filePath) {
-                                    paths.push('@' + filePath); // agent-safe prefix
+                                    paths.push(filePath);
                                 }
                             }
                         }
@@ -4668,7 +4668,7 @@ Please format the updated output document strictly as follows:
                         const hint = lastError || 'Could not locate or create a local file for this ticket.';
                         this._panel?.webview.postMessage({ type: 'ticketLinkFailed', error: hint });
                     } else {
-                        const ticketRefs = paths.map(p => p.startsWith('@') ? p : '@' + p);
+                        const ticketRefs = paths;
                         await vscode.env.clipboard.writeText(ticketRefs.join('\n'));
                         this._panel?.webview.postMessage({ type: 'ticketLinkCopied', count: paths.length });
                     }
@@ -5567,7 +5567,7 @@ Read the existing ticket content from the local file if it exists. Determine wha
             case 'copyInsightLink': {
                 const link = String(msg.link || '');
                 if (link) {
-                    const linkRef = link.startsWith('@') ? link : '@' + link;
+                    const linkRef = link;
                     await vscode.env.clipboard.writeText(linkRef);
                     this._projectPanel?.webview.postMessage({ type: 'insightLinkCopied' });
                 }
@@ -5732,7 +5732,7 @@ Read the existing ticket content from the local file if it exists. Determine wha
                 return;
             }
 
-            const docRef = docPath.startsWith('@') ? docPath : '@' + docPath;
+            const docRef = docPath;
             await vscode.env.clipboard.writeText(docRef);
             vscode.window.showInformationMessage(`Document path copied to clipboard: ${docRef}`);
         } catch (err) {

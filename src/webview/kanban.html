@@ -7383,7 +7383,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             });
             mcpRow.appendChild(mcpLabel);
             mcpRow.appendChild(mcpSelect);
-            container.appendChild(mcpRow);
 
             // MCP Monitor Config Panel (Collapsible)
             const mcpConfigPanel = document.createElement('div');
@@ -7486,18 +7485,18 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             mcpHelp.textContent = 'On this interval, Switchboard asks your monitor terminal to check the selected sources via your claude.ai MCP servers. Checks run unattended using flat subscription interactive terminal sessions (saving programmatic token billing costs).';
             mcpConfigPanel.appendChild(mcpHelp);
 
-            container.appendChild(mcpConfigPanel);
-
             const saveMonitorConfig = () => {
                 const enabled = mcpSelect.value === 'on';
                 const intervalMinutes = parseInt(intervalSelect.value, 10);
                 const customInstruction = customInstructionTextarea.value;
+                const sources = Array.from(activeSources);
+                mcpMonitorConfig = { ...mcpMonitorConfig, enabled, intervalMinutes, sources, customInstruction };
                 postKanbanMessage({
                     type: 'setMcpMonitorConfig',
                     config: {
                         enabled,
                         intervalMinutes,
-                        sources: Array.from(activeSources),
+                        sources,
                         customInstruction
                     }
                 });
@@ -7525,6 +7524,16 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             safetyNote.style.cssText = 'padding:6px 10px; font-family:var(--font-mono); font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 8px 8px; line-height:1.4; display:' + (isContinuousMode ? 'block' : 'none') + ';';
             safetyNote.innerHTML = '💡 <strong>Safe Planning:</strong> Automation pulls plans from <strong>oldest to newest</strong>. You can safely run automation while planning, as recently created plans are processed last.';
             container.appendChild(safetyNote);
+
+            // MCP description text always visible below dropdown
+            const mcpDesc = document.createElement('div');
+            mcpDesc.style.cssText = 'padding:0 8px 8px 8px; font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); line-height:1.4;';
+            mcpDesc.textContent = 'On this interval, Switchboard asks your monitor terminal to check the selected sources (e.g. Slack) via your claude.ai MCP servers. Checks run unattended in a flat-subscription interactive terminal session.';
+
+            // Append MCP Monitor components after safety note
+            container.appendChild(mcpRow);
+            container.appendChild(mcpDesc);
+            container.appendChild(mcpConfigPanel);
 
             modeSelect.addEventListener('change', () => {
                 const newMode = modeSelect.value;

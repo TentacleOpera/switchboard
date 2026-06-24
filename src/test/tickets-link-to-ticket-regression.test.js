@@ -14,10 +14,14 @@ function run() {
         'Expected PlanningPanelProvider.ts to contain switchboard.importTaskAsDocument'
     );
 
-    // (b) The copied path uses '@' + prefix
+    // (b) The copied path does NOT use '@' + prefix
     assert.ok(
-        planningProviderSource.includes("'@' + filePath"),
-        "Expected PlanningPanelProvider.ts to prefix copied path with '@'"
+        !planningProviderSource.includes("'@' + filePath"),
+        "Expected PlanningPanelProvider.ts to NOT prefix copied path with '@'"
+    );
+    assert.ok(
+        planningProviderSource.includes("paths.push(filePath)"),
+        "Expected PlanningPanelProvider.ts to push filePath without '@' prefix"
     );
 
     // (c) The backend posts a ticketLinkCopied message on success and ticketLinkFailed on failure

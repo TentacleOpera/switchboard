@@ -1899,6 +1899,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     public setKanbanProvider(provider: KanbanProvider) {
         this._kanbanProvider = provider;
         this._kanbanProvider.updateAutobanConfig(this._getAutobanBroadcastState());
+        this._postMcpMonitorConfig();
 
         // Sync workspace context when the user switches workspaces on the kanban board
         provider.onWorkspaceChange((newRoot) => {
@@ -19212,12 +19213,14 @@ What would you like to find?`;
     private async _postMcpMonitorConfig() {
         const config = await GlobalIntegrationConfigService.getMcpMonitorConfig();
         const isMonitorRunning = this._isMcpMonitorTerminalRunning(config.targetRole);
-        this._view?.webview.postMessage({
+        const message = {
             type: 'updateMcpMonitorConfig',
             config,
             isMonitorRunning,
             presets: TaskViewerProvider.SOURCE_PRESETS
-        });
+        };
+        this._view?.webview.postMessage(message);
+        this._kanbanProvider?.postMessage(message);
     }
 
     private _isMcpMonitorTerminalRunning(targetRole: string): boolean {
