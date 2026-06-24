@@ -7627,7 +7627,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // MCP description text always visible below dropdown
             const mcpDesc = document.createElement('div');
             mcpDesc.style.cssText = 'padding:0 8px 8px 8px; font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); line-height:1.4;';
-            mcpDesc.textContent = 'On this interval, Switchboard asks your monitor terminal to check the selected sources (e.g. Slack) via your claude.ai MCP servers. Checks run unattended in a flat-subscription interactive terminal session.';
+            mcpDesc.textContent = 'On this interval, Switchboard asks your monitor terminal to check the selected sources via your claude.ai MCP servers. Checks run unattended using flat subscription interactive terminal sessions (saving programmatic token billing costs).';
 
             // Append MCP Monitor components after safety note
             container.appendChild(mcpRow);

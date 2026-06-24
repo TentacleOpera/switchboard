@@ -4687,6 +4687,11 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         this._panel?.webview.postMessage(m);
                     }
                 }
+                // Push persisted MCP monitor config to the kanban webview on
+                // ready. The initial push from setKanbanProvider() is dropped
+                // when _panel is undefined (extension activation), so we
+                // re-request it here once the webview is live.
+                this._taskViewerProvider?.postMcpMonitorConfig();
                 // §10 — Constant-mode remote control auto-starts on load.
                 {
                     const rcRoot = this._resolveWorkspaceRoot(undefined);

@@ -8,15 +8,15 @@
 
 ### Problem Analysis & Root Cause
 
-- **Focus mode models subtasks wrong.** `enterEpicFocusMode` (`src/webview/kanban.html` ~L4992-L5002) filters the board to a single epic's subtasks (`displayCards` keeps `cardId === currentFocusedEpicId || card.epicId === currentFocusedEpicId`, ~L5077-L5087) and surfaces per-column Advance-All over them — i.e. it lets subtasks sit in different stages. The decided model is the opposite: subtasks are a rigid unit that never diverge and never render as individual board cards. Focus mode's whole reason to exist is therefore removed.
+- **Focus mode models subtasks wrong.** `enterEpicFocusMode` (`src/webview/kanban.html` L4992-L5002) filters the board to a single epic's subtasks (`displayCards` keeps `cardId === currentFocusedEpicId || card.epicId === currentFocusedEpicId`, L5077-L5087) and surfaces per-column Advance-All over them — i.e. it lets subtasks sit in different stages. The decided model is the opposite: subtasks are a rigid unit that never diverge and never render as individual board cards. Focus mode's whole reason to exist is therefore removed.
 
-- **Focus was welded to the worktree chip anyway.** The only trigger for `enterEpicFocusMode` is clicking the `.wt-chip` (~L9301-L9307), which exists only when `currentEpicWorktrees[card.planId]` is set (epic card render ~L5359-L5367). So a pure view operation was gated behind git plumbing — a smell that disappears once focus is deleted.
+- **Focus was welded to the worktree chip anyway.** The only trigger for `enterEpicFocusMode` is clicking the `.wt-chip` (L9310-L9317), which exists only when `currentEpicWorktrees[card.planId]` is set (epic card render L5359-L5367). So a pure view operation was gated behind git plumbing — a smell that disappears once focus is deleted.
 
-- **The "focus the worktree" signal is inert.** Clicking the chip posts `focusWorktree` → backend stores `_focusedWorktreePath` (`KanbanProvider.ts` L152, set ~L7112) and **nothing reads it** (no readers in `src/` outside declaration/assignment). Dead code to remove with focus mode.
+- **The "focus the worktree" signal is inert.** Clicking the chip posts `focusWorktree` → backend stores `_focusedWorktreePath` (`KanbanProvider.ts` L152, set at L7204) and **nothing reads it** (verified: only 2 references in `src/` — the declaration at L152 and the assignment at L7204; no readers anywhere). The handler also calls `this._taskViewerProvider.notifyStateChanged()` (L7206) — a side effect whose subscribers must be checked before deletion (see Edge-Case Audit). Dead code to remove with focus mode.
 
-- **Worktree execution routing is independent of focus.** Agents run inside an epic's worktree because a dispatched subtask carries `epic_id`, resolved to the worktree path at dispatch time via `TaskViewerProvider.resolveWorktreePathForPlan(...)` (~L2861) → `findTerminalNameByWorktreePath` (~L1764). This is unaffected by removing focus mode.
+- **Worktree execution routing is independent of focus.** Agents run inside an epic's worktree because a dispatched subtask carries `epic_id`, resolved to the worktree path at dispatch time via `TaskViewerProvider.resolveWorktreePathForPlan(...)` (`TaskViewerProvider.ts` L6992, called at L1705/L2864/L15514) → `findTerminalNameByWorktreePath` (`TaskViewerProvider.ts` L6972). Verified: neither references focus state. Unaffected by removing focus mode.
 
-- **Worktree creation is duplicated/misplaced.** The Worktrees tab (`kanban.html` ~L9011-L9076) creates a **project** worktree, **all epics** in bulk, and an **unbound** worktree — but has **no single-epic** option. The card's `⎇` `.create-wt-chip` button (`createWorktreeForEpic`) is the only per-epic path, which is why creation leaked onto the card.
+- **Worktree creation is duplicated/misplaced.** The Worktrees tab (`kanban.html` L8897 `createWorktreesPanel`) creates a **project** worktree (L8999-L9047), **all epics** in bulk (L9049-L9062), and an **unbound** worktree (L9064-L9085) — but has **no single-epic** option. The card's `⎇` `.create-wt-chip` button (`createWorktreeForEpic`, delegated at L9319-L9334) is the only per-epic path, which is why creation leaked onto the card.
 
 ### Conclusion
 
@@ -24,52 +24,170 @@ Delete focus mode (the Epics tab is the inspection surface). Demote the worktree
 
 ## Metadata
 
-- **Tags:** `ux`, `kanban`, `epics`, `worktrees`, `frontend`, `refactor`
-- **Complexity:** 4/10 (down from 5 — deleting focus is simpler than generalizing it)
+- **Tags:** `ux`, `frontend`, `refactor`, `feature`
+- **Complexity:** 4
+
+## User Review Required
+
+No. This is a pure front-end deletion + UI relocation. No persisted state, schema, dispatch, or backend behavior changes (the only backend change is removing a write-only dead field and its handler). The model shift (subtasks never diverge) was already decided and is enforced data-side by the sibling plan `kanban-epic-subtask-column-leak-and-backlog-cascade.md` (§1 done). No user data or workflow is affected beyond removing a view filter the user has explicitly rejected.
 
 ## Complexity Audit
 
-Routine, frontend-weighted. No dispatch/DB behavior changes — execution routing stays on `epic_id`. The focus deletion is a clean removal across one hot webview (`kanban.html`); the only genuinely new UI is a single-epic picker in the Worktrees tab that reuses the existing `createWorktreeForEpic` message. Risk: leaving a dangling reference to a deleted focus symbol, or breaking the main board render / drag-drop when the focus-conditional branches are removed.
+### Routine
+- Pure deletion of focus-mode functions, state vars, banner element, and click delegators in one hot webview (`kanban.html`).
+- Demoting the `.wt-chip` from clickable to read-only label is a 2-property CSS/attribute change (`cursor:pointer`→`cursor:default`, drop the delegator).
+- The single-epic Worktrees-tab form reuses the existing `createWorktreeForEpic` message (backend handler at `KanbanProvider.ts` L7039) — no new backend message.
+- The subtask-exclusion bullet (make `!card.epicId` unconditional) is **already done** by the sibling plan's §1 (implemented in working tree).
+
+### Complex / Risky
+- **Dangling-reference surface is wider than the obvious symbols.** Beyond `currentFocusedEpicId`/`enterEpicFocusMode`/`clearEpicFocusMode`/`renderFocusBanner`, the focus state leaks into: `currentFocusedEpicWorktreePath` (L3739), the `worktreeConfig` handler's `if (!currentFocusedEpicId)` guard (L6184), and `renderFocusBanner()` call (L6156). Every site must be collapsed to the unfocused path or removed. `updateWorktreeIndicator` (L4978) SURVIVES — it is still called from L6186/L6188 — only its calls inside the deleted focus functions disappear.
+- **`focusWorktree` handler side effect.** The handler at L7202-L7208 calls `this._taskViewerProvider.notifyStateChanged()`. Removing it drops one `notifyStateChanged` call. Must verify no subscriber depends on that notification firing on focus changes (see Edge-Case Audit).
 
 ## Edge-Case & Dependency Audit
 
-- **Depends on** `kanban-epic-subtask-column-leak-and-backlog-cascade.md` §1 — the `!card.epicId` subtask exclusion. With focus gone, that exclusion becomes **unconditional** (the two plans agree on this; whichever lands second makes it unconditional). Subtasks then never appear as board cards.
-- **Worktree users lose chip-focus muscle memory** — acceptable: focus is removed for everyone and replaced by the Epics tab. The chip remains visible as a non-interactive branch label so the worktree is still surfaced on the card.
-- **No backend message changes for creation** — `createWorktreeForEpic` already exists and is handled (`KanbanProvider.ts` ~L6947). The Worktrees-tab picker just sends it with the selected epic's `planId`/`topic`/`workspaceRoot`.
-- **Dangling references** — `currentFocusedEpicId` is read in several render branches (`kanban.html:3738,4993-5087,6152-6184`); every read must be removed or its branch collapsed to the unfocused path. Grep for `currentFocusedEpicId`, `enterEpicFocusMode`, `clearEpicFocusMode`, `renderFocusBanner`, `focusWorktree`, `_focusedWorktreePath` and confirm zero references remain.
-- **Per-epic creation needs the epic list** — the Worktrees panel can build its dropdown from `currentCards.filter(c => c.isEpic)`, excluding epics that already have a worktree (show the branch instead).
-- **No confirmation dialogs** (project rule).
+- **Race Conditions:** None introduced. The new epic-create button must reuse the existing 5-second disable-debounce pattern (as at L9042/L9082) to prevent double-click worktree spam — `createWorktreeForEpic` is not idempotent at the UI level (the backend blocks duplicate epic worktrees at L7047, but the button should still debounce to avoid redundant messages).
+- **Security:** None. No new user input surfaces; the epic dropdown is built from already-trusted `currentCards`.
+- **Side Effects:**
+  - Removing the `focusWorktree` handler (L7202-L7208) removes one `this._taskViewerProvider.notifyStateChanged()` call. **Verification required:** grep `notifyStateChanged` consumers and confirm none read `_focusedWorktreePath` (which has zero readers — verified). If `notifyStateChanged` only refreshes tree views that don't depend on the focus field, removal is safe.
+  - `updateWorktreeIndicator` (L4978) stays — it is called from the `worktreeConfig` handler (L6186/L6188) for the non-focus worktree indicator. Do NOT delete the function; only its calls inside `enterEpicFocusMode`/`clearEpicFocusMode` go away with those functions.
+- **Dependencies & Conflicts:**
+  - Depends on `kanban-epic-subtask-column-leak-and-backlog-cascade.md` §1 — the `!card.epicId` subtask exclusion. **§1 is already DONE** (implemented in working tree, unconditional). This plan's matching bullet (Proposed Change §1, second bullet) is therefore a **no-op / already-complete** — do not re-edit L5086.
+  - The Worktrees-tab epic dropdown freshness depends on `createWorktreeForEpic`'s backend handler calling `_refreshBoard` (L7067) BEFORE `_sendWorktreeConfig` (L7068), both awaited in order. This ensures `updateBoard` (which updates `currentCards` + `currentEpicWorktrees`) lands before `worktreeConfig` (which re-renders the tab via L6182). **Invariant: do not reorder L7067/L7068.** No code change needed — just documented so a future refactor doesn't break the dropdown.
+  - Worktree users lose chip-focus muscle memory — acceptable: focus is removed for everyone and replaced by the Epics tab. The chip remains visible as a non-interactive branch label so the worktree is still surfaced on the card.
+  - No confirmation dialogs (project rule).
+- **Dangling references — full removal checklist** (grep each, expect zero after):
+  `currentFocusedEpicId`, `currentFocusedEpicWorktreePath`, `enterEpicFocusMode`, `clearEpicFocusMode`, `renderFocusBanner`, `focusWorktree`, `_focusedWorktreePath`, `kanban-focus-banner`, and the `.wt-chip` / `#kanban-focus-banner .btn-icon` click delegators. `updateWorktreeIndicator` must STILL appear (at L6186/L6188) — its presence is expected and correct.
+- **Per-epic creation needs the epic list** — the Worktrees panel builds its dropdown from `currentCards.filter(c => c.isEpic)`, excluding epics that already have a worktree (via `currentEpicWorktrees[epicId]` — show the branch label instead). Both are module-level (L3736/L3737) and accessible inside `createWorktreesPanel`.
+
+## Dependencies
+
+None (no prerequisite sessions). Relates-to:
+- `kanban-epic-subtask-column-leak-and-backlog-cascade.md` (§1 done — unconditional `!card.epicId` exclusion already in working tree; this plan's matching bullet is a no-op).
+- `feature_plan_20260625081837_epics-as-orchestration-onramp.md` (Epics tab is the sole epic-inspection + orchestration surface).
+
+## Adversarial Synthesis
+
+Key risks: (1) the focus-state surface is wider than the obvious symbols — `currentFocusedEpicWorktreePath` (L3739), the `worktreeConfig` guard at L6184, and the `renderFocusBanner()` call at L6156 must all be collapsed, and `updateWorktreeIndicator` must NOT be deleted (it survives at L6186/L6188); (2) removing the `focusWorktree` handler drops a `notifyStateChanged` side effect whose subscribers must be confirmed not to depend on the write-only `_focusedWorktreePath`; (3) the new epic-create button must reuse the 5s disable-debounce pattern or users can spam worktree creation. Mitigations: full grep checklist including the non-obvious symbols; trace `notifyStateChanged` consumers before deleting the handler; copy the debounce pattern verbatim from L9042.
 
 ## Proposed Changes
 
-### 1. Delete on-board focus mode — `src/webview/kanban.html`
-- Remove `enterEpicFocusMode` / `clearEpicFocusMode` (~L4992-L5021), `currentFocusedEpicId` (~L3738) and every reference, `renderFocusBanner` (~L5013) and the focus banner element, and the `.wt-chip` click handler that entered focus (~L9301-L9307).
-- Make the subtask exclusion **unconditional**: `displayCards = displayCards.filter(card => !card.epicId)` with no `currentFocusedEpicId` branch (~L5077-L5087). (Coordinate with `kanban-epic-subtask-column-leak-and-backlog-cascade.md` §1.)
-- Remove focus-conditional render branches (~L6152-L6184), collapsing each to the unfocused behavior.
+### `src/webview/kanban.html` — Delete on-board focus mode
 
-### 2. Demote the worktree chip to a read-only label — `src/webview/kanban.html`
-- Where a worktree exists, keep rendering the branch chip (~L5359-L5367) but remove its click/focus behavior; render it as a label with `title="Worktree: <branch>"`.
-- Remove the per-card `.create-wt-chip` `⎇` button entirely (creation moves to the tab, §3).
+- **Context:** Focus mode is the wrong model (subtasks never diverge). All focus symbols are confined to this file's inline script.
+- **Logic / Implementation:**
+  - Delete `enterEpicFocusMode` (L4992-L5002) and `clearEpicFocusMode` (L5004-L5011).
+  - Delete `renderFocusBanner` (L5013-L5031) and the focus banner element at L2540 (`<div id="kanban-focus-banner" ...>`).
+  - Delete the module-level state `let currentFocusedEpicId = null;` (L3738) and `let currentFocusedEpicWorktreePath = null;` (L3739).
+  - In `renderBoard`, remove the focus branch at L5077-L5087 and keep ONLY the unfocused subtask exclusion: `displayCards = displayCards.filter(card => !card.epicId);`. **Note:** this is already the unconditional behavior in the working tree (sibling plan §1 done) — verify, do not re-edit if already unconditional.
+  - In the `updateBoard` handler: remove the `if (currentFocusedEpicId) { renderBoard(currentCards); }` branch at L6152-L6154 (collapse to the unfocused path — no re-render needed there since `epicWorktreesChanged`/`boardSignatureChanged` already gate re-render), and remove the `renderFocusBanner();` call at L6156.
+  - In the `worktreeConfig` handler (L6180-L6191): remove the `if (!currentFocusedEpicId)` guard at L6184 and make the inner `updateWorktreeIndicator` logic unconditional:
+    ```js
+    if (activeWorktrees.length === 1) {
+        updateWorktreeIndicator(activeWorktrees[0].path);
+    } else {
+        updateWorktreeIndicator(null);
+    }
+    ```
+    (Keep `updateWorktreeIndicator` itself — it is still used here.)
+  - In the global click delegator (L9303-L9341): delete the `.wt-chip` → `enterEpicFocusMode` block (L9310-L9317) and the `#kanban-focus-banner .btn-icon` → `clearEpicFocusMode` block (L9336-L9340). Keep the `.create-wt-chip` block for now (it is removed in the next section).
+- **Edge Cases:** Do not delete `updateWorktreeIndicator` (L4978) — it survives via L6186/L6188. Do not touch `currentEpicWorktrees` (L3737) — needed for the chip label and the new dropdown.
 
-### 3. Per-epic worktree creation in the Worktrees tab — `src/webview/kanban.html`
-- In `createWorktreesPanel` (~L8888), add a "Create Worktree for Epic" form: an epic dropdown (`currentCards.filter(c => c.isEpic)`, excluding epics that already have a worktree) + a button posting:
+### `src/webview/kanban.html` — Demote the worktree chip to a read-only label
+
+- **Context:** With focus gone, the chip's only job is to display the linked branch. It is already a `<span>` with `title="Worktree: ${linkedWorktree.branch}"` (L5361-L5364). The only edits are removing interactivity.
+- **Logic / Implementation:**
+  - At L5361-L5364, change `cursor:pointer` → `cursor:default` on the `.wt-chip` span and remove `data-epic-id` (no longer needed — no delegator). Keep the `title` and branch text.
+  - Remove the per-card `.create-wt-chip` `⎇` button entirely (L5365-L5367) — creation moves to the Worktrees tab.
+  - Delete the `.create-wt-chip` click delegator block (L9319-L9334) — no longer reachable.
+- **Edge Cases:** Epics without a worktree now show no chip at all (the `⎇` affordance is gone). Creation is discoverable via the Worktrees tab. This matches the plan's intent (creation consolidated in the tab).
+
+### `src/webview/kanban.html` — Per-epic worktree creation in the Worktrees tab
+
+- **Context:** `createWorktreesPanel` (L8897) already has project / all-epics / unbound forms. Add a single-epic picker beside "Create Worktrees for All Epics" (L9049-L9062).
+- **Logic / Implementation:** Insert a new form between the all-epics button (L9062) and the unbound form (L9064):
   ```js
-  postKanbanMessage({ type: 'createWorktreeForEpic', epicId, epicTopic, workspaceRoot: currentWorkspaceRoot });
+  // 2b. Create worktree for a single epic
+  const epicForm = document.createElement('div');
+  epicForm.style.cssText = 'display: flex; gap: 8px; align-items: center;';
+  const epicLabel = document.createElement('span');
+  epicLabel.style.fontSize = '11px';
+  epicLabel.textContent = 'Epic:';
+  const epicSelect = document.createElement('select');
+  epicSelect.style.cssText = 'flex: 1; padding: 4px; font-size: 11px; background: var(--input-bg, #222); color: var(--text-normal, #ccc); border: 1px solid var(--border-color);';
+  const epicDefaultOpt = document.createElement('option');
+  epicDefaultOpt.value = '';
+  epicDefaultOpt.textContent = '-- Choose an Epic --';
+  epicSelect.appendChild(epicDefaultOpt);
+  const epicCards = (Array.isArray(currentCards) ? currentCards : []).filter(c => c.isEpic);
+  epicCards.forEach(epic => {
+      if (currentEpicWorktrees[epic.planId]) return; // exclude epics that already have a worktree
+      const opt = document.createElement('option');
+      opt.value = epic.planId;
+      opt.textContent = epic.topic;
+      epicSelect.appendChild(opt);
+  });
+  const createEpicBtn = document.createElement('button');
+  createEpicBtn.className = 'worktree-primary-btn';
+  createEpicBtn.style.padding = '4px 8px';
+  createEpicBtn.style.fontSize = '10px';
+  createEpicBtn.textContent = 'Create Epic Worktree';
+  if (config && config.controlPlaneMode === 'explicit' && repos.length === 0) {
+      createEpicBtn.disabled = true;
+      createEpicBtn.title = 'No git repositories detected in control plane';
+  }
+  createEpicBtn.addEventListener('click', () => {
+      const selectedEpicId = epicSelect.value;
+      if (!selectedEpicId) {
+          showUIMessage('Please select an epic first.');
+          return;
+      }
+      const epic = epicCards.find(e => e.planId === selectedEpicId);
+      if (!epic) return;
+      createEpicBtn.disabled = true;
+      postKanbanMessage({
+          type: 'createWorktreeForEpic',
+          epicId: selectedEpicId,
+          epicTopic: epic.topic,
+          workspaceRoot: currentWorkspaceRoot,
+          repoName: selectedWorktreeRepo || undefined
+      });
+      setTimeout(() => { createEpicBtn.disabled = false; }, 5000);
+  });
+  epicForm.appendChild(epicLabel);
+  epicForm.appendChild(epicSelect);
+  epicForm.appendChild(createEpicBtn);
+  actionSection.appendChild(epicForm);
   ```
-  Place it beside "Create Worktrees for All Epics". No backend change (`createWorktreeForEpic` handled at `KanbanProvider.ts` ~L6947).
+- **Edge Cases:**
+  - Empty epic list → dropdown shows only the placeholder; button is a no-op (guarded by `showUIMessage`).
+  - Dropdown freshness: relies on `_refreshBoard` (L7067) preceding `_sendWorktreeConfig` (L7068) in the backend handler — already the case (both awaited in order). Do not reorder.
+  - Reuses `selectedWorktreeRepo` (L5948) for control-plane repo targeting, matching the project/unbound forms.
 
-### 4. Remove the inert focus→worktree signal — `kanban.html` + `KanbanProvider.ts`
-- Drop the `focusWorktree` post (was in the now-deleted focus entry) and the write-only `_focusedWorktreePath` field/handler (`KanbanProvider.ts` L152, ~L7112), since nothing reads it.
+### `src/services/KanbanProvider.ts` — Remove the inert focus→worktree signal
+
+- **Context:** `_focusedWorktreePath` is write-only (verified: only L152 declaration + L7204 assignment, zero readers). The `focusWorktree` handler (L7202-L7208) also calls `this._taskViewerProvider.notifyStateChanged()`.
+- **Logic / Implementation:**
+  - Delete the `case 'focusWorktree':` handler (L7202-L7208).
+  - Delete the field `private _focusedWorktreePath: string | null = null;` (L152).
+- **Edge Cases:** Before deleting, grep `notifyStateChanged` consumers and confirm none read `_focusedWorktreePath` (already verified zero readers). If any `notifyStateChanged` subscriber reads the focus field, it is already broken (no readers) — removal is safe. The `createWorktreeForEpic` handler (L7039-L7073) is untouched.
 
 ## Verification Plan
 
-1. **Build:** `npm run compile`.
-2. **Focus gone:** no way to filter the board to a single epic's subtasks; no focus banner; subtasks never render as individual column cards (epic shows only its count badge). Inspecting an epic's subtasks is done in the **Epics tab** (via the Review button, per `review-epic-opens-kanban-tab-not-epic-tab.md`).
-3. **No dangling refs:** grep confirms zero references to `currentFocusedEpicId` / `enterEpicFocusMode` / `clearEpicFocusMode` / `renderFocusBanner` / `focusWorktree` / `_focusedWorktreePath`. Board render and drag-drop not regressed.
-4. **Worktree chip is a label:** clicking it does nothing (or shows the branch tooltip); the per-card `⎇` button is gone.
-5. **Worktrees tab single-epic creation:** select an epic → worktree created and linked; the epic's card shows the branch label; that epic disappears from the dropdown.
-6. **Dispatch routing intact:** dispatch a subtask of a worktree-linked epic → agent still runs in the epic's worktree (routing via `epic_id` unchanged).
+### Automated Tests
+
+No automated tests apply (pure front-end deletion + UI relocation; the only backend change is removing dead code). Verification is manual + grep audit. Per session directives, do NOT run `npm run compile` or the test suite here — the user runs them separately.
+
+1. **Focus gone:** no way to filter the board to a single epic's subtasks; no focus banner; subtasks never render as individual column cards (epic shows only its count badge). Inspecting an epic's subtasks is done in the **Epics tab** (via the Review button, per `review-epic-opens-kanban-tab-not-epic-tab.md`).
+2. **No dangling refs (scoped grep):** `grep -n "currentFocusedEpicId\|currentFocusedEpicWorktreePath\|enterEpicFocusMode\|clearEpicFocusMode\|renderFocusBanner\|focusWorktree\|_focusedWorktreePath\|kanban-focus-banner" src/` returns **zero** matches. `grep -n "updateWorktreeIndicator" src/webview/kanban.html` still returns matches at L6186/L6188 (expected — the function survives). Board render and drag-drop not regressed.
+3. **Worktree chip is a label:** clicking it does nothing (shows the branch tooltip only); the per-card `⎇` button is gone.
+4. **Worktrees tab single-epic creation:** select an epic → worktree created and linked; the epic's card shows the branch label; that epic disappears from the dropdown on next render. Double-clicking the button is debounced (5s disable).
+5. **Dispatch routing intact:** dispatch a subtask of a worktree-linked epic → agent still runs in the epic's worktree (routing via `epic_id` / `resolveWorktreePathForPlan` unchanged).
+6. **Other themes/panels unchanged:** no regression to Claudify / Afterburner-Pro; no regression to the project / all-epics / unbound worktree forms.
+7. **(User-run) Build:** `npm run compile` succeeds (run by user, not in this session).
+8. **(User-run) Tests:** existing test suite passes (run by user, not in this session).
 
 ## Status
 
-All steps **pending**. Reframed from "make focus first-class" to "remove focus + worktree cleanup" per the decided model. Relates-to: `kanban-epic-subtask-column-leak-and-backlog-cascade.md` (subtask exclusion → unconditional; its §3 dropped) and `feature_plan_20260625081837_epics-as-orchestration-onramp.md` (Epics tab is the epic-inspection + orchestration surface).
+All steps **pending**. Reframed from "make focus first-class" to "remove focus + worktree cleanup" per the decided model. The subtask-exclusion bullet (Proposed Change §1, second bullet) is **already complete** via the sibling plan's §1 (unconditional `!card.epicId` in working tree) — verify, do not re-edit. Relates-to: `kanban-epic-subtask-column-leak-and-backlog-cascade.md` (§1 done; §3 dropped) and `feature_plan_20260625081837_epics-as-orchestration-onramp.md` (Epics tab is the epic-inspection + orchestration surface).
+
+> **Recommendation:** Send to Coder (complexity 4 — multi-site deletion in one hot file plus a new UI form reusing an existing backend message; no architectural risk but the dangling-reference surface warrants care).

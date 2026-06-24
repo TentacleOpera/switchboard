@@ -171,3 +171,48 @@ No automated tests are included in this verification plan (per session directive
 ---
 
 **Recommendation:** Complexity is 5/10 → **Send to Coder**.
+
+---
+
+## Reviewer Pass (2026-06-25)
+
+### Stage 1 — Grumpy Findings
+
+| Severity | Finding | Location |
+|---|---|---|
+| **MAJOR** | Change 1b initial-push is a **silent no-op**. `setKanbanProvider()` runs at extension activation (`extension.ts:758`) when `KanbanProvider._panel` is `undefined`. `KanbanProvider.postMessage()` (`KanbanProvider.ts:1367`) returns early when `_panel` is null — the message is **dropped, not queued**. The plan's claim that `_pendingWebviewMessages` queues it is wrong: queuing only happens when `_panel` exists but `_webviewReady` is false. Result: first kanban open after activation/reload shows hardcoded default `enabled: false`, not the persisted value. Manual Verification #2 fails. | `TaskViewerProvider.ts:1902`, `KanbanProvider.ts:1366-1373` |
+| **NIT** | `mcpDesc` wording drifted from `mcpHelp` — said "interactive terminal session" (singular) vs `mcpHelp`'s "interactive terminal sessions (saving programmatic token billing costs)". Plan required consistency. | `kanban.html:7630` vs `:7584` |
+| **NIT** | All line numbers in "Proposed Changes" are stale by 20-60 lines. Implementation used correct lines; plan text is misleading for future readers. | Plan body |
+
+### Stage 2 — Balanced Synthesis
+
+- **Change 2 (optimistic update):** Keep — correct, load-bearing fix for the "reverts to Off" bug.
+- **Change 1 (echo to kanban):** Keep — correct targeted routing.
+- **Change 1b (initial push from `setKanbanProvider`):** **Fix now** — add public wrapper `postMcpMonitorConfig()` on `TaskViewerProvider` and call it from `KanbanProvider`'s `ready` handler so the persisted config is pushed after the webview is live.
+- **Change 4 (reorder):** Keep — correctly appends MCP block after `safetyNote`.
+- **Change 5 (description):** Keep, fix wording drift to match `mcpHelp` exactly.
+- **Change 3 (no-op guard):** Keep as no-op — plan correctly identified redundancy.
+
+### Fixes Applied
+
+1. **`src/services/TaskViewerProvider.ts:19226-19236`** — Added public wrapper `postMcpMonitorConfig()` that delegates to `_postMcpMonitorConfig()`, enabling `KanbanProvider` to request the persisted config push after its webview becomes ready.
+2. **`src/services/KanbanProvider.ts:4690-4694`** — Added `this._taskViewerProvider?.postMcpMonitorConfig()` call in the `ready` message handler, after flushing queued messages. This ensures the kanban panel receives the persisted MCP monitor config on every webview (re)initialization, fixing the silent-drop gap in Change 1b.
+3. **`src/webview/kanban.html:7630`** — Aligned `mcpDesc` text to exactly match `mcpHelp` (`kanban.html:7584`): "On this interval, Switchboard asks your monitor terminal to check the selected sources via your claude.ai MCP servers. Checks run unattended using flat subscription interactive terminal sessions (saving programmatic token billing costs)."
+
+### Files Changed (Reviewer Pass)
+
+- `src/services/TaskViewerProvider.ts` — added `postMcpMonitorConfig()` public wrapper (lines 19226-19236)
+- `src/services/KanbanProvider.ts` — added `postMcpMonitorConfig()` call in `ready` handler (lines 4690-4694)
+- `src/webview/kanban.html` — aligned `mcpDesc` wording with `mcpHelp` (line 7630)
+
+### Validation Results
+
+- **Compilation:** Skipped per session directive.
+- **Tests:** Skipped per session directive.
+- **Static verification:** All five plan changes confirmed present in code. Reviewer fixes (public wrapper + `ready` handler push + wording alignment) confirmed applied. `KanbanProvider._taskViewerProvider` reference confirmed available at call site (line 150 declaration, set at line 165). `KanbanProvider.postMessage` early-return-on-null-panel behavior confirmed at line 1367.
+
+### Remaining Risks
+
+1. **Double-push on `ready`:** If `setKanbanProvider`'s initial push somehow *did* get queued (e.g., kanban panel already exists during a re-activation scenario), the `ready` handler would push MCP config twice. This is harmless — `updateMcpMonitorConfig` is idempotent (it just sets `mcpMonitorConfig` and re-renders).
+2. **`postMcpMonitorConfig()` is fire-and-forget:** The public wrapper uses `void this._postMcpMonitorConfig()` (no await). If the async fetch fails, the error is swallowed. This matches the existing pattern in `setMcpMonitorConfigFromKanban` (line 19210, also unawaited `void`-style call), so it's consistent with codebase conventions.
+3. **Manual verification still required:** The stick test, persistence-across-reopen, mid-edit broadcast, visual ordering, and sidebar parity checks (Verification Plan items 1-7) need human confirmation in a running VSIX.

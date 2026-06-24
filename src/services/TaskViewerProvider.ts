@@ -19223,6 +19223,18 @@ What would you like to find?`;
         this._kanbanProvider?.postMessage(message);
     }
 
+    /**
+     * Public wrapper so KanbanProvider can request the persisted MCP monitor
+     * config be pushed to the kanban webview once it becomes ready. The
+     * `setKanbanProvider()` initial push is a no-op when the kanban panel
+     * hasn't been created yet (KanbanProvider.postMessage drops messages
+     * when `_panel` is undefined), so the kanban `ready` handler must
+     * re-request the config after the webview is live.
+     */
+    public postMcpMonitorConfig(): void {
+        void this._postMcpMonitorConfig();
+    }
+
     private _isMcpMonitorTerminalRunning(targetRole: string): boolean {
         const openTerminals = vscode.window.terminals || [];
         const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix('MCP Monitor'));
