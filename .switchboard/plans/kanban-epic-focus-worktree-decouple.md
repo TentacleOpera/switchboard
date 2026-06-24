@@ -188,6 +188,66 @@ No automated tests apply (pure front-end deletion + UI relocation; the only back
 
 ## Status
 
-All steps **pending**. Reframed from "make focus first-class" to "remove focus + worktree cleanup" per the decided model. The subtask-exclusion bullet (Proposed Change §1, second bullet) is **already complete** via the sibling plan's §1 (unconditional `!card.epicId` in working tree) — verify, do not re-edit. Relates-to: `kanban-epic-subtask-column-leak-and-backlog-cascade.md` (§1 done; §3 dropped) and `feature_plan_20260625081837_epics-as-orchestration-onramp.md` (Epics tab is the epic-inspection + orchestration surface).
+**IMPLEMENTED + REVIEWED.** All proposed changes applied in commit `70c0e08` (auto-commit before review). Reviewer pass complete — see `## Reviewer Pass` below. Reframed from "make focus first-class" to "remove focus + worktree cleanup" per the decided model. The subtask-exclusion bullet (Proposed Change §1, second bullet) was **already complete** via the sibling plan's §1 (unconditional `!card.epicId`) — verified in working tree, not re-edited. Relates-to: `kanban-epic-subtask-column-leak-and-backlog-cascade.md` (§1 done; §3 dropped) and `feature_plan_20260625081837_epics-as-orchestration-onramp.md` (Epics tab is the epic-inspection + orchestration surface).
 
 > **Recommendation:** Send to Coder (complexity 4 — multi-site deletion in one hot file plus a new UI form reusing an existing backend message; no architectural risk but the dangling-reference surface warrants care).
+
+## Reviewer Pass
+
+### Stage 1 — Grumpy Principal Engineer
+
+*"You want me to review a deletion? Fine. Deletions are where bugs hide, because nobody checks the seams. Let me poke every seam."*
+
+- **[MAJOR] `showUIMessage` is a phantom function.** The brand-new epic-create form (`src/webview/kanban.html` L9145, post-edit) calls `showUIMessage('Please select an epic first.')` — a function that **does not exist anywhere in `src/`** (grep: zero definitions, two call sites). The dropdown defaults to the placeholder `value=''`, so the very first time a user clicks "Create Epic Worktree" without picking an epic, the handler throws a `ReferenceError`, the message never shows, and the button stays enabled with zero feedback. The plan *specified this call verbatim* — the plan was wrong about the helper existing. The project form at L9081 has the **same pre-existing bug** (copied the broken pattern). The codebase standard is `postKanbanMessage({ type: 'showWarning', message: ... })`, which the backend handles at `KanbanProvider.ts` L5526. **Fix applied.**
+
+- **[NIT] `--border-color` has no fallback in the epic `<select>` style.** `epicSelect.style.cssText` uses `var(--border-color)` without a fallback (L9120). It IS defined at the root theme (L20/L42), so it resolves in shipped themes — but a custom theme that omits it gets a borderless select. The neighboring project/unbound forms do the same, so this is consistent with the file's conventions. Not worth fixing in isolation.
+
+- **[NIT] Unescaped `linkedWorktree.branch` in the chip `title` attribute** (L5363). A branch name containing `"` would break the title attribute. Pre-existing (the original chip had the same unescaped title) and git branch names are charset-constrained, so not introduced by this plan. Out of scope.
+
+- **[PASS] Dangling-reference checklist — clean.** Grep across `src/` for `currentFocusedEpicId|currentFocusedEpicWorktreePath|enterEpicFocusMode|clearEpicFocusMode|renderFocusBanner|focusWorktree|_focusedWorktreePath|kanban-focus-banner` returns **zero** matches. `updateWorktreeIndicator` correctly survives at L5019 (def) / L6181 / L6183. `currentEpicWorktrees` correctly survives at L3780/L5361/L6127/L6128/L9127. The `.wt-chip` span survives as a read-only label (L5363); `.create-wt-chip` and its delegator are gone. The global click delegator (L9404-L9410) no longer references any focus/chip selectors — only the button-flash animation remains.
+
+- **[PASS] `updateBoard` restructure is behaviorally equivalent.** The new logic collapses the old `else if (epicWorktreesChanged)` / `else { if (currentFocusedEpicId) renderBoard }` into `else { currentCards = nextCards; if (epicWorktreesChanged) renderBoard }`. Traced all four branches against the original: sigChanged → `renderBoard(nextCards)` (same, and `renderBoard` sets `currentCards` at L5038); !sigChanged && epicWorktreesChanged → set + render (same); !sigChanged && !epicWorktreesChanged → set, no render (same, since the old `currentFocusedEpicId` branch is now permanently dead). Correct.
+
+- **[PASS] `worktreeConfig` guard collapse is correct.** The `if (!currentFocusedEpicId)` guard at the old L6184 is gone; the `updateWorktreeIndicator` logic is now unconditional (L6180-L6184). Matches the plan exactly.
+
+- **[PASS] `focusWorktree` handler + `_focusedWorktreePath` field removed.** `KanbanProvider.ts` L152 field and the L7202-L7208 handler are both gone. Traced `notifyStateChanged` (`TaskViewerProvider.ts` L9854): it triggers `_refreshConfiguredPlanWatcher`, `_stateSyncHook`, and `refresh()` — none read `_focusedWorktreePath` (which lived on `KanbanProvider` and had zero readers, verified). The two remaining `notifyStateChanged` callers (L878, L1871) fire for their own reasons. Removal is safe — the edge-case audit's claim holds.
+
+- **[PASS] Backend invariant holds.** `createWorktreeForEpic` (`KanbanProvider.ts` L7070-L7104) still awaits `_refreshBoard` (L7098) BEFORE `_sendWorktreeConfig` (L7099). Dropdown freshness invariant preserved. Handler untouched.
+
+- **[PASS] New epic-create form scoping.** `selectedWorktreeRepo` (L5948), `currentWorkspaceRoot` (L3800), `currentCards` (L3779), `currentEpicWorktrees` (L3780), `config`/`repos` (panel params), `postKanbanMessage`, `escapeHtml`/`escapeAttr` (L4381) — all in scope inside `createWorktreesPanel`. The 5s disable-debounce (L9158) matches the plan and the sibling buttons (L9109/L9183). `worktree-primary-btn` CSS class is defined (L63-L71). `epic.topic` is set via `textContent` (safe). The `epicCards` closure is consistent with the dropdown options (both built at the same render pass).
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is:** All deletions (focus functions, state vars, banner element, click delegators, `focusWorktree` handler, `_focusedWorktreePath` field), the chip demotion to read-only label, the `updateBoard` restructure, the `worktreeConfig` guard collapse, and the new epic-create form structure. All match the plan and are behaviorally correct.
+
+**Fix now (applied):**
+1. **[MAJOR] `showUIMessage` → `postKanbanMessage({ type: 'showWarning', ... })`** at the new epic form (L9145) AND the pre-existing project form (L9081). Both were calling an undefined function; both now use the codebase-standard warning channel that the backend handles at `KanbanProvider.ts` L5526. The project-form fix is opportunistic (pre-existing, same bug class, one line) — leaving it broken while fixing only the new form would be inconsistent.
+
+**Defer (noted, not fixed):**
+- `--border-color` fallback in the epic select (NIT — matches file conventions; fix would be a file-wide sweep, out of scope).
+- Unescaped `linkedWorktree.branch` in the chip title (NIT — pre-existing, git-constrained charset, out of scope).
+
+### Code Fixes Applied
+
+| File | Line(s) | Change |
+| :--- | :--- | :--- |
+| `src/webview/kanban.html` | 9145 | `showUIMessage('Please select an epic first.')` → `postKanbanMessage({ type: 'showWarning', message: 'Please select an epic first.' })` |
+| `src/webview/kanban.html` | 9081 | `showUIMessage('Please select a project first.')` → `postKanbanMessage({ type: 'showWarning', message: 'Please select a project first.' })` (pre-existing same-bug fix) |
+
+### Validation Results
+
+- **Dangling-reference grep** (`currentFocusedEpicId|currentFocusedEpicWorktreePath|enterEpicFocusMode|clearEpicFocusMode|renderFocusBanner|focusWorktree|_focusedWorktreePath|kanban-focus-banner|showUIMessage` across `src/`): **0 matches**. PASS.
+- **`updateWorktreeIndicator` survival grep** (`src/webview/kanban.html`): 3 matches at L5019 (def), L6181, L6183. PASS (expected — function survives).
+- **`currentEpicWorktrees` survival grep**: 5 matches at L3780, L5361, L6127, L6128, L9127. PASS.
+- **`.wt-chip` survival / `.create-wt-chip` removal grep**: 1 match (the read-only span at L5363), 0 `.create-wt-chip` matches. PASS.
+- **Backend invariant** (`_refreshBoard` before `_sendWorktreeConfig` in `createWorktreeForEpic`): confirmed at `KanbanProvider.ts` L7098-L7099, both awaited in order. PASS.
+- **`notifyStateChanged` consumer trace**: no reader of `_focusedWorktreePath`; removal safe. PASS.
+- **Compilation (`npm run compile`)**: SKIPPED per session directives (user runs separately).
+- **Automated tests**: SKIPPED per session directives (user runs separately).
+
+### Remaining Risks
+
+1. **Manual UX verification still required** (per Verification Plan §1-§6): focus is gone, chip is non-interactive, single-epic creation works end-to-end, dispatch routing intact, no theme regressions. These are runtime behaviors not exhaustively provable by static grep.
+2. **`--border-color` fallback** (NIT, deferred) — borderless select in a hypothetical custom theme that omits the variable.
+3. **Unescaped branch name in chip `title`** (NIT, deferred, pre-existing) — theoretical title-attribute break if a branch name contains `"`.
+4. **User-run build + tests** — `npm run compile` and the test suite must be run by the user (skipped in this session per directives).

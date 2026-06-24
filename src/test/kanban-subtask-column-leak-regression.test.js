@@ -70,6 +70,15 @@ function run() {
         'both per-role prompt-preview filters must skip subtask cards (if (c.epicId) return false;)'
     );
 
+    // 5. Reroute sendToBacklog and sendToNew to moveCardToColumn for cascading subtasks
+    const backlogBlock = getCaseBlock(source, 'sendToBacklog');
+    assert.ok(backlogBlock.includes('moveCardToColumn('), 'sendToBacklog must call moveCardToColumn');
+    assert.ok(!backlogBlock.includes('db.updateColumn(resolvedSessionId'), 'sendToBacklog must NOT call db.updateColumn directly');
+
+    const newBlock = getCaseBlock(source, 'sendToNew');
+    assert.ok(newBlock.includes('moveCardToColumn('), 'sendToNew must call moveCardToColumn');
+    assert.ok(!newBlock.includes('db.updateColumn(resolvedSessionId'), 'sendToNew must NOT call db.updateColumn directly');
+
     console.log('kanban subtask column-leak regression test passed');
 }
 

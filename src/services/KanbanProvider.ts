@@ -6381,10 +6381,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if (!resolvedRoot) break;
                 const resolvedSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
                 if (!resolvedSessionId) break;
-                const db = this._getKanbanDb(resolvedRoot);
-                await db.updateColumn(resolvedSessionId, 'BACKLOG');
-                _schedulePlanStateWrite(db, resolvedRoot, resolvedSessionId, 'BACKLOG',
-                    'active').catch(() => { /* fire-and-forget */ });
+                await this.moveCardToColumn(resolvedRoot, resolvedSessionId, 'BACKLOG');
                 this.refresh();
                 break;
             }
@@ -6393,10 +6390,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if (!resolvedRoot) break;
                 const resolvedSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
                 if (!resolvedSessionId) break;
-                const db = this._getKanbanDb(resolvedRoot);
-                await db.updateColumn(resolvedSessionId, 'CREATED');
-                _schedulePlanStateWrite(db, resolvedRoot, resolvedSessionId, 'CREATED',
-                    'active').catch(() => { /* fire-and-forget */ });
+                await this.moveCardToColumn(resolvedRoot, resolvedSessionId, 'CREATED');
                 this.refresh();
                 break;
             }

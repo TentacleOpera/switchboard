@@ -9078,7 +9078,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             createProjBtn.addEventListener('click', () => {
                 const selectedProj = projSelect.value;
                 if (!selectedProj) {
-                    showUIMessage('Please select a project first.');
+                    postKanbanMessage({ type: 'showWarning', message: 'Please select a project first.' });
                     return;
                 }
                 createProjBtn.disabled = true;
@@ -9142,7 +9142,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             createEpicBtn.addEventListener('click', () => {
                 const selectedEpicId = epicSelect.value;
                 if (!selectedEpicId) {
-                    showUIMessage('Please select an epic first.');
+                    postKanbanMessage({ type: 'showWarning', message: 'Please select an epic first.' });
                     return;
                 }
                 const epic = epicCards.find(e => e.planId === selectedEpicId);
