@@ -129,6 +129,16 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this._taskViewerProvider.broadcastToWebviews({ type: 'switchboardThemeChanged', theme });
                     // Also update the setup panel itself
                     this._panel?.webview.postMessage({ type: 'switchboardThemeNameSetting', theme });
+                    // Re-broadcast the effective colour-kanban-icons value so the
+                    // Theme tab toggle updates live on theme switch (the per-theme
+                    // default may change when the theme changes and the setting is
+                    // unset). No feedback loop: the webview handler only sets
+                    // toggle.checked and does not send a setColourKanbanIconsSetting
+                    // message back.
+                    this._panel?.webview.postMessage({
+                        type: 'colourKanbanIconsSetting',
+                        enabled: this._taskViewerProvider.handleGetColourKanbanIconsSetting()
+                    });
                     break;
                 }
                 case 'ready':

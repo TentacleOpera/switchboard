@@ -11,6 +11,33 @@ import * as vscode from 'vscode';
  * before the switchboardThemeChanged message arrives, and stops panels whose
  * <body> had a hardcoded (or missing) class from starting on the wrong theme.
  */
+/**
+ * Resolve the effective value of `switchboard.theme.colourKanbanIcons`,
+ * applying a per-theme default when the setting has never been explicitly
+ * set at either the workspace or global level.
+ *
+ * - Explicit workspace value wins.
+ * - Else explicit global (user) value wins.
+ * - Else (unset): `true` for `claudify` and `afterburner-professional`,
+ *   `false` for all other themes.
+ *
+ * Shared by `getThemeBodyClass()` (first-paint body class) and
+ * `TaskViewerProvider.handleGetColourKanbanIconsSetting()` (Theme tab toggle)
+ * so both read sites use identical logic.
+ */
+export function getEffectiveColourKanbanIcons(): boolean {
+    const cfg = vscode.workspace.getConfiguration('switchboard');
+    const inspection = cfg.inspect<boolean>('theme.colourKanbanIcons');
+    if (inspection?.workspaceValue !== undefined) {
+        return !!inspection.workspaceValue;
+    }
+    if (inspection?.globalValue !== undefined) {
+        return !!inspection.globalValue;
+    }
+    const theme = cfg.get<string>('theme.name', 'afterburner');
+    return theme === 'claudify' || theme === 'afterburner-professional';
+}
+
 export function getThemeBodyClass(): string {
     const cfg = vscode.workspace.getConfiguration('switchboard');
     const theme = cfg.get<string>('theme.name', 'afterburner');
@@ -18,10 +45,7 @@ export function getThemeBodyClass(): string {
         const animDisabled = cfg.get<boolean>('theme.disableCyberAnimation', false);
         return 'cyber-theme-enabled' + (animDisabled ? ' cyber-animation-disabled' : '');
     }
-    const colourIconsConfig = cfg.inspect<boolean>('theme.colourKanbanIcons');
-    const hasExplicitColourIcons = colourIconsConfig?.workspaceValue !== undefined || colourIconsConfig?.globalValue !== undefined;
-    const isProTheme = theme === 'claudify' || theme === 'afterburner-professional';
-    const colourIcons = hasExplicitColourIcons ? !!cfg.get<boolean>('theme.colourKanbanIcons') : (isProTheme ? true : false);
+    const colourIcons = getEffectiveColourKanbanIcons();
     const colourClass = colourIcons ? ' kanban-icons-colour' : '';
     if (theme === 'claudify') {
         return 'theme-claudify' + colourClass;

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { stateFs as fs, stateLockfile as lockfile, getWorkspaceRootFromStatePath } from './stateConfigBridge';
-import { applyThemeBodyClass } from './themeBodyClass';
+import { applyThemeBodyClass, getEffectiveColourKanbanIcons } from './themeBodyClass';
 import type { FSWatcher, Dirent, Stats } from 'fs';
 import * as os from 'os';
 import * as crypto from 'crypto';
@@ -3648,14 +3648,7 @@ Each plan file must include:
     }
 
     public handleGetColourKanbanIconsSetting(): boolean {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const theme = config.get<string>('theme.name', 'afterburner');
-        const colourIconsConfig = config.inspect<boolean>('theme.colourKanbanIcons');
-        const hasExplicitColourIcons = colourIconsConfig?.workspaceValue !== undefined || colourIconsConfig?.globalValue !== undefined;
-        if (hasExplicitColourIcons) {
-            return !!config.get<boolean>('theme.colourKanbanIcons');
-        }
-        return (theme === 'claudify' || theme === 'afterburner-professional');
+        return getEffectiveColourKanbanIcons();
     }
 
     public async handleSetColourKanbanIconsSetting(enabled: boolean): Promise<void> {

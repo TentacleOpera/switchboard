@@ -121,3 +121,50 @@ Per session directives: **skip compilation** and **skip automated tests**. The t
 ---
 
 **Recommendation:** Complexity is 3 → **Send to Coder**.
+
+---
+
+## Reviewer Pass (2026-06-24)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *"I asked for ONE shared helper. You gave me TWO copy-pasted blobs of the same logic. And you forgot the third requirement entirely. Let me count the ways this disappoints me."*
+
+**[MAJOR] DRY violation — shared helper never created; logic duplicated inline.**
+`themeBodyClass.ts:21-24` and `TaskViewerProvider.ts:3652-3658` contain **byte-for-byte equivalent** `inspect()` + per-theme-default logic, inlined at both read sites. The plan's own Adversarial Synthesis explicitly called out that "a single shared helper function ensures both read sites use identical logic." The whole point of centralising this was so that when the per-theme-ON list changes (e.g. a third theme gets added), you update ONE function, not hunt for two copies that are already drifting. This is exactly the kind of "it works today" shortcut that becomes a bug six months from now when someone updates one site and not the other.
+
+**[MAJOR] `setThemeSetting` re-broadcast completely missing.**
+`SetupPanelProvider.ts:125-132` was **not touched**. The plan's third Proposed Change — re-broadcasting `colourKanbanIconsSetting` after a theme switch so the Theme tab toggle updates live — was skipped entirely. Result: switch from Afterburner → Claudify with an unset value and the toggle stays OFF until you close and reopen the panel. This directly fails the "Live theme switch (unset)" manual verification case in the plan's own Verification Plan. You wrote the test case and then didn't implement the code that satisfies it.
+
+**[NIT] `!!cfg.get<boolean>(...)` double-negation in the inlined version.**
+The inlined copies used `!!config.get<boolean>('theme.colourKanbanIcons')` to coerce. The shared helper uses `!!inspection.workspaceValue` / `!!inspection.globalValue` directly off the `inspect()` result, which is cleaner — it reads the already-fetched value rather than re-querying. Minor, but it shows the inline path was doing redundant config reads.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep:** The core `inspect()` unset-detection logic is correct in both inline copies — it checks both `workspaceValue` and `globalValue` before falling back to the per-theme default, exactly as the plan specified. No logic bug; purely a structural/DRY problem. The `themeBodyClass.ts` first-paint integration is correct and the `TaskViewerProvider.ts` toggle-feed integration is correct.
+
+**Fix now (both are valid MAJOR):**
+1. Extract the shared `getEffectiveColourKanbanIcons()` helper into `themeBodyClass.ts` as the plan required; refactor `getThemeBodyClass()` and `TaskViewerProvider.handleGetColourKanbanIconsSetting()` to call it. Eliminates the duplicate and the redundant `get()` re-read.
+2. Add the `colourKanbanIconsSetting` re-broadcast to the `setThemeSetting` case in `SetupPanelProvider.ts` after the existing `switchboardThemeNameSetting` push. No feedback-loop risk (confirmed: `setup.html:4544-4549` only sets `toggle.checked`).
+
+**Defer:** Nothing — both findings are material and low-risk to fix.
+
+### Fixes Applied
+
+1. **`src/services/themeBodyClass.ts`** — Added exported `getEffectiveColourKanbanIcons(): boolean` helper (lines 14-39) implementing the `inspect()` → workspaceValue → globalValue → per-theme-default cascade. Refactored `getThemeBodyClass()` (line 48) to call the helper instead of inlining the logic.
+2. **`src/services/TaskViewerProvider.ts`** — Extended the existing `themeBodyClass` import (line 4) to include `getEffectiveColourKanbanIcons`. Replaced the 8-line inlined body of `handleGetColourKanbanIconsSetting()` (now line 3650-3652) with a single `return getEffectiveColourKanbanIcons();` call.
+3. **`src/services/SetupPanelProvider.ts`** — Added the `colourKanbanIconsSetting` re-broadcast (lines 132-141) inside the `setThemeSetting` case, after the `switchboardThemeNameSetting` push. Calls `this._taskViewerProvider.handleGetColourKanbanIconsSetting()` (which now delegates to the shared helper) and posts the effective value to the setup panel webview.
+
+### Validation Results
+
+- **Compilation:** Skipped per session directives.
+- **Automated tests:** Skipped per session directives.
+- **Static verification (grep):** `inspect<boolean>('theme.colourKanbanIcons')` now appears in exactly **one** source location (`themeBodyClass.ts:30`) — the duplicate in `TaskViewerProvider.ts` is eliminated. The only other match is in this plan file.
+- **Import check:** `TaskViewerProvider.ts:4` imports `getEffectiveColourKanbanIcons` alongside the pre-existing `applyThemeBodyClass` import — no new import line, merged cleanly.
+- **Feedback-loop safety:** Confirmed `setup.html:4544-4549` `colourKanbanIconsSetting` handler only sets `toggle.checked`; it does not emit a `setColourKanbanIconsSetting` message. No loop.
+
+### Remaining Risks
+
+- **Pre-existing (out of scope, noted in plan):** The kanban panel's body class does not update the `kanban-icons-colour` class live on theme switch — only on next open/refresh. The `switchboardThemeChanged` handler in `kanban.html` does not toggle that class. This plan explicitly scoped this out; behaviour is unchanged by this review.
+- **Manual verification still required:** The 8 manual checklist items in the Verification Plan above have not been executed in this session (no VS Code runtime). The user should run them against an installed VSIX.
+
