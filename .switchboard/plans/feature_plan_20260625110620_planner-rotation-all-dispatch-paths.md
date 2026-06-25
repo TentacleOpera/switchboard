@@ -285,3 +285,64 @@ case 'invokeSystemBuilder': {
 ---
 
 **Recommendation:** Complexity is 4/10 (multi-file but routine, reusing proven patterns). **Send to Coder.**
+
+---
+
+## Reviewer Pass — Completed
+
+**Reviewer:** in-place adversarial review (Grumpy → Balanced → verify → plan update).
+**Status:** IMPLEMENTATION COMPLETE. No code fixes required.
+
+### Stage 1 (Grumpy) findings
+
+| # | Severity | Location | Finding |
+|---|---|---|---|
+| 1 | NIT | `PlanningPanelProvider.ts:3299, 3316, 3340` | Inline comment says "Fall back to ad-hoc terminal creation if no planner agent is registered" but the fallback actually fires on ANY dispatch failure (incl. registered-but-dead planner). Plan's "Behaviour change (accepted)" documents this correctly; the comment understates it. Deferred — project rule forbids editing comments not explicitly flagged. |
+| 2 | NIT | `PlanningPanelProvider.ts:3322` | `invokeConstitutionUpdater` fallback creates a terminal named `'Constitution Builder'` (not `'Constitution Updater'`). Pre-existing — not introduced by this plan. Out of scope. |
+| 3 | NIT | plan file (this file) | Original plan line references drifted after implementation (9507→9636, 5230→5266, 3274→3292, 3300→3328, etc.). Fixed below in "Final file locations". |
+
+**Zero CRITICAL. Zero MAJOR.** No code fixes applied.
+
+### Stage 2 (Balanced) synthesis
+
+- **Keep as-is:** All code changes. Rotation gating on `role === 'planner'`, cursor-advance-on-success-only semantics, fallback chains, `_taskViewerProvider` wiring, and the `dispatchCustomPromptToRole` return-value improvement (now returns actual dispatch success instead of unconditional `true`) are all correct and match the plan.
+- **Fix now:** None in code. Plan-file line-reference NIT handled here.
+- **Defer:** NIT #1 (comment accuracy — forbidden to touch per project rules) and NIT #2 (updater terminal name — pre-existing, out of scope).
+
+### Verification (static — per SKIP COMPILATION / SKIP TESTS directives)
+
+- **Rotation primitives present & correctly invoked:** `getRoleTerminalSet` (`TaskViewerProvider.ts:3495`), `getPlannerRotationCursor` (`3528`), `advancePlannerRotationCursor` (`3535`) — all called from `dispatchCustomPromptToRole` (`2640-2678`) using the same `locationKey` derivation as the kanban single-card (`KanbanProvider.ts:5417`, `5469`) and batch (`3750`) paths. **Shared-cursor coherence confirmed.**
+- **Return-type contract:** `_dispatchExecuteMessage` (`TaskViewerProvider.ts:15415-15441`) returns `Promise<boolean>` on all paths (`return true` at 15437; `return false` at 15425, 15440). The `if (success && plannerLocationKey)` advance gate (`2674`) is sound.
+- **Non-planner role isolation:** `KanbanProvider.ts:3126` (orchestrator) and `6917` (lead) call `dispatchCustomPromptToRole`; the `role === 'planner'` guard (`2648`) routes them to the unchanged `_resolveAgentTerminalForPlan` fallback. **No regression.**
+- **Wiring confirmed:** `PlanningPanelProvider._taskViewerProvider` field (`114`) + `setTaskViewerProvider` setter (`147-149`) + `extension.ts:853` call all present. Follows the existing `_kanbanProvider` type-only-import pattern (avoids runtime circular import).
+- **No confirmation dialogs introduced** (project rule satisfied).
+- **Memo clipboard fallback:** Now correctly gated on real dispatch failure (`TaskViewerProvider.ts:9636-9641`) instead of the old always-`true` return. Intentional improvement; `askAgentTask` (`5266`) ignores the return value so it's unaffected.
+- **Constitution Builder / Updater / System Builder:** All three (`PlanningPanelProvider.ts:3292-3351`) try `dispatchCustomPromptToRole('planner', …)` first, break on success, fall back to ad-hoc terminal find + create + `sendRobustText` on failure. Behaviour-change (fallback fires on any dispatch failure, not just missing-by-name) is accepted per plan.
+
+### Final file locations (post-implementation)
+
+| Plan reference (original) | Actual location |
+|---|---|
+| `TaskViewerProvider.ts:2634-2646` (`dispatchCustomPromptToRole`) | `TaskViewerProvider.ts:2640-2678` |
+| `TaskViewerProvider.ts:9507` (Memo send) | `TaskViewerProvider.ts:9636` |
+| `TaskViewerProvider.ts:5230` (`askAgentTask`) | `TaskViewerProvider.ts:5266` |
+| `TaskViewerProvider.ts:5946-5956` (`_resolveAgentTerminalForPlan`) | (unchanged — fallback path) |
+| `PlanningPanelProvider.ts:3274-3298` (constitution builder/updater) | `PlanningPanelProvider.ts:3292-3326` |
+| `PlanningPanelProvider.ts:3300-3319` (system builder) | `PlanningPanelProvider.ts:3328-3351` |
+| `PlanningPanelProvider.ts:111` (`_kanbanProvider` field) | `PlanningPanelProvider.ts:111-114` (`_taskViewerProvider` added at 114) |
+| `extension.ts:852` (wiring) | `extension.ts:853` |
+| `KanbanProvider.ts:3045` (orchestrator) | `KanbanProvider.ts:3126` |
+| `KanbanProvider.ts:6695` (lead) | `KanbanProvider.ts:6917` |
+
+### Files changed (by the implementation under review)
+
+- `src/services/TaskViewerProvider.ts` — `dispatchCustomPromptToRole` rewritten with planner-rotation logic + real return value.
+- `src/services/PlanningPanelProvider.ts` — added `_taskViewerProvider` field + `setTaskViewerProvider` setter; `invokeConstitutionBuilder`, `invokeConstitutionUpdater`, `invokeSystemBuilder` now route through `dispatchCustomPromptToRole` with ad-hoc fallback.
+- `src/extension.ts` — `planningPanelProvider.setTaskViewerProvider(taskViewerProvider)` wired at line 853.
+
+### Remaining risks
+
+1. **Cursor race (accepted by design):** Two near-simultaneous sends can both read the same cursor and both pick the same terminal before either advances. Identical to the kanban paths' existing property; acceptable for user-paced interaction. No lock added (per plan).
+2. **NIT #1 (deferred):** Fallback comments in `PlanningPanelProvider.ts:3299/3316/3340` understate the trigger condition. Not fixed (project rule: don't edit comments unless asked).
+3. **NIT #2 (deferred, out of scope):** `invokeConstitutionUpdater` fallback terminal named `'Constitution Builder'`. Pre-existing.
+4. **`askAgentTask` dead-planner silent failure (pre-existing):** If the configured planner agent's terminal is dead, the guard passes but dispatch fails; `askAgentTask` ignores the return value, so the user gets no feedback. Unchanged by this plan — flagged for awareness only.
