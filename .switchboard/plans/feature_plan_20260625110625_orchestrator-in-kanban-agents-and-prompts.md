@@ -14,7 +14,7 @@ The epic-orchestration-onramp plan (`feature_plan_20260625081837_epics-as-orches
 - `sharedDefaults.js:38` — `DEFAULT_ROLE_CONFIG` has orchestrator with full addon config
 - `sharedDefaults.js:18` — `DEFAULT_VISIBLE_AGENTS` has `orchestrator: false`
 - `sharedDefaults.js:56` — `BUILT_IN_AGENT_LABELS` has `{ key: 'orchestrator', label: 'Orchestrator' }`
-- `sharedDefaults.js:270-285` — `ROLE_ADDONS` has a complete orchestrator entry (8 addons including subagent policy radio)
+- `sharedDefaults.js:270-285` — `ROLE_ADDONS` has a complete orchestrator entry (9 addons including subagent policy radio)
 - `sharedDefaults.js:63` — `ROLE_KEYS` is derived from `DEFAULT_ROLE_CONFIG` keys, so it includes orchestrator
 - `sharedDefaults.js:67` — `PROMPT_OVERRIDE_EXCLUDED_KEYS` does NOT include orchestrator (prompt is editable)
 - `extension.ts:2637` — `allBuiltInAgents` includes `{ name: 'Orchestrator', role: 'orchestrator' }`
@@ -33,11 +33,17 @@ The epic-orchestration-onramp plan (`feature_plan_20260625081837_epics-as-orches
 
 **Root cause:** The kanban.html Agents tab and Prompts tab predate the orchestrator role and use hardcoded HTML rows/options instead of dynamic generation from `BUILT_IN_AGENT_LABELS` (which the setup.html Prompts tab does at `setup.html:1643`). When the orchestrator role was added to the backend, these hardcoded UI elements were missed. The `handleRoleChange` function (`kanban.html:3239`) and `renderRoleAddons` function (`kanban.html:3301`) are generic enough to handle orchestrator without additional code — they read from `ROLE_ADDONS[role]` and `roleConfigs[role]`, both of which already include orchestrator. The `refreshPreview` function (`kanban.html:3479`) sends `getPromptPreview` with the current role, and the backend already handles orchestrator in `handleGetDefaultPromptPreviews`. So the ONLY missing pieces are the three hardcoded HTML/JS structures listed above.
 
+**Note:** The same hardcoded-HTML gap also affects `claude_designer` and `mcp_monitor` (both present in `BUILT_IN_AGENT_LABELS` at `sharedDefaults.js:43-60` but absent from the kanban Agents tab and role selector). This plan is scoped to orchestrator only; a separate plan should address the remaining gaps or refactor the Agents tab to dynamically generate rows from `BUILT_IN_AGENT_LABELS`.
+
 ## Metadata
 
-- **Tags:** `bug`, `ui`, `kanban`, `orchestrator`, `agents-tab`, `prompts-tab`
+- **Tags:** `ui`, `bugfix`, `frontend`
 - **Complexity:** 3/10 (adding hardcoded HTML rows/options — the backend and dynamic rendering paths are already complete)
 - **Related plan:** `feature_plan_20260625081837_epics-as-orchestration-onramp.md` (this completes its UAT gaps)
+
+## User Review Required
+
+No user review required. This plan adds three hardcoded HTML/JS insertions to a single file (`kanban.html`) with no architectural changes, no data migrations, and no breaking changes. All backend and dynamic-rendering paths are already complete and verified.
 
 ## Complexity Audit
 
@@ -54,15 +60,32 @@ The epic-orchestration-onramp plan (`feature_plan_20260625081837_epics-as-orches
 
 ## Edge-Case & Dependency Audit
 
-- **Orchestrator is hidden by default** (`DEFAULT_VISIBLE_AGENTS.orchestrator = false`): The visibility toggle checkbox should render **unchecked**, matching the default. The sync logic at `kanban.html:6496-6497` sets `cb.checked = vis[cb.dataset.role] !== false` — for a new install with no saved state, `vis.orchestrator` would be `false` (from defaults), so the checkbox renders unchecked. For existing installs with saved `visibleAgents` state that predates orchestrator, the key may be absent — `vis.orchestrator` would be `undefined`, and `undefined !== false` is `true`, which would incorrectly check the box. **Mitigation:** The backend's `getVisibleAgents` merges defaults (`orchestrator: false`) with saved state, so the sent value should always be `false` for new installs. Verify this merge path.
-- **No confirmation dialogs** (project rule) — not applicable (this is a UI addition, no delete/confirm actions).
-- **Prompt preview for orchestrator:** The `previewEl.readOnly` check at `kanban.html:3296` only sets read-only for `planner` and `code_researcher` — orchestrator's prompt preview is editable, which is correct (the orchestrator's prompt override should be user-editable).
-- **Add-on rendering:** The `renderRoleAddons` function at `kanban.html:3301` reads from `ROLE_ADDONS[role]`. The orchestrator entry in `sharedDefaults.js:270-285` includes a `subagentPolicy` radio addon with a `customSubagentName` text input — the rendering code at `kanban.html:3322-3360` handles radio addons with text inputs, so this should work out of the box.
-- **Jules row precedent:** The Jules agent row at `kanban.html:2766` has no CLI command input (it uses `<span>` instead of `<input>`). The orchestrator DOES need a CLI command input (it's a terminal-based agent), so model the row after the researcher row (`kanban.html:2764`), not the Jules row.
+- **Race Conditions:** None. The three insertions are static HTML/JS that load with the webview. The sync logic (`startupCommands` handler at `kanban.html:6491-6519`) runs after DOM load and queries existing elements — the new orchestrator row will be present by then. No async ordering issues.
+- **Security:** None. No new user inputs, no new message handlers, no new backend endpoints. The orchestrator CLI command input uses the same `data-role` pattern as all other agent rows — the backend already handles `startupCommands` for orchestrator via the generic `cmds[i.dataset.role]` lookup.
+- **Side Effects:**
+  - **Orchestrator is hidden by default** (`DEFAULT_VISIBLE_AGENTS.orchestrator = false`): The visibility toggle checkbox should render **unchecked**, matching the default. The sync logic at `kanban.html:6496-6497` sets `cb.checked = vis[cb.dataset.role] !== false`. **Verified safe:** The backend's `getVisibleAgents` (`TaskViewerProvider.ts:3610-3649`) builds `defaults` with `orchestrator: false` and returns `{ ...defaults, ...fileValue }`. If saved state (`fileValue`) lacks the `orchestrator` key, the spread preserves `defaults.orchestrator = false`. So `vis.orchestrator` is always `false` (not `undefined`) for both new and existing installs. The checkbox renders unchecked correctly.
+  - **No confirmation dialogs** (project rule) — not applicable (this is a UI addition, no delete/confirm actions).
+  - **Prompt preview for orchestrator:** The `previewEl.readOnly` check at `kanban.html:3296` only sets read-only for `planner` and `code_researcher` — orchestrator's prompt preview is editable, which is correct (the orchestrator's prompt override should be user-editable).
+  - **Add-on rendering:** The `renderRoleAddons` function at `kanban.html:3301` reads from `ROLE_ADDONS[role]`. The orchestrator entry in `sharedDefaults.js:270-285` includes a `subagentPolicy` radio addon with a `customSubagentName` text input — the rendering code at `kanban.html:3322-3360` handles radio addons with text inputs, so this works out of the box.
+  - **Jules row precedent:** The Jules agent row at `kanban.html:2766` has no CLI command input (it uses `<span>` instead of `<input>`). The orchestrator DOES need a CLI command input (it's a terminal-based agent), so model the row after the researcher row (`kanban.html:2764`), not the Jules row.
+- **Dependencies & Conflicts:**
+  - The `handleGetDefaultPromptPreviews` roles array (`TaskViewerProvider.ts:3914`) includes `'orchestrator'` — the default prompt preview will load correctly. (Note: this array only covers 8 of 16 roles — a pre-existing limitation unrelated to this plan. Orchestrator is among the 8, so verification step 7 will pass.)
+  - The `_getDefaultPromptOverrides` roles array (`TaskViewerProvider.ts:7341`) includes `'orchestrator'` — saved prompt overrides will be loaded correctly.
+  - No conflicts with other plans. The `claude_designer` and `mcp_monitor` roles are also missing from the kanban UI but are out of scope for this plan.
+
+## Dependencies
+
+- `feature_plan_20260625081837_epics-as-orchestration-onramp.md` — the prior plan that added the orchestrator role to all backend enumeration touch-points (agentConfig.ts, sharedDefaults.js, extension.ts, agentPromptBuilder.ts, TaskViewerProvider.ts). This plan completes its UAT gaps by adding the missing kanban.html UI elements. Must already be implemented (it is — verified by code inspection).
+
+## Adversarial Synthesis
+
+Key risks: (1) The `visibleAgents` merge path could theoretically leave `orchestrator` as `undefined` for existing installs — **verified safe**: the backend spread `{ ...defaults, ...fileValue }` with `defaults.orchestrator = false` guarantees `false` for all installs. (2) The same hardcoded-HTML gap affects `claude_designer` and `mcp_monitor` — out of scope but should be tracked separately. Mitigations: the three insertions are purely additive static HTML with no logic changes; all dynamic rendering paths are generic and already handle orchestrator.
 
 ## Proposed Changes
 
 ### `src/webview/kanban.html` — Agents tab (after the researcher row, ~line 2765)
+
+**Context:** The Agents tab uses hardcoded `<div class="startup-row">` elements for each built-in agent. The sync logic at `kanban.html:6493-6498` iterates over existing DOM elements via `querySelectorAll` — it does NOT dynamically create rows. The orchestrator row must be added statically.
 
 **1. Add the orchestrator agent row:**
 
@@ -71,9 +94,13 @@ The epic-orchestration-onramp plan (`feature_plan_20260625081837_epics-as-orches
 <div class="agent-description">Runs an entire epic end-to-end with native subagents — one agent handles all subtasks in a single dispatch.</div>
 ```
 
-Insert this after the researcher row (line 2764-2765) and before the Jules row (line 2766).
+**Implementation:** Insert this after the researcher row (line 2764-2765) and before the Jules row (line 2766). The row follows the researcher row pattern (checkbox + label + CLI text input), NOT the Jules row pattern (checkbox + label + `<span>` — Jules has no CLI command).
+
+**Edge Cases:** The checkbox renders unchecked by default because `DEFAULT_VISIBLE_AGENTS.orchestrator = false` and the backend merge path preserves this. The CLI command input is picked up by the `startupCommands` handler's `querySelectorAll('#agents-tab-content input[type="text"][data-role]')` at `kanban.html:6493-6494`.
 
 ### `src/webview/kanban.html` — Prompts tab role selector (line 2824)
+
+**Context:** The Prompts tab role selector is a hardcoded `<select id="roleSelect">` with `<option>` elements for each built-in role. The `handleRoleChange` function (`kanban.html:3239`) fires on selection change and routes to the correct rendering path based on the selected role. Orchestrator falls into the `else` branch (line 3290-3292) which calls `renderRoleAddons(currentRole)`.
 
 **2. Add the orchestrator option to the `<select id="roleSelect">`:**
 
@@ -83,9 +110,13 @@ Insert this after the researcher row (line 2764-2765) and before the Jules row (
 <option value="jules">Jules</option>
 ```
 
-Insert `<option value="orchestrator">Orchestrator</option>` after the researcher option (line 2823) and before the jules option (line 2824).
+**Implementation:** Insert `<option value="orchestrator">Orchestrator</option>` after the researcher option (line 2823) and before the jules option (line 2824). This matches the order in `BUILT_IN_AGENT_LABELS` (`sharedDefaults.js:55-58`) where orchestrator appears between researcher and jules.
+
+**Edge Cases:** Selecting "Orchestrator" triggers `handleRoleChange`, which shows `promptCustomization` (line 3247: `currentRole === 'planner' ? 'none' : 'block'`), hides `researchComplexityConfig` (line 3246: only for researcher/code_researcher), hides `plannerConfig` (line 3245), and calls `renderRoleAddons('orchestrator')` in the else branch (line 3291). The prompt preview is editable (line 3296: readOnly only for planner/code_researcher).
 
 ### `src/webview/kanban.html` — ROLE_DESCRIPTIONS (line 3209)
+
+**Context:** `ROLE_DESCRIPTIONS` is a hardcoded object mapping role keys to description strings. The `updateRoleDescription` function (`kanban.html:3212-3216`) reads `ROLE_DESCRIPTIONS[currentRole]` and falls back to empty string if the key is absent. Adding the orchestrator entry ensures the description displays when the role is selected.
 
 **3. Add the orchestrator description:**
 
@@ -98,11 +129,17 @@ const ROLE_DESCRIPTIONS = {
 };
 ```
 
-Insert `orchestrator: 'Runs an entire epic end-to-end with native subagents — one agent handles all subtasks in a single dispatch.',` after the `gatherer` entry (line 3208) and before the `jules` entry (line 3209).
+**Implementation:** Insert `orchestrator: 'Runs an entire epic end-to-end with native subagents — one agent handles all subtasks in a single dispatch.',` after the `gatherer` entry (line 3208) and before the `jules` entry (line 3209).
+
+**Edge Cases:** If the entry is omitted, `updateRoleDescription` falls back to empty string — cosmetic only, no functional impact. Adding it ensures UI completeness.
 
 ## Verification Plan
 
-> Manual verification against an installed VSIX (per project norm).
+> Manual verification against an installed VSIX (per project norm). No compilation or automated tests required for this session.
+
+### Automated Tests
+
+No automated tests required. This plan adds three static HTML/JS insertions to a single webview file with no logic changes. All dynamic rendering paths are already complete and tested via the backend. Verification is manual against an installed VSIX per project norm.
 
 ### Manual Verification
 
@@ -116,3 +153,8 @@ Insert `orchestrator: 'Runs an entire epic end-to-end with native subagents — 
 8. **Subagent policy radio:** Click through the Subagent Policy radio options → selecting "Custom Subagent" shows the custom subagent name text input. Enter a name → it saves.
 9. **No phantom kanban column:** Confirm that enabling the orchestrator does NOT create a new column on the kanban board (the orchestrator has no entry in `DEFAULT_KANBAN_COLUMNS` and `columnToPromptRole` has no orchestrator mapping).
 10. **Orchestrate button in Epics tab:** After enabling the orchestrator and entering a CLI command, the Orchestrate button in the Epics tab should reflect the configured state (related to the Issue 3 plan — if that plan is also implemented, the button should appear teal/active).
+11. **Existing installs — checkbox default:** On an existing install with saved `visibleAgents` state that predates orchestrator, verify the Orchestrator checkbox renders **unchecked** (not incorrectly checked). This confirms the backend merge path (`getVisibleAgents` spreads `defaults.orchestrator = false` over absent saved key).
+
+---
+
+**Recommendation:** Complexity 3/10 → **Send to Intern**. Three static HTML/JS insertions in a single file, no logic changes, no migrations, all backend paths already complete.

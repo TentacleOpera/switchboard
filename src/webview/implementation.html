@@ -22,7 +22,7 @@
             --border-dim: #252525;
             --bg-dim: #111111;
             --text-primary: #e0e0e0;
-            --text-secondary: #777777;
+            --text-secondary: #8C8C8C;
 
             --accent-primary: #00e5ff;
             --accent-cyan: var(--accent-primary);
@@ -57,17 +57,8 @@
             --glow-green-btn: none;
             --text-primary: #E0E0E0;
             --text-secondary: #8C8C8C;
-            --border-color: #38332E;
-            --border-bright: #5C544A;
-        }
-
-        body.theme-afterburner-pro {
-            --accent-primary: #00e5ff;
-            --accent-teal: #00e5ff;
-            --accent-cyan: #00e5ff;
-            --accent-teal-dim: color-mix(in srgb, #00e5ff 40%, transparent);
-            --accent-teal-bright: #5ce8e6;
-            --glow-teal: none;
+            --border-color: #222222;
+            --border-bright: #444444;
         }
 
         /* Claudify: remove neon glow from base (non-cyber) interactive states */
@@ -624,6 +615,10 @@
             opacity: 0.25;
         }
 
+        .locate-btn + .locate-btn {
+            margin-left: 6px;
+        }
+
         /* Action Buttons */
         .action-btn {
             width: 100%;
@@ -1043,7 +1038,11 @@
         }
 
         /* Action Button Feedback Animations */
-        @keyframes pulse-green {
+        /* One-shot green ring for the success button. Renamed back from a colliding
+           second `pulse-green` (commit 6e9e08c) so the status-dot/secondary-button
+           breathing pulse (the other `pulse-green` above) survives, and so
+           .action-btn.success's `success-glow` reference resolves again (D11). */
+        @keyframes success-glow {
             0% {
                 box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-green) 30%, transparent);
             }
@@ -1093,7 +1092,6 @@
         .action-btn.success {
             border-color: var(--accent-green) !important;
             color: var(--accent-green) !important;
-            animation: success-glow 1.2s ease-out;
             background: linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--accent-green) 60%, transparent) 50%, transparent 100%);
             background-size: 200% 100%;
             animation: success-glow 1.2s ease-out, sweep 1s ease-out;
@@ -1583,7 +1581,7 @@
                         Tip: you can also use 'start memo capture' in an agent chat.
                     </p>
                     <textarea id="memo-textarea" class="modal-textarea"
-                              placeholder="Bug: login button overlaps on mobile&#10;Thought: maybe cache the user profile&#10;Issue: API returns 500 on empty payload..."
+                              placeholder="Bug: login button overlaps on mobile&#10;&#10;Thought: maybe cache the user profile&#10;&#10;Issue: API returns 500 on empty payload..."
                               style="width: 100%; min-height: 240px; resize: vertical; font-family: var(--font-mono, monospace); font-size: 13px;"></textarea>
                     <span id="memo-status" style="font-size: 11px; color: var(--text-secondary); min-height: 14px;"></span>
                     <button id="memo-clear-btn" class="secondary-btn w-full">Clear</button>
@@ -2179,7 +2177,7 @@
                         // to fall back to a possibly-wrong workspace root.
                         const validSubTabs = ['agents', 'terminals', 'memo'];
                         const restoredSubTab = (message.activeSubTab && validSubTabs.includes(message.activeSubTab)) ? message.activeSubTab : 'terminals';
-                        switchAgentTab(restoredSubTab);
+                        switchAgentTab(restoredSubTab, false);
                     }
                     toggleOnboarding(message.needsSetup === true);
                     break;
@@ -2442,15 +2440,12 @@
                         // Compute the desired theme class set without touching unrelated classes
                         // (e.g. kanban-icons-colour, cyber-animation-disabled) that may have been
                         // injected server-side by applyThemeBodyClass().
-                        const allThemeClasses = ['theme-claudify', 'theme-afterburner-pro', 'cyber-theme-enabled'];
+                        const allThemeClasses = ['theme-claudify', 'cyber-theme-enabled'];
                         const desired = new Set();
                         if (message.theme === 'afterburner') {
                             desired.add('cyber-theme-enabled');
                         } else if (message.theme === 'claudify') {
                             desired.add('theme-claudify');
-                        } else if (message.theme === 'afterburner-professional') {
-                            desired.add('theme-claudify');
-                            desired.add('theme-afterburner-pro');
                         }
                         // Remove only theme classes that should NOT be present — leave the
                         // correct ones in place so there is no flash if they were already
@@ -2581,10 +2576,12 @@
         let currentAgentTab = 'terminals';
         let isAutobanPanelInteracting = false;
         let memoDirty = false;
-        function switchAgentTab(tab) {
+        function switchAgentTab(tab, persist = true) {
             const isChanging = currentAgentTab !== tab;
             currentAgentTab = tab;
-            vscode.postMessage({ type: 'setActiveSubTab', tab: tab });
+            if (persist) {
+                vscode.postMessage({ type: 'setActiveSubTab', tab: tab });
+            }
             const tabs = {
                 agents: agentListStandard,
                 terminals: agentListTerminals,
@@ -2779,6 +2776,28 @@
                     vscode.postMessage({ type: 'focusTerminal', terminalName: 'Jules Monitor' });
                 };
                 header.appendChild(locateBtn);
+
+                // Clear Button (per-terminal) — disabled when no Jules Monitor terminal is registered
+                const clearBtn = document.createElement('button');
+                clearBtn.className = 'locate-btn';
+                clearBtn.innerText = 'clear';
+                // Clarification: gate on Jules Monitor being registered, mirroring broadcast clear's term.alive guard
+                const julesTerm = lastTerminals['Jules Monitor'];
+                clearBtn.disabled = !(julesTerm && julesTerm.alive);
+                clearBtn.onclick = () => {
+                    if (clearBtn.disabled) return;
+                    clearBtn.disabled = true;
+                    clearBtn.innerText = 'clearing';
+                    vscode.postMessage({
+                        type: 'sendToTerminal',
+                        name: 'Jules Monitor',
+                        input: '/clear',
+                        paced: false,
+                        source: { actor: 'switchboard-ui', tool: 'clear-terminal', allowBroadcast: false }
+                    });
+                    setTimeout(() => { clearBtn.disabled = !(julesTerm && julesTerm.alive); clearBtn.innerText = 'clear'; }, 600);
+                };
+                header.appendChild(clearBtn);
             } else if (!hideLocate) {
                 // Locate Button
                 const locateBtn = document.createElement('button');
@@ -2793,6 +2812,27 @@
                     if (resolvedTermName) vscode.postMessage({ type: 'focusTerminal', terminalName: resolvedTermName });
                 };
                 header.appendChild(locateBtn);
+
+                // Clear Button (per-terminal) — co-gated with locate via hideLocate; disabled for chat-only/ unresolved terminals
+                const clearBtn = document.createElement('button');
+                clearBtn.className = 'locate-btn';
+                clearBtn.innerText = 'clear';
+                clearBtn.disabled = !resolvedTermName || isChatOnly;
+                if (isChatOnly) clearBtn.style.opacity = '0.3';
+                clearBtn.onclick = () => {
+                    if (!resolvedTermName) return;
+                    clearBtn.disabled = true;
+                    clearBtn.innerText = 'clearing';
+                    vscode.postMessage({
+                        type: 'sendToTerminal',
+                        name: resolvedTermName,
+                        input: '/clear',
+                        paced: false,
+                        source: { actor: 'switchboard-ui', tool: 'clear-terminal', allowBroadcast: false }
+                    });
+                    setTimeout(() => { clearBtn.disabled = !resolvedTermName || isChatOnly; clearBtn.innerText = 'clear'; }, 600);
+                };
+                header.appendChild(clearBtn);
             }
 
             // Action Button
@@ -2960,7 +3000,7 @@
 
                         // Terminals tab content is statically defined in HTML
                         // No dynamic panel creation needed
-                        switchAgentTab(currentAgentTab);
+                        switchAgentTab(currentAgentTab, false);
                         return; // skip the rest of normal renderAgentList
                     }
                 }
@@ -3078,7 +3118,7 @@
             // No dynamic panel creation needed - see #agent-list-terminals in HTML
 
             // Restore active tab visibility after re-render
-            switchAgentTab(currentAgentTab);
+            switchAgentTab(currentAgentTab, false);
         }
 
         function createNotionPanel() {
@@ -3457,6 +3497,26 @@ Work through all plans in the list, using the marker format above.`;
                 if (termName) vscode.postMessage({ type: 'focusTerminal', terminalName: termName });
             };
             header.appendChild(locateBtn);
+
+            // Clear Button (per-terminal)
+            const clearBtn = document.createElement('button');
+            clearBtn.className = 'locate-btn';
+            clearBtn.innerText = 'clear';
+            clearBtn.disabled = !termName;
+            clearBtn.onclick = () => {
+                if (!termName) return;
+                clearBtn.disabled = true;
+                clearBtn.innerText = 'clearing';
+                vscode.postMessage({
+                    type: 'sendToTerminal',
+                    name: termName,
+                    input: '/clear',
+                    paced: false,
+                    source: { actor: 'switchboard-ui', tool: 'clear-terminal', allowBroadcast: false }
+                });
+                setTimeout(() => { clearBtn.disabled = !termName; clearBtn.innerText = 'clear'; }, 600);
+            };
+            header.appendChild(clearBtn);
 
             const input = document.createElement('textarea');
             input.className = 'agent-input';

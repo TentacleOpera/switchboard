@@ -850,6 +850,7 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(planningPanelProvider);
     kanbanProvider!.setPlanningPanelProvider(planningPanelProvider);
     planningPanelProvider.setKanbanProvider(kanbanProvider!);
+    planningPanelProvider.setTaskViewerProvider(taskViewerProvider);
 
     const designPanelProvider = new DesignPanelProvider(
         context.extensionUri,

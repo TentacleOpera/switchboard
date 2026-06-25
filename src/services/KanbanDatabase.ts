@@ -564,7 +564,7 @@ ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     complexity = excluded.complexity,
     tags = excluded.tags,
     repo_scope = excluded.repo_scope,
-    project = excluded.project,
+    project = COALESCE(NULLIF(excluded.project, ''), plans.project),
     workspace_id = excluded.workspace_id,
     updated_at = excluded.updated_at,
     last_action = excluded.last_action,
@@ -580,7 +580,7 @@ ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     is_epic = COALESCE(excluded.is_epic, is_epic),
     epic_id = CASE WHEN excluded.epic_id IS NOT NULL AND excluded.epic_id != '' THEN excluded.epic_id ELSE epic_id END,
     workspace_name = excluded.workspace_name,
-    project_id = excluded.project_id
+    project_id = COALESCE(excluded.project_id, plans.project_id)
 `;
 
 const MIGRATION_VERSION_KEY = 'kanban_db_migration_version';

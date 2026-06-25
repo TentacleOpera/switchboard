@@ -684,20 +684,18 @@
         "switchboard.theme.colourKanbanIcons": {
           "type": "boolean",
           "default": false,
-          "description": "Render kanban board icons in full colour at rest (cyan for Afterburner Professional, terracotta for Claudify) instead of flat grey with a colour click-flash. Only affects the Afterburner Professional and Claudify themes.",
+          "description": "Render kanban board icons in full colour at rest (terracotta for Claudify) instead of flat grey with a colour click-flash. Only affects the Claudify theme.",
           "scope": "window"
         },
         "switchboard.theme.name": {
           "type": "string",
           "enum": [
             "afterburner",
-            "claudify",
-            "afterburner-professional"
+            "claudify"
           ],
           "enumDescriptions": [
-            "Afterburner — Cyberpunk theme, brighter cyan, Hanken Grotesk, scanline effects",
-            "Claudify — Afterburner with Claude terracotta accent and Poppins headings",
-            "Afterburner Professional — Claudify layout with Afterburner cyan accent and GeistPixel headings"
+            "Afterburner — Cyan immersive theme: Hanken headings (no glow), scanlines and glass always on, CRT sweep toggleable",
+            "Claudify — Claude terracotta accent, Hanken headings, flat neutral surface"
           ],
           "default": "afterburner",
           "description": "Visual theme for Switchboard webviews. Applies to Setup, Kanban, and Planning panels.",

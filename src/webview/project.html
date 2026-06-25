@@ -26,18 +26,6 @@
             font-weight: 100 900;
             font-display: swap;
         }
-        @font-face {
-            font-family: 'Poppins';
-            src: url('{{POPPINS_SEMIBOLD_FONT_URI}}') format('woff2');
-            font-weight: 600;
-            font-display: swap;
-        }
-        @font-face {
-            font-family: 'Poppins';
-            src: url('{{POPPINS_BOLD_FONT_URI}}') format('woff2');
-            font-weight: 700;
-            font-display: swap;
-        }
         :root {
             --kanban-bg: #000000;
             --panel-bg: #000000;
@@ -58,7 +46,7 @@
             --card-bg-hover: #1a1a1a;
             --card-border: 1px solid #333333;
             --text-primary: #e0e0e0;
-            --text-secondary: #888888;
+            --text-secondary: #8C8C8C;
             --font-family: 'Hanken Grotesk', var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
             --font-mono: var(--vscode-editor-font-family, 'SF Mono', Monaco, 'Cascadia Code', monospace);
             --spacing-unit: 8px;
@@ -80,18 +68,10 @@
             --glow-teal: none;           /* kill all variable-routed neon glow */
             --text-primary: #E0E0E0;
             --text-secondary: #8C8C8C;
-            --border-color: #38332E;
-            --border-bright: #5C544A;
+            --border-color: #333333;
+            --border-bright: #444444;
             /* Backgrounds NOT set here — the grid block below provides a solid near-black surface. */
             /* Display-font vars NOT overridden — keep base GeistPixel (pixel font). */
-        }
-
-        body.theme-afterburner-pro {
-            --accent-primary: #00e5ff;
-            --accent-teal: #00e5ff;
-            --accent-teal-dim: color-mix(in srgb, #00e5ff 40%, transparent);
-            --accent-teal-bright: #5ce8e6;
-            --glow-teal: none;
         }
 
         /* Claudify: remove neon glow from base (non-cyber) interactive states */
@@ -445,7 +425,7 @@
             background: #333;
             color: #fff;
         }
-        .kanban-plan-copy-link, .kanban-plan-copy-prompt {
+        .kanban-plan-copy-link, .kanban-plan-copy-prompt, .epic-card-action {
             font-size: 10px;
             background: transparent;
             border: 1px solid var(--border-color);
@@ -454,7 +434,7 @@
             border-radius: 3px;
             cursor: pointer;
         }
-        .kanban-plan-copy-link:hover, .kanban-plan-copy-prompt:hover {
+        .kanban-plan-copy-link:hover, .kanban-plan-copy-prompt:hover, .epic-card-action:hover {
             border-color: var(--accent-teal);
             color: var(--text-primary);
         }
@@ -664,7 +644,13 @@
 
         /* Claudify: neutral-grey tab nav (active tab keeps the terracotta accent). */
         body.theme-claudify .shared-tab-btn:not(.active) { color: #8a8a8a; }
-        body.theme-claudify .shared-tab-btn.active { border-color: transparent; }
+        /* Active tab = invisible rectangle: fill + bottom border match the bar so only the
+           terracotta text reads (D14). */
+        body.theme-claudify .shared-tab-btn.active {
+            background: var(--panel-bg);
+            border-color: transparent;
+            border-bottom-color: transparent;
+        }
         body.theme-claudify .shared-tab-btn:hover:not(.active) {
             color: #c8c8c8;
             background: color-mix(in srgb, #ffffff 5%, transparent);
@@ -725,8 +711,9 @@
         body.cyber-theme-enabled {
             background-color: #101414;
             background-image:
-                linear-gradient(color-mix(in srgb, var(--accent-primary) 4%, transparent) 1px, transparent 1px),
-                linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 4%, transparent) 1px, transparent 1px);
+                /* Subtle neutral grey grid lines (cyan pulled out of the background per D13) */
+                linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
             background-size: 40px 40px, 40px 40px;
         }
 
@@ -759,25 +746,15 @@
         .cyber-theme-enabled #tuning-preview-pane {
             background-color: rgba(255, 255, 255, 0.015);
             background-image:
-                linear-gradient(color-mix(in srgb, var(--accent-primary) 8%, transparent) 1px, transparent 1px),
-                linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 8%, transparent) 1px, transparent 1px);
+                linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
             background-size: 40px 40px, 40px 40px;
             backdrop-filter: blur(6px);
             -webkit-backdrop-filter: blur(6px);
         }
 
         /* ── Cyber Panel Theme: Neon Glow Effects ── */
-        .cyber-theme-enabled .preview-panel-wrapper h1 {
-            text-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 60%, transparent),
-                         0 0 20px color-mix(in srgb, var(--accent-teal) 30%, transparent);
-        }
-        .cyber-theme-enabled .preview-panel-wrapper h2 {
-            text-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 50%, transparent),
-                         0 0 16px color-mix(in srgb, var(--accent-teal) 25%, transparent);
-        }
-        .cyber-theme-enabled .preview-panel-wrapper h3 {
-            text-shadow: 0 0 6px color-mix(in srgb, var(--accent-teal) 40%, transparent);
-        }
+        /* Headings: no glow (Hanken, H1 white / H2–H6 cyan) per D13. */
 
         /* Inline code: neon glow */
         .cyber-theme-enabled #kanban-preview-content code,
@@ -826,10 +803,10 @@
         body.theme-claudify #constitution-preview-pane,
         body.theme-claudify #system-preview-pane,
         body.theme-claudify #tuning-preview-pane {
-            background-color: #1F1C1A;   /* lifted from near-black (#14110F) to soften text/background contrast (claudify has no glass overlay) */
+            background-color: #1C1C1C;   /* neutral flat surface (claudify has no glass overlay) */
             background-image:
-                linear-gradient(color-mix(in srgb, var(--accent-primary) 5%, transparent) 1px, transparent 1px),
-                linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 5%, transparent) 1px, transparent 1px);
+                linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
             background-size: 40px 40px, 40px 40px;
         }
 
@@ -845,24 +822,16 @@
             color: #D97757;
         }
 
-        /* Claudify: h2-h6 — Poppins, warm cream */
+        /* Claudify: h2-h6 — Hanken, terracotta */
         body.theme-claudify #kanban-preview-content h2, body.theme-claudify #kanban-preview-content h3, body.theme-claudify #kanban-preview-content h4, body.theme-claudify #kanban-preview-content h5, body.theme-claudify #kanban-preview-content h6,
         body.theme-claudify #epics-preview-content h2, body.theme-claudify #epics-preview-content h3, body.theme-claudify #epics-preview-content h4, body.theme-claudify #epics-preview-content h5, body.theme-claudify #epics-preview-content h6,
         body.theme-claudify #constitution-preview-content h2, body.theme-claudify #constitution-preview-content h3, body.theme-claudify #constitution-preview-content h4, body.theme-claudify #constitution-preview-content h5, body.theme-claudify #constitution-preview-content h6,
         body.theme-claudify #system-preview-content h2, body.theme-claudify #system-preview-content h3, body.theme-claudify #system-preview-content h4, body.theme-claudify #system-preview-content h5, body.theme-claudify #system-preview-content h6,
         body.theme-claudify #tuning-preview-content h2, body.theme-claudify #tuning-preview-content h3, body.theme-claudify #tuning-preview-content h4, body.theme-claudify #tuning-preview-content h5, body.theme-claudify #tuning-preview-content h6 {
-            font-family: 'Poppins', var(--font-family);
+            font-family: var(--font-family);
             letter-spacing: normal;
             font-stretch: 100%;
-            color: #F0EBE6;
-        }
-
-        body.theme-afterburner-pro #kanban-preview-content h1,
-        body.theme-afterburner-pro #epics-preview-content h1,
-        body.theme-afterburner-pro #constitution-preview-content h1,
-        body.theme-afterburner-pro #system-preview-content h1,
-        body.theme-afterburner-pro #tuning-preview-content h1 {
-            color: var(--accent-primary);
+            color: #D97757;
         }
 
         /* Unified Markdown Preview Styling (Kanban, Epics & Constitution) */
@@ -900,10 +869,16 @@
         body.cyber-theme-enabled #constitution-preview-content h1, body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6,
         body.cyber-theme-enabled #system-preview-content h1, body.cyber-theme-enabled #system-preview-content h2, body.cyber-theme-enabled #system-preview-content h3, body.cyber-theme-enabled #system-preview-content h4, body.cyber-theme-enabled #system-preview-content h5, body.cyber-theme-enabled #system-preview-content h6,
         body.cyber-theme-enabled #tuning-preview-content h1, body.cyber-theme-enabled #tuning-preview-content h2, body.cyber-theme-enabled #tuning-preview-content h3, body.cyber-theme-enabled #tuning-preview-content h4, body.cyber-theme-enabled #tuning-preview-content h5, body.cyber-theme-enabled #tuning-preview-content h6 {
-            font-family: var(--display-font), var(--font-family);
-            letter-spacing: var(--display-letter-spacing);
-            font-stretch: var(--display-font-stretch);
+            font-family: var(--font-family);
             line-height: 1.1;
+        }
+        /* Cyber theme — doc preview h1 white, h2-h6 cyan (no glow) */
+        body.cyber-theme-enabled #kanban-preview-content h1,
+        body.cyber-theme-enabled #epics-preview-content h1,
+        body.cyber-theme-enabled #constitution-preview-content h1,
+        body.cyber-theme-enabled #system-preview-content h1,
+        body.cyber-theme-enabled #tuning-preview-content h1 {
+            color: #ffffff;
         }
         /* Cyber theme — doc preview h2-h6 use accent color */
         body.cyber-theme-enabled #kanban-preview-content h2, body.cyber-theme-enabled #kanban-preview-content h3, body.cyber-theme-enabled #kanban-preview-content h4, body.cyber-theme-enabled #kanban-preview-content h5, body.cyber-theme-enabled #kanban-preview-content h6,
@@ -1413,11 +1388,6 @@
         }
         .active-path-btn:hover { border-color: var(--accent-teal, #00e5ff); }
     </style>
-    <!-- Poppins via Google Fonts CDN (online, temporary — bundled local @font-face also exists above).
-         Declared last so this definition wins for the markdown-preview headings. -->
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap');
-    </style>
 </head>
 <body>
     <div class="shared-tab-bar">
@@ -1475,17 +1445,10 @@
                 <select id="epics-workspace-filter">
                     <option value="">All Workspaces</option>
                 </select>
-                <button id="btn-set-active-epic" class="strip-btn" disabled>Set as Active Planning Context</button>
+                <!-- "Set as Active Planning Context" removed: PRDs are now per-project (Projects tab + PROJECT CONTEXT toggle), decoupled from epics. The Epics tab is orchestration-only. The legacy planner.designDocLink setter remains wired for back-compat. -->
                 <button id="btn-new-epic" class="strip-btn">+ New Epic</button>
+                <button id="btn-epic-modes-help" class="strip-btn" title="How to run an epic (3 ways)" style="font-weight: bold; min-width: 28px; padding: 2px 8px;">?</button>
             </div>
-            <details class="epic-modes-explainer" style="margin: 0 8px 6px; font-size: 11px; color: var(--text-secondary);">
-                <summary style="cursor: pointer;">How to run an epic (3 ways)</summary>
-                <div style="padding: 6px 4px 2px; line-height: 1.5;">
-                    <div><b>Step</b> — drag the epic column-to-column on the board; each column's agent batch-processes every subtask.</div>
-                    <div><b>Orchestrate</b> — click <b>Orchestrate</b> below; one orchestrator agent runs the whole epic end-to-end with native subagents.</div>
-                    <div><b>Split (recommended)</b> — drag the epic to the <b>Planner</b> column to improve every subtask plan, <i>then</i> click <b>Orchestrate</b> here to hand the improved epic to the orchestrator to implement.</div>
-                </div>
-            </details>
             <div class="content-row">
                 <div id="epics-list-pane">
                     <div class="sidebar-toggle-row">
@@ -1659,6 +1622,23 @@
                 <button id="btn-epic-orchestrate-copy" class="strip-btn">Copy Prompt</button>
                 <button id="btn-epic-orchestrate-send" class="strip-btn" style="border-color: var(--accent-teal);">Send to Orchestrator</button>
                 <button id="btn-epic-orchestrate-close" class="strip-btn">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Epic Modes Help Modal -->
+    <div id="epic-modes-help-overlay" class="kanban-log-overlay" style="display: none;">
+        <div class="kanban-log-modal" style="width: 480px; max-width: 90vw;">
+            <div style="padding: 12px 16px; font-weight: bold; border-bottom: 1px solid var(--border-color);">
+                How to Run an Epic (3 Ways)
+            </div>
+            <div style="padding: 16px; line-height: 1.6; font-size: 12px;">
+                <div style="margin-bottom: 10px;"><b>Step</b> — drag the epic column-to-column on the board; each column's agent batch-processes every subtask.</div>
+                <div style="margin-bottom: 10px;"><b>Orchestrate</b> — click <b>Orchestrate</b> on an epic; one orchestrator agent runs the whole epic end-to-end with native subagents.</div>
+                <div><b>Split (recommended)</b> — drag the epic to the <b>Planner</b> column to improve every subtask plan, <i>then</i> click <b>Orchestrate</b> in the Epics tab to hand the improved epic to the orchestrator to implement.</div>
+            </div>
+            <div class="kanban-log-close" style="display: flex; justify-content: flex-end; padding: 12px 16px;">
+                <button id="btn-epic-modes-help-close" class="strip-btn">Close</button>
             </div>
         </div>
     </div>

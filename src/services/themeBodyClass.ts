@@ -21,8 +21,7 @@ import * as vscode from 'vscode';
  *
  * - Explicit workspace value wins.
  * - Else explicit global (user) value wins.
- * - Else (unset): `true` for `claudify` and `afterburner-professional`,
- *   `false` for all other themes.
+ * - Else (unset): `true` for `claudify`, `false` for all other themes.
  *
  * Shared by `getThemeBodyClass()` (first-paint body class) and
  * `TaskViewerProvider.handleGetColourKanbanIconsSetting()` (Theme tab toggle)
@@ -38,7 +37,7 @@ export function getEffectiveColourKanbanIcons(): boolean {
         return !!inspection.globalValue;
     }
     const theme = cfg.get<string>('theme.name', 'afterburner');
-    return theme === 'claudify' || theme === 'afterburner-professional';
+    return theme === 'claudify';
 }
 
 export function getThemeBodyClass(): string {
@@ -52,9 +51,6 @@ export function getThemeBodyClass(): string {
     const colourClass = colourIcons ? ' kanban-icons-colour' : '';
     if (theme === 'claudify') {
         return 'theme-claudify' + colourClass;
-    }
-    if (theme === 'afterburner-professional') {
-        return 'theme-claudify theme-afterburner-pro' + colourClass;
     }
     return '';
 }

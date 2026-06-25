@@ -369,16 +369,6 @@ export class DesignPanelProvider implements vscode.Disposable {
         );
         htmlContent = htmlContent.replace(/\{\{HANKEN_FONT_URI\}\}/g, hankenFontUri.toString());
 
-        const poppinsSemiboldFontUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this._extensionUri, 'designs', 'Poppins-SemiBold.woff2')
-        );
-        htmlContent = htmlContent.replace(/\{\{POPPINS_SEMIBOLD_FONT_URI\}\}/g, poppinsSemiboldFontUri.toString());
-
-        const poppinsBoldFontUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this._extensionUri, 'designs', 'Poppins-Bold.woff2')
-        );
-        htmlContent = htmlContent.replace(/\{\{POPPINS_BOLD_FONT_URI\}\}/g, poppinsBoldFontUri.toString());
-
         htmlContent = applyThemeBodyClass(htmlContent);
         return htmlContent;
     }
@@ -1619,6 +1609,11 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 const linkRef = linkPath;
                 vscode.env.clipboard.writeText(linkRef);
                 vscode.window.showInformationMessage(`Copied document path to clipboard: ${linkRef}`);
+                break;
+            }
+
+            case 'linkToFolder': {
+                await this._handleLinkToFolder(this._getWorkspaceRoot(), String(message.folderPath || ''));
                 break;
             }
 
@@ -3188,5 +3183,69 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
 
         checkAndRefresh(this._activeHtmlPreview);
         checkAndRefresh(this._activeClaudePreview, 'claude');
+    }
+
+    /**
+     * Resolve a folder path (absolute, or <index>:<relativePath> subfolder id)
+     * to an absolute path, verify it sits within a configured design/briefs/html/images
+     * folder, and copy it to the clipboard so the user can paste it into an agent prompt.
+     * Mirrors PlanningPanelProvider._handleLinkToFolder.
+     */
+    private async _handleLinkToFolder(workspaceRoot: string | undefined, folderPath: string): Promise<void> {
+        try {
+            if (!folderPath) {
+                throw new Error('No folder path provided');
+            }
+
+            // Build the allowed-folder set across ALL roots and ALL four kinds up front.
+            // The frontend sends a bare absolute path with no owning-root hint, and
+            // DesignPanelProvider has no _getLocalFolderServiceForFolder helper.
+            // Validating against a single root would reject legitimate folders from non-primary roots.
+            // So we make both resolution and validation root-agnostic.
+            const allowedPaths: string[] = [];
+            for (const root of this._getWorkspaceRoots()) {
+                const svc = this._getLocalFolderService(root);
+                allowedPaths.push(
+                    ...svc.getDesignFolderPaths(),
+                    ...svc.getBriefsFolderPaths(),
+                    ...svc.getHtmlFolderPaths(),
+                    ...svc.getImagesFolderPaths(),
+                );
+            }
+
+            let resolvedFolder = '';
+
+            if (/^\d+:/.test(folderPath)) {
+                // Subfolder id `<index>:<relativePath>` — join against every allowed
+                // base and take the first that exists on disk.
+                const relativePath = folderPath.substring(folderPath.indexOf(':') + 1);
+                for (const base of allowedPaths) {
+                    const candidate = path.join(base, relativePath);
+                    if (fs.existsSync(candidate)) {
+                        resolvedFolder = candidate;
+                        break;
+                    }
+                }
+                if (!resolvedFolder) throw new Error('Subfolder not found');
+            } else {
+                // Frontend sends already-resolved absolute paths.
+                const svc = this._getLocalFolderService(workspaceRoot || this._getWorkspaceRoots()[0] || '');
+                resolvedFolder = svc.resolveFolderPath(folderPath);
+            }
+
+            const isWithinAllowed = allowedPaths.some(
+                p => resolvedFolder === p || resolvedFolder.startsWith(p + path.sep)
+            );
+            if (!isWithinAllowed) {
+                throw new Error('Folder is not within a configured folder');
+            }
+            if (!fs.existsSync(resolvedFolder)) {
+                throw new Error('Folder does not exist');
+            }
+            await vscode.env.clipboard.writeText(resolvedFolder);
+            vscode.window.showInformationMessage(`Folder path copied to clipboard: ${resolvedFolder}`);
+        } catch (err) {
+            vscode.window.showErrorMessage(`Failed to link to folder: ${String(err)}`);
+        }
     }
 }

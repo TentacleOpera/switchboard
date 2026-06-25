@@ -536,6 +536,58 @@ async function testNativeTaskQueryAndMutationHelpers() {
                 && req.jsonBody?.comment_text === 'Looks good'
             );
             await service.addTaskComment('task-created', 'Looks good');
+
+            // Test getCommentThreads and structured comment normalization
+            http.queueJson(200, {
+                comments: [
+                    {
+                        id: 'comment-struct-1',
+                        comment_text: 'Hello John Doe',
+                        comment: [
+                            { text: 'Hello ' },
+                            { type: 'tag', user: { id: '123', username: 'John Doe', email: 'john@example.com' } }
+                        ],
+                        user: { id: 'author-1', username: 'Author One', email: 'author@example.com' },
+                        date: '1710000000000'
+                    },
+                    {
+                        id: 'comment-plain-1',
+                        comment_text: 'Looks good',
+                        user: { id: 'author-2', username: 'Author Two', email: 'author2@example.com' },
+                        date: '1710000001000'
+                    },
+                    {
+                        id: 'comment-media-1',
+                        comment_text: '',
+                        comment: [
+                            { text: 'Check this out' }
+                        ],
+                        user: { id: 'author-3', username: 'Author Three', email: 'author3@example.com' },
+                        date: '1710000002000'
+                    }
+                ]
+            }, (req) => req.method === 'GET' && req.path === '/api/v2/task/task-created/comment');
+
+            const { threads } = await service.getCommentThreads('task-created');
+            assert.strictEqual(threads.length, 3);
+            
+            // 1. Structured comment:
+            assert.strictEqual(threads[0].id, 'comment-struct-1');
+            assert.strictEqual(threads[0].body, 'Hello @John Doe');
+            assert.strictEqual(threads[0].mentions.length, 1);
+            assert.strictEqual(threads[0].mentions[0].id, '123');
+            assert.strictEqual(threads[0].mentions[0].name, 'John Doe');
+            assert.strictEqual(threads[0].author.name, 'Author One');
+
+            // 2. Plain comment:
+            assert.strictEqual(threads[1].id, 'comment-plain-1');
+            assert.strictEqual(threads[1].body, 'Looks good');
+            assert.strictEqual(threads[1].author.name, 'Author Two');
+
+            // 3. Structured comment with empty comment_text:
+            assert.strictEqual(threads[2].id, 'comment-media-1');
+            assert.strictEqual(threads[2].body, 'Check this out');
+            assert.strictEqual(threads[2].author.name, 'Author Three');
         } finally {
             http.restore();
         }

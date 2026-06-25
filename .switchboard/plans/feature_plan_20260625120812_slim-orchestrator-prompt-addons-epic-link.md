@@ -34,8 +34,8 @@ The epic doc already gets an auto-generated subtask block via `_regenerateEpicFi
 
 ## Metadata
 
-- **Tags:** `prompt-builder`, `orchestrator`, `epics`, `add-ons`, `kanban`, `ux`
-- **Complexity:** 5/10
+- **Tags:** refactor, feature, ui, ux
+- **Complexity:** 6/10 (raised from 5 after verification surfaced the missing `_getPromptsConfig` orchestrator wiring — see Complexity Audit)
 
 ## User Review Required
 
@@ -51,6 +51,7 @@ None. The two decisions that could have been forks are already made by the user:
 - Map the new add-on to its option in the orchestrator option-resolution path (`KanbanProvider.ts` ~L2860–2975), mirroring `switchboardSafeguardsEnabled` (L2868).
 
 ### Complex / Risky
+- **`_getPromptsConfig` does NOT wire the orchestrator role at all — CRITICAL, discovered during verification.** `_getPromptsConfig` (`KanbanProvider.ts` L3050–3264) loads `plannerConfig … gathererConfig` but **never loads an `orchestratorConfig`**, and **none** of the `*ByRole` maps (`switchboardSafeguardsByRole`, `gitProhibitionByRole`, `skipCompilationByRole`, `skipTestsByRole`, `cavemanOutputByRole`, `clearAntigravityContextByRole`, `useSubagentsByRole`, `noSubagentsByRole`, `customSubagentNameByRole`, `useWorktreesPerPlanByRole`, `suppressWalkthroughByRole`) contain an `orchestrator:` key. Consequence: **every orchestrator add-on toggle in the Prompts tab is dead today** — option-resolution at L2858–2880 reads `promptsConfig.<x>ByRole?.['orchestrator']` which is `undefined`, so it falls through to the hardcoded generic `?? default` (e.g. `skipCompilation ?? false`, `cavemanOutput ?? false`), ignoring the user's saved orchestrator config. The entire premise of this plan ("toggle add-ons → terse prompt reflects them") and Manual Verification #3 depend on closing this gap. **It is in scope HERE**: the dependency plan `110625` is pure `kanban.html` UI work and does not touch `_getPromptsConfig` (verified). Without this, the new `ultracode` add-on resolves to `false` forever.
 - **Rewriting the orchestrator branch (`agentPromptBuilder.ts` L1162–1209) — CRITICAL.** Replace the fixed `promptParts` (and especially the `PLANS TO PROCESS:\n${planList}` entry) with: the selected add-on directive blocks (safeguards/git/skip/subagent/antigravity/suppress-walkthrough/**ultracode**, each already gated by its option) **plus an epic-doc-link line**. The subtask enumeration and `EPIC_ORCHESTRATION_DIRECTIVE`/`PLANS TO PROCESS` must be dropped **for the orchestrator role only**. The orchestrator's editable prompt override (`resolveBaseInstructions('orchestrator', …)`, applied as the base) and the legacy `epic_prompt_template` fallback must continue to work.
 - **Epic-doc link source.** `buildEpicOrchestrationPrompt` (`KanbanProvider.ts` L2985–3030) must pass the epic doc's path/link to the prompt builder (e.g. a new `epicDocPath`/`epicDocLink` option) instead of the subtask plan list. The epic plan's `planFile` (already resolved at L3001) is the link source.
 - **Guaranteeing the subtask block — CRITICAL for correctness.** Because the prompt now only links the epic doc, that doc MUST contain the subtask list at dispatch time. `_regenerateEpicFile` is only invoked on subtask-membership changes (L7422/7560/7574), not necessarily at epic creation or before an Orchestrate dispatch. Add a guaranteed regeneration: call `_regenerateEpicFile` at epic creation AND defensively at the top of `buildEpicOrchestrationPrompt` so the linked doc is always current.
@@ -64,11 +65,13 @@ None. The two decisions that could have been forks are already made by the user:
 
 **Scope guard — do NOT change step mode.** When an epic is dragged onto a *non-orchestrator* column (planner/lead/etc., `role !== 'orchestrator'`), the existing `epicPromptTemplate` prepend + `PLANS TO PROCESS` path (L485–490, L2957–2967) must be left intact. This plan only restructures the **orchestrator** role branch. Verify the other roles' branches and `planList` usage are untouched.
 
-**Tests that assert on the removed strings (must be updated):**
-- `src/test/minimal-prompt.test.js` — asserts presence/absence of `FOCUS DIRECTIVE`, `GIT POLICY`, `FOCUS DIRECTIVE` for various roles.
-- `src/test/agent-prompt-builder-subagents.test.js` (and the stale `.tmp` copy) — asserts `AUTHORIZATION TO EXECUTE` / `GIT POLICY` per role, subagent directives.
-- `src/test/pipeline-orchestrator-regression.test.js` — orchestrator pipeline assertions.
-Update these to reflect the new orchestrator assembly (add-on blocks + epic-doc link, no `PLANS TO PROCESS`). Add a new assertion: with only the `ultracode` add-on enabled, the orchestrator prompt is approximately "read the epic at `<link>` and use ultracode" and contains **no** subtask paths.
+**Tests — corrected after reading them. NONE of the three currently break; the real work is NEW coverage:**
+- `src/test/minimal-prompt.test.js` — verified: builds the **planner** prompt only (asserts `FOCUS DIRECTIVE`/`GIT POLICY`/`PLANS TO PROCESS` against a planner build, L76–77 and L250–256). It never builds the orchestrator role, so the orchestrator-branch rewrite cannot break it. **No edit required.**
+- `src/test/agent-prompt-builder-subagents.test.js` (and the stale `.tmp` copy) — verified: every role list it iterates is `['planner','reviewer','tester','lead','coder']` (plus `intern`/`analyst` at L125). Orchestrator is **absent from all of them** (L35/45/61/107/125), so its `AUTHORIZATION TO EXECUTE`/`GIT POLICY`/subagent assertions are unaffected. **No edit required.**
+- `src/test/pipeline-orchestrator-regression.test.js` — verified: asserts on `PipelineOrchestrator.ts` source (the autoban **pipeline** orchestrator), NOT the epic-orchestrator *role* prompt. Different subsystem entirely. **No edit required.**
+- **NEW test (the actual deliverable):** add an orchestrator-role case (in `minimal-prompt.test.js` or a new `orchestrator-prompt.test.js`) asserting that with only the `ultracode` add-on enabled, the prompt ≈ "Read the epic … `<link>` … use ultracode", contains **no** `PLANS TO PROCESS`, **no** per-subtask paths, and **no** `EPIC MODE`/`AUTHORIZATION`/`FOCUS DIRECTIVE`/`GIT POLICY` walls; plus a second case asserting each toggled add-on (safeguards/git/skip) adds exactly its block and toggling off removes it.
+
+**Intended default-behavior change from wiring the orchestrator role.** Once `_getPromptsConfig` reads `orchestratorConfig`, the orchestrator will finally honor its `sharedDefaults.js` L38 defaults (`skipCompilation:true`, `skipTests:true`, `cavemanOutput:true`, `subagentPolicy:'useSubagents'`) instead of the accidental generic fallbacks it gets today (skip=false, caveman=false, no-subagents). This is the **correct/intended** behavior — it matches the checkboxes users already see in the Prompts tab — but it IS a dispatched-behavior change on first run after upgrade. Each new `orchestrator:` `*ByRole` default MUST mirror the `sharedDefaults.js` L38 value, not the other roles' values.
 
 **Security / side effects:** None new. The epic doc link is a workspace-relative path already known to the provider; no new file reads are introduced beyond the existing `_regenerateEpicFile` write.
 
@@ -76,6 +79,16 @@ Update these to reflect the new orchestrator assembly (add-on blocks + epic-doc 
 
 - **Depends on / coordinates with `feature_plan_20260625110625_orchestrator-in-kanban-agents-and-prompts.md`** — that plan adds the orchestrator row to the kanban Agents tab and the `<option value="orchestrator">` to the Prompts-tab role selector, which is what makes the orchestrator's add-ons (including the new `ultracode` one) selectable in the UI. The `ultracode` add-on added here will only surface once that plan lands. Implement that plan first, or land them together; this plan adds the add-on *definition* and *prompt wiring* but does not re-do the UI row/option (avoid duplicating its kanban.html edits).
 - **Context:** `feature_plan_20260625081837_epics-as-orchestration-onramp.md` (the broader onramp this completes).
+
+## Cross-Plan Coordination (this session)
+
+- **The rewritten orchestrator branch must still carry the shared PRD block (↔ `feature_plan_20260625143400_per-project-prd-and-projects-tab.md`).** That plan injects the active project's PRD into the *shared* prompt scaffold that applies to every role. The orchestrator-branch rewrite here MUST NOT return a self-contained string that bypasses that shared injection — when project-context is on, the orchestrator prompt carries the PRD. "Terse" means dropping the subtask enumeration / `PLANS TO PROCESS` / directive walls, **not** dropping the PRD. (A PRD *link* is preferable to full PRD content in the orchestrator prompt, to keep it terse.) **Boundary:** Switchboard only makes the PRD *available* to the orchestrator; whether the orchestrator propagates it to its own subagents is the agent's decision — not a Switchboard guarantee. Optional nudge (not a guarantee): one line in the orchestrator base instruction — *"respect these project requirements and pass them to any subagents you spawn."*
+- **Co-located option-resolution / `PromptBuilderOptions` edits (↔ `…143400`).** Both plans add option keys (`ultracodeEnabled` here; `prdEnabled`/`prdLink`/`prdContent` there) in `KanbanProvider.ts` ~L2860–2896 and to `PromptBuilderOptions`. Purely additive — coordinate to avoid merge friction.
+- **Shared Orchestrate-button handler (↔ `feature_plan_20260625141208_epic-only-orchestrator-board-column.md`).** This plan builds + dispatches the terse orchestrator prompt; the column plan teleports the epic into `ORCHESTRATING` after dispatch. One handler, two plans' concerns — implement together (build prompt → dispatch → move).
+
+## Adversarial Synthesis
+
+Key risks: (1) the plan's premise that orchestrator add-on resolution "already exists" is false — `_getPromptsConfig` never wires the orchestrator role, so without adding `orchestratorConfig` + `orchestrator:` keys to the `*ByRole` maps, every add-on toggle (including the new `ultracode`) is a no-op; (2) the three named tests don't exercise the orchestrator role, so the work is *new* coverage, not edits; (3) wiring the role flips its effective defaults to the intended `sharedDefaults.js` L38 values (a benign but real first-run behavior change). Mitigations: promote the `_getPromptsConfig` wiring to a CRITICAL Proposed Change with per-key defaults mirroring L38; keep the shared-scaffold PRD injection seam intact (the terse join replaces only the subtask/directive-wall portion, never the shared injection); rely on the defensive `_regenerateEpicFile` call in `buildEpicOrchestrationPrompt` as the single guarantee that the linked epic doc carries the `## Subtasks` block at dispatch (it backfills missing markers, so it is safe for pre-change epics and promote-to-epic alike).
 
 ## Proposed Changes
 
@@ -97,25 +110,39 @@ Update these to reflect the new orchestrator assembly (add-on blocks + epic-doc 
 6. **Rewrite the `role === 'orchestrator'` branch (L1162–1209):** build the prompt as the join of (a) the orchestrator base/override (kept minimal), (b) the *selected* add-on directive blocks already computed above (`safeguardsBlock`/`gitBlock`/`skipBlock`/`subagentBlock`/`antigravityBlock`/`suppressWalkthroughBlock`/**`ultracode` block**), and (c) an epic-doc-link line such as `Read the epic and its subtasks at: ${epicDocLink}`. **Remove** the `PLANS TO PROCESS:\n${planList}` part and the `EPIC_ORCHESTRATION_DIRECTIVE`/subtask enumeration for this role. Leave `EPIC_ORCHESTRATION_DIRECTIVE` and the epic-mode `planList` prefixing (L485–490) intact for non-orchestrator step mode.
 
 ### File 3 — `src/services/KanbanProvider.ts`
-7. In the orchestrator option-resolution path (~L2860–2975), map the new add-on: `ultracodeEnabled: <orchestrator addons>.ultracode ?? false`, mirroring `switchboardSafeguardsEnabled` (L2868). Preserve unknown add-on keys.
-8. In `buildEpicOrchestrationPrompt` (L2985–3030): (a) call `await this._regenerateEpicFile(workspaceRoot, epic.planId, db)` defensively before assembling, so the linked doc always has the subtask block; (b) pass `epicDocLink` (the resolved `epic.planFile` path, L3001) into the options. The subtask `plans.push(...)` loop may remain for `subtaskCount`/preview metadata but those plans must no longer be enumerated in the orchestrator prompt body.
-9. Ensure `_regenerateEpicFile` is also invoked at **epic creation** (verify the creation path calls it; if not, add the call) so the subtask block exists from the start.
+7. **Wire the orchestrator role into `_getPromptsConfig` (L3050–3264) — CRITICAL prerequisite (see Complexity Audit).**
+   - (a) Load `const orchestratorConfig: any = this._getRoleConfig('orchestrator');` alongside the other role configs (L3054–3066).
+   - (b) Add an `orchestrator:` key to every `*ByRole` map the orchestrator branch consumes, each defaulting to the `sharedDefaults.js` **L38** value (NOT the other roles' defaults):
+     - `switchboardSafeguardsByRole.orchestrator: orchestratorConfig?.addons?.switchboardSafeguards ?? true`
+     - `gitProhibitionByRole.orchestrator: orchestratorConfig?.addons?.gitProhibition ?? true`
+     - `skipCompilationByRole.orchestrator: orchestratorConfig?.addons?.skipCompilation ?? true`
+     - `skipTestsByRole.orchestrator: orchestratorConfig?.addons?.skipTests ?? true`
+     - `cavemanOutputByRole.orchestrator: orchestratorConfig?.addons?.cavemanOutput ?? true`
+     - `clearAntigravityContextByRole.orchestrator: orchestratorConfig?.addons?.clearAntigravityContext ?? false`
+     - `useSubagentsByRole.orchestrator` / `noSubagentsByRole.orchestrator` / `customSubagentNameByRole.orchestrator` — mirror the existing `subagentPolicy === 'useSubagents' | 'noSubagents' | 'customSubagent'` pattern (orchestrator default policy is `'useSubagents'`, so `useSubagents` resolves `true` by default).
+     - `useWorktreesPerPlanByRole.orchestrator: orchestratorConfig?.addons?.useWorktreesPerPlan === true`
+     - `suppressWalkthroughByRole.orchestrator: orchestratorConfig?.addons?.suppressWalkthrough ?? false`
+   - (c) Add a new `ultracodeByRole: { orchestrator: orchestratorConfig?.addons?.ultracode ?? false }` map.
+   - Reading `orchestratorConfig.addons` is non-destructive (`_getRoleConfig` returns the saved object as-is); do not rewrite it — unknown/legacy add-on keys are preserved automatically.
+8. In `resolvedOptions` (L2858–2880), add `ultracodeEnabled: promptsConfig.ultracodeByRole?.[role] ?? false`. Once step 7 lands, the existing generic lines (`skipCompilation`, `cavemanOutputEnabled`, `switchboardSafeguardsEnabled`, etc.) resolve correctly for the orchestrator too — no per-line orchestrator special-case needed.
+9. In `buildEpicOrchestrationPrompt` (L2985–3030): (a) call `await this._regenerateEpicFile(workspaceRoot, epic.planId, db)` defensively before assembling, so the linked doc always has the subtask block; (b) pass `epicDocLink` into the options — prefer the workspace-relative `epic.planFile` (more portable in the prompt than the absolute path resolved at L3001). The subtask `plans.push(...)` loop may remain for `subtaskCount`/preview metadata but those plans must no longer be enumerated in the orchestrator prompt body.
+10. Epic-creation coverage (verified): `createEpic` already calls `_regenerateEpicFile` (L7560) and `addSubtaskToEpic` does too (L7422); **`promoteToEpic` (L7426–7468) does NOT** — a freshly promoted single-plan epic carries no `## Subtasks` block until a subtask is added. The defensive call in step 9(a) is the real guarantee and already covers promote-to-epic, so no separate creation-path edit is strictly required; optionally add a `_regenerateEpicFile` call at the end of `promoteToEpic` as cheap belt-and-suspenders.
 
 ### File 4 — `src/webview/kanban.html`
-10. No new add-on-row work beyond the dependency plan; the `ultracode` checkbox renders automatically from `ROLE_ADDONS.orchestrator` once `feature_plan_20260625110625` has added the orchestrator role to the Prompts tab. (If that plan has not landed, this checkbox will not appear — call that out at implementation time.)
+11. No new add-on-row work beyond the dependency plan; the `ultracode` checkbox renders automatically from `ROLE_ADDONS.orchestrator` once `feature_plan_20260625110625` has added the orchestrator role to the Prompts tab. (If that plan has not landed, this checkbox will not appear — call that out at implementation time.)
 
 ### File 5 — tests
-11. Update `minimal-prompt.test.js`, `agent-prompt-builder-subagents.test.js`, and `pipeline-orchestrator-regression.test.js` for the new orchestrator assembly; add the "ultracode-only ⇒ terse, no subtask paths" assertion.
+12. **Do NOT edit** `minimal-prompt.test.js`, `agent-prompt-builder-subagents.test.js`, or `pipeline-orchestrator-regression.test.js` for this change — none of them exercise the orchestrator role (verified; see Edge-Case audit). **Add** a new orchestrator-role test: with only the `ultracode` add-on enabled, the prompt ≈ "Read the epic … `<link>` … use ultracode", contains no subtask paths and none of the `PLANS TO PROCESS`/`EPIC MODE`/`AUTHORIZATION`/`FOCUS DIRECTIVE`/`GIT POLICY` walls; plus a per-add-on on/off assertion. (Run separately by the user per session norm.)
 
 ## Verification Plan
 
 ### Automated Tests
-- Update the three test files above; add an assertion that the orchestrator prompt with only `ultracode` enabled ≈ "Read the epic … `<link>` … use ultracode" and contains no subtask file paths. (Run separately by the user per session norm.)
+- Add a new orchestrator-role assertion (the three existing test files need no edits — verified): orchestrator prompt with only `ultracode` enabled ≈ "Read the epic … `<link>` … use ultracode", contains no subtask file paths and none of the directive walls; plus a per-add-on on/off assertion proving the `_getPromptsConfig` wiring takes effect. (Run separately by the user per session norm.)
 
 ### Manual Verification
 1. Kanban Prompts tab → select **Orchestrator** → the add-on list shows **Ultracode** (unchecked by default) alongside the existing add-ons.
 2. With **all add-ons off except Ultracode**, the prompt preview is terse: a minimal "read this epic … use ultracode" + the epic doc link, with **no** `PLANS TO PROCESS`, no per-subtask paths, no `EPIC MODE`/`AUTHORIZATION`/`FOCUS`/`GIT` walls.
-3. Toggle Switchboard Safeguards / Git Prohibition / Skip blocks on → each adds exactly its directive block; toggling off removes it. Preview == dispatch (byte-identical).
+3. Toggle Switchboard Safeguards / Git Prohibition / Skip blocks on → each adds exactly its directive block; toggling off removes it. Preview == dispatch (byte-identical). **(This now actually works — it relies on the File 3 step 7 `_getPromptsConfig` wiring; before that fix these toggles were dead for the orchestrator role.)**
 4. Orchestrate an epic whose doc was created **before** this change (no SUBTASKS block) → the doc is backfilled with the `## Subtasks` block and the dispatched prompt links it.
 5. Orchestrate an epic → open the linked epic doc → the subtask list is present and current.
 6. Drag an epic onto a non-orchestrator column (step mode) → the old `PLANS TO PROCESS` + template behavior is unchanged (regression guard).
@@ -123,4 +150,4 @@ Update these to reflect the new orchestrator assembly (add-on blocks + epic-doc 
 
 ## Recommendation
 
-Complexity 5/10 → **Send to Coder**. Mostly well-scoped wiring (one add-on, one option, one option-mapping), but the orchestrator-branch rewrite and the "epic doc must always carry subtasks" guarantee are the two careful spots; the migration/backfill and the step-mode scope guard must not be skipped.
+Complexity 6/10 → **Send to Coder**. Well-scoped, but now with **three** careful spots, not two: (1) the `_getPromptsConfig` orchestrator wiring — the newly discovered CRITICAL prerequisite without which every add-on toggle is dead; (2) the orchestrator-branch rewrite to the terse `[add-on blocks] + [epic-doc link]` form (preserving the shared PRD-injection seam); and (3) the "epic doc must always carry subtasks" guarantee via the defensive `_regenerateEpicFile` call. The migration/backfill, the intended default-behavior change, and the step-mode scope guard must not be skipped.

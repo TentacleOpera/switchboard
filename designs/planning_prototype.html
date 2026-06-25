@@ -53,7 +53,9 @@
             --text-secondary: #888888;
             --font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
             --font-mono: var(--vscode-editor-font-family, 'SF Mono', Monaco, 'Cascadia Code', monospace);
-            --proto-heading-font: 'GeistPixel', 'Hanken Grotesk', sans-serif; /* switcher target */
+            --proto-h1-font: 'GeistPixel', 'Hanken Grotesk', sans-serif;  /* switcher target */
+            --proto-h26-font: 'GeistPixel', 'Hanken Grotesk', sans-serif; /* switcher target */
+            --proto-surface: #1F1C1A; /* switcher target — flat-mode pane colour */
 
             /* Spacing rhythm */
             --spacing-unit: 8px;
@@ -1099,7 +1101,7 @@
             color: #ffffff;
             letter-spacing: -0.05em;
             font-stretch: 90%;
-            font-family: var(--proto-heading-font, 'GeistPixel', 'Hanken Grotesk', sans-serif);
+            font-family: var(--proto-h26-font, 'GeistPixel', 'Hanken Grotesk', sans-serif);
         }
 
         #markdown-preview h2, #markdown-preview h3, #markdown-preview h4, #markdown-preview h5, #markdown-preview h6,
@@ -2836,20 +2838,29 @@
             border-color: var(--accent-teal);
         }
         /* ===== Prototype heading switcher (preview only — not in shipped CSS) ===== */
-        body[data-hglow="on"] #markdown-preview :is(h1,h2,h3,h4,h5,h6) {
+        #markdown-preview h1 { font-family: var(--proto-h1-font, 'GeistPixel', 'Hanken Grotesk', sans-serif) !important; }
+        #markdown-preview :is(h2,h3,h4,h5,h6) { font-family: var(--proto-h26-font, 'GeistPixel', 'Hanken Grotesk', sans-serif) !important; }
+        body[data-h1glow="on"] #markdown-preview h1 {
             text-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 55%, transparent),
                          0 0 18px color-mix(in srgb, var(--accent-teal) 30%, transparent) !important;
         }
-        body[data-hglow="off"] #markdown-preview :is(h1,h2,h3,h4,h5,h6) { text-shadow: none !important; }
+        body[data-h1glow="off"] #markdown-preview h1 { text-shadow: none !important; }
+        body[data-h26glow="on"] #markdown-preview :is(h2,h3,h4,h5,h6) {
+            text-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 55%, transparent),
+                         0 0 18px color-mix(in srgb, var(--accent-teal) 30%, transparent) !important;
+        }
+        body[data-h26glow="off"] #markdown-preview :is(h2,h3,h4,h5,h6) { text-shadow: none !important; }
         body[data-h1color="white"] #markdown-preview h1 { color: #ffffff !important; }
         body[data-h1color="cyan"] #markdown-preview h1 { color: var(--accent-teal) !important; }
         body[data-h1color="terracotta"] #markdown-preview h1 { color: #D97757 !important; border-left-color: #D97757 !important; }
+        body[data-h1color="cream"] #markdown-preview h1 { color: #F0EBE6 !important; }
 
         #proto-switcher {
             position: fixed; top: 14px; right: 14px; z-index: 99999; width: 214px;
             background: rgba(9,11,13,0.93); border: 1px solid #2a2e34; border-radius: 10px; padding: 13px 14px;
             font-family: 'Hanken Grotesk', sans-serif; font-size: 12px; color: #e3e6e9;
             box-shadow: 0 10px 34px rgba(0,0,0,0.55); backdrop-filter: blur(9px); -webkit-backdrop-filter: blur(9px);
+            max-height: calc(100vh - 28px); overflow-y: auto;
         }
         #proto-switcher h4 { margin: 0 0 10px; font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: #6f757c; font-weight: 600; }
         #proto-switcher .grp { margin-bottom: 11px; }
@@ -2862,14 +2873,90 @@
         }
         #proto-switcher button:hover { border-color: #525964; color: #fff; }
         #proto-switcher button.on { background: color-mix(in srgb, var(--accent-teal) 24%, transparent); border-color: var(--accent-teal); color: #fff; }
+
+        /* switcher: H2–H6 colour / scanline / CRT / glass / grid */
+        body[data-h26color="white"] #markdown-preview :is(h2,h3,h4,h5,h6) { color: #ffffff !important; }
+        body[data-h26color="cyan"] #markdown-preview :is(h2,h3,h4,h5,h6) { color: var(--accent-teal) !important; }
+        body[data-h26color="terracotta"] #markdown-preview :is(h2,h3,h4,h5,h6) { color: #D97757 !important; }
+        body[data-h26color="cream"] #markdown-preview :is(h2,h3,h4,h5,h6) { color: #F0EBE6 !important; }
+
+        body[data-scanline="off"] .cyber-scanlines { background-image: none !important; }
+        body[data-crt="off"] .cyber-scanlines::before { display: none !important; animation: none !important; }
+        body[data-glass="off"] * { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
+        /* glass off must also drop the pane translucency → solid #1F1C1A surface (as Pro/Claudify) */
+        body[data-glass="off"] #preview-pane,
+        body[data-glass="off"] #preview-pane-online,
+        body[data-glass="off"] #preview-pane-design,
+        body[data-glass="off"] #preview-pane-html,
+        body[data-glass="off"] #preview-pane-tickets,
+        body[data-glass="off"] #kanban-preview-pane { background-color: var(--proto-surface, #1F1C1A) !important; }
+
+        /* Body grid — real Afterburner body = 4% accent on #101414 (only visible in immersive mode) */
+        body[data-grid="off"] { background-image: none !important; }
+        body[data-grid="cyan"] {
+            background-image:
+                linear-gradient(rgba(0,229,255,0.04) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0,229,255,0.04) 1px, transparent 1px) !important;
+        }
+        body[data-grid="terra"] {
+            background-image:
+                linear-gradient(rgba(217,119,87,0.04) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(217,119,87,0.04) 1px, transparent 1px) !important;
+        }
+        body[data-grid="grey"] {
+            background-image:
+                linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px) !important;
+        }
+        body[data-grid="off"] #preview-pane { background-image: none !important; }
+        /* Pane grid, glass ON (Afterburner immersive) = 8% accent on the translucent/blurred pane */
+        body[data-glass="on"][data-grid="cyan"] #preview-pane {
+            background-image:
+                linear-gradient(rgba(0,229,255,0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0,229,255,0.08) 1px, transparent 1px) !important;
+        }
+        body[data-glass="on"][data-grid="terra"] #preview-pane {
+            background-image:
+                linear-gradient(rgba(217,119,87,0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(217,119,87,0.08) 1px, transparent 1px) !important;
+        }
+        body[data-glass="on"][data-grid="grey"] #preview-pane {
+            background-image:
+                linear-gradient(rgba(255,255,255,0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px) !important;
+        }
+        /* Pane grid, glass OFF (Claudify/Pro flat) = 5% accent on solid #1F1C1A (exact shipped value) */
+        body[data-glass="off"][data-grid="cyan"] #preview-pane {
+            background-image:
+                linear-gradient(rgba(0,229,255,0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0,229,255,0.05) 1px, transparent 1px) !important;
+        }
+        body[data-glass="off"][data-grid="terra"] #preview-pane {
+            background-image:
+                linear-gradient(rgba(217,119,87,0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(217,119,87,0.05) 1px, transparent 1px) !important;
+        }
+        body[data-glass="off"][data-grid="grey"] #preview-pane {
+            background-image:
+                linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px) !important;
+        }
     </style>
 </head>
 <body class="cyber-theme-enabled theme-afterburner-updated">
     <div id="proto-switcher">
         <h4>Heading preview</h4>
         <div class="grp">
-            <span class="lbl">Font · all headings</span>
-            <div class="seg" data-set="font">
+            <span class="lbl">H1 font</span>
+            <div class="seg" data-set="h1font">
+                <button data-val="geist">Pixel</button>
+                <button data-val="poppins">Poppins</button>
+                <button data-val="hanken">Hanken</button>
+            </div>
+        </div>
+        <div class="grp">
+            <span class="lbl">H2–H6 font</span>
+            <div class="seg" data-set="h26font">
                 <button data-val="geist">Pixel</button>
                 <button data-val="poppins">Poppins</button>
                 <button data-val="hanken">Hanken</button>
@@ -2881,12 +2968,66 @@
                 <button data-val="white">White</button>
                 <button data-val="cyan">Cyan</button>
                 <button data-val="terracotta">Terra</button>
+                <button data-val="cream">Cream</button>
             </div>
         </div>
         <div class="grp">
-            <span class="lbl">Glow</span>
-            <div class="seg" data-set="hglow">
+            <span class="lbl">H2–H6 colour</span>
+            <div class="seg" data-set="h26color">
+                <button data-val="white">White</button>
+                <button data-val="cyan">Cyan</button>
+                <button data-val="terracotta">Terra</button>
+                <button data-val="cream">Cream</button>
+            </div>
+        </div>
+        <div class="grp">
+            <span class="lbl">H1 glow</span>
+            <div class="seg" data-set="h1glow">
                 <button data-val="on">On</button>
+                <button data-val="off">Off</button>
+            </div>
+        </div>
+        <div class="grp">
+            <span class="lbl">H2–H6 glow</span>
+            <div class="seg" data-set="h26glow">
+                <button data-val="on">On</button>
+                <button data-val="off">Off</button>
+            </div>
+        </div>
+        <div class="grp">
+            <span class="lbl">Scanlines</span>
+            <div class="seg" data-set="scanline">
+                <button data-val="on">On</button>
+                <button data-val="off">Off</button>
+            </div>
+        </div>
+        <div class="grp">
+            <span class="lbl">CRT sweep</span>
+            <div class="seg" data-set="crt">
+                <button data-val="on">On</button>
+                <button data-val="off">Off</button>
+            </div>
+        </div>
+        <div class="grp">
+            <span class="lbl">Glass blur</span>
+            <div class="seg" data-set="glass">
+                <button data-val="on">On</button>
+                <button data-val="off">Off</button>
+            </div>
+        </div>
+        <div class="grp">
+            <span class="lbl">Flat surface</span>
+            <div class="seg" data-set="surface">
+                <button data-val="warm">Warm</button>
+                <button data-val="neutral">Neutral</button>
+            </div>
+        </div>
+        <div class="grp">
+            <span class="lbl">Background grid</span>
+            <div class="seg" data-set="grid">
+                <button data-val="cyan">Cyan</button>
+                <button data-val="terra">Terra</button>
+                <button data-val="grey">Grey</button>
                 <button data-val="off">Off</button>
             </div>
         </div>
@@ -3254,6 +3395,7 @@
             poppins: "'Poppins', 'Hanken Grotesk', sans-serif",
             hanken:  "'Hanken Grotesk', sans-serif"
         };
+        var SURFACES = { warm: '#1F1C1A', neutral: '#1C1C1C' };
         var root = document.documentElement, body = document.body;
         function mark(set, val) {
             document.querySelectorAll('#proto-switcher .seg[data-set="' + set + '"] button').forEach(function (b) {
@@ -3266,16 +3408,27 @@
                 var btn = e.target.closest('button');
                 if (!btn) return;
                 var val = btn.getAttribute('data-val');
-                if (set === 'font') root.style.setProperty('--proto-heading-font', FONTS[val]);
+                if (set === 'h1font') root.style.setProperty('--proto-h1-font', FONTS[val]);
+                else if (set === 'h26font') root.style.setProperty('--proto-h26-font', FONTS[val]);
+                else if (set === 'surface') root.style.setProperty('--proto-surface', SURFACES[val]);
                 else body.setAttribute('data-' + set, val);
                 mark(set, val);
             });
         });
         // initial state = "proper" Afterburner: pixel headings, white H1, glow on
-        root.style.setProperty('--proto-heading-font', FONTS.geist);
+        root.style.setProperty('--proto-h1-font', FONTS.geist);
+        root.style.setProperty('--proto-h26-font', FONTS.geist);
+        root.style.setProperty('--proto-surface', SURFACES.warm);
         body.setAttribute('data-h1color', 'white');
-        body.setAttribute('data-hglow', 'on');
-        mark('font', 'geist'); mark('h1color', 'white'); mark('hglow', 'on');
+        body.setAttribute('data-h26color', 'cyan');
+        body.setAttribute('data-h1glow', 'on');
+        body.setAttribute('data-h26glow', 'on');
+        body.setAttribute('data-scanline', 'on');
+        body.setAttribute('data-crt', 'on');
+        body.setAttribute('data-glass', 'on');
+        body.setAttribute('data-grid', 'cyan');
+        mark('h1font', 'geist'); mark('h26font', 'geist'); mark('surface', 'warm'); mark('h1color', 'white'); mark('h26color', 'cyan');
+        mark('h1glow', 'on'); mark('h26glow', 'on'); mark('scanline', 'on'); mark('crt', 'on'); mark('glass', 'on'); mark('grid', 'cyan');
     })();
     </script>
 </body>

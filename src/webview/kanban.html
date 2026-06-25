@@ -20,7 +20,7 @@
             --border-color: #333333;
             --border-bright: #555555;
             --text-primary: #e0e0e0;
-            --text-secondary: #888888;
+            --text-secondary: #8C8C8C;
 
             --accent-primary: #00e5ff;
             --accent-teal: var(--accent-primary);
@@ -43,14 +43,6 @@
             --border-bright: #555555;
         }
 
-        body.theme-afterburner-pro {
-            --accent-primary: #00e5ff;
-            --accent-teal: #00e5ff;
-            --accent-teal-dim: color-mix(in srgb, #00e5ff 40%, transparent);
-            --accent-teal-bright: #5ce8e6;
-            --glow-teal: none;
-        }
-
         /* Claudify: remove neon glow from base (non-cyber) interactive states */
         body.theme-claudify .btn-batch:hover,
         body.theme-claudify .kanban-card.selected,
@@ -65,10 +57,6 @@
         /* Claudify: recolor hardcoded teal (#00ad9f) that no variable controls */
         body.theme-claudify .worktree-primary-btn { background: color-mix(in srgb, #D97757 12%, transparent); }
         body.theme-claudify .worktree-primary-btn:hover:not(:disabled) { background: color-mix(in srgb, #D97757 25%, transparent); }
-
-        /* Afterburner Pro: recolor worktree button to cyan (MUST be after Claudify rule — equal specificity, later wins) */
-        body.theme-afterburner-pro .worktree-primary-btn { background: color-mix(in srgb, var(--accent-primary) 12%, transparent); }
-        body.theme-afterburner-pro .worktree-primary-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
 
         /* Claudify: avoid afterburner's glowing coloured icons. The teal-tinted PNGs are knocked
            to black (brightness(0)) then inverted to a flat neutral GREY at rest and on hover.
@@ -104,17 +92,6 @@
         body.theme-claudify .btn-add-plan.flash img {
             filter: brightness(0) saturate(100%) invert(54%) sepia(48%) saturate(560%) hue-rotate(330deg) brightness(108%) contrast(87%);
         }
-        /* Afterburner Pro: icon click-flash shows original cyan PNGs brightened (MUST be after Claudify flash rule — equal specificity, later wins) */
-        body.theme-afterburner-pro .strip-icon-btn.flash img,
-        body.theme-afterburner-pro .kanban-sub-bar .strip-icon-btn.flash img,
-        body.theme-afterburner-pro .controls-strip .strip-icon-btn.flash img,
-        body.theme-afterburner-pro .column-icon-btn.flash img,
-        body.theme-afterburner-pro .column-header-btn.flash img,
-        body.theme-afterburner-pro .mode-toggle.flash img,
-        body.theme-afterburner-pro .complexity-routing-btn.flash img,
-        body.theme-afterburner-pro .btn-add-plan.flash img {
-            filter: brightness(1.1) saturate(1.1);
-        }
         /* Off states stay greyed-out (no teal to recolor) */
         body.theme-claudify .strip-icon-btn.is-off img,
         body.theme-claudify .kanban-sub-bar .strip-icon-btn.is-off img,
@@ -124,75 +101,44 @@
 
         /* ── Colour kanban icons opt-in (switchboard.theme.colourKanbanIcons) ──
            When enabled, override Claudify's grey-at-rest knockout so icons show in
-           colour at rest and on hover. Afterburner Pro → original cyan PNGs (no
-           knockout). Claudify → terracotta. Placed AFTER the grey rules (77-95) and
-           the pro flash override (107-117); the extra .kanban-icons-colour class
-           gives equal-or-higher specificity so these win. */
+           terracotta at rest and on hover. Placed AFTER the grey rules (77-95); the
+           extra .kanban-icons-colour class gives equal-or-higher specificity so
+           these win. */
 
-        /* Afterburner Professional: original cyan PNGs at rest + hover, no flash dependency */
-        body.theme-afterburner-pro.kanban-icons-colour .strip-icon-btn img,
-        body.theme-afterburner-pro.kanban-icons-colour .kanban-sub-bar .strip-icon-btn img,
-        body.theme-afterburner-pro.kanban-icons-colour .controls-strip .strip-icon-btn img,
-        body.theme-afterburner-pro.kanban-icons-colour .column-icon-btn img,
-        body.theme-afterburner-pro.kanban-icons-colour .column-header-btn img,
-        body.theme-afterburner-pro.kanban-icons-colour .mode-toggle img,
-        body.theme-afterburner-pro.kanban-icons-colour .complexity-routing-btn img,
-        body.theme-afterburner-pro.kanban-icons-colour .btn-add-plan img {
-            filter: none;                 /* original cyan-tinted PNG = colour at rest */
-        }
-        body.theme-afterburner-pro.kanban-icons-colour .strip-icon-btn:hover img,
-        body.theme-afterburner-pro.kanban-icons-colour .kanban-sub-bar .strip-icon-btn:hover img,
-        body.theme-afterburner-pro.kanban-icons-colour .strip-icon-btn.is-active img,
-        body.theme-afterburner-pro.kanban-icons-colour .kanban-sub-bar .strip-icon-btn.is-active img,
-        body.theme-afterburner-pro.kanban-icons-colour .column-icon-btn:hover img,
-        body.theme-afterburner-pro.kanban-icons-colour .column-header-btn:hover img,
-        body.theme-afterburner-pro.kanban-icons-colour .mode-toggle:hover img,
-        body.theme-afterburner-pro.kanban-icons-colour .complexity-routing-btn:hover img,
-        body.theme-afterburner-pro.kanban-icons-colour .btn-add-plan:hover img {
-            filter: brightness(1.15) saturate(1.1);   /* brighten cyan on hover/active */
-        }
-
-        /* Claudify (non-pro): terracotta at rest + hover, matching its accent.
-           :not(.theme-afterburner-pro) keeps this from clobbering the cyan pro rules
-           above when both share the .theme-claudify class. */
-        body.theme-claudify.kanban-icons-colour:not(.theme-afterburner-pro) .strip-icon-btn img,
-        body.theme-claudify.kanban-icons-colour:not(.theme-afterburner-pro) .kanban-sub-bar .strip-icon-btn img,
-        body.theme-claudify.kanban-icons-colour:not(.theme-afterburner-pro) .controls-strip .strip-icon-btn img,
-        body.theme-claudify.kanban-icons-colour:not(.theme-afterburner-pro) .column-icon-btn img,
-        body.theme-claudify.kanban-icons-colour:not(.theme-afterburner-pro) .column-header-btn img,
-        body.theme-claudify.kanban-icons-colour:not(.theme-afterburner-pro) .mode-toggle img,
-        body.theme-claudify.kanban-icons-colour:not(.theme-afterburner-pro) .complexity-routing-btn img,
-        body.theme-claudify.kanban-icons-colour:not(.theme-afterburner-pro) .btn-add-plan img {
+        /* Claudify: terracotta at rest + hover, matching its accent. */
+        body.theme-claudify.kanban-icons-colour .strip-icon-btn img,
+        body.theme-claudify.kanban-icons-colour .kanban-sub-bar .strip-icon-btn img,
+        body.theme-claudify.kanban-icons-colour .controls-strip .strip-icon-btn img,
+        body.theme-claudify.kanban-icons-colour .column-icon-btn img,
+        body.theme-claudify.kanban-icons-colour .column-header-btn img,
+        body.theme-claudify.kanban-icons-colour .mode-toggle img,
+        body.theme-claudify.kanban-icons-colour .complexity-routing-btn img,
+        body.theme-claudify.kanban-icons-colour .btn-add-plan img {
             /* same terracotta recolour used by the Claudify .flash rule (kanban.html:105) */
             filter: brightness(0) saturate(100%) invert(54%) sepia(48%) saturate(560%) hue-rotate(330deg) brightness(108%) contrast(87%);
         }
-        body.theme-claudify.kanban-icons-colour:not(.theme-afterburner-pro) .strip-icon-btn:hover img,
-        body.theme-claudify.kanban-icons-colour:not(.theme-afterburner-pro) .kanban-sub-bar .strip-icon-btn:hover img,
-        body.theme-claudify.kanban-icons-colour:not(.theme-afterburner-pro) .strip-icon-btn.is-active img,
-        body.theme-claudify.kanban-icons-colour:not(.theme-afterburner-pro) .kanban-sub-bar .strip-icon-btn.is-active img,
-        body.theme-claudify.kanban-icons-colour:not(.theme-afterburner-pro) .column-icon-btn:hover img,
-        body.theme-claudify.kanban-icons-colour:not(.theme-afterburner-pro) .column-header-btn:hover img,
-        body.theme-claudify.kanban-icons-colour:not(.theme-afterburner-pro) .mode-toggle:hover img,
-        body.theme-claudify.kanban-icons-colour:not(.theme-afterburner-pro) .complexity-routing-btn:hover img,
-        body.theme-claudify.kanban-icons-colour:not(.theme-afterburner-pro) .btn-add-plan:hover img {
+        body.theme-claudify.kanban-icons-colour .strip-icon-btn:hover img,
+        body.theme-claudify.kanban-icons-colour .kanban-sub-bar .strip-icon-btn:hover img,
+        body.theme-claudify.kanban-icons-colour .strip-icon-btn.is-active img,
+        body.theme-claudify.kanban-icons-colour .kanban-sub-bar .strip-icon-btn.is-active img,
+        body.theme-claudify.kanban-icons-colour .column-icon-btn:hover img,
+        body.theme-claudify.kanban-icons-colour .column-header-btn:hover img,
+        body.theme-claudify.kanban-icons-colour .mode-toggle:hover img,
+        body.theme-claudify.kanban-icons-colour .complexity-routing-btn:hover img,
+        body.theme-claudify.kanban-icons-colour .btn-add-plan:hover img {
             /* slightly brighter terracotta on hover/active */
             filter: brightness(0) saturate(100%) invert(54%) sepia(48%) saturate(700%) hue-rotate(330deg) brightness(120%) contrast(87%);
         }
 
         /* Preserve the disabled (.is-off) greyed-out treatment when colour mode is ON —
-           at rest AND on hover. The colour resting rules above would otherwise override
-           the theme .is-off rule at 119-123 by specificity (Claudify: 0,5,2 > 0,3,2) or
-           source order (Pro: equal 0,4,2 but later), making disabled icons appear coloured.
-           The Claudify selectors carry :not(.theme-afterburner-pro) to match the colour
-           hover rule's (0,5,3) specificity, then win by later source order — so disabled
-           icons stay grey even while hovered. Pro selectors are (0,4,2), tying the Pro
-           colour hover (0,4,2) and winning by source order. */
-        body.theme-claudify.kanban-icons-colour:not(.theme-afterburner-pro) .strip-icon-btn.is-off img,
-        body.theme-claudify.kanban-icons-colour:not(.theme-afterburner-pro) .kanban-sub-bar .strip-icon-btn.is-off img,
-        body.theme-claudify.kanban-icons-colour:not(.theme-afterburner-pro) .complexity-routing-btn.is-off img,
-        body.theme-afterburner-pro.kanban-icons-colour .strip-icon-btn.is-off img,
-        body.theme-afterburner-pro.kanban-icons-colour .kanban-sub-bar .strip-icon-btn.is-off img,
-        body.theme-afterburner-pro.kanban-icons-colour .complexity-routing-btn.is-off img {
+           at rest AND on hover. The colour resting/hover rules above would otherwise
+           override the theme .is-off rule (119-123) by specificity/source order, making
+           disabled icons appear coloured. These selectors tie the colour hover rule's
+           specificity and win by later source order — so disabled icons stay grey even
+           while hovered. */
+        body.theme-claudify.kanban-icons-colour .strip-icon-btn.is-off img,
+        body.theme-claudify.kanban-icons-colour .kanban-sub-bar .strip-icon-btn.is-off img,
+        body.theme-claudify.kanban-icons-colour .complexity-routing-btn.is-off img {
             filter: grayscale(1) brightness(0.7);
         }
 
@@ -217,7 +163,8 @@
         }
         /* Epic cards: restore the purple identity that the !important .kanban-card rules above
            otherwise flatten (mirrors the green .completed bar). Declared after :hover so the
-           purple survives hover, but before .selected so selection still wins. */
+           purple survives hover. Selection still wins for non-epic cards; epic cards have their
+           own .epic-card.selected override below that keeps the purple border. */
         body.theme-claudify .kanban-card.epic-card,
         body.theme-claudify .kanban-card.epic-card:hover {
             border-left: 4px solid #7c3aed !important;
@@ -229,6 +176,11 @@
             border-color: var(--accent-primary) !important;
             color: var(--text-primary) !important;
             box-shadow: inset 0 0 0 1px var(--accent-primary) !important;
+        }
+        /* Selected epic cards in Claudify: purple border instead of terracotta */
+        body.theme-claudify .kanban-card.epic-card.selected {
+            border-color: #7c3aed !important;
+            box-shadow: inset 0 0 0 1px #7c3aed !important;
         }
         /* Card titles hardcode harsh white (.card-topic) or inherit the muted subtitle colour.
            Give them a mid-tone — brighter than the subtitle (--text-secondary), softer than
@@ -919,11 +871,10 @@
         }
 
         .kanban-card {
-            /* Mix 12% teal into the top, fading to 4% teal at the bottom */
-            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            /* Black/grey card body shared across both themes (D1) — no resting teal tint or edge.
+               Afterburner still lights up on hover/select via the rules below. */
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg) 100%);
             border: 1px solid var(--vscode-contrastBorder, var(--border-color));
-            border-left: 3px solid var(--accent-teal-dim);
-            /* Persistent teal edge */
             border-radius: 3px;
             padding: 10px 12px;
             margin-bottom: 8px;
@@ -938,7 +889,6 @@
 
         .kanban-card:hover {
             border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
-            border-left-color: var(--accent-teal);
             /* Replace black shadow with a glowing teal bloom */
             box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
             /* Elevate hovered card so its tooltip is above other cards */
@@ -1394,9 +1344,15 @@
         /* Selected card highlight */
         .kanban-card.selected {
             border-color: var(--accent-teal);
-            border-left-color: var(--accent-teal);
             box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 35%, transparent),
                         inset 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+
+        /* Selected epic cards: purple border instead of theme accent */
+        .kanban-card.epic-card.selected {
+            border-color: #7c3aed;
+            box-shadow: 0 0 8px color-mix(in srgb, #7c3aed 35%, transparent),
+                        inset 0 0 4px color-mix(in srgb, #7c3aed 10%, transparent);
         }
 
         /* Recover buttons in Completed column */
@@ -2485,7 +2441,13 @@
 /* Claudify: neutral-grey tab nav (active tab keeps the terracotta accent). kanban.html has its
    own inline copy of these tab styles, so the override must live here too. */
 body.theme-claudify .shared-tab-btn:not(.active) { color: #8a8a8a; }
-body.theme-claudify .shared-tab-btn.active { border-color: transparent; }
+/* Active tab = invisible rectangle: fill + bottom border match the bar so only the
+   terracotta text reads (D14). */
+body.theme-claudify .shared-tab-btn.active {
+  background: var(--panel-bg);
+  border-color: transparent;
+  border-bottom-color: transparent;
+}
 body.theme-claudify .shared-tab-btn:hover:not(.active) {
   color: #c8c8c8;
   background: color-mix(in srgb, #ffffff 5%, transparent);
@@ -2496,6 +2458,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
     <body class="cyber-theme-enabled">
     <div class="shared-tab-bar">
         <button class="shared-tab-btn active" data-tab="kanban">KANBAN</button>
+        <button class="shared-tab-btn" data-tab="projects">PROJECTS</button>
         <button class="shared-tab-btn" data-tab="agents">AGENTS</button>
         <button class="shared-tab-btn" data-tab="prompts">PROMPTS</button>
         <button class="shared-tab-btn" data-tab="automation">AUTOMATION</button>
@@ -2512,11 +2475,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <!-- Left Side: Workspace/Project controls -->
             <select id="workspace-project-select" class="workspace-project-select" data-tooltip="Select workspace and project" style="min-width:280px;"></select>
             <button class="strip-btn is-teal" id="btn-assign-workspace-project" data-tooltip="Assign selected plan(s) to this workspace/project" disabled>ASSIGN</button>
-            <button class="strip-btn is-teal" id="btn-epic-action" data-tooltip="Convert selected plans to epic or manage existing epic" disabled>EPIC</button>
+            <button class="strip-btn is-teal" id="btn-epic-action" data-tooltip="Convert selected plans to epic or manage existing epic" disabled>PROMOTE TO EPIC</button>
             <button class="btn-add-plan" id="btn-add-project" data-tooltip="Add new project">+</button>
             <button id="btn-delete-project" class="strip-icon-btn" data-tooltip="Select a project to delete" disabled>
                 <img src="{{ICON_DELETE_PROJECT}}" alt="Delete Project">
             </button>
+            <button class="strip-btn is-off" id="btn-project-context" data-tooltip="Project Context: when on, the active project's PRD (Projects tab) is injected into every dispatched prompt">PROJECT CONTEXT</button>
             <button class="strip-icon-btn" id="btn-scan-folders" data-tooltip="Scan all configured folders for plan files now (forces immediate pickup of anything the watchers missed)">
                 <img src="{{ICON_IMPORT_PLANS}}" alt="Scan Folders">
             </button>
@@ -2571,6 +2535,31 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 </div>
             </div>
             <div class="kanban-board" id="kanban-board"></div>
+        </div>
+    </div>
+
+    <!-- Projects Tab Content -->
+    <div id="projects-tab-content" class="shared-tab-content">
+        <div style="padding:12px; overflow-y:auto; height:100%; max-width:860px; display:flex; flex-direction:column;">
+            <div class="db-subsection">
+                <div class="subsection-header"><span>Project Requirements (PRD)</span></div>
+                <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:12px;">
+                    A PRD is a loose set of product requirements respected across all plans in a project — independent of epics.
+                    Author one per project below. When the <strong>PROJECT CONTEXT</strong> toggle (next to the project selector on the Kanban tab) is on,
+                    the active project's PRD is injected into <em>every</em> dispatched prompt (planner, lead, coder, reviewer, tester, orchestrator).
+                    Stored at <code>.switchboard/projects/&lt;project&gt;/prd.md</code> (git-trackable).
+                </div>
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px; flex-wrap:wrap;">
+                    <label style="font-size:11px; color:var(--text-secondary);">Project:</label>
+                    <select id="projects-prd-select" class="workspace-project-select" style="min-width:240px;"></select>
+                    <button class="strip-btn is-teal" id="btn-save-project-prd" data-tooltip="Save this project's PRD" disabled>SAVE PRD</button>
+                    <span id="projects-prd-status" style="font-size:11px; color:var(--text-secondary);"></span>
+                </div>
+                <div id="projects-prd-path-hint" style="font-size:10px; color:var(--text-secondary); margin-bottom:6px; font-family:monospace; opacity:0.7;"></div>
+                <textarea id="projects-prd-editor" spellcheck="false"
+                    placeholder="Select a project, then write its product requirements here…"
+                    style="width:100%; min-height:380px; resize:vertical; font-family:var(--vscode-editor-font-family, monospace); font-size:12px; line-height:1.5; padding:10px; box-sizing:border-box; background:var(--vscode-input-background, #1e1e1e); color:var(--vscode-input-foreground, #ddd); border:1px solid var(--border-color, #333); border-radius:4px;" disabled></textarea>
+            </div>
         </div>
     </div>
 
@@ -2763,6 +2752,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           <div class="agent-description">Synchronizes plan state and comments back to connected project management systems (e.g. ClickUp/Linear).</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="researcher" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Researcher</label><input type="text" data-role="researcher" id="agents-tab-cmd-researcher" placeholder="e.g. claude" style="flex:1;"></div>
           <div class="agent-description">Researches general topics and saves results as documents to local docs storage (.switchboard/docs/).</div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="orchestrator" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Orchestrator</label><input type="text" data-role="orchestrator" id="agents-tab-cmd-orchestrator" placeholder="e.g. claude --dangerously-skip-permissions" style="flex:1;"></div>
+          <div class="agent-description">Runs an entire epic end-to-end with native subagents — one agent handles all subtasks in a single dispatch.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="jules" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Jules</label><span style="flex:1;font-size:10px;color:var(--text-secondary);">Cloud coder visibility only</span></div>
           <div class="agent-description">Offloads tasks to Google Jules cloud-coding service for quota-free background execution.</div>
           <label class="startup-row" style="display:flex;align-items:center;gap:8px;margin-top:6px;">
@@ -2819,8 +2810,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <option value="reviewer">Reviewer</option>
             <option value="tester">Acceptance Tester</option>
             <option value="analyst">Analyst</option>
-            <option value="ticket_updater">Ticket Updater</option>
             <option value="researcher">Researcher</option>
+            <option value="orchestrator">Orchestrator</option>
+            <option value="ticket_updater">Ticket Updater</option>
             <option value="jules">Jules</option>
             <optgroup id="customAgentsGroup" label="Custom Agents"></optgroup>
           </select>
@@ -2873,10 +2865,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 
 
                 
-                <label class="checkbox-item" title="Append planning epic as context for planning">
+                <label class="checkbox-item" title="Legacy: superseded by per-project PRDs (Projects tab + PROJECT CONTEXT toggle). Kept for back-compat with existing setups.">
                   <input type="checkbox" id="plannerAddonPlanningEpic">
-                  <span>Planning Epic Reference</span>
-                  <span class="tooltip">Include planning epic as context</span>
+                  <span>Planning Epic Reference (legacy)</span>
+                  <span class="tooltip">Legacy planner-only doc. Use per-project PRDs (Projects tab) instead.</span>
                 </label>
                 <label class="checkbox-item" title="Include project constitution as context for planning">
                   <input type="checkbox" id="plannerAddonConstitution">
@@ -3142,7 +3134,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
     <div id="epic-create-modal" class="modal-overlay hidden">
         <div class="modal-content">
             <div class="modal-header">
-                <h3 class="modal-title">Create Epic</h3>
+                <h3 class="modal-title" id="epic-create-title">Create Epic</h3>
                 <button class="modal-close-btn" id="epic-create-close">&times;</button>
             </div>
             <div class="modal-body">
@@ -3203,9 +3195,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             analyst: 'Researches general-purpose technical queries and outlines plan dependencies.',
             ticket_updater: 'Reads a ticket and posts a short triage verdict (severity, area, recommended action, auto/needs-human) back to ClickUp/Linear.',
             researcher: 'Researches general topics and saves results as documents to local docs storage (.switchboard/docs/).',
-            code_researcher: 'Uses research to scope and improve coding plans with codebase exploration and external research.',
+            code_researcher: 'Reviews plans for research gaps, hands you a ready-to-run research prompt, then integrates the findings you paste back.',
             splitter: 'Segregates planned files into distinct routine and complex task batches.',
             gatherer: 'Researches codebase context for plans and writes context briefs before planning review.',
+            orchestrator: 'Runs an entire epic end-to-end with native subagents — one agent handles all subtasks in a single dispatch.',
             jules: 'Offloads tasks to Google Jules cloud-coding service for quota-free background execution.'
         };
 
@@ -3243,8 +3236,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (!plannerConfig || !researchComplexityConfig || !promptCustomization) return;
 
             plannerConfig.style.display = currentRole === 'planner' ? 'block' : 'none';
-            researchComplexityConfig.style.display = (currentRole === 'researcher' || currentRole === 'code_researcher') ? 'block' : 'none';
+            researchComplexityConfig.style.display = currentRole === 'researcher' ? 'block' : 'none';
             promptCustomization.style.display = currentRole === 'planner' ? 'none' : 'block';
+            
+            const saveToLocalDocsRow = document.getElementById('saveToLocalDocsRow');
+            if (saveToLocalDocsRow) {
+                saveToLocalDocsRow.style.display = 'none';
+            }
 
             if (currentRole === 'planner') {
                 const config = roleConfigs.planner;
@@ -3273,7 +3271,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     plannerCustomNameInput.style.display = plannerSubagentPolicy === 'customSubagent' ? 'inline-block' : 'none';
                     plannerCustomNameInput.value = config.addons?.customSubagentName || '';
                 }
-            } else if (currentRole === 'researcher' || currentRole === 'code_researcher') {
+            } else if (currentRole === 'researcher') {
                 const config = roleConfigs[currentRole] || { prompt: '', addons: {} };
                 const complexity = config.researchComplexity || 'deep';
                 const radio = document.querySelector(`input[name="researchComplexity"][value="${complexity}"]`);
@@ -3281,10 +3279,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                 const saveToLocalDocsRow = document.getElementById('saveToLocalDocsRow');
                 if (saveToLocalDocsRow) {
-                    saveToLocalDocsRow.style.display = currentRole === 'researcher' ? 'block' : 'none';
-                    if (currentRole === 'researcher') {
-                        document.getElementById('saveToLocalDocs').checked = !!config.saveToLocalDocs;
-                    }
+                    saveToLocalDocsRow.style.display = 'block';
+                    document.getElementById('saveToLocalDocs').checked = !!config.saveToLocalDocs;
                 }
                 renderRoleAddons(currentRole);
             } else {
@@ -3778,6 +3774,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let activeProjectFilter = null;
         let workspaceItems = [];
         let currentControlPlaneMode = 'none';
+        let projectContextEnabled = false;
         let columnDragDropModes = {};
         const integrationState = {
             clickup: { setupComplete: false, realTimeSyncEnabled: false, autoPullEnabled: false, pullIntervalMinutes: 60, syncError: false, mappingWarning: '', unmappedColumnCount: 0 },
@@ -3810,6 +3807,90 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (!selectedProject) return;
             postKanbanMessage({ type: 'deleteProject', projectName: selectedProject, workspaceRoot });
         });
+
+        // ── Per-project PRD: "PROJECT CONTEXT" toggle + Projects-tab editor ──────────
+        function updateProjectContextButton() {
+            const btn = document.getElementById('btn-project-context');
+            if (!btn) return;
+            btn.classList.toggle('is-off', !projectContextEnabled);
+            btn.classList.toggle('is-teal', projectContextEnabled);
+            btn.setAttribute('data-tooltip', projectContextEnabled
+                ? 'Project Context ON — the active project’s PRD is injected into every dispatched prompt. Click to disable.'
+                : 'Project Context OFF — click to inject the active project’s PRD (Projects tab) into every dispatched prompt.');
+        }
+
+        document.getElementById('btn-project-context')?.addEventListener('click', () => {
+            projectContextEnabled = !projectContextEnabled;
+            updateProjectContextButton();
+            postKanbanMessage({ type: 'setProjectContextEnabled', enabled: projectContextEnabled, workspaceRoot: getActiveWorkspaceRoot() });
+        });
+
+        // Populate the Projects-tab project dropdown from the active workspace's projects.
+        function populateProjectsPrdSelect() {
+            const select = document.getElementById('projects-prd-select');
+            if (!select) return;
+            const prevValue = select.value;
+            const wsRoot = getActiveWorkspaceRoot();
+            const projects = (allWorkspaceProjects && allWorkspaceProjects[wsRoot]) || [];
+            select.innerHTML = '';
+            if (!projects.length) {
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = 'No projects — add one on the Kanban tab (+)';
+                select.appendChild(opt);
+                select.disabled = true;
+                setProjectsPrdEditorEnabled(false);
+                document.getElementById('projects-prd-editor').value = '';
+                document.getElementById('projects-prd-path-hint').textContent = '';
+                return;
+            }
+            select.disabled = false;
+            for (const proj of projects) {
+                const opt = document.createElement('option');
+                opt.value = proj;
+                opt.textContent = proj;
+                opt.dataset.workspaceRoot = wsRoot;
+                select.appendChild(opt);
+            }
+            // Prefer the previously-selected project, else the board's active project, else first.
+            if (prevValue && projects.includes(prevValue)) {
+                select.value = prevValue;
+            } else if (activeProjectFilter && activeProjectFilter !== '__unassigned__' && projects.includes(activeProjectFilter)) {
+                select.value = activeProjectFilter;
+            } else {
+                select.value = projects[0];
+            }
+            requestProjectPrd();
+        }
+
+        function setProjectsPrdEditorEnabled(enabled) {
+            const editor = document.getElementById('projects-prd-editor');
+            const saveBtn = document.getElementById('btn-save-project-prd');
+            if (editor) editor.disabled = !enabled;
+            if (saveBtn) saveBtn.disabled = !enabled;
+        }
+
+        function requestProjectPrd() {
+            const select = document.getElementById('projects-prd-select');
+            const projectName = select?.value;
+            if (!projectName) { setProjectsPrdEditorEnabled(false); return; }
+            const editor = document.getElementById('projects-prd-editor');
+            if (editor) editor.value = '';
+            document.getElementById('projects-prd-status').textContent = 'Loading…';
+            postKanbanMessage({ type: 'getProjectPrd', projectName, workspaceRoot: getActiveWorkspaceRoot() });
+        }
+
+        document.getElementById('projects-prd-select')?.addEventListener('change', requestProjectPrd);
+
+        document.getElementById('btn-save-project-prd')?.addEventListener('click', () => {
+            const select = document.getElementById('projects-prd-select');
+            const projectName = select?.value;
+            const editor = document.getElementById('projects-prd-editor');
+            if (!projectName || !editor) return;
+            document.getElementById('projects-prd-status').textContent = 'Saving…';
+            postKanbanMessage({ type: 'saveProjectPrd', projectName, content: editor.value, workspaceRoot: getActiveWorkspaceRoot() });
+        });
+
         let testingFailSourceColumn = '';
         // Routing map state
         let routingMapConfig = { lead: [7, 8, 9, 10], coder: [4, 5, 6], intern: [1, 2, 3] };
@@ -3900,6 +3981,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 // Hydrate REMOTE tab when activated (§10)
                 if (tabName === 'remote') {
                   postKanbanMessage({ type: 'getRemoteConfig' });
+                }
+
+                // Hydrate PROJECTS tab when activated (per-project PRD editor)
+                if (tabName === 'projects') {
+                  populateProjectsPrdSelect();
                 }
             });
         });
@@ -4568,24 +4654,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         </button>
                     </div>`;
                 } else {
-                    const julesBtn = (isPlanReviewed && lastVisibleAgents.jules !== false)
-                        ? `<button class="column-icon-btn" data-action="julesSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Send selected plans to Jules">
-                               <img src="${ICON_JULES}" alt="Jules">
-                           </button>`
-                        : '';
-                    const rePlanBtn = (isPlanReviewed && lastVisibleAgents.planner !== false)
-                        ? `<button class="column-icon-btn" data-action="rePlanSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Re-plan selected plans (trigger high-reasoning refinement)">
-                               <img src="${ICON_ANALYST_MAP}" alt="Re-plan">
-                           </button>`
-                        : '';
-                    const splitterBtn = (isPlanReviewed && lastVisibleAgents.splitter !== false)
-                        ? `<button class="column-icon-btn" data-action="splitterSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Split selected plans into Routine and Complex files">
-                               <img src="${ICON_SPLITTER}" alt="Splitter">
-                           </button>`
-                        : '';
-                    const codeMapBtn = (isCreated && lastVisibleAgents.analyst !== false)
-                        ? `<button class="column-icon-btn" data-action="codeMapSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Run code map on selected plans (or all if none selected)">
-                               <img src="${ICON_CODE_MAP}" alt="Code Map">
+                    const epicGroupBtn = isCreated
+                        ? `<button class="column-icon-btn" data-action="groupAllIntoEpic" data-column="${escapeAttr(def.id)}" data-tooltip="Group all plans in this column into an epic">
+                               <img src="${ICON_CODE_MAP}" alt="Group Into Epic">
                            </button>`
                         : '';
                     const testingFailBtn = (def.kind === 'coded')
@@ -4609,7 +4680,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         ${julesBtn}
                         ${rePlanBtn}
                         ${splitterBtn}
-                        ${codeMapBtn}
+                        ${epicGroupBtn}
                         ${testingFailBtn}
                     </div>`;
                 }
@@ -4715,7 +4786,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         nextColSource = visibleCodedIds[visibleCodedIds.length - 1] || 'CODER CODED';
                     }
                     const nextCol = getNextColumn(nextColSource);
-                    if (!nextCol && action !== 'julesSelected' && action !== 'rePlanSelected' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed' && action !== 'splitterSelected') return;
+                    if (!nextCol && action !== 'julesSelected' && action !== 'rePlanSelected' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed' && action !== 'splitterSelected' && action !== 'groupAllIntoEpic') return;
 
                     switch (action) {
                         case 'moveSelected': {
@@ -4819,19 +4890,23 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             ids.forEach(id => selectedCards.delete(id));
                             break;
                         }
-                        case 'codeMapSelected': {
-                            let ids = getSelectedInColumn(column);
-                            const usedAll = ids.length === 0;
-                            if (usedAll) {
-                                ids = getAllInColumn(column);
+                        case 'groupAllIntoEpic': {
+                            const allIds = getAllInColumn(column);
+                            if (allIds.length === 0) return;
+                            selectedCards.clear();
+                            document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
+                            const nonEpicCards = [];
+                            for (const id of allIds) {
+                                const card = currentCards.find(c => (c.planId || c.sessionId) === id);
+                                if (card && !card.isEpic) {
+                                    selectedCards.set(id, card);
+                                    nonEpicCards.push(card);
+                                    const cardEl = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-session="${CSS.escape(id)}"]`);
+                                    if (cardEl) cardEl.classList.add('selected');
+                                }
                             }
-                            if (ids.length === 0) return;
-                            if (usedAll && ids.length > 5) {
-                                postKanbanMessage({ type: 'codeMapConfirm', sessionIds: ids, count: ids.length, workspaceRoot: getActiveWorkspaceRoot() });
-                            } else {
-                                postKanbanMessage({ type: 'codeMapSelected', sessionIds: ids, workspaceRoot: getActiveWorkspaceRoot() });
-                            }
-                            ids.forEach(id => selectedCards.delete(id));
+                            if (nonEpicCards.length === 0) return;
+                            openEpicCreateModal();
                             break;
                         }
                         case 'testingFailed': {
@@ -4854,7 +4929,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             postKanbanMessage({ type: 'completeAll', workspaceRoot: getActiveWorkspaceRoot() });
                             ids.forEach(id => selectedCards.delete(id));
                             break;
-                        }
                     }
                 });
             });
@@ -5610,6 +5684,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             e.currentTarget.classList.remove('drag-over');
             const workspaceRoot = e.dataTransfer.getData('application/switchboard-workspace-root') || getActiveWorkspaceRoot();
 
+            const targetDef = columnDefinitions.find(c => c.id === targetColumn);
+            if (targetDef && targetDef.epicOnly) {
+                document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
+                selectedCards.clear();
+                return;
+            }
+
             let sessionIds = [];
             try {
                 sessionIds = JSON.parse(e.dataTransfer.getData('application/json'));
@@ -5871,6 +5952,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
             });
 
+            // Keep the render-guard signature in sync with the optimistic mutation.
+            lastBoardSignature = buildBoardSignature(currentCards);
+
 
 
             if (validIds.length > 0) {
@@ -5935,16 +6019,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         // Compute the desired theme class set without touching unrelated classes
                         // (e.g. kanban-icons-colour, cyber-animation-disabled) that may have been
                         // injected server-side by applyThemeBodyClass().
-                        const allThemeClasses = ['theme-claudify', 'theme-afterburner-pro', 'cyber-theme-enabled'];
+                        const allThemeClasses = ['theme-claudify', 'cyber-theme-enabled'];
                         const desired = new Set();
                         // Cyber CRT effects belong to Afterburner ONLY (matches the other panels).
                         if (msg.theme === 'afterburner') {
                             desired.add('cyber-theme-enabled');
                         } else if (msg.theme === 'claudify') {
                             desired.add('theme-claudify');
-                        } else if (msg.theme === 'afterburner-professional') {
-                            desired.add('theme-claudify');
-                            desired.add('theme-afterburner-pro');
                         }
                         // Remove only theme classes that should NOT be present — leave the
                         // correct ones in place so there is no flash if they were already
@@ -6015,9 +6096,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         allWorkspaceProjects = msg.allWorkspaceProjects;
                     }
 
+                    if (typeof msg.projectContextEnabled === 'boolean') {
+                        projectContextEnabled = msg.projectContextEnabled;
+                        updateProjectContextButton();
+                    }
+
                     const explicitChange = previousRoot !== '' && previousRoot !== currentWorkspaceRoot;
                     updateWorkspaceProjectDropdown(explicitChange ? currentWorkspaceRoot : null);
                     updateWorkspaceFilterBadge();
+
+                    // Keep the Projects-tab editor in sync if it is the active tab.
+                    if (document.querySelector('.shared-tab-btn[data-tab="projects"]')?.classList.contains('active')) {
+                        populateProjectsPrdSelect();
+                    }
 
                     // Keep the worktrees tab's "CREATE NEW WORKTREE IN <workspace>" header in sync
                     // when the displayed workspace name changes while that tab is open. Compare the
@@ -6040,6 +6131,29 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             loadWorktreeConfig();
                         }
                     }
+                    break;
+                }
+                case 'projectContextEnabled': {
+                    projectContextEnabled = !!msg.enabled;
+                    updateProjectContextButton();
+                    break;
+                }
+                case 'projectPrdContent': {
+                    const select = document.getElementById('projects-prd-select');
+                    // Ignore stale responses for a project the user has since switched away from.
+                    if (select && select.value === msg.projectName) {
+                        const editor = document.getElementById('projects-prd-editor');
+                        if (editor) editor.value = msg.content || '';
+                        setProjectsPrdEditorEnabled(true);
+                        document.getElementById('projects-prd-status').textContent = msg.exists ? '' : 'New PRD — not yet saved';
+                        const hint = document.getElementById('projects-prd-path-hint');
+                        if (hint) hint.textContent = msg.path || '';
+                    }
+                    break;
+                }
+                case 'projectPrdSaved': {
+                    const statusEl = document.getElementById('projects-prd-status');
+                    if (statusEl) statusEl.textContent = msg.ok ? 'Saved ✓' : 'Save failed';
                     break;
                 }
                 case 'moveCards': {
@@ -6699,11 +6813,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const nonEpics = selected.filter(s => !s.isEpic);
             if (selected.length === 0) {
                 btn.disabled = true;
-                btn.textContent = 'EPIC';
+                btn.textContent = 'PROMOTE TO EPIC';
             } else if (epics.length === 1 && nonEpics.length === 0) {
                 // On-board epic management moved to the Epics tab — no lone-epic board action.
                 btn.disabled = true;
-                btn.textContent = 'EPIC';
+                btn.textContent = 'PROMOTE TO EPIC';
             } else if (epics.length === 1 && nonEpics.length > 0) {
                 btn.disabled = false;
                 btn.textContent = `ADD ${nonEpics.length} TO EPIC`;
@@ -6712,10 +6826,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 btn.textContent = 'PROMOTE TO EPIC';
             } else if (epics.length === 0 && nonEpics.length > 1) {
                 btn.disabled = false;
-                btn.textContent = `EPIC (${nonEpics.length})`;
+                btn.textContent = 'PROMOTE TO EPIC';
             } else {
                 btn.disabled = true;
-                btn.textContent = 'EPIC';
+                btn.textContent = 'PROMOTE TO EPIC';
             }
         }
 
@@ -7216,18 +7330,36 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         });
 
         // Epic modal helpers
-        function openEpicCreateModal() {
+        function openEpicCreateModal(opts = {}) {
             const modal = document.getElementById('epic-create-modal');
             const planCount = document.getElementById('epic-create-plan-count');
             const planList = document.getElementById('epic-create-plan-list');
             const nameInput = document.getElementById('epic-create-name');
+            const titleText = document.getElementById('epic-create-title');
+            const descLabel = modal?.querySelector('label[for="epic-create-description"]');
+            const descInput = document.getElementById('epic-create-description');
+            const submitBtn = document.getElementById('epic-create-submit');
             const selectedIds = Array.from(selectedCards.keys());
             const selectedPlans = selectedIds.map(id => currentCards.find(c => (c.planId || c.sessionId) === id)).filter(Boolean);
             if (planCount) planCount.textContent = `${selectedPlans.length} plan(s) selected`;
             if (planList) planList.innerHTML = selectedPlans.map(p => `<li>${escapeHtml(p.topic)}</li>`).join('');
+
+            const isSinglePromote = opts.singlePlanPromote === true;
             const firstTopic = selectedPlans[0]?.topic || '';
-            const suggestion = firstTopic.length > 40 ? firstTopic.substring(0, 37) + '...' : firstTopic;
-            if (nameInput) nameInput.value = suggestion ? suggestion + ' Epic' : '';
+            if (isSinglePromote) {
+                if (nameInput) nameInput.value = firstTopic;
+                if (titleText) titleText.textContent = 'Promote to Epic';
+                if (descLabel) descLabel.style.display = 'none';
+                if (descInput) descInput.style.display = 'none';
+                if (submitBtn) submitBtn.textContent = 'Promote to Epic';
+            } else {
+                const suggestion = firstTopic.length > 40 ? firstTopic.substring(0, 37) + '...' : firstTopic;
+                if (nameInput) nameInput.value = suggestion ? suggestion + ' Epic' : '';
+                if (titleText) titleText.textContent = 'Create Epic';
+                if (descLabel) descLabel.style.display = '';
+                if (descInput) descInput.style.display = '';
+                if (submitBtn) submitBtn.textContent = 'Create Epic';
+            }
             if (modal) modal.classList.remove('hidden');
         }
         function closeEpicCreateModal() {
@@ -9345,19 +9477,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     updateReassignButtonVisibility();
                     updateEpicActionButton();
                 } else if (epics.length === 0 && nonEpics.length === 1) {
-                    // Single plan — promote in-place, no new file created
-                    const entry = Array.from(selectedCards.entries()).find(([, v]) => !v.isEpic);
-                    const planId = entry ? entry[0] : '';
-                    const card = currentCards.find(c => (c.planId || c.sessionId) === planId);
-                    if (planId && card) {
-                        postKanbanMessage({ type: 'promoteToEpic', planId, workspaceRoot: card.workspaceRoot || getActiveWorkspaceRoot() });
-                        selectedCards.clear();
-                        document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
-                        updateReassignButtonVisibility();
-                        updateEpicActionButton();
-                    }
+                    openEpicCreateModal({ singlePlanPromote: true });
                 } else if (epics.length === 0 && nonEpics.length > 1) {
-                    openEpicCreateModal();
+                    openEpicCreateModal({ singlePlanPromote: false });
                 }
             });
             document.getElementById('epic-create-close')?.addEventListener('click', closeEpicCreateModal);
@@ -9367,12 +9489,22 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 const descInput = document.getElementById('epic-create-description');
                 const name = nameInput ? nameInput.value.trim() : '';
                 if (!name) {
-                    alert('Epic name is required.');
+                    if (nameInput) {
+                        nameInput.focus();
+                        nameInput.style.borderColor = 'var(--status-red, red)';
+                    }
                     return;
+                }
+                if (nameInput) {
+                    nameInput.style.borderColor = '';
                 }
                 const subtaskPlanIds = Array.from(selectedCards.keys());
                 const workspaceRoot = getActiveWorkspaceRoot();
-                postKanbanMessage({ type: 'createEpic', name, description: descInput ? descInput.value.trim() : '', subtaskPlanIds, workspaceRoot });
+                if (subtaskPlanIds.length === 1) {
+                    postKanbanMessage({ type: 'promoteToEpic', planId: subtaskPlanIds[0], name, workspaceRoot });
+                } else {
+                    postKanbanMessage({ type: 'createEpic', name, description: descInput ? descInput.value.trim() : '', subtaskPlanIds, workspaceRoot });
+                }
                 closeEpicCreateModal();
                 selectedCards.clear();
                 document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));

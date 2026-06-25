@@ -25,26 +25,31 @@ Two gaps combine to produce the missing feature:
 The user's pain — "hard to tell agents where to write things to" — is directly caused by gap #1 (no UI to trigger it) compounded by gap #2 (no backend to fulfill it even if the UI existed).
 
 ## Metadata
-- **Tags:** design-tab, sidebar, ux, clipboard, folder-link, parity
+- **Tags:** frontend, backend, ui, ux, feature
 - **Complexity:** 4/10
 - **Files touched:** `src/webview/design.js`, `src/services/DesignPanelProvider.ts`
 - **Risk:** Low — additive UI + a new message handler that mirrors an existing, proven handler in PlanningPanelProvider.
 
+## User Review Required
+
+- **None.** All decisions are settled in this plan. Scope is deliberately limited to the per-folder **Link** button (Create/Import deferred per edge case #6); the multi-root validation strategy is specified below; no product-level choices remain open.
+
 ## Complexity Audit
 
-**Routine.** This is a parity port of an existing, working feature from the planning tab to the design tab:
+### Routine
+This is a parity port of an existing, working feature from the planning tab to the design tab:
 
-- The CSS already exists in `design.html` (no stylesheet changes needed).
+- The CSS already exists in `design.html` (no stylesheet changes needed) — **verified**: `.folder-subheader`, `.source-folder-header`, `.folder-link-btn` are present (design.html lines ~714–777).
 - The backend handler to mirror (`_handleLinkToFolder`) is ~50 lines and self-contained.
 - The frontend change is a per-tab grouping loop that reuses the same DOM structure planning.js already uses.
-
-**Not complex / not risky because:**
 - No data migrations, no settings schema changes, no kanban/DB writes.
-- No new dependencies; reuses `LocalFolderService.resolveFolderPath` and `getFolderPaths` already used throughout `DesignPanelProvider`.
+- No new dependencies; reuses `LocalFolderService.resolveFolderPath` plus the per-kind getters `getDesignFolderPaths` / `getBriefsFolderPaths` / `getHtmlFolderPaths` / `getImagesFolderPaths` (all **verified** to exist and to return resolved-absolute paths — LocalFolderService.ts lines 387, 742, 824, 896).
 - No confirm dialogs (per project rules — and `window.confirm` is a no-op in webviews anyway).
 - The "Link" action is read-only (clipboard write + info toast); it cannot destroy data.
 
-The only mild complexity is that design.js renders four separate tabs, so the grouping logic should be factored into a shared helper rather than copy-pasted four times.
+### Complex / Risky
+- **Multi-root validation (the one real risk).** The frontend sends only an absolute `folderPath` with no owning-root hint, and `DesignPanelProvider` has **no `_getLocalFolderServiceForFolder` helper** (that helper exists only in `PlanningPanelProvider`). If the handler validates containment against only the primary root's configured folders, a folder belonging to a *non-primary* root will fail the `isWithinAllowed` check and surface a spurious error toast. **Mitigation:** build `allowedPaths` as the union of all four folder kinds across **all** workspace roots (see the corrected handler in Proposed Changes §1). This makes validation root-agnostic, matching how the frontend addresses folders.
+- **Four-tab duplication.** design.js renders four separate tabs, so the grouping logic must be factored into a shared helper rather than copy-pasted four times.
 
 ## Edge-Case & Dependency Audit
 
@@ -61,6 +66,21 @@ The only mild complexity is that design.js renders four separate tabs, so the gr
 6. **No `createLocalDoc` / `importResearchDoc` parity required.** The user's issue is specifically about *linking* (copying the path) to tell agents where to write. Create/Import buttons are secondary. To keep scope tight and risk low, this plan adds **only the Link button** per folder. Create/Import can be added later if desired. (The CSS for create/import already exists, so a future addition is trivial.)
 
 7. **`dist/` is not the source of truth.** Per project rules, do not audit or touch `dist/`. All edits go to `src/`.
+
+### Structured audit
+
+- **Race Conditions:** None. The render functions run synchronously on each `*DocsReady` message; the Link click handler fires a one-shot `postMessage`. The backend handler is async but performs only reads (`fs.existsSync`) and a clipboard write — no shared mutable state, no queue, no debounce interaction. The existing `_designDocsDebounce`/`_htmlDocsDebounce` timers govern list rebuilds, not this handler.
+- **Security / Path safety:** The handler must reject any folder not contained within a configured folder (`isWithinAllowed`), exactly as the planning handler does, so an attacker-supplied or stale `folderPath` cannot copy arbitrary filesystem paths. Containment uses `resolvedFolder === p || resolvedFolder.startsWith(p + path.sep)` to prevent prefix-spoofing (e.g. `/foo-evil` matching `/foo`). Clipboard write happens **only after** both the containment check and `fs.existsSync` pass.
+- **Side Effects:** Two, both benign and user-visible: a clipboard overwrite and an information/error toast. No file writes, no DB writes, no kanban transitions.
+- **Dependencies & Conflicts:** Reuses `LocalFolderService` per-kind getters and `resolveFolderPath` (verified public API). No new imports (`fs`, `path`, `vscode`, `LocalFolderService` already imported — DesignPanelProvider.ts lines 2–8). No conflict with the existing `linkToDocument` case (verified: no `linkToFolder` case currently exists). The shared `buildFolderLinkHeader` helper is net-new and referenced only by the four render functions.
+
+## Dependencies
+
+- None. This plan is self-contained; it does not depend on any other in-flight Switchboard session.
+
+## Adversarial Synthesis
+
+**Risk Summary:** The single material risk is multi-root path validation — because the frontend sends a bare absolute path and `DesignPanelProvider` lacks the planning-side `_getLocalFolderServiceForFolder` helper, validating against only the primary root would reject legitimate non-primary-root folders. Mitigation: build `allowedPaths` as the union of all four folder kinds across **all** workspace roots, making validation root-agnostic. Secondary, lower risks (empty-folder header rendering, search-collapse behavior, subfolder-id handling) are addressed in the edge-case audit; all are read-only and cannot destroy data.
 
 ## Proposed Changes
 
@@ -83,49 +103,52 @@ case 'linkToFolder': {
  * folder, and copy it to the clipboard so the user can paste it into an agent prompt.
  * Mirrors PlanningPanelProvider._handleLinkToFolder.
  */
-private async _handleLinkToFolder(workspaceRoot: string, folderPath: string): Promise<void> {
+private async _handleLinkToFolder(workspaceRoot: string | undefined, folderPath: string): Promise<void> {
     try {
         if (!folderPath) {
             throw new Error('No folder path provided');
         }
-        let resolvedFolder = '';
-        let service = this._getLocalFolderService(workspaceRoot);
 
-        if (/^\d+:/.test(folderPath)) {
-            const colonIdx = folderPath.indexOf(':');
-            const relativePath = folderPath.substring(colonIdx + 1);
-            let found = false;
-            for (const root of this._getWorkspaceRoots()) {
-                const svc = this._getLocalFolderService(root);
-                // Check all configured folder kinds for this root.
-                const allFolderPaths = [
-                    ...svc.getDesignFolderPaths(),
-                    ...svc.getBriefsFolderPaths(),
-                    ...svc.getHtmlFolderPaths(),
-                    ...svc.getImagesFolderPaths(),
-                ];
-                for (const base of allFolderPaths) {
-                    const candidate = path.join(base, relativePath);
-                    if (fs.existsSync(candidate)) {
-                        resolvedFolder = candidate;
-                        service = svc;
-                        found = true;
-                        break;
-                    }
-                }
-                if (found) break;
-            }
-            if (!found) throw new Error('Subfolder not found');
-        } else {
-            resolvedFolder = service.resolveFolderPath(folderPath);
+        // Build the allowed-folder set across ALL roots and ALL four kinds up front.
+        // The frontend sends a bare absolute path with no owning-root hint, and
+        // DesignPanelProvider has no _getLocalFolderServiceForFolder helper (that
+        // helper exists only in PlanningPanelProvider). Validating against a single
+        // root would reject legitimate folders from non-primary roots. So we make
+        // both resolution and validation root-agnostic.
+        const allowedPaths: string[] = [];
+        for (const root of this._getWorkspaceRoots()) {
+            const svc = this._getLocalFolderService(root);
+            allowedPaths.push(
+                ...svc.getDesignFolderPaths(),
+                ...svc.getBriefsFolderPaths(),
+                ...svc.getHtmlFolderPaths(),
+                ...svc.getImagesFolderPaths(),
+            );
         }
 
-        const allowedPaths = [
-            ...service.getDesignFolderPaths(),
-            ...service.getBriefsFolderPaths(),
-            ...service.getHtmlFolderPaths(),
-            ...service.getImagesFolderPaths(),
-        ];
+        let resolvedFolder = '';
+
+        if (/^\d+:/.test(folderPath)) {
+            // Subfolder id `<index>:<relativePath>` — join against every allowed
+            // base and take the first that exists on disk.
+            const relativePath = folderPath.substring(folderPath.indexOf(':') + 1);
+            for (const base of allowedPaths) {
+                const candidate = path.join(base, relativePath);
+                if (fs.existsSync(candidate)) {
+                    resolvedFolder = candidate;
+                    break;
+                }
+            }
+            if (!resolvedFolder) throw new Error('Subfolder not found');
+        } else {
+            // Frontend sends already-resolved absolute paths (getDesignFolderPaths
+            // et al. return resolved-absolute). resolveFolderPath returns an
+            // absolute path unchanged; for a relative fallback it resolves against
+            // the given (or primary) root.
+            const svc = this._getLocalFolderService(workspaceRoot || this._getWorkspaceRoots()[0] || '');
+            resolvedFolder = svc.resolveFolderPath(folderPath);
+        }
+
         const isWithinAllowed = allowedPaths.some(
             p => resolvedFolder === p || resolvedFolder.startsWith(p + path.sep)
         );
@@ -143,7 +166,11 @@ private async _handleLinkToFolder(workspaceRoot: string, folderPath: string): Pr
 }
 ```
 
-> Note: `DesignPanelProvider` already imports `fs`, `path`, `vscode`, and `LocalFolderService` (line 8). No new imports needed. Verify `resolveFolderPath` exists on `LocalFolderService` — it is already called by `PlanningPanelProvider._handleLinkToFolder`, so it is part of the public API.
+> **Verified notes:**
+> - `DesignPanelProvider` already imports `fs`, `path`, `vscode`, and `LocalFolderService` (lines 2–8). No new imports needed.
+> - `resolveFolderPath` and the four per-kind getters (`getDesignFolderPaths`, `getBriefsFolderPaths`, `getHtmlFolderPaths`, `getImagesFolderPaths`) all exist on `LocalFolderService` and return resolved-absolute paths (LocalFolderService.ts 195, 387, 742, 824, 896).
+> - `_getWorkspaceRoots()` (line 386) and `_getLocalFolderService(root)` (line 390) exist. `_getWorkspaceRoot` is the constructor-injected accessor returning `string | undefined` — hence the `workspaceRoot: string | undefined` signature and the `|| this._getWorkspaceRoots()[0]` fallback.
+> - There is no existing `linkToFolder` case in the dispatcher (verified), so this is purely additive. The dispatch case can simply call `await this._handleLinkToFolder(this._getWorkspaceRoot(), String(message.folderPath || ''));`
 
 ### 2. `src/webview/design.js` — add per-folder "Link" headers to each tab
 
@@ -230,7 +257,11 @@ Repeat the same block in `renderBriefsDocs`, `renderHtmlDocs`, and `renderImages
 
 ## Verification Plan
 
-1. **Build check:** `npm run compile` succeeds with no new TypeScript errors in `DesignPanelProvider.ts`.
+### Automated Tests
+- No automated tests are added for this change (additive UI + a read-only clipboard handler). The existing suite is sufficient as a regression guard and will be run separately by the user. Compilation/type-checking is likewise deferred to the user (per this session's skip directives) — when the user does build, confirm there are no new TypeScript errors in `DesignPanelProvider.ts` (the `workspaceRoot: string | undefined` signature plus the all-roots `allowedPaths` loop type-check cleanly against the existing helpers).
+
+### Manual Verification
+1. **Build/type check (deferred to user):** confirm `DesignPanelProvider.ts` has no new TypeScript errors.
 2. **Manual — Design Docs tab:**
    - With ≥1 configured design folder containing docs: a folder header with a "Link" button appears per configured folder; clicking "Link" copies the absolute path and shows the info toast; pasting elsewhere yields the correct absolute path.
    - With a configured folder that is empty: the header + Link button still appear (count `0`), and "Link" still copies the path.
@@ -240,3 +271,9 @@ Repeat the same block in `renderBriefsDocs`, `renderHtmlDocs`, and `renderImages
 5. **Subfolder IDs:** if a doc lives in a subfolder, confirm a Link button whose `folderPath` is an `index:relative` style id resolves correctly (path exists check passes and the right absolute path is copied). If the design tabs don't currently emit subfolder-level headers (this plan only emits top-level configured-folder headers), this case is N/A but the handler must still not crash on such an id.
 6. **Error path:** temporarily point a configured folder at a deleted directory, click Link → expect an error toast "Failed to link to folder: Folder does not exist" and nothing written to the clipboard.
 7. **No confirm dialogs:** confirm no `window.confirm` / modal gate was introduced (per project rules).
+
+---
+
+## Recommendation
+
+**Complexity 4/10 → Send to Coder.** The work is a well-scoped parity port: additive frontend (one shared helper + four insertion points) plus one read-only backend handler that mirrors a proven one. The only non-trivial judgment call — root-agnostic multi-root validation — is now fully specified in the corrected handler above.

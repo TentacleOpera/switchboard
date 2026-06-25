@@ -65,7 +65,14 @@
 /* Claudify: neutral-grey tab nav (structural chrome stays grey; the active tab keeps the
    terracotta accent). Content elsewhere stays warm — this only neutralises the nav. */
 body.theme-claudify .shared-tab-btn:not(.active) { color: #8a8a8a; }
-body.theme-claudify .shared-tab-btn.active { border-color: transparent; }
+/* Active tab = invisible rectangle: fill + bottom border match the bar so only the
+   terracotta text reads (D14). Without this the var(--panel-bg2) fill shows a faint
+   grey rectangle over the var(--panel-bg) bar. */
+body.theme-claudify .shared-tab-btn.active {
+  background: var(--panel-bg);
+  border-color: transparent;
+  border-bottom-color: transparent;
+}
 body.theme-claudify .shared-tab-btn:hover:not(.active) {
   color: #c8c8c8;
   background: color-mix(in srgb, #ffffff 5%, transparent);

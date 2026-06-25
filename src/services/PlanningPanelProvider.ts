@@ -109,6 +109,9 @@ export class PlanningPanelProvider {
     // assemble/dispatch the orchestrator prompt for the Epics-tab Orchestrate action so the
     // builder logic lives in one place (preview = dispatch parity).
     private _kanbanProvider?: import('./KanbanProvider').KanbanProvider;
+    // Type-only reference (avoids a runtime circular import with TaskViewerProvider).
+    // Used to dispatch constitution builder/updater + system builder prompts through the planner rotation.
+    private _taskViewerProvider?: import('./TaskViewerProvider').TaskViewerProvider;
     private readonly _SERVER_DENY_LIST: readonly string[] = [
         '.switchboard',
         '.git',
@@ -139,6 +142,10 @@ export class PlanningPanelProvider {
 
     public setKanbanProvider(provider: import('./KanbanProvider').KanbanProvider): void {
         this._kanbanProvider = provider;
+    }
+
+    public setTaskViewerProvider(provider: import('./TaskViewerProvider').TaskViewerProvider): void {
+        this._taskViewerProvider = provider;
     }
 
     // Ensure adapters are registered for current workspace roots.
@@ -408,16 +415,6 @@ export class PlanningPanelProvider {
             vscode.Uri.joinPath(this._extensionUri, 'designs', 'HankenGrotesk-Variable.woff2')
         );
         htmlContent = htmlContent.replace(/\{\{HANKEN_FONT_URI\}\}/g, hankenFontUri.toString());
-
-        const poppinsSemiboldFontUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this._extensionUri, 'designs', 'Poppins-SemiBold.woff2')
-        );
-        htmlContent = htmlContent.replace(/\{\{POPPINS_SEMIBOLD_FONT_URI\}\}/g, poppinsSemiboldFontUri.toString());
-
-        const poppinsBoldFontUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this._extensionUri, 'designs', 'Poppins-Bold.woff2')
-        );
-        htmlContent = htmlContent.replace(/\{\{POPPINS_BOLD_FONT_URI\}\}/g, poppinsBoldFontUri.toString());
 
         htmlContent = applyThemeBodyClass(htmlContent);
         return htmlContent;
@@ -1315,16 +1312,6 @@ export class PlanningPanelProvider {
         );
         htmlContent = htmlContent.replace(/\{\{HANKEN_FONT_URI\}\}/g, hankenFontUri.toString());
 
-        const poppinsSemiboldFontUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this._extensionUri, 'designs', 'Poppins-SemiBold.woff2')
-        );
-        htmlContent = htmlContent.replace(/\{\{POPPINS_SEMIBOLD_FONT_URI\}\}/g, poppinsSemiboldFontUri.toString());
-
-        const poppinsBoldFontUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this._extensionUri, 'designs', 'Poppins-Bold.woff2')
-        );
-        htmlContent = htmlContent.replace(/\{\{POPPINS_BOLD_FONT_URI\}\}/g, poppinsBoldFontUri.toString());
-
         htmlContent = applyThemeBodyClass(htmlContent);
         return htmlContent;
     }
@@ -1718,10 +1705,13 @@ export class PlanningPanelProvider {
             case 'ticketsDefaultRoot': {
                 const restoredRoot = this._stateStore.getPanelState<string>('tickets.root');
                 const allowedRoots = buildWorkspaceItems(allRoots).map(item => item.workspaceRoot);
+                const kanbanRoot = this._kanbanProvider?.getCurrentWorkspaceRoot() || null;
                 let defaultRoot: string | undefined;
 
                 if (restoredRoot && allowedRoots.includes(restoredRoot)) {
                     defaultRoot = restoredRoot;
+                } else if (kanbanRoot && allowedRoots.includes(kanbanRoot)) {
+                    defaultRoot = kanbanRoot;
                 } else if (allowedRoots.length > 0) {
                     defaultRoot = allowedRoots[0];
                 } else {
@@ -2551,6 +2541,11 @@ export class PlanningPanelProvider {
                             }
                         } catch (err) { /* root has no kanban DB, skip */ }
                     }
+                    // Compute orchestrator availability before the guard check so a newer
+                    // request arriving during the await doesn't get a stale message.
+                    const orchestratorAvailable = this._kanbanProvider
+                        ? await this._kanbanProvider.isOrchestratorAvailable()
+                        : false;
                     if (requestId !== this._latestRequestIds.get(guardKey)) { break; }
                     allPlans.sort((a, b) => b.mtime - a.mtime);
                     mergedColumns.sort((a, b) => a.order - b.order);
@@ -2560,11 +2555,13 @@ export class PlanningPanelProvider {
                         workspaceItems,
                         allWorkspaceProjects,
                         columns: mergedColumns,
-                        requestId
+                        kanbanWorkspaceRoot: this._kanbanProvider?.getCurrentWorkspaceRoot() || null,
+                        requestId,
+                        orchestratorAvailable
                     });
                 } catch (err) {
                     if (requestId === this._latestRequestIds.get(guardKey)) {
-                        this._projectPanel?.webview.postMessage({ type: 'kanbanPlansReady', plans: [], columns: [], requestId, error: String(err) });
+                        this._projectPanel?.webview.postMessage({ type: 'kanbanPlansReady', plans: [], columns: [], requestId, error: String(err), orchestratorAvailable: false });
                     }
                 }
                 break;
@@ -2627,6 +2624,26 @@ export class PlanningPanelProvider {
                         'switchboard.copyPlanFromKanban', sessionId, column, wsRoot
                     );
                     this._projectPanel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: !!success, sessionId });
+                } catch (err) {
+                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: String(err) });
+                }
+                break;
+            }
+            case 'copyEpicPlannerPrompt': {
+                const sessionId = String(msg.sessionId || '');
+                const wsRoot = String(msg.workspaceRoot || workspaceRoot);
+                if (!sessionId || !this._kanbanProvider) {
+                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: false, sessionId: '', error: 'No sessionId or kanban provider' });
+                    break;
+                }
+                try {
+                    const assembled = await this._kanbanProvider.buildEpicOrchestrationPrompt(wsRoot, sessionId, 'planner');
+                    if (!assembled) {
+                        this._projectPanel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: 'Could not resolve this epic.' });
+                        break;
+                    }
+                    await vscode.env.clipboard.writeText(assembled.prompt);
+                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: true, sessionId });
                 } catch (err) {
                     this._projectPanel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: String(err) });
                 }
@@ -3074,7 +3091,8 @@ export class PlanningPanelProvider {
                 });
                 this._projectPanel?.webview.postMessage({
                     type: 'constitutionFilesLoaded',
-                    workspaces
+                    workspaces,
+                    kanbanWorkspaceRoot: this._kanbanProvider?.getCurrentWorkspaceRoot() || null
                 });
                 break;
             }
@@ -3276,10 +3294,16 @@ Please format the updated output document strictly as follows:
                 if (!allRoots.includes(wsRoot)) {
                     break;
                 }
+                const promptText = `Follow instructions in .agents/skills/constitution_builder.md to build or improve CONSTITUTION.md in this project.`;
+                // Try dispatching via the planner role (gets rotation for free).
+                // Fall back to ad-hoc terminal creation if no planner agent is registered.
+                if (this._taskViewerProvider) {
+                    const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole('planner', promptText, wsRoot);
+                    if (dispatched) { break; }
+                }
                 const terminal = vscode.window.terminals.find(t => t.name.toLowerCase().includes('planner') || t.name.toLowerCase().includes('lead'))
                     || vscode.window.createTerminal({ name: 'Constitution Builder', cwd: wsRoot });
                 terminal.show();
-                const promptText = `Follow instructions in .agents/skills/constitution_builder.md to build or improve CONSTITUTION.md in this project.`;
                 const { sendRobustText } = require('./terminalUtils');
                 await sendRobustText(terminal, promptText);
                 break;
@@ -3289,10 +3313,14 @@ Please format the updated output document strictly as follows:
                 if (!allRoots.includes(wsRoot)) {
                     break;
                 }
+                const promptText = `Follow instructions in .agents/skills/constitution_builder.md to improve and update the existing CONSTITUTION.md in this project.`;
+                if (this._taskViewerProvider) {
+                    const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole('planner', promptText, wsRoot);
+                    if (dispatched) { break; }
+                }
                 const terminal = vscode.window.terminals.find(t => t.name.toLowerCase().includes('planner') || t.name.toLowerCase().includes('lead'))
                     || vscode.window.createTerminal({ name: 'Constitution Builder', cwd: wsRoot });
                 terminal.show();
-                const promptText = `Follow instructions in .agents/skills/constitution_builder.md to improve and update the existing CONSTITUTION.md in this project.`;
                 const { sendRobustText } = require('./terminalUtils');
                 await sendRobustText(terminal, promptText);
                 break;
@@ -3305,14 +3333,18 @@ Please format the updated output document strictly as follows:
                 const audience = key === 'agents'
                     ? 'coding agents working in this repository'
                     : 'Claude Code and other AI assistants working in this repository';
-                const terminal = vscode.window.terminals.find(t =>
-                        t.name.toLowerCase().includes('planner') || t.name.toLowerCase().includes('lead'))
-                    || vscode.window.createTerminal({ name: 'System Builder', cwd: wsRoot });
-                terminal.show();
                 const promptText =
                     `Inspect this codebase, then create a ${filename} file at the project root for ${audience}. ` +
                     `Document: a concise architecture overview, the key build/test/lint commands, the directory layout, ` +
                     `and any project-specific conventions or gotchas an agent must follow. Keep it tight and high-signal.`;
+                if (this._taskViewerProvider) {
+                    const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole('planner', promptText, wsRoot);
+                    if (dispatched) { break; }
+                }
+                const terminal = vscode.window.terminals.find(t =>
+                        t.name.toLowerCase().includes('planner') || t.name.toLowerCase().includes('lead'))
+                    || vscode.window.createTerminal({ name: 'System Builder', cwd: wsRoot });
+                terminal.show();
                 const { sendRobustText } = require('./terminalUtils');
                 await sendRobustText(terminal, promptText);
                 break;
@@ -6269,6 +6301,7 @@ Read the existing ticket content from the local file if it exists. Determine wha
                 ticketsFolderPathsByRoot,
                 nodes: mappedNodes,
                 workspaceItems,
+                kanbanWorkspaceRoot: this._kanbanProvider?.getCurrentWorkspaceRoot() || null,
                 antigravitySessions,
                 antigravityEnabled: agEnabled
             });
@@ -6282,6 +6315,7 @@ Read the existing ticket content from the local file if it exists. Determine wha
                 ticketsFolderPathsByRoot: {},
                 nodes: [],
                 workspaceItems: this._buildKanbanWorkspaceItems(),
+                kanbanWorkspaceRoot: this._kanbanProvider?.getCurrentWorkspaceRoot() || null,
                 error: String(err)
             });
         }

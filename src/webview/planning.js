@@ -75,22 +75,27 @@
         populateWorkspaceDropdown(select, _workspaceItems, currentVal, includeAllOption);
     }
 
+    let _kanbanDefaultRoot = null;
+
     // NEW helper — single source of truth for the Docs tab workspace filter.
     // Default is the first workspace, NOT "All Workspaces" (aggregate is a browse-only view).
     // An explicit prior All-Workspaces choice ('') is still honored; only the *absence* of a
     // selection defaults to a specific workspace. The backend omits unset keys entirely, so an
     // empty string here means the user deliberately picked All Workspaces.
-    function resolveDocsWorkspaceFilter(workspaceItems) {
+    function resolveDocsWorkspaceFilter(workspaceItems, kanbanRoot) {
         const items = workspaceItems || [];
         const panel = _restoredPanelState.panel || {};
         const hasRestored = Object.prototype.hasOwnProperty.call(panel, 'docs.root') && panel['docs.root'] !== undefined;
         const restored = hasRestored ? panel['docs.root'] : null;
+        const effectiveKanbanRoot = kanbanRoot !== undefined ? kanbanRoot : _kanbanDefaultRoot;
 
         let resolved;
         if (restored === '') {
             resolved = ''; // user explicitly chose All Workspaces previously
         } else if (restored && items.some(item => item.workspaceRoot === restored)) {
             resolved = restored; // restored specific root still present
+        } else if (effectiveKanbanRoot && items.some(item => item.workspaceRoot === effectiveKanbanRoot)) {
+            resolved = effectiveKanbanRoot; // default to the Kanban panel's selection
         } else {
             resolved = items[0] ? items[0].workspaceRoot : ''; // default to first workspace
         }
@@ -2597,7 +2602,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         state._lastLocalDocsMsg = msg;
         state.localFolderPathsByRoot = msg.folderPathsByRoot || {};
         state.ticketsFolderPathsByRoot = msg.ticketsFolderPathsByRoot || {};
-        resolveDocsWorkspaceFilter(msg.workspaceItems || []);
+        if (msg.kanbanWorkspaceRoot !== undefined) {
+            _kanbanDefaultRoot = msg.kanbanWorkspaceRoot || null;
+        }
+        resolveDocsWorkspaceFilter(msg.workspaceItems || [], msg.kanbanWorkspaceRoot || null);
         populateWorkspaceDropdown('docs-workspace-filter', msg.workspaceItems || [], state.docsWorkspaceRootFilter);
         
         rerenderUnifiedDocs();
@@ -2854,7 +2862,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         // Compute the desired theme class set without touching unrelated classes
         // (e.g. kanban-icons-colour, cyber-animation-disabled) that may have been
         // injected server-side by applyThemeBodyClass().
-        const allThemeClasses = ['theme-claudify', 'theme-afterburner-pro', 'cyber-theme-enabled'];
+        const allThemeClasses = ['theme-claudify', 'cyber-theme-enabled'];
         const desired = new Set();
         // Cyberpunk CRT effects (scanlines, grid, glow, sweep) are part of the Afterburner aesthetic.
         // Toggle cyber-theme-enabled: on for afterburner ONLY.
@@ -2862,9 +2870,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             desired.add('cyber-theme-enabled');
         } else if (state.switchboardTheme === 'claudify') {
             desired.add('theme-claudify');
-        } else if (state.switchboardTheme === 'afterburner-professional') {
-            desired.add('theme-claudify');
-            desired.add('theme-afterburner-pro');
         }
         // Remove only theme classes that should NOT be present — leave the
         // correct ones in place so there is no flash if they were already

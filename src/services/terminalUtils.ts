@@ -10,6 +10,36 @@ function withClipboardLock<T>(fn: () => Promise<T>): Promise<T> {
     return next;
 }
 
+// Per-terminal send lock: serialize the FULL /clear + prompt sequence for a
+// single terminal so two overlapping dispatches to the same terminal cannot
+// interleave their clears and prompts (e.g. rapid double "move all", or two
+// columns dispatching to the planner role at once). Distinct terminals keep
+// running concurrently. The KEY is a normalized terminal name (the caller
+// normalizes), so suffix/case aliases of the same terminal share one lock.
+// Mirrors the proven _clipboardLock promise-chain pattern above.
+const _terminalSendLocks = new Map<string, Promise<void>>();
+
+export function withTerminalSendLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    if (_terminalSendLocks.has(key)) {
+        // Diagnostic: a previous send to this terminal is still in flight, so
+        // this one will queue behind it. Helps explain any perceived slowness.
+        console.log(`[TerminalSendLock] Queuing send to '${key}' — previous send in progress`);
+    }
+    const existing = _terminalSendLocks.get(key) || Promise.resolve();
+    const next = existing.then(fn, fn);
+    // Store a result/error-swallowing tail so the chain always advances even if
+    // a send rejects (e.g. terminal closed mid-send). No deadlock on failure.
+    _terminalSendLocks.set(key, next.then(() => {}, () => {}));
+    return next;
+}
+
+// Optional: drop a terminal's lock entry (e.g. from a terminal-close handler).
+// Not required — the map is bounded by the small set of role-terminal names.
+export function cleanupTerminalSendLock(key: string): void {
+    _terminalSendLocks.delete(key);
+}
+
+
 // Named timing constants for clipboard paste operations
 const PRE_PASTE_SETTLE_MS = 200;
 const POST_PASTE_SETTLE_MS = 800;

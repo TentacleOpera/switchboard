@@ -458,6 +458,30 @@
         return list.querySelector(`.tree-node[data-node-id="${nodeId}"]`);
     }
 
+    function buildFolderLinkHeader(folderPath, docCount) {
+        const header = document.createElement('div');
+        header.className = 'folder-subheader source-folder-header';
+        header.title = folderPath;
+
+        const label = document.createElement('span');
+        label.style.fontWeight = 'bold';
+        const folderName = folderPath.split(/[\\/]/).filter(Boolean).pop() || folderPath;
+        label.textContent = `${folderName}${docCount != null ? ` (${docCount})` : ''}`;
+        header.appendChild(label);
+
+        const linkBtn = document.createElement('button');
+        linkBtn.className = 'folder-link-btn';
+        linkBtn.textContent = 'Link';
+        linkBtn.title = 'Copy folder path to clipboard';
+        linkBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            vscode.postMessage({ type: 'linkToFolder', folderPath });
+        });
+        header.appendChild(linkBtn);
+
+        return header;
+    }
+
     // ── Tree Rendering: Design Docs ──
     function renderDesignDocs(rootEntry) {
         const { sourceId, nodes, folderPaths } = rootEntry;
@@ -500,31 +524,79 @@
             docNodes = docNodes.filter(d => (d.title || d.name || '').toLowerCase().includes(search));
         }
 
-        docNodes.forEach(node => {
-            const actions = ['Set Context', 'Link Doc'];
-            const fullName = node.name || node.id || '';
-            const lastDot = fullName.lastIndexOf('.');
-            const title = lastDot > 0 ? fullName.substring(0, lastDot) : fullName;
-            const ext = lastDot > 0 ? fullName.substring(lastDot).toLowerCase() : '';
-            let subtitle = 'File';
-            if (['.md', '.markdown'].includes(ext)) subtitle = 'Markdown';
-            else if (['.yaml', '.yml'].includes(ext)) subtitle = 'YAML';
-            else if (ext === '.json') subtitle = 'JSON';
-            else if (['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(ext)) subtitle = ext.substring(1).toUpperCase();
-
-            const card = renderDocCard({
-                title,
-                subtitle,
-                sourceId,
-                nodeId: node.id,
-                nodeMetadata: node.metadata,
-                actions,
-                isSelected: state.activeSource === sourceId && state.activeDocId === node.id,
-                clickHandler: () => {
-                    loadDocumentPreview(sourceId, node.id, node.name);
+        // Render folder Link headers and their document cards
+        const folderPathsList = folderPaths || [];
+        if (search) {
+            // Group filtered docs by sourceFolder; only show folders with matches.
+            const byFolder = new Map();
+            docNodes.forEach(d => {
+                const sf = d.metadata?.sourceFolder;
+                if (!sf) return;
+                if (!byFolder.has(sf)) byFolder.set(sf, []);
+                byFolder.get(sf).push(d);
+            });
+            [...byFolder.entries()].forEach(([sf, docs]) => {
+                docList.appendChild(buildFolderLinkHeader(sf, docs.length));
+                docs.forEach(node => {
+                    docList.appendChild(createDesignDocCard(node, sourceId));
+                });
+            });
+        } else {
+            // Show every configured folder, even empty ones.
+            const countByFolder = new Map();
+            const docsByFolder = new Map();
+            docNodes.forEach(d => {
+                const sf = d.metadata?.sourceFolder;
+                if (sf) {
+                    countByFolder.set(sf, (countByFolder.get(sf) || 0) + 1);
+                    if (!docsByFolder.has(sf)) docsByFolder.set(sf, []);
+                    docsByFolder.get(sf).push(d);
                 }
             });
-            docList.appendChild(card);
+            folderPathsList.forEach(fp => {
+                docList.appendChild(buildFolderLinkHeader(fp, countByFolder.get(fp) || 0));
+                const docs = docsByFolder.get(fp) || [];
+                docs.forEach(node => {
+                    docList.appendChild(createDesignDocCard(node, sourceId));
+                });
+            });
+            // Also surface any sourceFolders seen on docs that aren't in folderPaths
+            const configuredSet = new Set(folderPathsList);
+            countByFolder.forEach((cnt, sf) => {
+                if (!configuredSet.has(sf)) {
+                    docList.appendChild(buildFolderLinkHeader(sf, cnt));
+                    const docs = docsByFolder.get(sf) || [];
+                    docs.forEach(node => {
+                        docList.appendChild(createDesignDocCard(node, sourceId));
+                    });
+                }
+            });
+        }
+    }
+
+    function createDesignDocCard(node, sourceId) {
+        const actions = ['Set Context', 'Link Doc'];
+        const fullName = node.name || node.id || '';
+        const lastDot = fullName.lastIndexOf('.');
+        const title = lastDot > 0 ? fullName.substring(0, lastDot) : fullName;
+        const ext = lastDot > 0 ? fullName.substring(lastDot).toLowerCase() : '';
+        let subtitle = 'File';
+        if (['.md', '.markdown'].includes(ext)) subtitle = 'Markdown';
+        else if (['.yaml', '.yml'].includes(ext)) subtitle = 'YAML';
+        else if (ext === '.json') subtitle = 'JSON';
+        else if (['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(ext)) subtitle = ext.substring(1).toUpperCase();
+
+        return renderDocCard({
+            title,
+            subtitle,
+            sourceId,
+            nodeId: node.id,
+            nodeMetadata: node.metadata,
+            actions,
+            isSelected: state.activeSource === sourceId && state.activeDocId === node.id,
+            clickHandler: () => {
+                loadDocumentPreview(sourceId, node.id, node.name);
+            }
         });
     }
 
@@ -570,22 +642,70 @@
             docNodes = docNodes.filter(d => (d.title || d.name || '').toLowerCase().includes(search));
         }
 
-        docNodes.forEach(node => {
-            const fullName = node.name || node.id || '';
-            const lastDot = fullName.lastIndexOf('.');
-            const title = lastDot > 0 ? fullName.substring(0, lastDot) : fullName;
-            const card = renderDocCard({
-                title: node.title || title,
-                subtitle: 'Markdown',
-                sourceId,
-                nodeId: node.id,
-                nodeMetadata: node.metadata,
-                isSelected: state.activeBriefSourceId === sourceId && state.activeBriefDocId === node.id,
-                clickHandler: () => {
-                    loadDocumentPreview(sourceId, node.id, node.name);
+        // Render folder Link headers and their document cards
+        const folderPathsList = folderPaths || [];
+        if (search) {
+            // Group filtered docs by sourceFolder; only show folders with matches.
+            const byFolder = new Map();
+            docNodes.forEach(d => {
+                const sf = d.metadata?.sourceFolder;
+                if (!sf) return;
+                if (!byFolder.has(sf)) byFolder.set(sf, []);
+                byFolder.get(sf).push(d);
+            });
+            [...byFolder.entries()].forEach(([sf, docs]) => {
+                docList.appendChild(buildFolderLinkHeader(sf, docs.length));
+                docs.forEach(node => {
+                    docList.appendChild(createBriefDocCard(node, sourceId));
+                });
+            });
+        } else {
+            // Show every configured folder, even empty ones.
+            const countByFolder = new Map();
+            const docsByFolder = new Map();
+            docNodes.forEach(d => {
+                const sf = d.metadata?.sourceFolder;
+                if (sf) {
+                    countByFolder.set(sf, (countByFolder.get(sf) || 0) + 1);
+                    if (!docsByFolder.has(sf)) docsByFolder.set(sf, []);
+                    docsByFolder.get(sf).push(d);
                 }
             });
-            docList.appendChild(card);
+            folderPathsList.forEach(fp => {
+                docList.appendChild(buildFolderLinkHeader(fp, countByFolder.get(fp) || 0));
+                const docs = docsByFolder.get(fp) || [];
+                docs.forEach(node => {
+                    docList.appendChild(createBriefDocCard(node, sourceId));
+                });
+            });
+            // Also surface any sourceFolders seen on docs that aren't in folderPaths
+            const configuredSet = new Set(folderPathsList);
+            countByFolder.forEach((cnt, sf) => {
+                if (!configuredSet.has(sf)) {
+                    docList.appendChild(buildFolderLinkHeader(sf, cnt));
+                    const docs = docsByFolder.get(sf) || [];
+                    docs.forEach(node => {
+                        docList.appendChild(createBriefDocCard(node, sourceId));
+                    });
+                }
+            });
+        }
+    }
+
+    function createBriefDocCard(node, sourceId) {
+        const fullName = node.name || node.id || '';
+        const lastDot = fullName.lastIndexOf('.');
+        const title = lastDot > 0 ? fullName.substring(0, lastDot) : fullName;
+        return renderDocCard({
+            title: node.title || title,
+            subtitle: 'Markdown',
+            sourceId,
+            nodeId: node.id,
+            nodeMetadata: node.metadata,
+            isSelected: state.activeBriefSourceId === sourceId && state.activeBriefDocId === node.id,
+            clickHandler: () => {
+                loadDocumentPreview(sourceId, node.id, node.name);
+            }
         });
     }
 
@@ -671,25 +791,68 @@
             return;
         }
 
-        const typeSubheader = document.createElement('div');
-        typeSubheader.className = 'type-subheader';
-        typeSubheader.textContent = 'HTML Previews';
-        docList.appendChild(typeSubheader);
-
-        docNodes.forEach(doc => {
-            const card = renderDocCard({
-                title: doc.name || doc.id,
-                subtitle: 'HTML',
-                sourceId,
-                nodeId: doc.id,
-                nodeMetadata: doc.metadata,
-                actions: ['Serve & Open', 'Link Doc'],
-                isSelected: state.activeSource === sourceId && state.activeDocId === doc.id,
-                clickHandler: () => {
-                    loadDocumentPreview(sourceId, doc.id, doc.name);
+        // Render folder Link headers and their document cards
+        const folderPathsList = folderPaths || [];
+        if (search) {
+            // Group filtered docs by sourceFolder; only show folders with matches.
+            const byFolder = new Map();
+            docNodes.forEach(d => {
+                const sf = d.metadata?.sourceFolder;
+                if (!sf) return;
+                if (!byFolder.has(sf)) byFolder.set(sf, []);
+                byFolder.get(sf).push(d);
+            });
+            [...byFolder.entries()].forEach(([sf, docs]) => {
+                docList.appendChild(buildFolderLinkHeader(sf, docs.length));
+                docs.forEach(doc => {
+                    docList.appendChild(createHtmlDocCard(doc, sourceId));
+                });
+            });
+        } else {
+            // Show every configured folder, even empty ones.
+            const countByFolder = new Map();
+            const docsByFolder = new Map();
+            docNodes.forEach(d => {
+                const sf = d.metadata?.sourceFolder;
+                if (sf) {
+                    countByFolder.set(sf, (countByFolder.get(sf) || 0) + 1);
+                    if (!docsByFolder.has(sf)) docsByFolder.set(sf, []);
+                    docsByFolder.get(sf).push(d);
                 }
             });
-            docList.appendChild(card);
+            folderPathsList.forEach(fp => {
+                docList.appendChild(buildFolderLinkHeader(fp, countByFolder.get(fp) || 0));
+                const docs = docsByFolder.get(fp) || [];
+                docs.forEach(doc => {
+                    docList.appendChild(createHtmlDocCard(doc, sourceId));
+                });
+            });
+            // Also surface any sourceFolders seen on docs that aren't in folderPaths
+            const configuredSet = new Set(folderPathsList);
+            countByFolder.forEach((cnt, sf) => {
+                if (!configuredSet.has(sf)) {
+                    docList.appendChild(buildFolderLinkHeader(sf, cnt));
+                    const docs = docsByFolder.get(sf) || [];
+                    docs.forEach(doc => {
+                        docList.appendChild(createHtmlDocCard(doc, sourceId));
+                    });
+                }
+            });
+        }
+    }
+
+    function createHtmlDocCard(doc, sourceId) {
+        return renderDocCard({
+            title: doc.name || doc.id,
+            subtitle: 'HTML',
+            sourceId,
+            nodeId: doc.id,
+            nodeMetadata: doc.metadata,
+            actions: ['Serve & Open', 'Link Doc'],
+            isSelected: state.activeSource === sourceId && state.activeDocId === doc.id,
+            clickHandler: () => {
+                loadDocumentPreview(sourceId, doc.id, doc.name);
+            }
         });
     }
 
@@ -744,25 +907,68 @@
             return;
         }
 
-        const typeSubheader = document.createElement('div');
-        typeSubheader.className = 'type-subheader';
-        typeSubheader.textContent = 'Images';
-        docList.appendChild(typeSubheader);
-
-        docNodes.forEach(doc => {
-            const card = renderDocCard({
-                title: doc.name || doc.id,
-                subtitle: 'Image',
-                sourceId: 'images-folder',
-                nodeId: doc.id,
-                nodeMetadata: doc.metadata,
-                actions: ['Link Doc'],
-                isSelected: state.activeSource === 'images-folder' && state.activeDocId === doc.id,
-                clickHandler: () => {
-                    loadDocumentPreview('images-folder', doc.id, doc.name);
+        // Render folder Link headers and their document cards
+        const folderPathsList = folderPaths || [];
+        if (search) {
+            // Group filtered docs by sourceFolder; only show folders with matches.
+            const byFolder = new Map();
+            docNodes.forEach(d => {
+                const sf = d.metadata?.sourceFolder;
+                if (!sf) return;
+                if (!byFolder.has(sf)) byFolder.set(sf, []);
+                byFolder.get(sf).push(d);
+            });
+            [...byFolder.entries()].forEach(([sf, docs]) => {
+                docList.appendChild(buildFolderLinkHeader(sf, docs.length));
+                docs.forEach(doc => {
+                    docList.appendChild(createImageDocCard(doc));
+                });
+            });
+        } else {
+            // Show every configured folder, even empty ones.
+            const countByFolder = new Map();
+            const docsByFolder = new Map();
+            docNodes.forEach(d => {
+                const sf = d.metadata?.sourceFolder;
+                if (sf) {
+                    countByFolder.set(sf, (countByFolder.get(sf) || 0) + 1);
+                    if (!docsByFolder.has(sf)) docsByFolder.set(sf, []);
+                    docsByFolder.get(sf).push(d);
                 }
             });
-            docList.appendChild(card);
+            folderPathsList.forEach(fp => {
+                docList.appendChild(buildFolderLinkHeader(fp, countByFolder.get(fp) || 0));
+                const docs = docsByFolder.get(fp) || [];
+                docs.forEach(doc => {
+                    docList.appendChild(createImageDocCard(doc));
+                });
+            });
+            // Also surface any sourceFolders seen on docs that aren't in folderPaths
+            const configuredSet = new Set(folderPathsList);
+            countByFolder.forEach((cnt, sf) => {
+                if (!configuredSet.has(sf)) {
+                    docList.appendChild(buildFolderLinkHeader(sf, cnt));
+                    const docs = docsByFolder.get(sf) || [];
+                    docs.forEach(doc => {
+                        docList.appendChild(createImageDocCard(doc));
+                    });
+                }
+            });
+        }
+    }
+
+    function createImageDocCard(doc) {
+        return renderDocCard({
+            title: doc.name || doc.id,
+            subtitle: 'Image',
+            sourceId: 'images-folder',
+            nodeId: doc.id,
+            nodeMetadata: doc.metadata,
+            actions: ['Link Doc'],
+            isSelected: state.activeSource === 'images-folder' && state.activeDocId === doc.id,
+            clickHandler: () => {
+                loadDocumentPreview('images-folder', doc.id, doc.name);
+            }
         });
     }
 
@@ -3278,15 +3484,12 @@
                 // Compute the desired theme class set without touching unrelated classes
                 // (e.g. kanban-icons-colour, cyber-animation-disabled) that may have been
                 // injected server-side by applyThemeBodyClass().
-                const allThemeClasses = ['theme-claudify', 'theme-afterburner-pro', 'cyber-theme-enabled'];
+                const allThemeClasses = ['theme-claudify', 'cyber-theme-enabled'];
                 const desired = new Set();
                 if (state.switchboardTheme === 'afterburner') {
                     desired.add('cyber-theme-enabled');
                 } else if (state.switchboardTheme === 'claudify') {
                     desired.add('theme-claudify');
-                } else if (state.switchboardTheme === 'afterburner-professional') {
-                    desired.add('theme-claudify');
-                    desired.add('theme-afterburner-pro');
                 }
                 // Remove only theme classes that should NOT be present — leave the
                 // correct ones in place so there is no flash if they were already

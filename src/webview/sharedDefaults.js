@@ -22,7 +22,7 @@ const DEFAULT_VISIBLE_AGENTS = {
 const DEFAULT_ROLE_CONFIG = {
     planner: {
         workflowFilePath: '.agents/workflows/improve-plan.md',
-        addons: { switchboardSafeguards: true, designDoc: false, constitution: false, aggressivePairProgramming: false, gitProhibition: false, clearAntigravityContext: false, cavemanOutput: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: true }
+        addons: { switchboardSafeguards: true, designDoc: false, constitution: false, aggressivePairProgramming: false, gitProhibition: false, clearAntigravityContext: false, cavemanOutput: true, adviseResearch: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: true }
     },
     lead: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, leadChallenge: false, accurateCoding: false, gitProhibition: true, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', useWorktreesPerPlan: false, workflowFilePathEnabled: false, workflowFilePath: '' } },
     coder: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, accurateCoding: false, gitProhibition: true, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', useWorktreesPerPlan: false, workflowFilePathEnabled: false, workflowFilePath: '' } },
@@ -35,7 +35,7 @@ const DEFAULT_ROLE_CONFIG = {
     splitter: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, complexityScoringSkill: false, clearAntigravityContext: false, cavemanOutput: false, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } },
     code_researcher: { prompt: '', researchComplexity: 'deep', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: false, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } },
     gatherer: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: false, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } },
-    orchestrator: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'useSubagents', customSubagentName: '', useWorktreesPerPlan: false, workflowFilePathEnabled: false, workflowFilePath: '' } },
+    orchestrator: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'useSubagents', customSubagentName: '', useWorktreesPerPlan: false, workflowFilePathEnabled: false, workflowFilePath: '', ultracode: false } },
     claude_designer: { prompt: 'Import a design from claude.ai/design into the target folder, writing the implementation into the designated workspace folder, built with the repo\'s existing components and styles.', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } }
 };
 
@@ -70,7 +70,7 @@ const PROMPT_OVERRIDE_EXCLUDED_KEYS = new Set(['ticket_updater', 'splitter', 'co
 const ROLE_ADDONS = {
     planner: [
         { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
-        { id: 'designDoc', label: 'Planning Epic Reference', tooltip: 'Include planning epic as context', default: false },
+        { id: 'designDoc', label: 'Planning Epic Reference (legacy)', tooltip: 'Legacy planner-only doc — superseded by per-project PRDs (Projects tab + PROJECT CONTEXT toggle). Kept for back-compat.', default: false },
         { id: 'constitution', label: 'Project Constitution Reference', tooltip: 'Include project constitution as context for planning', default: false },
         { id: 'designSystemDoc', label: 'Design Doc Reference', tooltip: 'Include design system doc as context', default: false },
         { id: 'aggressivePairProgramming', label: 'Aggressive Pair Programming', tooltip: 'Assume Coder can handle more independently', default: false },
@@ -281,7 +281,8 @@ const ROLE_ADDONS = {
             { value: 'customSubagent', label: 'Custom Subagent', tooltip: 'Instruct the agent to use a specific custom subagent', textInputOn: 'customSubagent' }
         ], default: 'useSubagents' },
         { id: 'useWorktreesPerPlan', label: 'Worktrees Per Plan', tooltip: 'Instruct the agent to use its native subagent/orchestration capabilities to process each subtask in an isolated git worktree', default: false },
-        { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false }
+        { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false },
+        { id: 'ultracode', label: 'Ultracode', tooltip: 'Append the "use ultracode" directive so a Claude Code host orchestrates the epic with multi-agent workflows', default: false }
     ]
 };
 

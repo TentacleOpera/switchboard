@@ -92,7 +92,7 @@ async function run() {
                         defaultPromptOverrides,
                         gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.[role] ?? true,
                         switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role] ?? true,
-                        researchDepth: role === 'code_researcher' ? promptsConfig.codeResearcher?.researchDepth : (role === 'researcher' ? promptsConfig.researchDepth : undefined),
+                        researchDepth: role === 'researcher' ? promptsConfig.researchDepth : undefined,
                         saveToLocalDocs: role === 'researcher' ? promptsConfig.saveToLocalDocs : undefined,
                         localDocsPath: role === 'researcher' ? promptsConfig.localDocsPath : undefined,
                         // Planner-specific options (matching _generateBatchPlannerPrompt pattern)

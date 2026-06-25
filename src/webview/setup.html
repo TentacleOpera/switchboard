@@ -16,12 +16,12 @@
             --bg-color: #0d0d0d;
             --panel-bg: #000000;
             --panel-bg2: #050505;
-            --border-color: #222222;
+            --border-color: #333333;
             --border-bright: #444444;
             --border-dim: #252525;
             --bg-dim: #111111;
             --text-primary: #e0e0e0;
-            --text-secondary: #777777;
+            --text-secondary: #8C8C8C;
             --accent-primary: #00e5ff;
             --accent-teal: var(--accent-primary);
             --accent-teal-dim: color-mix(in srgb, var(--accent-teal) 40%, transparent);
@@ -43,16 +43,8 @@
             --glow-red: none;
             --text-primary: #E0E0E0;
             --text-secondary: #8C8C8C;  /* setup is a settings panel — keep its body text grey, headings warm */
-            --border-color: #38332E;
-            --border-bright: #5C544A;
-        }
-
-        body.theme-afterburner-pro {
-            --accent-primary: #00e5ff;
-            --accent-teal: #00e5ff;
-            --accent-teal-dim: color-mix(in srgb, #00e5ff 40%, transparent);
-            --accent-teal-bright: #5ce8e6;
-            --glow-teal: none;
+            --border-color: #333333;
+            --border-bright: #444444;
         }
 
         /* Claudify: remove neon glow from base (non-cyber) interactive states */
@@ -425,6 +417,89 @@
         .setup-shell {
             padding-top: 0;
         }
+
+        /* ───────────────────────────────────────────────────────────
+           Immersive parity (D2): setup joins the planning/design/project
+           family. Afterburner = cool-neutral ground + grey ambient grid +
+           glass content panels + CRT scanlines. Claudify = flat neutral
+           grid surface, no glass. implementation.html stays plain (D3). */
+
+        /* Afterburner: cool-neutral ground + grey ambient grid */
+        body.cyber-theme-enabled {
+            background-color: #101414;
+            background-image:
+                linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+        }
+        /* Glass content panels float over the grid */
+        .cyber-theme-enabled .shared-tab-content {
+            background: rgba(10, 10, 10, 0.70);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+        }
+
+        /* CRT scanline texture + rolling sweep (sweep frozen by cyber-animation-disabled) */
+        .cyber-scanlines {
+            display: none;
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0, 0, 0, 0.07) 2px,
+                rgba(0, 0, 0, 0.07) 4px
+            );
+            z-index: 5;
+        }
+        .cyber-theme-enabled .cyber-scanlines { display: block; }
+        .cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
+            content: " ";
+            display: block;
+            position: absolute;
+            background: linear-gradient(
+                to bottom,
+                rgba(255, 255, 255, 0) 0%,
+                color-mix(in srgb, var(--accent-primary) 3%, transparent) 10%,
+                color-mix(in srgb, var(--accent-primary) 7%, transparent) 50%,
+                color-mix(in srgb, var(--accent-primary) 3%, transparent) 90%,
+                rgba(255, 255, 255, 0) 100%
+            );
+            width: 100%;
+            height: 80px;
+            pointer-events: none;
+            z-index: 6;
+            animation: scanline-sweep 8s linear infinite;
+        }
+        @keyframes scanline-sweep {
+            0% { transform: translateY(-80px); }
+            100% { transform: translateY(100vh); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
+                animation: none;
+                display: none;
+            }
+        }
+
+        /* Claudify: flat neutral surface + grey grid (no glass) */
+        body.theme-claudify {
+            background-color: #1C1C1C;
+            background-image:
+                linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+        }
+        body.theme-claudify .shared-tab-content {
+            background-color: #1C1C1C;
+            background-image:
+                linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+        }
     </style>
     <style>
 .shared-tab-bar {
@@ -483,10 +558,24 @@
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
 }
+/* Claudify: neutral-grey tab nav; active tab = invisible rectangle (bg + bottom border
+   match the bar) so only the terracotta text reads (D14). */
+body.theme-claudify .shared-tab-btn:not(.active) { color: #8a8a8a; }
+body.theme-claudify .shared-tab-btn.active {
+  background: var(--panel-bg);
+  border-color: transparent;
+  border-bottom-color: transparent;
+}
+body.theme-claudify .shared-tab-btn:hover:not(.active) {
+  color: #c8c8c8;
+  background: color-mix(in srgb, #ffffff 5%, transparent);
+}
     </style>
 </head>
 
 <body class="cyber-theme-enabled">
+    <!-- CRT scanline overlay (Afterburner only; non-interactive, viewport-fixed) -->
+    <div class="cyber-scanlines"></div>
     <div class="setup-shell">
         <!-- Tab Navigation -->
         <div class="shared-tab-bar" role="tablist" aria-label="Setup sections">
@@ -1196,10 +1285,6 @@
                     <input type="radio" name="theme-selection" value="claudify">
                     <span>Claudify</span>
                 </label>
-                <label class="db-radio-option">
-                    <input type="radio" name="theme-selection" value="afterburner-professional">
-                    <span>Afterburner Professional</span>
-                </label>
             </div>
             <div style="border-top: 1px solid var(--border-dim); margin: 12px 0;"></div>
             <div id="theme-animation-settings">
@@ -1223,7 +1308,7 @@
                     <input id="colour-kanban-icons-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
                     <div style="display:flex; flex-direction:column; gap:4px;">
                         <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Colour kanban board icons</span>
-                        <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Show kanban toolbar icons in colour at rest (cyan for Afterburner Professional, terracotta for Claudify) instead of grey with a colour click-flash.</span>
+                        <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Show kanban toolbar icons in colour at rest (terracotta for Claudify) instead of grey with a colour click-flash.</span>
                     </div>
                 </label>
                 <div id="colour-kanban-icons-status" style="min-height:14px; margin-top:6px; font-size:10px; color:var(--accent-teal); font-family:var(--font-mono);"></div>
@@ -1712,11 +1797,10 @@
             const t = theme || currentSwitchboardTheme || 'afterburner';
             const section = document.getElementById('theme-animation-settings');
             if (section) section.style.display = (t === 'afterburner') ? '' : 'none';
-            // Colour-icons checkbox: only the two non-afterburner themes that use the grey icon rules.
+            // Colour-icons checkbox: only Claudify uses the grey icon rules.
             const colourSection = document.getElementById('theme-colour-icons-settings');
             if (colourSection) {
-                colourSection.style.display =
-                    (t === 'afterburner-professional' || t === 'claudify') ? '' : 'none';
+                colourSection.style.display = (t === 'claudify') ? '' : 'none';
             }
         }
 
@@ -4205,15 +4289,12 @@
                     // Compute the desired theme class set without touching unrelated classes
                     // (e.g. kanban-icons-colour, cyber-animation-disabled) that may have been
                     // injected server-side by applyThemeBodyClass().
-                    const allThemeClasses = ['theme-claudify', 'theme-afterburner-pro', 'cyber-theme-enabled'];
+                    const allThemeClasses = ['theme-claudify', 'cyber-theme-enabled'];
                     const desired = new Set();
                     if (theme === 'afterburner') {
                         desired.add('cyber-theme-enabled');
                     } else if (theme === 'claudify') {
                         desired.add('theme-claudify');
-                    } else if (theme === 'afterburner-professional') {
-                        desired.add('theme-claudify');
-                        desired.add('theme-afterburner-pro');
                     }
                     // Remove only theme classes that should NOT be present — leave the
                     // correct ones in place so there is no flash if they were already

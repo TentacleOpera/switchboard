@@ -131,15 +131,12 @@
         // Compute the desired theme class set without touching unrelated classes
         // (e.g. kanban-icons-colour, cyber-animation-disabled) that may have been
         // injected server-side by applyThemeBodyClass().
-        const allThemeClasses = ['theme-claudify', 'theme-afterburner-pro', 'cyber-theme-enabled'];
+        const allThemeClasses = ['theme-claudify', 'cyber-theme-enabled'];
         const desired = new Set();
         if (state.switchboardTheme === 'afterburner') {
             desired.add('cyber-theme-enabled');
         } else if (state.switchboardTheme === 'claudify') {
             desired.add('theme-claudify');
-        } else if (state.switchboardTheme === 'afterburner-professional') {
-            desired.add('theme-claudify');
-            desired.add('theme-afterburner-pro');
         }
         // Remove only theme classes that should NOT be present — leave the
         // correct ones in place so there is no flash if they were already
@@ -164,6 +161,7 @@
     let uploadingPlanAttachment = false;
 
     let _epicSelectedPlan = null;
+    let _orchestratorAvailable = false;
     let _epicPreviewFilePath = null;
     let _epicDocumentsCache = [];
     let _pendingKanbanSelection = null;
@@ -287,6 +285,7 @@
                 handleThemeChanged(msg.theme);
                 break;
             case 'kanbanPlansReady':
+                _orchestratorAvailable = !!msg.orchestratorAvailable;
                 if (btnCreateKanbanPlan) {
                     btnCreateKanbanPlan.disabled = false;
                     btnCreateKanbanPlan.textContent = 'Create';
@@ -299,12 +298,21 @@
                 _kanbanAllWorkspaceProjects = msg.allWorkspaceProjects || {};
                 _kanbanWorkspaceItems = msg.workspaceItems || [];
                 _kanbanAvailableColumns = msg.columns || [];
+                if (msg.kanbanWorkspaceRoot && _kanbanWorkspaceItems.some(ws => ws.workspaceRoot === msg.kanbanWorkspaceRoot)) {
+                    if (!kanbanFilters.workspaceRoot) {
+                        kanbanFilters.workspaceRoot = msg.kanbanWorkspaceRoot;
+                    }
+                    if (!epicsFilters.workspaceRoot) {
+                        epicsFilters.workspaceRoot = msg.kanbanWorkspaceRoot;
+                    }
+                }
                 populateWorkspaceDropdowns();
                 populateKanbanFilters();
                 renderKanbanPlans();
                 renderEpicsList();
                 tryResolvePendingKanbanSelection();
                 tryResolvePendingEpicSelection();
+                if (_epicSelectedPlan) renderEpicMetaBar(_epicSelectedPlan);
                 break;
             case 'planCreated':
                 if (btnCreateKanbanPlan) {
@@ -440,6 +448,14 @@
                 break;
             case 'constitutionFilesLoaded':
                 _constitutionWorkspaces = msg.workspaces || [];
+                if (msg.kanbanWorkspaceRoot && _constitutionWorkspaces.some(ws => ws.workspaceRoot === msg.kanbanWorkspaceRoot)) {
+                    if (!_constitutionWsFilter) {
+                        _constitutionWsFilter = msg.kanbanWorkspaceRoot;
+                    }
+                    if (!_systemWsFilter) {
+                        _systemWsFilter = msg.kanbanWorkspaceRoot;
+                    }
+                }
                 // The dropdowns are pure workspace filters (default "All Workspaces"); the
                 // sidebar lists the actual docs. Populate the filters, then render the lists,
                 // which auto-select the first doc when nothing is selected yet.
@@ -816,6 +832,9 @@
         });
         kanbanWorkspaceFilter.value = currentWS;
         epicsWorkspaceFilter.value = epicsFilters.workspaceRoot;
+        if (tuningWorkspaceFilter && currentWS) {
+            tuningWorkspaceFilter.value = currentWS;
+        }
     }
 
     function populateKanbanFilters() {
@@ -1290,6 +1309,15 @@
                 itemDiv.classList.add('selected');
             }
 
+            const isManageable = plan && !plan.isEpicDocument;
+            const actionButtons = isManageable ? `
+                <div class="kanban-plan-actions" style="margin-top: 6px;">
+                    ${plan.planFile ? `<button class="kanban-plan-copy-link epic-card-action" data-plan-file="${escapeHtml(plan.planFile)}">Copy Link</button>` : ''}
+                    ${plan.sessionId || plan.planId ? `<button class="kanban-plan-copy-prompt epic-card-action" data-session-id="${escapeHtml(plan.sessionId || plan.planId)}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}">Copy Planning Prompt</button>` : ''}
+                    ${plan.sessionId || plan.planId ? `<button class="epic-send-to-planner epic-card-action" data-plan-file="${escapeHtml(plan.planFile || '')}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}">Send to Planner</button>` : ''}
+                </div>
+            ` : '';
+
             const displayTime = plan.mtime > 0 ? formatRelativeTime(plan.mtime) : 'unknown';
             itemDiv.innerHTML = `
                 <div style="font-weight: 500;">${escapeHtml(plan.topic)}</div>
@@ -1298,15 +1326,69 @@
                     <summary style="cursor: pointer; color: var(--text-secondary);">Subtasks (${plan.subtaskCount || 0})</summary>
                     <div class="epic-subtasks-list" id="subtasks-${escapeHtml(plan.planId)}">Loading subtasks...</div>
                 </details>
+                ${actionButtons}
             `;
 
             itemDiv.addEventListener('click', e => {
-                if (e.target.tagName === 'SUMMARY' || e.target.closest('.epic-accordion')) return;
+                if (e.target.tagName === 'SUMMARY' || e.target.closest('.epic-accordion') || e.target.closest('.epic-card-action')) return;
                 if (state.dirtyFlags.epics) exitEditMode('epics');
                 document.querySelectorAll('.epic-plan-item').forEach(el => el.classList.remove('selected'));
                 itemDiv.classList.add('selected');
                 selectEpic(plan);
             });
+
+            // Copy Link
+            const epicCopyLinkBtn = itemDiv.querySelector('.epic-card-action.kanban-plan-copy-link');
+            if (epicCopyLinkBtn) {
+                epicCopyLinkBtn.addEventListener('click', e => {
+                    e.stopPropagation();
+                    const filePath = epicCopyLinkBtn.dataset.planFile;
+                    navigator.clipboard.writeText(toAgentRef(filePath)).then(() => {
+                        epicCopyLinkBtn.textContent = 'Copied';
+                        setTimeout(() => epicCopyLinkBtn.textContent = 'Copy Link', 2000);
+                    });
+                });
+            }
+
+            // Copy Planning Prompt
+            const epicCopyPromptBtn = itemDiv.querySelector('.epic-card-action.kanban-plan-copy-prompt');
+            if (epicCopyPromptBtn) {
+                epicCopyPromptBtn.addEventListener('click', e => {
+                    e.stopPropagation();
+                    vscode.postMessage({
+                        type: 'copyEpicPlannerPrompt',
+                        sessionId: epicCopyPromptBtn.dataset.sessionId,
+                        workspaceRoot: epicCopyPromptBtn.dataset.workspaceRoot
+                    });
+                    epicCopyPromptBtn.textContent = 'Copied';
+                    setTimeout(() => epicCopyPromptBtn.textContent = 'Copy Planning Prompt', 2000);
+                });
+            }
+
+            // Send to Planner
+            const epicSendPlannerBtn = itemDiv.querySelector('.epic-send-to-planner');
+            if (epicSendPlannerBtn) {
+                epicSendPlannerBtn.addEventListener('click', e => {
+                    e.stopPropagation();
+                    const planFile = epicSendPlannerBtn.dataset.planFile;
+                    const wsRoot = epicSendPlannerBtn.dataset.workspaceRoot;
+                    const plannerCol = typeof _kanbanAvailableColumns !== 'undefined'
+                        ? _kanbanAvailableColumns.find(c => c.id === 'CREATED' || c.kind === 'created')
+                        : null;
+                    if (!plannerCol) {
+                        showToast('No Planner column found on the kanban board.', 'error');
+                        return;
+                    }
+                    vscode.postMessage({
+                        type: 'moveKanbanPlanColumn',
+                        planFile,
+                        newColumn: plannerCol.id,
+                        workspaceRoot: wsRoot
+                    });
+                    epicSendPlannerBtn.textContent = 'Sent';
+                    setTimeout(() => epicSendPlannerBtn.textContent = 'Send to Planner', 2000);
+                });
+            }
 
             const accordion = itemDiv.querySelector('.epic-accordion');
             accordion.addEventListener('toggle', () => {
@@ -1351,7 +1433,7 @@
         const isManageable = plan && !plan.isEpicDocument;
         const manageGroup = isManageable ? `
             <div class="kanban-meta-group" style="display:flex; gap:6px;">
-                <button class="strip-btn" id="btn-epic-orchestrate" style="border-color: var(--accent-teal);" title="Assemble the orchestrator prompt for this epic and copy it">Orchestrate</button>
+                <button class="strip-btn" id="btn-epic-orchestrate" style="${_orchestratorAvailable ? 'border-color: var(--accent-teal);' : 'opacity: 0.6; border-color: var(--border-color);'}" title="${_orchestratorAvailable ? 'Hand this epic to one orchestrator agent that runs all subtasks end-to-end with native subagents. Copies the prompt and attempts to dispatch to the orchestrator terminal.' : 'Hand this epic to one orchestrator agent that runs all subtasks end-to-end. No orchestrator agent is configured yet — clicking copies the prompt. Enable the Orchestrator agent in the kanban Agents tab to dispatch directly.'}">Orchestrate</button>
                 <button class="strip-btn" id="btn-epic-add-subtask" title="Add an existing plan to this epic as a subtask">+ Subtask</button>
                 <button class="strip-btn" id="btn-epic-delete" style="color:#ff6b6b;" title="Delete this epic (subtasks are detached)">Delete Epic</button>
             </div>
@@ -1540,6 +1622,19 @@
             workspaceRoot: _epicSelectedPlan.workspaceRoot
         });
         closeEpicAddSubtaskOverlay();
+    });
+
+    // ---- Epic modes help modal ----
+    document.getElementById('btn-epic-modes-help')?.addEventListener('click', () => {
+        const ov = document.getElementById('epic-modes-help-overlay');
+        if (ov) ov.style.display = 'flex';
+    });
+    document.getElementById('btn-epic-modes-help-close')?.addEventListener('click', () => {
+        const ov = document.getElementById('epic-modes-help-overlay');
+        if (ov) ov.style.display = 'none';
+    });
+    document.getElementById('epic-modes-help-overlay')?.addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) e.currentTarget.style.display = 'none';
     });
 
     if (epicsWorkspaceFilter) {

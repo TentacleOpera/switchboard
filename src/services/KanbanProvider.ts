@@ -1291,7 +1291,8 @@ export class KanbanProvider implements vscode.Disposable {
                 effectiveControlPlaneRoot: cpStatus.effectiveWorkspaceRoot,
                 explicitControlPlaneRoot: cpStatus.explicitControlPlaneRoot,
                 pendingCandidate: cpStatus.pendingCandidate,
-                repoScopeFilter: cpStatus.repoScopeFilter
+                repoScopeFilter: cpStatus.repoScopeFilter,
+                projectContextEnabled: await this._resolveProjectContextEnabled(resolvedWorkspaceRoot)
             });
 
             // THE critical message — sends cards to webview
@@ -2189,7 +2190,8 @@ export class KanbanProvider implements vscode.Disposable {
                 effectiveControlPlaneRoot: cpStatus2.effectiveWorkspaceRoot,
                 explicitControlPlaneRoot: cpStatus2.explicitControlPlaneRoot,
                 pendingCandidate: cpStatus2.pendingCandidate,
-                repoScopeFilter: cpStatus2.repoScopeFilter
+                repoScopeFilter: cpStatus2.repoScopeFilter,
+                projectContextEnabled: await this._resolveProjectContextEnabled(resolvedWorkspaceRoot)
             });
             this._lastCards = cards;
             const allWorktrees = dbReady ? await db.getWorktrees() : [];
@@ -2346,7 +2348,8 @@ export class KanbanProvider implements vscode.Disposable {
                 effectiveControlPlaneRoot: cpStatus3.effectiveWorkspaceRoot,
                 explicitControlPlaneRoot: cpStatus3.explicitControlPlaneRoot,
                 pendingCandidate: cpStatus3.pendingCandidate,
-                repoScopeFilter: cpStatus3.repoScopeFilter
+                repoScopeFilter: cpStatus3.repoScopeFilter,
+                projectContextEnabled: await this._resolveProjectContextEnabled(resolvedWorkspaceRoot)
             });
             this._lastCards = cards;
             this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig });
@@ -2400,6 +2403,7 @@ export class KanbanProvider implements vscode.Disposable {
     ): KanbanColumnDefinition[] {
         const occupiedColumns = new Set(cards.map(c => c.column));
         return columns.filter(col => {
+            if (col.epicOnly) return occupiedColumns.has(col.id);
             if (!col.hideWhenNoAgent) return true;
             if (col.role && visibleAgents[col.role] !== false) return true;
             if (occupiedColumns.has(col.id)) return true;
@@ -2803,6 +2807,40 @@ export class KanbanProvider implements vscode.Disposable {
         return {};
     }
 
+    /**
+     * Whether the per-project "Project Context" toggle is on for this workspace.
+     * Stored in the kanban DB config table (the blessed home for state/config),
+     * so it is naturally per-workspace.
+     */
+    private async _resolveProjectContextEnabled(workspaceRoot: string): Promise<boolean> {
+        try {
+            const db = this._getKanbanDb(workspaceRoot);
+            if (db && await db.ensureReady()) {
+                return (await db.getConfig('project_context_enabled')) === 'true';
+            }
+        } catch { /* non-fatal */ }
+        return false;
+    }
+
+    /**
+     * Resolve the active PROJECT's PRD (mirrors _resolveConstitution but keyed on
+     * the project NAME — there is no project_id FK on plans). Returns {} for the
+     * unassigned / no-project case so "No Project" boards inject no PRD. Reads are
+     * wrapped so a partially-written file (concurrent Projects-tab save) is tolerated.
+     */
+    private async _resolveProjectPrd(workspaceRoot: string, projectName: string | null | undefined): Promise<{ prdLink?: string; prdContent?: string }> {
+        if (!projectName || projectName === KanbanDatabase.UNASSIGNED_PROJECT_FILTER) return {};
+        const { getProjectPrdPath } = require('./prdUtils');
+        const filePath = getProjectPrdPath(workspaceRoot, projectName);
+        if (fs.existsSync(filePath)) {
+            try {
+                const prdContent = await fs.promises.readFile(filePath, 'utf8');
+                if (prdContent.trim()) return { prdLink: filePath, prdContent };
+            } catch { /* non-fatal */ }
+        }
+        return {};
+    }
+
     private async _resolveDesignSystemDoc(workspaceRoot: string): Promise<{ designSystemDocLink?: string; designSystemDocContent?: string }> {
         const config = vscode.workspace.getConfiguration('switchboard');
         const designSystemDocEnabled = config.get<boolean>('planner.designSystemDocEnabled', false);
@@ -2841,6 +2879,16 @@ export class KanbanProvider implements vscode.Disposable {
                 mergedAddons.constitutionLink = constitutionLink;
                 mergedAddons.constitutionContent = constitutionContent;
             }
+            // Per-project PRD (project-context toggle) — custom agents are a SEPARATE
+            // prompt path; inject the active project's PRD here too. Gated only by the
+            // project-context toggle + an active-project PRD (NOT a per-role add-on).
+            if (await this._resolveProjectContextEnabled(workspaceRoot)) {
+                const { prdLink, prdContent } = await this._resolveProjectPrd(workspaceRoot, this.getDisplayedProjectForRoot(workspaceRoot));
+                if (prdLink || prdContent) {
+                    mergedAddons.prdLink = prdLink;
+                    mergedAddons.prdContent = prdContent;
+                }
+            }
             const promptTab = this._getRoleConfig(role)?.prompt?.trim() || '';
             const instructions = promptTab || agentConfig?.promptInstructions || '';
             return buildCustomAgentPrompt(
@@ -2867,6 +2915,7 @@ export class KanbanProvider implements vscode.Disposable {
             useWorktreesPerPlanEnabled: promptsConfig.useWorktreesPerPlanByRole?.[role] ?? false,
             switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role] ?? true,
             gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.[role] ?? true,
+            ultracodeEnabled: promptsConfig.ultracodeByRole?.[role] ?? false,
             workflowFilePathEnabled: promptsConfig.workflowFilePathEnabledByRole?.[role] ?? false,
             workflowFilePath: promptsConfig.workflowFilePathByRole?.[role] || '',
             defaultPromptOverrides,
@@ -2878,6 +2927,22 @@ export class KanbanProvider implements vscode.Disposable {
             // must stay unchanged). The global flag is the cheap short-circuit.
             remoteControlActive: await this._isRemoteActiveForDispatch(workspaceRoot, plans),
         };
+
+        // Per-project PRD (Decision #1): a SINGLE project-level toggle injects the
+        // active project's PRD into EVERY dispatched prompt via the shared
+        // dispatchPrefixCore (all roles) — it is NOT a per-role add-on. Keyed on the
+        // active project NAME via getDisplayedProjectForRoot, which already returns
+        // null for "No Project"/unfiltered boards and for dispatches targeting a
+        // different workspace than the one on screen (race-tolerant). Resolved here,
+        // before the role branches, so the tester reconciliation below can see it.
+        if (await this._resolveProjectContextEnabled(workspaceRoot)) {
+            const { prdLink, prdContent } = await this._resolveProjectPrd(workspaceRoot, this.getDisplayedProjectForRoot(workspaceRoot));
+            if (prdLink || prdContent) {
+                resolvedOptions.prdEnabled = true;
+                resolvedOptions.prdLink = prdLink;
+                resolvedOptions.prdContent = prdContent;
+            }
+        }
 
         if (role === 'planner') {
             resolvedOptions.aggressivePairProgramming = promptsConfig.aggressivePairProgramming;
@@ -2907,16 +2972,22 @@ export class KanbanProvider implements vscode.Disposable {
             resolvedOptions.reviewerConciseModeEnabled = promptsConfig.reviewerConciseModeEnabled;
             resolvedOptions.reviewerCompactPlanUpdateEnabled = promptsConfig.reviewerCompactPlanUpdateEnabled;
         } else if (role === 'tester') {
+            // The acceptance tester needs an authoritative requirements baseline. The
+            // active project's PRD (resolved above into resolvedOptions.prdEnabled and
+            // injected via the shared prefix) satisfies this; the legacy global design
+            // doc remains a back-compat fallback. Throw ONLY when neither exists.
             const { designDocLink, designDocContent } = await this._resolveGlobalDesignDoc(workspaceRoot);
-            if (!designDocLink) {
-                throw new Error('Acceptance Tester requires a Planning Epic to be enabled and attached in Setup.');
+            if (!designDocLink && !resolvedOptions.prdEnabled) {
+                throw new Error('Acceptance Tester requires a product requirements document (PRD) for the active project (enable "Project Context" and author a PRD in the Projects tab), or a Planning Epic enabled and attached in Setup.');
             }
             resolvedOptions.designDocLink = designDocLink;
             resolvedOptions.designDocContent = designDocContent;
-        } else if (role === 'researcher' || role === 'code_researcher') {
-            resolvedOptions.researchDepth = role === 'code_researcher' ? promptsConfig.codeResearcher?.researchDepth : promptsConfig.researchDepth;
-            resolvedOptions.saveToLocalDocs = role === 'researcher' ? promptsConfig.saveToLocalDocs : undefined;
-            resolvedOptions.localDocsPath = role === 'researcher' ? promptsConfig.localDocsPath : undefined;
+        } else if (role === 'researcher') {
+            resolvedOptions.researchDepth = promptsConfig.researchDepth;
+            resolvedOptions.saveToLocalDocs = promptsConfig.saveToLocalDocs;
+            resolvedOptions.localDocsPath = promptsConfig.localDocsPath;
+        } else if (role === 'code_researcher') {
+            // Advise-research flow does not use researchDepth options.
         } else if (role === 'ticket_updater') {
             resolvedOptions.ticketUpdateMode = promptsConfig.ticketUpdateMode;
         } else if (role === 'splitter') {
@@ -2948,6 +3019,13 @@ export class KanbanProvider implements vscode.Disposable {
             resolvedOptions.epicMode = true;
             resolvedOptions.epicTopic = epicPlan?.topic || '';
             resolvedOptions.subtaskCount = subtaskCount;
+            if (role === 'orchestrator' && epicPlan) {
+                let relativePath = epicPlan.absolutePath;
+                if (workspaceRoot && epicPlan.absolutePath.startsWith(workspaceRoot)) {
+                    relativePath = epicPlan.absolutePath.substring(workspaceRoot.length).replace(/^[/\\]+/, '');
+                }
+                resolvedOptions.epicDocLink = relativePath;
+            }
             // Epic prompt template: the orchestrator role prompt override is the new home
             // (Decision #3/#4). For NON-orchestrator roles (step mode: epic dragged to the
             // planner/lead column) prepend that override, falling back to the legacy
@@ -2984,12 +3062,15 @@ export class KanbanProvider implements vscode.Disposable {
      */
     public async buildEpicOrchestrationPrompt(
         workspaceRoot: string,
-        epicSessionId: string
+        epicSessionId: string,
+        role: string = 'orchestrator'
     ): Promise<{ prompt: string; epicTopic: string; subtaskCount: number; totalSubtasks: number } | null> {
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !(await db.ensureReady())) { return null; }
         const epic = await db.getPlanByPlanId(epicSessionId);
         if (!epic || !epic.isEpic) { return null; }
+
+        await this._regenerateEpicFile(workspaceRoot, epic.planId, db);
 
         const maxRaw = await db.getConfig('epic_max_subtasks');
         const maxSubtasks = maxRaw ? parseInt(maxRaw, 10) : 20;
@@ -3025,7 +3106,7 @@ export class KanbanProvider implements vscode.Disposable {
             });
         }
 
-        const prompt = await this.generateUnifiedPrompt('orchestrator', plans, workspaceRoot);
+        const prompt = await this.generateUnifiedPrompt(role, plans, workspaceRoot);
         return { prompt, epicTopic: epic.topic, subtaskCount: limited.length, totalSubtasks: subtasks.length };
     }
 
@@ -3047,6 +3128,25 @@ export class KanbanProvider implements vscode.Disposable {
         return { assembled, sent };
     }
 
+    /**
+     * Returns true if the orchestrator agent is both visible (enabled) and has
+     * a startup command configured. Used by the Epics tab to style the
+     * Orchestrate button to reflect whether dispatch will succeed.
+     * Note: this is a heuristic — it checks configuration, not whether a
+     * terminal is currently running. The prompt is always copied as a fallback.
+     */
+    public async isOrchestratorAvailable(workspaceRoot?: string): Promise<boolean> {
+        if (!this._taskViewerProvider) { return false; }
+        try {
+            const visibleAgents = await this._taskViewerProvider.getVisibleAgents(workspaceRoot);
+            if (!visibleAgents?.orchestrator) { return false; }
+            const commands = await this._taskViewerProvider.getStartupCommands(workspaceRoot);
+            return !!(commands?.orchestrator && commands.orchestrator.trim());
+        } catch {
+            return false;
+        }
+    }
+
     private async _getPromptsConfig(workspaceRoot: string): Promise<any> {
         const config = vscode.workspace.getConfiguration('switchboard');
         
@@ -3064,6 +3164,7 @@ export class KanbanProvider implements vscode.Disposable {
         const codeResearcherConfig: any = this._getRoleConfig('code_researcher')
             ?? this._getRoleConfig('research_planner');
         const gathererConfig: any = this._getRoleConfig('gatherer');
+        const orchestratorConfig: any = this._getRoleConfig('orchestrator');
 
         return {
             workflowFilePathEnabledByRole: {
@@ -3079,6 +3180,7 @@ export class KanbanProvider implements vscode.Disposable {
                 ticket_updater: ticketUpdaterConfig?.addons?.workflowFilePathEnabled ?? false,
                 code_researcher: codeResearcherConfig?.addons?.workflowFilePathEnabled ?? false,
                 gatherer: gathererConfig?.addons?.workflowFilePathEnabled ?? false,
+                orchestrator: orchestratorConfig?.addons?.workflowFilePathEnabled ?? false,
             },
             workflowFilePathByRole: {
                 planner: plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agents/workflows/improve-plan.md'),
@@ -3093,6 +3195,7 @@ export class KanbanProvider implements vscode.Disposable {
                 ticket_updater: ticketUpdaterConfig?.addons?.workflowFilePath || '',
                 code_researcher: codeResearcherConfig?.addons?.workflowFilePath || '',
                 gatherer: gathererConfig?.addons?.workflowFilePath || '',
+                orchestrator: orchestratorConfig?.addons?.workflowFilePath || '',
             },
             accurateCodingEnabledByRole: {
                 lead: leadConfig?.addons?.accurateCoding ?? config.get<boolean>('accurateCoding.enabled', false),
@@ -3128,6 +3231,7 @@ export class KanbanProvider implements vscode.Disposable {
                 splitter: splitterConfig?.addons?.skipCompilation ?? false,
                 ticket_updater: ticketUpdaterConfig?.addons?.skipCompilation ?? false,
                 code_researcher: codeResearcherConfig?.addons?.skipCompilation ?? false,
+                orchestrator: orchestratorConfig?.addons?.skipCompilation ?? true,
             },
             skipTestsByRole: {
                 planner: plannerConfig?.addons?.skipTests ?? false,
@@ -3141,6 +3245,7 @@ export class KanbanProvider implements vscode.Disposable {
                 splitter: splitterConfig?.addons?.skipTests ?? false,
                 ticket_updater: ticketUpdaterConfig?.addons?.skipTests ?? false,
                 code_researcher: codeResearcherConfig?.addons?.skipTests ?? false,
+                orchestrator: orchestratorConfig?.addons?.skipTests ?? true,
             },
             gitProhibitionEnabled: plannerConfig?.addons?.gitProhibition ?? config.get<boolean>('planner.gitProhibitionEnabled', false),
             codeResearcher: {
@@ -3161,6 +3266,7 @@ export class KanbanProvider implements vscode.Disposable {
                 splitter: splitterConfig?.addons?.gitProhibition ?? true,
                 ticket_updater: ticketUpdaterConfig?.addons?.gitProhibition ?? true,
                 code_researcher: codeResearcherConfig?.addons?.gitProhibition ?? true,
+                orchestrator: orchestratorConfig?.addons?.gitProhibition ?? true,
             },
             switchboardSafeguardsByRole: {
                 planner: plannerConfig?.addons?.switchboardSafeguards ?? true,
@@ -3174,6 +3280,7 @@ export class KanbanProvider implements vscode.Disposable {
                 splitter: splitterConfig?.addons?.switchboardSafeguards ?? true,
                 ticket_updater: ticketUpdaterConfig?.addons?.switchboardSafeguards ?? true,
                 code_researcher: codeResearcherConfig?.addons?.switchboardSafeguards ?? true,
+                orchestrator: orchestratorConfig?.addons?.switchboardSafeguards ?? true,
             },
             useSubagentsByRole: {
                 planner: plannerConfig?.addons?.subagentPolicy === 'useSubagents' || (plannerConfig?.addons?.subagentPolicy === undefined && plannerConfig?.addons?.useSubagents === true),
@@ -3188,6 +3295,7 @@ export class KanbanProvider implements vscode.Disposable {
                 ticket_updater: ticketUpdaterConfig?.addons?.subagentPolicy === 'useSubagents' || (ticketUpdaterConfig?.addons?.subagentPolicy === undefined && ticketUpdaterConfig?.addons?.useSubagents === true),
                 code_researcher: codeResearcherConfig?.addons?.subagentPolicy === 'useSubagents' || (codeResearcherConfig?.addons?.subagentPolicy === undefined && codeResearcherConfig?.addons?.useSubagents === true),
                 gatherer: gathererConfig?.addons?.subagentPolicy === 'useSubagents' || (gathererConfig?.addons?.subagentPolicy === undefined && gathererConfig?.addons?.useSubagents === true),
+                orchestrator: orchestratorConfig?.addons?.subagentPolicy === 'useSubagents' || (orchestratorConfig?.addons?.subagentPolicy === undefined && orchestratorConfig?.addons?.useSubagents !== false),
             },
             noSubagentsByRole: {
                 planner: plannerConfig?.addons?.subagentPolicy === 'noSubagents',
@@ -3202,6 +3310,7 @@ export class KanbanProvider implements vscode.Disposable {
                 ticket_updater: ticketUpdaterConfig?.addons?.subagentPolicy === 'noSubagents',
                 code_researcher: codeResearcherConfig?.addons?.subagentPolicy === 'noSubagents',
                 gatherer: gathererConfig?.addons?.subagentPolicy === 'noSubagents',
+                orchestrator: orchestratorConfig?.addons?.subagentPolicy === 'noSubagents',
             },
             customSubagentNameByRole: {
                 planner: plannerConfig?.addons?.subagentPolicy === 'customSubagent' ? (plannerConfig?.addons?.customSubagentName || '') : '',
@@ -3216,11 +3325,13 @@ export class KanbanProvider implements vscode.Disposable {
                 ticket_updater: ticketUpdaterConfig?.addons?.subagentPolicy === 'customSubagent' ? (ticketUpdaterConfig?.addons?.customSubagentName || '') : '',
                 code_researcher: codeResearcherConfig?.addons?.subagentPolicy === 'customSubagent' ? (codeResearcherConfig?.addons?.customSubagentName || '') : '',
                 gatherer: gathererConfig?.addons?.subagentPolicy === 'customSubagent' ? (gathererConfig?.addons?.customSubagentName || '') : '',
+                orchestrator: orchestratorConfig?.addons?.subagentPolicy === 'customSubagent' ? (orchestratorConfig?.addons?.customSubagentName || '') : '',
             },
             useWorktreesPerPlanByRole: {
                 lead: leadConfig?.addons?.useWorktreesPerPlan === true,
                 coder: coderConfig?.addons?.useWorktreesPerPlan === true,
                 intern: internConfig?.addons?.useWorktreesPerPlan === true,
+                orchestrator: orchestratorConfig?.addons?.useWorktreesPerPlan === true,
             },
             clearAntigravityContextByRole: {
                 planner: plannerConfig?.addons?.clearAntigravityContext ?? false,
@@ -3235,6 +3346,7 @@ export class KanbanProvider implements vscode.Disposable {
                 ticket_updater: ticketUpdaterConfig?.addons?.clearAntigravityContext ?? false,
                 code_researcher: codeResearcherConfig?.addons?.clearAntigravityContext ?? false,
                 gatherer: gathererConfig?.addons?.clearAntigravityContext ?? false,
+                orchestrator: orchestratorConfig?.addons?.clearAntigravityContext ?? false,
             },
             cavemanOutputByRole: {
                 planner: plannerConfig?.addons?.cavemanOutput ?? true,
@@ -3249,17 +3361,22 @@ export class KanbanProvider implements vscode.Disposable {
                 ticket_updater: ticketUpdaterConfig?.addons?.cavemanOutput ?? false,
                 code_researcher: codeResearcherConfig?.addons?.cavemanOutput ?? false,
                 gatherer: gathererConfig?.addons?.cavemanOutput ?? false,
+                orchestrator: orchestratorConfig?.addons?.cavemanOutput ?? true,
             },
             suppressWalkthroughByRole: {
                 lead: leadConfig?.addons?.suppressWalkthrough ?? false,
                 coder: coderConfig?.addons?.suppressWalkthrough ?? false,
                 intern: internConfig?.addons?.suppressWalkthrough ?? false,
+                orchestrator: orchestratorConfig?.addons?.suppressWalkthrough ?? false,
             },
             ticketUpdateMode: ticketUpdaterConfig?.addons?.ticketUpdateMode
                 ?? (ticketUpdaterConfig?.addons?.ticketUpdateEnabled === true ? 'comment-only'
                     : ticketUpdaterConfig?.addons?.ticketUpdateEnabled === false ? 'disabled'
                     : 'disabled'),
             complexityScoringSkill: splitterConfig?.addons?.complexityScoringSkill ?? true,
+            ultracodeByRole: {
+                orchestrator: orchestratorConfig?.addons?.ultracode ?? false,
+            },
         };
     }
 
@@ -3658,6 +3775,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
         /** Returns true if the column should NOT be considered a next step. */
         const shouldSkip = (col: typeof allColumns[0]): boolean => {
+            if (col.epicOnly) {
+                return true;
+            }
             if (col.id === 'ACCEPTANCE TESTED' && !acceptanceTesterActive) {
                 return true;
             }
@@ -3955,6 +4075,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
         const column = (await this._buildKanbanColumns(customAgents, customKanbanColumns))
             .find((entry) => entry.id === targetColumn);
         if (!column) {
+            return null;
+        }
+
+        if (column.epicOnly) {
             return null;
         }
 
@@ -4588,6 +4712,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
             await this._autoCommitIfCodeReviewTransition(workspaceRoot, sessionId, targetColumn);
 
             const plan = await db.getPlanBySessionId(sessionId);
+            if (targetColumn === 'ORCHESTRATING' && !(plan && plan.isEpic)) {
+                return false;
+            }
             let moved: boolean;
             if (plan && plan.isEpic) {
                 // Atomic: move epic + all subtasks in one transaction
@@ -4607,6 +4734,19 @@ This step is what moves the plan forward in the Switchboard pipeline.
         }
     }
 
+    private async _collectAllMovedSessionIds(workspaceRoot: string, sessionId: string): Promise<string[]> {
+        const db = this._getKanbanDb(workspaceRoot);
+        if (db && await db.ensureReady()) {
+            const plan = await db.getPlanBySessionId(sessionId);
+            if (plan && !!plan.isEpic) {
+                const subtasks = await db.getSubtasksByEpicId(plan.planId);
+                const subtaskSessionIds = subtasks.map(st => st.sessionId).filter(Boolean);
+                return [sessionId, ...subtaskSessionIds];
+            }
+        }
+        return [sessionId];
+    }
+
     public async moveCardToColumnByPlanFile(
         workspaceRoot: string,
         planFile: string,
@@ -4618,6 +4758,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
             const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
 
             const previousRecord = await db.getPlanByPlanFile(planFile, workspaceId);
+            if (targetColumn === 'ORCHESTRATING' && !(previousRecord && previousRecord.isEpic)) {
+                return false;
+            }
             const sessionId = previousRecord?.sessionId || null;
 
             if (targetColumn === 'CODE REVIEWED') {
@@ -5078,6 +5221,68 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
                 break;
             }
+            case 'setProjectContextEnabled': {
+                // Per-project PRD master toggle. Stored in the kanban DB config table
+                // (per-workspace). No board refresh needed — the toggle only affects
+                // future dispatch prompts; confirm state back to the webview.
+                const workspaceRoot = msg.workspaceRoot || this._currentWorkspaceRoot;
+                if (workspaceRoot) {
+                    const db = this._getKanbanDb(workspaceRoot);
+                    if (db && await db.ensureReady()) {
+                        await db.setConfig('project_context_enabled', msg.enabled ? 'true' : 'false');
+                    }
+                    this._panel?.webview.postMessage({ type: 'projectContextEnabled', enabled: !!msg.enabled });
+                }
+                break;
+            }
+            case 'getProjectPrd': {
+                // Read a project's PRD file for the Projects-tab editor.
+                const workspaceRoot = msg.workspaceRoot || this._currentWorkspaceRoot;
+                if (workspaceRoot && typeof msg.projectName === 'string') {
+                    const { getProjectPrdPath } = require('./prdUtils');
+                    const filePath = getProjectPrdPath(workspaceRoot, msg.projectName);
+                    let content = '';
+                    let exists = false;
+                    try {
+                        if (fs.existsSync(filePath)) {
+                            content = await fs.promises.readFile(filePath, 'utf8');
+                            exists = true;
+                        }
+                    } catch { /* non-fatal */ }
+                    this._panel?.webview.postMessage({
+                        type: 'projectPrdContent',
+                        projectName: msg.projectName,
+                        workspaceRoot,
+                        content,
+                        exists,
+                        path: filePath
+                    });
+                }
+                break;
+            }
+            case 'saveProjectPrd': {
+                // Write a project's PRD file (creating .switchboard/projects/<slug>/).
+                const workspaceRoot = msg.workspaceRoot || this._currentWorkspaceRoot;
+                if (workspaceRoot && typeof msg.projectName === 'string' && typeof msg.content === 'string') {
+                    const { getProjectPrdPath } = require('./prdUtils');
+                    const filePath = getProjectPrdPath(workspaceRoot, msg.projectName);
+                    let ok = false;
+                    try {
+                        await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+                        await fs.promises.writeFile(filePath, msg.content, 'utf8');
+                        ok = true;
+                    } catch (err) {
+                        console.error('[KanbanProvider] Failed to save project PRD:', err);
+                    }
+                    this._panel?.webview.postMessage({
+                        type: 'projectPrdSaved',
+                        projectName: msg.projectName,
+                        ok,
+                        path: filePath
+                    });
+                }
+                break;
+            }
             case 'setAutomationMode': {
                 if (this._taskViewerProvider) {
                     await this._taskViewerProvider.setAutomationModeFromKanban(msg);
@@ -5313,13 +5518,16 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const { sessionIds, targetColumn } = msg;
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (Array.isArray(sessionIds) && sessionIds.length > 0 && workspaceRoot) {
+                    const allMovedIds: string[] = [];
                     for (const sid of sessionIds) {
                         await this.moveCardToColumn(workspaceRoot, sid, targetColumn);
                         await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetColumn, 'backward', workspaceRoot);
+                        const movedIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                        allMovedIds.push(...movedIds);
                     }
                     // Targeted delta, not a full-board redraw — the move is already persisted
                     // and the target column is known. Keeps drag-advance snappy.
-                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds, targetColumn });
+                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn });
                 }
                 break;
             }
@@ -5327,13 +5535,16 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const { sessionIds, targetColumn } = msg;
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (Array.isArray(sessionIds) && sessionIds.length > 0 && workspaceRoot) {
+                    const allMovedIds: string[] = [];
                     for (const sid of sessionIds) {
                         await this.moveCardToColumn(workspaceRoot, sid, targetColumn);
                         await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetColumn, 'forward', workspaceRoot);
+                        const movedIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                        allMovedIds.push(...movedIds);
                     }
                     // Targeted delta, not a full-board redraw — the move is already persisted
                     // and the target column is known. Keeps drag-advance snappy.
-                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds, targetColumn });
+                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn });
                 }
                 break;
             }
@@ -5668,7 +5879,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     }
                     // Targeted delta instead of a full refresh — dispatchConfiguredKanbanColumnAction
                     // already persisted the column move server-side (mirrors promptAll custom-user branch).
-                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds, targetColumn });
+                    const allMovedIds: string[] = [];
+                    for (const sid of sessionIds) {
+                        const movedIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                        allMovedIds.push(...movedIds);
+                    }
+                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn });
                     this._panel?.webview.postMessage({ type: 'promptOnDropResult', sessionIds, success: dispatched });
                     if (dispatched) {
                         this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plan(s) to clipboard.`, isError: false });
@@ -5689,22 +5905,28 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     for (const [role, sids] of groups) {
                         if (sids.length === 0) { continue; }
                         const targetCol = this._targetColumnForDispatchRole(role);
+                        const allMovedSids: string[] = [];
                         for (const sid of sids) {
                             await this.moveCardToColumn(workspaceRoot, sid, targetCol);
                             await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
                             // Record IDE dispatch identity after drag-drop with prompt mode
                             await this._recordDispatchIdentity(workspaceRoot, sid, targetCol, undefined, true);
+                            const movedIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                            allMovedSids.push(...movedIds);
                         }
-                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sids, targetColumn: targetCol });
+                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: allMovedSids, targetColumn: targetCol });
                     }
                 } else {
+                    const allMovedIds2: string[] = [];
                     for (const sid of sessionIds) {
                         await this.moveCardToColumn(workspaceRoot, sid, targetColumn);
                         await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetColumn, 'forward', workspaceRoot);
                         // Record IDE dispatch identity after drag-drop with prompt mode
                         await this._recordDispatchIdentity(workspaceRoot, sid, targetColumn, undefined, true);
+                        const movedIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                        allMovedIds2.push(...movedIds);
                     }
-                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds, targetColumn });
+                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: allMovedIds2, targetColumn });
                 }
 
                 // Pair programming: dispatch coder work for high-complexity cards routed to Lead
@@ -7433,10 +7655,33 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (!plan) { vscode.window.showWarningMessage('Plan not found.'); break; }
                 if (plan.isEpic) { vscode.window.showWarningMessage('Plan is already an epic.'); break; }
 
+                // If a custom name is provided, persist it to BOTH the DB topic and the file's
+                // # H1 heading. DB-only is NOT durable: the next re-import re-derives topic from
+                // the heading (extractTopic) and overwrites the DB topic via insertFileDerivedPlan's
+                // ON CONFLICT ... DO UPDATE SET topic = excluded.topic.
+                // Strip newlines so a multi-line name cannot inject a second heading.
+                const customName = msg.name ? String(msg.name).replace(/[\r\n]+/g, ' ').trim() : '';
+                if (customName && customName !== plan.topic) {
+                    // 0a. DB topic (use the still-current pre-move plan_file as the key)
+                    await db.updateTopicByPlanFile(plan.planFile, plan.workspaceId, customName);
+                    // 0b. File # H1 heading — rewrite the first H1 (or prepend one if absent)
+                    try {
+                        const curAbsPath = path.resolve(workspaceRoot, plan.planFile);
+                        const content = await fs.promises.readFile(curAbsPath, 'utf8');
+                        const rewritten = /^#\s+.+$/m.test(content)
+                            ? content.replace(/^#\s+.+$/m, `# ${customName}`)
+                            : `# ${customName}\n\n${content}`;
+                        await fs.promises.writeFile(curAbsPath, rewritten, 'utf8');
+                    } catch (titleErr) {
+                        console.warn(`[KanbanProvider] promoteToEpic: H1 rewrite failed (DB topic still updated): ${titleErr}`);
+                    }
+                }
+
                 // Move file to epics/ directory for unified architecture.
                 // Embed the full planId in the filename so the subtask→epic link survives
                 // re-import (the watcher derives plan_id back from this trailing UUID).
-                const slug = (plan.topic || 'epic').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'epic';
+                const effectiveTopic = customName || plan.topic || 'epic';
+                const slug = effectiveTopic.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'epic';
                 const epicDir = path.join(workspaceRoot, '.switchboard', 'epics');
                 const oldAbsPath = path.resolve(workspaceRoot, plan.planFile);
                 await fs.promises.mkdir(epicDir, { recursive: true });
@@ -7455,7 +7700,6 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 const oldRelPath = plan.planFile.replace(/\\/g, '/');
                 this._globalPlanWatcher?.registerRename(oldRelPath);
 
-                // 4. Move the file
                 try {
                     await fs.promises.rename(oldAbsPath, newAbsPath);
                 } catch (moveErr) {
@@ -7463,6 +7707,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     await db.updatePlanFileByPlanId(plan.planId, plan.planFile);
                 }
 
+                await this._regenerateEpicFile(workspaceRoot, plan.planId, db);
                 await this._refreshBoard(workspaceRoot);
                 break;
             }
@@ -7490,10 +7735,15 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 const columnDefs = await this._buildKanbanColumns([], customColumns);
                 const ordinalMap = new Map<string, number>();
                 columnDefs.forEach((def, idx) => ordinalMap.set(def.id, idx));
+                if (!ordinalMap.has('BACKLOG')) {
+                    ordinalMap.set('BACKLOG', -1);
+                }
                 const resolvedColumn = subtasks
-                     .map((st: any) => st.kanbanColumn)
+                     .map((st: any) => this._normalizeLegacyKanbanColumn(st.kanbanColumn))
                      .filter((col: string | null): col is string => !!col)
-                     .sort((a: string, b: string) => (ordinalMap.get(a) ?? Infinity) - (ordinalMap.get(b) ?? Infinity))[0] || subtasks[0].kanbanColumn || 'CREATED';
+                     .sort((a: string, b: string) => (ordinalMap.get(a) ?? Infinity) - (ordinalMap.get(b) ?? Infinity))[0] || this._normalizeLegacyKanbanColumn(subtasks[0].kanbanColumn) || 'CREATED';
+                const effectiveColumn = resolvedColumn === 'BACKLOG' ? 'CREATED' : resolvedColumn;
+                console.log(`[KanbanProvider] createEpic: subtask columns = [${subtasks.map(st => st.kanbanColumn).join(', ')}], resolvedColumn=${resolvedColumn}, effectiveColumn=${effectiveColumn}`);
                 const planId = crypto.randomUUID();
                 const sessionId = crypto.randomUUID();
                 const workspaceId = await db.getWorkspaceId();
@@ -7518,7 +7768,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     sessionId,
                     topic: name,
                     planFile: epicPlanFile,
-                    kanbanColumn: resolvedColumn,
+                    kanbanColumn: effectiveColumn,
                     status: 'active',
                     complexity: 'Unknown',
                     tags: '',
@@ -7558,6 +7808,8 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     await db.updateEpicStatus(st.planId || st.sessionId, 0, planId);
                 }
                 await this._regenerateEpicFile(workspaceRoot, planId, db);
+                const verifyEpic = await db.getPlanByPlanId(planId);
+                console.log(`[KanbanProvider] createEpic: verify is_epic=${verifyEpic?.isEpic}, kanbanColumn=${verifyEpic?.kanbanColumn}, project=${verifyEpic?.project}, planFile=${verifyEpic?.planFile}, activeProjectFilter=${this._projectFilter}`);
                 await this._refreshBoard(workspaceRoot);
                 break;
             }
@@ -7724,6 +7976,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             case 'CODER CODED': return 'coder';
             case 'INTERN CODED': return 'intern';
             case 'CODED': return 'lead';
+            case 'ORCHESTRATING': return 'orchestrator';
             case 'CODE REVIEWED': return 'reviewer';
             case 'ACCEPTANCE TESTED': return 'tester';
             case 'CONTEXT GATHERER': return 'gatherer';

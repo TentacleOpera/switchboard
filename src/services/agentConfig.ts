@@ -38,6 +38,10 @@ export interface CustomAgentAddons {
     constitutionContent?: string;
     constitutionLink?: string;
 
+    // Per-project PRD (project-context toggle; resolved at dispatch, not a saved per-agent flag)
+    prdLink?: string;
+    prdContent?: string;
+
     // Workflow
     workflowFilePathEnabled?: boolean;
     workflowFilePath?: string;
@@ -78,6 +82,7 @@ export interface KanbanColumnDefinition {
     dragDropMode: 'cli' | 'prompt' | 'disabled';
     hideWhenNoAgent?: boolean;
     triggerPrompt?: string;
+    epicOnly?: boolean;
 }
 
 export interface KanbanColumnBuildOverrides {
@@ -102,12 +107,14 @@ export const BUILT_IN_AGENT_LABELS: Record<BuiltInAgentRole, string> = {
 const DEFAULT_KANBAN_COLUMNS: KanbanColumnDefinition[] = [
     { id: 'CREATED', label: 'New', order: 0, kind: 'created', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'RESEARCHER', label: 'Researcher', role: 'researcher', order: 90, kind: 'review', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt', hideWhenNoAgent: true },
+    { id: 'CODE_RESEARCHER', label: 'Code Researcher', role: 'code_researcher', order: 95, kind: 'review', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt', hideWhenNoAgent: true },
     { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner', order: 100, kind: 'review', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'SPLITTER', label: 'Splitter', role: 'splitter', order: 110, kind: 'review', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt', hideWhenNoAgent: true },
     { id: 'CONTEXT GATHERER', label: 'Context Gatherer', role: 'gatherer', order: 50, kind: 'review', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli', hideWhenNoAgent: true },
     { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 180, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'INTERN CODED', label: 'Intern', role: 'intern', order: 200, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli', hideWhenNoAgent: true },
+    { id: 'ORCHESTRATING', label: 'Orchestrator', role: 'orchestrator', order: 250, kind: 'review', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli', hideWhenNoAgent: true, epicOnly: true },
     { id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer', order: 300, kind: 'reviewed', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli' },
     { id: 'ACCEPTANCE TESTED', label: 'Acceptance Tested', role: 'tester', order: 350, kind: 'reviewed', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli', hideWhenNoAgent: true },
     { id: 'TICKET UPDATER', label: 'Ticket Updater', role: 'ticket_updater', order: 9000, kind: 'reviewed', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt', hideWhenNoAgent: true },

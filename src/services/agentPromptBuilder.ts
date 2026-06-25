@@ -161,6 +161,10 @@ export interface PromptBuilderOptions {
     customSubagentName?: string;
     /** When true, instructs the agent to use native subagent/worktree capabilities to isolate each plan. */
     useWorktreesPerPlanEnabled?: boolean;
+    /** When true, appends the ultracode directive. */
+    ultracodeEnabled?: boolean;
+    /** The epic doc's path/link. */
+    epicDocLink?: string;
 
     /** Controls ticket update behavior: disabled, comment-only, refine-ticket, or research-and-refine */
     ticketUpdateMode?: 'disabled' | 'comment-only' | 'refine-ticket' | 'research-and-refine';
@@ -188,6 +192,17 @@ export interface PromptBuilderOptions {
     epicPromptTemplate?: string;
     /** §11 — when true, the dispatched card's board is under remote control; inject REMOTE_MODE_DIRECTIVE into all role prompts. */
     remoteControlActive?: boolean;
+    /**
+     * Per-project PRD (project-context toggle). When true, the active project's
+     * PRD is injected into EVERY dispatched prompt via the shared dispatch prefix
+     * (all roles) — it is NOT a per-role add-on. Gated solely by the project-context
+     * toggle + an active-project PRD.
+     */
+    prdEnabled?: boolean;
+    /** Path/link to the active project's PRD file. */
+    prdLink?: string;
+    /** Full content of the active project's PRD, embedded verbatim. */
+    prdContent?: string;
 }
 
 export function resolveBaseInstructions(
@@ -294,6 +309,32 @@ export const FOCUS_DIRECTIVE = `FOCUS DIRECTIVE: Each plan file path below is th
 // not to terminal input.
 export const REMOTE_MODE_DIRECTIVE = `REMOTE MODE: You are running under remote control — the user is NOT at the terminal. If you need to ask the user anything or report a blocker, post it as a comment on the linked issue using the linear_api skill (or clickup_api). Do NOT wait on terminal input. Continue with any work you can do without the answer.`;
 
+/**
+ * Build the per-project PRD reference block folded into the shared dispatch
+ * prefix (`dispatchPrefixCore`) so it reaches EVERY role — mirroring the §11
+ * remote-mode prefix injection, NOT the planner-only constitution block.
+ * Gated by `options.prdEnabled` (the project-context toggle + an active PRD).
+ * For the orchestrator we prefer the link over full content to preserve the
+ * slim-prompt goal — its subagents read the file and the PRD is also surfaced
+ * in the epic doc.
+ */
+export function buildPrdReferenceBlock(options: PromptBuilderOptions | undefined, role: string): string {
+    if (!options?.prdEnabled) return '';
+    const link = options.prdLink?.trim();
+    const content = options.prdContent?.trim();
+    if (!link && !content) return '';
+    if (role === 'orchestrator') {
+        if (link) {
+            return `PROJECT REQUIREMENTS (PRD):\nThe active project has a product requirements document that all work on this project must respect. Read it and pass the relevant requirements to your subagents:\n${link}`;
+        }
+        return `PROJECT REQUIREMENTS (PRD):\nThe following product requirements apply to the active project and must be respected by all work on it. Pass the relevant requirements to your subagents:\n\n${content}`;
+    }
+    if (content) {
+        return `PROJECT REQUIREMENTS (PRD):\nThe following product requirements apply to the active project and must be respected throughout this work:\n\n${content}`;
+    }
+    return `PROJECT REQUIREMENTS (PRD):\nThe following product requirements document applies to the active project and must be respected throughout this work:\n${link}`;
+}
+
 export const INLINE_CHALLENGE_DIRECTIVE = `For each plan, before implementation:
 - perform a concise adversarial review of that specific plan,
 - list at least 2 concrete flaws/edge cases and how you'll address them,
@@ -311,6 +352,7 @@ export const SKIP_TESTS_DIRECTIVE = `SKIP TESTS: Do NOT run automated tests (uni
 export const ADVISE_RESEARCH_DIRECTIVE = `RESEARCH WHEN UNSURE: As you plan, track every assumption, factual claim, API/behavior, or library detail you are NOT 100% certain about. If any exist, read the skill file .agents/skills/advise_research/SKILL.md and follow it. In the plan file, add a brief "## Uncertain Assumptions" section that lists ONLY those uncertainties and notes that the user was advised to run web research to confirm them before implementation — do NOT put the research prompt itself in the plan. Then, at the very end of your chat summary to the user (after everything else), supply the ready-to-run research prompt so they can trigger web research. If you are confident about everything, state that no research is needed and omit both the section and the prompt.`;
 export const CAVEMAN_OUTPUT_DIRECTIVE = `CAVEMAN MODE: Talk like caveman. Drop filler, keep substance. Use fragments. Technical terms exact. Code unchanged. Pattern: [thing] [action] [reason]. [next step].`;
 export const SUPPRESS_WALKTHROUGH_DIRECTIVE = `SUPPRESS WALKTHROUGH: Do NOT generate a walkthrough.md artifact at the end of this task. Omit the walkthrough creation step entirely.`;
+export const ULTRACODE_DIRECTIVE = `use ultracode`;
 
 export const NO_SUBAGENTS_DIRECTIVE = "SUBAGENT POLICY: You are strictly forbidden from spawning or invoking any subagents. Handle all tasks yourself.";
 export const CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE = (name: string) =>
@@ -437,13 +479,15 @@ export function buildKanbanBatchPrompt(
     const clearAntigravityContext = options?.clearAntigravityContext ?? false;
     const skipCompilation = options?.skipCompilation ?? false;
     const skipTests = options?.skipTests ?? false;
-    const adviseResearchIfUnsure = options?.adviseResearchIfUnsure ?? false;
+    const adviseResearchIfUnsure = options?.adviseResearchIfUnsure ?? true;
     const suppressWalkthroughEnabled = options?.suppressWalkthroughEnabled ?? false;
     const cavemanOutputEnabled = options?.cavemanOutputEnabled ?? false;
     const useSubagentsEnabled = options?.useSubagentsEnabled ?? false;
     const noSubagentsEnabled = options?.noSubagentsEnabled ?? false;
     const customSubagentName = options?.customSubagentName?.replace(/[^a-zA-Z0-9_]/g, '').trim() || undefined;
     const useWorktreesPerPlanEnabled = options?.useWorktreesPerPlanEnabled ?? false;
+    const ultracodeEnabled = options?.ultracodeEnabled ?? false;
+    const epicDocLink = options?.epicDocLink;
 
     let subagentBlock = '';
     if (noSubagentsEnabled) {
@@ -480,7 +524,11 @@ export function buildKanbanBatchPrompt(
     // §11 — fold the remote-mode directive into the shared dispatch prefix so it reaches
     // every role's suffixBlock without touching each role branch individually.
     const remoteModeBlock = options?.remoteControlActive ? REMOTE_MODE_DIRECTIVE : '';
-    const dispatchPrefixCore = [dispatchContextBlock, remoteModeBlock].filter(Boolean).join('\n\n');
+    // Per-project PRD: fold into the shared prefix so it reaches every role's
+    // suffixBlock (planner, lead, coder, reviewer, tester, orchestrator, …) without
+    // touching each role branch — same pattern as the §11 remote-mode block.
+    const prdBlock = buildPrdReferenceBlock(options, role);
+    const dispatchPrefixCore = [dispatchContextBlock, remoteModeBlock, prdBlock].filter(Boolean).join('\n\n');
     const dispatchContextPrefix = dispatchPrefixCore ? `${dispatchPrefixCore}\n\n` : '';
     if (options?.epicMode && options?.epicTopic) {
         planList = `${EPIC_ORCHESTRATION_DIRECTIVE(options.epicTopic, options.subtaskCount || 0)}\n\n${planList}`;
@@ -999,29 +1047,19 @@ fields above, no speculative implementation detail. Comment only.`;
     }
 
     if (role === 'code_researcher') {
-        const depth = options?.researchDepth || 'deep';
+        const crBase = `You are a Code Researcher Agent. Your job is to identify where each plan needs more research, hand the user a ready-to-run research prompt, then incorporate the findings they bring back.
 
-        const depthLabels: Record<string, string> = {
-            quick: 'Quick (5-10 sources)',
-            standard: 'Standard (15-30 sources)',
-            deep: 'Deep (50-100+ sources)',
-            academic: 'Academic (100-200+ sources)'
-        };
-        const label = depthLabels[depth] || depth;
+STEP 1 — Review: For each plan in PLANS TO PROCESS, read it and track every assumption, factual claim, or API/library/behavior detail you are NOT 100% certain about. Read .agents/skills/advise_research/SKILL.md and follow it.
 
-        // Parameterize the research directive with the selected depth
-        const customDeepDirective = DEEP_RESEARCH_DIRECTIVE
-            .replace('depth set to "deep" (50-100 sources)', `depth set to "${depth}" (${label})`)
-            .replace('TARGET SOURCE COUNT: 50-100 sources', `TARGET SOURCE COUNT: ${label}`);
+STEP 2 — If uncertainties exist:
+  a. Add a brief "## Uncertain Assumptions" section to the plan file listing ONLY those uncertainties (do NOT put the research prompt itself in the plan).
+  b. Output, in this terminal, a single ready-to-run research prompt structured per the skill (ROLE, CONTEXT, CENTRAL QUESTION, 4-6 SUB-QUESTIONS, SOURCE GUIDANCE, SCOPE, OUTPUT format, CITATIONS-at-end, DEPTH/source-count target).
+  c. STOP. Tell the user to run that prompt (Google AI Studio with search grounding, or their research agent of choice), organize the results, and paste them back into THIS terminal. Do not proceed until they do.
 
-        let crBase = `You are a Code Researcher Agent.\n\n${customDeepDirective}` +
-            `\n\nPHASE 5: Plan Update — After completing the research synthesis, you MUST update each plan file listed in PLANS TO PROCESS with your findings. ` +
-            `Integrate your research into the plan's existing sections: ` +
-            `add findings and analysis to relevant Proposed Changes subsections, ` +
-            `update the Edge-Case & Dependency Audit with newly discovered risks, ` +
-            `and append a "Knowledge Gaps" subsection under the Complexity Audit if gaps were identified. ` +
-            `Do NOT truncate, summarize, or delete existing plan content. ` +
-            `Do NOT add new top-level sections that duplicate or conflict with the plan's canonical structure.`;
+STEP 3 — When the user pastes research findings back:
+  Integrate them into the plan's existing sections (add to relevant Proposed Changes subsections, update the Edge-Case & Dependency Audit with newly discovered risks, resolve/remove the "## Uncertain Assumptions" items they answer). Do NOT truncate, summarize, or delete existing plan content. Do NOT add new top-level sections that duplicate or conflict with the plan's canonical structure.
+
+If you are confident about everything, state that no research is needed, omit the "## Uncertain Assumptions" section and the research prompt, and leave the plan unchanged.`;
 
         let baseInstructions = resolveBaseInstructions('code_researcher', crBase, options);
         if (cavemanOutputEnabled) {
@@ -1166,7 +1204,7 @@ Read the persona at \`.agents/personas/gatherer.md\` and follow it step-by-step.
         // toward implementing them; it still works standalone on a cold epic.
         const orchestratorBase = `You are the Epic Orchestrator.
 
-You receive an epic and its subtask plans below as a SINGLE delivery unit. Implement every subtask end-to-end using your native subagent or orchestration capabilities — dispatch one subagent per subtask where supported, otherwise process them sequentially in the order listed.
+You receive an epic and its subtask plans as a SINGLE delivery unit. Implement every subtask end-to-end using your native subagent or orchestration capabilities.
 
 The subtask plans may already have been improved by a planning agent — treat them as ready to implement. Refine a subtask plan only if it is clearly insufficient to implement from; do not re-plan a subtask whose plan is already adequate. Keep the subtasks coupled as one epic — do NOT treat them as independent tickets.`;
 
@@ -1191,18 +1229,20 @@ The subtask plans may already have been improved by a planning agent — treat t
         const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock]
+        const ultracodeBlock = ultracodeEnabled ? ULTRACODE_DIRECTIVE : '';
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock, ultracodeBlock]
             .filter(Boolean)
             .join('\n\n');
 
         const suppressWalkthroughBlock = suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '';
+        const epicDocLinkLine = epicDocLink ? `Read the epic and its subtasks at: ${epicDocLink}` : '';
         const promptParts = [
             `Please orchestrate the following epic.`,
             executionDirective,
             safeguardsBlock,
             baseInstructions,
             suffixBlock,
-            `PLANS TO PROCESS:\n${planList}`,
+            epicDocLinkLine,
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
 
@@ -1260,6 +1300,7 @@ export function columnToPromptRole(column: string): string | null {
             return 'tester';
         case 'CONTEXT GATHERER': return 'gatherer';
         case 'RESEARCHER': return 'researcher';
+        case 'CODE_RESEARCHER': return 'code_researcher';
         case 'SPLITTER': return 'splitter';
         case 'TICKET UPDATER': return 'ticket_updater';
         default:
@@ -1363,6 +1404,14 @@ export function buildCustomAgentPrompt(
         prompt += `\n\nPROJECT CONSTITUTION (pre-fetched):\n${addons.constitutionContent}`;
     } else if (addons?.constitutionLink) {
         prompt += `\n\nPROJECT CONSTITUTION:\n${addons.constitutionLink}`;
+    }
+
+    // Per-project PRD (project-context toggle) — custom agents are a separate prompt
+    // path and must carry the PRD too, otherwise they silently miss it.
+    if (addons?.prdContent) {
+        prompt += `\n\nPROJECT REQUIREMENTS (PRD):\nThe following product requirements apply to the active project and must be respected throughout this work:\n\n${addons.prdContent}`;
+    } else if (addons?.prdLink) {
+        prompt += `\n\nPROJECT REQUIREMENTS (PRD):\nThe following product requirements document applies to the active project and must be respected throughout this work:\n${addons.prdLink}`;
     }
 
     if (promptInstructions) prompt += `\n\nAdditional Instructions: ${promptInstructions}`;

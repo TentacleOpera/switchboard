@@ -168,17 +168,21 @@ suite('agentPromptBuilder', () => {
             assert.ok(!prompt.includes('RESEARCH WHEN UNSURE:'), 'Should NOT include research directive');
         });
 
-        test('adviseResearchIfUnsure: undefined omits research directive', () => {
+        test('adviseResearchIfUnsure: undefined includes research directive (default ON)', () => {
             const prompt = buildKanbanBatchPrompt('planner', makePlans(1), {});
-            assert.ok(!prompt.includes('RESEARCH WHEN UNSURE:'), 'Should NOT include research directive');
+            assert.ok(prompt.includes('RESEARCH WHEN UNSURE:'), 'Should include research directive by default');
+            assert.ok(prompt.includes('.agents/skills/advise_research/SKILL.md'), 'Should include path to skill file');
         });
     });
 
     suite('buildKanbanBatchPrompt — code_researcher role', () => {
-        test('injects PHASE 5 Plan Update instructions', () => {
+        test('injects advise-research instructions and stops/waits', () => {
             const prompt = buildKanbanBatchPrompt('code_researcher', makePlans(1), {});
-            assert.ok(prompt.includes('PHASE 5: Plan Update'), 'Should include Phase 5 Plan Update instruction');
-            assert.ok(prompt.includes('update each plan file listed in PLANS TO PROCESS'), 'Should instruct to update plan files');
+            assert.ok(prompt.includes('You are a Code Researcher Agent.'), 'Should define Code Researcher Agent role');
+            assert.ok(prompt.includes('.agents/skills/advise_research/SKILL.md'), 'Should reference the research skill file');
+            assert.ok(prompt.includes('STOP. Tell the user to run that prompt'), 'Should contain STOP instruction');
+            assert.ok(prompt.includes('When the user pastes research findings back'), 'Should instruct on how to integrate findings');
+            assert.ok(!prompt.includes('TARGET SOURCE COUNT:'), 'Should not contain depth parameters');
         });
     });
 
@@ -209,6 +213,10 @@ suite('agentPromptBuilder', () => {
 
         test('maps RESEARCHER to researcher', () => {
             assert.strictEqual(columnToPromptRole('RESEARCHER'), 'researcher');
+        });
+
+        test('maps CODE_RESEARCHER to code_researcher', () => {
+            assert.strictEqual(columnToPromptRole('CODE_RESEARCHER'), 'code_researcher');
         });
 
         test('maps SPLITTER to splitter', () => {

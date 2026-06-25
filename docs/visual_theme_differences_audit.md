@@ -13,7 +13,9 @@
 
 Recorded as they are made. IDs are referenced throughout the backlog (§5) and open-decisions (§6).
 
-> **Global principle (stated by the user):** every decision here applies across **all three themes** — Afterburner, Claudify, and Afterburner Pro — per-panel. A value living in only one theme today still gets standardized across all three. Do not re-scope decisions per theme.
+> **Global principle (stated by the user):** every decision here applies across the themes, per-panel. A value living in only one theme today still gets standardized. Do not re-scope decisions per theme.
+
+> **Target model (D13):** the theme list collapses from three to **two** — a single cyan **Afterburner** (Afterburner + Pro merged) and **Claudify** (terracotta). Sections §1–§4 below describe the *current 3-theme implementation* (the starting point for the work); the **Decisions Log here is the target spec**. The body sections get reconciled to the 2-theme model when the implementation plan is written.
 
 | # | Topic | Decision | Status |
 | :--- | :--- | :--- | :--- |
@@ -26,8 +28,11 @@ Recorded as they are made. IDs are referenced throughout the backlog (§5) and o
 | **D7** | Border standard — hue & brightness | ✅ **Neutral + dim — borders never introduce colour.** All themes use neutral, dim grey borders; the brighter warm-brown borders of Claudify/Pro read as "too grid-like." **Implementation shape:** keep the `--border-color` and `--border-bright` declarations in every theme block — **no deleting or consolidating CSS** — only change Claudify's warm browns (`#38332E`/`#5C544A`) to the neutral greys. Pro inherits Claudify's neutral values exactly as it does today. Exact neutral value → **D6**. | ✅ Decided |
 | **D8** | Muted text colour (`--text-secondary`) | **Standardize to `#8C8C8C` across all themes/panels.** Afterburner runs darker (`#777777` on implementation/setup, `#888888` elsewhere) and reads as low-contrast; Claudify/Pro are already `#8C8C8C`. Raise Afterburner to match. User-observed legibility issue. | ✅ Decided |
 | **D9** | Per-panel border values — **all three themes** | Borders neutral/dim (D7); per-panel values are **kept** as intentional distinctions and applied identically across Afterburner, Claudify and Pro. **`--border-color`** = `#222222` on **implementation** (the sidebar — deliberately darker than the board), `#333333` everywhere else (**setup** corrected `#222`→`#333`). **`--border-bright`** = `#555555` on **kanban** (kept), `#444444` everywhere else (kept). Claudify/Pro drop the warm browns and use these same neutral per-panel values. Keep all declarations. | ✅ Decided |
-| **D10** | Afterburner Pro H1 heading | Open. Pro's H2–H6 use Poppins **deliberately** (GeistPixel only looks good *with* a glow, which Pro lacks). But Pro's **H1** is GeistPixel + cyan/blue and reads weaker than Afterburner's white+glow or Claudify's orange. Leaning: make Pro's H1 **Poppins** too. Undecided. | 🔍 Open |
+| **D10** | Afterburner Pro H1 heading | ⊘ **Moot — superseded by D13.** Afterburner Pro is merged away; the merged Afterburner uses Hanken / no-glow / white H1. | ⊘ Closed |
 | **D11** | Fix `implementation.html` animations | ✅ **In scope — must fix** (user observed the success-button glow / status-dot pulse disappear). **Root cause:** commit `6e9e08c` renamed `@keyframes success-glow` → `pulse-green`, colliding with the existing `pulse-green` (overriding it) and leaving `.action-btn.success` referencing the now-gone `success-glow`. **Fix:** rename the line-1046 keyframe back to `success-glow` (fixes both at once); drop the redundant `animation:` at line 1096. | ✅ Decided |
+| **D12** | Claudify refinements (from prototype) | ✅ Decided. **H1** unchanged (GeistPixel · terracotta). **H2–H6:** font Poppins→**Hanken**, colour cream→**terracotta `#D97757`**. **Flat surface:** warm `#1F1C1A`→**neutral `#1C1C1C`**. **Background grid:** terracotta→**grey**. Net: terracotta becomes a text/accent colour only — Claudify's chrome (surface + grid) goes neutral/grey, no warm tint. *Side effect:* Poppins is no longer used by Claudify. | ✅ Decided |
+| **D14** | Tab navigation | ✅ Decided. **Afterburner:** keep the active-tab background glow (`.cyber-theme-enabled .shared-tab-btn.active` box-shadow, `shared-tabs.css:55–57`) + glassmorphic bar — no change. **Claudify:** tabs must be **invisible rectangles** (black-on-black) showing only text — terracotta on the active tab, grey on the rest. Today the active tab carries `background: var(--panel-bg2)` (`#0a0a0a`) over a `var(--panel-bg)` `#000` bar → the faint grey rectangle. **Fix:** add a Claudify override so the active tab's `background` (and `border-bottom-color`) match the bar (`var(--panel-bg)` / transparent); Claudify currently overrides only `border-color` (`shared-tabs.css:68`), not the fill. | ✅ Decided |
+| **D13** | Merge Afterburner + Afterburner Pro → one cyan theme | ✅ Decided. Collapse to a single **Afterburner** (cyan); **remove** the `afterburner-professional` enum value + its body-class path (clean break — unreleased, no migration). **Spec:** Headings **Hanken, no glow** — H1 white, H2–H6 cyan. **Scanlines + glass always on**; **CRT sweep** stays user-toggleable via the existing setup setting (`disableCyberAnimation`). **Surface = glass retained** (prototype "Glass on"): translucent + blurred panes stay over the existing cool-neutral `#101414` ground; only the **ambient grid goes grey** (cyan pulled out of the background). The solid neutral `#1C1C1C` surface is Claudify's glass-off look, *not* Afterburner's. **Cyan glow retained on accent elements** (kanban column plan numbers/badges, selected cards) — only *headings* lose their glow. Theme list becomes **two**: Afterburner (cyan) + Claudify (terracotta). **Supersedes D10** and the Pro-Poppins item. | ✅ Decided |
 
 > **D1 sub-detail (resolved 2026-06-25):** Afterburner's card body goes black with **no resting teal left edge** (remove the `border-left` stripe), but **keeps its cyan hover bloom and selected glow**. Net: all three themes share the black card body; Afterburner alone still lights up on hover/select — consistent with the glows-on-for-Afterburner rule.
 
@@ -75,12 +80,12 @@ These differences *should* exist — they are each theme's reason for being. Mec
 | **Accent bright** | `#5ce8e6` | `#E2A188` | `#5ce8e6` |
 | **Neon glows** (`--glow-*`) | On | Killed (`none` + rule-level `box-shadow:none`) | Killed (inherited from Claudify) |
 | **CRT scanlines + sweep** | Yes — *planning/design/project only* | No | No (not `cyber-theme-enabled`) |
-| **Immersive grid bg + glassmorphism** | Yes — accent grid + backdrop-blur | Partial — solid `#1F1C1A` grid, no blur | No (inherits Claudify's flat surface) |
+| **Immersive grid bg + glassmorphism** | Yes — accent grid + backdrop-blur | Flat — **neutral `#1C1C1C`** surface + **grey grid**, no blur (D12) | No (inherits Claudify's flat surface) |
 | **Kanban cards** | Black/grey gradient; keeps cyan hover bloom + selected glow; no teal left edge (D1) | Black/grey gradient, no glow | Black/grey gradient (inherited), cyan select border |
 | **Heading H1** (preview panels) | GeistPixel · default white | GeistPixel · terracotta `#D97757` | GeistPixel · cyan `#00e5ff` |
-| **Heading H2–H6** (preview panels) | GeistPixel · cyan | Poppins · warm cream `#F0EBE6` | Poppins · warm cream (intentional — GeistPixel needs a glow; D10 covers H1) |
+| **Heading H2–H6** (preview panels) | GeistPixel · cyan | **Hanken · terracotta `#D97757`** (D12) | Poppins · warm cream (intentional — GeistPixel needs a glow; D10 covers H1) |
 | **Kanban icons at rest** | Cyan PNGs | Flat grey, terracotta click-flash | Flat grey, cyan click-flash |
-| **Tab bar (active)** | Cyan glow + backdrop-blur | Grey, flat | Grey, flat (inherited) |
+| **Tab bar (active)** | Cyan glow + backdrop-blur (kept) | Invisible tab rectangles — bg matches bar, terracotta text (D14) | Grey, flat (inherited) |
 
 ### 2.1 The card model (verified)
 
@@ -239,12 +244,11 @@ Severity-tagged. None of these are part of any theme's intended identity. Items 
 
 ## 6. Open decisions (still needed before a standardization plan)
 
-Resolved items have moved to the **Decisions log (§0)** — D1 (black cards), D2/D3 (setup gets the treatment, implementation stays plain), D4 (keep parallel clone files), D5 (package.json deferred). Two remain open, both under investigation by the user:
+**All decisions are resolved** — see the **Decisions Log (§0).** The merged-Afterburner surface (D13) is settled as **glass-retained**: the content/preview pane keeps its translucent glass + blur (the prototype's "Glass on" state) over the existing cool-neutral `#101414` ground, with a grey grid and ambient cyan removed. The solid neutral `#1C1C1C` surface belongs to Claudify (glass-off) only.
 
-1. **Base Afterburner drift — D6 (§4.2)** — Reconcile the per-panel base values, or leave them? Affects the *default* theme for the existing install base, so the riskiest. *Under investigation.*
-2. **Border standard — warm vs neutral — D7** — Decide the single border identity: either Afterburner **adopts the warm browns** (`#38332E`/`#5C544A`), or Claudify **and** Pro **adopt neutral greys**. This one call resolves both the kanban grey-border outlier and the "Pro inherits warm borders" question. *Under investigation.*
+(Earlier open items are closed — **D6**: leave base drift as-is; **D7**: neutral/dim borders; **D10**: moot under the merge.)
 
-One smaller sub-question is also open under D1: whether the black Afterburner card keeps teal hover/selected accents or goes fully neutral.
+**Next step:** turn D1–D13 into a sequenced implementation plan (the body sections §1–§4 also get reconciled from the 3-theme to the 2-theme model at that point).
 
 ---
 

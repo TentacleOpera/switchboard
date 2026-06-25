@@ -1659,20 +1659,23 @@ export class ClickUpSyncService {
     const mentions: Array<{ id: string; name: string }> = [];
     let body = '';
 
-    // ClickUp structured comment: array of { type: 'text'|'tag', text?, assignee? }
+    // ClickUp structured comment: array of blocks.
+    // GET response shape: text blocks are {"text": "..."} (no type field),
+    //   tag blocks are {"type": "tag", "user": {id, username, ...}}.
+    // POST shape (for reference): text blocks have type:"text", tag blocks use assignee.
     if (Array.isArray(comment?.comment)) {
       for (const block of comment.comment) {
-        if (block?.type === 'text' && typeof block.text === 'string') {
+        if (typeof block?.text === 'string' && (!block.type || block.type === 'text')) {
           body += block.text;
-        } else if (block?.type === 'tag' && block.assignee) {
-          const userId = String(block.assignee).trim();
-          // We don't have the name here, just the ID; the UI will resolve if needed
-          mentions.push({ id: userId, name: String(block?.text || '') });
-          body += `@${block?.text || userId}`;
+        } else if (block?.type === 'tag') {
+          const userId = String(block?.user?.id || block?.assignee || '').trim();
+          const name = String(block?.user?.username || block?.text || '').trim();
+          mentions.push({ id: userId, name });
+          body += `@${name || userId}`;
         }
       }
     } else {
-      body = String(comment?.comment_text || comment?.text_content || '').trim();
+      body = String(comment?.comment_text || '').trim();
     }
 
     return {

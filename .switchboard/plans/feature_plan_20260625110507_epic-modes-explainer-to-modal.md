@@ -12,15 +12,19 @@ The root cause is a design choice in the original epic-orchestration-onramp plan
 
 ## Metadata
 
-- **Tags:** `feature`, `ui`, `epics-tab`
+- **Tags:** `feature`, `ui`, `frontend`
 - **Complexity:** 2/10 (pure HTML/CSS/JS — move existing content into an existing modal pattern, add a trigger button)
+
+## User Review Required
+
+No user review required. This is a self-contained UI refactor that moves existing content into an existing modal pattern. No backend, state, or data flow changes. The user should verify the modal renders correctly in their preferred theme after implementation.
 
 ## Complexity Audit
 
 ### Routine
 - Adding a `?` button to the Epics tab controls strip and a new `.kanban-log-overlay` modal — both follow the established pattern (`project.html:1622-1646` for the New Epic modal, `project.html:1649-1664` for the orchestrate overlay).
 - Moving the three-mode explainer text from the `<details>` into the modal body — copy-paste of existing HTML.
-- Wiring the open/close handlers in `project.js` — follows the same `vscode.postMessage` / `addEventListener` convention used by `closeEpicOrchestrateOverlay` (`project.js:1474-1477`).
+- Wiring the open/close handlers in `project.js` — follows the same `?.addEventListener` convention used by the epic orchestration handlers (`project.js:1528-1530`).
 
 ### Complex / Risky
 - None. No backend changes, no state migration, no data flow changes.
@@ -31,6 +35,16 @@ The root cause is a design choice in the original epic-orchestration-onramp plan
 - **No confirmation dialogs** (project rule) — this is a read-only info modal, no confirm gate involved.
 - **Mobile/narrow layouts:** The modal uses `max-width: 90vw` (matching the orchestrate overlay at `project.html:1650`), so it adapts to narrow viewports.
 - **Accessibility:** The `?` button should have a `title` attribute ("How to run an epic") for hover tooltip.
+- **Pre-existing latent bug (not introduced by this plan):** `showKanbanLogOverlay` (`project.js:2057-2059`) calls `document.querySelector('.kanban-log-overlay')` and `.remove()`s the first match. Since all static modals (New Epic, Orchestrate, Add Subtask, and now this help modal) share `class="kanban-log-overlay"`, opening a Kanban plan log could remove a static modal from the DOM. This is a pre-existing issue affecting 3 existing modals — this plan follows the same convention and does not worsen the risk. A separate fix should give `showKanbanLogOverlay` a more specific selector (e.g., `.kanban-log-overlay.dynamic-log`).
+- **No Escape-key close:** No modal in `project.js` handles `Escape` keydown. This plan follows the existing convention (backdrop click + Close button only). Adding Escape handling would be scope creep.
+
+## Dependencies
+
+None — this plan is self-contained and has no dependencies on other plans or sessions.
+
+## Adversarial Synthesis
+
+Key risks: (1) The new modal shares `class="kanban-log-overlay"` with static modals and the dynamic `showKanbanLogOverlay` function removes the first matching element — a pre-existing latent bug, but this plan follows the same convention as 3 existing static modals so it introduces no new risk. (2) Minor JS style inconsistency — the proposed handlers should use `?.addEventListener` to match the codebase convention at `project.js:1528-1530`. Mitigations: adopt the `?.addEventListener` pattern; track the `showKanbanLogOverlay` selector issue as a separate fix.
 
 ## Proposed Changes
 
@@ -80,33 +94,38 @@ The root cause is a design choice in the original epic-orchestration-onramp plan
 
 ### `src/webview/project.js`
 
-**4. Add open/close handlers (near the epic orchestration handlers, ~line 1530):**
+**4. Add open/close handlers (near the epic orchestration handlers, after line 1530):**
+
+Use the `?.addEventListener` pattern to match the existing convention at `project.js:1528-1530`:
 
 ```javascript
 // ---- Epic modes help modal ----
-const btnEpicModesHelp = document.getElementById('btn-epic-modes-help');
-const btnEpicModesHelpClose = document.getElementById('btn-epic-modes-help-close');
-const epicModesHelpOverlay = document.getElementById('epic-modes-help-overlay');
-
-if (btnEpicModesHelp) btnEpicModesHelp.addEventListener('click', () => {
-    if (epicModesHelpOverlay) epicModesHelpOverlay.style.display = 'flex';
+document.getElementById('btn-epic-modes-help')?.addEventListener('click', () => {
+    const ov = document.getElementById('epic-modes-help-overlay');
+    if (ov) ov.style.display = 'flex';
 });
-if (btnEpicModesHelpClose) btnEpicModesHelpClose.addEventListener('click', () => {
-    if (epicModesHelpOverlay) epicModesHelpOverlay.style.display = 'none';
+document.getElementById('btn-epic-modes-help-close')?.addEventListener('click', () => {
+    const ov = document.getElementById('epic-modes-help-overlay');
+    if (ov) ov.style.display = 'none';
 });
 // Close on overlay backdrop click
-if (epicModesHelpOverlay) epicModesHelpOverlay.addEventListener('click', (e) => {
-    if (e.target === epicModesHelpOverlay) epicModesHelpOverlay.style.display = 'none';
+document.getElementById('epic-modes-help-overlay')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) e.currentTarget.style.display = 'none';
 });
 ```
 
-### `src/webview/project.html` — CSS cleanup (optional)
+### `src/webview/project.html` — CSS cleanup (confirmed no-op)
 
-**5. Remove the now-unused `.epic-modes-explainer` style if present** (check for a CSS rule referencing it; if none exists inline, no action needed — the `<details>` used only inline styles).
+**5. No CSS cleanup needed.** Verified: there is no CSS rule referencing `.epic-modes-explainer` anywhere in `src/webview/` — the `<details>` element used only inline styles. The class name appears exclusively in the HTML block being deleted in step 1. No further action required.
 
 ## Verification Plan
 
 > Manual verification against an installed VSIX (per project norm).
+> Compilation and automated tests are skipped per session directives.
+
+### Automated Tests
+
+No automated tests required — this is a pure UI refactor with no backend logic, state changes, or data flow. The change moves existing HTML content into an existing modal pattern. Verification is manual (see below).
 
 ### Manual Verification
 
@@ -116,3 +135,8 @@ if (epicModesHelpOverlay) epicModesHelpOverlay.addEventListener('click', (e) => 
 4. **Tooltip:** Hover the `?` button → "How to run an epic (3 ways)" tooltip appears.
 5. **Theme check:** Open in afterburner, claudify, and cyber themes → modal renders correctly (reuses `.kanban-log-overlay` / `.kanban-log-modal` which are already theme-aware).
 6. **No regression:** The Orchestrate button, + Subtask, Delete Epic, and New Epic buttons all still work as before.
+7. **No DOM conflict:** Open the help modal, then close it. Open a Kanban plan log from the Kanban tab. Confirm the help modal and other static modals still open correctly afterwards (verifies the pre-existing `showKanbanLogOverlay` issue is not triggered by normal usage flow).
+
+---
+
+**Recommendation:** Complexity 2/10 → **Send to Intern**. This is a routine, single-pass UI change that follows an established pattern with no backend or state implications.

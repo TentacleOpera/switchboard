@@ -13,7 +13,7 @@ let JSDOMClass: any;
 import { SessionActionLog, ArchiveSpec, ArchiveResult } from './SessionActionLog';
 import { KanbanProvider } from './KanbanProvider';
 import type { SetupPanelProvider } from './SetupPanelProvider';
-import { sendRobustText, getAntigravityHash, pasteTextViaClipboard } from './terminalUtils';
+import { sendRobustText, getAntigravityHash, pasteTextViaClipboard, withTerminalSendLock } from './terminalUtils';
 import { PipelineOrchestrator } from './PipelineOrchestrator';
 import { bundleWorkspaceContext } from './ContextBundler';
 import {
@@ -1958,6 +1958,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             case 'ACCEPTANCE TESTED': return 'tester';
             case 'CONTEXT GATHERER': return 'gatherer';
             case 'RESEARCHER': return 'researcher';
+            case 'CODE_RESEARCHER': return 'code_researcher';
             case 'SPLITTER': return 'splitter';
             case 'TICKET UPDATER': return 'ticket_updater';
             case 'COMPLETED': return null;
@@ -1990,6 +1991,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return 'PLAN REVIEWED';
             case 'researcher':
                 return 'PLAN REVIEWED';
+            case 'code_researcher':
+                return 'PLAN REVIEWED';
             case 'splitter':
                 return 'PLAN REVIEWED';
             case 'ticket_updater':
@@ -2018,6 +2021,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return 'gatherer';
             case 'RESEARCHER':
                 return 'researcher';
+            case 'CODE_RESEARCHER':
+                return 'code_researcher';
             case 'SPLITTER':
                 return 'splitter';
             case 'TICKET UPDATER':
@@ -2321,6 +2326,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     return {
                         ...baseRecord,
                         project: existing.project || '',
+                        projectId: existing.projectId ?? null,
                         clickupTaskId: existing.clickupTaskId || '',
                         linearIssueId: existing.linearIssueId || '',
                         routedTo: existing.routedTo || '',
@@ -2634,15 +2640,41 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     public async dispatchCustomPromptToRole(role: string, prompt: string, workspaceRoot: string): Promise<boolean> {
         const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedWorkspaceRoot) { return false; }
-        const targetAgent = await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot);
+
+        // For planner role: pick the next terminal from the rotation cursor
+        // (mirrors the kanban single-card path). For other roles: use default resolution.
+        let targetAgent: string | undefined;
+        let plannerLocationKey: string | undefined;
+        if (role === 'planner') {
+            const { terminals, locationKey } = await this.getRoleTerminalSet('planner', resolvedWorkspaceRoot);
+            if (terminals.length > 0) {
+                const cursor = this.getPlannerRotationCursor(locationKey);
+                const picked = terminals[cursor % terminals.length];
+                if (picked && this._isValidAgentName(picked)) {
+                    targetAgent = picked;
+                    plannerLocationKey = locationKey;
+                }
+            }
+        }
+        // Fallback: default resolution (also covers non-planner roles and empty/single-terminal pools)
+        if (!targetAgent) {
+            targetAgent = await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot);
+        }
+
         if (!targetAgent) {
             vscode.window.showErrorMessage(`No agent assigned to role '${role}'. Please assign a terminal first.`);
             return false;
         }
         if (!this._isValidAgentName(targetAgent)) { return false; }
         vscode.commands.executeCommand('switchboard.focusTerminalByName', targetAgent);
-        await this._dispatchExecuteMessage(resolvedWorkspaceRoot, targetAgent, prompt, {});
-        return true;
+        const success = await this._dispatchExecuteMessage(resolvedWorkspaceRoot, targetAgent, prompt, {});
+
+        // Advance the rotation cursor ONLY after successful dispatch
+        // (consistent with the kanban single-card path — a failed dispatch doesn't skip a terminal)
+        if (success && plannerLocationKey) {
+            await this.advancePlannerRotationCursor(plannerLocationKey, 1);
+        }
+        return success;
     }
 
     /** Reveal the sidebar and switch to the Memo sub-tab (target of switchboard.openMemo). */
@@ -2653,6 +2685,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         await vscode.commands.executeCommand('switchboard-view.focus');
         // 3. If the view is already live, switch immediately (initialState won't re-fire).
         this._view?.webview.postMessage({ type: 'openMemoTab' });
+        // 4. Cold-open safety net: re-assert Memo once the webview has had a moment to mount.
+        setTimeout(() => {
+            this._view?.webview.postMessage({ type: 'openMemoTab' });
+        }, 300);
     }
 
     private _getMemoPath(workspaceRoot: string): string {
@@ -5916,31 +5952,124 @@ Each plan file must include:
         await this._postRecentActivity(50, undefined, resolvedRoot);
     }
 
+    private _isTerminalLive(terminalName: string): boolean {
+        if (this._registeredTerminals) {
+            let terminal = this._registeredTerminals.get(terminalName);
+            if (!terminal) {
+                terminal = this._registeredTerminals.get(this._suffixedName(terminalName));
+            }
+            if (!terminal) {
+                const normalized = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
+                for (const [name, t] of this._registeredTerminals.entries()) {
+                    if (this._normalizeAgentKey(this._stripIdeSuffix(name)) === normalized) {
+                        terminal = t;
+                        break;
+                    }
+                }
+            }
+            if (terminal && terminal.exitStatus === undefined) {
+                return true;
+            }
+        }
+        const openTerminals = vscode.window.terminals || [];
+        const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
+        const found = openTerminals.find(t => {
+            if (t.exitStatus !== undefined) return false;
+            const tName = this._normalizeAgentKey(t.name);
+            const creationName = this._normalizeAgentKey((t.creationOptions as vscode.TerminalOptions | undefined)?.name || '');
+            return tName === strippedTarget || creationName === strippedTarget;
+        });
+        return !!found;
+    }
+
+    private async _getAgentNameForRoleGlobal(role: string, skipStatePath?: string | null): Promise<string | undefined> {
+        const allRoots = this._filterMappedRoots(this._getWorkspaceRoots());
+        const candidates: string[] = [];
+
+        for (const root of allRoots) {
+            const statePath = this._resolveStateFilePath(root);
+            if (!statePath || statePath === skipStatePath) continue;
+
+            try {
+                if (!fs.existsSync(statePath)) continue;
+                const content = await fs.promises.readFile(statePath, 'utf8');
+                const state = JSON.parse(content);
+
+                let foundInRoot = false;
+                if (state.terminals) {
+                    for (const [name, info] of Object.entries(state.terminals) as [string, any][]) {
+                        if (info.role === role) {
+                            candidates.push(name);
+                            foundInRoot = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!foundInRoot && state.chatAgents) {
+                    for (const [name, info] of Object.entries(state.chatAgents) as [string, any][]) {
+                        if (info.role === role) {
+                            candidates.push(name);
+                            break;
+                        }
+                    }
+                }
+            } catch {
+                // ignore and continue
+            }
+        }
+
+        if (candidates.length === 0) return undefined;
+
+        // Try to find a live one first
+        for (const name of candidates) {
+            if (this._isTerminalLive(name)) {
+                return name;
+            }
+        }
+
+        // Otherwise return the first matched candidate
+        return candidates[0];
+    }
+
     private async _getAgentNameForRole(role: string, workspaceRoot?: string): Promise<string | undefined> {
         const statePath = this._resolveStateFilePath(workspaceRoot);
-        if (!statePath) return undefined;
+        let localMatch: string | undefined = undefined;
 
-        try {
-            if (!fs.existsSync(statePath)) return undefined;
-            const content = await fs.promises.readFile(statePath, 'utf8');
-            const state = JSON.parse(content);
+        if (statePath) {
+            try {
+                if (fs.existsSync(statePath)) {
+                    const content = await fs.promises.readFile(statePath, 'utf8');
+                    const state = JSON.parse(content);
 
-            if (state.terminals) {
-                for (const [name, info] of Object.entries(state.terminals) as [string, any][]) {
-                    if (info.role === role) return name;
+                    if (state.terminals) {
+                        for (const [name, info] of Object.entries(state.terminals) as [string, any][]) {
+                            if (info.role === role) {
+                                localMatch = name;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!localMatch && state.chatAgents) {
+                        for (const [name, info] of Object.entries(state.chatAgents) as [string, any][]) {
+                            if (info.role === role) {
+                                localMatch = name;
+                                break;
+                            }
+                        }
+                    }
                 }
+            } catch {
+                // ignore and proceed to global fallback
             }
-
-            if (state.chatAgents) {
-                for (const [name, info] of Object.entries(state.chatAgents) as [string, any][]) {
-                    if (info.role === role) return name;
-                }
-            }
-
-            return undefined;
-        } catch {
-            return undefined;
         }
+
+        if (localMatch) {
+            return localMatch;
+        }
+
+        return this._getAgentNameForRoleGlobal(role, statePath);
     }
 
     private async _resolveAgentTerminalForPlan(
@@ -15393,52 +15522,63 @@ What would you like to find?`;
 
         if (!terminal) return false;
 
-        // Log the session event for observability
-        await this._logEvent('dispatch', {
-            timestamp: new Date().toISOString(),
-            dispatchId: messageId,
-            event: 'received',
-            sender: meta.sender,
-            recipient: meta.recipient,
-            action: meta.action
-        });
+        // Serialize the full /clear + prompt sequence per terminal so two
+        // overlapping dispatches to the SAME terminal cannot interleave. Key on
+        // the resolved, normalized name so suffix/case aliases coalesce; distinct
+        // terminals keep their own chains and stay concurrent. Resolution above
+        // is intentionally outside the lock (read-only, and a missing terminal
+        // must fail fast without queuing).
+        const sendLockKey =
+            this._normalizeAgentKey(this._stripIdeSuffix(terminal.name || terminalName)) || terminalName;
 
-        // Clear terminal before prompt if configured
-        // Use clipboard paste for /clear to bypass CLI slash-command mode.
-        // sendText('/clear') triggers slash command interpretation in CLI agents
-        // (copilot, claude, etc.), causing the subsequent prompt to concatenate
-        // with the /clear input. Clipboard paste uses a different input path
-        // that avoids this.
-        // NOTE: handleKanbanBatchTrigger may now be invoked concurrently across
-        // distinct terminals (see _distributePlannerDispatch). The /clear + prompt
-        // await chain below is safe to run in parallel across terminals because each
-        // operates on its own vscode.Terminal. The clipboard pastes are serialized by
-        // _clipboardLock (terminalUtils.ts), which is intentional and prevents
-        // clipboard corruption — do NOT remove that lock.
-        const clearBeforePrompt = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true);
-        const rawClearDelay = vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 2000);
-        const clearDelay = Math.min(Math.max(rawClearDelay, 0), 10000);
+        return withTerminalSendLock(sendLockKey, async () => {
+            // Log the session event for observability
+            await this._logEvent('dispatch', {
+                timestamp: new Date().toISOString(),
+                dispatchId: messageId,
+                event: 'received',
+                sender: meta.sender,
+                recipient: meta.recipient,
+                action: meta.action
+            });
 
-        const paced = meta.sender !== meta.recipient;
-        if (clearBeforePrompt) {
-            try {
-                await pasteTextViaClipboard(terminal, '/clear');
-                // Submit the pasted /clear command
-                await new Promise(r => setTimeout(r, paced ? 1000 : 100));
-                terminal.sendText('', true);
-                // Wait for the CLI to process the clear before sending the prompt
-                await new Promise(r => setTimeout(r, paced ? clearDelay : Math.max(100, Math.round(clearDelay / 3))));
-            } catch (e) {
-                console.error(`[TaskViewerProvider] /clear paste failed: ${e}`);
-                // No fallback to sendText('/clear') — that would re-introduce
-                // slash-command-concatenation in CLI agents (copilot, claude, etc.)
+            // Clear terminal before prompt if configured
+            // Use clipboard paste for /clear to bypass CLI slash-command mode.
+            // sendText('/clear') triggers slash command interpretation in CLI agents
+            // (copilot, claude, etc.), causing the subsequent prompt to concatenate
+            // with the /clear input. Clipboard paste uses a different input path
+            // that avoids this.
+            // NOTE: handleKanbanBatchTrigger may now be invoked concurrently across
+            // distinct terminals (see _distributePlannerDispatch). The /clear + prompt
+            // await chain below is safe to run in parallel across terminals because each
+            // operates on its own vscode.Terminal. The clipboard pastes are serialized by
+            // _clipboardLock (terminalUtils.ts), which is intentional and prevents
+            // clipboard corruption — do NOT remove that lock.
+            const clearBeforePrompt = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true);
+            const rawClearDelay = vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 2000);
+            const clearDelay = Math.min(Math.max(rawClearDelay, 0), 10000);
+
+            const paced = meta.sender !== meta.recipient;
+            if (clearBeforePrompt) {
+                try {
+                    await pasteTextViaClipboard(terminal, '/clear');
+                    // Submit the pasted /clear command
+                    await new Promise(r => setTimeout(r, paced ? 1000 : 100));
+                    terminal.sendText('', true);
+                    // Wait for the CLI to process the clear before sending the prompt
+                    await new Promise(r => setTimeout(r, paced ? clearDelay : Math.max(100, Math.round(clearDelay / 3))));
+                } catch (e) {
+                    console.error(`[TaskViewerProvider] /clear paste failed: ${e}`);
+                    // No fallback to sendText('/clear') — that would re-introduce
+                    // slash-command-concatenation in CLI agents (copilot, claude, etc.)
+                }
             }
-        }
 
-        // Deliver via robust paced send
-        await sendRobustText(terminal, payload, paced);
+            // Deliver via robust paced send
+            await sendRobustText(terminal, payload, paced);
 
-        return true;
+            return true;
+        });
     }
 
     private async _handleTriggerAgentAction(

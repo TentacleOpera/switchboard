@@ -35,18 +35,6 @@
             font-weight: 100 900;
             font-display: swap;
         }
-        @font-face {
-            font-family: 'Poppins';
-            src: url('{{POPPINS_SEMIBOLD_FONT_URI}}') format('woff2');
-            font-weight: 600;
-            font-display: swap;
-        }
-        @font-face {
-            font-family: 'Poppins';
-            src: url('{{POPPINS_BOLD_FONT_URI}}') format('woff2');
-            font-weight: 700;
-            font-display: swap;
-        }
         :root {
             /* Kanban dark theme - matching kanban screen */
             --kanban-bg: #000000;
@@ -74,7 +62,7 @@
 
             /* Semantic text colors */
             --text-primary: #e0e0e0;
-            --text-secondary: #888888;
+            --text-secondary: #8C8C8C;
             --font-family: 'Hanken Grotesk', var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
             --font-mono: var(--vscode-editor-font-family, 'SF Mono', Monaco, 'Cascadia Code', monospace);
 
@@ -102,18 +90,10 @@
             --glow-teal: none;           /* kill all variable-routed neon glow */
             --text-primary: #E0E0E0;
             --text-secondary: #8C8C8C;
-            --border-color: #38332E;
-            --border-bright: #5C544A;
+            --border-color: #333333;
+            --border-bright: #444444;
             /* Backgrounds NOT set here — the grid block below provides a solid near-black surface. */
             /* Display-font vars NOT overridden — keep base GeistPixel (pixel font). */
-        }
-
-        body.theme-afterburner-pro {
-            --accent-primary: #00e5ff;
-            --accent-teal: #00e5ff;
-            --accent-teal-dim: color-mix(in srgb, #00e5ff 40%, transparent);
-            --accent-teal-bright: #5ce8e6;
-            --glow-teal: none;
         }
 
         /* Claudify: remove neon glow from base (non-cyber) interactive states */
@@ -1066,10 +1046,17 @@
         body.cyber-theme-enabled #kanban-preview-pane h1, body.cyber-theme-enabled #kanban-preview-pane h2, body.cyber-theme-enabled #kanban-preview-pane h3, body.cyber-theme-enabled #kanban-preview-pane h4, body.cyber-theme-enabled #kanban-preview-pane h5, body.cyber-theme-enabled #kanban-preview-pane h6,
         body.cyber-theme-enabled #markdown-preview-tickets h1, body.cyber-theme-enabled #markdown-preview-tickets h2, body.cyber-theme-enabled #markdown-preview-tickets h3, body.cyber-theme-enabled #markdown-preview-tickets h4, body.cyber-theme-enabled #markdown-preview-tickets h5, body.cyber-theme-enabled #markdown-preview-tickets h6,
         body.cyber-theme-enabled #markdown-preview-briefs h1, body.cyber-theme-enabled #markdown-preview-briefs h2, body.cyber-theme-enabled #markdown-preview-briefs h3, body.cyber-theme-enabled #markdown-preview-briefs h4, body.cyber-theme-enabled #markdown-preview-briefs h5, body.cyber-theme-enabled #markdown-preview-briefs h6 {
-            font-family: var(--display-font), var(--font-family);
-            letter-spacing: var(--display-letter-spacing);
-            font-stretch: var(--display-font-stretch);
+            font-family: var(--font-family);
             line-height: 1.1;
+        }
+        /* Cyber theme — doc preview h1 white, h2-h6 cyan (no glow) */
+        body.cyber-theme-enabled #markdown-preview h1,
+        body.cyber-theme-enabled #markdown-preview-online h1,
+        body.cyber-theme-enabled #markdown-preview-design h1,
+        body.cyber-theme-enabled #kanban-preview-pane h1,
+        body.cyber-theme-enabled #markdown-preview-tickets h1,
+        body.cyber-theme-enabled #markdown-preview-briefs h1 {
+            color: #ffffff;
         }
         /* Cyber theme — doc preview h2-h6 use accent color */
         body.cyber-theme-enabled #markdown-preview h2, body.cyber-theme-enabled #markdown-preview h3, body.cyber-theme-enabled #markdown-preview h4, body.cyber-theme-enabled #markdown-preview h5, body.cyber-theme-enabled #markdown-preview h6,
@@ -2116,18 +2103,7 @@
         }
 
         /* ── Cyber Panel Theme: Neon Glow Effects ── */
-        /* Headings: bright teal glow */
-        .cyber-theme-enabled .preview-panel-wrapper h1 {
-            text-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 60%, transparent),
-                         0 0 20px color-mix(in srgb, var(--accent-teal) 30%, transparent);
-        }
-        .cyber-theme-enabled .preview-panel-wrapper h2 {
-            text-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 50%, transparent),
-                         0 0 16px color-mix(in srgb, var(--accent-teal) 25%, transparent);
-        }
-        .cyber-theme-enabled .preview-panel-wrapper h3 {
-            text-shadow: 0 0 6px color-mix(in srgb, var(--accent-teal) 40%, transparent);
-        }
+        /* Headings: no glow (Hanken, H1 white / H2–H6 cyan) per D13. */
 
         /* Preview panel wrapper: subtle outer glow border */
         .cyber-theme-enabled .preview-panel-wrapper {
@@ -2211,9 +2187,9 @@
         body.cyber-theme-enabled {
             background-color: #101414;
             background-image:
-                /* Subtle accent grid lines */
-                linear-gradient(color-mix(in srgb, var(--accent-primary) 4%, transparent) 1px, transparent 1px),
-                linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 4%, transparent) 1px, transparent 1px);
+                /* Subtle neutral grey grid lines (cyan pulled out of the background per D13) */
+                linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
             background-size: 40px 40px, 40px 40px;
         }
 
@@ -2267,8 +2243,8 @@
         .cyber-theme-enabled #stitch-preview-pane {
             background-color: rgba(255, 255, 255, 0.015);
             background-image:
-                linear-gradient(color-mix(in srgb, var(--accent-primary) 8%, transparent) 1px, transparent 1px),
-                linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 8%, transparent) 1px, transparent 1px);
+                linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
             background-size: 40px 40px, 40px 40px;
             backdrop-filter: blur(6px);
             -webkit-backdrop-filter: blur(6px);
@@ -2278,8 +2254,8 @@
         .cyber-theme-enabled #kanban-preview-pane {
             background-color: rgba(255, 255, 255, 0.015);
             background-image:
-                linear-gradient(color-mix(in srgb, var(--accent-primary) 8%, transparent) 1px, transparent 1px),
-                linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 8%, transparent) 1px, transparent 1px);
+                linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
             background-size: 40px 40px, 40px 40px;
             backdrop-filter: blur(6px);
             -webkit-backdrop-filter: blur(6px);
@@ -2389,10 +2365,10 @@
         body.theme-claudify #stitch-content,
         body.theme-claudify #preview-pane-design,
         body.theme-claudify #stitch-preview-pane {
-            background-color: #1F1C1A;   /* lifted from near-black (#14110F) to soften text/background contrast (claudify has no glass overlay) */
+            background-color: #1C1C1C;   /* neutral flat surface (claudify has no glass overlay) */
             background-image:
-                linear-gradient(color-mix(in srgb, var(--accent-primary) 5%, transparent) 1px, transparent 1px),
-                linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 5%, transparent) 1px, transparent 1px);
+                linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
             background-size: 40px 40px, 40px 40px;
         }
 
@@ -2405,18 +2381,13 @@
             color: #D97757;
         }
 
-        /* Claudify: h2-h6 — Poppins, warm cream */
+        /* Claudify: h2-h6 — Hanken, terracotta */
         body.theme-claudify #markdown-preview-briefs h2, body.theme-claudify #markdown-preview-briefs h3, body.theme-claudify #markdown-preview-briefs h4, body.theme-claudify #markdown-preview-briefs h5, body.theme-claudify #markdown-preview-briefs h6,
         body.theme-claudify #markdown-preview-design h2, body.theme-claudify #markdown-preview-design h3, body.theme-claudify #markdown-preview-design h4, body.theme-claudify #markdown-preview-design h5, body.theme-claudify #markdown-preview-design h6 {
-            font-family: 'Poppins', var(--font-family);
+            font-family: var(--font-family);
             letter-spacing: normal;
             font-stretch: 100%;
-            color: #F0EBE6;
-        }
-
-        body.theme-afterburner-pro #markdown-preview-briefs h1,
-        body.theme-afterburner-pro #markdown-preview-design h1 {
-            color: var(--accent-primary);
+            color: #D97757;
         }
 
         .preview-panel-wrapper {
@@ -3601,16 +3572,17 @@
 
 /* Claudify: neutral-grey tab nav (active tab keeps the terracotta accent). */
 body.theme-claudify .shared-tab-btn:not(.active) { color: #8a8a8a; }
-body.theme-claudify .shared-tab-btn.active { border-color: transparent; }
+/* Active tab = invisible rectangle: fill + bottom border match the bar so only the
+   terracotta text reads (D14). */
+body.theme-claudify .shared-tab-btn.active {
+  background: var(--panel-bg);
+  border-color: transparent;
+  border-bottom-color: transparent;
+}
 body.theme-claudify .shared-tab-btn:hover:not(.active) {
   color: #c8c8c8;
   background: color-mix(in srgb, #ffffff 5%, transparent);
 }
-    </style>
-    <!-- Poppins via Google Fonts CDN (online, temporary — bundled local @font-face also exists above).
-         Declared last so this definition wins for the markdown-preview headings. -->
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap');
     </style>
 </head>
     <!-- The cyber-theme-enabled class below is a STATIC FALLBACK ONLY.
