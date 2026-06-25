@@ -23,6 +23,7 @@
         selectedEl: null,
         previewRequestId: 0,
         htmlFolderPathsByRoot: persistedState.htmlFolderPathsByRoot || {},
+        claudeFolderPathsByRoot: persistedState.claudeFolderPathsByRoot || {},
         designFolderPathsByRoot: persistedState.designFolderPathsByRoot || {},
         briefsFolderPathsByRoot: persistedState.briefsFolderPathsByRoot || {},
         htmlPreviewCollapsed: persistedState.htmlPreviewCollapsed || false,
@@ -2384,15 +2385,14 @@
         persistTab('claude.root', state.claudeWorkspaceRootFilter);
         state.activeClaudeDocId = null;
         state.claudeTargetFolder = '';
-        updateClaudeTargetFolderStatus();
         const msg = state._lastClaudeDocsMsg || {};
         const filteredNodes = state.claudeWorkspaceRootFilter
             ? (msg.nodes || []).filter(n => n.metadata?.root === state.claudeWorkspaceRootFilter)
             : (msg.nodes || []);
         renderClaudeDocs({
-            sourceId: msg.sourceId || 'html-folder',
+            sourceId: msg.sourceId || 'claude-folder',
             nodes: filteredNodes,
-            folderPaths: getCurrentFolderPaths(state.htmlFolderPathsByRoot, state.claudeWorkspaceRootFilter),
+            folderPaths: getCurrentFolderPaths(state.claudeFolderPathsByRoot, state.claudeWorkspaceRootFilter),
             error: msg.error
         });
     });
@@ -2489,9 +2489,9 @@
             ? (msg.nodes || []).filter(n => n.metadata?.root === state.claudeWorkspaceRootFilter)
             : (msg.nodes || []);
         renderClaudeDocs({
-            sourceId: msg.sourceId || 'html-folder',
+            sourceId: msg.sourceId || 'claude-folder',
             nodes: filteredNodes,
-            folderPaths: getCurrentFolderPaths(state.htmlFolderPathsByRoot, state.claudeWorkspaceRootFilter),
+            folderPaths: getCurrentFolderPaths(state.claudeFolderPathsByRoot, state.claudeWorkspaceRootFilter),
             error: msg.error
         });
     });
@@ -2625,7 +2625,6 @@
                 }
                 const claudeSelect = document.getElementById('claude-workspace-filter');
                 if (claudeSelect) claudeSelect.value = state.claudeWorkspaceRootFilter;
-                updateClaudeTargetFolderStatus();
 
                 const restoredDesignRoot = _restoredPanelState.panel['design.root'] || '';
                 if (_workspaceItems.length === 0 || restoredDesignRoot === '' || _workspaceItems.some(i => i.workspaceRoot === restoredDesignRoot)) {
@@ -2656,7 +2655,7 @@
 
                 // Override active tab with persisted value if it differs from the HTML default
                 const restoredTab = (msg.panel || {})['activeTab'];
-                const validTabs = ['stitch', 'briefs', 'html-preview', 'images', 'design'];
+                const validTabs = ['stitch', 'claude', 'briefs', 'html-preview', 'images', 'design'];
                 if (restoredTab && validTabs.includes(restoredTab)) {
                     const currentTab = document.querySelector('.shared-tab-btn.active')?.dataset.tab;
                     if (currentTab !== restoredTab) {
@@ -2793,10 +2792,8 @@
 
             case 'htmlDocsReady':
                 state._lastHtmlDocsMsg = msg;
-                state._lastClaudeDocsMsg = msg;
                 state.htmlFolderPathsByRoot = msg.folderPathsByRoot || {};
                 populateWorkspaceDropdown('html-workspace-filter', msg.workspaceItems || [], state.htmlWorkspaceRootFilter);
-                populateWorkspaceDropdown('claude-workspace-filter', msg.workspaceItems || [], state.claudeWorkspaceRootFilter);
                 const filteredHtmlNodes = state.htmlWorkspaceRootFilter
                     ? (msg.nodes || []).filter(n => n.metadata?.root === state.htmlWorkspaceRootFilter)
                     : (msg.nodes || []);
@@ -2806,17 +2803,23 @@
                     folderPaths: getCurrentFolderPaths(state.htmlFolderPathsByRoot, state.htmlWorkspaceRootFilter),
                     error: msg.error
                 });
+                break;
 
+            case 'claudeDocsReady': {
+                state._lastClaudeDocsMsg = msg;
+                state.claudeFolderPathsByRoot = msg.folderPathsByRoot || {};
+                populateWorkspaceDropdown('claude-workspace-filter', msg.workspaceItems || [], state.claudeWorkspaceRootFilter);
                 const filteredClaudeNodes = state.claudeWorkspaceRootFilter
                     ? (msg.nodes || []).filter(n => n.metadata?.root === state.claudeWorkspaceRootFilter)
                     : (msg.nodes || []);
                 renderClaudeDocs({
-                    sourceId: msg.sourceId || 'html-folder',
+                    sourceId: msg.sourceId || 'claude-folder',
                     nodes: filteredClaudeNodes,
-                    folderPaths: getCurrentFolderPaths(state.htmlFolderPathsByRoot, state.claudeWorkspaceRootFilter),
+                    folderPaths: getCurrentFolderPaths(state.claudeFolderPathsByRoot, state.claudeWorkspaceRootFilter),
                     error: msg.error
                 });
                 break;
+            }
 
             case 'imagesDocsReady':
                 state._lastImagesDocsMsg = msg;
@@ -2850,6 +2853,15 @@
                     renderFolderListModal();
                 }
                 updateDestinationDropdowns();
+                break;
+            }
+            case 'claudeFoldersListed': {
+                if (!state.claudeFolderPathsByRoot) state.claudeFolderPathsByRoot = {};
+                state.claudeFolderPathsByRoot[msg.workspaceRoot] = msg.paths || [];
+                if (folderModalScope === 'claude') {
+                    renderFolderListModal();
+                }
+                // Claude folders are NOT Stitch output targets — do not touch the destination dropdowns.
                 break;
             }
             case 'imagesFoldersListed': {
@@ -3385,12 +3397,13 @@
     });
 
     // ===== FOLDER MANAGEMENT & PREVIEW HELPERS =====
-    let folderModalScope = 'design'; // design, html, images, stitch, briefs
+    let folderModalScope = 'design'; // design, html, claude, images, stitch, briefs
 
     function requestAllFolders(root) {
         if (!root) return;
         vscode.postMessage({ type: 'listDesignFolders', workspaceRoot: root });
         vscode.postMessage({ type: 'listHtmlFolders', workspaceRoot: root });
+        vscode.postMessage({ type: 'listClaudeFolders', workspaceRoot: root });
         vscode.postMessage({ type: 'listImagesFolders', workspaceRoot: root });
         vscode.postMessage({ type: 'listStitchFolders', workspaceRoot: root });
         vscode.postMessage({ type: 'listBriefsFolders', workspaceRoot: root });
@@ -3437,6 +3450,7 @@
         if (modalTitle) {
             if (scope === 'design') modalTitle.textContent = 'Manage Design Folders';
             else if (scope === 'html') modalTitle.textContent = 'Manage HTML Previews Folders';
+            else if (scope === 'claude') modalTitle.textContent = 'Manage Claude Folders';
             else if (scope === 'images') modalTitle.textContent = 'Manage Images Folders';
             else if (scope === 'stitch') modalTitle.textContent = 'Manage Stitch Folders';
             else if (scope === 'briefs') modalTitle.textContent = 'Manage Briefs Folders';
@@ -3487,6 +3501,9 @@
         } else if (folderModalScope === 'html') {
             root = state.htmlWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
             folderPaths = state.htmlFolderPathsByRoot ? (state.htmlFolderPathsByRoot[root] || []) : [];
+        } else if (folderModalScope === 'claude') {
+            root = state.claudeWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            folderPaths = state.claudeFolderPathsByRoot ? (state.claudeFolderPathsByRoot[root] || []) : [];
         } else if (folderModalScope === 'images') {
             root = state.imagesWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
             folderPaths = state.imagesFolderPathsByRoot ? (state.imagesFolderPathsByRoot[root] || []) : [];
@@ -3533,6 +3550,8 @@
                     vscode.postMessage({ type: 'removeDesignFolder', folderPath: path, workspaceRoot: root });
                 } else if (folderModalScope === 'html') {
                     vscode.postMessage({ type: 'removeHtmlFolder', folderPath: path, workspaceRoot: root });
+                } else if (folderModalScope === 'claude') {
+                    vscode.postMessage({ type: 'removeClaudeFolder', folderPath: path, workspaceRoot: root });
                 } else if (folderModalScope === 'images') {
                     vscode.postMessage({ type: 'removeImagesFolder', folderPath: path, workspaceRoot: root });
                 } else if (folderModalScope === 'stitch') {
@@ -3624,6 +3643,9 @@
         } else if (folderModalScope === 'html') {
             root = state.htmlWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
             vscode.postMessage({ type: 'listHtmlFolders', workspaceRoot: root });
+        } else if (folderModalScope === 'claude') {
+            root = state.claudeWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            vscode.postMessage({ type: 'listClaudeFolders', workspaceRoot: root });
         } else if (folderModalScope === 'images') {
             root = state.imagesWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
             vscode.postMessage({ type: 'listImagesFolders', workspaceRoot: root });
@@ -3644,6 +3666,9 @@
         } else if (folderModalScope === 'html') {
             root = state.htmlWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
             vscode.postMessage({ type: 'addHtmlFolder', workspaceRoot: root });
+        } else if (folderModalScope === 'claude') {
+            root = state.claudeWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            vscode.postMessage({ type: 'addClaudeFolder', workspaceRoot: root });
         } else if (folderModalScope === 'images') {
             root = state.imagesWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
             vscode.postMessage({ type: 'addImagesFolder', workspaceRoot: root });
@@ -4124,7 +4149,6 @@
         const parts = relativePath.replace(/\\/g, '/').split('/');
         parts.pop();
         state.claudeTargetFolder = parts.join('/') || '';
-        updateClaudeTargetFolderStatus();
 
         const initialState = document.getElementById('claude-initial-state');
         const loadingState = document.getElementById('claude-loading-state');
@@ -4147,25 +4171,6 @@
         });
     }
 
-    function updateClaudeTargetFolderStatus() {
-        const folderSpan = document.getElementById('claude-target-folder');
-        if (!folderSpan) return;
-
-        let displayPath = '';
-        if (state.claudeTargetFolder) {
-            displayPath = state.claudeTargetFolder;
-        } else {
-            const select = document.getElementById('claude-workspace-filter');
-            if (select && select.value) {
-                const selectedOption = select.options[select.selectedIndex];
-                displayPath = selectedOption ? selectedOption.text : '(workspace root)';
-            } else {
-                displayPath = '(workspace root)';
-            }
-        }
-        folderSpan.textContent = `Target: ${displayPath}`;
-    }
-
     const CLAUDE_IMPORT_PROMPT = ({ folder, projectRef }) =>
       `Import a design from claude.ai/design into this repository, writing the implementation into \`${folder}\`, built with the repo's existing components and styles. ` +
       (projectRef
@@ -4180,17 +4185,6 @@
         const prompt = CLAUDE_IMPORT_PROMPT({ folder, projectRef });
         vscode.postMessage({
             type: 'copyClaudeImportPrompt',
-            prompt
-        });
-    });
-
-    document.getElementById('btn-send-claude-prompt')?.addEventListener('click', () => {
-        const projectInput = document.getElementById('claude-design-project');
-        const projectRef = projectInput ? projectInput.value.trim() : '';
-        const folder = state.claudeTargetFolder || getClaudeWorkspaceRootFallback();
-        const prompt = CLAUDE_IMPORT_PROMPT({ folder, projectRef });
-        vscode.postMessage({
-            type: 'sendClaudeImportPrompt',
             prompt
         });
     });
@@ -4215,7 +4209,7 @@
         foldersBtn.className = 'sidebar-folders-btn';
         foldersBtn.title = 'Manage Folders';
         foldersBtn.textContent = 'Manage Folders';
-        foldersBtn.addEventListener('click', () => openFoldersModal('html'));
+        foldersBtn.addEventListener('click', () => openFoldersModal('claude'));
         toggleRow.appendChild(foldersBtn);
 
         const toggleBtn = document.createElement('button');
@@ -4232,7 +4226,7 @@
         treePaneClaude.appendChild(docList);
 
         if (!nodes || nodes.length === 0) {
-            docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No HTML preview files found.</div>';
+            docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No files or folders found.</div>';
             return;
         }
 
@@ -4252,44 +4246,58 @@
             return;
         }
 
-        const typeSubheader = document.createElement('div');
-        typeSubheader.className = 'type-subheader';
-        typeSubheader.textContent = 'Repo Folders & Files';
-        docList.appendChild(typeSubheader);
+        // Partition the nodes by type so each group renders under its own subheader
+        // (Folders / HTML / Images), matching the HTML Previews and Images tabs.
+        const getFileExt = (name) => {
+            const i = name.lastIndexOf('.');
+            return i >= 0 ? name.substring(i).toLowerCase() : '';
+        };
+        const folderNodes = docNodes.filter(n => n.kind === 'folder');
+        const htmlNodes = docNodes.filter(n => n.kind !== 'folder' && ['.html', '.htm'].includes(getFileExt(n.name)));
+        const imageNodes = docNodes.filter(n => n.kind !== 'folder' && ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(getFileExt(n.name)));
 
-        docNodes.forEach(doc => {
-            const isFolder = doc.kind === 'folder';
-            const ext = isFolder ? '' : doc.name.substring(doc.name.lastIndexOf('.')).toLowerCase();
-            const isImageFile = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(ext);
-            const card = renderDocCard({
-                title: doc.name || doc.id,
-                subtitle: isFolder ? 'Folder' : (isImageFile ? 'Image' : 'HTML'),
-                sourceId,
-                nodeId: doc.id,
-                nodeMetadata: doc.metadata,
-                actions: [],
-                isSelected: isFolder ? false : (state.activeClaudeDocId === doc.id),
-                clickHandler: () => {
-                    if (isFolder) {
-                        let relativePath = doc.id.includes(':') ? doc.id.substring(doc.id.indexOf(':') + 1) : doc.id;
-                        state.claudeTargetFolder = relativePath;
-                        updateClaudeTargetFolderStatus();
-                        
-                        const pane = document.getElementById('tree-pane-claude');
-                        if (pane) {
-                            pane.querySelectorAll('.tree-node.selected').forEach(el => el.classList.remove('selected'));
+        function renderGroup(subheaderText, groupNodes, isImageGroup) {
+            if (groupNodes.length === 0) return;
+            const subheader = document.createElement('div');
+            subheader.className = 'type-subheader';
+            subheader.textContent = subheaderText;
+            docList.appendChild(subheader);
+
+            groupNodes.forEach(doc => {
+                const isFolder = doc.kind === 'folder';
+                const card = renderDocCard({
+                    title: doc.name || doc.id,
+                    subtitle: isFolder ? 'Folder' : (isImageGroup ? 'Image' : 'HTML'),
+                    sourceId,
+                    nodeId: doc.id,
+                    nodeMetadata: doc.metadata,
+                    actions: [],
+                    isSelected: isFolder ? false : (state.activeClaudeDocId === doc.id),
+                    clickHandler: () => {
+                        if (isFolder) {
+                            let relativePath = doc.id.includes(':') ? doc.id.substring(doc.id.indexOf(':') + 1) : doc.id;
+                            state.claudeTargetFolder = relativePath;
+
+                            const pane = document.getElementById('tree-pane-claude');
+                            if (pane) {
+                                pane.querySelectorAll('.tree-node.selected').forEach(el => el.classList.remove('selected'));
+                            }
+                            const wrapper = findTreeNodeInPane('tree-pane-claude', doc.id);
+                            if (wrapper) {
+                                wrapper.classList.add('selected');
+                            }
+                        } else {
+                            loadClaudePreview(sourceId, doc.id, doc.name);
                         }
-                        const wrapper = findTreeNodeInPane('tree-pane-claude', doc.id);
-                        if (wrapper) {
-                            wrapper.classList.add('selected');
-                        }
-                    } else {
-                        loadClaudePreview(sourceId, doc.id, doc.name);
                     }
-                }
+                });
+                docList.appendChild(card);
             });
-            docList.appendChild(card);
-        });
+        }
+
+        renderGroup('Folders', folderNodes, false);
+        renderGroup('HTML', htmlNodes, false);
+        renderGroup('Images', imageNodes, true);
     }
 
     function applySidebarState() {

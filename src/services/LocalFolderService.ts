@@ -14,6 +14,7 @@ export interface LocalFolderConfig {
 export interface LocalFolderPathsConfig {
     localFolderPaths: string[];
     htmlFolderPaths: string[];
+    claudeFolderPaths: string[];
     designFolderPaths: string[];
     ticketsFolderPaths: string[];
     imagesFolderPaths: string[];
@@ -92,6 +93,7 @@ export class LocalFolderService {
             if (!parsed) return {
                 localFolderPaths: [],
                 htmlFolderPaths: [],
+                claudeFolderPaths: [],
                 designFolderPaths: [],
                 ticketsFolderPaths: [],
                 imagesFolderPaths: [],
@@ -102,6 +104,7 @@ export class LocalFolderService {
             return {
                 localFolderPaths: parsed.localFolderPaths || [],
                 htmlFolderPaths: parsed.htmlFolderPaths || [],
+                claudeFolderPaths: parsed.claudeFolderPaths || [],
                 designFolderPaths: parsed.designFolderPaths || [],
                 ticketsFolderPaths: parsed.ticketsFolderPaths || [],
                 imagesFolderPaths: parsed.imagesFolderPaths || [],
@@ -113,6 +116,7 @@ export class LocalFolderService {
             return {
                 localFolderPaths: [],
                 htmlFolderPaths: [],
+                claudeFolderPaths: [],
                 designFolderPaths: [],
                 ticketsFolderPaths: [],
                 imagesFolderPaths: [],
@@ -161,6 +165,7 @@ export class LocalFolderService {
                 const cfg: LocalFolderPathsConfig = {
                     localFolderPaths: parsed.localFolderPaths || [],
                     htmlFolderPaths: parsed.htmlFolderPaths || [],
+                    claudeFolderPaths: parsed.claudeFolderPaths || [],
                     designFolderPaths: parsed.designFolderPaths || [],
                     ticketsFolderPaths: parsed.ticketsFolderPaths || [],
                     imagesFolderPaths: parsed.imagesFolderPaths || [],
@@ -175,6 +180,7 @@ export class LocalFolderService {
         return {
             localFolderPaths: [],
             htmlFolderPaths: [],
+            claudeFolderPaths: [],
             designFolderPaths: [],
             ticketsFolderPaths: [],
             imagesFolderPaths: [],
@@ -449,6 +455,91 @@ export class LocalFolderService {
         }
 
         return items;
+    }
+
+    // ── Claude folder source ──
+    // The Claude tab has its own independent folder list, decoupled from HTML Previews.
+    // It previews the same file types (.html/.htm + images), so it reuses _scanHtmlFolder.
+
+    getClaudeFolderPaths(): string[] {
+        const cfg = this._getOrLoadCachedConfig();
+        const seen = new Set<string>();
+        return (cfg.claudeFolderPaths || [])
+            .map(p => this.resolveFolderPath(p))
+            .filter(p => p && !seen.has(p) && seen.add(p) as unknown as boolean);
+    }
+
+    async addClaudeFolderPath(folderPath: string): Promise<void> {
+        const cfg = await this.loadFolderPathsConfig();
+        const currentPaths = cfg.claudeFolderPaths || [];
+        const resolvedInput = this.resolveFolderPath(folderPath);
+
+        const isDuplicate = currentPaths.some(p => this.resolveFolderPath(p) === resolvedInput);
+        if (!isDuplicate) {
+            cfg.claudeFolderPaths = [...currentPaths, folderPath];
+            await this.saveFolderPathsConfig(cfg);
+        }
+    }
+
+    async removeClaudeFolderPath(folderPath: string): Promise<void> {
+        const cfg = await this.loadFolderPathsConfig();
+        const currentPaths = cfg.claudeFolderPaths || [];
+        const resolvedToRemove = this.resolveFolderPath(folderPath);
+
+        cfg.claudeFolderPaths = currentPaths.filter(p => this.resolveFolderPath(p) !== resolvedToRemove);
+        await this.saveFolderPathsConfig(cfg);
+    }
+
+    async listClaudeFiles(): Promise<Array<{
+        id: string;
+        name: string;
+        relativePath: string;
+        isFolder?: boolean;
+        parentId?: string;
+        sourceFolder: string;
+        title?: string;
+    }>> {
+        const folderPaths = this.getClaudeFolderPaths();
+        if (folderPaths.length === 0) { return []; }
+
+        const items: Array<{
+            id: string;
+            name: string;
+            relativePath: string;
+            isFolder?: boolean;
+            parentId?: string;
+            sourceFolder: string;
+            title?: string;
+        }> = [];
+
+        const seenAbsolutePaths = new Set<string>();
+
+        for (let i = 0; i < folderPaths.length; i++) {
+            const folderPath = folderPaths[i];
+            try {
+                const stat = await fs.promises.stat(folderPath);
+                if (!stat.isDirectory()) { continue; }
+            } catch { continue; }
+
+            await this._scanHtmlFolder(folderPath, folderPath, items, null, i, seenAbsolutePaths, 0);
+        }
+
+        return items;
+    }
+
+    /**
+     * Returns the raw persisted `folders.paths` object WITHOUT default-key injection,
+     * or null if no config exists. Used for one-time migration key-absence detection
+     * (loadFolderPathsConfig always injects defaults, so it can't distinguish
+     * "key absent" from "explicitly empty").
+     */
+    async loadFolderPathsConfigRaw(): Promise<any | null> {
+        try {
+            const db = KanbanDatabase.forWorkspace(this._effectiveWorkspaceRoot);
+            return await db.getConfigJson<any>('folders.paths', null);
+        } catch {
+            return null;
+        }
     }
 
     private async _scanHtmlFolder(

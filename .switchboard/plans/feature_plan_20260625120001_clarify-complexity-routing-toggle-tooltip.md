@@ -69,13 +69,15 @@ const complexityRoutingToggle = isPlanReviewed
 Replace the `data-tooltip` value with a two-state description:
 ```js
 const complexityRoutingToggle = isPlanReviewed
-    ? `<div id="complexity-routing-toggle" class="complexity-routing-btn ${dynamicComplexityRoutingEnabled ? 'is-active' : 'is-off'}" data-tooltip="Complexity routing&#10;&#10;ON: auto-routes by score (low→coder, high→lead)&#10;OFF: all cards drop to Lead Coded">
+    ? `<div id="complexity-routing-toggle" class="complexity-routing-btn ${dynamicComplexityRoutingEnabled ? 'is-active' : 'is-off'}" data-tooltip="Complexity routing&#10;&#10;ON: auto-routes by score (low→Coder, high→Lead)&#10;OFF: all cards drop to Lead Coder">
            <img src="${ICON_DYNAMIC_ROUTING}" alt="Dynamic Routing">
        </div>`
     : '';
 ```
 
 This keeps the string free of double-quotes (using `→` and `&#10;` entities) so it remains valid inside the double-quoted attribute and renders as a multi-line tooltip consistent with the import-clipboard button's style.
+
+> **Reviewer correction (2026-06-25):** The original proposed tooltip said "Lead Coded," but the column is labeled "Lead Coder" (line 3741: `{ id: 'LEAD CODED', label: 'Lead Coder', ... }`). The wrong label would have defeated the plan's goal — users couldn't match the tooltip's destination to a visible column. Fixed to "Lead Coder." Also normalized ON-state casing to title-case ("low→Coder, high→Lead") for internal consistency with the OFF-state and the board labels.
 
 **Context:** The toggle is rendered only on the `PLAN REVIEWED` column (gated by `isPlanReviewed` at line 4503). It controls routing behavior for cards dropped onto the synthetic `CODED_AUTO` column. The `resolveCodedAutoTarget()` function at line 5590 contains the off-state fallback (`return 'LEAD CODED'` at line 5591).
 
@@ -90,6 +92,36 @@ This keeps the string free of double-quotes (using `→` and `&#10;` entities) s
 
 ### Automated Tests
 No automated tests required — this is a static tooltip string change with no logic impact. Verification is manual (hover inspection). Per session directives, compilation and test suite execution are skipped.
+
+---
+
+## Review Results (2026-06-25)
+
+### Findings
+| Severity | Finding | Location |
+|---|---|---|
+| MAJOR | Tooltip said "Lead Coded" but the column is labeled "Lead Coder" — destination name mismatch defeats the plan's goal of making off-state behavior predictable | `src/webview/kanban.html:4521` (tooltip) vs `src/webview/kanban.html:3741` (column label) |
+| NIT | Inconsistent casing: ON-state used lowercase "coder"/"lead" while OFF-state used title-case "Lead Coded" | `src/webview/kanban.html:4521` |
+| NIT (deferred) | ON-state omits INTERN CODED routing and NaN→CODER CODED fallback — intentional simplification per plan | `src/webview/kanban.html:5590-5606` |
+
+### Fixes Applied
+1. **MAJOR:** Changed "Lead Coded" → "Lead Coder" in the tooltip OFF-state description (`kanban.html:4521`) to match the actual column label (`Lead Coder`, line 3741).
+2. **NIT:** Normalized ON-state casing to "low→Coder, high→Lead" for internal consistency with the OFF-state and board labels.
+
+### Files Changed
+- `src/webview/kanban.html` — line 4521 (tooltip string correction)
+
+### Validation
+- Grep `Lead Coded` → 0 matches (eliminated).
+- Grep `Toggle complexity routing` (old tooltip) → 0 matches (eliminated).
+- Grep `complexity-routing-toggle` → 3 matches intact (render, UI update, click handler) — no structural breakage.
+- Tooltip now reads: `Complexity routing` / `ON: auto-routes by score (low→Coder, high→Lead)` / `OFF: all cards drop to Lead Coder`.
+- No double-quotes or backticks inside the attribute value; `&#10;` entities and `→` arrow preserved.
+- Compilation and test suite skipped per session directives.
+
+### Remaining Risks
+- **None material.** The ON-state simplification ("low→Coder, high→Lead") intentionally omits the INTERN CODED routing path and NaN-score fallback to CODER CODED. This is acceptable for a concise UI hint and was explicitly sanctioned by the plan. Documenting every routing edge case would make the tooltip unreadable.
+- Manual hover verification (per the Verification Plan checklist above) is still recommended before release to confirm multi-line rendering in the actual webview.
 
 ---
 

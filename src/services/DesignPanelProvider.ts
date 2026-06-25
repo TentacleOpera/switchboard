@@ -43,10 +43,13 @@ export class DesignPanelProvider implements vscode.Disposable {
     private _disposables: vscode.Disposable[] = [];
     private _nonce: string = '';
     private _htmlFolderWatchers: vscode.FileSystemWatcher[] = [];
+    private _claudeFolderWatchers: vscode.FileSystemWatcher[] = [];
     private _designFolderWatchers: vscode.FileSystemWatcher[] = [];
     private _imagesFolderWatchers: vscode.FileSystemWatcher[] = [];
     private _briefsFolderWatchers: vscode.FileSystemWatcher[] = [];
+    private _saveTextDocListener?: vscode.Disposable;
     private _htmlDocsDebounce?: NodeJS.Timeout;
+    private _claudeDocsDebounce?: NodeJS.Timeout;
     private _designDocsDebounce?: NodeJS.Timeout;
     private _imagesDocsDebounce?: NodeJS.Timeout;
     private _briefsDocsDebounce?: NodeJS.Timeout;
@@ -128,10 +131,13 @@ export class DesignPanelProvider implements vscode.Disposable {
 
         this._panel.onDidChangeViewState(e => this._onVisibilityChanged(e.webviewPanel.visible), null, this._disposables);
 
+        await this._migrateClaudeFoldersOnce();
         this._setupHtmlFolderWatchers();
+        this._setupClaudeFolderWatchers();
         this._setupDesignFolderWatchers();
         this._setupImagesFolderWatchers();
         this._setupBriefsFolderWatchers();
+        this._registerSaveTextDocListener();
 
         this._disposables.push(
             vscode.workspace.onDidChangeWorkspaceFolders(async () => {
@@ -141,10 +147,12 @@ export class DesignPanelProvider implements vscode.Disposable {
                 });
                 this.disposeWatchers();
                 this._setupHtmlFolderWatchers();
+                this._setupClaudeFolderWatchers();
                 this._setupDesignFolderWatchers();
                 this._setupImagesFolderWatchers();
                 this._setupBriefsFolderWatchers();
                 await this._sendHtmlDocsReady();
+                await this._sendClaudeDocsReady();
                 await this._sendDesignDocsReady();
                 await this._sendImagesDocsReady();
                 await this._sendBriefsDocsReady();
@@ -216,10 +224,13 @@ export class DesignPanelProvider implements vscode.Disposable {
 
         this._panel.onDidChangeViewState(e => this._onVisibilityChanged(e.webviewPanel.visible), null, this._disposables);
 
+        await this._migrateClaudeFoldersOnce();
         this._setupHtmlFolderWatchers();
+        this._setupClaudeFolderWatchers();
         this._setupDesignFolderWatchers();
         this._setupImagesFolderWatchers();
         this._setupBriefsFolderWatchers();
+        this._registerSaveTextDocListener();
 
         // Replicate the workspace-folder-change listener from open() so restored
         // panels react to workspace changes (refreshes content and re-wires watchers).
@@ -231,10 +242,12 @@ export class DesignPanelProvider implements vscode.Disposable {
                 });
                 this.disposeWatchers();
                 this._setupHtmlFolderWatchers();
+                this._setupClaudeFolderWatchers();
                 this._setupDesignFolderWatchers();
                 this._setupImagesFolderWatchers();
                 this._setupBriefsFolderWatchers();
                 await this._sendHtmlDocsReady();
+                await this._sendClaudeDocsReady();
                 await this._sendDesignDocsReady();
                 await this._sendImagesDocsReady();
                 await this._sendBriefsDocsReady();
@@ -285,6 +298,8 @@ export class DesignPanelProvider implements vscode.Disposable {
         }
         this._htmlServers.clear();
         this._htmlServerCreationPromises.clear();
+        this._saveTextDocListener?.dispose();
+        this._saveTextDocListener = undefined;
         this._disposables.forEach(disposable => disposable.dispose());
         this._disposables = [];
         if (this._autoRefreshDebounce) {
@@ -296,6 +311,8 @@ export class DesignPanelProvider implements vscode.Disposable {
     private disposeWatchers(): void {
         this._htmlFolderWatchers.forEach(w => w.dispose());
         this._htmlFolderWatchers = [];
+        this._claudeFolderWatchers.forEach(w => w.dispose());
+        this._claudeFolderWatchers = [];
         this._designFolderWatchers.forEach(w => w.dispose());
         this._designFolderWatchers = [];
         this._imagesFolderWatchers.forEach(w => w.dispose());
@@ -410,9 +427,42 @@ export class DesignPanelProvider implements vscode.Disposable {
                             this._sendHtmlDocsReady();
                             this._autoRefreshHtmlPreview(uri);
                         });
-                        watcher.onDidCreate(() => this._sendHtmlDocsReady());
+                        watcher.onDidCreate((uri) => {
+                            this._sendHtmlDocsReady();
+                            this._autoRefreshHtmlPreview(uri);
+                        });
                         watcher.onDidDelete(() => this._sendHtmlDocsReady());
                         this._htmlFolderWatchers.push(watcher);
+                    }
+                }
+            } catch {}
+        }
+    }
+
+    private _setupClaudeFolderWatchers(): void {
+        this._claudeFolderWatchers.forEach(w => w.dispose());
+        this._claudeFolderWatchers = [];
+        const roots = this._getWorkspaceRoots();
+        for (const root of roots) {
+            try {
+                const service = this._getLocalFolderService(root);
+                const paths = service.getClaudeFolderPaths();
+                for (const p of paths) {
+                    if (fs.existsSync(p)) {
+                        const pattern = new vscode.RelativePattern(p, '**/*');
+                        const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+                        watcher.onDidChange((uri) => {
+                            this._sendClaudeDocsReady();
+                            // _autoRefreshHtmlPreview already checks _activeClaudePreview, so it
+                            // covers Claude-tab auto-refresh too.
+                            this._autoRefreshHtmlPreview(uri);
+                        });
+                        watcher.onDidCreate((uri) => {
+                            this._sendClaudeDocsReady();
+                            this._autoRefreshHtmlPreview(uri);
+                        });
+                        watcher.onDidDelete(() => this._sendClaudeDocsReady());
+                        this._claudeFolderWatchers.push(watcher);
                     }
                 }
             } catch {}
@@ -491,6 +541,80 @@ export class DesignPanelProvider implements vscode.Disposable {
                 });
             }
         }, 300);
+    }
+
+    private async _sendClaudeDocsReady(): Promise<void> {
+        if (this._claudeDocsDebounce) {
+            clearTimeout(this._claudeDocsDebounce);
+        }
+        this._claudeDocsDebounce = setTimeout(async () => {
+            this._claudeDocsDebounce = undefined;
+            try {
+                const allRoots = this._getWorkspaceRoots();
+                const allFiles: any[] = [];
+                const seenFilePaths = new Set<string>();
+                const configuredFolderPathsByRoot: Record<string, string[]> = {};
+
+                for (const root of allRoots) {
+                    try {
+                        const localFolderService = this._getLocalFolderService(root);
+                        const folderPaths = localFolderService.getClaudeFolderPaths();
+                        configuredFolderPathsByRoot[root] = folderPaths;
+
+                        const files = await localFolderService.listClaudeFiles();
+                        for (const f of files) {
+                            const absPath = path.resolve(f.sourceFolder, f.relativePath);
+                            if (!seenFilePaths.has(absPath)) {
+                                seenFilePaths.add(absPath);
+                                allFiles.push({ ...f, _root: root });
+                            }
+                        }
+                    } catch {}
+                }
+
+                if (!this._panel) return;
+                this._updateWebviewRoots();
+
+                this._panel.webview.postMessage({
+                    type: 'claudeDocsReady',
+                    sourceId: 'claude-folder',
+                    folderPathsByRoot: configuredFolderPathsByRoot,
+                    nodes: this._mapLocalFilesToTreeNodes(allFiles),
+                    workspaceItems: this._buildKanbanWorkspaceItems()
+                });
+            } catch (err) {
+                this._panel?.webview.postMessage({
+                    type: 'claudeDocsReady',
+                    sourceId: 'claude-folder',
+                    folderPathsByRoot: {},
+                    nodes: [],
+                    workspaceItems: this._buildKanbanWorkspaceItems(),
+                    error: String(err)
+                });
+            }
+        }, 300);
+    }
+
+    /**
+     * One-time per-install migration: seed claudeFolderPaths from htmlFolderPaths for
+     * installs that configured folders via the Claude tab while it was coupled to the
+     * html-folder source. Detects "never migrated" via raw key-absence — the key is
+     * literally missing from storage — so an explicit empty list set later is respected
+     * and never re-seeded. Fresh installs (no stored config) skip migration entirely;
+     * claudeFolderPaths defaults to [] via loadFolderPathsConfig.
+     */
+    private async _migrateClaudeFoldersOnce(): Promise<void> {
+        for (const root of this._getWorkspaceRoots()) {
+            try {
+                const svc = this._getLocalFolderService(root);
+                const raw = await svc.loadFolderPathsConfigRaw();
+                if (raw && raw.claudeFolderPaths === undefined) {
+                    const cfg = await svc.loadFolderPathsConfig();
+                    cfg.claudeFolderPaths = cfg.htmlFolderPaths || [];
+                    await svc.saveFolderPathsConfig(cfg);
+                }
+            } catch {}
+        }
     }
 
     private async _sendDesignDocsReady(): Promise<void> {
@@ -1013,7 +1137,7 @@ export class DesignPanelProvider implements vscode.Disposable {
         const requestedPath = decodeURIComponent(parsedUrl.pathname);
 
         if (requestedPath === '/' || requestedPath === '') {
-            res.writeHead(403, { 'Content-Type': 'text/plain' });
+            res.writeHead(403, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
             res.end('Forbidden: directory listing not available');
             return;
         }
@@ -1023,7 +1147,7 @@ export class DesignPanelProvider implements vscode.Disposable {
         const normalizedResolved = path.normalize(resolvedPath);
 
         if (!normalizedResolved.startsWith(normalizedSource + path.sep) && normalizedResolved !== normalizedSource) {
-            res.writeHead(403, { 'Content-Type': 'text/plain' });
+            res.writeHead(403, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
             res.end('Forbidden: path traversal denied');
             return;
         }
@@ -1031,7 +1155,7 @@ export class DesignPanelProvider implements vscode.Disposable {
         const pathParts = normalizedResolved.split(path.sep);
         for (const part of pathParts) {
             if (this._SERVER_DENY_LIST.some(denied => part === denied || part.startsWith(denied))) {
-                res.writeHead(403, { 'Content-Type': 'text/plain' });
+                res.writeHead(403, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
                 res.end('Forbidden: access denied');
                 return;
             }
@@ -1202,10 +1326,10 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 } else {
                     html = injected + html;
                 }
-                res.writeHead(200, { 'Content-Type': mimeType });
+                res.writeHead(200, { 'Content-Type': mimeType, 'Cache-Control': 'no-store' });
                 res.end(Buffer.from(html, 'utf8'));
             } else {
-                res.writeHead(200, { 'Content-Type': mimeType });
+                res.writeHead(200, { 'Content-Type': mimeType, 'Cache-Control': 'no-store' });
                 res.end(data);
             }
         });
@@ -1273,7 +1397,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             case 'ready': {
                 const allRoots = this._getWorkspaceRoots();
                 const items = buildWorkspaceItems(allRoots);
-                const tabKeys = ['stitch', 'html-preview', 'images', 'design', 'html.root', 'design.root', 'briefs', 'briefs.root', 'stitch.root', 'images.root', 'activeTab'];
+                const tabKeys = ['stitch', 'html-preview', 'images', 'design', 'html.root', 'claude.root', 'design.root', 'briefs', 'briefs.root', 'stitch.root', 'images.root', 'activeTab'];
                 const statePayload = this._stateStore.getAllStates(tabKeys, allRoots);
                 this.postMessage({
                     type: 'workspaceItemsUpdated',
@@ -1296,6 +1420,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 this.postMessage({ type: 'switchboardThemeChanged', theme: themeConfig.get<string>('theme.name', 'afterburner') });
                 this.postMessage({ type: 'cyberAnimationSetting', disabled: themeConfig.get<boolean>('theme.disableCyberAnimation', false) });
                 await this._sendHtmlDocsReady();
+                await this._sendClaudeDocsReady();
                 await this._sendDesignDocsReady();
                 await this._sendImagesDocsReady();
                 await this._sendBriefsDocsReady();
@@ -1442,7 +1567,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
 
             case 'fetchPreview': {
                 const rawDocId = String(message.docId || '');
-                if (message.sourceId === 'html-folder' && message.sourceFolder) {
+                if ((message.sourceId === 'html-folder' || message.sourceId === 'claude-folder') && message.sourceFolder) {
                     if (message.target === 'claude') {
                         this._activeClaudePreview = {
                             sourceFolder: path.resolve(message.sourceFolder),
@@ -1479,24 +1604,6 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 if (!prompt) break;
                 await vscode.env.clipboard.writeText(prompt);
                 vscode.window.showInformationMessage('Copied Claude import prompt to clipboard.');
-                break;
-            }
-
-            case 'sendClaudeImportPrompt': {
-                const prompt = String(message.prompt || '');
-                if (!prompt) break;
-                const terminal = vscode.window.activeTerminal;
-                if (!terminal) {
-                    vscode.window.showWarningMessage('No active terminal. Focus your running Claude Code terminal, then send.');
-                    break;
-                }
-                terminal.show();
-                try {
-                    const { sendRobustText } = require('./terminalUtils');
-                    await sendRobustText(terminal, prompt, true);
-                } catch (err: any) {
-                    vscode.window.showErrorMessage('Failed to send prompt to terminal: ' + err.message);
-                }
                 break;
             }
 
@@ -2254,6 +2361,39 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 this.postMessage({ type: 'htmlFoldersListed', paths: service.getHtmlFolderPaths(), workspaceRoot: root });
                 break;
             }
+            case 'listClaudeFolders': {
+                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                const service = this._getLocalFolderService(root);
+                const paths = service.getClaudeFolderPaths();
+                this.postMessage({ type: 'claudeFoldersListed', paths, workspaceRoot: root });
+                break;
+            }
+            case 'addClaudeFolder': {
+                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                const result = await vscode.window.showOpenDialog({
+                    openLabel: 'Add Claude Folder',
+                    canSelectFiles: false,
+                    canSelectFolders: true,
+                    canSelectMany: false
+                });
+                if (result && result.length > 0) {
+                    const service = this._getLocalFolderService(root);
+                    await service.addClaudeFolderPath(result[0].fsPath);
+                    this._setupClaudeFolderWatchers();
+                    await this._sendClaudeDocsReady();
+                    this.postMessage({ type: 'claudeFoldersListed', paths: service.getClaudeFolderPaths(), workspaceRoot: root });
+                }
+                break;
+            }
+            case 'removeClaudeFolder': {
+                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                const service = this._getLocalFolderService(root);
+                await service.removeClaudeFolderPath(message.folderPath);
+                this._setupClaudeFolderWatchers();
+                await this._sendClaudeDocsReady();
+                this.postMessage({ type: 'claudeFoldersListed', paths: service.getClaudeFolderPaths(), workspaceRoot: root });
+                break;
+            }
             // Convenience toggle: register (or unregister) the hidden Stitch assets folder as an
             // HTML preview source, so downloaded screen HTML shows up in the HTML Previews tab.
             case 'toggleStitchHtmlPreview': {
@@ -2282,7 +2422,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         await this._sendHtmlDocsReady();
                         break;
                     case 'claude':
-                        await this._sendHtmlDocsReady();
+                        await this._sendClaudeDocsReady();
                         break;
                     case 'images':
                         await this._sendImagesDocsReady();
@@ -2740,7 +2880,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
     }
 
     private _isPolledTab(tab: string): boolean {
-        return tab === 'html-preview' || tab === 'images' || tab === 'briefs';
+        return tab === 'html-preview' || tab === 'claude' || tab === 'images' || tab === 'briefs';
     }
 
     private _onVisibilityChanged(visible: boolean): void {
@@ -2782,6 +2922,8 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 let folders: string[] = [];
                 if (tab === 'html-preview') {
                     folders = service.getHtmlFolderPaths();
+                } else if (tab === 'claude') {
+                    folders = service.getClaudeFolderPaths();
                 } else if (tab === 'images') {
                     folders = service.getImagesFolderPaths();
                 } else if (tab === 'briefs') {
@@ -2812,6 +2954,8 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 this._lastFolderSignature[tab] = hash;
                 if (tab === 'html-preview') {
                     await this._sendHtmlDocsReady();
+                } else if (tab === 'claude') {
+                    await this._sendClaudeDocsReady();
                 } else if (tab === 'images') {
                     await this._sendImagesDocsReady();
                 } else if (tab === 'briefs') {
@@ -2840,7 +2984,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
         }
 
         const filterFn = (name: string): boolean => {
-            if (tab === 'html-preview') {
+            if (tab === 'html-preview' || tab === 'claude') {
                 return this._isHtmlOrImageFile(name);
             } else if (tab === 'images') {
                 return this._isImageFile(name);
@@ -2907,20 +3051,21 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 ? docId.substring(docId.indexOf(':') + 1)
                 : docId;
 
-            // Only configured design/html/briefs/images folders may be read from.
+            // Only configured design/html/claude/briefs/images folders may be read from.
             const allowedFolders = new Set<string>();
             for (const root of this._getWorkspaceRoots()) {
                 try {
                     const svc = this._getLocalFolderService(root);
                     svc.getDesignFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
                     svc.getHtmlFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
+                    svc.getClaudeFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
                     svc.getBriefsFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
                     svc.getImagesFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
                 } catch {}
             }
             const resolvedFolder = path.resolve(sourceFolder);
             if (!allowedFolders.has(resolvedFolder)) {
-                throw new Error('sourceFolder is not a configured design/html/briefs/images folder');
+                throw new Error('sourceFolder is not a configured design/html/claude/briefs/images folder');
             }
             const absPath = path.resolve(resolvedFolder, relativePath);
             if (absPath !== resolvedFolder && !absPath.startsWith(resolvedFolder + path.sep)) {
@@ -2993,6 +3138,16 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 error: err.message || String(err)
             });
         }
+    }
+
+    private _registerSaveTextDocListener(): void {
+        if (this._saveTextDocListener) return;
+        this._saveTextDocListener = vscode.workspace.onDidSaveTextDocument((document) => {
+            if (!this._panel?.visible) return;
+            if (!this._activeHtmlPreview && !this._activeClaudePreview) return;
+            this._autoRefreshHtmlPreview(document.uri);
+        });
+        this._disposables.push(this._saveTextDocListener);
     }
 
     private _autoRefreshHtmlPreview(changedUri: vscode.Uri): void {

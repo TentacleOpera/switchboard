@@ -3624,9 +3624,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
     <body class="cyber-theme-enabled">
     <div id="research-tab-bar" class="shared-tab-bar">
         <button class="shared-tab-btn active" data-tab="stitch">STITCH</button>
+        <button class="shared-tab-btn" data-tab="claude">CLAUDE</button>
         <button class="shared-tab-btn" data-tab="briefs">BRIEFS</button>
         <button class="shared-tab-btn" data-tab="html-preview">HTML PREVIEWS</button>
-        <button class="shared-tab-btn" data-tab="claude">CLAUDE</button>
         <button class="shared-tab-btn" data-tab="images">IMAGES</button>
         <button class="shared-tab-btn" data-tab="design">DESIGN SYSTEM</button>
     </div>
@@ -3813,9 +3813,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 </select>
                 <input type="text" id="claude-docs-search" class="sidebar-search-input" placeholder="Search previews..." />
                 <input type="text" id="claude-design-project" class="sidebar-search-input" placeholder="claude.ai/design URL or ID (optional)..." style="max-width: 200px;" />
-                <span id="claude-target-folder" style="font-size: 11px; font-family: var(--font-mono); color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 250px;">Target: [Select target]</span>
-                <button id="btn-copy-claude-prompt" class="strip-btn" title="Copy the import prompt to clipboard">Copy import prompt</button>
-                <button id="btn-send-claude-prompt" class="strip-btn stitch-btn-primary" title="Send prompt to active Claude Code terminal">Send to active terminal</button>
+                <button id="btn-copy-claude-prompt" class="strip-btn stitch-btn-primary" title="Copy the import prompt to clipboard">Copy import prompt</button>
             </div>
             <div class="content-row">
                 <div id="tree-pane-claude">
