@@ -574,12 +574,51 @@ async function testNativeTaskQueryAndMutationHelpers() {
                         comment: [],
                         user: { id: 'author-4', username: 'Author Four', email: 'author4@example.com' },
                         date: '1710000003000'
+                    },
+                    {
+                        // 5. Emoji-only comment (single codepoint):
+                        id: 'comment-emoji-1',
+                        comment_text: '',
+                        comment: [
+                            { text: 'U0001F60A', type: 'emoticon', emoticon: { code: '1f60a' } }
+                        ],
+                        user: { id: 'author-5', username: 'Author Five', email: 'author5@example.com' },
+                        date: '1710000004000'
+                    },
+                    {
+                        // 6. Image attachment comment (defensive — undocumented shape):
+                        id: 'comment-image-1',
+                        comment_text: '',
+                        comment: [
+                            { type: 'image', url: 'https://example.com/screenshot.png', title: 'screenshot.png' }
+                        ],
+                        user: { id: 'author-6', username: 'Author Six', email: 'author6@example.com' },
+                        date: '1710000005000'
+                    },
+                    {
+                        // 7. Multi-codepoint emoji (ZWJ family sequence):
+                        id: 'comment-emoji-multi-1',
+                        comment_text: '',
+                        comment: [
+                            { type: 'emoticon', emoticon: { code: '1f468-200d-1f469-200d-1f467' } }
+                        ],
+                        user: { id: 'author-7', username: 'Author Seven', email: 'author7@example.com' },
+                        date: '1710000006000'
+                    },
+                    {
+                        // 8. Media-only comment with empty array + empty comment_text:
+                        //    Should hit the [media comment] last-resort placeholder.
+                        id: 'comment-media-empty-1',
+                        comment_text: '',
+                        comment: [],
+                        user: { id: 'author-8', username: 'Author Eight', email: 'author8@example.com' },
+                        date: '1710000007000'
                     }
                 ]
             }, (req) => req.method === 'GET' && req.path === '/api/v2/task/task-created/comment');
 
             const { threads } = await service.getCommentThreads('task-created');
-            assert.strictEqual(threads.length, 4);
+            assert.strictEqual(threads.length, 8);
             
             // 1. Structured comment:
             assert.strictEqual(threads[0].id, 'comment-struct-1');
@@ -603,6 +642,31 @@ async function testNativeTaskQueryAndMutationHelpers() {
             assert.strictEqual(threads[3].id, 'comment-empty-array-1');
             assert.strictEqual(threads[3].body, 'Fallback text here');
             assert.strictEqual(threads[3].author.name, 'Author Four');
+
+            // 5. Emoji-only comment (single codepoint):
+            assert.strictEqual(threads[4].id, 'comment-emoji-1');
+            assert.strictEqual(threads[4].body, '😊');  // U+1F60A = 😊
+            assert.strictEqual(threads[4].bodyParts[0].type, 'emoji');
+            assert.strictEqual(threads[4].bodyParts[0].text, '😊');
+
+            // 6. Image attachment comment:
+            assert.strictEqual(threads[5].id, 'comment-image-1');
+            assert.strictEqual(threads[5].body, '[screenshot.png]');
+            assert.strictEqual(threads[5].bodyParts[0].type, 'image');
+            assert.strictEqual(threads[5].bodyParts[0].url, 'https://example.com/screenshot.png');
+            assert.strictEqual(threads[5].bodyParts[0].alt, 'screenshot.png');
+
+            // 7. Multi-codepoint emoji (ZWJ family: U+1F468 U+200D U+1F469 U+200D U+1F467 = 👨‍👩‍👧):
+            assert.strictEqual(threads[6].id, 'comment-emoji-multi-1');
+            assert.strictEqual(threads[6].body, '👨‍👩‍👧');
+            assert.strictEqual(threads[6].bodyParts[0].type, 'emoji');
+            assert.strictEqual(threads[6].bodyParts[0].text, '👨‍👩‍👧');
+
+            // 8. Media-only comment with empty array + empty comment_text:
+            assert.strictEqual(threads[7].id, 'comment-media-empty-1');
+            assert.strictEqual(threads[7].body, '[media comment]');
+            assert.strictEqual(threads[7].bodyParts[0].type, 'text');
+            assert.strictEqual(threads[7].bodyParts[0].text, '[media comment]');
         } finally {
             http.restore();
         }

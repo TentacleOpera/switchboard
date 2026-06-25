@@ -641,11 +641,39 @@
         });
     }
 
+    function renderCommentBodyHtml(thread) {
+        // If bodyParts is available, render structured content (text + emoji + images).
+        // Otherwise, fall back to escaped body string (Linear, optimistic inserts, old data).
+        if (Array.isArray(thread.bodyParts) && thread.bodyParts.length > 0) {
+            let html = '';
+            for (const part of thread.bodyParts) {
+                if (part.type === 'text') {
+                    html += escapeHtml(part.text || '');
+                } else if (part.type === 'emoji') {
+                    // Emoji characters are Unicode — safe to render directly.
+                    // escapeHtml won't mangle them (they're not <, >, or &), but
+                    // we escape anyway for consistency in case of unexpected content.
+                    html += escapeHtml(part.text || '');
+                } else if (part.type === 'image') {
+                    // Only allow https: and data: schemes (matches CSP img-src).
+                    const url = part.url || '';
+                    if (url.startsWith('https://') || url.startsWith('data:')) {
+                        html += '<img src="' + escapeAttr(url) + '" alt="' + escapeAttr(part.alt || 'attachment') + '" class="cm-comment-image" />';
+                    } else {
+                        html += escapeHtml('[' + (part.alt || 'attachment') + ']');
+                    }
+                }
+            }
+            return html;
+        }
+        return escapeHtml(thread.body || '');
+    }
+
     function renderThreadHtml(thread) {
         const optimisticClass = thread._optimistic ? ' cm-optimistic' : '';
         const authorName = escapeHtml(thread.author?.name || thread.author?.email || 'Unknown');
         const dateStr = escapeHtml(formatCommentDate(thread.date));
-        const bodyHtml = escapeHtml(thread.body || '');
+        const bodyHtml = renderCommentBodyHtml(thread);
         let html = '<div class="cm-thread' + optimisticClass + '" data-thread-id="' + escapeHtml(thread.id) + '">';
         html += '<div class="cm-thread-header">';
         html += '<span class="cm-thread-author">' + authorName + '</span>';
@@ -674,7 +702,7 @@
         const optimisticClass = reply._optimistic ? ' cm-optimistic' : '';
         const authorName = escapeHtml(reply.author?.name || reply.author?.email || 'Unknown');
         const dateStr = escapeHtml(formatCommentDate(reply.date));
-        const bodyHtml = escapeHtml(reply.body || '');
+        const bodyHtml = renderCommentBodyHtml(reply);
         let html = '<div class="cm-reply' + optimisticClass + '" data-reply-id="' + escapeHtml(reply.id) + '">';
         html += '<div class="cm-reply-header">';
         html += '<span class="cm-reply-author">' + authorName + '</span>';

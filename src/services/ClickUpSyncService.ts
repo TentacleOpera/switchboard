@@ -1624,20 +1624,46 @@ export class ClickUpSyncService {
             console.warn(`[ClickUpSync] Failed to fetch replies for comment ${commentId}:`, e);
             return null;
           }
-        })
-      );
-      for (const result of replyResults) {
-        if (result) {
-          const thread = threads.find((t: any) => t.id === result.threadId);
-          if (thread) {
-            thread.replies = result.replies;
-          }
+    // Filter out comments that are actually replies (which have a parent_id).
+    // ClickUp /task/{id}/comment returns a flat list of all comments + replies.
+    // Grouping is handled client-side via parent_id relationships.
+    const topLevelRaw = rawComments.filter((c: any) => !c.parent_id);
+    const replyRaw = rawComments.filter((c: any) => c.parent_id);
+    const repliesByParent = new Map<string, any[]>();
+    for (const r of replyRaw) {
+      const pid = String(r.parent_id || '').trim();
+      if (!repliesByParent.has(pid)) { repliesByParent.set(pid, []); }
+      repliesByParent.get(pid)!.push(r);
+    }
+
+    const threads: any[] = [];
+    for (const comment of topLevelRaw) {
+      const normalized = this._normalizeClickUpComment(comment);
+      const parentId = normalized.id;
+      const directReplies = repliesByParent.get(parentId) || [];
+
+      // If ClickUp response indicates replies exist (reply_count > 0)
+      // but repliesByParent is empty (which happens when flat list lacks reply objects),
+      // we perform defensive API fetches to load nested threads.
+      const replyCount = Number(comment.reply_count || 0);
+      if (replyCount > 0 && directReplies.length === 0) {
+        // Fallback: fetch replies via separate endpoint API.
+        try {
+          const repliesResult = await this.retry(() =>
+            this.httpRequest('GET', `/comment/${parentId}/reply`)
+          );
+          const rawReplies = Array.isArray(repliesResult.data?.replies) ? repliesResult.data.replies : [];
+          normalized.replies = rawReplies.map((r: any) => this._normalizeClickUpComment(r));
+        } catch {
+          // Log fallback error, proceed with empty replies list.
+          normalized.replies = [];
         }
+      } else {
+        // Map inline replies if they were retrieved in the initial flat list.
+        normalized.replies = directReplies.map((r: any) => this._normalizeClickUpComment(r));
       }
-      // Respect rate limit between batches
-      if (batches.indexOf(batch) < batches.length - 1) {
-        await this.delay(this.rateLimitDelay);
-      }
+
+      threads.push(normalized);
     }
 
     return { threads, threadingSupported: true };
@@ -1652,12 +1678,14 @@ export class ClickUpSyncService {
     id: string;
     author: { id: string; name: string; email: string };
     body: string;
+    bodyParts?: Array<{ type: 'text' | 'emoji' | 'image'; text?: string; url?: string; alt?: string }>;
     date: string;
     mentions: Array<{ id: string; name: string }>;
     replies: any[];
   } {
     const mentions: Array<{ id: string; name: string }> = [];
     let body = '';
+    const bodyParts: Array<{ type: 'text' | 'emoji' | 'image'; text?: string; url?: string; alt?: string }> = [];
 
     // ClickUp structured comment: array of blocks.
     // GET response shape: text blocks are {"text": "..."} (no type field),
@@ -1667,21 +1695,74 @@ export class ClickUpSyncService {
       for (const block of comment.comment) {
         if (typeof block?.text === 'string' && (!block.type || block.type === 'text')) {
           body += block.text;
+          bodyParts.push({ type: 'text', text: block.text });
         } else if (block?.type === 'tag') {
           const userId = String(block?.user?.id || block?.assignee || '').trim();
           const name = String(block?.user?.username || block?.text || '').trim();
           mentions.push({ id: userId, name });
-          body += `@${name || userId}`;
+          const mentionText = `@${name || userId}`;
+          body += mentionText;
+          bodyParts.push({ type: 'text', text: mentionText });
+        } else if (block?.type === 'emoticon') {
+          // ClickUp emoticon block: { type: "emoticon", text: "U0001F60A", emoticon: { code: "1f60a" } }
+          // Construct the emoji character from the hex codepoint.
+          // Multi-codepoint emoji (ZWJ sequences, skin-tone modifiers) may use
+          // "-"-separated hex segments, e.g. "1f468-200d-1f469-200d-1f467".
+          const hexCode = String(block?.emoticon?.code || '').trim();
+          let emoji = '';
+          if (hexCode && /^[0-9a-fA-F-]+$/.test(hexCode)) {
+            try {
+              if (hexCode.includes('-')) {
+                // Multi-codepoint: split on "-" and concatenate codepoints.
+                emoji = hexCode.split('-')
+                  .filter(seg => /^[0-9a-fA-F]+$/.test(seg))
+                  .map(seg => String.fromCodePoint(parseInt(seg, 16)))
+                  .join('');
+              } else {
+                emoji = String.fromCodePoint(parseInt(hexCode, 16));
+              }
+            } catch { emoji = ''; }
+          }
+          if (!emoji && typeof block?.text === 'string') {
+            // Fallback: try to decode "U0001F60A" format (single codepoint only)
+            const m = block.text.match(/^U0*([0-9a-fA-F]+)$/);
+            if (m) {
+              try { emoji = String.fromCodePoint(parseInt(m[1], 16)); } catch { emoji = ''; }
+            }
+          }
+          if (emoji) {
+            body += emoji;
+            bodyParts.push({ type: 'emoji', text: emoji });
+          }
+        } else if (block?.type === 'attachment' || block?.type === 'image' || block?.type === 'file') {
+          // Defensive: undocumented block type. Extract URL from common fields.
+          const url = String(block?.url || block?.image || block?.src || block?.attachment || '').trim();
+          const alt = String(block?.title || block?.filename || block?.name || 'attachment').trim();
+          if (url && (url.startsWith('https://') || url.startsWith('data:'))) {
+            body += `[${alt}]`;
+            bodyParts.push({ type: 'image', url, alt });
+          } else {
+            // No valid URL — show placeholder text
+            body += `[${alt}]`;
+            bodyParts.push({ type: 'text', text: `[${alt}]` });
+          }
         }
       }
-      // Fallback: if the structured array yielded no text (empty array or
-      // only unrecognized block types), use comment_text so we don't show
-      // a blank body — the same failure class as the original UAT bug.
+      // Fallback: if the structured array yielded no text, use comment_text.
       if (!body) {
-        body = String(comment?.comment_text || '').trim();
+        const fallback = String(comment?.comment_text || '').trim();
+        if (fallback) {
+          body = fallback;
+          bodyParts.push({ type: 'text', text: fallback });
+        } else {
+          // Last-resort placeholder for media-only comments with no decodable blocks.
+          body = '[media comment]';
+          bodyParts.push({ type: 'text', text: '[media comment]' });
+        }
       }
     } else {
       body = String(comment?.comment_text || '').trim();
+      if (body) { bodyParts.push({ type: 'text', text: body }); }
     }
 
     return {
@@ -1691,7 +1772,11 @@ export class ClickUpSyncService {
         name: String(comment?.user?.username || '').trim(),
         email: String(comment?.user?.email || '').trim()
       },
-      body,
+      body,       // Plain-text representation. For image blocks, shows [alt] placeholder.
+      bodyParts,  // Structured representation. For image blocks, contains the actual URL.
+                   // body and bodyParts intentionally diverge for image blocks —
+                   // body is for non-webview consumers (logging, search), bodyParts
+                   // is for the webview renderer.
       date: String(comment?.date || '').trim(),
       mentions,
       replies: []

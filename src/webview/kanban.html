@@ -2920,7 +2920,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           </div>
         </div>
         
-        <!-- Research Complexity Section (for researcher and code_researcher) -->
+        <!-- Research Complexity Section (researcher only; code_researcher uses the advise-research round-trip) -->
         <div id="researchComplexityConfig" class="role-config" style="display: none;">
           <div class="db-subsection">
             <div class="subsection-header"><span>Research Complexity</span></div>
@@ -3952,7 +3952,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     saveRoleConfig(currentRole);
                 });
             }
-            // Research complexity radio buttons (shared by researcher and code_researcher)
+            // Research complexity radio buttons (researcher only; code_researcher hides this section)
             document.querySelectorAll('input[name="researchComplexity"]').forEach(radio => {
                 radio.addEventListener('change', (e) => {
                     if (!roleConfigs[currentRole]) roleConfigs[currentRole] = { prompt: '', addons: {} };

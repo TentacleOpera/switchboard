@@ -180,8 +180,10 @@ suite('agentPromptBuilder', () => {
             const prompt = buildKanbanBatchPrompt('code_researcher', makePlans(1), {});
             assert.ok(prompt.includes('You are a Code Researcher Agent.'), 'Should define Code Researcher Agent role');
             assert.ok(prompt.includes('.agents/skills/advise_research/SKILL.md'), 'Should reference the research skill file');
+            assert.ok(prompt.includes('## Uncertain Assumptions'), 'Should instruct writing the Uncertain Assumptions section');
             assert.ok(prompt.includes('STOP. Tell the user to run that prompt'), 'Should contain STOP instruction');
             assert.ok(prompt.includes('When the user pastes research findings back'), 'Should instruct on how to integrate findings');
+            assert.ok(!prompt.includes('DEEP RESEARCH MODE'), 'Should not contain the autonomous deep-research directive');
             assert.ok(!prompt.includes('TARGET SOURCE COUNT:'), 'Should not contain depth parameters');
         });
     });

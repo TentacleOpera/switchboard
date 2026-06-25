@@ -207,3 +207,41 @@ Run by the **user** separately (this planning session is directed to skip compil
 ---
 
 **Recommendation:** Complexity 6 (Mixed — mostly routine pattern-extension across five files, with one moderate prompt-correctness risk in the round-trip directive). → **Send to Coder.**
+
+## Reviewer Pass (2026-06-26)
+
+### Stage 1 — Adversarial Findings (Grumpy Principal Engineer)
+
+| # | Severity | File:Line | Finding |
+|---|---|---|---|
+| 1 | MAJOR | `src/services/__tests__/agentPromptBuilder.test.ts:179-186` | Missing `## Uncertain Assumptions` positive assertion and `DEEP RESEARCH MODE` negative assertion. Plan Verification item #2 explicitly required both; only `TARGET SOURCE COUNT:` was checked. A future regression that re-injected `DEEP_RESEARCH_DIRECTIVE` or dropped the Uncertain Assumptions section would pass silently. |
+| 2 | MAJOR | `src/test/agent-prompt-builder-subagents.test.js:241-251` | Same gap — no `## Uncertain Assumptions` positive, no `DEEP RESEARCH MODE` negative. Plan Verification item #3 said "replace with the advise-research expectations." The `!includes('depth set to "quick"')` check is a weak proxy that wouldn't catch `DEEP_RESEARCH_DIRECTIVE` re-injection. |
+| 3 | NIT | `src/webview/kanban.html:2923` | Stale comment `(for researcher and code_researcher)` — section is now researcher-only per `:3211`. |
+| 4 | NIT | `src/webview/kanban.html:3955` | Stale comment `(shared by researcher and code_researcher)` — no longer shared. |
+| 5 | NIT (deferred) | `src/services/agentPromptBuilder.ts:1049-1062` | Plan optionally suggested extracting persona into exported `CODE_RESEARCH_ADVISORY_DIRECTIVE` constant for parity with `ADVISE_RESEARCH_DIRECTIVE`/`DEEP_RESEARCH_DIRECTIVE`. Not done; inline `crBase`. Acceptable per plan ("Consider extracting"). |
+
+### Stage 2 — Balanced Synthesis
+
+- **Fix now:** #1, #2 (add missing assertions — plan's explicit verification criteria, cheap), #3, #4 (stale comments, trivial).
+- **Defer:** #5 (optional extraction, no correctness impact).
+- **Verified correct (no action):** column definition (`agentConfig.ts:110`), all four role-mapping sites (`TaskViewerProvider.ts:1961,1994-1995,2024-2025`; `agentPromptBuilder.ts:1308`), prompt rewrite (`agentPromptBuilder.ts:1049-1083`), UI visibility/hiding (`kanban.html:3211,3214-3217,3246-3260`), read-only preview (`:3264,3949`), role description (`:3170`), `scColumnRoleMap` exclusion (`kanban.html:7584-7595` — `CODE_RESEARCHER` correctly absent), `KanbanProvider` depth split (`KanbanProvider.ts:3017-3022`), `researcher` branch untouched (`agentPromptBuilder.ts:1002-1047`), dispatch via `column.role` (`KanbanProvider.ts:4157-4163`), role-validation gate (`KanbanProvider.ts:3944`).
+
+### Fixes Applied
+
+1. `src/services/__tests__/agentPromptBuilder.test.ts:183,186` — added `assert.ok(prompt.includes('## Uncertain Assumptions'), ...)` and `assert.ok(!prompt.includes('DEEP RESEARCH MODE'), ...)`.
+2. `src/test/agent-prompt-builder-subagents.test.js:247-248,254` — added `## Uncertain Assumptions` positive and `DEEP RESEARCH MODE` negative (both for default and depth-option variants).
+3. `src/webview/kanban.html:2923` — comment corrected to `(researcher only; code_researcher uses the advise-research round-trip)`.
+4. `src/webview/kanban.html:3955` — comment corrected to `(researcher only; code_researcher hides this section)`.
+
+### Validation Results
+
+- **Assertion sanity check (runtime):** extracted the `code_researcher` branch source and confirmed `## Uncertain Assumptions` → `true`, `DEEP RESEARCH MODE` → `false`, `TARGET SOURCE COUNT` → `false`, `DEEP_RESEARCH_DIRECTIVE` → `false`. All new assertions hold against the actual prompt text.
+- **Compilation:** skipped per session policy (project assumed pre-compiled).
+- **Automated tests:** skipped per session policy (user runs separately). The two modified test files now cover the plan's Verification items #2 and #3 in full.
+- **Manual verification (items #6–#12):** not executed in this session — deferred to the user's installed-VSIX pass.
+
+### Remaining Risks
+
+- **Prompt-correctness (runtime, untestable here):** the round-trip directive's reliability in making a live agent *stop* after drafting and *resume* on paste-back within the same terminal session is a behavioral property that unit tests cannot verify. Manual items #8–#10 are the real gate.
+- **Deferred NIT #5:** persona remains inline; if a future change needs to reference `CODE_RESEARCH_ADVISORY_DIRECTIVE` from another module or test, the extraction will be required at that point.
+- **No state migration needed:** confirmed — `CODE_RESEARCHER` is a new built-in column with `hideWhenNoAgent: true` and `DEFAULT_VISIBLE_AGENTS.code_researcher = false`, so existing installs see no new column until they enable the agent. Legacy `research_planner` fallback (`KanbanProvider.ts` config resolution) is preserved.
