@@ -3764,6 +3764,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let autobanCountdownTimer = null;
         let autobanColumns = columnDefinitions.filter(col => col.autobanEnabled).map(col => col.id);
         let lastBoardSignature = '';
+        // Render-guard deadline (epoch ms). While Date.now() < this value an in-flight
+        // optimistic drag is suppressing full renderBoard calls from updateBoard. 0 = inactive.
+        // Re-armed on every drop so overlapping drags EXTEND the window rather than
+        // clearing it prematurely; auto-expires so it can never get stuck.
+        let optimisticMoveUntil = 0;
+        const OPTIMISTIC_MOVE_WINDOW_MS = 2000; // covers the 350ms dispatch + backend round-trip
         let currentWorkspaceRoot = '';
         try {
             const attr = document.body?.dataset?.initialWorkspaceRoot;
@@ -5779,6 +5785,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 // that reverts the move and loses epic styling — same bug as the main
                 // validIds path below.
                 lastBoardSignature = buildBoardSignature(currentCards);
+                optimisticMoveUntil = Date.now() + OPTIMISTIC_MOVE_WINDOW_MS;  // arm/extend the render guard
 
                 setTimeout(() => {
                     dispatchGroups.forEach(group => {
@@ -5960,6 +5967,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             // Keep the render-guard signature in sync with the optimistic mutation.
             lastBoardSignature = buildBoardSignature(currentCards);
+            optimisticMoveUntil = Date.now() + OPTIMISTIC_MOVE_WINDOW_MS;  // arm/extend the render guard
 
 
 
@@ -6231,13 +6239,26 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         routingMapConfig = msg.routingConfig;
                         updateRoutingMapButtonIndicator();
                     }
+                    const optimisticActive = Date.now() < optimisticMoveUntil;
                     if (nextBoardSignature !== lastBoardSignature) {
-                        lastBoardSignature = nextBoardSignature;
-                        console.log('[Kanban WV] signature changed, calling renderBoard with', nextCards.length, 'cards');
-                        renderBoard(nextCards);
+                        if (optimisticActive) {
+                            // Optimistic drag in-flight: backend hasn't processed the move yet, so
+                            // nextCards is stale w.r.t. the user's intent. Absorb the data (so the next
+                            // authoritative render — a moveCards delta or a post-window updateBoard —
+                            // has the freshest baseline) but DO NOT renderBoard: a full DOM replacement
+                            // here would revert the optimistic move and strip epic styling/animation.
+                            // currentEpicWorktrees is already updated above; worktree visuals render
+                            // when the window expires.
+                            currentCards = nextCards;
+                            lastBoardSignature = buildBoardSignature(currentCards);
+                        } else {
+                            lastBoardSignature = nextBoardSignature;
+                            console.log('[Kanban WV] signature changed, calling renderBoard with', nextCards.length, 'cards');
+                            renderBoard(nextCards);
+                        }
                     } else {
                         currentCards = nextCards;
-                        if (epicWorktreesChanged) {
+                        if (epicWorktreesChanged && !optimisticActive) {
                             console.log('[Kanban WV] epicWorktrees changed, calling renderBoard with', nextCards.length, 'cards');
                             renderBoard(currentCards);
                         }
@@ -6356,6 +6377,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         columns = columnDefinitions.map(col => col.id);
                         autobanColumns = columnDefinitions.filter(col => col.autobanEnabled).map(col => col.id);
                         lastBoardSignature = '';
+                 optimisticMoveUntil = 0;  // a deliberate workspace switch ends any in-flight drag guard
                         renderColumns();
                         renderBoard(currentCards);
                         updateAllColumnAgents();
@@ -6884,6 +6906,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     return;
                 }
                 const sourceWorkspaceRoot = Array.from(sourceWorkspaces)[0];
+                lastBoardSignature = '';  // Ensure the refresh triggered by selectWorkspace is not short-circuited
+                optimisticMoveUntil = 0;  // a deliberate workspace switch ends any in-flight drag guard
                 postKanbanMessage({
                     type: 'reassignPlansWorkspace',
                     sessionIds: sessionIds,

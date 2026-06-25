@@ -278,3 +278,57 @@ This closes the startup timing gap: the watcher's `_currentProjects` map is popu
 ## Recommendation
 
 **Send to Coder.** Complexity 5 (Mixed): the diff is small and the COALESCE/re-resolution changes reuse an existing, proven pattern, but the Layer 2 semantics change and the shared-file coordination with the companion plan warrant a coder's judgment rather than a purely mechanical pass. Land alongside `feature_plan_20260625155416_fix_plans_fall_out_of_project_kanban.md`.
+
+---
+
+## Reviewer-Executor Pass (2026-06-25)
+
+### ⚠️ Headline finding: the implementation had NOT been written
+
+This plan was handed to review labelled "implementation complete." It was not. A diff of the working tree against `HEAD` was empty, and a direct read of all three target sites showed **none** of the three changes present:
+
+- `KanbanDatabase.ts:1332` — still `project = excluded.project,` (Change #1 absent)
+- `GlobalPlanWatcherService.ts:585` — still the bare metadata-refresh `else` branch (Change #2 absent)
+- `KanbanProvider.ts:293` — constructor restored the filter but did not propagate it (Change #3 absent)
+
+Only the **companion** plan's change had landed (`KanbanDatabase.ts:567`, `UPSERT_PLAN_SQL` → `project = COALESCE(NULLIF(excluded.project, ''), plans.project)`), confirming the two plans were meant to land together but this one was dropped. The reviewer-executor therefore implemented all three changes per spec, then reviewed them.
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *Pulls glasses down nose.* "Implementation complete," it says. **Complete.** I diff `HEAD` and the tree is pristine — not one byte changed. So we're "reviewing" the empty set, are we? The companion plan's UPSERT got its `COALESCE(NULLIF(...))` armor at line 567, sauntered in dressed for the gala — and *this* one, its twin, got left at the train station holding the luggage. `insertFileDerivedPlan` is STILL blithely doing `project = excluded.project`, which is the precise murder weapon Layer 1 was written to confiscate. Every file-save was a loaded gun pointed at the user's project assignment. **CRITICAL.** Fixed: all three changes now applied.
+>
+> And while I'm holding the magnifying glass — Change #2 honors `metadata.project` *unconditionally*. Read it again. A plan already filed under "Automated Testing" with a real FK, whose file happens to carry `**Project:** v5 funnel` at the top of a line — next mtime bump, the text column flips to "v5 funnel" while `project_id` stays bolted to Automated Testing, because `insertFileDerivedPlan` only re-resolves the FK when `projectId` is *null*, and the COALESCE then lovingly preserves the stale FK. Text says one thing, the foreign key says another, and the board — which JOINs on the FK — shrugs and keeps the card where it was. A house divided. **MAJOR.** *Except* — I grepped every plan file on disk. Not one carries a genuine top-of-line `**Project:**` assignment; every match is prose *about* the feature. The gun exists but there are no bullets and the trigger is welded. Documented, not patched — see Balanced.
+>
+> The startup gap (Change #3): you propagate an *un-validated* persisted filter at construction. Delete a project between sessions, birth a plan in the startup window, and it gets stamped with a ghost project name + NULL FK that Layer 1 now makes *sticky*. **NIT** — the board JOINs on the (NULL) FK so it lands on the base board anyway, and the validation path corrects the filter. Cosmetic. The plan already confessed to this at line 94. Fine.
+>
+> Layer 2 will now drag any empty-project plan into whatever project is selected the next time someone breathes on its file. The user's deliberately-unassigned plan, hoovered into "v5 funnel" on a stray save. **NIT** — bounded to "a filter is active," matches the documented write-time contract. Accepted.
+
+### Stage 2 — Balanced synthesis
+
+- **Keep:** all three changes exactly as specified. They are type-sound (`project?: string` accepts every branch's `string`), reuse the companion's proven `COALESCE(NULLIF(...))` pattern, and the existing-plan re-resolution mirrors the new-plan precedence (`metadata.project` > live > `_currentProjects` > existing). The `else if (!resolvedProject)` guard correctly limits re-resolution to plans that currently lack a project, so already-assigned plans are untouched.
+- **Fixed now (CRITICAL):** the missing implementation — all three changes written to source. This *was* the bug.
+- **Documented, not patched (MAJOR → accepted):** the frontmatter-override FK divergence. Patching it would mean clearing `project_id` whenever the name changes, which directly fights the deliberate "COALESCE preserves a valid FK" design (and could wipe a good FK when frontmatter names a not-yet-existing project). It is unreachable in practice — no plan file carries a real frontmatter project line — and cosmetic if reached (board placement follows the FK). Fixing it would expand scope beyond this plan; recorded as a remaining risk instead.
+- **Accepted (NIT, already in plan):** stale-filter startup gap (cosmetic, validation path corrects); Layer 2 unassigned-plan adoption (intended write-time contract, gated on an active filter).
+
+### Fixes Applied (this pass)
+
+1. `src/services/KanbanDatabase.ts:1332` — `project = excluded.project` → `project = COALESCE(NULLIF(excluded.project, ''), plans.project)`. The existing `project_id = COALESCE(excluded.project_id, plans.project_id)` line was left intact (do-not-remove guard honored).
+2. `src/services/GlobalPlanWatcherService.ts:585-608` — existing-plan branch now re-resolves the active project (frontmatter > live resolver > `_currentProjects` fallback) only when the plan currently has none, then passes `project: resolvedProject`. `...plan` keeps the (possibly NULL) `projectId` so `insertFileDerivedPlan` backfills the FK for newly-adopted orphans.
+3. `src/services/KanbanProvider.ts:293-301` — constructor now calls `this._globalPlanWatcher?.setCurrentProject(resolvedRoot, persistedFilter)` immediately after restoring the persisted filter, mirroring the validation-path call at `KanbanProvider.ts:2075`.
+
+### Files Changed
+- `src/services/KanbanDatabase.ts`
+- `src/services/GlobalPlanWatcherService.ts`
+- `src/services/KanbanProvider.ts`
+
+### Validation Results
+- **Compilation:** skipped per session directive (no `tsc`/webpack run). Changes statically reviewed: type-sound (`KanbanPlanRecord.project` is `string | undefined`; every assignment is a `string`), all referenced symbols (`workspaceRoot`, `metadata`, `resolveEffectiveWorkspaceRootFromMappings`, `_resolveDisplayedProject`, `_currentProjects`, `setCurrentProject`) in scope and already imported.
+- **Tests:** skipped per session directive (suite run separately by the user). The automated-test specs in the Verification Plan above remain the intended coverage.
+- **Blast-radius check:** all 6 callers of `insertFileDerivedPlan` (KanbanMigration ×2, GlobalPlanWatcherService ×2, PlanFileImporter, TaskViewerProvider ×3, SessionActionLog) are file-derived importers; none clear a project via this method (project-clearing uses the dedicated `deleteProject` → direct `UPDATE` path), so the more-conservative COALESCE cannot regress any caller.
+- **Grep-verified:** all three edits present in source.
+
+### Remaining Risks
+1. **Frontmatter-override FK divergence (MAJOR, unreachable in practice).** If a plan that is already assigned to project A (non-null `project_id`) acquires a literal top-of-line `**Project:** B`, a re-import sets `project` text to B while `project_id` stays at A's FK; the board (FK JOIN) keeps the card on A's board. No current plan file carries such a line, so this is latent and cosmetic. Not patched — fixing it conflicts with the intentional FK-preservation design.
+2. **Stale-filter startup gap (NIT).** A persisted filter for a since-deleted project, propagated at construction, can stamp a sticky stale `project` name (with NULL FK) on a plan created in the startup window. Cosmetic — board JOINs on the NULL FK (base board); validation path corrects the filter.
+3. **Layer 2 adoption (NIT, intended).** While a project filter is active, re-importing an empty-project plan adopts that project. Matches the write-time project-assignment contract; correctable from the dropdown.
+4. **Companion coupling.** This plan and `feature_plan_20260625155416_fix_plans_fall_out_of_project_kanban.md` must ship together; the companion's `UPSERT_PLAN_SQL` change is already in source, so both import paths now preserve project assignment consistently.

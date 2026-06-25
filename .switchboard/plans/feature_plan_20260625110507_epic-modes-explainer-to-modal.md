@@ -140,3 +140,48 @@ No automated tests required — this is a pure UI refactor with no backend logic
 ---
 
 **Recommendation:** Complexity 2/10 → **Send to Intern**. This is a routine, single-pass UI change that follows an established pattern with no backend or state implications.
+
+---
+
+## Review Pass (2026-06-25)
+
+### Stage 1 — Grumpy Principal Engineer (adversarial)
+
+Severity-tagged findings against the actual implementation:
+
+- **CRITICAL:** None.
+- **MAJOR:** None.
+- **NIT:** The pre-existing `showKanbanLogOverlay` selector bug (`project.js:2153`) remains unfixed — pre-existing, correctly documented in plan, deferred. Verified: `document.querySelector('.kanban-log-overlay')` first-match is always `#new-epic-modal` (project.html:1584); the new help modal at line 1629 is never the first match, so this change introduces no new risk. The New Epic modal gets nuked when a Kanban plan log opens — real bug, but not THIS plan's bug.
+
+Implementation faithfulness verified:
+- `<details class="epic-modes-explainer">` fully removed — zero matches across `src/`. No orphaned CSS or JS references. ✓
+- `?` button at project.html:1449 — uses `strip-btn` class, `title` tooltip present, compact inline styles. ✓
+- Modal at project.html:1628-1643 — reuses `.kanban-log-overlay`/`.kanban-log-modal`, placed after Orchestrate overlay, before Add Subtask overlay. ✓
+- JS handlers at project.js:1627-1638 — `?.addEventListener` pattern, correct `display: 'flex'`/`'none'` toggling, backdrop click guard. ✓
+- Text adapted correctly: "below"→"on an epic", "here"→"in the Epics tab" — proper contextual adaptation for modal (vs. inline) placement. ✓
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is:** All HTML and JS changes — faithful to plan, follow established patterns.
+**Fix now:** Nothing — no CRITICAL/MAJOR findings.
+**Defer:** `showKanbanLogOverlay` selector bug (project.js:2153) → separate plan; give dynamic log overlay a distinct class (e.g. `.dynamic-log`) and update selector.
+
+### Code Fixes Applied
+
+None required.
+
+### Validation Results
+
+- Compilation: skipped per session directives.
+- Automated tests: skipped per session directives.
+- Static verification: all checks passed (see Stage 1 checklist above).
+
+### Files Changed (Actual)
+
+- `src/webview/project.html` — removed `<details>` explainer (was ~line 1481); added `?` button at line 1449; added help modal at lines 1628-1643.
+- `src/webview/project.js` — added open/close/backdrop handlers at lines 1627-1638.
+
+### Remaining Risks
+
+1. **Pre-existing `showKanbanLogOverlay` selector bug** (project.js:2153) — not introduced by this plan, but still latent. Opening a Kanban plan log removes `#new-epic-modal` from the DOM. Fix: separate plan with a more specific selector.
+2. **No Escape-key close** — follows existing convention (no modal in project.js handles Escape). Scope creep to add.
