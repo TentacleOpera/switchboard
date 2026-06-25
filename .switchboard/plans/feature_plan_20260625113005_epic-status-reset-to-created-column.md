@@ -167,3 +167,39 @@ No automated tests required for this change. The fix is in the `createEpic` hand
 ---
 
 **Recommendation:** Complexity is 5/10 → **Send to Coder**. The core changes (ordinal map fix, BACKLOG mapping, legacy normalization, diagnostic log) are straightforward single-file edits. The only risk is the unconfirmed root cause, which the diagnostic log will resolve during manual testing.
+
+---
+
+## Review Results (Reviewer Pass — 2026-06-25)
+
+### Files Changed
+- `src/services/KanbanProvider.ts` — `createEpic` handler (lines 7734–7746): BACKLOG ordinal injection, legacy column normalization, effectiveColumn mapping, diagnostic logging, upsertPlan column swap. Additional verify log at line 7812.
+
+### Stage 1 — Adversarial Findings
+
+| Severity | Finding | Location | Disposition |
+|----------|---------|----------|-------------|
+| NIT | Two `console.log` diagnostic statements left in production code (one planned, one extra verify log at line 7812). No TODO/follow-up marker. | KanbanProvider.ts:7746, 7812 | Defer — remove after root cause confirmed via manual testing |
+| NIT | Type predicate `(col: string \| null): col is string` is imprecise — `_normalizeLegacyKanbanColumn` always returns `string`, never `null`. No runtime impact. | KanbanProvider.ts:7743 | Defer — cosmetic, not worth the diff |
+| NIT | Fallback chain re-normalizes `subtasks[0].kanbanColumn` redundantly (already normalized in the `.map()` step, but the mapped array was filtered/sorted so the fallback needs its own normalization). Correct but slightly wasteful. | KanbanProvider.ts:7744 | No action — correct behavior |
+
+### Investigated Non-Issues (confirmed safe)
+- **`updateEpicStatus` column clobber risk:** `UPDATE plans SET is_epic, epic_id, updated_at` — does NOT touch `kanban_column`. Safe.
+- **`_regenerateEpicFile` re-import risk:** Rewrites file only, calls `registerPendingCreation` to skip watcher. No `upsertPlan`/`insertFileDerivedPlan`. Column preserved.
+- **BACKLOG ordinal -1 vs custom negative-order columns:** Theoretical edge case — no evidence of negative-order custom columns in the wild. `KANBAN_REWEIGHT_STEP` uses positive weights.
+- **Schema guarantees:** `kanban_column TEXT NOT NULL DEFAULT 'CREATED'` — NULL cannot appear. `_readRows` default is belt-and-suspenders.
+
+### Stage 2 — Balanced Synthesis
+All four plan changes are implemented correctly. No CRITICAL or MAJOR findings. No code fixes applied. The two diagnostic `console.log` statements are intentionally temporary per the plan's verification strategy and should be removed after manual testing confirms the root cause.
+
+### Verification (Static — compilation/tests skipped per session directives)
+1. **Code path traced:** `createEpic` → `getPlanByPlanId` (reads DB `kanban_column`) → `_normalizeLegacyKanbanColumn` → ordinal sort → BACKLOG→CREATED mapping → `upsertPlan(effectiveColumn)`. ✓
+2. **No clobber risk:** `updateEpicStatus` and `_regenerateEpicFile` do not touch `kanban_column`. ✓
+3. **Schema check:** `kanban_column NOT NULL DEFAULT 'CREATED'`. ✓
+4. **Frontend contract:** `kanban.html` sends `subtaskPlanIds` for 2+ selections; `promoteToEpic` for single. `promoteToEpic` does not change column. ✓
+5. **VALID_KANBAN_COLUMNS:** All possible `effectiveColumn` values are valid. ✓
+
+### Remaining Risks
+1. **Unconfirmed root cause (Cause 1):** If subtask `kanban_column` values are stale in the DB (all `CREATED` despite being displayed in other columns), the logic fix is insufficient and Change 5 (DB sync investigation) is needed. The diagnostic log will reveal this during manual testing.
+2. **Diagnostic log debt:** Two `console.log` statements should be removed after manual testing confirms the fix works.
+3. **Legacy CODED data audit:** The normalization fix handles `'CODED'` → `'LEAD CODED'` correctly, but the extent of legacy `'CODED'` values in the installed base is unknown. The V22 migration (KanbanDatabase.ts line 4483–4502) resets invalid columns to `'CREATED'`, but `'CODED'` is in `VALID_KANBAN_COLUMNS` so it would NOT be reset — it would persist as `'CODED'` and now be normalized at epic creation time.

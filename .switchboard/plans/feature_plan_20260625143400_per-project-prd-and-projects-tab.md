@@ -149,3 +149,75 @@ These supersede or sharpen claims above; they were verified by reading the curre
 ## Recommendation
 
 Complexity 7/10 → **Send to Lead Coder.** The original 6/10 "Send to Coder" framing assumed the work was mostly mirroring the constitution pattern; code-grounding revealed three things that raise the risk to High: (1) the tester role hard-throws without a design doc and must be reconciled (Correction #4), (2) "all roles" spans two distinct prompt paths and the constitution is the wrong template (Corrections #2/#3), and (3) a misattributed file (Correction #5). Strongly prefer the **split**: a foundation slice — name-based per-project PRD storage + `getProjectPrdPath` + `_resolveProjectPrd` + the `dispatchPrefixCore`/custom-agent injection + tester reconciliation + the project-context toggle — landed and verified first; then a UI slice — the full Projects tab + PRD editor (modelled on the constitution tab). The careful parts are the active-project (name) plumbing and the tester landmine; the rest reuses existing project + prefix infrastructure.
+
+---
+
+## Reviewer Pass (2026-06-25, in-place reviewer-executor)
+
+Reviewed the implemented code against this plan as the source of truth. The "danger trio" the plan flagged (tester throw, two prompt paths, misattributed file) was the focus. Verdict: **implementation is faithful and complete; no CRITICAL/MAJOR code defects found; no code fixes applied** (none warranted — see below). Verification was static/manual only (compilation + tests skipped per session directive).
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *Cracks knuckles. Adjusts monocle. Pulls the diff up on the big monitor.*
+>
+> "Right. You told me you decoupled the PRD from epics. Half this team can't decouple a USB cable. Let's see what you actually shipped before I believe a word of it.
+>
+> **The tester landmine (Correction #4) — the one that would've paged me at 3am.** `KanbanProvider.ts:2980` — *fine*. You resolve the project PRD into `resolvedOptions.prdEnabled` BEFORE the role branches (`:2938`), then the tester branch throws **only** when `!designDocLink && !resolvedOptions.prdEnabled`. The error message even names the Projects tab and the toggle instead of the old 'enable a Planning Epic in Setup' lie. I came here to scream and you took my screaming away. Disappointing. NIT at most: you re-`await _resolveGlobalDesignDoc` inside the tester branch (`:2979`) when the planner branch already resolves it — two reads of the same config on a planner→tester pipeline. It's a `getConfiguration` read, not a disk hit. I'll allow it.
+>
+> **'All roles' — the claim that's a lie in 90% of codebases.** You SAID every dispatched prompt. I counted. Fourteen role branches in `buildKanbanBatchPrompt`, fourteen `suffixBlock`s, fourteen `dispatchContextPrefix` references (`:603–1263`). The PRD rides in `dispatchPrefixCore` (`:531`) right next to the §11 remote-mode block exactly as Correction #2 demanded — NOT bolted onto the planner-only constitution like a coward would've done. And the *second* prompt path, `buildCustomAgentPrompt`, gets its own explicit injection (`:1411`) wired from the custom-agent resolution branch (`:2885`). You found BOTH paths. Who are you and what did you do with the usual author.
+>
+> **The misattribution trap (Correction #5).** I went hunting for the crime scene — did some intern 'fix' `DesignPanelProvider.setActivePlanningContext` and nuke the design-SYSTEM doc by accident? No. It's untouched. The PRD writer work stayed clear of it. Grudging nod.
+>
+> **Path traversal.** `sanitizeProjectSlug` (`prdUtils.ts:16`) clamps to `[a-z0-9_-]`, collapses runs, trims, length-caps, re-trims, and falls back to `'project'` on empty. A project named `../../etc/passwd` becomes `etc-passwd`. Try-hard malicious name? Neutered. The verbatim-injection trust boundary is identical to the constitution's — consistent, defensible.
+>
+> **Now the thing that actually annoys me. The race.** Your OWN edge-case audit (line 62) said: resolve the PRD from *the plan's stored project*, fall back to the live filter. You did NOT. You key entirely on `getDisplayedProjectForRoot` (`:4607`) → the live in-memory `_projectFilter`. Yes, I checked — `_projectFilter` is set *synchronously* in `setProjectFilter` (`:4618`); only the workspaceState *persist* is debounced, so the in-memory read is never stale. Fine. AND it returns `null` for cross-workspace dispatch and `__unassigned__`, so a background automation dispatch can never inject the WRONG project's PRD — worst case it injects *none*. So the security failure mode is closed. But the *correctness* gap is real and you waved it away: `BatchPromptPlan` has no `project` field (`:28`), so if autoban dispatches a plan belonging to project A while the board is filtered to project B *in the same workspace*, plan A gets B's PRD. You didn't fix it because fixing it means threading `project` through every dispatch builder. Pragmatic. But don't pretend the audit item is satisfied — it's *deferred*, not *done*. Say so in the plan or I'll know you're hiding it.
+>
+> **Projects tab scope creep — in reverse.** Step 6 promised 'create/rename/delete' IN the Projects tab. What I got: a PRD editor and a project dropdown. Create/delete live on the Kanban toolbar (pre-existing). Rename doesn't exist anywhere — never did. The empty-state literally tells the user 'add one on the Kanban tab (+)'. It's honest, it works, but it is NOT what step 6 said. NIT — the Complexity Audit already conceded create/delete exist on the toolbar, so this is a wording mismatch, not a missing feature.
+>
+> **Custom-agent orchestrator.** If someone wires a *custom* agent as their orchestrator, `buildCustomAgentPrompt` injects the full PRD *content* (`:1411`), not the link — blowing the terseness goal you coordinated with the slim-orchestrator plan. But that goal was scoped to the *built-in* orchestrator role, which DOES get the link (`:326`). Custom path is separate by design. NIT.
+>
+> **Dead-ish defensive branch.** `_resolveProjectPrd` only ever returns `prdLink` *with* `prdContent` (`:2838`), so the link-only `else` in `buildPrdReferenceBlock` (`:335`) and the orchestrator content-only branch are unreachable via the real resolution path. Harmless — it mirrors the link/content shape used everywhere else and guards against future callers. Leave it.
+>
+> *Sits back.* "I wanted blood. I got a clean implementation that did the three hard things the plan said were hard. Two NITs worth writing down, one deferred audit item worth being honest about. Get out of my office."
+
+### Stage 2 — Balanced synthesis
+
+**Keep (verified correct):**
+- Tester reconciliation (`KanbanProvider.ts:2974–2984`): PRD-first, global-design-doc fallback, throws only when neither exists, with an updated user-facing message. Correction #4 fully addressed.
+- Two-path "all roles" injection: `dispatchPrefixCore` (`agentPromptBuilder.ts:531`) reaches all 14 built-in roles; `buildCustomAgentPrompt` (`:1411`) + custom-agent resolution branch (`KanbanProvider.ts:2885`) cover the separate path. Correction #2/#3 fully addressed.
+- `DesignPanelProvider.setActivePlanningContext` left untouched; back-compat (`designDoc` add-on key, `_resolveGlobalDesignDoc`, planner/tester fallbacks) preserved. Correction #5 honored + migration rule satisfied (purely additive: new `project_context_enabled` config key, new PRD files; nothing dropped).
+- Name-based slug + path-traversal sanitisation (`prdUtils.ts`); `_resolveProjectPrd` faithfully mirrors `_resolveConstitution`'s try/catch read shape.
+- Toggle gating is airtight: OFF ⇒ no `prdEnabled` ⇒ no injection on either path; `prdEnabled` only set when a non-empty PRD actually exists for the active (non-unassigned, same-workspace) project.
+- No `confirm()`/confirmation-dialog regressions introduced (project rule); new buttons reuse real `strip-btn`/`is-teal`/`is-off` styles.
+
+**Fix now:** Nothing. No CRITICAL/MAJOR defect. The two NITs and the deferred race item do not justify code churn against committed, working behavior — and the only "complete" fix for the race (adding `project` to `BatchPromptPlan` and threading it through every dispatch builder) is a cross-cutting change with its own regression surface that the plan itself listed as an *advisory* edge-case mitigation, not a Proposed Change. The actual Proposed Change (step 4, "ensure the active project is available to this path") IS satisfied by `getDisplayedProjectForRoot`.
+
+**Defer / document (no action this pass):**
+1. **Race mitigation is partial, not complete.** PRD is keyed on the displayed filter, not the dispatched plan's own project. Security failure mode (wrong PRD across workspaces / on unassigned boards) is closed; the residual is a same-workspace automation dispatch of an off-filter plan getting the displayed project's PRD. Revisit if/when `BatchPromptPlan` gains a `project` field.
+2. **Projects-tab CRUD wording.** Step 6 said create/rename/delete in-tab; shipped as PRD-editor-only with CRUD on the toolbar (rename never existed). Functional, but the plan text overstates the tab's scope.
+3. **Custom-agent orchestrator gets full PRD content, not the link** — terseness goal applies only to the built-in orchestrator (which is correct). Acceptable.
+
+### Files reviewed (no edits applied this pass)
+- `src/services/prdUtils.ts` — new: `sanitizeProjectSlug`, `getProjectPrdPath`.
+- `src/services/agentPromptBuilder.ts` — `PromptBuilderOptions.prd{Enabled,Link,Content}` (`:201–205`); `buildPrdReferenceBlock` (`:321`); `dispatchPrefixCore` fold (`:531`); custom-agent injection (`:1411`).
+- `src/services/agentConfig.ts` — `CustomAgentAddons.prd{Link,Content}` (`:42–43`).
+- `src/services/KanbanProvider.ts` — `_resolveProjectContextEnabled` (`:2815`); `_resolveProjectPrd` (`:2831`); batch + custom-agent option resolution (`:2885`, `:2938`); tester reconciliation (`:2974`); `getDisplayedProjectForRoot` (`:4607`); board-state `projectContextEnabled` (`:1295`, `:2194`, `:2352`); message handlers `setProjectContextEnabled`/`getProjectPrd`/`saveProjectPrd` (`:5224–5285`).
+- `src/webview/kanban.html` — PROJECTS tab button (`:2460`) + content (`:2541`); PROJECT CONTEXT toggle (`:2482`); planner add-on demoted to "Planning Epic Reference (legacy)" with `designDoc` key preserved (`:2867–2871`, `:4092`); editor/toggle JS (`:3810–3891`); hydration (`:3986`) + message handlers (`:6105–6164`).
+
+### Validation results
+- **Compilation:** SKIPPED per session directive.
+- **Automated tests:** SKIPPED per session directive.
+- **Static/manual review:** PASS. All 14 role suffixBlocks confirmed to consume `dispatchContextPrefix`; both prompt paths inject the PRD; toggle gating verified ON/OFF; tester throw verified PRD-first; sanitisation verified against `..`/`/`; back-compat keys & fallbacks verified intact; no confirmation dialogs; referenced webview helpers (`getActiveWorkspaceRoot`, `activeProjectFilter`) and CSS classes (`strip-btn`, `is-teal`, `is-off`) confirmed to exist.
+
+### Findings summary (by severity)
+- **CRITICAL:** none.
+- **MAJOR:** none.
+- **NIT/Deferred:**
+  - Race: PRD keyed on displayed filter, not the plan's project — partial mitigation of the line-62 audit item (`KanbanProvider.ts:4607`, `agentPromptBuilder.ts:28`). Wrong-PRD-across-workspace is closed; same-workspace off-filter automation dispatch is the residual. Deferred (needs `BatchPromptPlan.project`).
+  - Tester branch re-reads `_resolveGlobalDesignDoc` already resolved for planner (`KanbanProvider.ts:2979`) — negligible (config read). No fix.
+  - Projects tab is PRD-editor-only; create/delete on toolbar, no rename — step-6 wording overstates scope (`kanban.html:2541`). No fix.
+  - Custom-agent orchestrator injects full PRD content vs. link (`agentPromptBuilder.ts:1411`) — out of the built-in-orchestrator terseness scope. No fix.
+
+### Remaining risks
+- The deferred race item is the only behavioral risk, and it is bounded (no cross-project *security* leak; worst real-world case is an off-filter automation dispatch picking up the displayed project's PRD within one workspace). Acceptable for ship; track against a future `BatchPromptPlan.project` thread-through.
+- Compilation/tests were not run this pass (per directive) — the user's separate test run is the gate for type-level regressions.
