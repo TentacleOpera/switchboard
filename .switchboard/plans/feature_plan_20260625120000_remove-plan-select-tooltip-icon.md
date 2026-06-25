@@ -104,3 +104,53 @@ N/A — skipped per session directive. No unit/integration/e2e tests apply to a 
 
 ## Recommendation
 Complexity 2 → **Send to Intern**.
+
+---
+
+## Reviewer Pass (2026-06-25)
+
+### Stage 1 — Grumpy Principal Engineer
+
+Alright, let me look at this. A complexity-2 single-file deletion. Two edits. How hard can it be to screw up?
+
+**The markup edit.** The plan said: replace the three-line span-bearing `<div class="section-label">PLAN SELECT <span …>ⓘ</span></div>` with `<div class="section-label">PLAN SELECT</div>`. The diff shows *exactly* that. No trailing whitespace, no leftover attribute, no accidental deletion of the surrounding `<div class="section-header">` wrapper. The closing `</div>` lands on the same line as the opening tag. Clean. I literally cannot find fault here, and that annoys me.
+
+**The CSS edit.** The plan said: delete the `.tooltip-icon { … }` rule (12 lines) and preserve the surrounding blank-line structure to avoid a double-blank artifact. The diff removed the rule *and* its trailing blank line. Result: `.section-label` (ends line 169) → one blank line (170) → `.section-header` (171). Exactly one blank line between siblings. No double-blank, no zero-blank. The implementation note was followed to the letter. Infuriatingly correct.
+
+**Collateral damage check.** Grep across all of `src/` for `tooltip-icon`: **zero matches**. The class had exactly two consumers in the repo (the CSS definition and the span), both in this file, both removed. No JS file referenced it (the plan claimed this and the grep confirms it). No other webview file used it. There is nothing left to break.
+
+**Stale-citation check.** The plan's Adversarial Synthesis already corrected the line-number drift (1535–1537 → 1541–1543) and the tag vocabulary. The post-edit line numbers in the plan's Proposed Changes section are now stale again (the file shrank by 13 lines), but that is a documentation artifact, not a code defect — and the plan explicitly instructs not to truncate existing steps, so I am leaving the historical citations in place.
+
+**Verdict.** No CRITICAL. No MAJOR. No NIT worth fixing. This is a textbook minimal-surface deletion executed precisely as specified. The only thing I can grumble about is that the plan exists at all for a 13-line deletion — but that is a process complaint, not a code complaint.
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| Markup edit matches plan exactly | — | Keep (no action) |
+| CSS rule removed, blank-line structure preserved | — | Keep (no action) |
+| Zero residual `tooltip-icon` references in `src/` | — | Keep (no action) |
+| Post-edit line numbers in plan's Proposed Changes are stale (file shrank by 13 lines) | NIT | Defer — documentation artifact only; plan history must not be truncated per instructions |
+
+**Fixes applied:** None required. The implementation is complete and correct as committed.
+
+### Verification Results
+
+| Check | Result |
+|---|---|
+| `grep tooltip-icon src/webview/implementation.html` | 0 matches ✓ |
+| `grep -r tooltip-icon src/` | 0 matches across all files ✓ |
+| `PLAN SELECT` label markup | `<div class="section-label">PLAN SELECT</div>` — clean, single-line ✓ |
+| CSS blank-line structure post-edit | `.section-label` → 1 blank line → `.section-header` — no double-blank artifact ✓ |
+| No JS references to `.tooltip-icon` | Confirmed via repo-wide grep ✓ |
+| Compilation | Skipped per session directive |
+| Automated tests | Skipped per session directive |
+
+### Files Changed
+
+- `src/webview/implementation.html` — removed `.tooltip-icon` CSS rule (12 lines) and the tooltip-icon span from the `PLAN SELECT` section label (commit `bb46704`).
+
+### Remaining Risks
+
+- **None material.** The help text ("use the Recover menu or ask an agent to run the Fix Plans Dropdown skill") is no longer surfaced as a hover hint on the heading. The plan's Adversarial Synthesis already softened the discoverability claim to "assumed" — the Recover menu remains a named, persistent affordance, so no user-facing capability is lost. At worst, a hover-only hint (already inaccessible to keyboard/touch users) is gone.
+- **Stale line numbers** in the plan's Proposed Changes section (citations reference pre-edit line numbers). Documentation-only; no code impact.
