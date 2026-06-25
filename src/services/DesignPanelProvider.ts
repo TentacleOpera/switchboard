@@ -1163,7 +1163,7 @@ export class DesignPanelProvider implements vscode.Disposable {
 
         fs.readFile(resolvedPath, (err, data) => {
             if (err) {
-                res.writeHead(404, { 'Content-Type': 'text/plain' });
+                res.writeHead(404, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
                 res.end('Not Found');
                 return;
             }

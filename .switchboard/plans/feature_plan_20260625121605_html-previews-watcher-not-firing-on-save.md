@@ -211,4 +211,40 @@ No frontend changes are required.
 
 ---
 
+## Reviewer Pass (2026-06-25)
+
+### Stage 1: Adversarial Findings
+
+| # | Severity | File:Line | Finding |
+|---|----------|-----------|---------|
+| 1 | NIT | `DesignPanelProvider.ts:1166` | 404 response in `_handleHtmlServerRequest` missing `Cache-Control: no-store` — all other 5 `writeHead` calls have it. Plan said "all responses." |
+| 2 | — | `DesignPanelProvider.ts:430-433` | `onDidCreate` HTML watcher wiring: VERIFIED OK |
+| 3 | — | `DesignPanelProvider.ts:460-463` | `onDidCreate` Claude watcher wiring: VERIFIED OK (Claude `onDidChange` also wired) |
+| 4 | — | `DesignPanelProvider.ts:50,140,233,301-302,3143-3151` | `onDidSaveTextDocument` listener: registration, idempotency guard, disposal in `dispose()` only (NOT `disposeWatchers()`): VERIFIED OK |
+| 5 | — | `DesignPanelProvider.ts:1140,1150,1158,1329,1332` | `Cache-Control: no-store` on all 200/403 responses: VERIFIED OK |
+| 6 | — | `design.js` | Frontend unchanged for this plan (design.js diff is from Claude-tab-folder-management plan): VERIFIED OK |
+| 7 | — | `DesignPanelProvider.ts:3165-3186` | Shared debounce collapses `onDidSaveTextDocument` + `onDidCreate` double-fire: VERIFIED OK |
+
+### Stage 2: Balanced Synthesis
+
+No CRITICAL or MAJOR findings. One NIT: the 404 response at line 1166 was the only `writeHead` in `_handleHtmlServerRequest` missing `Cache-Control: no-store`. Low real-world risk (auto-refresh uses `?t=` cache-busting on the iframe src, so a stale 404 won't be reused), but fixed for consistency with the plan's "all responses" intent.
+
+### Fixes Applied
+
+- **`src/services/DesignPanelProvider.ts:1166`** — Added `'Cache-Control': 'no-store'` to the 404 `writeHead` call. All 6 `writeHead` calls in `_handleHtmlServerRequest` now include the header.
+
+### Verification Results
+
+- **Typecheck/compilation:** Skipped per session directives.
+- **Automated tests:** Skipped per session directives.
+- **Manual verification:** All 12 manual verification steps in the plan remain valid and should be run by the user.
+- **Static review:** All plan requirements verified against actual code. All `writeHead` calls confirmed consistent. Listener lifecycle confirmed correct (dispose in `dispose()` only, not `disposeWatchers()`).
+
+### Remaining Risks
+
+- **External editor saves** — `onDidSaveTextDocument` only fires for VS Code editor saves. External editor edits rely on `onDidChange`/`onDidCreate` from the file watcher, which may not fire on macOS atomic saves. This is an accepted scope boundary per the plan.
+- **No automated test coverage** — The fix has no regression test. The 12 manual verification steps are the safety net. A future test could mock `onDidSaveTextDocument` and verify `_autoRefreshHtmlPreview` is called.
+
+---
+
 **Recommendation:** Complexity is 3/10 → **Send to Intern**
