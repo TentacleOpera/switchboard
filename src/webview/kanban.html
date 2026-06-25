@@ -2457,7 +2457,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
     <body class="cyber-theme-enabled">
     <div class="shared-tab-bar">
         <button class="shared-tab-btn active" data-tab="kanban">KANBAN</button>
-        <button class="shared-tab-btn" data-tab="projects">PROJECTS</button>
         <button class="shared-tab-btn" data-tab="agents">AGENTS</button>
         <button class="shared-tab-btn" data-tab="prompts">PROMPTS</button>
         <button class="shared-tab-btn" data-tab="automation">AUTOMATION</button>
@@ -2479,7 +2478,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <button id="btn-delete-project" class="strip-icon-btn" data-tooltip="Select a project to delete" disabled>
                 <img src="{{ICON_DELETE_PROJECT}}" alt="Delete Project">
             </button>
-            <button class="strip-btn is-off" id="btn-project-context" data-tooltip="Project Context: when on, the active project's PRD (Projects tab) is injected into every dispatched prompt">PROJECT CONTEXT</button>
             <button class="strip-icon-btn" id="btn-scan-folders" data-tooltip="Scan all configured folders for plan files now (forces immediate pickup of anything the watchers missed)">
                 <img src="{{ICON_IMPORT_PLANS}}" alt="Scan Folders">
             </button>
@@ -2534,31 +2532,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 </div>
             </div>
             <div class="kanban-board" id="kanban-board"></div>
-        </div>
-    </div>
-
-    <!-- Projects Tab Content -->
-    <div id="projects-tab-content" class="shared-tab-content">
-        <div style="padding:12px; overflow-y:auto; height:100%; max-width:860px; display:flex; flex-direction:column;">
-            <div class="db-subsection">
-                <div class="subsection-header"><span>Project Requirements (PRD)</span></div>
-                <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:12px;">
-                    A PRD is a loose set of product requirements respected across all plans in a project — independent of epics.
-                    Author one per project below. When the <strong>PROJECT CONTEXT</strong> toggle (next to the project selector on the Kanban tab) is on,
-                    the active project's PRD is injected into <em>every</em> dispatched prompt (planner, lead, coder, reviewer, tester, orchestrator).
-                    Stored at <code>.switchboard/projects/&lt;project&gt;/prd.md</code> (git-trackable).
-                </div>
-                <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px; flex-wrap:wrap;">
-                    <label style="font-size:11px; color:var(--text-secondary);">Project:</label>
-                    <select id="projects-prd-select" class="workspace-project-select" style="min-width:240px;"></select>
-                    <button class="strip-btn is-teal" id="btn-save-project-prd" data-tooltip="Save this project's PRD" disabled>SAVE PRD</button>
-                    <span id="projects-prd-status" style="font-size:11px; color:var(--text-secondary);"></span>
-                </div>
-                <div id="projects-prd-path-hint" style="font-size:10px; color:var(--text-secondary); margin-bottom:6px; font-family:monospace; opacity:0.7;"></div>
-                <textarea id="projects-prd-editor" spellcheck="false"
-                    placeholder="Select a project, then write its product requirements here…"
-                    style="width:100%; min-height:380px; resize:vertical; font-family:var(--vscode-editor-font-family, monospace); font-size:12px; line-height:1.5; padding:10px; box-sizing:border-box; background:var(--vscode-input-background, #1e1e1e); color:var(--vscode-input-foreground, #ddd); border:1px solid var(--border-color, #333); border-radius:4px;" disabled></textarea>
-            </div>
         </div>
     </div>
 
@@ -3779,7 +3752,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let activeProjectFilter = null;
         let workspaceItems = [];
         let currentControlPlaneMode = 'none';
-        let projectContextEnabled = false;
         let columnDragDropModes = {};
         const integrationState = {
             clickup: { setupComplete: false, realTimeSyncEnabled: false, autoPullEnabled: false, pullIntervalMinutes: 60, syncError: false, mappingWarning: '', unmappedColumnCount: 0 },
@@ -3811,89 +3783,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const workspaceRoot = selectedOption?.dataset?.workspaceRoot || currentWorkspaceRoot;
             if (!selectedProject) return;
             postKanbanMessage({ type: 'deleteProject', projectName: selectedProject, workspaceRoot });
-        });
-
-        // ── Per-project PRD: "PROJECT CONTEXT" toggle + Projects-tab editor ──────────
-        function updateProjectContextButton() {
-            const btn = document.getElementById('btn-project-context');
-            if (!btn) return;
-            btn.classList.toggle('is-off', !projectContextEnabled);
-            btn.classList.toggle('is-teal', projectContextEnabled);
-            btn.setAttribute('data-tooltip', projectContextEnabled
-                ? 'Project Context ON — the active project’s PRD is injected into every dispatched prompt. Click to disable.'
-                : 'Project Context OFF — click to inject the active project’s PRD (Projects tab) into every dispatched prompt.');
-        }
-
-        document.getElementById('btn-project-context')?.addEventListener('click', () => {
-            projectContextEnabled = !projectContextEnabled;
-            updateProjectContextButton();
-            postKanbanMessage({ type: 'setProjectContextEnabled', enabled: projectContextEnabled, workspaceRoot: getActiveWorkspaceRoot() });
-        });
-
-        // Populate the Projects-tab project dropdown from the active workspace's projects.
-        function populateProjectsPrdSelect() {
-            const select = document.getElementById('projects-prd-select');
-            if (!select) return;
-            const prevValue = select.value;
-            const wsRoot = getActiveWorkspaceRoot();
-            const projects = (allWorkspaceProjects && allWorkspaceProjects[wsRoot]) || [];
-            select.innerHTML = '';
-            if (!projects.length) {
-                const opt = document.createElement('option');
-                opt.value = '';
-                opt.textContent = 'No projects — add one on the Kanban tab (+)';
-                select.appendChild(opt);
-                select.disabled = true;
-                setProjectsPrdEditorEnabled(false);
-                document.getElementById('projects-prd-editor').value = '';
-                document.getElementById('projects-prd-path-hint').textContent = '';
-                return;
-            }
-            select.disabled = false;
-            for (const proj of projects) {
-                const opt = document.createElement('option');
-                opt.value = proj;
-                opt.textContent = proj;
-                opt.dataset.workspaceRoot = wsRoot;
-                select.appendChild(opt);
-            }
-            // Prefer the previously-selected project, else the board's active project, else first.
-            if (prevValue && projects.includes(prevValue)) {
-                select.value = prevValue;
-            } else if (activeProjectFilter && activeProjectFilter !== '__unassigned__' && projects.includes(activeProjectFilter)) {
-                select.value = activeProjectFilter;
-            } else {
-                select.value = projects[0];
-            }
-            requestProjectPrd();
-        }
-
-        function setProjectsPrdEditorEnabled(enabled) {
-            const editor = document.getElementById('projects-prd-editor');
-            const saveBtn = document.getElementById('btn-save-project-prd');
-            if (editor) editor.disabled = !enabled;
-            if (saveBtn) saveBtn.disabled = !enabled;
-        }
-
-        function requestProjectPrd() {
-            const select = document.getElementById('projects-prd-select');
-            const projectName = select?.value;
-            if (!projectName) { setProjectsPrdEditorEnabled(false); return; }
-            const editor = document.getElementById('projects-prd-editor');
-            if (editor) editor.value = '';
-            document.getElementById('projects-prd-status').textContent = 'Loading…';
-            postKanbanMessage({ type: 'getProjectPrd', projectName, workspaceRoot: getActiveWorkspaceRoot() });
-        }
-
-        document.getElementById('projects-prd-select')?.addEventListener('change', requestProjectPrd);
-
-        document.getElementById('btn-save-project-prd')?.addEventListener('click', () => {
-            const select = document.getElementById('projects-prd-select');
-            const projectName = select?.value;
-            const editor = document.getElementById('projects-prd-editor');
-            if (!projectName || !editor) return;
-            document.getElementById('projects-prd-status').textContent = 'Saving…';
-            postKanbanMessage({ type: 'saveProjectPrd', projectName, content: editor.value, workspaceRoot: getActiveWorkspaceRoot() });
         });
 
         let testingFailSourceColumn = '';
@@ -3986,11 +3875,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 // Hydrate REMOTE tab when activated (§10)
                 if (tabName === 'remote') {
                   postKanbanMessage({ type: 'getRemoteConfig' });
-                }
-
-                // Hydrate PROJECTS tab when activated (per-project PRD editor)
-                if (tabName === 'projects') {
-                  populateProjectsPrdSelect();
                 }
             });
         });
@@ -6114,19 +5998,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         allWorkspaceProjects = msg.allWorkspaceProjects;
                     }
 
-                    if (typeof msg.projectContextEnabled === 'boolean') {
-                        projectContextEnabled = msg.projectContextEnabled;
-                        updateProjectContextButton();
-                    }
-
                     const explicitChange = previousRoot !== '' && previousRoot !== currentWorkspaceRoot;
                     updateWorkspaceProjectDropdown(explicitChange ? currentWorkspaceRoot : null);
                     updateWorkspaceFilterBadge();
-
-                    // Keep the Projects-tab editor in sync if it is the active tab.
-                    if (document.querySelector('.shared-tab-btn[data-tab="projects"]')?.classList.contains('active')) {
-                        populateProjectsPrdSelect();
-                    }
 
                     // Keep the worktrees tab's "CREATE NEW WORKTREE IN <workspace>" header in sync
                     // when the displayed workspace name changes while that tab is open. Compare the
@@ -6149,29 +6023,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             loadWorktreeConfig();
                         }
                     }
-                    break;
-                }
-                case 'projectContextEnabled': {
-                    projectContextEnabled = !!msg.enabled;
-                    updateProjectContextButton();
-                    break;
-                }
-                case 'projectPrdContent': {
-                    const select = document.getElementById('projects-prd-select');
-                    // Ignore stale responses for a project the user has since switched away from.
-                    if (select && select.value === msg.projectName) {
-                        const editor = document.getElementById('projects-prd-editor');
-                        if (editor) editor.value = msg.content || '';
-                        setProjectsPrdEditorEnabled(true);
-                        document.getElementById('projects-prd-status').textContent = msg.exists ? '' : 'New PRD — not yet saved';
-                        const hint = document.getElementById('projects-prd-path-hint');
-                        if (hint) hint.textContent = msg.path || '';
-                    }
-                    break;
-                }
-                case 'projectPrdSaved': {
-                    const statusEl = document.getElementById('projects-prd-status');
-                    if (statusEl) statusEl.textContent = msg.ok ? 'Saved ✓' : 'Save failed';
                     break;
                 }
                 case 'moveCards': {

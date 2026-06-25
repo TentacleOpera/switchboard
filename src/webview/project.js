@@ -32,6 +32,10 @@
 
             if (activeTab === 'kanban') {
                 vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+            } else if (activeTab === 'projects') {
+                // Ensure the workspace/project caches are fresh, then hydrate the PRD editor.
+                vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+                hydrateProjectsTab();
             } else if (activeTab === 'epics') {
                 vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
                 vscode.postMessage({ type: 'fetchEpicDocuments' });
@@ -270,8 +274,21 @@
     const tuningPreviewContent = document.getElementById('tuning-preview-content');
     const tuningEditor = document.getElementById('tuning-editor');
 
+    // Projects tab elements (per-project PRDs)
+    const projectsWorkspaceFilter = document.getElementById('projects-workspace-filter');
+    const projectsPrdSelect = document.getElementById('projects-prd-select');
+    const projectsPrdEditor = document.getElementById('projects-prd-editor');
+    const btnSaveProjectPrd = document.getElementById('btn-save-project-prd');
+    const btnProjectContext = document.getElementById('btn-project-context');
+    const projectsPrdStatus = document.getElementById('projects-prd-status');
+    const projectsPrdPathHint = document.getElementById('projects-prd-path-hint');
+    let projectContextEnabled = false;
+    let _prdLoadedProject = null;   // project name whose PRD is currently in the editor
+    let _prdDirty = false;          // user has typed since the last load → don't clobber
+
     const kanbanFilters = { column: '', workspaceRoot: '', project: '', search: '' };
     const epicsFilters = { workspaceRoot: '' };
+    const projectsFilters = { workspaceRoot: '' };
 
     // Initialize Webview Content
     vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
@@ -295,9 +312,12 @@
                     return;
                 }
                 _kanbanPlansCache = msg.plans || [];
-                _kanbanAllWorkspaceProjects = msg.allWorkspaceProjects || {};
-                _kanbanWorkspaceItems = msg.workspaceItems || [];
-                _kanbanAvailableColumns = msg.columns || [];
+                // Proactive "plans changed" pushes (e.g. after a complexity edit / move) carry
+                // only `plans` — they must NOT wipe the workspace/project/column lists, which a
+                // bare `|| {}` would. Overwrite these only when the full payload includes them.
+                if (msg.allWorkspaceProjects) _kanbanAllWorkspaceProjects = msg.allWorkspaceProjects;
+                if (msg.workspaceItems) _kanbanWorkspaceItems = msg.workspaceItems;
+                if (msg.columns) _kanbanAvailableColumns = msg.columns;
                 if (msg.kanbanWorkspaceRoot && _kanbanWorkspaceItems.some(ws => ws.workspaceRoot === msg.kanbanWorkspaceRoot)) {
                     if (!kanbanFilters.workspaceRoot) {
                         kanbanFilters.workspaceRoot = msg.kanbanWorkspaceRoot;
@@ -310,9 +330,32 @@
                 populateKanbanFilters();
                 renderKanbanPlans();
                 renderEpicsList();
+                // Keep the Projects-tab editor in sync when fresh project data arrives.
+                if (activeTab === 'projects') {
+                    updateProjectsPrdSelect();
+                    requestProjectContextEnabled();
+                }
                 tryResolvePendingKanbanSelection();
                 tryResolvePendingEpicSelection();
                 if (_epicSelectedPlan) renderEpicMetaBar(_epicSelectedPlan);
+                break;
+            case 'projectContextEnabled':
+                // Host echo of the PROJECT CONTEXT toggle for the workspace this tab edits.
+                projectContextEnabled = !!msg.enabled;
+                updateProjectContextButton();
+                break;
+            case 'projectPrdContent': {
+                // Ignore stale responses for a project the user has since switched away from.
+                if (projectsPrdSelect && projectsPrdSelect.value === msg.projectName) {
+                    if (projectsPrdEditor) projectsPrdEditor.value = msg.content || '';
+                    setProjectsPrdEditorEnabled(true);
+                    if (projectsPrdStatus) projectsPrdStatus.textContent = msg.exists ? '' : 'New PRD — not yet saved';
+                    if (projectsPrdPathHint) projectsPrdPathHint.textContent = msg.path || '';
+                }
+                break;
+            }
+            case 'projectPrdSaved':
+                if (projectsPrdStatus) projectsPrdStatus.textContent = msg.ok ? 'Saved ✓' : 'Save failed';
                 break;
             case 'planCreated':
                 if (btnCreateKanbanPlan) {
@@ -821,6 +864,9 @@
         kanbanWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
         epicsWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
         if (tuningWorkspaceFilter) tuningWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
+        // The Projects tab is workspace-specific (a PRD/toggle belongs to one workspace),
+        // so its filter lists concrete workspaces only — no "All Workspaces" option.
+        if (projectsWorkspaceFilter) projectsWorkspaceFilter.innerHTML = '';
 
         _kanbanWorkspaceItems.forEach(ws => {
             const opt = document.createElement('option');
@@ -829,11 +875,19 @@
             kanbanWorkspaceFilter.appendChild(opt.cloneNode(true));
             epicsWorkspaceFilter.appendChild(opt.cloneNode(true));
             if (tuningWorkspaceFilter) tuningWorkspaceFilter.appendChild(opt.cloneNode(true));
+            if (projectsWorkspaceFilter) projectsWorkspaceFilter.appendChild(opt.cloneNode(true));
         });
         kanbanWorkspaceFilter.value = currentWS;
         epicsWorkspaceFilter.value = epicsFilters.workspaceRoot;
         if (tuningWorkspaceFilter && currentWS) {
             tuningWorkspaceFilter.value = currentWS;
+        }
+        if (projectsWorkspaceFilter) {
+            // Default the Projects tab to its prior selection, else the active kanban workspace,
+            // else the first workspace. Persist back into projectsFilters so reads stay consistent.
+            const desired = projectsFilters.workspaceRoot || currentWS || (_kanbanWorkspaceItems[0] && _kanbanWorkspaceItems[0].workspaceRoot) || '';
+            projectsWorkspaceFilter.value = desired;
+            projectsFilters.workspaceRoot = projectsWorkspaceFilter.value;
         }
     }
 
@@ -886,6 +940,127 @@
             kanbanProjectFilter.appendChild(opt);
         });
         kanbanProjectFilter.value = kanbanFilters.project;
+    }
+
+    // =========================================================================
+    // PROJECTS TAB (per-project PRDs)
+    // =========================================================================
+    // The PRD authoring UI lives here, next to the constitution editor — doc
+    // creation belongs in the Project panel, not the kanban board. A PRD is a
+    // per-project requirements doc; the PROJECT CONTEXT toggle (per-workspace)
+    // governs whether the active project's PRD is injected into dispatched prompts.
+    function getProjectsTabWorkspaceRoot() {
+        return (projectsWorkspaceFilter && projectsWorkspaceFilter.value)
+            || projectsFilters.workspaceRoot
+            || kanbanFilters.workspaceRoot
+            || (_kanbanWorkspaceItems[0] && _kanbanWorkspaceItems[0].workspaceRoot)
+            || '';
+    }
+
+    function setProjectsPrdEditorEnabled(enabled) {
+        if (projectsPrdEditor) projectsPrdEditor.disabled = !enabled;
+        if (btnSaveProjectPrd) btnSaveProjectPrd.disabled = !enabled;
+    }
+
+    function updateProjectContextButton() {
+        if (!btnProjectContext) return;
+        btnProjectContext.textContent = projectContextEnabled ? 'PROJECT CONTEXT: ON' : 'PROJECT CONTEXT: OFF';
+        // project.html has no is-teal/is-off classes — toggle the "on" look inline.
+        btnProjectContext.style.background = projectContextEnabled ? 'var(--accent-teal)' : '';
+        btnProjectContext.style.color = projectContextEnabled ? '#001014' : '';
+        btnProjectContext.style.borderColor = projectContextEnabled ? 'var(--accent-teal)' : '';
+        btnProjectContext.setAttribute('data-tooltip', projectContextEnabled
+            ? "Project Context ON — the selected project's PRD is injected into every dispatched prompt. Click to disable."
+            : "Project Context OFF — click to inject the selected project's PRD into every dispatched prompt.");
+    }
+
+    // Populate the project dropdown for the Projects-tab workspace.
+    function updateProjectsPrdSelect() {
+        if (!projectsPrdSelect) return;
+        const prevValue = projectsPrdSelect.value;
+        const wsRoot = getProjectsTabWorkspaceRoot();
+        const projects = (_kanbanAllWorkspaceProjects && _kanbanAllWorkspaceProjects[wsRoot]) || [];
+        projectsPrdSelect.innerHTML = '';
+        if (!projects.length) {
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = 'No projects — add one on the Kanban board (+)';
+            projectsPrdSelect.appendChild(opt);
+            projectsPrdSelect.disabled = true;
+            setProjectsPrdEditorEnabled(false);
+            if (projectsPrdEditor) projectsPrdEditor.value = '';
+            if (projectsPrdPathHint) projectsPrdPathHint.textContent = '';
+            if (projectsPrdStatus) projectsPrdStatus.textContent = '';
+            _prdLoadedProject = null;
+            _prdDirty = false;
+            return;
+        }
+        projectsPrdSelect.disabled = false;
+        projects.forEach(proj => {
+            const opt = document.createElement('option');
+            opt.value = proj;
+            opt.textContent = proj;
+            projectsPrdSelect.appendChild(opt);
+        });
+        // Prefer the prior selection, else the board's active project filter, else the first.
+        if (prevValue && projects.includes(prevValue)) {
+            projectsPrdSelect.value = prevValue;
+        } else if (kanbanFilters.project && kanbanFilters.project !== '__none__' && projects.includes(kanbanFilters.project)) {
+            projectsPrdSelect.value = kanbanFilters.project;
+        } else {
+            projectsPrdSelect.value = projects[0];
+        }
+        requestProjectPrd();
+    }
+
+    function requestProjectPrd() {
+        if (!projectsPrdSelect) return;
+        const projectName = projectsPrdSelect.value;
+        const wsRoot = getProjectsTabWorkspaceRoot();
+        if (!projectName || !wsRoot) { setProjectsPrdEditorEnabled(false); return; }
+        if (projectsPrdEditor) projectsPrdEditor.value = '';
+        if (projectsPrdStatus) projectsPrdStatus.textContent = 'Loading…';
+        vscode.postMessage({ type: 'getProjectPrd', projectName, workspaceRoot: wsRoot });
+    }
+
+    function requestProjectContextEnabled() {
+        const wsRoot = getProjectsTabWorkspaceRoot();
+        if (!wsRoot) { projectContextEnabled = false; updateProjectContextButton(); return; }
+        vscode.postMessage({ type: 'getProjectContextEnabled', workspaceRoot: wsRoot });
+    }
+
+    function hydrateProjectsTab() {
+        populateWorkspaceDropdowns();
+        updateProjectsPrdSelect();
+        requestProjectContextEnabled();
+    }
+
+    if (projectsWorkspaceFilter) {
+        projectsWorkspaceFilter.addEventListener('change', () => {
+            projectsFilters.workspaceRoot = projectsWorkspaceFilter.value;
+            updateProjectsPrdSelect();
+            requestProjectContextEnabled();
+        });
+    }
+    if (projectsPrdSelect) {
+        projectsPrdSelect.addEventListener('change', requestProjectPrd);
+    }
+    if (btnProjectContext) {
+        btnProjectContext.addEventListener('click', () => {
+            projectContextEnabled = !projectContextEnabled;
+            updateProjectContextButton();
+            vscode.postMessage({ type: 'setProjectContextEnabled', enabled: projectContextEnabled, workspaceRoot: getProjectsTabWorkspaceRoot() });
+        });
+    }
+    if (btnSaveProjectPrd) {
+        btnSaveProjectPrd.addEventListener('click', () => {
+            if (!projectsPrdSelect || !projectsPrdEditor) return;
+            const projectName = projectsPrdSelect.value;
+            const wsRoot = getProjectsTabWorkspaceRoot();
+            if (!projectName || !wsRoot) return;
+            if (projectsPrdStatus) projectsPrdStatus.textContent = 'Saving…';
+            vscode.postMessage({ type: 'saveProjectPrd', projectName, content: projectsPrdEditor.value, workspaceRoot: wsRoot });
+        });
     }
 
     // =========================================================================

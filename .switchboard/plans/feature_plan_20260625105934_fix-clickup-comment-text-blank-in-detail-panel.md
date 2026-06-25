@@ -99,7 +99,7 @@ No — the root cause is confirmed by research and code inspection. The fix is a
 Research has been completed. All assumptions are resolved:
 1. ~~`comment_text` is empty/absent for structured comments~~ — **REFUTED.** ClickUp populates `comment_text` for text+mention comments. The root cause is not empty `comment_text`; it's the buggy block iteration that skips all blocks when the `comment` array exists, preventing the `comment_text` fallback from ever being reached.
 2. `comment` array is echoed back on GET — **CONFIRMED.**
-3. `text_content` is not a comment-level REST field — **CONFIRMED.** Dead code, removed.
+3. `text_content` is not a comment-level REST field — **CONFIRMED.** Removed from `_normalizeClickUpComment`'s `else` branch only. It remains in `getTaskDetails`/`getTaskComments` (`:1244`, `:1273`) because Change B (which would have replaced those usages) was optional and not implemented. The task-level `text_content` at `:735` (`_normalizeClickUpTask`) is valid and was correctly left in place.
 
 ## Adversarial Synthesis
 
@@ -215,3 +215,48 @@ This plan supersedes the field-name fix from `feature_plan_20260623140500` (whic
 **Root cause:** `_normalizeClickUpComment` has two bugs in its block iteration that cause it to skip every block when processing GET responses: (1) text blocks in GET responses omit the `type` field, failing the `block?.type === 'text'` check; (2) tag blocks in GET responses use a `user` object, failing the `block?.type === 'tag' && block.assignee` check. Both blocks are skipped, the body stays empty, and the `comment_text` fallback in the `else` branch is never reached because the `comment` array exists.
 
 **Research confirmed:** ClickUp's GET response `comment` array uses a different shape than the POST format the codebase sends. Text blocks are `{"text": "..."}` (no `type`), tag blocks are `{"type": "tag", "user": {...}}` (not `assignee`). The fix handles both GET and POST shapes with fallback chains.
+
+---
+
+## Reviewer Pass (2026-06-26)
+
+### Stage 1 — Adversarial Findings
+
+| # | Severity | File:Line | Finding |
+|---|----------|-----------|---------|
+| 1 | **CRITICAL** | `ClickUpSyncService.ts:1666-1676` (pre-fix) | Missing empty-body fallback in the `if (Array.isArray(comment?.comment))` branch. If the `comment` array exists but is empty (or contains only unrecognized block types), the for loop runs zero times, `body` stays `''`, and the `comment_text` fallback in the `else` branch is never reached. This is the **same structural failure class** as the original UAT bug — the `comment` array's existence blocks the fallback. |
+| 2 | NIT | `ClickUpSyncService.ts:1674` | Dangling `@` if a tag block has no `user`, no `text`, and no `assignee` — `name` and `userId` both `''`, body gets `@`. Unlikely in practice (ClickUp tag blocks always carry a user). Deferred. |
+| 3 | NIT | Plan `:102` (Uncertain Assumptions) | Wording claimed `text_content` is "Dead code, removed" — it was only removed from `_normalizeClickUpComment`'s else branch. Still present in `getTaskDetails`/`getTaskComments` (`:1244`, `:1273`) because Change B was optional and not implemented. Doc corrected. |
+
+### Stage 2 — Balanced Synthesis
+
+- **Finding 1 (CRITICAL):** Fix now. One-line addition after the for loop: `if (!body) { body = String(comment?.comment_text || '').trim(); }`. This closes the structural vulnerability that allowed the original UAT failure to occur. Without this, any future ClickUp block type the decoder doesn't recognize would re-introduce blank bodies.
+- **Finding 2 (NIT):** Defer — not worth the complexity for a malformed-data edge case.
+- **Finding 3 (NIT):** Fix the plan wording (done above).
+
+### Fixes Applied
+
+1. **`src/services/ClickUpSyncService.ts:1677-1682`** — Added empty-body fallback inside the `if (Array.isArray(...))` branch: after the for loop, if `body` is still empty, fall back to `comment_text`. This prevents blank bodies when the `comment` array is empty or contains only unrecognized block types.
+2. **`src/test/integrations/clickup/clickup-sync-service.test.js:568-577, 582, 602-605`** — Added a 4th test case: structured comment with an empty `comment` array and populated `comment_text`. Asserts `threads[3].body === 'Fallback text here'`. Updated thread count assertion from 3 to 4.
+3. **Plan file `:102`** — Corrected the `text_content` wording in Uncertain Assumptions to accurately reflect what was removed and what remains.
+
+### Files Changed
+
+- `src/services/ClickUpSyncService.ts` — empty-body fallback in `_normalizeClickUpComment` (`:1677-1682`)
+- `src/test/integrations/clickup/clickup-sync-service.test.js` — 4th test case + count update
+- `.switchboard/plans/feature_plan_20260625105934_fix-clickup-comment-text-blank-in-detail-panel.md` — this reviewer pass section + wording correction
+
+### Validation Results
+
+- **Static check 1** (`grep "block?.type === 'text'"`): PASS — zero matches, no strict type checks remain.
+- **Static check 2** (`grep "block?.assignee"`): PASS — single match at `:1671`, used only as `|| block?.assignee` fallback.
+- **Empty-body fallback verification**: PASS — `if (!body)` guard present at `:1680`, reads `comment?.comment_text`.
+- **Test file structure**: PASS — 4 cases, count = 4, assertions cover structured/plain/media-only/empty-array.
+- **Compilation**: Skipped per session directive.
+- **Automated tests**: Skipped per session directive — to be run separately by user.
+
+### Remaining Risks
+
+1. **Dangling `@` on malformed tag blocks** (NIT, deferred) — `ClickUpSyncService.ts:1674`. If a tag block lacks `user`, `text`, and `assignee`, body gets a bare `@`. Unlikely in practice; not fixed to avoid over-engineering.
+2. **`text_content` in detail-load paths** (INFO) — `ClickUpSyncService.ts:1244` and `:1273` still reference `comment?.text_content` as a fallback. Confirmed not a comment-level REST field, but harmless (always `undefined` → falls through to `''`). Would be cleaned up if Change B is ever implemented.
+3. **Manual UAT still required** — the structured-comment-with-mention and plain-comment scenarios need verification on an installed VSIX against a real ClickUp task with mentions.

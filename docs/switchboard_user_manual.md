@@ -266,9 +266,7 @@ Run a single board that orchestrates agents across multiple repositories with a 
 
 ## 8. Projects, Epics & Governance
 
-This section covers **Projects**, **Epics**, the **Constitution**, and the **System** doc. They span two panels:
-- **Projects** (plan grouping + per-project PRD) are created and managed in the **Kanban panel** (`switchboard.openKanban`) — on the board's control strip and its **PROJECTS** tab.
-- **Epics, Constitution, and the System doc** are managed in the **Project Panel** (`switchboard.openProjectPanel`).
+This section covers **Projects**, **Epics**, the **Constitution**, and the **System** doc. Most of this is managed in the **Project Panel** (`switchboard.openProjectPanel`) — the PROJECTS, EPICS, CONSTITUTION, and SYSTEM tabs. The exceptions are board-level project actions — creating a project, assigning plans to it, and the **PROJECT CONTEXT** toggle — which live on the **Kanban board** (`switchboard.openKanban`) control strip because they act on the board.
 
 ### Projects
 A **Project** is a workspace-scoped grouping of plans *and* the carrier of project-wide context (a PRD / spec). Use projects to slice one repo's board into areas (e.g. `frontend`, `backend`, `infra`) and to give every agent working in that area the same requirements.
@@ -279,7 +277,7 @@ A **Project** is a workspace-scoped grouping of plans *and* the carrier of proje
 
 **Filter / delete** — The Workspace/Project Selector filters the board to a single project (or "No Project"). The **Delete Project** icon button removes the selected project.
 
-**Per-project PRD (Product Requirements Document)** — Each project can have a PRD: a loose set of requirements respected across every plan in that project, independent of epics. Author it on the Kanban panel's **PROJECTS** tab — pick the project, write the requirements, and click **SAVE PRD**. It is stored at `.switchboard/projects/<project>/prd.md` (git-trackable; a path hint shows the exact file).
+**Per-project PRD (Product Requirements Document)** — Each project can have a PRD: a loose set of requirements respected across every plan in that project, independent of epics. Author it on the **Project Panel's PROJECTS tab** — pick the project, write the requirements, and click **SAVE PRD**. It is stored at `.switchboard/projects/<project>/prd.md` (git-trackable; a path hint shows the exact file).
 
 **PROJECT CONTEXT toggle** — The **PROJECT CONTEXT** button on the Kanban control strip is off by default. When you turn it on, the active project's PRD is injected into **every dispatched prompt** — planner, lead, coder, reviewer, tester, and orchestrator — under the verbatim header:
 
@@ -1207,7 +1205,7 @@ Collapsible accordion showing recent dispatch and autoban events. Each entry sho
 
 ### Kanban Board (`kanban.html`)
 
-The central orchestration panel, hosted by `KanbanProvider`. Nine tabs: KANBAN, PROJECTS, AGENTS, PROMPTS, AUTOMATION, REMOTE, WORKTREES, UAT, SETUP.
+The central orchestration panel, hosted by `KanbanProvider`. Eight tabs: KANBAN, AGENTS, PROMPTS, AUTOMATION, REMOTE, WORKTREES, UAT, SETUP. (The per-project PRD editor lives on the Project Panel's PROJECTS tab — see below.)
 
 **KANBAN Tab**
 The board itself with drag-and-drop columns. Controls strip:
@@ -1215,7 +1213,7 @@ The board itself with drag-and-drop columns. Controls strip:
 - **PROMOTE TO EPIC** — Convert selected plans to an epic or manage an existing epic.
 - **+ (Add Project)** — Create a new project (prompts for a project name).
 - **Delete Project** — Remove the selected project (icon button).
-- **PROJECT CONTEXT** — Toggle (off by default). When on, the active project's PRD (authored on the PROJECTS tab) is injected into every dispatched prompt across all roles.
+- **PROJECT CONTEXT** — Toggle (off by default). When on, the active project's PRD (authored on the Project Panel's PROJECTS tab) is injected into every dispatched prompt across all roles.
 - **Scan Folders** — Force immediate plan scan (`switchboard.triggerPlanScan`).
 - **AUTOBAN** — Start/stop the automation engine.
 - **Remote Control** — Start/stop Linear remote control.
@@ -1225,12 +1223,6 @@ The board itself with drag-and-drop columns. Controls strip:
 - **CHAT PROMPT** — Copy chat prompt (multi-plan if plans selected, otherwise general consultation).
 - Sub-bar: **Pause/Reset AUTOBAN timers**, status messages, worktree indicator.
 - Column headers: **+ (Add Plan)**, **Import from Clipboard** (multi-plan supported with `### PLAN N START` markers), **Backlog/New toggle** (CREATED column only), card count.
-
-**PROJECTS Tab**
-Authors the per-project **Product Requirements (PRD)** that the PROJECT CONTEXT toggle injects:
-- **Project dropdown** — Pick a project to edit (or "No projects — add one on the Kanban tab (+)").
-- **SAVE PRD** — Write the editor content to `.switchboard/projects/<project>/prd.md` (git-trackable). A path hint shows the exact file path.
-- **Editor** — Markdown textarea for the project's product requirements. See §8 (Projects).
 
 **AGENTS Tab**
 Configure agent visibility and CLI startup commands:
@@ -1271,9 +1263,9 @@ Board-level configuration:
 
 ### Project Panel (`project.html`)
 
-Hosted by `PlanningPanelProvider` (project mode). Five tabs: KANBAN PLANS, EPICS, CONSTITUTION, SYSTEM, TUNING.
+Hosted by `PlanningPanelProvider` (project mode). Six tabs: KANBAN PLANS, PROJECTS, EPICS, CONSTITUTION, SYSTEM, TUNING.
 
-> Note: Project *creation*, plan-to-project *assignment*, the **PROJECT CONTEXT** toggle, and the per-project **PRD** editor all live in the **Kanban panel** (`kanban.html`) — see its KANBAN and PROJECTS tabs above — not in this Project Panel. The Project Panel handles Epics, the Constitution, the System doc, and tuning.
+> Note: Project *creation*, plan-to-project *assignment*, and the **PROJECT CONTEXT** toggle live on the **Kanban panel** (`kanban.html`) board control strip — see its KANBAN tab above — because they act on the board. The per-project **PRD editor** lives on this Project Panel's PROJECTS tab.
 
 **KANBAN PLANS Tab**
 - **Workspace filter**, **Column filter** — Filter plans by workspace and Kanban column.
@@ -1282,6 +1274,12 @@ Hosted by `PlanningPanelProvider` (project mode). Five tabs: KANBAN PLANS, EPICS
 - **CHAT PROMPT** — Copy general chat planning prompt.
 - **Search** — Filter plans by text.
 - Plan list with selection and preview.
+
+**PROJECTS Tab**
+Authors the per-project **Product Requirements (PRD)** that the Kanban board's PROJECT CONTEXT toggle injects:
+- **Project dropdown** — Pick a project to edit (or "No projects — add one on the Kanban board with +").
+- **SAVE PRD** — Write the editor content to `.switchboard/projects/<project>/prd.md` (git-trackable). A path hint shows the exact file path.
+- **Editor** — Markdown textarea for the project's product requirements. See §8 (Projects).
 
 **EPICS Tab**
 - **Workspace filter**, **+ New Epic**, **?** (How to Run an Epic — 3 ways).

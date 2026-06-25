@@ -29,6 +29,7 @@ import { buildWorkspaceItems } from './workspaceUtils';
 import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 import { InsightManager } from './InsightManager';
 import { GovernanceFileKey } from './constitutionUtils';
+import { getProjectPrdPath } from './prdUtils';
 
 
 export interface PlanningPanelAdapterFactories {
@@ -3193,6 +3194,76 @@ export class PlanningPanelProvider {
                         error: String(err),
                         tab: 'constitution',
                         governanceFile: key
+                    });
+                }
+                break;
+            }
+            // ── Per-project PRDs (Projects tab) ─────────────────────────────────────────
+            // PRD authoring lives in this Project panel (next to the constitution editor),
+            // not the kanban board. The dispatch-path resolvers stay in KanbanProvider; the
+            // toggle is read/written via its public getProjectContextEnabled/setProjectContextEnabled.
+            case 'getProjectContextEnabled': {
+                // Hydrate the PROJECT CONTEXT toggle for the workspace the Projects tab edits.
+                const wsRoot = msg.workspaceRoot;
+                const enabled = (wsRoot && allRoots.includes(wsRoot) && this._kanbanProvider)
+                    ? await this._kanbanProvider.getProjectContextEnabled(wsRoot)
+                    : false;
+                this._projectPanel?.webview.postMessage({ type: 'projectContextEnabled', enabled, workspaceRoot: wsRoot });
+                break;
+            }
+            case 'setProjectContextEnabled': {
+                // Per-project PRD master toggle (per-workspace). KanbanProvider's dispatch path
+                // reads this same config, so a write here governs whether the active project's
+                // PRD is injected into future dispatched prompts. Confirm state back to the webview.
+                const wsRoot = msg.workspaceRoot;
+                if (wsRoot && allRoots.includes(wsRoot)) {
+                    await this._kanbanProvider?.setProjectContextEnabled(wsRoot, !!msg.enabled);
+                }
+                this._projectPanel?.webview.postMessage({ type: 'projectContextEnabled', enabled: !!msg.enabled, workspaceRoot: wsRoot });
+                break;
+            }
+            case 'getProjectPrd': {
+                // Read a project's PRD file for the Projects-tab editor.
+                const wsRoot = msg.workspaceRoot;
+                if (wsRoot && allRoots.includes(wsRoot) && typeof msg.projectName === 'string') {
+                    const filePath = getProjectPrdPath(wsRoot, msg.projectName);
+                    let content = '';
+                    let exists = false;
+                    try {
+                        if (fs.existsSync(filePath)) {
+                            content = await fs.promises.readFile(filePath, 'utf8');
+                            exists = true;
+                        }
+                    } catch { /* non-fatal */ }
+                    this._projectPanel?.webview.postMessage({
+                        type: 'projectPrdContent',
+                        projectName: msg.projectName,
+                        workspaceRoot: wsRoot,
+                        content,
+                        exists,
+                        path: filePath
+                    });
+                }
+                break;
+            }
+            case 'saveProjectPrd': {
+                // Write a project's PRD file (creating .switchboard/projects/<slug>/).
+                const wsRoot = msg.workspaceRoot;
+                if (wsRoot && allRoots.includes(wsRoot) && typeof msg.projectName === 'string' && typeof msg.content === 'string') {
+                    const filePath = getProjectPrdPath(wsRoot, msg.projectName);
+                    let ok = false;
+                    try {
+                        await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+                        await fs.promises.writeFile(filePath, msg.content, 'utf8');
+                        ok = true;
+                    } catch (err) {
+                        console.error('[PlanningPanelProvider] Failed to save project PRD:', err);
+                    }
+                    this._projectPanel?.webview.postMessage({
+                        type: 'projectPrdSaved',
+                        projectName: msg.projectName,
+                        ok,
+                        path: filePath
                     });
                 }
                 break;

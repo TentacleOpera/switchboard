@@ -1391,6 +1391,7 @@
 <body>
     <div class="shared-tab-bar">
         <button class="shared-tab-btn active" data-tab="kanban">KANBAN PLANS</button>
+        <button class="shared-tab-btn" data-tab="projects">PROJECTS</button>
         <button class="shared-tab-btn" data-tab="epics">EPICS</button>
         <button class="shared-tab-btn" data-tab="constitution">CONSTITUTION</button>
         <button class="shared-tab-btn" data-tab="system">SYSTEM</button>
@@ -1428,6 +1429,31 @@
                         <textarea id="kanban-editor" class="markdown-editor"></textarea>
                     </div>
                 </div>
+            </div>
+        </div>
+
+        <!-- Projects tab (per-project PRDs) -->
+        <div id="projects-content" class="shared-tab-content">
+            <div class="controls-strip">
+                <select id="projects-workspace-filter"></select>
+                <select id="projects-prd-select">
+                    <option value="">Select a project…</option>
+                </select>
+                <button class="strip-btn" id="btn-project-context" data-tooltip="When on, the selected project's PRD is injected into every dispatched prompt">PROJECT CONTEXT: OFF</button>
+                <button class="strip-btn" id="btn-save-project-prd" title="Save this project's PRD" disabled>SAVE PRD</button>
+                <span id="projects-prd-status" style="font-size:11px; color:var(--text-secondary);"></span>
+            </div>
+            <div style="padding:10px 14px; overflow-y:auto; flex:1; display:flex; flex-direction:column;">
+                <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
+                    A PRD is a loose set of product requirements respected across all plans in a project — independent of epics.
+                    When <strong>PROJECT CONTEXT</strong> is on, the selected project's PRD is injected into <em>every</em> dispatched
+                    prompt (planner, lead, coder, reviewer, tester, orchestrator). Stored at
+                    <code>.switchboard/projects/&lt;project&gt;/prd.md</code> (git-trackable).
+                </div>
+                <div id="projects-prd-path-hint" style="font-size:10px; font-family:monospace; color:var(--text-secondary); opacity:0.7; margin-bottom:6px;"></div>
+                <textarea id="projects-prd-editor" spellcheck="false"
+                    placeholder="Select a project, then write its product requirements here…"
+                    style="width:100%; flex:1; min-height:380px; resize:vertical; font-family:var(--vscode-editor-font-family, monospace); font-size:12px; line-height:1.5; padding:10px; box-sizing:border-box; background:var(--vscode-input-background, #1e1e1e); color:var(--vscode-input-foreground, #ddd); border:1px solid var(--border-color, #333); border-radius:4px;" disabled></textarea>
             </div>
         </div>
 

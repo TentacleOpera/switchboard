@@ -1674,6 +1674,12 @@ export class ClickUpSyncService {
           body += `@${name || userId}`;
         }
       }
+      // Fallback: if the structured array yielded no text (empty array or
+      // only unrecognized block types), use comment_text so we don't show
+      // a blank body — the same failure class as the original UAT bug.
+      if (!body) {
+        body = String(comment?.comment_text || '').trim();
+      }
     } else {
       body = String(comment?.comment_text || '').trim();
     }

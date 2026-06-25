@@ -2828,6 +2828,33 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     /**
+     * Public accessor: read the per-workspace PROJECT CONTEXT master toggle
+     * (`project_context_enabled` config). The PRD authoring UI lives in the
+     * Project panel (project.html) now, so PlanningPanelProvider reads the toggle
+     * state through this getter rather than the (private) dispatch-path resolver.
+     */
+    public async getProjectContextEnabled(workspaceRoot: string): Promise<boolean> {
+        return this._resolveProjectContextEnabled(workspaceRoot);
+    }
+
+    /**
+     * Public accessor: write the per-workspace PROJECT CONTEXT master toggle.
+     * The dispatch path reads this same config via _resolveProjectContextEnabled,
+     * so a write here immediately governs whether the active project's PRD is
+     * injected into future dispatched prompts.
+     */
+    public async setProjectContextEnabled(workspaceRoot: string, enabled: boolean): Promise<void> {
+        try {
+            const db = this._getKanbanDb(workspaceRoot);
+            if (db && await db.ensureReady()) {
+                await db.setConfig('project_context_enabled', enabled ? 'true' : 'false');
+            }
+        } catch (err) {
+            console.error('[KanbanProvider] Failed to set project_context_enabled:', err);
+        }
+    }
+
+    /**
      * Resolve the active PROJECT's PRD (mirrors _resolveConstitution but keyed on
      * the project NAME — there is no project_id FK on plans). Returns {} for the
      * unassigned / no-project case so "No Project" boards inject no PRD. Reads are
@@ -5243,68 +5270,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
                 break;
             }
-            case 'setProjectContextEnabled': {
-                // Per-project PRD master toggle. Stored in the kanban DB config table
-                // (per-workspace). No board refresh needed — the toggle only affects
-                // future dispatch prompts; confirm state back to the webview.
-                const workspaceRoot = msg.workspaceRoot || this._currentWorkspaceRoot;
-                if (workspaceRoot) {
-                    const db = this._getKanbanDb(workspaceRoot);
-                    if (db && await db.ensureReady()) {
-                        await db.setConfig('project_context_enabled', msg.enabled ? 'true' : 'false');
-                    }
-                    this._panel?.webview.postMessage({ type: 'projectContextEnabled', enabled: !!msg.enabled });
-                }
-                break;
-            }
-            case 'getProjectPrd': {
-                // Read a project's PRD file for the Projects-tab editor.
-                const workspaceRoot = msg.workspaceRoot || this._currentWorkspaceRoot;
-                if (workspaceRoot && typeof msg.projectName === 'string') {
-                    const { getProjectPrdPath } = require('./prdUtils');
-                    const filePath = getProjectPrdPath(workspaceRoot, msg.projectName);
-                    let content = '';
-                    let exists = false;
-                    try {
-                        if (fs.existsSync(filePath)) {
-                            content = await fs.promises.readFile(filePath, 'utf8');
-                            exists = true;
-                        }
-                    } catch { /* non-fatal */ }
-                    this._panel?.webview.postMessage({
-                        type: 'projectPrdContent',
-                        projectName: msg.projectName,
-                        workspaceRoot,
-                        content,
-                        exists,
-                        path: filePath
-                    });
-                }
-                break;
-            }
-            case 'saveProjectPrd': {
-                // Write a project's PRD file (creating .switchboard/projects/<slug>/).
-                const workspaceRoot = msg.workspaceRoot || this._currentWorkspaceRoot;
-                if (workspaceRoot && typeof msg.projectName === 'string' && typeof msg.content === 'string') {
-                    const { getProjectPrdPath } = require('./prdUtils');
-                    const filePath = getProjectPrdPath(workspaceRoot, msg.projectName);
-                    let ok = false;
-                    try {
-                        await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
-                        await fs.promises.writeFile(filePath, msg.content, 'utf8');
-                        ok = true;
-                    } catch (err) {
-                        console.error('[KanbanProvider] Failed to save project PRD:', err);
-                    }
-                    this._panel?.webview.postMessage({
-                        type: 'projectPrdSaved',
-                        projectName: msg.projectName,
-                        ok,
-                        path: filePath
-                    });
-                }
-                break;
-            }
+            // NOTE: PRD authoring (per-project PRD editor + PROJECT CONTEXT toggle) lives in the
+            // Project panel (project.html / PlanningPanelProvider), not the kanban board. The
+            // setProjectContextEnabled / getProjectPrd / saveProjectPrd message handlers are
+            // therefore in PlanningPanelProvider; the dispatch-path resolvers
+            // (_resolveProjectContextEnabled / _resolveProjectPrd) remain here, plus the public
+            // getProjectContextEnabled / setProjectContextEnabled accessors the Project panel calls.
             case 'setAutomationMode': {
                 if (this._taskViewerProvider) {
                     await this._taskViewerProvider.setAutomationModeFromKanban(msg);

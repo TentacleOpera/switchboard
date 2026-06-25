@@ -128,7 +128,7 @@ Organize plans into **Projects** (areas within a repo that also carry shared req
 ### Projects
 A **Project** slices a repo's board into areas (e.g. `frontend`, `backend`, `infra`) and carries a shared spec for that area. Create one on the Kanban board control strip with **+ (Add Project)**, assign plans with **ASSIGN**, and filter the board with the Workspace/Project selector.
 
-Each project can hold a **PRD** (Product Requirements Document) authored on the Kanban panel's **PROJECTS** tab and stored at `.switchboard/projects/<project>/prd.md` (git-trackable). Toggle **PROJECT CONTEXT** on the control strip to inject the active project's PRD — under the header `PROJECT REQUIREMENTS (PRD):` — into *every* dispatched prompt (planner, lead, coder, reviewer, tester, orchestrator). This is the per-project, all-roles successor to the old workspace-wide planner Design Doc setting.
+Each project can hold a **PRD** (Product Requirements Document) authored on the Project Panel's **PROJECTS** tab and stored at `.switchboard/projects/<project>/prd.md` (git-trackable). Toggle **PROJECT CONTEXT** on the Kanban control strip to inject the active project's PRD — under the header `PROJECT REQUIREMENTS (PRD):` — into *every* dispatched prompt (planner, lead, coder, reviewer, tester, orchestrator). This is the per-project, all-roles successor to the old workspace-wide planner Design Doc setting.
 
 ### Epics
 An Epic groups several plans (its subtasks) so they can be planned and shipped together. Manage epics in the **Project Panel → EPICS** tab: **+ New Epic** to create one (with an optional "Add to Kanban board"), **+ Subtask** to attach existing plans, **Orchestrate** to hand the whole epic to an Orchestrator agent, and **Delete Epic** (subtasks are detached, never destroyed). You can also select a plan on the board and click **PROMOTE TO EPIC**.
@@ -232,10 +232,10 @@ Settings:
 
 ## Panels
 
-- **Kanban** (`switchboard.openKanban`) — Visual board plus tabs for Projects (project PRDs), Agents, Prompts, Automation, Remote, Worktrees, UAT, and Setup. Projects are created and the PROJECT CONTEXT toggle lives here.
+- **Kanban** (`switchboard.openKanban`) — Visual board plus tabs for Agents, Prompts, Automation, Remote, Worktrees, UAT, and Setup. Projects are created here (board toolbar) and the PROJECT CONTEXT toggle lives here.
 - **Setup** (`switchboard.openSetupPanel`) — Central configuration.
 - **Planning** (`switchboard.openPlanningPanel`) — Authoring interface.
-- **Project Panel** (`switchboard.openProjectPanel`) — Epics, Constitution, and System docs.
+- **Project Panel** (`switchboard.openProjectPanel`) — Projects (per-project PRDs), Epics, Constitution, and System docs.
   ![Project panel — Constitution](docs/TODO_project_panel.png)
 - **Design Panel** (`switchboard.openDesignPanel`) — Six tabs: STITCH (Google Stitch), CLAUDE (claude.ai/design import), BRIEFS, HTML PREVIEWS, IMAGES, DESIGN SYSTEM.
   ![Design panel — Stitch](docs/TODO_design_panel.png)

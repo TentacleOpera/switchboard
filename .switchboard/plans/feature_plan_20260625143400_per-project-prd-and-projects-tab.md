@@ -221,3 +221,27 @@ Reviewed the implemented code against this plan as the source of truth. The "dan
 ### Remaining risks
 - The deferred race item is the only behavioral risk, and it is bounded (no cross-project *security* leak; worst real-world case is an off-filter automation dispatch picking up the displayed project's PRD within one workspace). Acceptable for ship; track against a future `BatchPromptPlan.project` thread-through.
 - Compilation/tests were not run this pass (per directive) — the user's separate test run is the gate for type-level regressions.
+
+---
+
+## UAT Failure & Correction (2026-06-26) — PRD UI moved from kanban.html → project.html
+
+**UAT verdict: FAILED on placement.** The implementation added the PROJECTS tab + per-project PRD editor + PROJECT CONTEXT toggle as a **top-level tab on the kanban board panel (`kanban.html` / `KanbanProvider`)**. That is the wrong surface. The owner's intent — and the obvious home given the rest of this plan — was the **Project panel (`project.html` / `PlanningPanelProvider`)**, as a tab **between KANBAN PLANS and EPICS**, sitting next to the **CONSTITUTION** editor (the very tab this plan named as the structural model). `kanban.html` is not a legacy/superseded panel; it simply **was never intended to host doc creation**. PRD authoring is doc creation, so it belongs in the Project panel alongside the constitution editor.
+
+This means Proposed Changes steps **6–9** and the Reviewer-Pass file list (which target `kanban.html`) are **superseded** by the relocation below. The backend *dispatch/injection* layer (the genuinely careful part — `_resolveProjectPrd`, `_resolveProjectContextEnabled`, the `dispatchPrefixCore` + `buildCustomAgentPrompt` injection, tester reconciliation) was correct and is **unchanged**; only the authoring UI and its message handlers moved.
+
+### What changed in the correction
+- **`src/webview/kanban.html`** — removed the PROJECTS top-level tab button, the `projects-tab-content` div, the PROJECT CONTEXT toolbar toggle, and all associated inline JS (`projectContextEnabled` state, `updateProjectContextButton`, `populateProjectsPrdSelect`, `requestProjectPrd`, `setProjectsPrdEditorEnabled`, the toggle/select/save listeners, the tab-hydration hook, and the `projectContextEnabled`/`projectPrdContent`/`projectPrdSaved` message cases). The legacy planner add-on "Planning Epic Reference (legacy)" (`designDoc` key) is **left intact** — it is role config, not doc creation, and remains the back-compat fallback.
+- **`src/webview/project.html`** — added a **PROJECTS** `shared-tab-btn` between KANBAN PLANS and EPICS, plus a `projects-content` tab with its own workspace filter, project selector, **PROJECT CONTEXT** toggle, **SAVE PRD** button, status text, path hint, and PRD textarea. Self-contained (no `is-teal`/`is-off`/`db-subsection` classes — the toggle's on/off look is applied inline).
+- **`src/webview/project.js`** — new Projects-tab wiring: element refs + `projectsFilters`/`projectContextEnabled` state, `populateWorkspaceDropdowns` now fills the projects workspace filter, `getProjectsTabWorkspaceRoot`/`updateProjectsPrdSelect`/`requestProjectPrd`/`requestProjectContextEnabled`/`hydrateProjectsTab`/`updateProjectContextButton`/`setProjectsPrdEditorEnabled`, the four listeners, the `projects` tab-activation hook, the kanbanPlansReady re-hydrate, and the `projectContextEnabled`/`projectPrdContent`/`projectPrdSaved` message cases.
+- **`src/services/PlanningPanelProvider.ts`** — added `getProjectContextEnabled`/`setProjectContextEnabled`/`getProjectPrd`/`saveProjectPrd` message cases in `_handleMessage` (posting back to `_projectPanel.webview`), reusing `prdUtils.getProjectPrdPath` and validating `workspaceRoot` against `_getWorkspaceRoots()`. The toggle is read/written through new public KanbanProvider accessors so the dispatch path keeps reading the same `project_context_enabled` config.
+- **`src/services/KanbanProvider.ts`** — added public `getProjectContextEnabled(root)` / `setProjectContextEnabled(root, enabled)` accessors; removed the three now-dead `kanban.html`-only webview message cases. Dispatch-path resolvers and the board-state payload are unchanged.
+
+### Decision recorded
+- The **PROJECT CONTEXT** toggle was consolidated **into the Projects tab** (alongside the PRD it gates) rather than left on the kanban toolbar — the whole PRD feature is now self-contained in one place. It remains a per-workspace master switch writing the same `project_context_enabled` config the dispatch path reads.
+
+### Validation (this correction)
+- `npx tsc --noEmit`: no new errors (only two pre-existing `await import(...)` node16 warnings in `ClickUpSyncService.ts`/`KanbanProvider.ts`, untouched by this work).
+- `npm run compile` (webpack): succeeds (only the pre-existing jsdom `canvas` warning).
+- `node --check src/webview/project.js`: passes; all new identifiers declared and referenced.
+- `kanban.html` confirmed free of every PRD identifier after removal.

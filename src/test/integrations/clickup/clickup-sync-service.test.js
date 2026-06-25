@@ -564,12 +564,22 @@ async function testNativeTaskQueryAndMutationHelpers() {
                         ],
                         user: { id: 'author-3', username: 'Author Three', email: 'author3@example.com' },
                         date: '1710000002000'
+                    },
+                    {
+                        // 4. Structured comment with empty comment array:
+                        //    comment_text is populated but the array is empty.
+                        //    The decoder must fall back to comment_text, not blank.
+                        id: 'comment-empty-array-1',
+                        comment_text: 'Fallback text here',
+                        comment: [],
+                        user: { id: 'author-4', username: 'Author Four', email: 'author4@example.com' },
+                        date: '1710000003000'
                     }
                 ]
             }, (req) => req.method === 'GET' && req.path === '/api/v2/task/task-created/comment');
 
             const { threads } = await service.getCommentThreads('task-created');
-            assert.strictEqual(threads.length, 3);
+            assert.strictEqual(threads.length, 4);
             
             // 1. Structured comment:
             assert.strictEqual(threads[0].id, 'comment-struct-1');
@@ -588,6 +598,11 @@ async function testNativeTaskQueryAndMutationHelpers() {
             assert.strictEqual(threads[2].id, 'comment-media-1');
             assert.strictEqual(threads[2].body, 'Check this out');
             assert.strictEqual(threads[2].author.name, 'Author Three');
+
+            // 4. Structured comment with empty comment array (fallback to comment_text):
+            assert.strictEqual(threads[3].id, 'comment-empty-array-1');
+            assert.strictEqual(threads[3].body, 'Fallback text here');
+            assert.strictEqual(threads[3].author.name, 'Author Four');
         } finally {
             http.restore();
         }
