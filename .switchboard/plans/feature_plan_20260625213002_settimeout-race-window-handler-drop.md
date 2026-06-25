@@ -374,3 +374,64 @@ This guarantees the newly selected workspace's board renders immediately instead
 ---
 
 **Recommendation**: Complexity 5 → **Send to Coder**
+
+---
+
+## Reviewer Pass (2026-06-26)
+
+Direct in-place reviewer-executor pass against the implemented code in `src/webview/kanban.html`. Implementation found substantially complete and faithful to the **Adversarial Review Revisions (A–E)**; one MAJOR gap in Revision E was found and fixed in code.
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *Adjusts monocle, exhales through nose.*
+>
+> So. You wrote an entire plan — a *beautiful* plan, mind you, with a timeline diagram and an edge-case table that could double as a wedding seating chart — explicitly naming **two** sites for the workspace-switch guard reset: "reassign-to-workspace" and "workspace-project-select change." Revision E. In writing. With line numbers.
+>
+> And then you implemented it at... the `updateColumns` handler. Which is *neither of those two things.* (**MAJOR**, `src/webview/kanban.html:6380`.) You walked into a room with two clearly labelled doors and went out the window.
+>
+> Here's why I'm not merely pedantic: I followed the wire. `selectWorkspace` in `KanbanProvider.ts:5152` calls `_refreshBoard` — which posts **`updateBoard`**, not `updateColumns`. So the dropdown — the *primary, user-facing workspace switcher* at `:6955` — clears `lastBoardSignature` at `:6966` but leaves `optimisticMoveUntil` armed. A user who starts a drag and then flicks the workspace dropdown within two seconds gets the new workspace's board **silently swallowed** by the very guard that was supposed to protect *the other* workspace's drag. The board you put the guard at (`updateColumns`) *already* calls `renderBoard` unconditionally — so the reset there is decorative. You guarded the door nobody uses and left the front gate open. (**MAJOR**.)
+>
+> The rest? Annoyingly competent, I'll grudgingly admit. The deadline approach is in. Both `setTimeout` race windows armed — CODED_AUTO at `:5788`, the `validIds` path at `:5970` — and the CODED_AUTO branch even has the decency to `return` at `:5824` so the two windows don't bleed into each other. The self-defeating `epicWorktreesChanged` re-render from the original Change #4 is properly throttled behind `!optimisticActive` in **both** branches (`:6244`, `:6261`) — good, because a full `renderBoard` mid-drag is exactly the arson this plan exists to prevent. You did NOT touch `moveCards`/`moveCardsFailed` (Revision C) — correct, and they still render from `currentCards` so the self-heal holds. No stuck-flag, no boolean residue.
+>
+> And then, because you cannot have nice things, the indentation at `:6380` was knocked seven columns out of true (**NIT**). It compiles. It also makes my eye twitch.
+>
+> Minor grumbles, filed for the record and *not* worth a line of code: the suppression branch recomputes `buildBoardSignature(currentCards)` at `:6253` when `nextBoardSignature` was already in hand at `:6230` (**NIT**, faithful to the plan text, leave it). And the 2000 ms window is a wager that the backend round-trip beats 1650 ms post-dispatch — lose that bet and you get a bounded ≤2 s flicker that self-heals on the next `moveCards`. You documented that residual, so I'll allow it. Begrudgingly.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep (verified correct, no change):**
+- Deadline declaration + window constant (`:3771–3772`) — Revision A. ✓
+- Both arm sites after their `lastBoardSignature` sync (`:5788` CODED_AUTO, `:5970` main `validIds`) — Revision B; the two windows are mutually exclusive (CODED_AUTO `return` at `:5824`). ✓
+- `updateBoard` suppression with `epicWorktreesChanged` gated behind `!optimisticActive` in both branches (`:6242`, `:6244`, `:6261`) — Revision D, the self-defeating-render fix. ✓
+- `moveCards`/`moveCardsFailed` deliberately untouched (`:6173`, `:6192`) — Revision C; self-heal via render-from-`currentCards` confirmed. ✓
+- COMPLETED immediate `completePlan` path left unguarded (`:5880`) — documented out-of-scope, correct. ✓
+
+**Fix now (applied this pass):**
+- **MAJOR — missing Revision-E guard reset at the workspace-project-select dropdown handler.** `selectWorkspace` → `_refreshBoard` → `updateBoard` (never `updateColumns`), so the dropdown switch (`:6964`) needed its own `optimisticMoveUntil = 0`. Added at `:6967`.
+- **NIT — indentation at `:6380`** normalized to match surrounding block.
+
+**Defer / accept (no action):**
+- Redundant signature recompute at `:6253` — faithful to plan, negligible cost.
+- ≤2 s self-healing flicker if backend round-trip exceeds ~1650 ms post-dispatch — documented residual.
+- Extra guard reset retained at `updateColumns` (`:6380`) — not one of the two named sites, but harmless and arguably beneficial (a column-structure change should not be suppressed mid-drag); left in place rather than removed.
+
+### Fixes Applied
+
+| Severity | Location | Fix |
+|----------|----------|-----|
+| MAJOR | `src/webview/kanban.html:6967` | Added `optimisticMoveUntil = 0;` in the `workspace-project-select` change handler's `isDifferentWorkspace` branch (Revision E's second named site, previously missed). Confirmed via `KanbanProvider.ts:5152` that `selectWorkspace` emits `updateBoard`, not `updateColumns`, so the reset at `:6380` did not cover this path. |
+| NIT | `src/webview/kanban.html:6380` | Normalized indentation of the `optimisticMoveUntil = 0;` line to match the surrounding block. |
+
+### Files Changed
+- `src/webview/kanban.html` — 1 line added (`:6967`), 1 line reindented (`:6380`).
+
+### Validation
+- **Compilation**: skipped per session directive (no `tsc`/build run). `dist/` is not used in dev/testing per CLAUDE.md; `src/` is source of truth.
+- **Tests**: skipped per session directive (suite run separately by user).
+- **Static review**: all guard sites enumerated and verified consistent — declaration (`:3771`), two arm sites (`:5788`, `:5970`), suppression handler (`:6242`), three workspace/project-switch resets (`:6380`, `:6910`, `:6967`). No `optimisticMoveInFlight`/`optimisticMoveTimeout` boolean residue remains. `moveCards`/`moveCardsFailed` confirmed untouched.
+- Edits are additive single lines mirroring adjacent verified code; no structural/brace changes.
+
+### Remaining Risks
+- **COMPLETED/archive drop** (`:5880`) remains unguarded by design — transient data/DOM desync possible between the optimistic mutation and `completePlan` processing, self-healing on the post-archive `updateBoard`. Documented out-of-scope; optional follow-up only.
+- **Window vs. round-trip**: if backend dispatch + DB write + `moveCards` exceeds the 2000 ms deadline, a stale `updateBoard` in the gap can cause a bounded ≤2 s flicker that self-heals on the next authoritative render. Accepted residual.
+- **Manual verification still required**: scenarios 1–10 in the Verification Plan (esp. #6 overlapping drags, #8 epic-worktree-during-guard, #9 workspace-switch-during-drag — the last now exercised by the `:6967` fix) require a running webview and were not executed in this static pass.
