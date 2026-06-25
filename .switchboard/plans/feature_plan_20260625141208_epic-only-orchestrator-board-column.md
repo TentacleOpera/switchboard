@@ -150,3 +150,58 @@ Key risks: (1) drag-drop dispatches the orchestrator on a non-epic card before t
 ## Recommendation
 
 Complexity 5/10 → **Send to Coder**. A column definition plus one new flag wired into five existing decision points (visibility filter, auto-advance skip, dispatch-spec null, DB-level move guard ×2 methods, webview drop guard). The care is in making the `epicOnly` guard authoritative across *all* move paths via three-layer defense-in-depth, and confirming the `kind`/parallel-lane interaction (verified: ID-based, not kind-based).
+
+---
+
+## Reviewer Pass (2026-06-25)
+
+Direct in-place reviewer-executor pass. All proposed changes were located in the committed source and verified against the plan. The implementation is **complete and faithful to the plan's literal steps**. One genuine defense-in-depth/documentation gap was found and addressed with a non-behavioral corrective comment; no functional bug exists.
+
+### Verification of implemented steps (all ✅)
+
+| Step | Location | Status |
+| :-- | :-- | :-- |
+| `epicOnly?: boolean` on `KanbanColumnDefinition` | `agentConfig.ts:85` | ✅ |
+| `ORCHESTRATING` column (order 250, kind `review`, role `orchestrator`, `dragDropMode:'cli'`, `hideWhenNoAgent`, `epicOnly`) | `agentConfig.ts:117` | ✅ |
+| `buildKanbanColumns` spread preserves `epicOnly` | `agentConfig.ts:357` | ✅ |
+| `_columnToRole` → `'orchestrator'` | `KanbanProvider.ts:8026` | ✅ |
+| `_filterDynamicColumns`: `epicOnly` ⇒ occupancy-only, placed **before** `hideWhenNoAgent` | `KanbanProvider.ts:2411` | ✅ |
+| `_getNextColumnId`/`shouldSkip`: `epicOnly` ⇒ skip, placed **first** | `KanbanProvider.ts:3785` | ✅ |
+| `_resolveKanbanDispatchSpec`: `epicOnly` ⇒ `null` | `KanbanProvider.ts:4092` | ✅ |
+| `moveCardToColumn` rejects non-epic → ORCHESTRATING (Option A) | `KanbanProvider.ts:4726` | ✅ |
+| `moveCardToColumnByPlanFile` rejects non-epic → ORCHESTRATING (Option A) | `KanbanProvider.ts:4772` | ✅ |
+| Webview `handleDrop` rejects drops onto `epicOnly` columns | `kanban.html:5692` | ✅ |
+
+Independently confirmed: `_isParallelCodedLane` is ID-based (`KanbanProvider.ts:4128`) so `kind:'review'` is safe; advance-OUT resolves `_columnToRole('CODE REVIEWED') === 'reviewer'`; `_columnsSignature` is computed on the **filtered** list (`KanbanProvider.ts:2173/2329/1275`) so show/hide of ORCHESTRATING re-emits `updateColumns`; `'ORCHESTRATING'` passes the DB column validator via `SAFE_COLUMN_NAME_RE` (`KanbanDatabase.ts:624`) exactly like the other non-allowlisted built-ins (RESEARCHER/SPLITTER/etc.).
+
+### Findings
+
+**CRITICAL** — none.
+
+**MAJOR (M1) — Dispatch guard #1 does not block dispatch as the plan's prose claims (defense-in-depth gap, no functional impact).**
+The plan (L52/L60/L92) states that `_resolveKanbanDispatchSpec` returning `null` for `epicOnly` columns prevents the orchestrator from being *dispatched* on foreign cards, and specifically (L60) that `_remoteDispatchColumnAgent` "would get `role=null` and return early." That is **false**: every dispatch caller resolves the role as `dispatchSpec?.role || this._columnToRole(targetColumn)` (`KanbanProvider.ts:1516`, `:5393`, `:5512`), and `_columnToRole('ORCHESTRATING')` returns `'orchestrator'` (`:8026`), so the `||` fallback rescues the role and dispatch would proceed (subject only to `_canAssignRole`). The null return only strips the *spec-driven custom-user* dispatch config; it is **not** the gate it is described as.
+- **Why there is no functional bug today:** every reachable entry path is independently blocked — drag is rejected by webview guard #3 (`kanban.html:5692`) *before any dispatch message is sent*; batch/auto-advance never returns ORCHESTRATING (`shouldSkip`, `:3785`); and no Linear status maps to ORCHESTRATING (so `_remoteApplyColumnMove` is never called with it). Data integrity is fully protected by the DB guards #2 (`:4726`/`:4772`), which are the authoritative layer and work correctly.
+- **Why the code was NOT changed to "fix" it:** the `_columnToRole('ORCHESTRATING') === 'orchestrator'` mapping is *required* for the legitimate path where an epic already parked in ORCHESTRATING receives an inbound Linear comment and is re-dispatched (`_remoteDispatchComment` → `_remoteDispatchColumnAgent`). A blanket dispatch block on ORCHESTRATING would break that. A truly correct backend dispatch gate would need an `isEpic`-aware check at three call sites — all of which are *unreachable* for ORCHESTRATING today, making the change dead code. A naive `if (!moved) return;` in `_remoteApplyColumnMove` (`:1488`) would change re-dispatch behavior for **all** Linear moves (redundant-webhook re-dispatch), a disproportionate regression risk for a path that cannot be hit.
+- **Fix applied:** a corrective comment at the `_resolveKanbanDispatchSpec` `epicOnly` guard (`KanbanProvider.ts:4092`) documenting that the null return is *defense-in-depth, not the gate*, and naming the three real gates — so a future maintainer does not trust the misleading premise. **Tripwire:** if a future change ever makes ORCHESTRATING a reachable backend dispatch target (a Linear status→ORCHESTRATING mapping, or any non-drag programmatic dispatch), an `isEpic`-aware guard MUST be added to the dispatch role resolution; the current null return will not stop it.
+
+### NITs (no action taken)
+
+- **N1 — Webview guard placement.** Implemented at the very top of `handleDrop` keyed on `targetColumn` (`kanban.html:5692`) rather than after `effectiveTargetColumn` as the plan snippet showed. Functionally identical (the only divergence between the two is the `CREATED`→`BACKLOG` backlog remap, and neither is `epicOnly`) and placing it earlier is marginally safer. Keep.
+- **N2 — Markdown state export.** `exportStateToFile` (`KanbanDatabase.ts:5308`) iterates `VALID_KANBAN_COLUMNS`, which omits ORCHESTRATING — so an epic parked there won't appear in the generated `Kanban Board` markdown dump. This is a **pre-existing** pattern (RESEARCHER/SPLITTER/INTERN CODED/ACCEPTANCE TESTED/TICKET UPDATER are already omitted), cosmetic, and not introduced by this plan. No change.
+- **N3 — Option A hardcoding.** Both DB guards check the literal `'ORCHESTRATING'` string rather than the `epicOnly` flag (as the plan recommended for now). If a second `epicOnly` column is ever added, these guards silently won't cover it — refactor to the `isEpicOnlyColumn()` helper (plan Option B) at that point. Acknowledged in the plan.
+
+### Cross-plan dependency (not a defect of this plan)
+
+The Orchestrate-button **teleport** (`moveCardToColumn(…, 'ORCHESTRATING')`, plan step 9) is **not present in this codebase** — it is correctly scoped to the sibling plan `feature_plan_20260625110531_per-card-epic-action-buttons.md`. Consequence: **this plan's column is inert until that plan lands** (the column has no occupant, so it never becomes visible). This matches the plan's own Dependencies note ("Land them together") and is expected, not a bug in this implementation.
+
+### Validation
+
+- **Typecheck/compile:** skipped per session directive (SKIP COMPILATION).
+- **Tests:** skipped per session directive (SKIP TESTS) — run separately by the user. The Verification Plan's automated-test additions remain TODO for that run.
+- **Static review:** all 10 proposed changes located and verified in committed source; all enforcement-point placements confirmed correct relative to surrounding logic.
+
+### Remaining risks
+
+1. **M1 defense-in-depth gap** (above): zero functional impact today; mitigated by webview guard #3 + `shouldSkip` + absence of Linear mapping + authoritative DB guards #2. Tripwire documented for future dispatch-target changes.
+2. **Inertness until the sibling button plan lands** (cross-plan dependency): the column cannot appear until the teleport exists. Land both together as the plan directs.
+3. **Test coverage outstanding**: the unit coverage described in the Verification Plan (occupancy visibility, `_getNextColumnId` skip, dispatch-spec null, non-epic move rejection) has not been added/run in this pass.

@@ -270,3 +270,49 @@ This handler uses `db.updateColumn` directly (line 6907, no epic cascade). Subta
 ---
 
 **Recommendation**: Complexity 4 → **Send to Coder**
+
+---
+
+## Code Review Pass (Reviewer-Executor)
+
+### Stage 1 — Adversarial Findings (Grumpy Principal Engineer)
+
+| Severity | Finding | Location |
+|----------|---------|----------|
+| CRITICAL | Cascade-inflated `movedIds`/`movedSids` arrays (now containing subtask session IDs) were reused for CLI agent dispatch (`triggerBatchAgentFromKanban`/`triggerAgentFromKanban`), causing unwanted agent dispatches for subtask plans when an epic is moved via button. The parent plan's drag handlers dodged this because they have no CLI dispatch; these button paths do. | `KanbanProvider.ts:3672`, `6078-6082`, `6148-6154`, `6212-6216`, `6285` |
+| NIT | `movedParts` status message uses `sids.length` (original count) not `movedSids.length` (cascade count). This is actually correct behavior — reports selected-card count, not inflated count. No fix needed. | `KanbanProvider.ts:6076`, `6210` |
+
+### Stage 2 — Balanced Synthesis
+
+**Keep (correct as implemented):**
+- All 15 cascade-collection insertions via `_collectAllMovedSessionIds`.
+- The `_collectAllMovedSessionIds` helper (line 4748) — reads `isEpic`/`epicId` only, stable regardless of persist timing.
+- The `_postMoveCardsByTarget` async signature change + `workspaceRoot` parameter (line 4043).
+- Both callers (`batchPlannerPrompt` line 5971, `batchLowComplexity` line 6001) — correctly `await` with `workspaceRoot`.
+- The `testingFailed` exclusion (line 6980) — correctly uses `db.updateColumn` (no cascade), posts `msg.sessionIds` directly.
+- Error-tracking gating: helper called only inside `if (ok)` blocks for sites with failure tracking (lines 3662, 3702, 6069, 6141, 6207, 6281).
+- Fire-and-forget sites (promptSelected/promptAll routing + else branches) collect unconditionally — matches existing behavior.
+
+**Fix applied (CRITICAL):** Separated "dispatch IDs" (original successfully-moved session IDs) from "moveCards IDs" (cascade-inflated). Added a `dispatchIds`/`dispatchSids` array in each of the 5 affected sites, pushing the original `sid` inside the `if (ok)` block, and changed the CLI trigger calls to use the dispatch-only array. The `moveCards` delta continues to use the cascade-inflated array.
+
+### Files Changed
+
+- `src/services/KanbanProvider.ts` — 5 sites fixed:
+  1. `_distributePlannerDispatch` fallback (line ~3654): added `dispatchIds`, changed `triggerBatchAgentFromKanban` at line 3674 to use `dispatchIds`.
+  2. `moveSelected` PLAN REVIEWED complexity routing (line ~6063): added `dispatchSids`, changed `triggerAgentFromKanban`/`triggerBatchAgentFromKanban` at lines 6084/6086 to use `dispatchSids`.
+  3. `moveSelected` main forward (line ~6135): added `dispatchIds`, changed `triggerAgentFromKanban`/`triggerBatchAgentFromKanban` at lines 6157/6159 to use `dispatchIds`.
+  4. `moveAll` PLAN REVIEWED complexity routing (line ~6201): added `dispatchSids`, changed `triggerAgentFromKanban`/`triggerBatchAgentFromKanban` at lines 6222/6224 to use `dispatchSids`.
+  5. `moveAll` main forward (line ~6275): added `dispatchIds`, changed `triggerBatchAgentFromKanban` at line 6295 to use `dispatchIds`.
+
+### Verification Results
+
+- **Compilation:** Skipped per session policy (pre-compiled state assumed).
+- **Tests:** Skipped per session policy (user runs separately).
+- **Grep audit:** All 17 `triggerAgentFromKanban`/`triggerBatchAgentFromKanban` call sites verified — the 5 fixed sites now use dispatch-only arrays; the remaining 12 use original/single IDs (`sessionId`, `sessionIds`, `msg.sessionIds`, `eligibleSessionIds`, or bucket-partitioned originals). No cascade-inflated array reaches a CLI dispatch.
+- **`moveCards` post audit:** All 21 `type: 'moveCards'` posts verified — 20 use cascade-inflated arrays (correct), 1 is `testingFailed` using `msg.sessionIds` (correctly excluded).
+
+### Remaining Risks
+
+- **Subtask agent dispatch via `_distributePlannerDispatch` main path:** The main path (line 3746) dispatches via bucket-partitioned `dispatchedIds` (originals only), so it was never affected. The fallback path is now fixed. No remaining risk.
+- **Fire-and-forget sites without error tracking:** If `moveCardToColumn` fails silently (returns falsy but is not checked), subtask IDs are still collected and sent in the `moveCards` delta. This matches the pre-existing fire-and-forget behavior and is documented in the plan's edge-case table. Low risk — the webview would show a stale move that the next `updateBoard` corrects.
+- **No new risks introduced by the review fixes.** The `dispatchIds` arrays are a strict subset of the originals that succeeded, preserving the pre-cascade dispatch semantics exactly.
