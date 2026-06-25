@@ -1236,9 +1236,14 @@ The subtask plans may already have been improved by a planning agent — treat t
 
         const suppressWalkthroughBlock = suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '';
         const epicDocLinkLine = epicDocLink ? `Read the epic and its subtasks at: ${epicDocLink}` : '';
+        // The AUTHORIZATION TO EXECUTE wall is gated with the rest of the safeguards
+        // (batch rules + FOCUS) so the terse "[add-on blocks] + [epic doc link]" form —
+        // all add-ons off except ultracode — carries no AUTHORIZATION/FOCUS/GIT walls.
+        // The execute-don't-replan intent still lives in the orchestrator base instruction.
+        const executionBlock = switchboardSafeguardsEnabled ? executionDirective : '';
         const promptParts = [
             `Please orchestrate the following epic.`,
-            executionDirective,
+            executionBlock,
             safeguardsBlock,
             baseInstructions,
             suffixBlock,

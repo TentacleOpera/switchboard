@@ -1543,13 +1543,18 @@
             if (epicCopyPromptBtn) {
                 epicCopyPromptBtn.addEventListener('click', e => {
                     e.stopPropagation();
+                    // No optimistic "Copied" text: the backend kanbanPlanPromptCopied
+                    // response handler (project.js ~565) finds this button via
+                    // .kanban-plan-copy-prompt[data-session-id] and sets "Copied!"/"Failed"
+                    // with a reset timer. An optimistic update would race with that handler
+                    // (it captures oldText at response time) and leave the button stuck on
+                    // "Copied". Matches the regular kanban Copy Prompt pattern (no optimistic
+                    // update — see project.js ~1174).
                     vscode.postMessage({
                         type: 'copyEpicPlannerPrompt',
                         sessionId: epicCopyPromptBtn.dataset.sessionId,
                         workspaceRoot: epicCopyPromptBtn.dataset.workspaceRoot
                     });
-                    epicCopyPromptBtn.textContent = 'Copied';
-                    setTimeout(() => epicCopyPromptBtn.textContent = 'Copy Planning Prompt', 2000);
                 });
             }
 

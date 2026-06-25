@@ -306,3 +306,45 @@ The `.kanban-plan-actions` class is already defined for regular plan cards. If e
 ---
 
 **Recommendation:** Complexity is 5/10 → **Send to Coder**. The frontend changes are routine (mirroring existing patterns), but the backend generalization of `buildEpicOrchestrationPrompt` and the new `copyEpicPlannerPrompt` handler require care to ensure the planner prompt is correctly assembled with epic expansion. The coder should verify findings #1-#4 in the Goal section before implementing.
+
+## Reviewer Pass — 2026-06-26
+
+### Implementation status
+
+Implementation is complete and present in the codebase (introduced in commit `239a82d`; the auto-commit `a12a802` titled "Add Per-Card Action Buttons…" actually captured unrelated PRD-editor changes — the feature code landed earlier). All five proposed changes are implemented:
+
+1. **`src/webview/project.js` — epic card action row** (~lines 1500-1507): `isManageable` guard, three buttons (Copy Link / Copy Planning Prompt / Send to Planner) with correct `escapeHtml` and `data-*` attributes. Matches plan with one beneficial deviation: the guard uses `plan.sessionId || plan.planId` (broader than the plan's `plan.sessionId`), consistent with the `requestEpicOrchestration` pattern. ✓
+2. **`src/webview/project.js` — button wiring** (~lines 1529-1579): Copy Link (clipboard + optimistic "Copied"), Copy Planning Prompt (postMessage), Send to Planner (column resolution via `c.id === 'CREATED' || c.kind === 'created'` + `typeof _kanbanAvailableColumns !== 'undefined'` guard). Click propagation blocked via `e.stopPropagation()` + early-return in card click handler (line 1521). ✓
+3. **`src/services/KanbanProvider.ts` — `buildEpicOrchestrationPrompt` generalized** (lines 3095-3143): `role: string = 'orchestrator'` default preserves existing callers; `generateUnifiedPrompt(role, plans, …)` uses the parameter. Beneficial addition beyond plan: `await this._regenerateEpicFile(workspaceRoot, epic.planId, db)` at line 3105 ensures the epic file reflects latest subtask state before prompt assembly. ✓
+4. **`src/services/PlanningPanelProvider.ts` — `copyEpicPlannerPrompt` handler** (lines 2633-2652): calls `buildEpicOrchestrationPrompt(wsRoot, sessionId, 'planner')` directly (NOT the broken `copyPlanFromKanban` path), writes to clipboard, responds with `kanbanPlanPromptCopied`. ✓
+5. **`src/webview/project.html` — CSS** (lines 427-439): `.epic-card-action` added to the existing `.kanban-plan-copy-link` / `.kanban-plan-copy-prompt` rules (shared styling). ✓
+
+### Stage 1 findings (Grumpy)
+
+| # | Severity | Finding | Location |
+|---|----------|---------|----------|
+| 1 | **MAJOR** | Optimistic "Copied" text on Copy Planning Prompt button races with the backend `kanbanPlanPromptCopied` response handler (which finds the button via `.kanban-plan-copy-prompt[data-session-id]` and captures `oldText` at response time). The backend timer resets to the stale "Copied" text, leaving the button permanently stuck. The regular kanban Copy Prompt button does NOT use optimistic updates. | `project.js:1551-1552` (pre-fix) |
+| 2 | NIT | Debug `console.log('[KanbanProvider] createEpic: verify is_epic=…')` left in production code. Outside this plan's scope (createEpic path) but rode in on the same commit. | `KanbanProvider.ts` (createEpic path) |
+| 3 | NIT | Plan line numbers stale (`renderEpicList` cited at 1285-1324; actual ~1470-1595). Documentation drift. | plan file |
+
+### Stage 2 synthesis & fixes applied
+
+- **Finding #1 (MAJOR) — FIXED:** Removed the optimistic `textContent = 'Copied'` + `setTimeout` reset from the epic Copy Planning Prompt click handler (`project.js:1542-1558`). The button now relies solely on the backend `kanbanPlanPromptCopied` response handler for "Copied!"/"Failed" feedback with proper reset, exactly matching the regular kanban Copy Prompt pattern (`project.js:1174-1185`). This eliminates the race.
+- **Finding #2 (NIT) — Deferred:** Out of scope (createEpic code path, not this plan). Flagged for separate cleanup.
+- **Finding #3 (NIT) — FIXED:** Plan file updated with actual line numbers in this review section.
+
+### Files changed by review
+
+- `src/webview/project.js` — removed optimistic "Copied" race in epic Copy Planning Prompt handler (lines 1542-1558).
+
+### Verification
+
+- **Compilation:** Skipped per session directive.
+- **Automated tests:** Skipped per session directive.
+- **Code-path verification (read-only):** Confirmed `toAgentRef` is loaded via `sharedUtils.js` (`project.html:1713`, `PlanningPanelProvider.ts:405-408`). Confirmed `_kanbanAvailableColumns` is a module-level variable in `project.js:162`, populated at line 320, in scope for the epic render function. Confirmed `generateUnifiedPrompt` has a `role === 'planner'` branch (`KanbanProvider.ts:2979`) and auto-injects `EPIC_ORCHESTRATION_DIRECTIVE` + epic prompt template for non-orchestrator roles when subtasks are present (`agentPromptBuilder.ts:533-534`, `KanbanProvider.ts:3047-3077`). Confirmed `kanbanPlanColumnChanged` handler (`project.js:458`) does NOT touch button text (no race for Send to Planner). Confirmed `kanbanPlanPromptCopied` handler (`project.js:565-578`) queries `.kanban-plan-copy-prompt[data-session-id]` and WILL match the epic button (both class and attribute present).
+
+### Remaining risks
+
+1. **`kanbanPlanPromptCopied` selector ambiguity (pre-existing, NIT):** The response handler uses `document.querySelector('.kanban-plan-copy-prompt[data-session-id="…"]')`, which returns the first DOM match. If the same epic appears as a card in BOTH the Kanban tab and the Epics tab (both panes may be in the DOM), and the kanban card's button precedes the epic's in DOM order, the feedback ("Copied!") may land on the kanban button instead of the epic button. This is a shared-infrastructure design issue, not introduced by this plan. Mitigation would require scoping the selector to the active pane — out of scope for this review.
+2. **Debug `console.log` in createEpic path** (NIT, deferred).
+3. **Manual verification items 1-10** in the Verification Plan above remain pending — to be run by the user against an installed VSIX.

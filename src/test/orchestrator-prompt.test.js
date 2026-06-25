@@ -27,6 +27,8 @@ function testOrchestratorPromptTerseWithUltracode() {
     assert.ok(!prompt.includes('subtask-1'), 'Prompt should not enumerate subtask path/topic');
     assert.ok(!prompt.includes('FOCUS DIRECTIVE'), 'Prompt should not contain FOCUS DIRECTIVE when safeguards are off');
     assert.ok(!prompt.includes('GIT POLICY'), 'Prompt should not contain GIT POLICY when git prohibition is off');
+    assert.ok(!prompt.includes('AUTHORIZATION TO EXECUTE'), 'Prompt should not contain the AUTHORIZATION wall when safeguards are off');
+    assert.ok(!prompt.includes('EPIC MODE'), 'Prompt should not contain the EPIC MODE directive wall');
     console.log('  PASS: Orchestrator prompt is terse with ultracode');
 }
 
@@ -40,6 +42,7 @@ function testOrchestratorAddonsToggle() {
     });
     assert.ok(promptWithSafeguards.includes('CRITICAL INSTRUCTIONS'), 'Should include batch execution rules when safeguards are on');
     assert.ok(promptWithSafeguards.includes('FOCUS DIRECTIVE'), 'Should include focus directive when safeguards are on');
+    assert.ok(promptWithSafeguards.includes('AUTHORIZATION TO EXECUTE'), 'Should include AUTHORIZATION wall when safeguards are on');
 
     const promptWithoutSafeguards = buildKanbanBatchPrompt('orchestrator', mockPlan, {
         switchboardSafeguardsEnabled: false,
@@ -47,6 +50,7 @@ function testOrchestratorAddonsToggle() {
     });
     assert.ok(!promptWithoutSafeguards.includes('CRITICAL INSTRUCTIONS'), 'Should not include batch execution rules when safeguards are off');
     assert.ok(!promptWithoutSafeguards.includes('FOCUS DIRECTIVE'), 'Should not include focus directive when safeguards are off');
+    assert.ok(!promptWithoutSafeguards.includes('AUTHORIZATION TO EXECUTE'), 'Should not include AUTHORIZATION wall when safeguards are off');
 
     // Test Git Prohibition
     const promptWithGit = buildKanbanBatchPrompt('orchestrator', mockPlan, {

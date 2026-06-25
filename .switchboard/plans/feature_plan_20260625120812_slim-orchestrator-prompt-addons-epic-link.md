@@ -151,3 +151,29 @@ Key risks: (1) the plan's premise that orchestrator add-on resolution "already e
 ## Recommendation
 
 Complexity 6/10 → **Send to Coder**. Well-scoped, but now with **three** careful spots, not two: (1) the `_getPromptsConfig` orchestrator wiring — the newly discovered CRITICAL prerequisite without which every add-on toggle is dead; (2) the orchestrator-branch rewrite to the terse `[add-on blocks] + [epic-doc link]` form (preserving the shared PRD-injection seam); and (3) the "epic doc must always carry subtasks" guarantee via the defensive `_regenerateEpicFile` call. The migration/backfill, the intended default-behavior change, and the step-mode scope guard must not be skipped.
+
+---
+
+## Reviewer Pass — 2026-06-26
+
+Adversarial in-place review of the as-implemented code against this plan. Verdict: **implementation is high-fidelity on every hard part** — the `_getPromptsConfig` orchestrator wiring (the actual CRITICAL of this plan) is complete with every `*ByRole` map carrying an `orchestrator:` key whose default mirrors `sharedDefaults.js:38`; the `PLANS TO PROCESS` / `EPIC_ORCHESTRATION_DIRECTIVE` subtask enumeration is genuinely gone from the orchestrator branch (the branch never references `planList`); the defensive `_regenerateEpicFile` and workspace-relative `epicDocLink` are in place; the shared PRD-injection seam survives via `dispatchContextPrefix` in the orchestrator `suffixBlock`. Two material gaps were found and fixed.
+
+### Findings by severity
+
+- **CRITICAL — `src/services/agentPromptBuilder.ts:1241` (pre-fix):** the orchestrator branch emitted `executionDirective` (the `AUTHORIZATION TO EXECUTE` wall) **unconditionally**, violating the Goal (which names `AUTHORIZATION TO EXECUTE` as the #1 fixed wall to remove), Manual Verification #2 ("all add-ons off except Ultracode → **no** `AUTHORIZATION` wall"), and the Proposed-Changes step-6 join (`base + [selected add-on blocks] + epic-doc-link` — `executionDirective` is in none of the three). **FIXED:** gated behind `switchboardSafeguardsEnabled` (`executionBlock = switchboardSafeguardsEnabled ? executionDirective : ''`), mirroring how `FOCUS_DIRECTIVE` — another Verification-#2 wall — is already gated. Terse case (safeguards off) → no AUTHORIZATION; default config (safeguards on) → execute-mode guard retained. Least-risky behavior change; execute-don't-replan intent also still lives in the orchestrator base instruction.
+- **MAJOR — `src/test/orchestrator-prompt.test.js:24-29` (pre-fix):** the new deliverable test omitted the `AUTHORIZATION` and `EPIC MODE` absence assertions that the plan's test spec (Edge-Case audit L72 + File 5 step 12) explicitly requires — which is exactly why the CRITICAL above went undetected. **FIXED:** added `!includes('AUTHORIZATION TO EXECUTE')` and `!includes('EPIC MODE')` to the terse case, plus an on/off `AUTHORIZATION TO EXECUTE` pair to `testOrchestratorAddonsToggle` to lock the gating in both directions.
+- **NIT (deferred):** double framing — `Please orchestrate the following epic.` (L1240) immediately precedes the base "You are the Epic Orchestrator." Harmless; left as-is.
+- **NIT (deferred):** in a *multi-repo* epic (subtasks with `repoScope`), `buildPromptDispatchContext` emits a `MULTI-REPO BATCH:` block listing subtask *topics* (not plan-file paths) through `dispatchContextPrefix`. This is the shared scaffold the plan told us to preserve; single-repo epics (the common case) emit nothing. Left as-is.
+
+### Fixes applied (files changed)
+- `src/services/agentPromptBuilder.ts` — orchestrator branch: gated `executionDirective` behind `switchboardSafeguardsEnabled` via new `executionBlock`.
+- `src/test/orchestrator-prompt.test.js` — added `AUTHORIZATION`/`EPIC MODE` absence assertions (terse case) and an `AUTHORIZATION` on/off pair (toggle case).
+
+### Validation
+- Per session directives: **compilation and automated tests were NOT run** (user runs the suite separately; the test imports `../../out/services/agentPromptBuilder`, so `out/` must be built first). Edits verified by inspection: `executionBlock` is a single guarded const consumed once in `promptParts`; `switchboardSafeguardsEnabled` and `executionDirective` are both already in scope at the edit site.
+- Confirmed by reading: `_getPromptsConfig` orchestrator defaults match `sharedDefaults.js:38` for every key (skip*=true, caveman=true, safeguards/git=true, antigravity/worktrees/suppress=false, subagentPolicy=useSubagents, ultracode=false); `resolvedOptions` reads the maps generically by `[role]` (L2938-2961) so the orchestrator now resolves correctly; `buildEpicOrchestrationPrompt` calls `_regenerateEpicFile` defensively before assembling (L3105) and `promoteToEpic` adds the belt-and-suspenders call (L7747).
+
+### Remaining risks
+- **Behavior of the gating choice:** with the orchestrator's default config (safeguards on), the dispatched prompt still carries `AUTHORIZATION TO EXECUTE` — intended (default-on execute guard). Only the deliberately-terse "everything off except ultracode" config strips it. If the user instead wants AUTHORIZATION *always* absent for the orchestrator regardless of safeguards, that is a one-line change (delete `executionBlock` from `promptParts`) — flagged, not taken, because gating is the lower-risk reading of Verification #2 + #3.
+- **Unrun tests:** the new assertions are not executed in this pass; they should pass given the fix, but the user's separate test run is the confirmation.
+- **Multi-repo epic topic exposure** (NIT above) persists by design.
