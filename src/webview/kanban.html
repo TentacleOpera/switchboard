@@ -6377,7 +6377,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         columns = columnDefinitions.map(col => col.id);
                         autobanColumns = columnDefinitions.filter(col => col.autobanEnabled).map(col => col.id);
                         lastBoardSignature = '';
-                 optimisticMoveUntil = 0;  // a deliberate workspace switch ends any in-flight drag guard
+                        optimisticMoveUntil = 0;  // a deliberate workspace switch ends any in-flight drag guard
                         renderColumns();
                         renderBoard(currentCards);
                         updateAllColumnAgents();
@@ -6964,6 +6964,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (isDifferentWorkspace) {
                 // Switch workspace context (triggers full board refresh)
                 lastBoardSignature = '';
+                optimisticMoveUntil = 0;  // a deliberate workspace switch ends any in-flight drag guard
                 postKanbanMessage({
                     type: 'selectWorkspace',
                     workspaceRoot: selectedWorkspaceRoot,

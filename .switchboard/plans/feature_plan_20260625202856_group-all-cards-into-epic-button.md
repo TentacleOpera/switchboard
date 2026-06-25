@@ -228,3 +228,48 @@ Automated tests and compilation are skipped per session directives. The test sui
 ---
 
 **Recommendation:** Complexity is 3/10 → **Send to Coder** (boundary case; 1-3 is "Send to Intern" but the `nextCol` guard fix adds a small coordination concern across two locations in the same file — Coder is the safer routing).
+
+---
+
+## Review Pass — Completed
+
+### Reviewer
+In-place reviewer-executor pass (Grumpy Principal Engineer → Balanced synthesis).
+
+### Files Changed (Implementation)
+- `src/webview/kanban.html` — all 5 plan changes applied:
+  1. **Button rendering** (lines 4662–4666): `codeMapBtn` replaced with `epicGroupBtn`, gated on `isCreated` only (analyst-visibility gate removed). Uses `ICON_CODE_MAP` with alt text "Group Into Epic".
+  2. **Template injection** (line 4688): `${epicGroupBtn}` replaces `${codeMapBtn}` in the `else`-branch button area.
+  3. **`nextCol` guard** (line 4794): `&& action !== 'groupAllIntoEpic'` added to the early-return exception list.
+  4. **Click handler** (lines 4898–4916): `case 'codeMapSelected'` replaced with `case 'groupAllIntoEpic'`. Clears prior selection, selects all non-epic cards in the column, opens `openEpicCreateModal()`.
+  5. **`ICON_CODE_MAP` constant** (line 3925): Left in place per plan recommendation (still referenced at line 4664).
+
+### Findings by Severity
+
+| Severity | Finding | Location | Status |
+|----------|---------|----------|--------|
+| NIT-1 | `ICON_CODE_MAP` constant name now semantically misleading (epic-group icon, not code-map). Harmless. Plan says leave it. | `kanban.html:3925` | Deferred — renaming risks `{{ICON_CODE_MAP}}` template injection breakage |
+| NIT-2 | For 1-card case, modal shows description field but `promoteToEpic` backend silently ignores it. Plan-accepted trade-off (forcing multi-card modal path for consistency). | `kanban.html:9533` (submit handler) | Deferred — would require backend change or reverting plan's modal-path choice |
+| NIT-3 | Alt text "Group Into Epic" vs tooltip "Group all plans in this column into an epic" — minor wording inconsistency. | `kanban.html:4663–4664` | Deferred — cosmetic only |
+
+**CRITICAL: 0 | MAJOR: 0 | NIT: 3 (all deferred)**
+
+### Fixes Applied
+None required. No CRITICAL or MAJOR findings. Implementation matches all 5 plan changes exactly.
+
+### Verification Results
+- **Compilation:** Skipped per session directives.
+- **Tests:** Skipped per session directives.
+- **Static verification performed:**
+  - All 5 plan changes confirmed present in `src/webview/kanban.html`.
+  - No orphaned references to `codeMapBtn`, `codeMapSelected`, or `codeMapConfirm` in `kanban.html`.
+  - Backend handlers `codeMapSelected`/`codeMapConfirm` preserved in `KanbanProvider.ts` (lines 6884–6895) — test `context-map-batching-regression.test.js` will pass.
+  - Backend handlers `createEpic` (line 7780) and `promoteToEpic` (line 7714) exist for modal submit flow.
+  - `openEpicCreateModal()` (line 7363) reads from `selectedCards.keys()` — confirms handler's `selectedCards.set()` calls feed the modal.
+  - `getAllInColumn()` (line 4436) returns IDs from `currentCards` — confirms handler's `currentCards.find()` lookup succeeds.
+  - Modal submit handler (lines 9531–9537) routes 1-card → `promoteToEpic`, multi-card → `createEpic` — both backend cases exist.
+
+### Remaining Risks
+1. **NIT-2 (1-card description ignored):** If a user groups a single card into an epic, enters a description, and clicks "Create Epic", the description is silently dropped. This is a minor UX wart but not a functional bug — the card is still promoted to an epic with the user's chosen name. Fixing would require either (a) passing `{ singlePlanPromote: true }` for the 1-card case (which the plan explicitly rejected to force modal consistency), or (b) modifying the `promoteToEpic` backend handler to accept a description (out of scope — backend change).
+2. **NIT-1 (icon semantic mismatch):** The code-map icon now launches an epic-grouping action. Users familiar with the old code-map button may be briefly confused. The tooltip clarifies the new function. No functional impact.
+3. **Dead backend code:** `codeMapSelected`/`codeMapConfirm` handlers in `KanbanProvider.ts` are now unreachable from the kanban UI. They are intentionally preserved for test compatibility. If code map is never re-exposed in the UI, this dead code could be cleaned up in a future refactor (along with updating/removing the test).
