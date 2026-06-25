@@ -1,4 +1,4 @@
-export type BuiltInAgentRole = 'lead' | 'coder' | 'intern' | 'reviewer' | 'tester' | 'planner' | 'analyst' | 'ticket_updater' | 'researcher' | 'splitter' | 'gatherer';
+export type BuiltInAgentRole = 'lead' | 'coder' | 'intern' | 'reviewer' | 'tester' | 'planner' | 'analyst' | 'ticket_updater' | 'researcher' | 'splitter' | 'gatherer' | 'orchestrator';
 
 export interface CustomAgentAddons {
     // Core
@@ -96,6 +96,7 @@ export const BUILT_IN_AGENT_LABELS: Record<BuiltInAgentRole, string> = {
     analyst: 'Analyst',
     ticket_updater: 'Ticket Updater',
     researcher: 'Researcher',
+    orchestrator: 'Orchestrator',
 };
 
 const DEFAULT_KANBAN_COLUMNS: KanbanColumnDefinition[] = [
@@ -391,7 +392,7 @@ export function parseDefaultPromptOverrides(
 ): Partial<Record<BuiltInAgentRole, DefaultPromptOverride>> {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
     const result: Partial<Record<BuiltInAgentRole, DefaultPromptOverride>> = {};
-    const VALID_ROLES: BuiltInAgentRole[] = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'splitter', 'gatherer'];
+    const VALID_ROLES: BuiltInAgentRole[] = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'splitter', 'gatherer', 'orchestrator'];
     const VALID_MODES: PromptOverrideMode[] = ['append', 'prepend', 'replace'];
     for (const role of VALID_ROLES) {
         const entry = (raw as Record<string, unknown>)[role];

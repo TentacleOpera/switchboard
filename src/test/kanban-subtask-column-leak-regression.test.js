@@ -79,6 +79,18 @@ function run() {
     assert.ok(newBlock.includes('moveCardToColumn('), 'sendToNew must call moveCardToColumn');
     assert.ok(!newBlock.includes('db.updateColumn(resolvedSessionId'), 'sendToNew must NOT call db.updateColumn directly');
 
+    // 6. completeAll must cascade column updates for epic cards so subtasks follow
+    //    to COMPLETED (same rigid-unit model — an epic's subtasks share its column).
+    const completeBlock = getCaseBlock(source, 'completeAll');
+    assert.ok(
+        completeBlock.includes('updateColumnWithEpicCascade('),
+        'completeAll must cascade epic column updates via updateColumnWithEpicCascade'
+    );
+    assert.ok(
+        completeBlock.includes('card.isEpic'),
+        'completeAll must branch on card.isEpic to detect epic cards'
+    );
+
     console.log('kanban subtask column-leak regression test passed');
 }
 

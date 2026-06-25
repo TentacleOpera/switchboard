@@ -3612,7 +3612,8 @@ Each plan file must include:
             ticket_updater: false,
             researcher: false,
             splitter: false,
-            mcp_monitor: false
+            mcp_monitor: false,
+            orchestrator: false
         };
 
         const customAgentsGlobal = await this.getCustomAgents(workspaceRoot);
@@ -3910,7 +3911,7 @@ Each plan file must include:
             return {};
         }
         const workspaceRoot = this._resolveWorkspaceRoot() || '';
-        const roles: string[] = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst'];
+        const roles: string[] = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'orchestrator'];
         const placeholder: BatchPromptPlan = {
             topic: '[your selected plans]',
             absolutePath: '/path/to/plan.md',
@@ -7337,7 +7338,7 @@ Each plan file must include:
         }
 
         // Merge with roleConfigs from globalState
-        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'splitter'];
+        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'splitter', 'orchestrator'];
         for (const role of roles) {
             const config: any = this.getSetting(`switchboard.prompts.roleConfig_${role}`, undefined);
             if (config && config.prompt?.trim()) {

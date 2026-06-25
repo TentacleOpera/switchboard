@@ -2546,7 +2546,7 @@ export class KanbanProvider implements vscode.Disposable {
         } catch { /* file may not exist or be invalid */ }
 
         // Merge with roleConfigs from workspaceState
-        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'splitter'];
+        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'splitter', 'orchestrator'];
         for (const role of roles) {
             const config: any = this._getRoleConfig(role);
             if (config && config.prompt?.trim()) {
@@ -2923,6 +2923,22 @@ export class KanbanProvider implements vscode.Disposable {
             resolvedOptions.complexityScoringSkill = promptsConfig.complexityScoringSkill;
         } else if (role === 'chat') {
             resolvedOptions.chatPlanDestinations = this._taskViewerProvider?.resolveChatPlanDestinations(workspaceRoot);
+        } else if (role === 'orchestrator') {
+            // The legacy global `epic_prompt_template` key (shipped — written by the old
+            // on-board epic-manage modal) now lives in the orchestrator role prompt
+            // override (Decision #3/#4). If the user has NOT set an orchestrator prompt,
+            // import the legacy template as a prepend so its old epic instructions still
+            // apply on top of the implementation-oriented default base. Read-only fallback:
+            // the legacy DB key is never written from here and never dropped (per CLAUDE.md).
+            if (!defaultPromptOverrides['orchestrator']) {
+                const db = this._getKanbanDb(workspaceRoot);
+                if (db && await db.ensureReady()) {
+                    const legacyTemplate = (await db.getConfig('epic_prompt_template') || '').trim();
+                    if (legacyTemplate) {
+                        defaultPromptOverrides['orchestrator'] = { mode: 'prepend', text: legacyTemplate };
+                    }
+                }
+            }
         }
 
         const hasSubtasks = plans.some(p => p.isSubtask);
@@ -2932,10 +2948,21 @@ export class KanbanProvider implements vscode.Disposable {
             resolvedOptions.epicMode = true;
             resolvedOptions.epicTopic = epicPlan?.topic || '';
             resolvedOptions.subtaskCount = subtaskCount;
-            // Read user-configured epic prompt template from DB config
-            const db = this._getKanbanDb(workspaceRoot);
-            if (db && await db.ensureReady()) {
-                const template = await db.getConfig('epic_prompt_template');
+            // Epic prompt template: the orchestrator role prompt override is the new home
+            // (Decision #3/#4). For NON-orchestrator roles (step mode: epic dragged to the
+            // planner/lead column) prepend that override, falling back to the legacy
+            // `epic_prompt_template` DB key (shipped — read as fallback, never dropped).
+            // The orchestrator role itself already applies its override as the prompt base
+            // via resolveBaseInstructions, so prepending it again here would duplicate it.
+            if (role !== 'orchestrator') {
+                const orchestratorTemplate = defaultPromptOverrides['orchestrator']?.text?.trim();
+                let template = orchestratorTemplate;
+                if (!template) {
+                    const db = this._getKanbanDb(workspaceRoot);
+                    if (db && await db.ensureReady()) {
+                        template = (await db.getConfig('epic_prompt_template')) || undefined;
+                    }
+                }
                 if (template) resolvedOptions.epicPromptTemplate = template;
             }
         }
@@ -2946,6 +2973,78 @@ export class KanbanProvider implements vscode.Disposable {
         };
 
         return buildKanbanBatchPrompt(role, plans, mergedOptions);
+    }
+
+    /**
+     * Assemble the orchestrator prompt for a single epic (Epics-tab Orchestrate action).
+     * Expands the epic into epic + its subtasks — capped at `epic_max_subtasks` with the same
+     * [WARNING] line the board step-mode path uses — and runs it through generateUnifiedPrompt
+     * so the preview the Epics tab shows is byte-identical to what gets dispatched (preview =
+     * dispatch parity). Returns null when the epic can't be resolved.
+     */
+    public async buildEpicOrchestrationPrompt(
+        workspaceRoot: string,
+        epicSessionId: string
+    ): Promise<{ prompt: string; epicTopic: string; subtaskCount: number; totalSubtasks: number } | null> {
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) { return null; }
+        const epic = await db.getPlanByPlanId(epicSessionId);
+        if (!epic || !epic.isEpic) { return null; }
+
+        const maxRaw = await db.getConfig('epic_max_subtasks');
+        const maxSubtasks = maxRaw ? parseInt(maxRaw, 10) : 20;
+        const subtasks = await db.getSubtasksByEpicId(epic.planId);
+        const limited = subtasks.slice(0, maxSubtasks);
+
+        const plans: BatchPromptPlan[] = [{
+            topic: epic.topic,
+            absolutePath: this._resolvePlanFilePath(workspaceRoot, epic.planFile),
+            complexity: epic.complexity,
+            sessionId: epic.sessionId || epic.planId,
+            epicId: epic.planId || undefined
+        }];
+        for (const st of limited) {
+            plans.push({
+                topic: `[SUBTASK] ${st.topic}`,
+                absolutePath: this._resolvePlanFilePath(workspaceRoot, st.planFile),
+                complexity: st.complexity,
+                workingDir: st.repoScope ? resolveWorkingDir(workspaceRoot, st.repoScope) : '',
+                sessionId: st.sessionId || st.planId,
+                isSubtask: true,
+                epicTopic: epic.topic,
+                epicId: epic.planId || undefined
+            });
+        }
+        if (subtasks.length > maxSubtasks) {
+            plans.push({
+                topic: `[WARNING: ${subtasks.length} subtasks exist but only ${maxSubtasks} included. Remaining subtasks stay in column: ${epic.kanbanColumn}]`,
+                absolutePath: '',
+                sessionId: '',
+                isSubtask: true,
+                epicTopic: epic.topic
+            });
+        }
+
+        const prompt = await this.generateUnifiedPrompt('orchestrator', plans, workspaceRoot);
+        return { prompt, epicTopic: epic.topic, subtaskCount: limited.length, totalSubtasks: subtasks.length };
+    }
+
+    /**
+     * Build the orchestrator prompt for an epic and dispatch it to the orchestrator terminal
+     * via dispatch-by-role. Returns the assembled prompt (so the caller can still copy it even
+     * if no orchestrator terminal exists — never hard-fail on a missing dispatch target).
+     */
+    public async dispatchEpicOrchestration(
+        workspaceRoot: string,
+        epicSessionId: string
+    ): Promise<{ assembled: { prompt: string; epicTopic: string; subtaskCount: number; totalSubtasks: number } | null; sent: boolean }> {
+        const assembled = await this.buildEpicOrchestrationPrompt(workspaceRoot, epicSessionId);
+        if (!assembled) { return { assembled: null, sent: false }; }
+        let sent = false;
+        if (this._taskViewerProvider) {
+            sent = await this._taskViewerProvider.dispatchCustomPromptToRole('orchestrator', assembled.prompt, workspaceRoot);
+        }
+        return { assembled, sent };
     }
 
     private async _getPromptsConfig(workspaceRoot: string): Promise<any> {
@@ -6251,7 +6350,17 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if (await dbAll.ensureReady()) {
                     for (const card of reviewedCards) {
                         const cardKey = this._cardId(card);
-                        await dbAll.updateColumn(cardKey, 'COMPLETED');
+                        // Cascade column update for epics so subtasks follow to COMPLETED
+                        // (same rigid-unit model as moveCardToColumn — an epic's subtasks
+                        // always share its column on every move). A direct db.updateColumn
+                        // would orphan subtasks in CODE REVIEWED when the epic completes.
+                        if (card.isEpic) {
+                            const subtasks = await dbAll.getSubtasksByEpicId(card.planId);
+                            const subtaskSessionIds = subtasks.map(st => st.sessionId).filter(Boolean);
+                            await dbAll.updateColumnWithEpicCascade(cardKey, subtaskSessionIds, 'COMPLETED');
+                        } else {
+                            await dbAll.updateColumn(cardKey, 'COMPLETED');
+                        }
                         _schedulePlanStateWrite(dbAll, workspaceRoot, cardKey, 'COMPLETED',
                             'completed').catch(() => { /* fire-and-forget */ });
                         await dbAll.updateStatus(cardKey, 'completed');
@@ -7498,15 +7607,19 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 }
                 const subtasks = await db.getSubtasksByEpicId(epic.planId);
                 this._panel?.webview.postMessage({ type: 'epicDetails', epic, subtasks });
-                if (msg.source === 'kanban') {
-                    const epicLockColumns = await db.getConfig('epic_lock_columns') || '';
-                    const epicPromptTemplate = await db.getConfig('epic_prompt_template') || '';
-                    const epicMaxSubtasks = await db.getConfig('epic_max_subtasks') || '';
-                    this._panel?.webview.postMessage({ type: 'kanbanEpicDetails', epic, subtasks, epicLockColumns, epicPromptTemplate, epicMaxSubtasks });
-                }
+                // The legacy `source:'kanban'` branch (which sent kanbanEpicDetails to the
+                // removed on-board epic-manage modal) is gone. The orchestration prompt is
+                // now the orchestrator role prompt (Decision #3); epic_prompt_template is
+                // read as a fallback in generateUnifiedPrompt, never surfaced for per-epic
+                // editing here.
                 break;
             }
             case 'updateEpicConfig': {
+                // Kept as a generic config writer (no remaining kanban caller — the modal was
+                // removed). epic_max_subtasks still bounds epic expansion (board step-mode and
+                // the Epics-tab Orchestrate assembly). epic_prompt_template/epic_lock_columns
+                // are superseded by the orchestrator role config but retained as shipped keys
+                // (read as fallback, never dropped — per CLAUDE.md).
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) break;
                 const db = this._getKanbanDb(workspaceRoot);

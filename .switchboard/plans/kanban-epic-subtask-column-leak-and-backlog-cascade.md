@@ -122,10 +122,35 @@ This step originally added a focus-mode branch to the column-action handler so f
 
 ## Status
 
-- §1 (exclusion + previews + test) — **implemented** in working tree. The exclusion is now **unconditional** (no focus exception).
-- §2 (cascade on every epic move) — **pending**. Decision point resolved: reroute through `moveCardToColumn`, drop dead `_schedulePlanStateWrite` calls, document integration-sync behavior change.
+- §1 (exclusion + previews + test) — **implemented & verified** in working tree. The exclusion is now **unconditional** (no focus exception). All six column-batch call sites confirmed routing through `_visibleColumnCards`. Per-role preview guards confirmed (`if (c.epicId) return false;` ×2).
+- §2 (cascade on every epic move) — **implemented & verified**. `sendToBacklog` (L6379) and `sendToNew` (L6388) rerouted through `moveCardToColumn`. Dead `_schedulePlanStateWrite` calls dropped. Trailing `this.refresh()` preserved. Integration-sync behavior change documented.
+- §2b (completeAll epic cascade — **added during review**) — **implemented & verified**. The original plan's audit claimed "no other bypassers exist among user-initiated board moves," but `completeAll` (L6240) called `dbAll.updateColumn(cardKey, 'COMPLETED')` directly, bypassing the epic cascade. Fixed: `completeAll` now branches on `card.isEpic` and uses `dbAll.updateColumnWithEpicCascade` for epic cards so subtasks follow to COMPLETED. Regression test extended with assertion #6.
 - §3 (focus-aware column buttons) — **dropped** (on-board focus mode is being removed).
 
-**Recommendation:** Complexity 4/10 → **Send to Coder** (single-file, two handler reroutes reusing an existing cascading method, but carries a documented integration-sync behavior change worth a human review pass).
+### Review Results (2026-06-25)
+
+**Stage 1 (Grumpy):**
+- §1: Correct. No findings.
+- §2: Correct. No findings.
+- MAJOR: `completeAll` bypassed epic cascade — same orphaning class as the `sendToBacklog`/`sendToNew` bug this plan fixes. The plan's audit claim ("no other bypassers exist") was false.
+- NIT: Regression test lacked `completeAll` cascade assertion.
+
+**Stage 2 (Balanced):** MAJOR fixed now (trivial — `card.isEpic` branch + `updateColumnWithEpicCascade`). NIT fixed now (test assertion #6 added).
+
+**Files changed during review:**
+- `src/services/KanbanProvider.ts` — `completeAll` handler (L6249-L6269): added `card.isEpic` branch with `getSubtasksByEpicId` + `updateColumnWithEpicCascade` for epic column updates.
+- `src/test/kanban-subtask-column-leak-regression.test.js` — added assertion #6: `completeAll` must contain `updateColumnWithEpicCascade(` and `card.isEpic`.
+
+**Validation:**
+- Regression test: `node src/test/kanban-subtask-column-leak-regression.test.js` → **PASS** (all 6 assertion groups).
+- Compilation: skipped per directive.
+- Test suite: skipped per directive.
+
+**Remaining risks:**
+- `uncompleteCard` (L6270) also calls `db.updateColumn(sessionId, targetColumn)` directly without cascade — but it's a **selection-based handler** (uses explicit `msg.sessionIds`), which the plan explicitly leaves untouched. If the user un-completes an epic, subtasks won't follow back. Flagged as a related observation, not fixed (consistent with plan's selection-handler policy).
+- `moveCardToColumnByPlanFile` (L4511) still doesn't cascade — out of scope, flagged in original plan.
+- Integration sync now fires on backlog/new/complete-epic moves — documented as intended. No risk identified.
+
+**Recommendation:** Complexity 4/10 → **Ready for release** after manual VSIX verification (see Verification Plan §Manual). All code changes verified; remaining risks are out-of-scope selection-handler and planFile-path gaps documented in the plan.
 
 Depends-on: none. Relates-to: `kanban-epic-focus-worktree-decouple.md` (removes on-board focus mode) and `feature_plan_20260625081837_epics-as-orchestration-onramp.md` (the Epics tab becomes the sole epic-inspection surface).

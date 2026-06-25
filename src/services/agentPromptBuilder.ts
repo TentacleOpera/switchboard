@@ -1159,6 +1159,56 @@ Read the persona at \`.agents/personas/gatherer.md\` and follow it step-by-step.
         return normalizeNewlines(promptParts);
     }
 
+    if (role === 'orchestrator') {
+        // Implementation-oriented base (Decision #9): the orchestrator hands the whole epic
+        // to one agent that drives every subtask with native subagents/worktrees. In split
+        // mode the subtask plans were already improved by the planner, so the default leans
+        // toward implementing them; it still works standalone on a cold epic.
+        const orchestratorBase = `You are the Epic Orchestrator.
+
+You receive an epic and its subtask plans below as a SINGLE delivery unit. Implement every subtask end-to-end using your native subagent or orchestration capabilities — dispatch one subagent per subtask where supported, otherwise process them sequentially in the order listed.
+
+The subtask plans may already have been improved by a planning agent — treat them as ready to implement. Refine a subtask plan only if it is clearly insufficient to implement from; do not re-plan a subtask whose plan is already adequate. Keep the subtasks coupled as one epic — do NOT treat them as independent tickets.`;
+
+        let baseInstructions = resolveBaseInstructions('orchestrator', orchestratorBase, options);
+        if (cavemanOutputEnabled) {
+            baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
+        }
+
+        let safetySessionBlock = '';
+        for (const plan of plans) {
+            if (plan.worktreePath) {
+                safetySessionBlock += `\nIMPORTANT: You are working in a safety session. All file operations and git commands\n` +
+                    `must be run from inside the worktree directory: ${plan.worktreePath}\n` +
+                    `Navigate into this directory before making any changes. Do NOT run git commands\n` +
+                    `from the parent directory — that is the main branch and will corrupt it.\n`;
+            }
+        }
+        if (safetySessionBlock) {
+            baseInstructions += '\n\n' + safetySessionBlock.trim();
+        }
+
+        const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
+        const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
+        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock]
+            .filter(Boolean)
+            .join('\n\n');
+
+        const suppressWalkthroughBlock = suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '';
+        const promptParts = [
+            `Please orchestrate the following epic.`,
+            executionDirective,
+            safeguardsBlock,
+            baseInstructions,
+            suffixBlock,
+            `PLANS TO PROCESS:\n${planList}`,
+            suppressWalkthroughBlock
+        ].filter(Boolean).join('\n\n');
+
+        return normalizeNewlines(promptParts);
+    }
+
     if (role === 'chat') {
         const chatBase = DEFAULT_CHAT_BASE_INSTRUCTIONS;
         let baseInstructions = resolveBaseInstructions('chat', chatBase, options);
@@ -1190,7 +1240,7 @@ Read the persona at \`.agents/personas/gatherer.md\` and follow it step-by-step.
 
     // No fallback — every built-in role must have an explicit template.
     // Custom agents are NOT routed through this function; they use plan-file-link-only prompts built at call sites.
-    throw new Error(`Unknown role '${role}' in buildKanbanBatchPrompt. Built-in roles: planner, reviewer, tester, lead, coder, intern, analyst, ticket_updater, researcher, splitter, gatherer, chat. Custom agents should be handled at the call site, not here.`);
+    throw new Error(`Unknown role '${role}' in buildKanbanBatchPrompt. Built-in roles: planner, reviewer, tester, lead, coder, intern, analyst, ticket_updater, researcher, splitter, gatherer, orchestrator, chat. Custom agents should be handled at the call site, not here.`);
 }
 
 /**

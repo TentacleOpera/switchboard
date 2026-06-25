@@ -105,6 +105,10 @@ export class PlanningPanelProvider {
     private _activeDesignDocSourceId: string | null = null;
     private _activeDesignDocId: string | null = null;
     private _activeTicketsProvider: 'clickup' | 'linear' | null = null;
+    // Type-only reference (avoids a runtime circular import with KanbanProvider). Used to
+    // assemble/dispatch the orchestrator prompt for the Epics-tab Orchestrate action so the
+    // builder logic lives in one place (preview = dispatch parity).
+    private _kanbanProvider?: import('./KanbanProvider').KanbanProvider;
     private readonly _SERVER_DENY_LIST: readonly string[] = [
         '.switchboard',
         '.git',
@@ -132,6 +136,10 @@ export class PlanningPanelProvider {
         private _context: vscode.ExtensionContext,
         private _stateStore: PanelStateStore
     ) {}
+
+    public setKanbanProvider(provider: import('./KanbanProvider').KanbanProvider): void {
+        this._kanbanProvider = provider;
+    }
 
     // Ensure adapters are registered for current workspace roots.
     // Safe to call from any context — the roots-key guard makes this idempotent.
@@ -2845,6 +2853,43 @@ export class PlanningPanelProvider {
                     this._projectPanel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, requestId: Date.now() });
                 } catch (err) {
                     console.error('[PlanningPanelProvider] deleteEpic failed:', err);
+                }
+                break;
+            }
+            case 'orchestrateEpic': {
+                // Assemble the orchestrator prompt for one epic and either copy it (default,
+                // Decision #6) or also dispatch it to the orchestrator terminal. Copy always
+                // happens so the action works even when no orchestrator terminal exists.
+                const sessionId = String(msg.sessionId || '');
+                const wsRoot = String(msg.workspaceRoot || workspaceRoot);
+                const mode = msg.mode === 'send' ? 'send' : (msg.mode === 'preview' ? 'preview' : 'copy');
+                if (!sessionId || !wsRoot || !this._kanbanProvider) {
+                    this._projectPanel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: false, mode, error: 'Orchestration is unavailable in this window.' });
+                    break;
+                }
+                try {
+                    if (mode === 'send') {
+                        const { assembled, sent } = await this._kanbanProvider.dispatchEpicOrchestration(wsRoot, sessionId);
+                        if (!assembled) {
+                            this._projectPanel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: false, mode, error: 'Could not resolve this epic.' });
+                            break;
+                        }
+                        await vscode.env.clipboard.writeText(assembled.prompt);
+                        this._projectPanel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: true, mode, sent, prompt: assembled.prompt, epicTopic: assembled.epicTopic, subtaskCount: assembled.subtaskCount, totalSubtasks: assembled.totalSubtasks });
+                    } else {
+                        const assembled = await this._kanbanProvider.buildEpicOrchestrationPrompt(wsRoot, sessionId);
+                        if (!assembled) {
+                            this._projectPanel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: false, mode, error: 'Could not resolve this epic.' });
+                            break;
+                        }
+                        if (mode === 'copy') {
+                            await vscode.env.clipboard.writeText(assembled.prompt);
+                        }
+                        this._projectPanel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: true, mode, prompt: assembled.prompt, epicTopic: assembled.epicTopic, subtaskCount: assembled.subtaskCount, totalSubtasks: assembled.totalSubtasks });
+                    }
+                } catch (err) {
+                    console.error('[PlanningPanelProvider] orchestrateEpic failed:', err);
+                    this._projectPanel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: false, mode, error: String(err) });
                 }
                 break;
             }
@@ -7725,7 +7770,7 @@ Read the existing ticket content from the local file if it exists. Determine wha
             lead: true, coder: true, intern: true, reviewer: true,
             tester: false, planner: true, analyst: true, jules: false,
             gatherer: false, ticket_updater: false, researcher: false,
-            splitter: false, code_researcher: false
+            splitter: false, code_researcher: false, orchestrator: false
         };
         let visibleAgents: Record<string, boolean> = { ...visibleAgentDefaults };
         try {

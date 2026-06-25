@@ -1478,6 +1478,14 @@
                 <button id="btn-set-active-epic" class="strip-btn" disabled>Set as Active Planning Context</button>
                 <button id="btn-new-epic" class="strip-btn">+ New Epic</button>
             </div>
+            <details class="epic-modes-explainer" style="margin: 0 8px 6px; font-size: 11px; color: var(--text-secondary);">
+                <summary style="cursor: pointer;">How to run an epic (3 ways)</summary>
+                <div style="padding: 6px 4px 2px; line-height: 1.5;">
+                    <div><b>Step</b> — drag the epic column-to-column on the board; each column's agent batch-processes every subtask.</div>
+                    <div><b>Orchestrate</b> — click <b>Orchestrate</b> below; one orchestrator agent runs the whole epic end-to-end with native subagents.</div>
+                    <div><b>Split (recommended)</b> — drag the epic to the <b>Planner</b> column to improve every subtask plan, <i>then</i> click <b>Orchestrate</b> here to hand the improved epic to the orchestrator to implement.</div>
+                </div>
+            </details>
             <div class="content-row">
                 <div id="epics-list-pane">
                     <div class="sidebar-toggle-row">
@@ -1633,6 +1641,43 @@
             <div class="kanban-log-close" style="display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px;">
                 <button id="btn-new-epic-cancel" class="strip-btn">Cancel</button>
                 <button id="btn-new-epic-submit" class="strip-btn" style="border-color: var(--accent-teal);">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Epic Orchestration Prompt Preview -->
+    <div id="epic-orchestrate-overlay" class="kanban-log-overlay" style="display: none;">
+        <div class="kanban-log-modal" style="width: 640px; max-width: 90vw;">
+            <div style="padding: 12px 16px; font-weight: bold; border-bottom: 1px solid var(--border-color);">
+                Orchestrate Epic — <span id="epic-orchestrate-title"></span>
+            </div>
+            <div style="padding: 12px 16px;">
+                <div id="epic-orchestrate-status" style="font-size: 11px; color: var(--text-secondary); margin-bottom: 8px;"></div>
+                <pre id="epic-orchestrate-prompt" style="background: #111; border: 1px solid var(--border-color); color: var(--text-primary); padding: 10px; border-radius: 4px; font-size: 11px; max-height: 50vh; overflow: auto; white-space: pre-wrap; word-break: break-word;"></pre>
+            </div>
+            <div class="kanban-log-close" style="display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px;">
+                <button id="btn-epic-orchestrate-copy" class="strip-btn">Copy Prompt</button>
+                <button id="btn-epic-orchestrate-send" class="strip-btn" style="border-color: var(--accent-teal);">Send to Orchestrator</button>
+                <button id="btn-epic-orchestrate-close" class="strip-btn">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Subtask to Epic -->
+    <div id="epic-add-subtask-overlay" class="kanban-log-overlay" style="display: none;">
+        <div class="kanban-log-modal" style="width: 420px;">
+            <div style="padding: 12px 16px; font-weight: bold; border-bottom: 1px solid var(--border-color);">
+                Add Subtask to Epic
+            </div>
+            <div style="padding: 16px; display: flex; flex-direction: column; gap: 10px;">
+                <label for="epic-add-subtask-select" style="font-size: 11px; color: var(--text-secondary);">Select a plan to add as a subtask</label>
+                <select id="epic-add-subtask-select" style="background: #111; border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px; border-radius: 4px; font-size: 12px;">
+                    <option value="">Select a plan…</option>
+                </select>
+            </div>
+            <div class="kanban-log-close" style="display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px;">
+                <button id="btn-epic-add-subtask-cancel" class="strip-btn">Cancel</button>
+                <button id="btn-epic-add-subtask-submit" class="strip-btn" style="border-color: var(--accent-teal);">Add</button>
             </div>
         </div>
     </div>

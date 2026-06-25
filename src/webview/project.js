@@ -387,6 +387,9 @@
             case 'epicError':
                 showToast(msg.message || 'Error occurred', 'error');
                 break;
+            case 'epicOrchestrationResult':
+                handleEpicOrchestrationResult(msg);
+                break;
             case 'activeDesignDocUpdated': {
                 const planningEpic = msg.planningEpic || { enabled: msg.enabled, docName: msg.docName, sourceId: msg.sourceId, docId: msg.docId };
                 _activeEpicName = planningEpic.enabled ? (planningEpic.docName || 'None') : 'None';
@@ -1343,13 +1346,46 @@
         const metaBar = document.getElementById('epic-preview-meta-bar');
         if (!metaBar) return;
         metaBar.style.display = 'flex';
+        // DB-backed epics support orchestration + subtask management; standalone epic
+        // documents (.switchboard/epics/*.md with no DB record) do not.
+        const isManageable = plan && !plan.isEpicDocument;
+        const manageGroup = isManageable ? `
+            <div class="kanban-meta-group" style="display:flex; gap:6px;">
+                <button class="strip-btn" id="btn-epic-orchestrate" style="border-color: var(--accent-teal);" title="Assemble the orchestrator prompt for this epic and copy it">Orchestrate</button>
+                <button class="strip-btn" id="btn-epic-add-subtask" title="Add an existing plan to this epic as a subtask">+ Subtask</button>
+                <button class="strip-btn" id="btn-epic-delete" style="color:#ff6b6b;" title="Delete this epic (subtasks are detached)">Delete Epic</button>
+            </div>
+        ` : '';
         metaBar.innerHTML = `
+            ${manageGroup}
             <div class="kanban-meta-group" style="margin-left: auto;">
                 <button class="strip-btn" id="btn-edit-epics" style="${state.editMode.epics ? 'display:none;' : ''}">Edit</button>
                 <button class="strip-btn" id="btn-save-epics" style="${state.editMode.epics ? '' : 'display:none;'}">Save</button>
                 <button class="strip-btn" id="btn-cancel-epics" style="${state.editMode.epics ? '' : 'display:none;'}">Cancel</button>
             </div>
         `;
+
+        if (isManageable) {
+            const btnOrch = document.getElementById('btn-epic-orchestrate');
+            const btnAddSub = document.getElementById('btn-epic-add-subtask');
+            const btnDelEpic = document.getElementById('btn-epic-delete');
+            if (btnOrch) btnOrch.addEventListener('click', () => requestEpicOrchestration('copy'));
+            if (btnAddSub) btnAddSub.addEventListener('click', openEpicAddSubtaskOverlay);
+            if (btnDelEpic) btnDelEpic.addEventListener('click', () => {
+                if (!_epicSelectedPlan) return;
+                // No confirm dialog (project rule): delete executes immediately. Subtasks are
+                // detached (deleteSubtasks:false), matching the board's epic-as-unit model.
+                vscode.postMessage({
+                    type: 'deleteEpic',
+                    sessionId: _epicSelectedPlan.sessionId || _epicSelectedPlan.planId,
+                    workspaceRoot: _epicSelectedPlan.workspaceRoot,
+                    deleteSubtasks: false
+                });
+                _epicSelectedPlan = null;
+                if (epicsPreviewContent) epicsPreviewContent.innerHTML = '<div class="kanban-empty-state">Select an epic to preview</div>';
+                metaBar.style.display = 'none';
+            });
+        }
 
         const btnEditEpics = document.getElementById('btn-edit-epics');
         const btnCancelEpics = document.getElementById('btn-cancel-epics');
@@ -1423,6 +1459,88 @@
             });
         });
     }
+
+    // ---- Epic orchestration (Epics-tab Orchestrate action) ----
+    function requestEpicOrchestration(mode) {
+        if (!_epicSelectedPlan) return;
+        vscode.postMessage({
+            type: 'orchestrateEpic',
+            mode, // 'copy' | 'send' | 'preview'
+            sessionId: _epicSelectedPlan.sessionId || _epicSelectedPlan.planId,
+            workspaceRoot: _epicSelectedPlan.workspaceRoot
+        });
+    }
+
+    function closeEpicOrchestrateOverlay() {
+        const ov = document.getElementById('epic-orchestrate-overlay');
+        if (ov) ov.style.display = 'none';
+    }
+
+    function handleEpicOrchestrationResult(msg) {
+        const ov = document.getElementById('epic-orchestrate-overlay');
+        if (!msg.ok) {
+            showToast(msg.error || 'Orchestration failed.', 'error');
+            return;
+        }
+        const titleEl = document.getElementById('epic-orchestrate-title');
+        const statusEl = document.getElementById('epic-orchestrate-status');
+        const promptEl = document.getElementById('epic-orchestrate-prompt');
+        if (titleEl) titleEl.textContent = msg.epicTopic || '';
+        if (promptEl) promptEl.textContent = msg.prompt || '';
+        if (statusEl) {
+            let status = `${msg.subtaskCount || 0} subtask(s) included`;
+            if (msg.totalSubtasks && msg.totalSubtasks > (msg.subtaskCount || 0)) {
+                status += ` (capped at ${msg.subtaskCount} of ${msg.totalSubtasks})`;
+            }
+            if (msg.mode === 'send') status += msg.sent ? ' · sent to Orchestrator terminal' : ' · no Orchestrator terminal found — prompt copied instead';
+            else if (msg.mode === 'copy') status += ' · copied to clipboard';
+            statusEl.textContent = status;
+        }
+        if (ov) ov.style.display = 'flex';
+        if (msg.mode === 'copy') showToast('Orchestrator prompt copied.', 'success');
+        else if (msg.mode === 'send') showToast(msg.sent ? 'Sent to Orchestrator.' : 'No Orchestrator terminal — prompt copied.', msg.sent ? 'success' : 'error');
+    }
+
+    // ---- Add subtask to epic (Epics-tab) ----
+    function openEpicAddSubtaskOverlay() {
+        if (!_epicSelectedPlan) return;
+        const ov = document.getElementById('epic-add-subtask-overlay');
+        const select = document.getElementById('epic-add-subtask-select');
+        if (!ov || !select) return;
+        // Candidates: plans in the same workspace that are not epics and not already a subtask.
+        const epicWs = _epicSelectedPlan.workspaceRoot;
+        const candidates = _kanbanPlansCache.filter(p =>
+            !p.isEpic && !p.epicId && p.workspaceRoot === epicWs &&
+            (p.planId !== _epicSelectedPlan.planId));
+        select.innerHTML = '<option value="">Select a plan…</option>' + candidates.map(p =>
+            `<option value="${escapeHtml(p.sessionId || p.planId)}">${escapeHtml(p.topic)}</option>`).join('');
+        if (candidates.length === 0) {
+            select.innerHTML = '<option value="">No eligible plans in this workspace</option>';
+        }
+        ov.style.display = 'flex';
+    }
+
+    function closeEpicAddSubtaskOverlay() {
+        const ov = document.getElementById('epic-add-subtask-overlay');
+        if (ov) ov.style.display = 'none';
+    }
+
+    document.getElementById('btn-epic-orchestrate-copy')?.addEventListener('click', () => requestEpicOrchestration('copy'));
+    document.getElementById('btn-epic-orchestrate-send')?.addEventListener('click', () => requestEpicOrchestration('send'));
+    document.getElementById('btn-epic-orchestrate-close')?.addEventListener('click', closeEpicOrchestrateOverlay);
+    document.getElementById('btn-epic-add-subtask-cancel')?.addEventListener('click', closeEpicAddSubtaskOverlay);
+    document.getElementById('btn-epic-add-subtask-submit')?.addEventListener('click', () => {
+        const select = document.getElementById('epic-add-subtask-select');
+        const subtaskSessionId = select ? select.value : '';
+        if (!subtaskSessionId || !_epicSelectedPlan) { closeEpicAddSubtaskOverlay(); return; }
+        vscode.postMessage({
+            type: 'addSubtaskToEpic',
+            epicSessionId: _epicSelectedPlan.sessionId || _epicSelectedPlan.planId,
+            subtaskSessionId,
+            workspaceRoot: _epicSelectedPlan.workspaceRoot
+        });
+        closeEpicAddSubtaskOverlay();
+    });
 
     if (epicsWorkspaceFilter) {
         epicsWorkspaceFilter.addEventListener('change', () => {

@@ -849,6 +849,7 @@ export async function activate(context: vscode.ExtensionContext) {
     );
     context.subscriptions.push(planningPanelProvider);
     kanbanProvider!.setPlanningPanelProvider(planningPanelProvider);
+    planningPanelProvider.setKanbanProvider(kanbanProvider!);
 
     const designPanelProvider = new DesignPanelProvider(
         context.extensionUri,
@@ -2629,7 +2630,11 @@ export async function activate(context: vscode.ExtensionContext) {
             { name: 'Coder', role: 'coder' },
             { name: 'Intern', role: 'intern' },
             { name: 'Reviewer', role: 'reviewer' },
-            { name: 'Analyst', role: 'analyst' }
+            { name: 'Analyst', role: 'analyst' },
+            // Orchestrator has no kanban column (Decision #2): it is a full role only so its
+            // terminal is spawnable/configurable and dispatch-by-role works for the Epics-tab
+            // Orchestrate action. Hidden by default (visibleAgents.orchestrator === false).
+            { name: 'Orchestrator', role: 'orchestrator' }
         ];
         const plannerCount = await taskViewerProvider.getPlannerTerminalCount(effectiveWorkspaceRoot);
         const agents: { name: string; role: string }[] = [];
