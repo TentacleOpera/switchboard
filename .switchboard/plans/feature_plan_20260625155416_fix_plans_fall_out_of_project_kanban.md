@@ -189,7 +189,7 @@ This matches the pattern already used in `insertFileDerivedPlan` (line 1333). It
     workspace_id = excluded.workspace_id,
 ```
 
-A NEW defensive pattern (not copied from `insertFileDerivedPlan`, which only guards `project_id` with COALESCE, not `project` text). Prevents `upsertPlans` callers from accidentally wiping the `project` text column with an empty string. Non-empty values still override (e.g. when a user explicitly reassigns a plan to a different project via `setProjectForPlans`, which uses a direct UPDATE, not `upsertPlans`).
+Matches the same `COALESCE(NULLIF(excluded.project, ''), plans.project)` pattern already used in `insertFileDerivedPlan` (line 1332). Prevents `upsertPlans` callers from accidentally wiping the `project` text column with an empty string. Non-empty values still override (e.g. when a user explicitly reassigns a plan to a different project via `setProjectForPlans`, which uses a direct UPDATE, not `upsertPlans`).
 
 **Design constraint:** After this fix, `upsertPlans` can no longer be used to CLEAR the `project` text column (an empty string is treated as "preserve existing"). This is intentional — `upsertPlans` is not the path for clearing project assignment. Use `setProjectForPlans(workspaceId, planIds, null)` or `deleteProject()` for that purpose, both of which use direct UPDATE statements that bypass `upsertPlans` entirely. If a future code path needs to clear `project` via `upsertPlans`, it must use a dedicated `UPDATE` statement instead.
 
@@ -218,6 +218,51 @@ A NEW defensive pattern (not copied from `insertFileDerivedPlan`, which only gua
 - Add a unit test: insert a plan with `project = "v5 funnel"`, `project_id = 2`. Then call `upsertPlans` with `project = "Automated Testing"` and `projectId = 4`. Assert both are updated (non-empty values still override).
 
 > **Session note:** Compilation and automated tests are skipped for this session per user directive. The test suite will be run separately by the user. Verification is limited to manual testing and code review.
+
+## Review Results (Reviewer Pass — 2026-06-26)
+
+### Implementation Verification
+
+All three proposed changes confirmed present and correct in the codebase:
+
+1. **`TaskViewerProvider.ts:2329`** — `projectId: existing.projectId ?? null` added to the `preserveExistingFields` branch. Round-trip verified: `getPlanByPlanFile` → `_readRows` (line 5779) maps `project_id` → `projectId` as `Number(...)` or `null`, so the preserved value is faithful.
+2. **`KanbanDatabase.ts:583`** — `project_id = COALESCE(excluded.project_id, plans.project_id)` in `UPSERT_PLAN_SQL` ON CONFLICT. Matches `insertFileDerivedPlan` pattern (line 1333).
+3. **`KanbanDatabase.ts:567`** — `project = COALESCE(NULLIF(excluded.project, ''), plans.project)` in `UPSERT_PLAN_SQL` ON CONFLICT. Matches `insertFileDerivedPlan` pattern (line 1332).
+
+### Caller Audit (all `upsertPlan`/`upsertPlans` callers)
+
+| Caller | `projectId` set? | `project` set? | Safe with COALESCE? |
+|--------|-----------------|----------------|---------------------|
+| `TaskViewerProvider:14749` (run sheet update) | ✅ via fix | ✅ preserved | ✅ Primary fix path |
+| `TaskViewerProvider:2359` (sync snapshot, `preserve=false`) | ❌ undefined→null | ❌ `''` | ✅ SQL COALESCE guards both |
+| `KanbanProvider:5107` (workspace reassign) | via `...plan` spread | explicit `targetProject` | ✅ INSERT path for new workspace; COALESCE preserves on conflict |
+| `KanbanProvider:7832` (epic creation) | ❌ not set | ❌ not set | ✅ COALESCE preserves on re-creation |
+| `PlanningPanelProvider:3016` (epic creation) | ❌ not set | ❌ not set | ✅ COALESCE preserves on re-creation |
+| `NotionBackupService:137` (restore) | ❌ undefined→null | ❌ undefined→`''` | ✅ COALESCE preserves local values (bonus protection) |
+
+### Findings
+
+| Severity | Finding | File:Line | Status |
+|----------|---------|-----------|--------|
+| NIT | Plan doc claimed `project` COALESCE was "a NEW pattern" — actually `insertFileDerivedPlan:1332` already uses the identical `COALESCE(NULLIF(...))` pattern | Plan file line 187 (now corrected) | ✅ Fixed in plan doc |
+| NIT | `baseRecord` (TaskViewerProvider:2299) doesn't set `projectId`; relies on SQL-level COALESCE for the `preserveExistingFields=false` path | TaskViewerProvider.ts:2299 | Deferred — SQL guard catches it |
+| — | `reassignPlansWorkspace` can't clear `project` text via `upsertPlan` if plan already exists in target DB | KanbanProvider.ts:5111 | Not a bug — documented design constraint; INSERT path (fresh in target) unaffected |
+
+### Fixes Applied
+
+- **Plan documentation:** Corrected the "NEW defensive pattern" claim to accurately reference the existing `insertFileDerivedPlan:1332` pattern.
+- **Code:** No code fixes needed — implementation is correct as-is.
+
+### Validation
+
+- Compilation: skipped per session directive.
+- Automated tests: skipped per session directive.
+- Code review: complete — all changes verified against plan requirements, all callers audited, round-trip data flow traced.
+
+### Remaining Risks
+
+1. **Design constraint (documented):** `upsertPlans` can no longer clear `project` text — must use `setProjectForPlans`/`deleteProject` direct UPDATEs. If a future feature needs to clear `project` via `upsertPlans`, it will need a dedicated UPDATE statement.
+2. **`baseRecord` inconsistency (NIT):** The `baseRecord` in `_buildKanbanRecordFromSheet` doesn't set `projectId`, relying on the SQL COALESCE guard. Functionally safe but a code-smell for future maintainers.
 
 ## Recommendation
 
