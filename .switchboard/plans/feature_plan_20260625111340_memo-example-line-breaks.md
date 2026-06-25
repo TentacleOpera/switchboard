@@ -97,3 +97,66 @@ Replace the single-newline separators in the placeholder with double-newline sep
 ---
 
 **Recommendation:** Complexity 1/10 → **Send to Intern**.
+
+---
+
+## Reviewer Pass — 2026-06-25
+
+### Stage 1: Grumpy Principal Engineer (adversarial)
+
+Inspection target: `src/webview/implementation.html:1583`.
+
+```html
+placeholder="Bug: login button overlaps on mobile&#10;&#10;Thought: maybe cache the user profile&#10;&#10;Issue: API returns 500 on empty payload..."
+```
+
+- **[NIT] Entity correctness:** `&#10;` is the numeric character entity for LF (U+000A); doubled to `&#10;&#10;` yields one blank line between entries. No typo (`&#13;`, `&amp;#10;`, etc.). Correct.
+- **[NIT] Separator count:** Exactly two inter-entry separators (Bug→Thought, Thought→Issue), both doubled. No leading/trailing double-newline introduced. Leading "Bug:" and trailing "..." byte-identical to the plan's "After" spec.
+- **[NIT] No collateral damage:** Surrounding context (instruction `<p>` lines above, `memo-status` span, Clear/Copy/Send buttons below, textarea `id`/`class`/`style`) untouched.
+- **[NIT] No stray duplicates:** Single occurrence of the placeholder string in `src/`; no missed twin in a second webview file.
+
+**Verdict:** Zero CRITICAL. Zero MAJOR. Zero actionable findings. Byte-exact execution of the plan.
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| Entity correctness | NIT | Keep — verified correct |
+| Separator count / no trailing doubles | NIT | Keep — verified correct |
+| No collateral damage to surrounding elements | NIT | Keep — verified intact |
+| No stray duplicate placeholders | NIT | Keep — single instance confirmed |
+
+**Fixes applied:** None — no CRITICAL/MAJOR findings.
+**Deferred:** Nothing — no remaining work.
+
+### Code Changes Verified
+
+- **File:** `src/webview/implementation.html` (line 1583)
+- **Change:** Both inter-entry separators in the `memo-textarea` placeholder changed from `&#10;` to `&#10;&#10;`, producing a blank line between each of the three example entries. Matches the plan's "After" spec byte-for-byte.
+
+### Validation Results
+
+- **Compilation:** Skipped per session directive.
+- **Automated tests:** Skipped per session directive; no test harness covers static placeholder copy.
+- **Manual inspection:** Performed. The rendered placeholder will display:
+  - `Bug: login button overlaps on mobile`
+  - *(blank line)*
+  - `Thought: maybe cache the user profile`
+  - *(blank line)*
+  - `Issue: API returns 500 on empty payload...`
+- **Downstream impact:** None. The placeholder is never persisted to `.switchboard/memo.md` and is not read by `memoGeneratePrompt` (which reads `textarea.value`, not the placeholder).
+
+### Remaining Risks
+
+None material. The only conceivable failure mode (a malformed HTML entity) was ruled out by inspection.
+
+### Summary
+
+| Severity | Count | Files / Lines |
+|---|---|---|
+| CRITICAL | 0 | — |
+| MAJOR | 0 | — |
+| NIT | 4 (all verified-clean, no action) | `src/webview/implementation.html:1583` |
+
+**Fixes applied:** 0 (none required).
+**Remaining risks:** None.
