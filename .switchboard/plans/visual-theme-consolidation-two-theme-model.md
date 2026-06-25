@@ -207,11 +207,15 @@ The implementation is **complete and faithful to D1–D14**. Every load-bearing 
 
 - **Keep** (verified, no action): clean-break Pro removal (Phase 1 exit-check zero); Afterburner headings Hanken/no-glow with H1 white + H2–H6 `--accent-primary`, accent-element glows preserved (Phase 2); Claudify H1 GeistPixel/terracotta + H2–H6 Hanken/terracotta, `#1C1C1C` surface, `0.05` grid, **live inline** tab fix (Phase 3); cross-cutting `#8C8C8C` / border / black-card values (Phase 4); setup immersive parity with the `.cyber-scanlines` element actually present (Phase 5); the animation de-collision (Phase 6); enumDescriptions (Phase 7).
 - **Fix now:** nothing. No CRITICAL or MAJOR findings.
-- **Defer / leave:** the dead `#888`/`#888888` `--text-secondary` fallbacks (NIT, never render, pre-existing); the optional Phase 4.4 `--text-primary` tidy (explicitly optional). Neither is worth churn during a review pass; both can ride along with any future tab-CSS touch.
+- **Defer / leave:** the dead `#888`/`#888888` `--text-secondary` fallbacks (NIT, never render, pre-existing); can ride along with any future tab-CSS touch.
+
+### Follow-up tidy (applied after the review, on user request)
+
+The optional **Phase 4.4** tidy was performed: removed the redundant `--text-primary: #E0E0E0;` redeclaration from the `body.theme-claudify` block in all 6 panels (`kanban`, `implementation`, `planning`, `design`, `project`, `setup`). Each was a no-op re-set of the base `:root --text-primary: #e0e0e0`; Claudify now inherits it from `:root`. Verified: exactly one `--text-primary` decl per panel, zero uppercase `#E0E0E0` left, `--text-secondary`/`--border-*` Claudify redeclarations deliberately untouched (per the "keep all declarations" rule — only the genuinely-never-themed `--text-primary` was dropped).
 
 ### Code fixes applied
 
-**None.** No valid CRITICAL/MAJOR finding surfaced. The only findings are non-rendering NITs; fixing dead fallbacks or doing the explicitly-optional Phase 4.4 tidy would be scope creep, not correction.
+**During the review pass: none** — no valid CRITICAL/MAJOR finding surfaced. **After the review (user request):** the optional Phase 4.4 `--text-primary` redeclaration tidy across all 6 panels (see above).
 
 ### Verification performed (grep/structural; compile & tests skipped per directive)
 
@@ -230,7 +234,7 @@ The implementation is **complete and faithful to D1–D14**. Every load-bearing 
 | :--- | :--- | :--- | :--- |
 | NIT | Stale `var(--text-secondary, #888888)` fallback (never renders; var always defined) | `kanban.html:1364` | Leave — dead, pre-existing |
 | NIT | Stale `var(--text-secondary, #888)` fallbacks | `planning.html:2476,2512`; `design.html:2514,2550` | Leave — dead, pre-existing |
-| NIT | Optional Phase 4.4 tidy not performed (`--text-primary: #E0E0E0` redeclarations remain) | all 6 panels | Leave — plan marked it optional |
+| NIT | Optional Phase 4.4 tidy (`--text-primary: #E0E0E0` redeclarations) | all 6 panels | **Done** — removed on user request post-review |
 | OBS | Dead `shared-tabs.css` edited in parallel with live inline copies | `shared-tabs.css:67–76` | No action — harmless; defensive if ever wired up |
 
 ### Remaining risks

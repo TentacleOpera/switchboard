@@ -37,7 +37,6 @@
             --accent-teal-dim: color-mix(in srgb, #D97757 40%, transparent);
             --accent-teal-bright: #E2A188;
             --glow-teal: none;           /* kill all variable-routed neon glow */
-            --text-primary: #E0E0E0;
             --text-secondary: #8C8C8C;
             --border-color: #333333;
             --border-bright: #555555;
@@ -5773,6 +5772,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
 
                 if (dispatchGroups.size === 0) return;
+
+                // Keep the render-guard signature in sync with the optimistic mutation.
+                // The forEach above mutated card.column for each dispatched card; without
+                // this, a subsequent stale updateBoard triggers a spurious full re-render
+                // that reverts the move and loses epic styling — same bug as the main
+                // validIds path below.
+                lastBoardSignature = buildBoardSignature(currentCards);
 
                 setTimeout(() => {
                     dispatchGroups.forEach(group => {

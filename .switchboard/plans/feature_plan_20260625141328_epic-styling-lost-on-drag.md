@@ -288,6 +288,14 @@ This mirrors what `moveCardsOptimistically` does at line 4321. Place this **befo
 
 **Clarification**: The `lastBoardSignature` update should be placed inside the `validIds.forEach` block's closing, right after line 5872, so it only runs when cards were actually moved. If `validIds` is empty, no mutation occurred and the signature update is unnecessary (but harmless).
 
+**IMPLEMENTED**: Applied at `kanban.html:5956` (current line numbers), after the `validIds.forEach` loop closes and before the `if (validIds.length > 0)` block. The early return at `if (validIds.length === 0) return;` (line 5905) ensures this only runs when cards were actually moved.
+
+### 2b. `src/webview/kanban.html` — Update `lastBoardSignature` in `CODED_AUTO` branch of `handleDrop` (REVIEW FIX)
+
+**Discovered during review**: The `CODED_AUTO` branch of `handleDrop` (lines 5705-5811) has its own optimistic DOM move that mutates `card.column = resolvedTarget` at line 5767, but the original implementation did NOT update `lastBoardSignature` before returning at line 5811. This is the exact same staleness bug as Section 2, in a sibling branch 100 lines above the fix. When an epic is dragged to the synthetic CODED_AUTO column, the 350ms `setTimeout` window before backend dispatch is vulnerable to a file-watcher `updateBoard` arriving with stale signature, triggering a spurious full re-render that loses epic styling.
+
+**Fix applied** (`kanban.html:5777-5782`): Added `lastBoardSignature = buildBoardSignature(currentCards);` after the `if (dispatchGroups.size === 0) return;` early return (line 5775) and before the `setTimeout` dispatch (line 5784). This mirrors the pattern at line 5956 and `moveCardsOptimistically` at line 4407. Placement after the `dispatchGroups.size === 0` return ensures it only runs when cards were actually moved.
+
 ### 3. `src/webview/kanban.html` — Defensive: ensure `moveCards` handler preserves epic fields
 
 The current `moveCards` handler already preserves `isEpic` via spread (`{ ...card, column: targetCol }`). No change needed here — the spread correctly preserves `isEpic`, `epicId`, and `subtaskCount`. The fix in #1 ensures that subtask cards are also updated, preventing the signature mismatch that triggers the spurious re-render.
@@ -350,3 +358,41 @@ A grep for `type: 'moveCards'` reveals 21 total send sites in `KanbanProvider.ts
 ---
 
 **Recommendation**: Complexity 5 → **Send to Coder**
+
+---
+
+## Review Pass — 2026-06-25
+
+### Files Changed (by review)
+
+| File | Lines | Change |
+|------|-------|--------|
+| `src/webview/kanban.html` | 5777-5782 (new) | **Review fix**: Added `lastBoardSignature = buildBoardSignature(currentCards)` in `CODED_AUTO` branch of `handleDrop`, after `dispatchGroups.size === 0` early return, before `setTimeout` dispatch. |
+
+### Findings by Severity
+
+| Severity | Finding | Location | Status |
+|----------|---------|----------|--------|
+| **MAJOR** | `CODED_AUTO` branch of `handleDrop` mutates `card.column` at line 5767 but never updates `lastBoardSignature` before returning at line 5811 — same staleness bug as Section 2, in a sibling branch. Epic dragged to CODED_AUTO loses styling on next `updateBoard`. | `src/webview/kanban.html:5767` (mutation), `:5811` (return without sync) | **FIXED** — added signature sync at `:5782` |
+| NIT | `allMovedIds2` variable name in `promptOnDrop` site 3 reads like a copy-paste artifact. No functional impact (separate scope from site 1). | `src/services/KanbanProvider.ts:5920` | Deferred — cosmetic |
+| NIT | Comment at `promptOnDrop` site 1 says "already persisted the column move server-side" — technically the helper only reads `isEpic`/`epicId`, not column, so persistence timing is irrelevant. Misleading but harmless. | `src/services/KanbanProvider.ts:5880-5881` | Deferred — cosmetic |
+
+### Verification Results
+
+- **Compilation**: SKIPPED per session directives.
+- **Automated tests**: SKIPPED per session directives. Relevant regression tests: `src/test/kanban-subtask-column-leak-regression.test.js`, `src/services/__tests__/KanbanDatabase.epicStatus.test.ts`.
+- **Static verification**: Confirmed all 3 `card.column =` mutation points in `handleDrop` are now covered by `lastBoardSignature` sync:
+  1. `CODED_AUTO` branch (line 5767) → synced at line 5782 **[review fix]**
+  2. `COMPLETED` branch (line 5869) → covered by main path sync at line ~5963 when backward IDs exist; when no backward IDs, `completePlan` flow handles board update (out of scope per plan edge case table)
+  3. Main `validIds.forEach` path (line 5950) → synced at line ~5963 **[original impl]**
+- **Scope check**: `lastBoardSignature` declared at `kanban.html:3767` (`let`), same script scope as `handleDrop` — no scope issues.
+- **Helper method**: `_collectAllMovedSessionIds` at `KanbanProvider.ts:4737` — verified `!!plan.isEpic` (correct for `number | undefined`), `plan.planId` (required string field), `getSubtasksByEpicId(plan.planId)` (matches signature `getSubtasksByEpicId(epicPlanId: string)`).
+- **All 5 drag-and-drop `moveCards` send sites** confirmed using helper: `moveCardBackwards` (5530), `moveCardForward` (5547), `promptOnDrop` site 1 (5887), site 2 (5917), site 3 (5929).
+- **`moveCards` webview handler** (line 6168): `{ ...card, column: targetCol }` correctly preserves `isEpic`, `epicId`, `subtaskCount`.
+- **`buildBoardSignature`** (line 4527): includes `isEpic`, `subtaskCount`, `epicId` in signature — epic identity is part of the render-guard.
+
+### Remaining Risks
+
+1. **16 button-driven `moveCards` send sites** still pass only original session IDs (not subtask IDs). These are explicitly documented as future work (Section 4). The helper method makes future fixes trivial.
+2. **350ms `setTimeout` race window**: The `lastBoardSignature` sync now runs BEFORE the `setTimeout` in both `handleDrop` branches, minimizing (but not eliminating) the window where a file-watcher `updateBoard` could arrive with stale DB data. The signature sync ensures the optimistic state is the baseline, so only genuinely different data triggers a re-render.
+3. **`COMPLETED` drag with no backward IDs**: The `card.column` mutation at line 5869 is not covered by a `lastBoardSignature` sync in the case where all dragged cards go to COMPLETED (no backward IDs → `validIds` empty → early return at 5905). This is acceptable because the `completePlan` flow handles board updates through a different mechanism (archival), and the plan's edge case table explicitly excludes "Drag to COMPLETED".
