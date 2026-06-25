@@ -351,11 +351,14 @@
                     setProjectsPrdEditorEnabled(true);
                     if (projectsPrdStatus) projectsPrdStatus.textContent = msg.exists ? '' : 'New PRD — not yet saved';
                     if (projectsPrdPathHint) projectsPrdPathHint.textContent = msg.path || '';
+                    _prdLoadedProject = msg.projectName;
+                    _prdDirty = false;
                 }
                 break;
             }
             case 'projectPrdSaved':
                 if (projectsPrdStatus) projectsPrdStatus.textContent = msg.ok ? 'Saved ✓' : 'Save failed';
+                if (msg.ok) _prdDirty = false;
                 break;
             case 'planCreated':
                 if (btnCreateKanbanPlan) {
@@ -1010,7 +1013,13 @@
         } else {
             projectsPrdSelect.value = projects[0];
         }
-        requestProjectPrd();
+        // Don't clobber an in-progress edit: reload only when the selection differs from
+        // what's loaded, or the current selection has no unsaved changes.
+        if (projectsPrdSelect.value !== _prdLoadedProject || !_prdDirty) {
+            requestProjectPrd();
+        } else {
+            setProjectsPrdEditorEnabled(true);
+        }
     }
 
     function requestProjectPrd() {
@@ -1019,6 +1028,7 @@
         const wsRoot = getProjectsTabWorkspaceRoot();
         if (!projectName || !wsRoot) { setProjectsPrdEditorEnabled(false); return; }
         if (projectsPrdEditor) projectsPrdEditor.value = '';
+        _prdDirty = false;  // a fresh load supersedes any prior unsaved state
         if (projectsPrdStatus) projectsPrdStatus.textContent = 'Loading…';
         vscode.postMessage({ type: 'getProjectPrd', projectName, workspaceRoot: wsRoot });
     }
@@ -1044,6 +1054,9 @@
     }
     if (projectsPrdSelect) {
         projectsPrdSelect.addEventListener('change', requestProjectPrd);
+    }
+    if (projectsPrdEditor) {
+        projectsPrdEditor.addEventListener('input', () => { _prdDirty = true; });
     }
     if (btnProjectContext) {
         btnProjectContext.addEventListener('click', () => {

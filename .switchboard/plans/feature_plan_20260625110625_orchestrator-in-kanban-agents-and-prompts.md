@@ -147,7 +147,7 @@ No automated tests required. This plan adds three static HTML/JS insertions to a
 2. **Agents tab — enable orchestrator:** Check the Orchestrator visibility checkbox → it saves (autosave on checkbox change at `kanban.html:3649`). Enter a CLI command (e.g. `claude`) → it saves on blur (autosave at `kanban.html:3652`). Verify the command persists after reloading the webview.
 3. **Agents tab — state sync:** Reload the webview → the Orchestrator checkbox and command input reflect the saved state (checkbox checked, command populated).
 4. **Prompts tab — orchestrator selectable:** Open the Prompts tab → the role selector dropdown includes "Orchestrator". Select it → the role description appears ("Runs an entire epic end-to-end…").
-5. **Prompts tab — add-ons render:** With Orchestrator selected, the Add-ons section shows the orchestrator's add-ons: Switchboard Safeguards, Git Prohibition, Clear Antigravity Context, Caveman Output, Skip Compilation, Skip Tests, Subagent Policy (radio: Not Specified / No Subagents / Yes / Custom), Worktrees Per Plan, Workflow File.
+5. **Prompts tab — add-ons render:** With Orchestrator selected, the Add-ons section shows the orchestrator's 10 add-ons: Switchboard Safeguards, Git Prohibition, Clear Antigravity Context, Caveman Output, Skip Compilation, Skip Tests, Subagent Policy (radio: Not Specified / No Subagents / Yes / Custom), Worktrees Per Plan, Workflow File, Ultracode. *(Updated during review: original checklist omitted Ultracode, which is defined at `sharedDefaults.js:285`.)*
 6. **Prompts tab — prompt editable:** With Orchestrator selected, the "Edit Prompt Template" textarea is editable (not read-only). Enter a custom prompt override → it saves. Reload → the override persists.
 7. **Prompts tab — prompt preview:** With Orchestrator selected, the prompt preview loads (shows the assembled orchestrator base prompt). Editing the textarea updates the saved override.
 8. **Subagent policy radio:** Click through the Subagent Policy radio options → selecting "Custom Subagent" shows the custom subagent name text input. Enter a name → it saves.
@@ -158,3 +158,66 @@ No automated tests required. This plan adds three static HTML/JS insertions to a
 ---
 
 **Recommendation:** Complexity 3/10 → **Send to Intern**. Three static HTML/JS insertions in a single file, no logic changes, no migrations, all backend paths already complete.
+
+## Reviewer Pass — Completed
+
+### Stage 1: Grumpy Principal Engineer Review
+
+*slams fist on desk*
+
+Listen. I came in here expecting to find at least ONE of the three insertions botched — a misplaced row, a typo'd `data-role`, a description that doesn't match. Instead I find a clean, surgical three-line addition to a single file. The kind of change that makes me suspicious because it's TOO clean. So I dug deeper. And here's what I found:
+
+**NIT-1 — Verification step 5 addon list is incomplete.** The plan's manual verification step 5 (line 150) lists 9 orchestrator add-ons: Switchboard Safeguards, Git Prohibition, Clear Antigravity Context, Caveman Output, Skip Compilation, Skip Tests, Subagent Policy, Worktrees Per Plan, Workflow File. But `sharedDefaults.js:270-286` defines **10** add-ons — the plan omits **Ultracode** (`sharedDefaults.js:285`: `{ id: 'ultracode', label: 'Ultracode', ... default: false }`). The CODE is correct (all 10 render via `renderRoleAddons`); the plan's verification TEXT is wrong. A reviewer following step 5 literally would think an addon is missing when it isn't. Fix the doc, not the code.
+
+**That's it.** No CRITICAL. No MAJOR. I checked every single claim in this plan against the actual codebase:
+
+- Agents tab row at `kanban.html:2727-2728` — ✓ present, correct `data-role="orchestrator"`, unchecked checkbox (no `checked` attr), CLI text input with `id="agents-tab-cmd-orchestrator"`, description matches. Placed after researcher (2725), before jules (2729). Follows researcher pattern (checkbox+label+input), NOT jules pattern (checkbox+label+span). Correct.
+- Role selector option at `kanban.html:2786` — ✓ `<option value="orchestrator">Orchestrator</option>` present, after researcher (2785), before ticket_updater (2787). Correct.
+- ROLE_DESCRIPTIONS entry at `kanban.html:3173` — ✓ present, after gatherer (3172), before jules (3174). Description text matches the agent row description. Correct.
+- Sync logic at `kanban.html:6490-6495` — ✓ uses `querySelectorAll('#agents-tab-content input[type="text"][data-role]')` and `querySelectorAll('#agents-tab-content .agents-tab-visible-toggle')` — both will pick up the orchestrator row automatically. No changes needed.
+- `handleRoleChange` at `kanban.html:3204` — ✓ orchestrator falls into `else` branch (line 3258) → `renderRoleAddons(currentRole)`. `researchComplexityConfig` hidden (line 3211: only 'block' for researcher). `promptCustomization` shown (line 3212: 'block' for non-planner). `previewEl.readOnly` is false (line 3264: only true for planner/code_researcher). Correct.
+- `renderRoleAddons` at `kanban.html:3269` — ✓ reads `ROLE_ADDONS[role]` which is injected from `sharedDefaults.js` via `<!-- SHARED_DEFAULTS_SCRIPT -->` placeholder (kanban.html:3138, replaced by KanbanProvider.ts:8075). Orchestrator has 10 addons including the `subagentPolicy` radio with `customSubagent` text input. The radio+text-input rendering path (lines 3291-3334) handles this. Correct.
+- `refreshPreview` at `kanban.html:3447` — ✓ sends `{ type: 'getPromptPreview', role: currentRole }` with `currentRole = 'orchestrator'`. Backend handles it. Correct.
+- Backend `getVisibleAgents` (TaskViewerProvider.ts:3652) — ✓ `orchestrator: false` in defaults, merge path `{ ...defaults, ...fileValue }` preserves it for existing installs. Correct.
+- Backend `handleGetDefaultPromptPreviews` (TaskViewerProvider.ts:3950) — ✓ roles array includes `'orchestrator'`. Correct.
+- Backend `_getDefaultPromptOverrides` (TaskViewerProvider.ts:7470) — ✓ roles array includes `'orchestrator'`. Correct.
+- `agentPromptBuilder.ts:1200` — ✓ orchestrator base-instruction branch exists. Correct.
+- `extension.ts:2638` — ✓ `{ name: 'Orchestrator', role: 'orchestrator' }` in allBuiltInAgents. Correct.
+- `agentConfig.ts:1,104,117,402` — ✓ orchestrator in BuiltInAgentRole, labels, autoban agents, VALID_ROLES. Correct.
+- Scope boundary — ✓ `claude_designer` and `mcp_monitor` are NOT in the kanban Agents tab or role selector (confirmed absent), matching the plan's explicit out-of-scope note. No scope creep.
+
+*exhales*
+
+Fine. It's correct. All three insertions are in the right place, the right order, with the right pattern. The backend was already complete. The dynamic rendering paths are generic and handle orchestrator without additional code. I have nothing to fix in the code. My only gripe is a documentation error in the verification checklist.
+
+### Stage 2: Balanced Synthesis
+
+**Keep as-is:**
+- All three code insertions (kanban.html:2727-2728, 2786, 3173) — verified correct, no changes needed.
+- All backend registrations — verified complete across agentConfig.ts, sharedDefaults.js, extension.ts, agentPromptBuilder.ts, TaskViewerProvider.ts.
+
+**Fix now:**
+- NIT-1: Update verification step 5 to include the 10th add-on (Ultracode) so the checklist matches the actual `ROLE_ADDONS.orchestrator` definition. Documentation-only fix.
+
+**Defer:**
+- The `claude_designer` and `mcp_monitor` gap (noted in plan line 36) — separate plan, explicitly out of scope. No action here.
+
+### Code Fixes Applied
+
+None. The implementation is correct as-is. No CRITICAL or MAJOR findings.
+
+### Verification Results
+
+- **Compilation:** Skipped per session instructions (pre-compiled state assumed).
+- **Automated tests:** Skipped per session instructions (run separately by user).
+- **Code inspection verification:** All 3 insertions verified present and correct in `src/webview/kanban.html`. All 6 backend touch-points verified to include orchestrator. All 5 dynamic rendering paths verified to handle orchestrator generically. Sync logic confirmed to pick up new row via `querySelectorAll`. Scope boundary confirmed (claude_designer/mcp_monitor correctly excluded).
+
+### Files Changed
+
+- `src/webview/kanban.html` — 3 insertions (Agents tab row, role selector option, ROLE_DESCRIPTIONS entry). No logic changes.
+
+### Remaining Risks
+
+1. **NIT (documentation only):** Verification step 5 listed 9 add-ons; actual `ROLE_ADDONS.orchestrator` has 10 (Ultracode was omitted from the checklist). Fixed in-plan below. No code risk.
+2. **Out-of-scope gap:** `claude_designer` and `mcp_monitor` remain absent from the kanban Agents tab and role selector. Tracked for a separate plan. No risk to this feature.
+3. **Manual VSIX verification pending:** Steps 1-11 require manual testing against an installed VSIX (per project norm). Code inspection confirms all wiring is correct, but runtime behavior (addon rendering, prompt preview, state persistence) should be confirmed by the user.

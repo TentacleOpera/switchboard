@@ -54,9 +54,10 @@ No — the emoticon block format is documented by ClickUp. The attachment block 
 
 ### Routine
 - Adding `emoticon` block handling to `_normalizeClickUpComment` — same loop, new `else if` branch.
+- Adding multi-codepoint emoji fallback (`-`-split on `emoticon.code`) — 3-line addition within the emoticon branch.
 - Adding defensive `attachment`/`image` block handling — same loop, new `else if` branch.
 - Adding CSS for inline images in the Comment Manager.
-- Adding unit tests for emoticon and attachment block decoding.
+- Adding unit tests for single-codepoint emoji, multi-codepoint ZWJ emoji, image attachment, and `[media comment]` placeholder.
 
 ### Complex / Risky
 - **Webview rendering of mixed content** — the Comment Manager currently renders body as `escapeHtml(thread.body)`. Emoji characters survive `escapeHtml` fine (they're not `<`, `>`, or `&`), but inline images require `<img>` tags which can't go through `escapeHtml`. The renderer needs a structured body format (not just a string) to safely mix text and images. This is the main architectural change.
@@ -69,7 +70,7 @@ No — the emoticon block format is documented by ClickUp. The attachment block 
 
 ### Security
 - **XSS via image URLs:** the webview CSP allows `img-src https: data:` (`planning.html:6`). Image URLs must be validated to start with `https://` or `data:` before rendering. Any other scheme (`javascript:`, `file:`, etc.) is blocked by CSP but should also be filtered in code as defense-in-depth.
-- **XSS via alt text:** the `alt` attribute on `<img>` must be escaped via `escapeAttr()`.
+- **XSS via alt text / src attribute breakout:** the `alt` and `src` attributes on `<img>` must be escaped via `escapeAttr()`. Note: `escapeAttr` (`planning.js:528`) only escapes `"` to `&quot;` — it does NOT escape `&`, `<`, or `>`. This is sufficient for attribute-value context (double-quote breakout is prevented), but URLs containing `&` in query strings (e.g., `?a=1&b=2`) will not have the `&` encoded. Browsers handle unencoded `&` in attribute values gracefully in practice (invalid entities are rendered literally), so this is a cosmetic nit, not a security hole. The scheme validation (`https://`/`data:`) is the primary XSS defense.
 - **Emoji injection:** emoji characters are Unicode codepoints, not HTML. They pass through `escapeHtml` safely. No injection risk.
 
 ### Side Effects
@@ -90,20 +91,23 @@ No — the emoticon block format is documented by ClickUp. The attachment block 
 
 ## Uncertain Assumptions
 
+> **The user was advised to run web research to confirm these assumptions before implementation.** The ready-to-run research prompt is supplied at the end of the chat summary.
+
 1. **Emoticon block `text` field format** — ClickUp docs show `"text": "U0001F60A"` for emoticon blocks. This appears to be a Unicode escape representation. Research needed: is this always `U` + 4-6 hex digits, or can it vary? The `emoticon.code` field (e.g., `"1f60a"`) is the raw hex codepoint and is more reliable for constructing the emoji character.
    - **Resolution:** Use `emoticon.code` (hex codepoint) as the primary source. Construct the emoji character via `String.fromCodePoint(parseInt(code, 16))`. Fall back to the `text` field if `emoticon.code` is absent.
 
-2. **Attachment/image block shape** — undocumented. ClickUp may return `{"type": "attachment", "url": "...", "title": "..."}` or `{"type": "image", "image": "...", "url": "..."}` or something else entirely. The plan handles this defensively: look for common URL fields (`url`, `image`, `src`, `attachment`) on any block with `type` matching `attachment`/`image`/`file`.
+2. **Emoticon `code` field for multi-codepoint emoji** — ClickUp docs only show single-codepoint examples (e.g., `"1f60a"`). It is uncertain whether compound emoji (skin-tone modifiers, ZWJ sequences like 👨‍👩‍👧, regional indicator flag emoji) are represented as a single `code` string with `-`-separated hex segments (e.g., `"1f468-200d-1f469-200d-1f467"`) or via some other format. `parseInt(code, 16)` stops at the first non-hex character, silently truncating compound emoji to their first codepoint.
+   - **Resolution:** Add a multi-codepoint fallback: if `code` contains `-`, split on `-` and map each segment through `String.fromCodePoint(parseInt(seg, 16))`, concatenating the results. This handles the most likely compound-emoji encoding. If ClickUp uses a different format, the single-codepoint path still works for basic emoji.
+
+3. **Attachment/image block shape** — undocumented. ClickUp may return `{"type": "attachment", "url": "...", "title": "..."}` or `{"type": "image", "image": "...", "url": "..."}` or something else entirely. The plan handles this defensively: look for common URL fields (`url`, `image`, `src`, `attachment`) on any block with `type` matching `attachment`/`image`/`file`.
    - **Resolution:** Defensive extraction. If no URL is found, show `[attachment]` placeholder text.
 
-3. **Whether attachment blocks exist at all** — ClickUp may handle image comments purely as task-level attachments with no block in the `comment` array. In that case, the comment would have `comment_text: ""` and `comment: []` (empty array), and the empty-body fallback from the prior plan would produce blank. The `[attachment]` placeholder would not fire because there are no blocks to iterate.
+4. **Whether attachment blocks exist at all** — ClickUp may handle image comments purely as task-level attachments with no block in the `comment` array. In that case, the comment would have `comment_text: ""` and `comment: []` (empty array), and the empty-body fallback from the prior plan would produce blank. The `[attachment]` placeholder would not fire because there are no blocks to iterate.
    - **Resolution:** After the block loop, if `body` is still empty AND the comment has a non-empty `comment_text` fallback, use `comment_text`. If `comment_text` is also empty, show `[media comment]` as a last-resort placeholder so the user sees *something* rather than blank.
 
 ## Adversarial Synthesis
 
-Key risks: (1) introducing `<img>` tags into the webview creates XSS surface — mitigated by URL scheme validation and `escapeAttr` on alt text; (2) the emoticon `text` field format is ambiguous (`"U0001F60A"` vs raw emoji) — mitigated by using `emoticon.code` as the primary source with `String.fromCodePoint`; (3) the attachment block shape is undocumented and may not exist — mitigated by defensive extraction with `[attachment]`/`[media comment]` placeholders; (4) the webview renderer currently expects `body` as a string and escapes it — this plan introduces a structured `bodyParts` array that allows safe mixing of text and images, with the renderer building HTML from typed parts instead of a single `escapeHtml` call.
-
-The structured `bodyParts` approach is preferred over "just concatenate HTML" because it keeps the security boundary clear: text parts are escaped, image parts are URL-validated, and the renderer assembles them. This avoids the temptation to inject raw HTML into the body string.
+Key risks: (1) introducing `<img>` tags into the webview creates XSS surface — mitigated by URL scheme validation (`https:`/`data:` only) and `escapeAttr` (escapes `"`) on `src`/`alt` attributes; (2) multi-codepoint emoji (ZWJ sequences, skin-tone modifiers) are silently truncated by single-`parseInt` decoding — mitigated by a `-`-split fallback that concatenates `fromCodePoint` per segment; (3) the attachment block shape is undocumented and may not exist — mitigated by defensive extraction with `[attachment]`/`[media comment]` placeholders. The structured `bodyParts` approach keeps the security boundary clear: text parts are escaped, image parts are URL-validated, and the renderer assembles typed parts rather than concatenating raw HTML.
 
 ## Proposed Changes
 
@@ -149,15 +153,25 @@ Update the block iteration (`:1666-1685`) to handle `emoticon` and `attachment`/
         } else if (block?.type === 'emoticon') {
           // ClickUp emoticon block: { type: "emoticon", text: "U0001F60A", emoticon: { code: "1f60a" } }
           // Construct the emoji character from the hex codepoint.
+          // Multi-codepoint emoji (ZWJ sequences, skin-tone modifiers) may use
+          // "-"-separated hex segments, e.g. "1f468-200d-1f469-200d-1f467".
           const hexCode = String(block?.emoticon?.code || '').trim();
           let emoji = '';
-          if (hexCode && /^[0-9a-fA-F]+$/.test(hexCode)) {
+          if (hexCode && /^[0-9a-fA-F-]+$/.test(hexCode)) {
             try {
-              emoji = String.fromCodePoint(parseInt(hexCode, 16));
+              if (hexCode.includes('-')) {
+                // Multi-codepoint: split on "-" and concatenate codepoints.
+                emoji = hexCode.split('-')
+                  .filter(seg => /^[0-9a-fA-F]+$/.test(seg))
+                  .map(seg => String.fromCodePoint(parseInt(seg, 16)))
+                  .join('');
+              } else {
+                emoji = String.fromCodePoint(parseInt(hexCode, 16));
+              }
             } catch { emoji = ''; }
           }
           if (!emoji && typeof block?.text === 'string') {
-            // Fallback: try to decode "U0001F60A" format
+            // Fallback: try to decode "U0001F60A" format (single codepoint only)
             const m = block.text.match(/^U0*([0-9a-fA-F]+)$/);
             if (m) {
               try { emoji = String.fromCodePoint(parseInt(m[1], 16)); } catch { emoji = ''; }
@@ -209,8 +223,11 @@ Update the return object (`:1687-1693`) to include `bodyParts`:
         name: String(comment?.user?.username || '').trim(),
         email: String(comment?.user?.email || '').trim()
       },
-      body,
-      bodyParts,
+      body,       // Plain-text representation. For image blocks, shows [alt] placeholder.
+      bodyParts,  // Structured representation. For image blocks, contains the actual URL.
+                   // body and bodyParts intentionally diverge for image blocks —
+                   // body is for non-webview consumers (logging, search), bodyParts
+                   // is for the webview renderer.
       date: String(comment?.date || '').trim(),
       mentions,
       replies: []
@@ -316,13 +333,13 @@ Add after the `.cm-reply-body` rule (`:2918`):
 
 ### File: `src/test/integrations/clickup/clickup-sync-service.test.js`
 
-#### Change E — add unit tests for emoticon and attachment block decoding
+#### Change E — add unit tests for emoticon, multi-codepoint emoji, attachment, and media-comment decoding
 
-Add two new test comments to the existing `getCommentThreads` test block (after the empty-array case at `:577`):
+Add four new test comments to the existing `getCommentThreads` test block (after the empty-array case at `:577`):
 
 ```js
                     {
-                        // 5. Emoji-only comment:
+                        // 5. Emoji-only comment (single codepoint):
                         id: 'comment-emoji-1',
                         comment_text: '',
                         comment: [
@@ -340,13 +357,32 @@ Add two new test comments to the existing `getCommentThreads` test block (after 
                         ],
                         user: { id: 'author-6', username: 'Author Six', email: 'author6@example.com' },
                         date: '1710000005000'
+                    },
+                    {
+                        // 7. Multi-codepoint emoji (ZWJ family sequence):
+                        id: 'comment-emoji-multi-1',
+                        comment_text: '',
+                        comment: [
+                            { type: 'emoticon', emoticon: { code: '1f468-200d-1f469-200d-1f467' } }
+                        ],
+                        user: { id: 'author-7', username: 'Author Seven', email: 'author7@example.com' },
+                        date: '1710000006000'
+                    },
+                    {
+                        // 8. Media-only comment with empty array + empty comment_text:
+                        //    Should hit the [media comment] last-resort placeholder.
+                        id: 'comment-media-empty-1',
+                        comment_text: '',
+                        comment: [],
+                        user: { id: 'author-8', username: 'Author Eight', email: 'author8@example.com' },
+                        date: '1710000007000'
                     }
 ```
 
-Update the thread count assertion from 4 to 6, and add assertions:
+Update the thread count assertion from 4 to 8, and add assertions:
 
 ```js
-            // 5. Emoji-only comment:
+            // 5. Emoji-only comment (single codepoint):
             assert.strictEqual(threads[4].id, 'comment-emoji-1');
             assert.strictEqual(threads[4].body, '😊');  // U+1F60A = 😊
             assert.strictEqual(threads[4].bodyParts[0].type, 'emoji');
@@ -358,6 +394,18 @@ Update the thread count assertion from 4 to 6, and add assertions:
             assert.strictEqual(threads[5].bodyParts[0].type, 'image');
             assert.strictEqual(threads[5].bodyParts[0].url, 'https://example.com/screenshot.png');
             assert.strictEqual(threads[5].bodyParts[0].alt, 'screenshot.png');
+
+            // 7. Multi-codepoint emoji (ZWJ family: U+1F468 U+200D U+1F469 U+200D U+1F467 = 👨‍👩‍👧):
+            assert.strictEqual(threads[6].id, 'comment-emoji-multi-1');
+            assert.strictEqual(threads[6].body, '👨‍👩‍👧');
+            assert.strictEqual(threads[6].bodyParts[0].type, 'emoji');
+            assert.strictEqual(threads[6].bodyParts[0].text, '👨‍👩‍👧');
+
+            // 8. Media-only comment with empty array + empty comment_text:
+            assert.strictEqual(threads[7].id, 'comment-media-empty-1');
+            assert.strictEqual(threads[7].body, '[media comment]');
+            assert.strictEqual(threads[7].bodyParts[0].type, 'text');
+            assert.strictEqual(threads[7].bodyParts[0].text, '[media comment]');
 ```
 
 ### No backend message-passing changes required
@@ -380,16 +428,17 @@ This change adds no `confirm()`/modal/two-click patterns, per CLAUDE.md.
 - `grep -n "renderCommentBodyHtml" src/webview/planning.js` — should find the helper function and its two call sites in `renderThreadHtml` and `renderReplyHtml`.
 
 ### Automated Tests
-- **Extend the existing unit test** in `src/test/integrations/clickup/clickup-sync-service.test.js` with cases 5 (emoji-only) and 6 (image attachment) as described in Change E. Update thread count assertion. This test should be written as part of implementation but will be run by the user separately.
+- **Extend the existing unit test** in `src/test/integrations/clickup/clickup-sync-service.test.js` with cases 5 (single-codepoint emoji), 6 (image attachment), 7 (multi-codepoint ZWJ emoji), and 8 (empty media comment → `[media comment]` placeholder) as described in Change E. Update thread count assertion from 4 to 8. This test should be written as part of implementation but will be run by the user separately.
 
 ### Manual (installed VSIX)
 1. **Emoji-only comment:** in ClickUp, post a comment on a task that contains only an emoji (no text). Open the Comment Manager overlay. Verify the emoji character renders (not blank, not `U0001F60A`).
 2. **Text + emoji comment:** post a comment with text and an emoji. Verify both the text and emoji render in sequence.
 3. **Text + mention + emoji:** post a comment with text, an @mention, and an emoji. Verify all three render in sequence.
-4. **Image comment (if reproducible):** attach an image to a ClickUp comment. Open the Comment Manager. Verify either the inline image renders, or a `[attachment]`/`[media comment]` placeholder shows (depending on whether ClickUp returns a block in the `comment` array).
-5. **Plain comment (regression):** open the Comment Manager on a task with a plain text comment. Verify body still renders correctly.
-6. **Linear (regression):** open the Comment Manager on a Linear issue with comments. Verify author/body/date still render correctly (Linear path doesn't produce `bodyParts`, so `renderCommentBodyHtml` falls back to `escapeHtml(body)`).
+4. **Multi-codepoint emoji (if reproducible):** post a comment with a compound emoji (e.g., 👨‍👩‍👧 family, 🏳️‍🌈 flag, 👍🏽 skin-tone). Verify the full compound emoji renders, not just the first codepoint.
+5. **Image comment (if reproducible):** attach an image to a ClickUp comment. Open the Comment Manager. Verify either the inline image renders, or a `[attachment]`/`[media comment]` placeholder shows (depending on whether ClickUp returns a block in the `comment` array).
+6. **Plain comment (regression):** open the Comment Manager on a task with a plain text comment. Verify body still renders correctly.
+7. **Linear (regression):** open the Comment Manager on a Linear issue with comments. Verify author/body/date still render correctly (Linear path doesn't produce `bodyParts`, so `renderCommentBodyHtml` falls back to `escapeHtml(body)`).
 
 ---
 
-**Recommendation:** Complexity 4 → **Send to Mid-level.** The backend decoder changes are straightforward (new `else if` branches), but the webview rendering change introduces a structured body format that requires careful XSS handling.
+**Recommendation:** Complexity 4 → **Send to Coder.** The backend decoder changes are straightforward (new `else if` branches), but the webview rendering change introduces a structured body format that requires careful XSS handling.

@@ -3204,8 +3204,8 @@ export class PlanningPanelProvider {
             // toggle is read/written via its public getProjectContextEnabled/setProjectContextEnabled.
             case 'getProjectContextEnabled': {
                 // Hydrate the PROJECT CONTEXT toggle for the workspace the Projects tab edits.
-                const wsRoot = msg.workspaceRoot;
-                const enabled = (wsRoot && allRoots.includes(wsRoot) && this._kanbanProvider)
+                const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const enabled = (wsRoot && this._kanbanProvider)
                     ? await this._kanbanProvider.getProjectContextEnabled(wsRoot)
                     : false;
                 this._projectPanel?.webview.postMessage({ type: 'projectContextEnabled', enabled, workspaceRoot: wsRoot });
@@ -3215,8 +3215,8 @@ export class PlanningPanelProvider {
                 // Per-project PRD master toggle (per-workspace). KanbanProvider's dispatch path
                 // reads this same config, so a write here governs whether the active project's
                 // PRD is injected into future dispatched prompts. Confirm state back to the webview.
-                const wsRoot = msg.workspaceRoot;
-                if (wsRoot && allRoots.includes(wsRoot)) {
+                const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (wsRoot) {
                     await this._kanbanProvider?.setProjectContextEnabled(wsRoot, !!msg.enabled);
                 }
                 this._projectPanel?.webview.postMessage({ type: 'projectContextEnabled', enabled: !!msg.enabled, workspaceRoot: wsRoot });
@@ -3224,8 +3224,8 @@ export class PlanningPanelProvider {
             }
             case 'getProjectPrd': {
                 // Read a project's PRD file for the Projects-tab editor.
-                const wsRoot = msg.workspaceRoot;
-                if (wsRoot && allRoots.includes(wsRoot) && typeof msg.projectName === 'string') {
+                const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (wsRoot && typeof msg.projectName === 'string') {
                     const filePath = getProjectPrdPath(wsRoot, msg.projectName);
                     let content = '';
                     let exists = false;
@@ -3248,8 +3248,8 @@ export class PlanningPanelProvider {
             }
             case 'saveProjectPrd': {
                 // Write a project's PRD file (creating .switchboard/projects/<slug>/).
-                const wsRoot = msg.workspaceRoot;
-                if (wsRoot && allRoots.includes(wsRoot) && typeof msg.projectName === 'string' && typeof msg.content === 'string') {
+                const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (wsRoot && typeof msg.projectName === 'string' && typeof msg.content === 'string') {
                     const filePath = getProjectPrdPath(wsRoot, msg.projectName);
                     let ok = false;
                     try {
