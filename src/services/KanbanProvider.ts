@@ -4033,13 +4033,17 @@ This step is what moves the plan forward in the Switchboard pipeline.
      * that already know each card's derived destination. Pairs with no resolved
      * target column are skipped (the card did not actually move).
      */
-    private _postMoveCardsByTarget(pairs: { sessionId: string; targetColumn: string }[]): void {
+    private async _postMoveCardsByTarget(
+        pairs: { sessionId: string; targetColumn: string }[],
+        workspaceRoot: string
+    ): Promise<void> {
         if (!this._panel || !Array.isArray(pairs) || pairs.length === 0) { return; }
         const byTarget = new Map<string, string[]>();
         for (const { sessionId, targetColumn } of pairs) {
             if (!sessionId || !targetColumn) { continue; }
+            const movedIds = await this._collectAllMovedSessionIds(workspaceRoot, sessionId);
             if (!byTarget.has(targetColumn)) { byTarget.set(targetColumn, []); }
-            byTarget.get(targetColumn)!.push(sessionId);
+            byTarget.get(targetColumn)!.push(...movedIds);
         }
         for (const [targetColumn, sessionIds] of byTarget) {
             this._panel.webview.postMessage({ type: 'moveCards', sessionIds, targetColumn });
@@ -5957,7 +5961,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 await vscode.env.clipboard.writeText(prompt);
                 const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => this._cardId(card)), 'CREATED', 'improve-plan', workspaceRoot);
                 // Per-target moveCards deltas instead of a trailing full refresh.
-                this._postMoveCardsByTarget(advanced);
+                await this._postMoveCardsByTarget(advanced, workspaceRoot);
                 this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied batch planner prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to PLAN REVIEWED.`, isError: false });
                 break;
             }
@@ -5987,7 +5991,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 await vscode.env.clipboard.writeText(prompt);
                 const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => this._cardId(card)), 'PLAN REVIEWED', undefined, workspaceRoot);
                 // Per-target moveCards deltas (target derived dynamically by the helper) — no full refresh.
-                this._postMoveCardsByTarget(advanced);
+                await this._postMoveCardsByTarget(advanced, workspaceRoot);
                 this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied batch low-complexity prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to CODER CODED.`, isError: false });
                 break;
             }

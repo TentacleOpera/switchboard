@@ -160,3 +160,48 @@ The following tests in `src/services/__tests__/agentPromptBuilder.test.ts` shoul
 ## Recommendation
 
 Complexity is 2/10 → **Send to Intern**.
+
+---
+
+## Reviewer Pass (2026-06-25)
+
+### Stage 1 — Grumpy Findings
+
+| Severity | Finding | Location |
+| :--- | :--- | :--- |
+| NIT | Plan cited `kanban.html:3215` and `KanbanProvider.ts:3113`; actual lines are `kanban.html:3263` and `KanbanProvider.ts:3215`. Adversarial Synthesis caught the kanban.html drift but missed the KanbanProvider drift. Implementer navigated correctly regardless. | Plan "Root Cause" section |
+| NIT | Plan's call-site analysis claimed the `?? false` fallback was "only hit by calls that bypass KanbanProvider." This is **incomplete**: `KanbanProvider.ts:2949` (`resolvedOptions.adviseResearchIfUnsure = promptsConfig.adviseResearchIfUnsure;`) is an in-KanbanProvider path that passes the value through without a `?? true` guard, so it also relied on the agentPromptBuilder fallback. The fix still plugs this hole correctly. | `KanbanProvider.ts:2949` |
+| NIT | Asymmetry: line 2949 has no `?? true` coalescing while line 3215 does. Functionally safe today (agentPromptBuilder fallback covers it), but a fragility if the fallback is ever reverted. Optional hardening: add `?? true` at line 2949. | `KanbanProvider.ts:2949` |
+
+No CRITICAL or MAJOR findings. All three code changes landed correctly.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is:** All three code changes are correct and match the plan's intent. Four-layer consistency (webview `!== false`, KanbanProvider:3215 `?? true`, KanbanProvider:2949 pass-through, agentPromptBuilder:482 `?? true`) is fully aligned to default-ON.
+
+**Fix now:** None required.
+
+**Defer (optional):** Add defensive `?? true` at `KanbanProvider.ts:2949` for symmetry with line 3215. Hardening only — not a correctness issue.
+
+### Code Fixes Applied
+
+None — the implementation was already correct.
+
+### Verification Results
+
+- **Cross-layer consistency**: ✅ All four read sites default to ON when value is absent/undefined.
+- **Test assertions**: ✅ Three tests in `adviseResearchIfUnsure option` suite (true includes, false omits, undefined includes) are consistent with implemented defaults.
+- **Directive text match**: ✅ `ADVISE_RESEARCH_DIRECTIVE` (`agentPromptBuilder.ts:352`) contains both `RESEARCH WHEN UNSURE:` and `.agents/skills/advise_research/SKILL.md`, matching test assertions.
+- **Compilation**: Skipped per session directive.
+- **Automated tests**: Skipped per session directive (user runs separately).
+
+### Files Changed (by implementer, verified by reviewer)
+
+1. `src/webview/sharedDefaults.js` line 25 — added `adviseResearch: true` to planner addons.
+2. `src/services/agentPromptBuilder.ts` line 482 — changed `?? false` to `?? true`.
+3. `src/services/__tests__/agentPromptBuilder.test.ts` lines 171-175 — updated `undefined` test to assert directive is included.
+
+### Remaining Risks
+
+- **Low**: The `KanbanProvider.ts:2949` path relies on the downstream agentPromptBuilder fallback rather than its own `?? true` guard. If the agentPromptBuilder default is ever reverted to `false`, this path would silently omit the directive. Optional mitigation: add `?? true` at line 2949.
+- **Low**: Line-number drift in the plan's citations (cosmetic only; code is correct).

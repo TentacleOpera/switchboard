@@ -41,61 +41,85 @@ t=350ms  setTimeout fires: postKanbanMessage({ type: 'moveCardForward', ... })
 
 The signature includes `lastActivity` (the `updatedAt` timestamp from the DB). When the file watcher triggers a refresh, the DB read returns rows with potentially newer `updatedAt` values (if any plan file was touched, even unrelated to the dragged card). This changes the signature even if no card's column changed, triggering a re-render. The signature also includes `topic`, `complexity`, `planFile`, `isEpic`, `subtaskCount`, and `epicId` — any of these changing on ANY card triggers a full re-render of ALL cards.
 
+> **Verified against source (2026-06-25).** `buildBoardSignature` is at `src/webview/kanban.html:4523`. Its per-card key is exactly:
+> `${workspaceRoot}|${planId||sessionId}|${column}|${topic}|${planFile}|${complexity}|${lastActivity}|${isEpic}|${subtaskCount}|${epicId}` — so the root-cause analysis above is accurate: any drift in `lastActivity` (or any other field) on any card flips the signature and forces a full re-render.
+
 ## Metadata
 
-- **Tags**: `bugfix`, `ui`, `ux`, `frontend`, `race-condition`
-- **Complexity**: 4
+- **Tags**: `bugfix`, `ui`, `ux`, `frontend`, `reliability`
+  - _(Note: `race-condition` from the original draft is not in the allowed tag list; mapped to `reliability`.)_
+- **Complexity**: 5 _(was 4 — see Complexity Audit; raised one notch because the guard's correctness hinges on subtle render-suppression and overlapping-window handling, not because the diff is large)_
 - **Affected Files**: `src/webview/kanban.html`
 - **Parent Plan**: `feature_plan_20260625141328_epic-styling-lost-on-drag.md` (Risk 2)
+
+## User Review Required
+
+- **None.** All design decisions are made and stated below:
+  - Guard mechanism: a **timestamp deadline** (`optimisticMoveUntil`), not a boolean + clear-on-`moveCards` (rationale in Adversarial Synthesis and Proposed Changes — it is the only variant that correctly survives overlapping rapid drags).
+  - Suppression window: **2000 ms** from the moment of drop, re-armed per drag. Tunable constant `OPTIMISTIC_MOVE_WINDOW_MS`.
+  - The `COMPLETED`/archive path (no 350 ms `setTimeout`) is **out of scope** for this plan; see Edge-Case audit for the documented residual.
 
 ## Complexity Audit
 
 ### Routine
-- Adding a boolean flag (`optimisticMoveInFlight`) to guard the `updateBoard` handler is a small, localized change.
-- The flag is set in `handleDrop` (already modified by the parent plan) and cleared in the `moveCards`/`triggerAction`/`promptOnDrop` response handlers.
-- No new APIs, no schema changes.
+- Declaring a guard variable (`optimisticMoveUntil`) and a constant next to the existing `lastBoardSignature` declaration is a small, localized change (`src/webview/kanban.html:3766`).
+- Arming the guard is a single assignment added immediately after the two existing `lastBoardSignature = buildBoardSignature(currentCards)` sync lines (`:5781` CODED_AUTO path, `:5962` main `validIds` path).
+- No new APIs, no schema changes, no backend changes. Single file.
+- Uses only standard browser globals already used throughout the file (`Date.now`, `setTimeout`).
 
 ### Complex / Risky
-- **Flag clearing timing**: The flag must be cleared at the right time — not too early (before the `moveCards` delta arrives) and not too late (blocking legitimate refreshes). The safest approach is to clear it when the `moveCards` delta arrives (which means the backend has processed the move) or after a timeout fallback (in case the backend message is lost).
-- **Multiple concurrent drags**: If the user drags multiple cards in rapid succession, each `handleDrop` call sets the flag. The flag must handle overlapping optimistic windows — either reference-counted or replaced by a timestamp-based check.
-- **`triggerAction`/`triggerBatchAction` paths**: These don't send a `moveCards` delta — they rely on `_scheduleBoardRefresh` → `updateBoard`. The flag must be cleared by the `updateBoard` itself in this case (after the first `updateBoard` that matches the optimistic state), or by a timeout.
-- **`CODED_AUTO` branch**: Has its own `setTimeout` (line 5784) with the same race window. Must be covered by the same guard.
+- **Render-suppression correctness**: the guard must suppress the *full* `renderBoard` during the window — including the `epicWorktreesChanged` branch. The original draft (Proposed Change #4) still called `renderBoard(currentCards)` when `epicWorktreesChanged` was true *inside* the guard, which would have reverted the optimistic move and re-introduced the exact bug. The revised design closes this.
+- **Overlapping rapid drags**: clearing the guard on the *first* `moveCards` delta (original Proposed Change #3) leaves a still-in-flight second drag unguarded. The revised deadline approach re-arms the window on every drop, so the guard naturally outlives the last drag.
+- **`triggerAction`/`triggerBatchAction` paths**: these don't send a `moveCards` delta — they rely on `_scheduleBoardRefresh` → `updateBoard`. The deadline expiring is the sole, correct clear path for them.
+- **`CODED_AUTO` branch**: has its own `setTimeout` (`:5783`) with the same race window. Covered by arming the guard at `:5781`.
+- **Data/DOM transient desync**: while the guard absorbs `currentCards = nextCards` (stale w.r.t. the move) but skips `renderBoard`, `currentCards` momentarily disagrees with the DOM. This is intentional and self-heals on the next authoritative render; see the design note in Proposed Changes.
 
 ## Edge-Case & Dependency Audit
 
 ### Race Conditions
 - **This IS the race condition being fixed.** The guard prevents `updateBoard` from firing a full re-render during the optimistic window.
-- **Guard bypass**: If the `moveCards` delta never arrives (backend error, panel disposed), the flag must be cleared by a timeout fallback to avoid permanently blocking refreshes.
+- **Guard never clears**: impossible with the deadline approach — `Date.now() < optimisticMoveUntil` is false once wall-clock passes the deadline, regardless of whether any backend message arrived. No stuck-flag failure mode.
+- **Overlapping drags**: each drop pushes `optimisticMoveUntil` forward, so the guard stays armed until 2 s after the *last* drag — every in-flight move is covered.
 
 ### Security
 - No security implications.
 
 ### Side Effects
-- **Delayed refresh**: While the guard is active, `updateBoard` messages are deferred (not dropped — the data is still stored in `currentCards` via the `else` branch, but `renderBoard` is skipped). This means if a genuinely unrelated change happens during the window (e.g. a new plan is discovered), its visual update is delayed by up to 350ms + the fallback timeout. This is acceptable — the user is actively dragging, and a 350ms delay on an unrelated card appearance is imperceptible.
-- **Signature-only updates**: The `else` branch of `updateBoard` (line 6238-6244) already does `currentCards = nextCards` without re-rendering when the signature matches. The guard extends this behavior to the case where the signature DOESN'T match but we're in an optimistic window.
+- **Delayed refresh**: while the guard is active, signature-mismatching `updateBoard` messages are absorbed into `currentCards` but not rendered. A genuinely unrelated change (e.g. a newly discovered plan) is visually delayed by up to the window (≤2 s after the last drag). Acceptable — the user is actively dragging, and the data is not lost; it renders on the next authoritative render (a `moveCards`/`moveCardsFailed` delta, or the first post-window `updateBoard`).
+- **Signature-only updates**: the `else` branch of `updateBoard` (`:6238`) already does `currentCards = nextCards` without re-rendering when the signature matches. The guard extends this "store-but-don't-render" behavior to the signature-mismatch case during the window, and additionally suppresses the `epicWorktreesChanged` re-render during the window so a worktree change can't cut the drop animation.
 
 ### Dependencies & Conflicts
-- Depends on the parent plan's `lastBoardSignature` sync (already applied).
-- No conflicts with other in-flight changes expected.
+- Depends on the parent plan's `lastBoardSignature` sync — **verified already present in source** at `:5781` (CODED_AUTO) and `:5962` (main `validIds`).
+- Touches the same `updateBoard` handler as the sibling plan `feature_plan_20260625213001_button-movecards-subtask-id-inclusion.md` (which concerns `moveCards` payload shape). No logical conflict — that plan changes the `moveCards` *message contents*; this plan changes *when `updateBoard` renders*. Land order does not matter, but expect a textual merge near the `moveCards`/`updateBoard` cases.
 
 | Edge Case | Impact | Mitigation |
 |-----------|--------|------------|
-| Backend error (moveCards never arrives) | Flag stuck active, refreshes permanently blocked | Timeout fallback (e.g. 2000ms) clears the flag |
-| Multiple rapid drags | Overlapping optimistic windows | Use a counter or timestamp; clear on last `moveCards` or timeout |
-| `triggerAction` path (no `moveCards` delta) | Flag never cleared by `moveCards` | Clear on first `updateBoard` after the `setTimeout` fires, or by timeout |
-| `CODED_AUTO` branch | Same race window | Apply same guard to the `CODED_AUTO` `setTimeout` |
-| `updateBoard` with genuinely new data (new plan) | Visual update delayed by ~350ms | Acceptable — user is actively dragging |
-| User switches workspace during drag | `updateBoard` with different workspace's data | Guard should only apply to the current workspace's cards |
+| Backend error (moveCards never arrives) | Guard would stay stuck (boolean approach) | Deadline approach auto-clears at wall-clock expiry — no stuck state |
+| Multiple rapid drags | Overlapping optimistic windows | Deadline re-armed on each drop → covers the last drag's full window |
+| `triggerAction` path (no `moveCards` delta) | No delta to clear on | Deadline expiry is the intended clear path; post-window `updateBoard` reconciles via signature |
+| `CODED_AUTO` branch | Same race window | Arm the guard at `:5781` (alongside its `lastBoardSignature` sync) |
+| `updateBoard` with genuinely new data (new plan) | Visual update delayed ≤2 s | Acceptable — user is actively dragging; data absorbed into `currentCards`, rendered on next authoritative render |
+| Epic worktree change during window | Original draft re-rendered → reverted the move | Suppress `epicWorktreesChanged` re-render while guard active; worktree data is stored and renders post-window |
+| User switches workspace/project during drag | New workspace's board suppressed until window expires | Reset `optimisticMoveUntil = 0` at the two switch sites (`:6898`, `:6942`) that already reset `lastBoardSignature` |
+| `COMPLETED`/archive drop | Mutates `card.column` + posts `completePlan` **immediately** (no `setTimeout`, no `lastBoardSignature` sync) | **Out of scope** — no 350 ms window. Residual: a stale `updateBoard` between the mutation and `completePlan` processing can transiently desync data vs DOM, self-healing on the real post-archive `updateBoard`. Optional follow-up: arm the guard + sync `lastBoardSignature` at `:5868` for consistency. |
 
 ## Dependencies
 
-- **Parent plan**: `feature_plan_20260625141328_epic-styling-lost-on-drag.md` must be merged first (provides the `lastBoardSignature` sync foundation).
+- **No cross-session (`sess_…`) dependencies.**
+- **Plan dependency**: `feature_plan_20260625141328_epic-styling-lost-on-drag.md` (parent) — provides the `lastBoardSignature` sync foundation, already merged into source.
+- **Sibling (informational, not blocking)**: `feature_plan_20260625213001_button-movecards-subtask-id-inclusion.md` — edits the adjacent `moveCards` case; expect a textual merge, no semantic conflict.
+
+## Adversarial Synthesis
+
+**Risk Summary**: The dominant risk is a self-defeating guard — the original draft still called `renderBoard` inside the guarded branch when `epicWorktreesChanged`, which would revert the very move it was protecting; the fix is to suppress *all* `renderBoard` paths during the window. The second risk is overlapping rapid drags: clearing on the first `moveCards` delta exposes later in-flight moves, so the guard uses a re-armed timestamp deadline (`optimisticMoveUntil`) instead of a boolean cleared by handlers — this also removes the stuck-flag failure mode entirely and drops the need to touch the `moveCards`/`moveCardsFailed` handlers. Mitigations: deadline auto-expiry, per-drop re-arm, full render-suppression during the window, and a guard reset on workspace/project switch.
 
 ## Proposed Changes
 
+> The numbered changes below preserve the original draft. The **"Adversarial Review Revisions"** block that follows supersedes the implementation specifics where the review found correctness gaps. Implement the revised versions; the originals are retained for traceability.
+
 ### 1. Add optimistic-move guard flag
 
-**In `src/webview/kanban.html`, near the `lastBoardSignature` declaration (line 3767):**
+**In `src/webview/kanban.html`, near the `lastBoardSignature` declaration (line 3766):**
 
 ```js
 let lastBoardSignature = '';
@@ -109,7 +133,7 @@ let optimisticMoveTimeout = null;
 
 ### 2. Set the guard in `handleDrop` (both branches)
 
-**Main `validIds` path (after line 5962, the `lastBoardSignature` sync):**
+**Main `validIds` path (after the `lastBoardSignature` sync at `:5962`):**
 
 ```js
 lastBoardSignature = buildBoardSignature(currentCards);
@@ -125,7 +149,7 @@ optimisticMoveTimeout = setTimeout(() => {
 }, 2000); // Fallback: clear after 2s in case backend response is lost
 ```
 
-**`CODED_AUTO` branch (after line 5782, the `lastBoardSignature` sync):**
+**`CODED_AUTO` branch (after the `lastBoardSignature` sync at `:5781`):**
 
 ```js
 lastBoardSignature = buildBoardSignature(currentCards);
@@ -141,7 +165,7 @@ optimisticMoveTimeout = setTimeout(() => {
 
 ### 3. Clear the guard when the backend confirms the move
 
-**In the `moveCards` handler (line 6159-6177), after `renderBoard`:**
+**In the `moveCards` handler (`:6165`), after `renderBoard`:**
 
 ```js
 case 'moveCards': {
@@ -160,7 +184,7 @@ case 'moveCards': {
 }
 ```
 
-**Also clear in `moveCardsFailed` handler (line 6178-6208):** The move failed, so the guard should be cleared to allow the revert re-render:
+**Also clear in `moveCardsFailed` handler (`:6184`):** The move failed, so the guard should be cleared to allow the revert re-render:
 
 ```js
 case 'moveCardsFailed': {
@@ -177,7 +201,7 @@ case 'moveCardsFailed': {
 
 ### 4. Guard the `updateBoard` handler
 
-**In the `updateBoard` handler (line 6234-6244), modify the signature-mismatch branch:**
+**In the `updateBoard` handler (signature-mismatch branch at `:6234`):**
 
 ```js
 if (nextBoardSignature !== lastBoardSignature) {
@@ -220,10 +244,80 @@ When the guard is active and we suppress a re-render, we update `currentCards` a
 
 No additional code needed for this path — the timeout fallback + signature comparison handles it naturally.
 
+---
+
+### Adversarial Review Revisions (implement these)
+
+The review found two correctness gaps and one missing case in the boolean+timeout design above. The revised design replaces the boolean/timeout pair with a single re-armed **timestamp deadline**, which (a) cannot get stuck, (b) correctly covers overlapping drags, and (c) removes the need to touch the `moveCards`/`moveCardsFailed` handlers at all.
+
+**Revision A — declare a deadline, not a boolean (supersedes Change #1).** Near `:3766`:
+
+```js
+let lastBoardSignature = '';
+// Render-guard deadline (epoch ms). While Date.now() < this value an in-flight
+// optimistic drag is suppressing full renderBoard calls from updateBoard. 0 = inactive.
+// Re-armed on every drop so overlapping drags EXTEND the window rather than
+// clearing it prematurely; auto-expires so it can never get stuck.
+let optimisticMoveUntil = 0;
+const OPTIMISTIC_MOVE_WINDOW_MS = 2000; // covers the 350ms dispatch + backend round-trip
+```
+
+**Revision B — arm the deadline at both `setTimeout` paths (supersedes Change #2).** Immediately after each existing `lastBoardSignature = buildBoardSignature(currentCards);` line — i.e. after `:5781` (CODED_AUTO) and after `:5962` (main `validIds`):
+
+```js
+lastBoardSignature = buildBoardSignature(currentCards);
+optimisticMoveUntil = Date.now() + OPTIMISTIC_MOVE_WINDOW_MS;  // arm/extend the render guard
+```
+
+No `clearTimeout`/timeout-handle bookkeeping — the deadline replaces it.
+
+**Revision C — drop Change #3 entirely.** Do **not** clear the guard from `moveCards`/`moveCardsFailed`. Those handlers already call `renderBoard(currentCards)` from authoritative state when `changed`, so they don't need the guard cleared to function — and clearing on the first delta is exactly what breaks overlapping drags. The deadline is the single source of truth for "is a drag window active," and it expires on its own. (Leaving the guard armed for the remainder of the window after a confirmed move only defers *unrelated* `updateBoard` re-renders, which is already documented as acceptable.)
+
+**Revision D — suppress ALL renders during the window (fixes the self-defeating bug in Change #4).** Replace the `:6234` branch with:
+
+```js
+const optimisticActive = Date.now() < optimisticMoveUntil;
+if (nextBoardSignature !== lastBoardSignature) {
+    if (optimisticActive) {
+        // Optimistic drag in-flight: backend hasn't processed the move yet, so
+        // nextCards is stale w.r.t. the user's intent. Absorb the data (so the next
+        // authoritative render — a moveCards delta or a post-window updateBoard —
+        // has the freshest baseline) but DO NOT renderBoard: a full DOM replacement
+        // here would revert the optimistic move and strip epic styling/animation.
+        // currentEpicWorktrees is already updated above; worktree visuals render
+        // when the window expires.
+        currentCards = nextCards;
+        lastBoardSignature = buildBoardSignature(currentCards);
+    } else {
+        lastBoardSignature = nextBoardSignature;
+        renderBoard(nextCards);
+    }
+} else {
+    currentCards = nextCards;
+    if (epicWorktreesChanged && !optimisticActive) {
+        renderBoard(currentCards);
+    }
+}
+```
+
+The critical difference from Change #4: the `epicWorktreesChanged` re-render is gated behind `!optimisticActive` in **both** branches. `renderBoard` is a full DOM rebuild (the same call this plan exists to prevent) — it is *not* a lightweight worktree-only update, so it must not run mid-window.
+
+**Revision E — reset the guard on workspace/project switch (new, fixes the workspace-switch edge case).** At the two sites that already reset `lastBoardSignature = ''` for an explicit switch — `:6898` (reassign-to-workspace) and `:6942` (workspace-project-select change) — add alongside each:
+
+```js
+lastBoardSignature = '';
+optimisticMoveUntil = 0;  // a deliberate workspace switch ends any in-flight drag guard
+```
+
+This guarantees the newly selected workspace's board renders immediately instead of being suppressed for the remainder of a stale drag window.
+
+**Design note — transient `currentCards`/DOM desync (intentional).** While the guard absorbs `currentCards = nextCards` but skips `renderBoard`, `currentCards` reflects backend (pre-move) data while the DOM shows the optimistic (post-move) position. This is deliberate and self-heals: the next authoritative render rebuilds the DOM from `currentCards`. On the `moveCards` path, the delta maps over `currentCards`, re-applies the moved card's `targetCol` (→ `changed = true`), and `renderBoard` produces the fully correct state **including** any new plans that arrived during the window — folding the move-correction and the fresh data into a single render. On the `triggerAction` path (no delta), the first post-window `updateBoard` reconciles via signature comparison.
+
 ## Verification Plan
 
 ### Automated Tests
 - No existing automated tests cover this race condition (it requires real file-watcher timing). Manual verification is the primary path.
+- Per session directive, the test suite is run separately by the user; no test run is performed as part of this planning pass.
 
 ### Manual Verification
 
@@ -241,37 +335,42 @@ No additional code needed for this path — the timeout fallback + signature com
 
 3. **Backend error (moveCards never arrives):**
    - Simulate a backend error by disposing the panel during the 350ms window
-   - Wait 2s for the timeout fallback
-   - Verify: guard clears, subsequent `updateBoard` messages are processed normally
+   - Wait for the window to expire (≤2s)
+   - Verify: guard auto-expires, subsequent `updateBoard` messages are processed normally
 
 4. **`triggerAction` path (CLI mode):**
    - Enable CLI triggers, drag a card forward
    - The `triggerAction` path fires (no `moveCards` delta)
    - Verify: during the 350ms window, a file-watcher `updateBoard` doesn't cause a re-render
-   - Verify: after 2s timeout, the guard clears and the board updates correctly
+   - Verify: after the window expires, the guard clears and the board updates correctly
 
 5. **`CODED_AUTO` branch:**
    - Drag a card to the synthetic CODED_AUTO column
    - During the 350ms window, trigger a file-watcher refresh
    - Verify: no spurious re-render, card stays in CODED_AUTO
 
-6. **Multiple rapid drags:**
+6. **Multiple rapid drags (overlap):**
    - Drag card A, then immediately drag card B (within 350ms)
-   - Verify: both cards move correctly, guard handles overlapping windows
-   - Verify: guard clears after the last `moveCards` delta or the 2s timeout
+   - Verify: both cards move correctly; the second drag's optimistic state is NOT disrupted by A's `moveCards` delta (deadline re-armed by B's drop)
+   - Verify: guard auto-clears ~2s after the last drag
 
 7. **`moveCardsFailed` path:**
    - Trigger a move that fails (e.g. DB unavailable)
-   - Verify: guard clears immediately on `moveCardsFailed`, revert re-render proceeds
+   - Verify: the revert `renderBoard` proceeds and shows the card back in its source column (guard does not need explicit clearing for this to work)
 
-8. **Epic worktree update during guard:**
-   - During an optimistic drag, trigger an epic worktree change
-   - Verify: `renderBoard` still fires for epic worktree changes (lightweight path preserved)
+8. **Epic worktree update during guard (regression of the original draft's bug):**
+   - During an optimistic drag, trigger an epic worktree change so `epicWorktreesChanged` is true mid-window
+   - Verify: NO full re-render fires during the window; the dragged card keeps its optimistic position and styling
+   - Verify: the worktree visual update appears after the window expires / on the next authoritative render
 
-9. **Regression — normal board refresh:**
-   - Without any drag in progress, trigger board refreshes (file watcher, manual refresh)
-   - Verify: `updateBoard` handler works exactly as before (guard is `false`, normal path)
+9. **Workspace/project switch during drag:**
+   - Begin a drag, then switch workspace or project before the window expires
+   - Verify: the newly selected workspace's board renders immediately (guard reset to inactive)
+
+10. **Regression — normal board refresh:**
+    - Without any drag in progress, trigger board refreshes (file watcher, manual refresh)
+    - Verify: `updateBoard` handler works exactly as before (`Date.now() >= optimisticMoveUntil`, normal path)
 
 ---
 
-**Recommendation**: Complexity 4 → **Send to Coder**
+**Recommendation**: Complexity 5 → **Send to Coder**
