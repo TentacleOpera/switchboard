@@ -175,3 +175,59 @@ Skipped per session directive — no unit/integration/e2e tests will be run as p
 ---
 
 **Recommendation:** Complexity 2 → **Send to Intern**.
+
+## Reviewer Pass (2026-06-25)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*Cracks knuckles. Stares at the diff.*
+
+**MAJOR — None.** I went looking for a smoking gun and found a water pistol. The jules alive-gating (`clearBtn.disabled = !(julesTerm && julesTerm.alive)`, line 2785) actually mirrors the broadcast clear's `term.role && term.alive` guard (line 1721). The asymmetry the Adversarial Synthesis *warned* about was already mitigated in the implementation. Color me surprised — someone read their own plan.
+
+**NIT — non-jules onclick guard is asymmetric with jules.** The jules branch defends itself with `if (clearBtn.disabled) return;` (line 2787). The non-jules branch (line 2822) and analyst branch (line 3506) only guard with `if (!resolvedTermName) return;` / `if (!termName) return;` — they never re-check `isChatOnly` or the disabled flag. Is this a bug? **No.** Disabled buttons don't dispatch click events, and `disabled` is set to `!resolvedTermName || isChatOnly` at render time, so a chat-only button is unclickable. The guard is belt-and-suspenders that's missing one suspender. It's cosmetic, not load-bearing.
+
+**NIT — stale closure in the 600ms restore.** `julesTerm`, `resolvedTermName`, and `isChatOnly` are captured at render time and reused inside `setTimeout`. If terminal state changes mid-debounce, the restore writes the *old* disabled state. But the whole row is rebuilt on the next `terminalStatuses` push, which replaces the DOM node entirely — so the stale closure is garbage-collected before it can lie to anyone. The plan documents this explicitly (Edge-Case Audit, line 36). Non-issue.
+
+**NIT — jules clear button has no `isChatOnly` opacity override.** Moot — jules is never a chat-only agent, so the `if (isChatOnly) opacity = 0.3` branch (line 2820) would be dead code if copied here. Correctly omitted.
+
+**PRAISE — Change 3 (optional) was chosen over inline `marginLeft`.** The implementer added `.locate-btn + .locate-btn { margin-left: 6px; }` (line 617) instead of inline `style.marginLeft` on every button. This is the *better* choice: no inline-style duplication, automatically applies to any future sibling `.locate-btn` pair, and keeps the JS clean. The plan offered it as optional; the implementer picked the cleaner path. Good judgment.
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Severity | Verdict |
+|---|---|---|
+| jules alive-gating | — | Already correct in implementation. Keep. |
+| non-jules/analyst onclick guard asymmetry | NIT | Defer — harmless due to disabled-gating; adding it is cosmetic and would deviate from the plan's specified onclick body. |
+| stale closure in 600ms restore | NIT | Defer — self-correcting via row rebuild on next push. Documented in plan. |
+| jules missing isChatOnly opacity | NIT | Won't fix — jules is never chat-only. |
+| CSS `.locate-btn + .locate-btn` chosen over inline marginLeft | — | Keep — cleaner than plan's primary proposal. |
+
+**No CRITICAL or MAJOR findings. No code fixes required.** The implementation is a faithful, clean realization of the plan. All three changes (jules clear, non-jules clear, analyst clear) are present and correct. The optional CSS approach (Change 3) was adopted in preference to inline styles — an improvement.
+
+### Files Changed (Verified in working tree)
+
+- `src/webview/implementation.html`
+  - Lines 617–619: added `.locate-btn + .locate-btn { margin-left: 6px; }` CSS rule (Change 3, optional — adopted).
+  - Lines 2779–2799: jules clear button in `createAgentRow` (Change 1, jules branch).
+  - Lines 2815–2834: non-jules clear button in `createAgentRow` (Change 1, non-jules branch).
+  - Lines 3500–3518: analyst clear button in `createAnalystRow` (Change 2).
+- `src/services/TaskViewerProvider.ts` — **no changes** (handler at lines 9891–9942 reused as-is; confirmed validates `name`/`input`, resolves terminal, calls `sendRobustText`).
+
+### Validation Results
+
+- **Compilation:** Skipped per session directive.
+- **Automated tests:** Skipped per session directive.
+- **Static verification (performed):**
+  - `grep` confirms all three clear buttons present with correct `sendToTerminal` payload (`type`, `name`, `input: '/clear'`, `paced: false`, `source.tool: 'clear-terminal'`, `allowBroadcast: false`).
+  - `sendToTerminal` handler (TaskViewerProvider.ts:9891) confirmed unchanged and validates `name`/`input`.
+  - `lastTerminals` (line 1934) confirmed in scope for both `createAgentRow` and `createAnalystRow`.
+  - Disabled-state CSS (`.locate-btn:disabled`, line 611) confirmed present — disabled clear buttons render at 0.25 opacity; chat-only override at 0.3 matches locate.
+  - No `window.confirm()` / confirmation gate present — complies with CLAUDE.md hard rule.
+  - Broadcast clear (lines 1719–1730) confirmed unchanged and still uses `allowBroadcast: true` / `tool: 'clear-terminals'`.
+  - Only two row-creator functions exist (`createAgentRow`, `createAnalystRow`); both received clear buttons. No missed render path.
+
+### Remaining Risks
+
+1. **Manual UX verification not run in this session** — the 9-step manual checklist (lines 165–173) requires a live VS Code webview session. The static checks confirm the code is wired correctly, but visual/interaction confirmation (disabled states, per-terminal isolation, double-click debounce) is deferred to the user.
+2. **Jules `/clear` semantics** — sending `/clear` to `Jules Monitor` is added "for consistency" per the plan. Whether the Jules monitor terminal meaningfully honors `/clear` is a runtime behavior question outside this code review's scope. The button is correctly alive-gated so a dead jules terminal is a no-op.
+3. **NIT (deferred):** onclick guard asymmetry between jules (`if (clearBtn.disabled) return;`) and non-jules/analyst (`if (!resolvedTermName) return;`). Harmless; flagged for awareness only.
