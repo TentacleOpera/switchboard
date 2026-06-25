@@ -155,3 +155,69 @@ Lines 594–596 already set `is_epic=1` for `.switchboard/epics/` files when `!p
 ---
 
 **Recommendation:** Complexity 5/10 → **Send to Coder.** The mechanical changes are simple, but the coder must treat Step 0 (diagnostic confirmation) as a gate and be prepared to redirect to the project-filter path if the watcher-race theory does not hold.
+
+---
+
+## Code Review Pass — 2026-06-26
+
+### Stage 1: Grumpy Principal Engineer Review
+
+> *Alright, let's see what the coder actually shipped vs. what the plan asked for. Popcorn ready.*
+
+**[MAJOR] Change 1 was NOT applied — `updateEpicStatus` left before the file writes.**
+`KanbanProvider.ts:7832` (pre-fix). The plan's Change 1 — the *primary* defensive change — explicitly said: "Move `updateEpicStatus(planId, 1, '')` to AFTER all file writes" so it's the last DB write before `_refreshBoard`. The coder left it sitting right after `upsertPlan`, before `writeFile` and `_regenerateEpicFile`. That's not "defensive hardening," that's "I read the plan and ignored the one mechanical instruction that mattered." The whole point was last-write-wins re-assertion; placing it before the file writes means any watcher event triggered by those writes can still stomp the state before refresh. Yes, the Verification Findings say `is_epic` is never reset — but if you're going to ship the defensive change at all, ship it *correctly*. Half-applied hardening is worse than none because it creates the illusion of safety.
+
+**[MAJOR] Change 3 diagnostic log is missing `projectId` — the one field that tests the leading hypothesis.**
+`KanbanProvider.ts:7849` (pre-fix). The plan *explicitly* called out `projectId=${(verifyEpic as any)?.projectId}` and even added a note: "Added `project`, `projectId`, and `activeProjectFilter` vs. the original to test the project-filter hypothesis." The coder shipped `project` and `activeProjectFilter` but **dropped `projectId`**. The plan's own Verification Findings concluded the project-filter is the most plausible remaining cause, and Step 0 point 4 says to check `projectId`. You can't diagnose a hypothesis you refused to log. This is the diagnostic equivalent of setting up a security camera and taping over the lens.
+
+**[NIT] Undocumented column-resolution logic added outside plan scope.**
+`KanbanProvider.ts:7775–7783`. The coder added `_normalizeLegacyKanbanColumn` to the subtask column resolution, a BACKLOG ordinal fallback, and an `effectiveColumn` that converts BACKLOG→CREATED. This is *not* in the plan. It's a reasonable fix for "epic not appearing on board" (an epic landing in BACKLOG might be invisible on a non-backlog board view), and it may actually address the real symptom better than the plan's `is_epic` focus. But it's undocumented in the plan and unreviewed. The plan's Step 0 was supposed to *identify* the root cause before shipping fixes — this pre-empts that gate.
+
+**[NIT] `promoteToEpic` path got `_regenerateEpicFile` added — also undocumented.**
+`KanbanProvider.ts:7747`. The single-plan promotion path now calls `_regenerateEpicFile` after the file move. Not in the plan. Probably correct (the moved file may be stale), but again, scope creep without review.
+
+**[OK] Change 4 (no-op confirmation) — correctly verified, no change needed.**
+`GlobalPlanWatcherService.ts:577–579` and `610–612` both re-assert `is_epic=1` for `epics/` files. The coder correctly left this alone. One thing done right.
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Severity | Verdict | Action |
+|---------|----------|---------|--------|
+| `updateEpicStatus` not moved to after file writes | MAJOR | **Fix now** — the plan's primary defensive change; trivial mechanical move | ✅ Applied: moved to line 7850, after `_regenerateEpicFile`, before `_refreshBoard` |
+| Diagnostic log missing `projectId` | MAJOR | **Fix now** — the plan explicitly required it for the project-filter hypothesis | ✅ Applied: added `projectId=${(verifyEpic as any)?.projectId}` to log line 7852 |
+| Column-resolution logic (BACKLOG→CREATED, legacy normalization) | NIT | **Keep** — reasonable fix, likely addresses the real "not appearing" symptom; document in plan | Kept; documented below |
+| `promoteToEpic` got `_regenerateEpicFile` | NIT | **Keep** — correct behavior, low risk | Kept; documented below |
+| Change 2 (re-register `registerPendingCreation`) | — | **Defer** — plan said "include only if Step 0 shows a late watcher event"; no evidence yet | Not applied (correct per plan) |
+
+### Fixes Applied
+
+1. **`src/services/KanbanProvider.ts:7850`** — Moved `await db.updateEpicStatus(planId, 1, '')` from before `writeFile` to after `_regenerateEpicFile`, making it the last DB write before `_refreshBoard`. Added explanatory comment. (Plan Change 1)
+2. **`src/services/KanbanProvider.ts:7852`** — Added `projectId=${(verifyEpic as any)?.projectId}` to the diagnostic console.log. (Plan Change 3 completion)
+
+### Files Changed (by this review pass)
+- `src/services/KanbanProvider.ts` — lines 7832–7852: moved `updateEpicStatus` call, added `projectId` to diagnostic log
+
+### Pre-existing Implementation Changes (found in code, outside plan scope — retained)
+- `src/services/KanbanProvider.ts:7775–7783` — Column resolution now normalizes legacy columns via `_normalizeLegacyKanbanColumn`, adds BACKLOG ordinal fallback, and converts BACKLOG→CREATED via `effectiveColumn`. Diagnostic log added for column resolution.
+- `src/services/KanbanProvider.ts:7747` — `promoteToEpic` path now calls `_regenerateEpicFile` after file move.
+
+### Validation Results
+- **Compilation:** Skipped per session directive.
+- **Tests:** Skipped per session directive.
+- **Manual verification:** Not run in this session (requires VS Code extension runtime + kanban board interaction). The diagnostic log at line 7852 now captures all fields needed for Step 0 diagnosis (`is_epic`, `kanbanColumn`, `project`, `projectId`, `planFile`, `activeProjectFilter`).
+
+### Remaining Risks
+1. **Root cause still unconfirmed.** The plan's Step 0 (diagnostic reproduction) has not been executed in a live environment. The column-resolution fix may have already addressed the symptom (epic landing in BACKLOG/invisible column), but this is unverified.
+2. **Project-filter hypothesis untested.** The `projectId` field is now logged but no live test has confirmed whether the epic is created with `project=''` / `project_id=NULL` and whether a filtered board hides it.
+3. **Change 2 (re-register `registerPendingCreation`) deferred.** If Step 0 reveals a late watcher event stomping the epic file, this change will need to be applied.
+4. **Column-resolution logic is undocumented in the original plan.** If it is the actual fix, the plan should be updated to reflect that the root cause was column placement, not `is_epic` state.
+
+### Summary
+
+| Severity | Finding | File:Line (pre-fix) | Fixed? |
+|----------|---------|---------------------|--------|
+| MAJOR | `updateEpicStatus` not moved after file writes (Change 1 not applied) | `KanbanProvider.ts:7832` | ✅ Fixed → line 7850 |
+| MAJOR | Diagnostic log missing `projectId` (Change 3 incomplete) | `KanbanProvider.ts:7849` | ✅ Fixed → line 7852 |
+| NIT | Undocumented column-resolution logic (BACKLOG→CREATED) | `KanbanProvider.ts:7775–7783` | Kept (documented) |
+| NIT | `promoteToEpic` got undocumented `_regenerateEpicFile` | `KanbanProvider.ts:7747` | Kept (documented) |
+| OK | Change 4 (watcher no-op) correctly verified | `GlobalPlanWatcherService.ts:577–612` | No change needed |

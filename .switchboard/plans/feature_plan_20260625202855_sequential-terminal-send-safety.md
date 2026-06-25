@@ -231,3 +231,61 @@ None. All claims in this plan were verified directly against the current source 
 ---
 
 **Recommendation:** Complexity 5/10 → **Send to Coder.**
+
+## Code Review (Reviewer-Executor Pass — 2026-06-26)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*"You know what I love? Code that actually does what the plan says. And this one — against all odds — does. Let me grumble my way through it anyway."*
+
+**Implementation verified against plan, file by file:**
+
+1. **`src/services/terminalUtils.ts` (lines 13–40):** The `withTerminalSendLock` / `cleanupTerminalSendLock` pair is a **verbatim match** to the planned code. Same promise-chain idiom as `_clipboardLock`, same error-swallowing tail, same diagnostic `console.log` on contention. The buggy auto-cleanup from the original draft is correctly absent. I have nothing to yell about here. *Infuriating.*
+
+2. **`src/services/TaskViewerProvider.ts` import (line 16):** `withTerminalSendLock` added to the existing `terminalUtils` import. Correct. `cleanupTerminalSendLock` is intentionally NOT imported — matches plan. Fine.
+
+3. **`_attemptDirectTerminalPush` wrap (lines 15487–15582):** Terminal resolution (lines 15494–15521) stays **outside** the lock. The `if (!terminal) return false;` guard is at line 15523 — a missing terminal fails fast without queuing. The `sendLockKey` is derived from the **resolved** terminal's name via `_normalizeAgentKey(_stripIdeSuffix(terminal.name || terminalName))` with a `|| terminalName` fallback. The body (logEvent → /clear config → paste+submit+wait → sendRobustText → return true) is wrapped verbatim inside `withTerminalSendLock(sendLockKey, async () => {...})`. The closure captures `terminal` by reference — safe because `terminal` is never reassigned after the guard.
+
+   *Now here's where I got excited.* `terminal` is declared as `let terminal: vscode.Terminal | undefined`. Under `strict: true` (confirmed in `tsconfig.json`), TypeScript classically widens `let` variables back to their declared type inside non-immediately-invoked closures. Lines 15564, 15567, 15578 use `terminal` without null checks — that would be **three type errors** under the old rules. **BUT** — TypeScript 5.4+ (project uses 5.9.3, confirmed via `tsc --version`) introduced "narrowing of `let` in closures" when the variable is never assigned between the narrowing point and the closure, and never assigned inside the closure. Both conditions hold here: `terminal` is last assigned at line 15517, narrowed at line 15523, read-only at line 15532, and the closure (lines 15534–15581) never assigns to it. So the narrowing **is preserved** and this compiles clean. *I was ready to burn this down and it slipped through on a technicality. Respect.*
+
+4. **`_distributePlannerDispatch` (KanbanProvider.ts:3665–3796):** Verified the plan's Layer 2 claims. Buckets are keyed by terminal name (`Map<string, string[]>`, line 3754), one bucket per terminal, dispatched via `Promise.allSettled` (line 3770). Each bucket → one `triggerBatchAgentFromKanban` call → one unified prompt. Intra-dispatch same-terminal contention is impossible. The gap the plan addresses (overlapping dispatches) is real and correctly scoped.
+
+5. **`cleanupTerminalSendLock` usage:** Confirmed it is defined but never imported or called anywhere in `src/`. Matches the plan's "optional, not wired" intent.
+
+**Findings:**
+
+| Severity | Finding | Location |
+|----------|---------|----------|
+| NIT | Double blank line between `cleanupTerminalSendLock` and the timing constants — cosmetic only | `terminalUtils.ts:41–42` |
+| NIT | Pre-existing comment inside the closure (lines 15551–15556) explains cross-terminal clipboard-lock safety but doesn't mention the new per-terminal send lock. Still factually correct (it says "across terminals"), just incomplete. Not modified per the "don't touch comments" rule. | `TaskViewerProvider.ts:15551–15556` |
+
+**No CRITICAL findings. No MAJOR findings.**
+
+### Stage 2 — Balanced Synthesis
+
+The implementation is a **faithful, correct execution of the plan**. The per-terminal send lock mirrors the proven `_clipboardLock` pattern, wraps the single `_attemptDirectTerminalPush` chokepoint, preserves terminal resolution outside the lock, and correctly keys on the normalized resolved terminal name. Lock ordering (per-terminal → clipboard) has no reverse path, so no deadlock. Error-swallowing tail ensures the chain advances on rejection. Distinct terminals remain concurrent.
+
+**What to keep:** Everything. No code changes needed.
+
+**What to fix now:** Nothing. Both NITs are cosmetic (whitespace) or informational (a still-correct comment that could be more complete). Neither warrants a code edit.
+
+**What can defer:** The optional `cleanupTerminalSendLock` wiring into `handleTerminalClosed` — explicitly deferred by the plan to avoid scope creep. The map is bounded by terminal-name count, so this is not a memory concern.
+
+### Validation Results
+
+- **TypeScript type safety:** Verified by analysis (not compilation, per session policy). `let terminal` narrowing in closure is preserved under TypeScript 5.9.3's 5.4+ narrowing rules — no assignments between guard and closure, none inside closure. No type errors expected.
+- **Lock ordering / deadlock:** Per-terminal lock wraps the sequence; clipboard lock is acquired only inside `pasteTextViaClipboard` (called within the per-terminal lock). Ordering is always per-terminal → clipboard. No reverse path. No deadlock.
+- **Error handling:** Rejection inside the locked callback rejects the returned `next` promise (preserving the existing error contract for `_dispatchExecuteMessage`), while the stored tail `next.then(() => {}, () => {})` swallows the error so the chain advances. No deadlock on failure.
+- **Compilation:** Skipped per session policy.
+- **Automated tests:** Skipped per session policy (no deterministic unit boundary for timing-sensitive concurrency code; manual verification is the gate).
+
+### Files Changed (Verified)
+
+- `src/services/terminalUtils.ts` — added `_terminalSendLocks` Map, `withTerminalSendLock()`, `cleanupTerminalSendLock()` (lines 13–40)
+- `src/services/TaskViewerProvider.ts` — added `withTerminalSendLock` to import (line 16); wrapped `_attemptDirectTerminalPush` body in `withTerminalSendLock` (lines 15525–15581)
+
+### Remaining Risks
+
+1. **Manual testing not yet performed** — the five manual test scenarios in the Verification Plan (single dispatch, rapid-fire double dispatch, concurrent distinct terminals, terminal closed mid-send, log inspection) are the real gate. This review confirms the code is structurally correct; only runtime behavior can confirm the concurrency semantics.
+2. **Other `sendRobustText` / `pasteTextViaClipboard` callers** (TaskViewerProvider.ts:9810, 15849, 19179, and standalone `pasteTextViaClipboard`) are intentionally NOT covered by the per-terminal lock. This is a known, scoped limitation documented in the plan — not a regression.
+3. **`cleanupTerminalSendLock` is not wired** — the lock map persists for the extension host lifetime. Bounded by terminal-name count (a few dozen at most), so negligible. Optional wiring into `handleTerminalClosed` is documented but deferred.

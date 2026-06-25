@@ -442,3 +442,46 @@ This change adds no `confirm()`/modal/two-click patterns, per CLAUDE.md.
 ---
 
 **Recommendation:** Complexity 4 → **Send to Coder.** The backend decoder changes are straightforward (new `else if` branches), but the webview rendering change introduces a structured body format that requires careful XSS handling.
+
+## Review Results (Reviewer Pass — 2026-06-26)
+
+### Stage 1: Grumpy Adversarial Findings
+
+| ID | Severity | File:Line | Description |
+|----|----------|-----------|-------------|
+| MAJOR-1 | MAJOR | `src/services/ClickUpSyncService.ts:1570-1586` | `getCommentThreads` public return type signature missing `bodyParts` on both thread and reply shapes. Plan explicitly required this update (plan lines 237-259); implementer updated only the private `_normalizeClickUpComment` signature. Runtime works (structural subtyping + `any[]` in flat-list path), but the public type contract doesn't expose `bodyParts` to TypeScript consumers. |
+| NIT-1 | NIT | `src/webview/planning.js:528-529` | `escapeAttr` only escapes `"` → `&quot;`, not `&`. Image URLs with query-string `&` pass through unencoded. Plan acknowledged this (plan line 73); browsers handle it gracefully; scheme validation is the real XSS defense. Cosmetic only. |
+| NIT-2 | NIT | `src/services/ClickUpSyncService.ts:1706-1736` | Emoticon block with undecodable `code` falls through to `[media comment]` placeholder. Acceptable degradation; `[unknown emoji]` would be more informative but not worth the complexity. |
+
+### Stage 2: Balanced Synthesis
+
+- **MAJOR-1 → Fix now.** Applied: added `bodyParts?` to both thread and reply shapes in `getCommentThreads` return type.
+- **NIT-1 → Defer.** Plan explicitly assessed as cosmetic; no security impact.
+- **NIT-2 → Defer.** Acceptable degradation; hex regex is broad enough for real-world codes.
+
+### Fixes Applied
+
+1. **`src/services/ClickUpSyncService.ts:1570-1588`** — Added `bodyParts?: Array<{ type: 'text' | 'emoji' | 'image'; text?: string; url?: string; alt?: string }>` to both the thread shape (line 1575) and the reply shape (line 1582) in the `getCommentThreads` public return type signature.
+
+2. **`src/services/ClickUpSyncService.ts:1599-1652`** — **CRITICAL pre-existing structural fix.** The `getCommentThreads` method had two merged implementations: a dead/incomplete batch-fetch approach (old lines 1604-1628) with unclosed `for`/`Promise.all`/`batch.map`/arrow-function braces, and a working flat-list filtering approach (old lines 1629-1671) accidentally nested inside the first's unclosed arrow function. This caused ~22 TS1005/TS1011/TS1128 parse errors starting at `_normalizeClickUpComment`'s declaration. Fixed by removing the dead batch-fetch code entirely and keeping the working flat-list implementation. The early return for non-threading mode was preserved (moved `const threads` declaration inside the `if (!threadingSupported)` block to avoid redeclaration conflict with the flat-list path's `const threads: any[]`).
+
+### Verification Results
+
+**Static checks (all passed):**
+- `grep "type === 'emoticon'" src/services/ClickUpSyncService.ts` → found at line 1708 ✓
+- `grep "type === 'image'" src/services/ClickUpSyncService.ts` → found at line 1739 ✓
+- `grep -c "bodyParts" src/services/ClickUpSyncService.ts` → 15 matches (signature ×2, private signature, declaration, push calls, return object) ✓
+- `grep -c "bodyParts" src/webview/planning.js` → 3 matches (helper function + 2 call sites) ✓
+- `grep "cm-comment-image" src/webview/planning.html` → found at line 2919 ✓
+- `grep "renderCommentBodyHtml" src/webview/planning.js` → 3 matches (definition + 2 call sites at lines 676, 705) ✓
+- `bodyParts` now present in `getCommentThreads` signature at lines 1575, 1582 ✓
+
+**Compilation:** `npx tsc --noEmit` — 0 errors from changed code. 2 pre-existing errors remain in unrelated files (`KanbanDatabase` and `ArchiveManager` import paths needing `.js` extensions for Node16 module resolution) — not introduced by this plan.
+**Automated tests:** Skipped per session directive; test suite to be run separately by user.
+
+### Remaining Risks
+
+1. **Attachment block shape is undocumented** — the defensive extraction (`url`/`image`/`src`/`attachment` fields) may not match ClickUp's actual format if/when they add image blocks. Mitigated by `[attachment]`/`[media comment]` placeholders.
+2. **Multi-codepoint emoji encoding is assumed** — the `-`-split format (e.g., `1f468-200d-1f469-200d-1f467`) is an educated guess. If ClickUp uses a different compound-emoji encoding, basic emoji still work via the single-codepoint path.
+3. **`escapeAttr` `&` gap (NIT-1)** — deferred; cosmetic only, no security impact.
+4. **Manual testing not yet performed** — emoji-only, text+emoji, multi-codepoint emoji, image attachment, and Linear regression paths require installed-VSIX verification per the manual test plan above.

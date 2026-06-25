@@ -1572,12 +1572,14 @@ export class ClickUpSyncService {
       id: string;
       author: { id: string; name: string; email: string };
       body: string;
+      bodyParts?: Array<{ type: 'text' | 'emoji' | 'image'; text?: string; url?: string; alt?: string }>;
       date: string;
       mentions: Array<{ id: string; name: string }>;
       replies: Array<{
         id: string;
         author: { id: string; name: string; email: string };
         body: string;
+        bodyParts?: Array<{ type: 'text' | 'emoji' | 'image'; text?: string; url?: string; alt?: string }>;
         date: string;
         mentions: Array<{ id: string; name: string }>;
       }>;
@@ -1599,31 +1601,11 @@ export class ClickUpSyncService {
     const hasReplyCount = rawComments.some((c: any) => typeof c?.reply_count === 'number');
     const threadingSupported = hasReplyCount;
 
-    const threads = rawComments.map((comment: any) => this._normalizeClickUpComment(comment));
-
     if (!threadingSupported) {
+      const threads = rawComments.map((comment: any) => this._normalizeClickUpComment(comment));
       return { threads, threadingSupported: false };
     }
 
-    // Fetch replies for comments with reply_count > 0, in batches of 5.
-    const commentsWithReplies = rawComments.filter((c: any) => Number(c?.reply_count || 0) > 0);
-    const batches = this.chunkArray(commentsWithReplies, 5);
-    for (const batch of batches) {
-      const replyResults = await Promise.all(
-        batch.map(async (comment: any) => {
-          const commentId = String(comment?.id || '').trim();
-          if (!commentId) { return null; }
-          try {
-            const replyResult = await this.httpRequest('GET', `/comment/${commentId}/reply`);
-            const rawReplies = Array.isArray(replyResult.data?.comments) ? replyResult.data.comments : [];
-            return {
-              threadId: commentId,
-              replies: rawReplies.map((r: any) => this._normalizeClickUpComment(r))
-            };
-          } catch (e) {
-            console.warn(`[ClickUpSync] Failed to fetch replies for comment ${commentId}:`, e);
-            return null;
-          }
     // Filter out comments that are actually replies (which have a parent_id).
     // ClickUp /task/{id}/comment returns a flat list of all comments + replies.
     // Grouping is handled client-side via parent_id relationships.

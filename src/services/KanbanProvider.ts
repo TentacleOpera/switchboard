@@ -7829,7 +7829,6 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     break;
                 }
 
-                await db.updateEpicStatus(planId, 1, '');
                 // Quote YAML values to prevent frontmatter breakage from names containing ---, :, etc.
                 const yamlSafeName = name.replace(/'/g, "''");
                 const yamlSafeDesc = (msg.description ? String(msg.description).trim() : '').replace(/'/g, "''");
@@ -7845,8 +7844,12 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     await db.updateEpicStatus(st.planId || st.sessionId, 0, planId);
                 }
                 await this._regenerateEpicFile(workspaceRoot, planId, db);
+                // Re-assert is_epic=1 as the FINAL DB write before refresh — defensive hardening
+                // so any intermediate file-watcher/scan event that might touch the record leaves
+                // is_epic=1 as the last-write-wins state. (Plan Change 1)
+                await db.updateEpicStatus(planId, 1, '');
                 const verifyEpic = await db.getPlanByPlanId(planId);
-                console.log(`[KanbanProvider] createEpic: verify is_epic=${verifyEpic?.isEpic}, kanbanColumn=${verifyEpic?.kanbanColumn}, project=${verifyEpic?.project}, planFile=${verifyEpic?.planFile}, activeProjectFilter=${this._projectFilter}`);
+                console.log(`[KanbanProvider] createEpic: verify is_epic=${verifyEpic?.isEpic}, kanbanColumn=${verifyEpic?.kanbanColumn}, project=${verifyEpic?.project}, projectId=${(verifyEpic as any)?.projectId}, planFile=${verifyEpic?.planFile}, activeProjectFilter=${this._projectFilter}`);
                 await this._refreshBoard(workspaceRoot);
                 break;
             }
