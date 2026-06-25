@@ -293,6 +293,11 @@ export class KanbanProvider implements vscode.Disposable {
             if (persistedFilter !== null) {
                 this._projectFilter = persistedFilter;
                 this._projectFilterNeedsValidation = true;
+                // Propagate the restored filter to the watcher immediately so plans
+                // created before the first board refresh still get the active project.
+                // The validation path in _refreshBoardImpl will correct this if the
+                // project no longer exists.
+                this._globalPlanWatcher?.setCurrentProject(resolvedRoot, persistedFilter);
             }
         }
         this._cliTriggersEnabled = this._getSetting<boolean>('kanban.cliTriggersEnabled', true);
@@ -3651,8 +3656,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const sid = this._cardId(card);
                 const ok = await this.moveCardToColumn(workspaceRoot, sid, nextCol);
                 if (ok) {
-                    movedIds.push(sid);
                     await tvp.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
+                    const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                    movedIds.push(...cascadeIds);
                 } else {
                     failures.push({ id: sid, sourceColumn: card.column, reason: "couldn't save — board may be out of sync" });
                 }
@@ -3692,8 +3698,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
             const sid = this._cardId(card);
             const ok = await this.moveCardToColumn(workspaceRoot, sid, nextCol);
             if (ok) {
-                movedIds.push(sid);
                 await tvp.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
+                const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                movedIds.push(...cascadeIds);
             } else {
                 failures.push({ id: sid, sourceColumn: card.column, reason: "couldn't save — board may be out of sync" });
             }
@@ -6046,8 +6053,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         for (const sid of sids) {
                             const ok = await this.moveCardToColumn(workspaceRoot, sid, targetCol);
                             if (ok) {
-                                movedSids.push(sid);
                                 await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
+                                const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                                movedSids.push(...cascadeIds);
                             } else {
                                 failures.push({ id: sid, sourceColumn: 'PLAN REVIEWED', reason: "couldn't save — board may be out of sync" });
                             }
@@ -6076,7 +6084,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     if (!nextCol) { break; }
                     const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, nextCol);
                     if (dispatchSpec?.source === 'custom-user' && this._taskViewerProvider) {
-                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: msg.sessionIds, targetColumn: nextCol });
+                        const allMovedIds: string[] = [];
+                        for (const sid of msg.sessionIds) {
+                            const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                            allMovedIds.push(...cascadeIds);
+                        }
+                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
                         if (dispatchSpec.dragDropMode === 'prompt' || this._cliTriggersEnabled) {
                             const instruction = dispatchSpec.role === 'planner' ? 'improve-plan' : undefined;
                             const dispatched = await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(dispatchSpec.role, msg.sessionIds, {
@@ -6110,8 +6123,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             for (const sid of msg.sessionIds) {
                                 const ok = await this.moveCardToColumn(workspaceRoot, sid, nextCol);
                                 if (ok) {
-                                    movedIds.push(sid);
                                     await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
+                                    const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                                    movedIds.push(...cascadeIds);
                                 } else {
                                     failures.push({ id: sid, sourceColumn: column, reason: "couldn't save — board may be out of sync" });
                                 }
@@ -6173,8 +6187,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         for (const sid of sids) {
                             const ok = await this.moveCardToColumn(workspaceRoot, sid, targetCol);
                             if (ok) {
-                                movedSids.push(sid);
                                 await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
+                                const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                                movedSids.push(...cascadeIds);
                             } else {
                                 failures.push({ id: sid, sourceColumn: 'PLAN REVIEWED', reason: "couldn't save — board may be out of sync" });
                             }
@@ -6203,7 +6218,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     if (!nextCol) { break; }
                     const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, nextCol);
                     if (dispatchSpec?.source === 'custom-user' && this._taskViewerProvider) {
-                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sessionIds, targetColumn: nextCol });
+                        const allMovedIds: string[] = [];
+                        for (const sid of sessionIds) {
+                            const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                            allMovedIds.push(...cascadeIds);
+                        }
+                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
                         if (dispatchSpec.dragDropMode === 'prompt' || this._cliTriggersEnabled) {
                             const instruction = dispatchSpec.role === 'planner' ? 'improve-plan' : undefined;
                             const dispatched = await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(dispatchSpec.role, sessionIds, {
@@ -6239,8 +6259,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             for (const sid of sessionIds) {
                                 const ok = await this.moveCardToColumn(workspaceRoot, sid, nextCol);
                                 if (ok) {
-                                    movedIds.push(sid);
                                     await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
+                                    const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                                    movedIds.push(...cascadeIds);
                                 } else {
                                     failures.push({ id: sid, sourceColumn: column, reason: "couldn't save — board may be out of sync" });
                                 }
@@ -6343,7 +6364,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot);
                         }
                     }
-                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: msg.sessionIds, targetColumn: nextCol });
+                    const allMovedIds: string[] = [];
+                    for (const sid of msg.sessionIds) {
+                        const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                        allMovedIds.push(...cascadeIds);
+                    }
+                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
                     this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`, isError: false });
                     break;
                 }
@@ -6357,11 +6383,14 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         for (const [role, sids] of groups) {
                             if (sids.length === 0) { continue; }
                             const targetCol = this._targetColumnForDispatchRole(role);
+                            const movedSids: string[] = [];
                             for (const sid of sids) {
                                 await this.moveCardToColumn(workspaceRoot, sid, targetCol);
                                 await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
+                                const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                                movedSids.push(...cascadeIds);
                             }
-                            this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sids, targetColumn: targetCol });
+                            this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
                         }
                         const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} skipped — unknown complexity)` : '';
                         this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans. Advanced ${knownIds.length}.${skippedSuffix}`, isError: false });
@@ -6369,11 +6398,14 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans. No plans advanced (${skippedCount} skipped — unknown complexity).`, isError: false });
                     }
                 } else {
+                    const allMovedIds: string[] = [];
                     for (const sid of msg.sessionIds) {
                         await this.moveCardToColumn(workspaceRoot, sid, nextCol);
                         await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
+                        const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                        allMovedIds.push(...cascadeIds);
                     }
-                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: msg.sessionIds, targetColumn: nextCol });
+                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
                     this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to next stage.`, isError: false });
                 }
                 break;
@@ -6420,7 +6452,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot);
                         }
                     }
-                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sessionIds, targetColumn: nextCol });
+                    const allMovedIds: string[] = [];
+                    for (const sid of sessionIds) {
+                        const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                        allMovedIds.push(...cascadeIds);
+                    }
+                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
                     this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`, isError: false });
                     break;
                 }
@@ -6439,10 +6476,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             // pre-conversion kanbanForwardMove path which routed through moveCardToColumn.
                             // A direct db.updateColumn would skip the epic subtask cascade and orphan
                             // subtasks in the source column when an epic parent is advanced.
+                            const movedSids: string[] = [];
                             for (const sid of sids) {
                                 await this.moveCardToColumn(workspaceRoot, sid, targetCol);
+                                const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                                movedSids.push(...cascadeIds);
                             }
-                            this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sids, targetColumn: targetCol });
+                            this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
                             // Column already persisted above. Preserve only the run-sheet workflow-event
                             // write that kanbanForwardMove (via _applyManualKanbanColumnChange) performed —
                             // drop its trailing full refreshUI that defeated this delta.
@@ -6460,10 +6500,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     // Persist via moveCardToColumn (DB-first, epic-cascade aware) — matches the
                     // pre-conversion kanbanForwardMove path. A direct db.updateColumn would skip the
                     // epic subtask cascade and orphan subtasks when an epic parent is advanced.
+                    const allMovedIds: string[] = [];
                     for (const sid of sessionIds) {
                         await this.moveCardToColumn(workspaceRoot, sid, nextCol);
+                        const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                        allMovedIds.push(...cascadeIds);
                     }
-                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sessionIds, targetColumn: nextCol });
+                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
                     // Column already persisted above. Preserve only the run-sheet workflow-event
                     // write that kanbanForwardMove (via _applyManualKanbanColumnChange) performed —
                     // drop its trailing full refreshUI that defeated this delta.

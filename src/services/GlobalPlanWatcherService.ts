@@ -582,12 +582,28 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
 
                 this._outputChannel?.appendLine(`[GlobalPlanWatcher] Imported new plan: ${relativePath} in ${workspaceId}`);
             } else {
-                // Existing plan - update metadata
+                // Existing plan - update metadata.
+                // Re-resolve the active project if the plan currently has none.
+                // Priority: explicit frontmatter project > live displayed project >
+                // _currentProjects fallback > existing DB project (preserved by COALESCE).
+                let resolvedProject = plan.project;
+                if (metadata.project) {
+                    // Frontmatter explicitly sets a project — honor it (overrides everything)
+                    resolvedProject = metadata.project;
+                } else if (!resolvedProject) {
+                    // Plan has no project and frontmatter doesn't set one — try the active
+                    // project sources that the new-plan path uses. Without this, a plan
+                    // initially imported with project='' (timing gap) is stuck empty forever.
+                    const effectiveRoot = resolveEffectiveWorkspaceRootFromMappings(workspaceRoot);
+                    const liveProject = this._resolveDisplayedProject?.(workspaceRoot) || '';
+                    resolvedProject = liveProject || this._currentProjects.get(effectiveRoot) || '';
+                }
                 const updatedRecord: KanbanPlanRecord = {
                     ...plan,
                     topic: metadata.topic,
                     complexity: metadata.complexity,
                     tags: metadata.tags,
+                    project: resolvedProject,
                     updatedAt: fileMtime
                 };
                 await db.insertFileDerivedPlan(updatedRecord);

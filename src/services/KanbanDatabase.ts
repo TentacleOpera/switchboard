@@ -1329,7 +1329,7 @@ export class KanbanDatabase {
                 topic = excluded.topic,
                 complexity = excluded.complexity,
                 tags = excluded.tags,
-                project = excluded.project,
+                project = COALESCE(NULLIF(excluded.project, ''), plans.project),
                 project_id = COALESCE(excluded.project_id, plans.project_id),
                 updated_at = excluded.updated_at
         `;
