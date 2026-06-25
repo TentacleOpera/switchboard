@@ -201,3 +201,54 @@ Per session directives, automated tests are NOT run as part of this plan — the
 ---
 
 **Recommendation:** Complexity 3 → **Send to Intern.** The primary fix is a single-file change mirroring an existing codebase pattern (`setActiveTab` at line 2007), with a complete call-site inventory (5 sites, all addressed). The optional hardening is a 4-line additive `setTimeout`. No new state, no schema changes, no architectural risk.
+
+---
+
+## Reviewer Pass — 2026-06-26
+
+### Stage 1: Adversarial Findings
+
+| # | Severity | Location | Finding |
+|---|----------|----------|---------|
+| 1 | NIT | `TaskViewerProvider.ts:2689-2691` | Dangling `setTimeout` with no `clearTimeout` on dispose. Harmless — optional chaining + VS Code disposed-webview no-op semantics make it safe. Noted for linter hygiene. |
+| 2 | NIT | `TaskViewerProvider.ts:2689-2691` | Rapid-click timer stacking (no debounce). Idempotent and harmless — `isChanging=false` after first, `memoLoad` doesn't re-fire, `setActiveSubTab` is redundant same-value. Unrealistic user behavior. |
+| 3 | NIT | `implementation.html:2200` | `openMemoTab` IPC handler retains `persist=true` with no explanatory comment. Documented in plan as intentional, but a future developer could "fix" it to `persist=false` and break the warm-path re-assert. |
+
+**No CRITICAL findings. No MAJOR findings.**
+
+### Stage 2: Balanced Synthesis
+
+- **Keep as-is:** Core persist-flag fix on `switchAgentTab`, all 5 call-site `persist` values, `setTimeout` safety net. All verified correct.
+- **Fix now:** NIT-3 — added explanatory comment at `implementation.html:2200` to prevent future well-intentioned breakage.
+- **Defer:** NIT-1 (dangling timer) and NIT-2 (timer stacking) — both harmless, fixing adds complexity for zero user benefit.
+
+### Code Fixes Applied
+
+- `src/webview/implementation.html:2199-2206` — Added 4-line comment explaining why `persist=true` (default) is intentional for the `openMemoTab` IPC handler. No behavioral change.
+
+### Static Verification Results
+
+Per session directives, compilation (`npm run compile`) and automated tests were NOT run. The following static verification was performed:
+
+1. **Call-site audit (5 sites):** All verified with correct `persist` values:
+   - `implementation.html:2179` — `switchAgentTab(restoredSubTab, false)` (initialState restore) ✓
+   - `implementation.html:2204` — `switchAgentTab('memo')` (openMemoTab IPC, default persist=true) ✓
+   - `implementation.html:2639` — `switchAgentTab(btn.dataset.tab)` (user click, default persist=true) ✓
+   - `implementation.html:3006` — `switchAgentTab(currentAgentTab, false)` (renderAgentList onboarding) ✓
+   - `implementation.html:3124` — `switchAgentTab(currentAgentTab, false)` (renderAgentList normal) ✓
+2. **`setActiveSubTab` single-source:** Posted from exactly ONE location — inside the `if (persist)` guard at `implementation.html:2582`. ✓
+3. **Host-side `_sendInitialState`:** Reads `ACTIVE_SUB_TAB_STATE_KEY` (line 5438) and sends `activeSubTab` in `initialState` message (line 5480). ✓
+4. **Host-side `setActiveSubTab` handler:** Persists to `workspaceState` with valid-sub-tab clamping (lines 9584-9588). ✓
+5. **Clobber path broken:** `terminalStatuses` (line 2227) → `renderAgentList()` → `switchAgentTab(currentAgentTab, false)` (line 3124) — no longer posts `setActiveSubTab`. ✓
+6. **`memoLoad` double-fire analysis:** Safe in all 3 message orderings (initialState-first, safety-net-first, simultaneous) — `isChanging` guard ensures exactly one `memoLoad`. ✓
+7. **Entry-point audit:** All 4 `switchboard.openMemo` references (extension.ts:796, 1902, 2051, 2188) route through `openMemoTab()`. ✓
+8. **No duplicate `switchAgentTab`:** Confirmed only in `implementation.html` — not in `kanban.html` or other webview files. ✓
+9. **`setActiveTab` precedent:** Confirmed at `implementation.html:2004-2010` — same `persist = true` guard pattern. ✓
+10. **`openMemoTab()` safety net:** Confirmed at `TaskViewerProvider.ts:2681-2692` — persists `'memo'`, focuses view, immediate post, 300ms re-assert. ✓
+
+### Remaining Risks
+
+- **NIT-1 (deferred):** Dangling `setTimeout` — harmless but a future linter/refactor may flag it. If the extension ever adds formal webview disposal cleanup, this timer ID should be tracked and cleared.
+- **NIT-2 (deferred):** No debounce on rapid `openMemoTab()` calls — harmless due to idempotency, but unbounded timer creation in theory.
+- **Manual testing pending:** The cold-start UX race is inherently a runtime behavior — static verification confirms the logic is correct, but the user should run the manual verification steps (plan lines 191-199) across multiple cold restarts to confirm end-to-end behavior.
+- **No automated test added:** The plan recommends (line 187) a `TaskViewerProvider` test asserting the clobber loop is broken. This has not been added — the user should consider adding it to prevent regression.

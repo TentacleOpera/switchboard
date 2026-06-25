@@ -4911,7 +4911,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                 }
                             }
                             if (nonEpicCards.length === 0) return;
-                            openEpicCreateModal();
+                            // Mirror the EPIC button: 1 card promotes in-place (no description),
+                            // 2+ cards create a new epic. Without this flag a lone card would open
+                            // the "Create Epic" modal yet dispatch promoteToEpic (submit branches on
+                            // count), silently discarding the description and mislabelling the modal.
+                            openEpicCreateModal({ singlePlanPromote: nonEpicCards.length === 1 });
                             break;
                         }
                         case 'testingFailed': {

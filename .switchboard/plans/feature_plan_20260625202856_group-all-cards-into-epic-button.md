@@ -249,7 +249,7 @@ In-place reviewer-executor pass (Grumpy Principal Engineer → Balanced synthesi
 | Severity | Finding | Location | Status |
 |----------|---------|----------|--------|
 | NIT-1 | `ICON_CODE_MAP` constant name now semantically misleading (epic-group icon, not code-map). Harmless. Plan says leave it. | `kanban.html:3925` | Deferred — renaming risks `{{ICON_CODE_MAP}}` template injection breakage |
-| NIT-2 | For 1-card case, modal shows description field but `promoteToEpic` backend silently ignores it. Plan-accepted trade-off (forcing multi-card modal path for consistency). | `kanban.html:9533` (submit handler) | Deferred — would require backend change or reverting plan's modal-path choice |
+| NIT-2 | For 1-card case, modal shows description field but `promoteToEpic` backend silently ignores it. Plan-accepted trade-off (forcing multi-card modal path for consistency). | `kanban.html:9533` (submit handler) | **FIXED 2026-06-26** — see addendum below |
 | NIT-3 | Alt text "Group Into Epic" vs tooltip "Group all plans in this column into an epic" — minor wording inconsistency. | `kanban.html:4663–4664` | Deferred — cosmetic only |
 
 **CRITICAL: 0 | MAJOR: 0 | NIT: 3 (all deferred)**
@@ -270,6 +270,27 @@ None required. No CRITICAL or MAJOR findings. Implementation matches all 5 plan 
   - Modal submit handler (lines 9531–9537) routes 1-card → `promoteToEpic`, multi-card → `createEpic` — both backend cases exist.
 
 ### Remaining Risks
-1. **NIT-2 (1-card description ignored):** If a user groups a single card into an epic, enters a description, and clicks "Create Epic", the description is silently dropped. This is a minor UX wart but not a functional bug — the card is still promoted to an epic with the user's chosen name. Fixing would require either (a) passing `{ singlePlanPromote: true }` for the 1-card case (which the plan explicitly rejected to force modal consistency), or (b) modifying the `promoteToEpic` backend handler to accept a description (out of scope — backend change).
+1. **NIT-2 (1-card description ignored):** ~~If a user groups a single card into an epic, enters a description, and clicks "Create Epic", the description is silently dropped.~~ **RESOLVED 2026-06-26 (see addendum).**
 2. **NIT-1 (icon semantic mismatch):** The code-map icon now launches an epic-grouping action. Users familiar with the old code-map button may be briefly confused. The tooltip clarifies the new function. No functional impact.
 3. **Dead backend code:** `codeMapSelected`/`codeMapConfirm` handlers in `KanbanProvider.ts` are now unreachable from the kanban UI. They are intentionally preserved for test compatibility. If code map is never re-exposed in the UI, this dead code could be cleaned up in a future refactor (along with updating/removing the test).
+
+---
+
+## Addendum — NIT-2 Fix (2026-06-26)
+
+**Surfaced by:** the code review of `feature_plan_20260625113004_option-to-name-epic-before-creation.md`, which traced the cross-plan interaction back to this button.
+
+**Why the original trade-off was stale.** This plan's single-card edge-case note (decision table, "Column has 1 non-epic card") was written against the **then-current** EPIC-button behavior, where a single non-epic selection did `promoteToEpic` *with no modal at all*. So the author forced `openEpicCreateModal()` in plain create mode purely to **give the user a chance to name the epic** — that was the real goal, and "always create mode" was just the means.
+
+In the interim, `option-to-name-epic-before-creation` changed the single-card EPIC button to open the modal in **`singlePlanPromote` mode** — which *also* shows the modal with an editable, pre-filled name field (it only hides the description). That fully satisfies this plan's naming goal, so "always create mode" was no longer required — it was now strictly worse, because the submit handler still branches on `subtaskPlanIds.length === 1` and dispatches `promoteToEpic` (no description param), leaving the visible description field as a dead control and the "Create Epic" title/button mislabelled.
+
+**The fix.** `kanban.html` `case 'groupAllIntoEpic'` now mirrors the EPIC button exactly:
+```javascript
+openEpicCreateModal({ singlePlanPromote: nonEpicCards.length === 1 });
+```
+- **1 non-epic card** → modal opens as "Promote to Epic" (description hidden, name pre-filled and editable); submit dispatches `promoteToEpic`. Modal mode and dispatch now agree; the user can still name the epic; no description field to silently discard.
+- **2+ non-epic cards** → modal opens as "Create Epic" (description visible); submit dispatches `createEpic`. Unchanged.
+
+**Behavioral delta.** None to the *dispatch* — a single-card group-all already promoted in-place (the submit handler always branched on count). The only change is the modal UI now matches what actually happens, and the misleading description field is hidden for the 1-card case. No backend change; the dispatch decision (`length === 1`) and the modal mode (`singlePlanPromote`) are now driven by the same count, so they can never diverge.
+
+**Validation:** compilation/tests skipped per session directives; static check confirms the EPIC-button branch (`kanban.html` `nonEpics.length === 1 → singlePlanPromote: true`) and the group-all branch now use identical logic.

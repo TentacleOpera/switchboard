@@ -2197,6 +2197,10 @@
                     break;
                 }
                 case 'openMemoTab': {
+                    // persist=true (default) is intentional: this is a user-initiated
+                    // entry point (status-bar click / hub link), not a programmatic
+                    // re-render. The redundant same-value write on the cold safety-net
+                    // path is harmless — see plan edge-case audit.
                     switchAgentTab('memo');
                     break;
                 }
