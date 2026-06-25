@@ -138,3 +138,61 @@ No automated tests required — this is a pure CSS visual change. Per session di
 ## Recommendation
 
 Complexity 2 → **Send to Intern**
+
+## Review Pass (2026-06-25)
+
+### Stage 1 — Grumpy Principal Engineer
+
+Listen. I came in here expecting a disaster — line numbers off by 700, a `!important` war, a cascade that somehow makes selected epics glow neon green. What I found is... actually correct. I hate that. Let me dig anyway.
+
+**Change 1 (default/Afterburner, line 1351):** `.kanban-card.epic-card.selected` at (0,3,0) vs `.kanban-card.selected` at (0,2,0). Higher specificity, no `!important` needed. The `border-color` shorthand sets all four sides. The `box-shadow` uses the same `color-mix` pattern as the base selected rule. **Verdict: correct.** I checked — Afterburner (`cyber-theme-enabled`) has no separate `.kanban-card.selected` override (confirmed: only lines 173 and 1344 define selected border/shadow). It shares the base rule. So this one override covers both default and Afterburner. Fine.
+
+**Change 2 (Claudify, line 180):** `body.theme-claudify .kanban-card.epic-card.selected` at (0,3,1) with `!important` on both `border-color` and `box-shadow`. The base Claudify selected rule at line 173 is (0,2,1) with `!important` — higher specificity + `!important` wins. The `box-shadow: none` group at line 47 is (0,2,1) without `!important` — crushed by the new rule's `!important`. **Verdict: correct.** The cascade analysis in the plan is actually right, which annoys me.
+
+**Change 3 (comment, lines 163-166):** Updated to reflect that epic cards now have their own `.epic-card.selected` override. Accurate. **Verdict: correct.**
+
+**Now the nitpick, because I'm not here to hand out trophies:**
+
+- **NIT — Claudify selected-epic background inconsistency (`src/webview/kanban.html:174` vs `:180`):** The new epic-selected rule overrides `border-color` and `box-shadow` but **not** `background`. So in Claudify, selecting an epic flips its background from the purple-tinted gradient (line 170) to the terracotta-neutral selected gradient (line 174), while the border goes purple. The border says "I'm an epic"; the background says "I'm a generic selected card." Slightly schizophrenic. **However** — the plan's Desired Behavior explicitly scopes the change to "border (all sides) and glow," and the default-theme implementation has the same shape (selected background is unaffected, epic's faint purple `rgba(124,58,237,0.06)` from line 919 persists). So this is consistent with the plan's stated scope and with the design principle "selection is the strongest visual state" (background reflects selection, border reflects epic identity). **Not a defect against the plan.** Flagging only so a future reviewer doesn't think it's an oversight.
+
+- **NIT — No `!important` on default-theme rule (line 1351):** The plan correctly notes specificity alone wins here. But if anyone later adds an `!important` to the base `.kanban-card.selected` rule at line 1344 for some unrelated reason, the epic override silently breaks. Defensive `!important` would future-proof it. **Not fixing** — the plan explicitly chose specificity-only for the default theme, and adding `!important` where the plan said not to would violate the plan-as-source-of-truth rule.
+
+No CRITICAL. No MAJOR. Two NITs, both within plan scope or explicitly deferred by plan design. The implementation is a faithful, correct realization of the plan.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is:**
+- All three changes (default override, Claudify override, comment update) — correct, match plan, no fixes needed.
+
+**Fix now:** None. No CRITICAL or MAJOR findings.
+
+**Defer (out of scope for this plan):**
+- Claudify selected-epic background tinting (NIT) — would require a new plan if the user wants the selected-epic background to also carry purple. Current behavior is consistent and within this plan's stated scope.
+- Defensive `!important` on default-theme rule (NIT) — explicitly rejected by the plan's specificity analysis.
+
+### Verification
+
+- **Compilation:** Skipped per session directives.
+- **Tests:** Skipped per session directives.
+- **Code inspection:** Confirmed all three changes present at expected locations (lines 163-166, 180-183, 1350-1355). Confirmed `.epic-card` class is applied at line 5407 based on `card.isEpic`. Confirmed no other `.kanban-card.selected` CSS rules exist beyond lines 173 and 1344. Confirmed Afterburner (`cyber-theme-enabled`) shares the base selected rule with no override. Specificity calculations in the plan verified correct.
+- **Manual visual verification:** Deferred to user (per plan's Verification Plan — pure CSS change, manual verification sufficient).
+
+### Files Changed
+
+- `src/webview/kanban.html` — lines 163-166 (comment), 179-183 (Claudify epic-selected), 1350-1355 (default epic-selected). No changes applied during this review (implementation already correct).
+
+### Remaining Risks
+
+1. **Low** — Claudify selected-epic background remains terracotta-neutral (NIT, out of plan scope).
+2. **Low** — Default-theme epic-selected rule relies on specificity alone; a future `!important` on the base `.kanban-card.selected` rule would break it (NIT, plan explicitly accepted this).
+
+### Summary
+
+| Severity | Finding | Location | Fix Applied |
+|----------|---------|----------|-------------|
+| NIT | Claudify selected-epic background not purple-tinted | `src/webview/kanban.html:174` | None (out of plan scope) |
+| NIT | Default-theme rule lacks defensive `!important` | `src/webview/kanban.html:1351` | None (plan explicitly chose specificity) |
+
+**Fixes applied during review:** None — implementation is correct as committed.
+
+**Remaining risks:** Two low-severity NITs, both within plan scope or explicitly deferred by plan design. No action required.
