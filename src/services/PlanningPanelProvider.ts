@@ -3043,12 +3043,15 @@ export class PlanningPanelProvider {
                 break;
             }
             case 'updateEpicConfig': {
+                // epic_prompt_template is superseded by the orchestrator role prompt override
+                // (Decision #3/#4); writes removed to avoid dual-source conflict.
+                // epic_lock_columns is dormant; writes removed.
+                // epic_max_subtasks still bounds epic expansion and has no addon replacement
+                // yet, so its write is kept. Legacy keys are still READ as fallback (per CLAUDE.md).
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
                 if (!wsRoot) break;
                 try {
                     const db = KanbanDatabase.forWorkspace(wsRoot);
-                    if (msg.epicLockColumns !== undefined) await db.setConfig('epic_lock_columns', String(msg.epicLockColumns));
-                    if (msg.epicPromptTemplate !== undefined) await db.setConfig('epic_prompt_template', String(msg.epicPromptTemplate));
                     if (msg.epicMaxSubtasks !== undefined) await db.setConfig('epic_max_subtasks', String(msg.epicMaxSubtasks));
                 } catch (err) {
                     console.error('[PlanningPanelProvider] updateEpicConfig failed:', err);

@@ -7615,21 +7615,17 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 break;
             }
             case 'updateEpicConfig': {
-                // Kept as a generic config writer (no remaining kanban caller — the modal was
-                // removed). epic_max_subtasks still bounds epic expansion (board step-mode and
-                // the Epics-tab Orchestrate assembly). epic_prompt_template/epic_lock_columns
-                // are superseded by the orchestrator role config but retained as shipped keys
-                // (read as fallback, never dropped — per CLAUDE.md).
+                // No remaining kanban caller — the on-board epic-manage modal was removed.
+                // epic_prompt_template is superseded by the orchestrator role prompt override
+                // (Decision #3/#4); writes to it are removed to avoid a dual-source conflict.
+                // epic_lock_columns is dormant (default matches no real column id); writes removed.
+                // epic_max_subtasks still bounds epic expansion (board step-mode and Epics-tab
+                // Orchestrate assembly) and has no addon replacement yet, so its write is kept.
+                // Legacy keys are never dropped — they are still READ as fallback (per CLAUDE.md).
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) break;
                 const db = this._getKanbanDb(workspaceRoot);
                 if (!db || !(await db.ensureReady())) break;
-                if (msg.epicLockColumns !== undefined) {
-                    await db.setConfig('epic_lock_columns', String(msg.epicLockColumns));
-                }
-                if (msg.epicPromptTemplate !== undefined) {
-                    await db.setConfig('epic_prompt_template', String(msg.epicPromptTemplate));
-                }
                 if (msg.epicMaxSubtasks !== undefined) {
                     await db.setConfig('epic_max_subtasks', String(msg.epicMaxSubtasks));
                 }

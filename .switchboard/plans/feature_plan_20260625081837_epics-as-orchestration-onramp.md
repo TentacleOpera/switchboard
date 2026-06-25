@@ -165,3 +165,47 @@ None requiring research. All touch-points verified against live code in this pas
 ---
 
 **Recommendation:** Sequence after the three drafted epic plans land (this plan assumes the Review→Epics nav and the epic-as-unit board model). Ship Phase 2 (Epics-tab orchestration + relocated management) and Phase 3 (modal removal) together so capabilities never regress; Phase 1 (role) underpins both; Phase 4 (per-CLI keyword) is optional polish. Complexity 7/10 — **Send to Lead Coder** (multi-file coordination across 8+ source files, new role enumeration pattern, shipped-config migration). The adversarial pass found and fixed 3 missing enumeration touch-points, 1 incorrect touch-point (`validRoles`/`rolePriority`), and 1 unspecified migration read-site; all line numbers have been corrected against live code.
+
+## Reviewer Pass (2026-06-25)
+
+### Stage 1 — Adversarial Findings
+
+| Severity | Finding | Location |
+|----------|---------|----------|
+| CRITICAL | None — all 15+ enumeration touch-points verified complete | — |
+| MAJOR | `epicMaxSubtasks` addon missing from `ROLE_ADDONS` — plan Phase 1/Decision #4 explicitly calls for it; old modal's "Max Subtasks" field was removed with no UI replacement | `sharedDefaults.js:266-281` |
+| MAJOR | `updateEpicConfig` handlers still write to superseded `epic_prompt_template` and dormant `epic_lock_columns` legacy keys — plan Phase 3 says "remove or redirect" | `KanbanProvider.ts:7617-7637`, `PlanningPanelProvider.ts:3045-3056` |
+| NIT | `handleGetDefaultPromptPreviews` roles array pre-existing missing `ticket_updater`/`researcher`/`splitter`/`gatherer` (not introduced by this plan) | `TaskViewerProvider.ts:3914` |
+| NIT | `'preview'` mode in orchestration backend is dead code — no UI button sends it | `project.js` `requestEpicOrchestration` |
+
+### Stage 2 — Balanced Synthesis
+
+**Verified correct (keep as-is):**
+- All role enumeration touch-points: `BuiltInAgentRole`, `BUILT_IN_AGENT_LABELS` (both copies), `VALID_ROLES` in `parseDefaultPromptOverrides`, `DEFAULT_VISIBLE_AGENTS`, `DEFAULT_ROLE_CONFIG`, `ROLE_ADDONS`, `getVisibleAgents` defaults (both providers), `_getDefaultPromptOverrides` roles arrays (both providers), `handleGetDefaultPromptPreviews` roles array, `allBuiltInAgents`, `columnToPromptRole` (correctly NO entry), unknown-role error message
+- `validRoles`/`rolePriority` correctly NOT touched (review-role arrays only)
+- `DEFAULT_KANBAN_COLUMNS` correctly NOT touched (no phantom lane)
+- `PROMPT_OVERRIDE_EXCLUDED_KEYS` correctly does NOT include `orchestrator`
+- Orchestrator prompt branch in `agentPromptBuilder.ts` — implementation-oriented per Decision #9, all variables in scope
+- `generateUnifiedPrompt` migration — imports legacy `epic_prompt_template` as prepend for orchestrator; uses orchestrator override (or legacy fallback) as epic prompt template for non-orchestrator step mode
+- Epics-tab orchestration UI — overlay, preview, copy/send, add-subtask, delete — all wired correctly; `setKanbanProvider` properly called in `extension.ts:852`
+- Modal removal — clean, no dangling references, `kanbanEpicDetails` fully removed
+- `completeAll` cascade fix — correct use of `updateColumnWithEpicCascade`
+- Regression test — covers cascade and subtask exclusion
+
+**Fixed in this review pass:**
+- MAJOR #2: Removed `epic_prompt_template` and `epic_lock_columns` writes from both `updateEpicConfig` handlers (`KanbanProvider.ts:7617`, `PlanningPanelProvider.ts:3045`). Kept `epic_max_subtasks` write (still actively read, no addon replacement yet). Legacy key READS preserved as fallback per CLAUDE.md.
+
+**Deferred (documented as remaining risks):**
+- MAJOR #1: `epicMaxSubtasks` addon not added to `ROLE_ADDONS`. The addon rendering system in `kanban.html:renderRoleAddons` only supports checkbox/radio/file types — no number/text input. Adding a configurable max-subtasks knob requires extending the addon type system, which is beyond the scope of this fix. The cap still works at default 20 via the legacy `epic_max_subtasks` DB key (read in `buildEpicOrchestrationPrompt` and the board step-mode path). **Remaining risk:** user has no UI to change the cap. Follow-up: add a `type: 'text'` or `type: 'number'` addon type to `renderRoleAddons` and wire `epicMaxSubtasks` into `buildEpicOrchestrationPrompt` (read from orchestrator role config, fall back to legacy DB key).
+- NIT #1/#2: Pre-existing missing roles in `handleGetDefaultPromptPreviews`; dead `'preview'` mode. Both harmless.
+
+### Files Changed in Review
+
+- `src/services/KanbanProvider.ts` — removed `epic_prompt_template` and `epic_lock_columns` writes from `updateEpicConfig` handler (lines 7617-7634)
+- `src/services/PlanningPanelProvider.ts` — removed `epic_prompt_template` and `epic_lock_columns` writes from `updateEpicConfig` handler (lines 3045-3060)
+
+### Validation Results
+
+- Compilation: skipped per session directive
+- Automated tests: skipped per session directive
+- Static verification: all enumeration touch-points confirmed via grep; no dangling references to removed modal; legacy key reads preserved; `updateColumnWithEpicCascade` method exists; `setKanbanProvider` wiring confirmed; `dispatchCustomPromptToRole` exists; `_filterDynamicColumns` confirmed safe (no column synthesis)
