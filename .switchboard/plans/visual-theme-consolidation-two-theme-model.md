@@ -182,3 +182,58 @@ None requiring external research. All claims are about this repo's CSS/config an
 ---
 
 **Recommendation: Send to Lead Coder** (complexity 7 — multi-file cross-cutting refactor with a clean-break enum removal, a non-obvious animation-rename side effect, and manual-only verification).
+
+---
+
+## Reviewer Pass (2026-06-25)
+
+Direct in-place reviewer-executor pass. Assessed the committed implementation (commit `239a82d "many fixes"`, working tree clean) against this plan's D1–D14 end-state. Per session directives: no compilation, no automated tests, no subagents, read-only git only.
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *Right. Seven phases, nine-ish files, the same delete-and-repaint smeared across three parallel clones that have a documented habit of drifting apart the moment you look away. This is exactly the kind of change that compiles green and ships a black-on-black tab into production because somebody edited five panels and forgot the sixth. So I went hunting for the corpse.*
+>
+> **The Pro carcass.** `grep -rn "afterburner-pro\|afterburner-professional" src/ package.json` — **zero**. Not one stray `theme-afterburner-pro` body block, not a limp `|| theme === 'afterburner-professional'` clinging on in `getEffectiveColourKanbanIcons()`, not a dead enum string in `package.json`. The JS handlers all collapsed to a clean `['theme-claudify', 'cyber-theme-enabled']` managed list. Fine. *Fine.* I wanted a survivor and there isn't one.
+>
+> **The animation landmine (Phase 6).** This was supposed to be where it all fell apart — duplicate `@keyframes pulse-green`, last-definition-wins, a second consumer at line 880 nobody named in the original plan. I counted the keyframes: **one** `pulse-green` (now line 559), the collider renamed back to `success-glow` (line 1045). `.status-dot` (545) and `.secondary-btn.success.feedback` (880) both resolve to the breathing pulse — *which is the D11 intent*, and there's a comment block at 1042–1044 admitting it on the record so the next reviewer doesn't "fix" it. `.action-btn.success` carries exactly **one** `animation: success-glow, sweep` (1097); the redundant twin from old line 1096 is gone. I hate that it's correct.
+>
+> **The dead-file trap (Phase 3.4).** Here's where I expected blood. `shared-tabs.css` is a *ghost* — `{{SHARED_TABS_CSS_URI}}` appears nowhere in any panel HTML, so `PlanningPanelProvider.ts:400` is shouting the URI into a void. If the Claudify tab fix lived *only* there, the `#0a0a0a` rectangle would still be sitting on every active tab in production and nobody would know. But no — the live `body.theme-claudify .shared-tab-btn.active { background: var(--panel-bg); border-bottom-color: transparent; }` is inlined in **all six** panels, and the base active rule still hands terracotta text via `color: var(--accent-teal)` → `#D97757`. They *also* edited the dead file. Belt and braces on a corpse. Wasteful, not wrong.
+>
+> **What I actually found**, after all that: a `var(--text-secondary, #888888)` at `kanban.html:1364` and four `var(--text-secondary, #888)` fallbacks in planning/design — stale fallbacks that never fire because the variable is *always* defined as `#8C8C8C`. Dead pixels. A **NIT**, and a pre-existing one. The optional Phase 4.4 tidy of the `--text-primary: #E0E0E0` redeclarations wasn't done — but the plan said *optional*, so I can't even be angry about it. I came for a CRITICAL and I'm leaving with lint.
+
+### Stage 2 — Balanced synthesis
+
+The implementation is **complete and faithful to D1–D14**. Every load-bearing risk the plan flagged was handled correctly:
+
+- **Keep** (verified, no action): clean-break Pro removal (Phase 1 exit-check zero); Afterburner headings Hanken/no-glow with H1 white + H2–H6 `--accent-primary`, accent-element glows preserved (Phase 2); Claudify H1 GeistPixel/terracotta + H2–H6 Hanken/terracotta, `#1C1C1C` surface, `0.05` grid, **live inline** tab fix (Phase 3); cross-cutting `#8C8C8C` / border / black-card values (Phase 4); setup immersive parity with the `.cyber-scanlines` element actually present (Phase 5); the animation de-collision (Phase 6); enumDescriptions (Phase 7).
+- **Fix now:** nothing. No CRITICAL or MAJOR findings.
+- **Defer / leave:** the dead `#888`/`#888888` `--text-secondary` fallbacks (NIT, never render, pre-existing); the optional Phase 4.4 `--text-primary` tidy (explicitly optional). Neither is worth churn during a review pass; both can ride along with any future tab-CSS touch.
+
+### Code fixes applied
+
+**None.** No valid CRITICAL/MAJOR finding surfaced. The only findings are non-rendering NITs; fixing dead fallbacks or doing the explicitly-optional Phase 4.4 tidy would be scope creep, not correction.
+
+### Verification performed (grep/structural; compile & tests skipped per directive)
+
+- `grep -rn "afterburner-pro\|afterburner-professional" src/ package.json` → **0 matches** (Phase 1 exit check ✓).
+- `grep -rn "Poppins" src/` → **0 matches** (Phase 3.5 ✓; provider refs in `DesignPanelProvider.ts`/`PlanningPanelProvider.ts` also cleaned. Loose `Poppins-*.woff2` remain only under `designs/` — prototype dir, out of scope).
+- `themeBodyClass.ts`: `getThemeBodyClass()` + `getEffectiveColourKanbanIcons()` key off `afterburner`/`claudify` only ✓.
+- `--text-secondary: #8C8C8C` in all 6 panels ✓; `--border-color` (`#222222` impl / `#333333` else) + `--border-bright` (`#555555` kanban / `#444444` else) ✓.
+- `.kanban-card` black/grey gradient, teal `border-left` removed, hover bloom (`kanban.html:890`) + selected glow (`1345`) intact ✓.
+- Grids neutral grey across the 3 immersive clones + setup (body `0.04`, pane `0.08`, Claudify `0.05`) ✓; CRT sweep accent wash intentionally retained ✓.
+- `implementation.html`: one `@keyframes pulse-green` (559), `success-glow` restored (1045), single `animation: success-glow, sweep` (1097); `.secondary-btn.success.feedback` (880) → breathing pulse (D11 intent) ✓. `implementation.html` has no `.cyber-scanlines` (stays plain) ✓.
+- Phase 3.4 tab fix present in the **live inline** CSS of all 6 panels (not just the dead `shared-tabs.css`) ✓.
+
+### Findings summary
+
+| Severity | Finding | Location | Disposition |
+| :--- | :--- | :--- | :--- |
+| NIT | Stale `var(--text-secondary, #888888)` fallback (never renders; var always defined) | `kanban.html:1364` | Leave — dead, pre-existing |
+| NIT | Stale `var(--text-secondary, #888)` fallbacks | `planning.html:2476,2512`; `design.html:2514,2550` | Leave — dead, pre-existing |
+| NIT | Optional Phase 4.4 tidy not performed (`--text-primary: #E0E0E0` redeclarations remain) | all 6 panels | Leave — plan marked it optional |
+| OBS | Dead `shared-tabs.css` edited in parallel with live inline copies | `shared-tabs.css:67–76` | No action — harmless; defensive if ever wired up |
+
+### Remaining risks
+
+- **Manual-only verification.** No automated coverage for webview CSS; the per-theme/per-panel visual checks in the Verification Plan still need a VSIX install run by the user (compile & tests were skipped this pass per directive). Structural/grep verification is green; pixel-level confirmation (e.g. Claudify tab truly black-on-black, breathing pulse vs ring on the secondary button) remains a human eyeball check.
+- **Drift dormant, not eliminated.** The three parallel clones were reconciled correctly *this time*, but D4 keeps them as copies — the next per-panel edit reintroduces the same omission-drift risk. Not a defect of this change.

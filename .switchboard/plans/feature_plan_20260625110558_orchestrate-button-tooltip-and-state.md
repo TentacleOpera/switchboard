@@ -182,3 +182,50 @@ Note the active tooltip uses "attempts to dispatch" (not "dispatches") because t
 ---
 
 **Recommendation:** Complexity 4/10 → **Send to Coder**. Three-file change with established patterns, no new architecture, safe fallback behavior. The main attention points are the placement of the `await` (before the guard) and the webview assignment (before the error check) — both documented above.
+
+---
+
+## Review Pass — 2026-06-25
+
+**Reviewer:** In-place adversarial review (Grumpy Principal Engineer → Balanced synthesis).
+
+### Files Changed (verified in source)
+
+| File | Lines | Change |
+|------|-------|--------|
+| `src/services/KanbanProvider.ts` | 3131-3148 | New `isOrchestratorAvailable` method after `dispatchEpicOrchestration` |
+| `src/services/PlanningPanelProvider.ts` | 2544-2548, 2560, 2564 | `orchestratorAvailable` computed before guard; added to postMessage + error branch |
+| `src/webview/project.js` | 164, 288, 315, 1436 | State var, handler assignment before error check, meta-bar re-render, conditional button style+tooltip |
+
+### Findings by Severity
+
+| Severity | Finding | Location | Status |
+|----------|---------|----------|--------|
+| CRITICAL | (none) | — | — |
+| MAJOR | (none) | — | — |
+| NIT | Overlay "Send to Orchestrator" button (`btn-epic-orchestrate-send`) still has hardcoded teal border — UX inconsistency with the dimmed meta-bar button, but out of this plan's scope | `src/webview/project.html:1623` | Deferred — separate follow-up |
+| NIT | Inline `title`/`style` ternary produces a ~450-char line — ugly but consistent with existing `renderEpicMetaBar` conventions | `src/webview/project.js:1436` | Not worth fixing |
+
+### Fixes Applied
+
+None — no CRITICAL or MAJOR findings. The implementation is a faithful, correct execution of the plan.
+
+### Validation Results (static verification — compilation/tests skipped per session directives)
+
+- ✅ All 6 planned change sites present and correctly placed.
+- ✅ `await isOrchestratorAvailable()` computed BEFORE the request guard (`PlanningPanelProvider.ts:2544-2549`) — stale messages caught by guard.
+- ✅ Webview `_orchestratorAvailable` assignment BEFORE `msg.error` early return (`project.js:288` before `293`) — error branch resets state to dimmed.
+- ✅ `isOrchestratorAvailable` null-safe on `_taskViewerProvider` (`KanbanProvider.ts:3139`).
+- ✅ Heuristic checks both visibility AND startup command (`KanbanProvider.ts:3142, 3144`).
+- ✅ `getVisibleAgents` default has `orchestrator: false` (`TaskViewerProvider.ts:3652`) — confirms default-dimmed behavior.
+- ✅ Error branch sends `orchestratorAvailable: false` (`PlanningPanelProvider.ts:2564`).
+- ✅ No `confirm()` gates introduced (grep: 0 matches in `project.js`) — project rule intact.
+- ✅ Button NOT disabled when dimmed — no `disabled` attribute; clicking still copies the prompt.
+- ✅ Tooltip text matches plan exactly (both active and inactive strings).
+- ✅ Method signatures match: `getVisibleAgents → Record<string,boolean>`, `getStartupCommands → Record<string,string>` (`TaskViewerProvider.ts:3636, 3558`).
+
+### Remaining Risks
+
+1. **Overlay button inconsistency (NIT, deferred):** The "Send to Orchestrator" button inside the orchestration overlay (`project.html:1623`) always renders teal regardless of orchestrator configuration. A user who clicks the dimmed meta-bar button sees a fully-active "Send" button in the overlay — slightly contradictory. Out of this plan's scope; recommend a follow-up plan to conditionally style `btn-epic-orchestrate-send` based on `_orchestratorAvailable`.
+2. **Heuristic vs. truth:** The availability check verifies configuration (visible + startup command) but not whether a terminal is currently running. The active tooltip hedges with "attempts to dispatch" — acceptable. The prompt is always copied as a fallback.
+3. **Legacy per-workspace state files:** `isOrchestratorAvailable()` is called without a `workspaceRoot`, so users on legacy per-workspace state files get `getVisibleAgents(undefined)` → defaults (`orchestrator: false`) → button always dimmed. The button still copies the prompt when clicked. Affects a shrinking minority of the install base; documented in the plan's Edge-Case Audit.
