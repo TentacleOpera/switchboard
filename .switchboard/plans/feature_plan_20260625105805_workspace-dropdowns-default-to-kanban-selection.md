@@ -297,3 +297,51 @@ Tests will be run separately by the user. No automated tests are included in thi
 ---
 
 **Recommendation:** Complexity 5 → **Send to Coder.**
+
+---
+
+## Reviewer Pass — 2026-06-25
+
+Direct in-place reviewer-executor pass. Implementation assessed against the plan; all changes A–F are present and faithful. One safe documentation fix applied; the remaining findings are design-acknowledged and left as-is with rationale.
+
+### Implementation verification (all present & correct)
+- **Change A** — `kanbanPlansReady` carries `kanbanWorkspaceRoot` (`PlanningPanelProvider.ts:2558`). ✓
+- **Change B** — `localDocsReady` carries it in both the success branch (`:6304`) and the error branch (`:6318`). ✓
+- **Change C** — `ticketsDefaultRoot` prefers `restoredRoot → kanbanRoot → allowedRoots[0] → allRoots[0]` (`:1705-1719`). ✓
+- **Change C2** — `constitutionFilesLoaded` carries it (`:3095`). ✓
+- **Change D** — `kanbanFilters`/`epicsFilters.workspaceRoot` seeded from the kanban root, validated against `_kanbanWorkspaceItems`, before `populateWorkspaceDropdowns()` (`project.js:301-309`). ✓
+- **Change D2** — `tuningWorkspaceFilter.value = currentWS` when set (`project.js:835-837`). ✓
+- **Change D3** — `_constitutionWsFilter`/`_systemWsFilter` seeded, validated against `msg.workspaces` (`project.js:451-458`). ✓
+- **Change E** — module-level `_kanbanDefaultRoot` (`planning.js:78`) + `resolveDocsWorkspaceFilter(items, kanbanRoot)` with `effectiveKanbanRoot = kanbanRoot !== undefined ? kanbanRoot : _kanbanDefaultRoot` (`:85-107`). All 4 call sites benefit: `:73`, `:2608` (passes root), `:2642` (online-docs race — uses cached fallback), `:3571`. ✓
+- **Change E2** — `handleLocalDocsReady` caches `_kanbanDefaultRoot` and passes the root (`planning.js:2605-2608`). ✓
+- **Change F** — `ticketsDefaultRoot` webview handler already consumes `msg.workspaceRoot` and guards restored state (`planning.js:4884-4897`); no edit required, as planned. ✓
+
+### Findings
+
+**Stage 1 (Grumpy Principal Engineer):**
+- *CRITICAL (alleged):* "`_kanbanDefaultRoot` is declared at line 78 but `resolveDocsWorkspaceFilter` is invoked at line 73 — temporal-dead-zone landmine, this will throw on load!" **→ Refuted.** `resolveDocsWorkspaceFilter` is a hoisted function *declaration*; its only init-time caller, `updateDropdown` via `registerWorkspaceDropdown`, is gated by `if (_workspaceItems.length > 0)` which is empty (`[]`) during synchronous module init. The function only runs after messages arrive, long after the `let` initializes. No TDZ hazard.
+- *MAJOR:* "An explicit **All Workspaces** ('') choice in the project.html Kanban/Epics/Constitution/System tabs is indistinguishable from 'unset', so the `if (!filter)` guard re-applies the kanban root on the *next* `kanbanPlansReady`/`constitutionFilesLoaded` — which fire on every tab switch and after every plan move/delete. The user's deliberate 'show everything' view silently snaps back to one workspace." **→ Valid behavior, but design-accepted (see Stage 2).**
+- *NIT:* `this._kanbanProvider?.getCurrentWorkspaceRoot() || null` is copy-pasted at 4 provider sites; the inline default-application block is near-duplicated between `project.js:301-308` and `:451-458`. DRY, not a defect.
+- *NIT:* the `resolveDocsWorkspaceFilter` header comment claimed "Default is the first workspace" and never mentioned the new kanban-default branch — stale the moment Change E landed.
+
+**Stage 2 (Balanced synthesis):**
+- *Keep:* every change A–F as implemented. The provider→webview message plumbing, the `_kanbanDefaultRoot` module variable solving the `onlineDocsReady` overwrite race, and the docs/tickets override-preservation (persisted `docs.root`/`tickets.root` with the `restored === ''` distinction) are all correct.
+- *Fix now (applied):* the stale `resolveDocsWorkspaceFilter` comment — updated to document the real resolution order (restored ⟶ kanban ⟶ first-workspace).
+- *Defer (by design):* the project.html '' All-Workspaces re-default. The plan's **Goal** explicitly wants these dropdowns to "default to that same workspace on panel **open/refresh**," and the Side-Effects audit states the project tabs "are all scoped to the same kanban workspace conceptually." Properly distinguishing explicit-'' from unset would require per-filter "user-touched" state and would, by design, *stop* the tabs from following a subsequent Kanban-panel workspace switch — directly contradicting the Goal. The `if (!filter)` guard is therefore the plan author's intended trade-off, not a regression to patch. Non-empty in-session choices *are* preserved (the filter var holds them across refresh). planning.js docs, which has persisted state, correctly preserves '' via `restored === ''`. Left unchanged intentionally.
+- *Defer (cosmetic):* the DRY nits — not worth the churn/risk in a 6000-line webview file.
+
+### Files changed this pass
+- `src/webview/planning.js` — corrected the stale `resolveDocsWorkspaceFilter` header comment to describe the restored → kanban → first-workspace resolution order. No logic change.
+
+### Validation results
+Per session directives: compilation and automated tests skipped (run separately by the user). Static checks (read-only grep) performed:
+- `kanbanWorkspaceRoot` present in all 3 files — provider sends at `:2558/:3095/:6304/:6318`; project.js consumes at `:301/:451`; planning.js consumes at `:2605/:2608`. ✓
+- `_kanbanDefaultRoot` declared (`:78`), set (`:2606`), read (`:90`). ✓
+- `tuningWorkspaceFilter.value` set in `populateWorkspaceDropdowns()` (`project.js:836`). ✓
+- `getCurrentWorkspaceRoot(): string | null` confirmed (`KanbanProvider.ts:716`); `|| null` normalization is appropriate.
+- `_kanbanProvider` wired before any webview message (`extension.ts:852`). ✓
+
+### Remaining risks
+1. **project.html '' = All-Workspaces re-default (design-accepted):** selecting "All Workspaces" in the Kanban/Epics/Constitution/System tabs reverts to the kanban workspace on the next refresh/tab-switch. Consistent with the plan's "track the kanban workspace on refresh" intent. If users later complain, the fix is per-filter user-touched state — but that changes the documented follow-on-refresh behavior, so it should be a deliberate product decision, not a silent patch.
+2. **Tuning filter resets on every `kanbanPlansReady`** (no persisted state) — explicitly accepted in the plan's Side-Effects audit; strictly better than the prior always-"All Workspaces" behavior.
+3. **Behavior unverified at runtime** — compile/test/manual-VSIX steps were deferred per session directives; the manual checklist (plan steps 1–9) still needs an installed-VSIX pass by the user.

@@ -482,6 +482,139 @@
         return header;
     }
 
+    /**
+     * Build a subfolder header row with a "Link" button that copies the subfolder path.
+     * folderId is the `<index>:<relativePath>` node id; the backend handler resolves it.
+     */
+    function buildSubfolderLinkHeader(folderId, folderName, docCount) {
+        const subheader = document.createElement('div');
+        subheader.className = 'folder-subheader';
+        subheader.title = folderId;
+
+        const subLabel = document.createElement('span');
+        subLabel.textContent = `${folderName}${docCount != null ? ` (${docCount})` : ''}`;
+        subheader.appendChild(subLabel);
+
+        const subLinkBtn = document.createElement('button');
+        subLinkBtn.className = 'folder-link-btn';
+        subLinkBtn.textContent = 'Link';
+        subLinkBtn.title = 'Copy subfolder path to clipboard';
+        subLinkBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            vscode.postMessage({ type: 'linkToFolder', folderPath: folderId });
+        });
+        subheader.appendChild(subLinkBtn);
+
+        return subheader;
+    }
+
+    /**
+     * Render subfolder-level Link headers and their document cards, then root-level docs.
+     * Mirrors planning.js lines 2264-2322: group docs by parent folder id (derived from
+     * the doc node id by stripping the last path segment), match against the subfolder
+     * node ids, and render a subfolder Link header for each subfolder.
+     *
+     * @param {HTMLElement} docList   — container to append to
+     * @param {Array} docs            — document nodes for this source folder
+     * @param {Array} subfolderNodes  — folder nodes (kind==='folder') for this source folder
+     * @param {Function} createCardFn — (doc) => HTMLElement
+     * @param {boolean} showAll       — when true, render empty subfolders too (no-search mode)
+     */
+    function renderSubfolderGroups(docList, docs, subfolderNodes, createCardFn, showAll) {
+        const folderIdMap = new Map();
+        subfolderNodes.forEach(f => folderIdMap.set(f.id, f));
+
+        const docsByParentFolder = new Map();
+        const rootDocs = [];
+        docs.forEach(d => {
+            const docId = d.id || '';
+            const lastSlashIdx = docId.lastIndexOf('/');
+            const parentFolderId = lastSlashIdx > 0 ? docId.substring(0, lastSlashIdx) : null;
+
+            if (parentFolderId && folderIdMap.has(parentFolderId)) {
+                if (!docsByParentFolder.has(parentFolderId)) docsByParentFolder.set(parentFolderId, []);
+                docsByParentFolder.get(parentFolderId).push(d);
+            } else {
+                rootDocs.push(d);
+            }
+        });
+
+        subfolderNodes.forEach(folder => {
+            const folderDocs = docsByParentFolder.get(folder.id) || [];
+            if (folderDocs.length === 0 && !showAll) return;
+
+            docList.appendChild(buildSubfolderLinkHeader(folder.id, folder.name, folderDocs.length));
+            folderDocs.forEach(doc => {
+                docList.appendChild(createCardFn(doc));
+            });
+        });
+
+        rootDocs.forEach(doc => {
+            docList.appendChild(createCardFn(doc));
+        });
+    }
+
+    /**
+     * Shared folder-grouping renderer: top-level source-folder Link headers + subfolder
+     * Link headers + document cards. Used by all four design-tab render functions.
+     *
+     * @param {HTMLElement} docList      — container to append to
+     * @param {Array} docNodes           — filtered document nodes (kind==='document')
+     * @param {Array} folderNodes        — all folder nodes (kind==='folder') from the scan
+     * @param {Array} folderPaths        — configured source folder absolute paths
+     * @param {string} search            — lowercased search string (empty if no search)
+     * @param {Function} createCardFn    — (doc) => HTMLElement
+     */
+    function renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, createCardFn) {
+        const folderPathsList = folderPaths || [];
+
+        // Group folder nodes by sourceFolder
+        const foldersBySourceFolder = new Map();
+        (folderNodes || []).forEach(f => {
+            const sf = f.metadata?.sourceFolder;
+            if (!sf) return;
+            if (!foldersBySourceFolder.has(sf)) foldersBySourceFolder.set(sf, []);
+            foldersBySourceFolder.get(sf).push(f);
+        });
+
+        if (search) {
+            // Group filtered docs by sourceFolder; only show folders with matches.
+            const byFolder = new Map();
+            docNodes.forEach(d => {
+                const sf = d.metadata?.sourceFolder;
+                if (!sf) return;
+                if (!byFolder.has(sf)) byFolder.set(sf, []);
+                byFolder.get(sf).push(d);
+            });
+            [...byFolder.entries()].forEach(([sf, docs]) => {
+                docList.appendChild(buildFolderLinkHeader(sf, docs.length));
+                renderSubfolderGroups(docList, docs, foldersBySourceFolder.get(sf) || [], createCardFn, false);
+            });
+        } else {
+            // Show every configured folder, even empty ones.
+            const docsByFolder = new Map();
+            docNodes.forEach(d => {
+                const sf = d.metadata?.sourceFolder;
+                if (sf) {
+                    if (!docsByFolder.has(sf)) docsByFolder.set(sf, []);
+                    docsByFolder.get(sf).push(d);
+                }
+            });
+            folderPathsList.forEach(fp => {
+                docList.appendChild(buildFolderLinkHeader(fp, (docsByFolder.get(fp) || []).length));
+                renderSubfolderGroups(docList, docsByFolder.get(fp) || [], foldersBySourceFolder.get(fp) || [], createCardFn, true);
+            });
+            // Also surface any sourceFolders seen on docs that aren't in folderPaths
+            const configuredSet = new Set(folderPathsList);
+            docsByFolder.forEach((docs, sf) => {
+                if (!configuredSet.has(sf)) {
+                    docList.appendChild(buildFolderLinkHeader(sf, docs.length));
+                    renderSubfolderGroups(docList, docs, foldersBySourceFolder.get(sf) || [], createCardFn, true);
+                }
+            });
+        }
+    }
+
     // ── Tree Rendering: Design Docs ──
     function renderDesignDocs(rootEntry) {
         const { sourceId, nodes, folderPaths } = rootEntry;
@@ -513,65 +646,19 @@
         docList.dataset.sourceId = sourceId;
         treePaneDesign.appendChild(docList);
 
-        if (!nodes || nodes.length === 0) {
+        if ((!nodes || nodes.length === 0) && (!folderPaths || folderPaths.length === 0)) {
             docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No design system documents found.</div>';
             return;
         }
 
         let docNodes = (nodes || []).filter(n => n.kind === 'document');
+        const folderNodes = (nodes || []).filter(n => n.kind === 'folder');
         const search = String(state.designDocsSearch || '').trim().toLowerCase();
         if (search) {
             docNodes = docNodes.filter(d => (d.title || d.name || '').toLowerCase().includes(search));
         }
 
-        // Render folder Link headers and their document cards
-        const folderPathsList = folderPaths || [];
-        if (search) {
-            // Group filtered docs by sourceFolder; only show folders with matches.
-            const byFolder = new Map();
-            docNodes.forEach(d => {
-                const sf = d.metadata?.sourceFolder;
-                if (!sf) return;
-                if (!byFolder.has(sf)) byFolder.set(sf, []);
-                byFolder.get(sf).push(d);
-            });
-            [...byFolder.entries()].forEach(([sf, docs]) => {
-                docList.appendChild(buildFolderLinkHeader(sf, docs.length));
-                docs.forEach(node => {
-                    docList.appendChild(createDesignDocCard(node, sourceId));
-                });
-            });
-        } else {
-            // Show every configured folder, even empty ones.
-            const countByFolder = new Map();
-            const docsByFolder = new Map();
-            docNodes.forEach(d => {
-                const sf = d.metadata?.sourceFolder;
-                if (sf) {
-                    countByFolder.set(sf, (countByFolder.get(sf) || 0) + 1);
-                    if (!docsByFolder.has(sf)) docsByFolder.set(sf, []);
-                    docsByFolder.get(sf).push(d);
-                }
-            });
-            folderPathsList.forEach(fp => {
-                docList.appendChild(buildFolderLinkHeader(fp, countByFolder.get(fp) || 0));
-                const docs = docsByFolder.get(fp) || [];
-                docs.forEach(node => {
-                    docList.appendChild(createDesignDocCard(node, sourceId));
-                });
-            });
-            // Also surface any sourceFolders seen on docs that aren't in folderPaths
-            const configuredSet = new Set(folderPathsList);
-            countByFolder.forEach((cnt, sf) => {
-                if (!configuredSet.has(sf)) {
-                    docList.appendChild(buildFolderLinkHeader(sf, cnt));
-                    const docs = docsByFolder.get(sf) || [];
-                    docs.forEach(node => {
-                        docList.appendChild(createDesignDocCard(node, sourceId));
-                    });
-                }
-            });
-        }
+        renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, (doc) => createDesignDocCard(doc, sourceId));
     }
 
     function createDesignDocCard(node, sourceId) {
@@ -631,65 +718,19 @@
         docList.dataset.sourceId = sourceId;
         treePaneBriefs.appendChild(docList);
 
-        if (!nodes || nodes.length === 0) {
+        if ((!nodes || nodes.length === 0) && (!folderPaths || folderPaths.length === 0)) {
             docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No design briefs found.</div>';
             return;
         }
 
         let docNodes = (nodes || []).filter(n => n.kind === 'document');
+        const folderNodes = (nodes || []).filter(n => n.kind === 'folder');
         const search = String(state.briefsDocsSearch || '').trim().toLowerCase();
         if (search) {
             docNodes = docNodes.filter(d => (d.title || d.name || '').toLowerCase().includes(search));
         }
 
-        // Render folder Link headers and their document cards
-        const folderPathsList = folderPaths || [];
-        if (search) {
-            // Group filtered docs by sourceFolder; only show folders with matches.
-            const byFolder = new Map();
-            docNodes.forEach(d => {
-                const sf = d.metadata?.sourceFolder;
-                if (!sf) return;
-                if (!byFolder.has(sf)) byFolder.set(sf, []);
-                byFolder.get(sf).push(d);
-            });
-            [...byFolder.entries()].forEach(([sf, docs]) => {
-                docList.appendChild(buildFolderLinkHeader(sf, docs.length));
-                docs.forEach(node => {
-                    docList.appendChild(createBriefDocCard(node, sourceId));
-                });
-            });
-        } else {
-            // Show every configured folder, even empty ones.
-            const countByFolder = new Map();
-            const docsByFolder = new Map();
-            docNodes.forEach(d => {
-                const sf = d.metadata?.sourceFolder;
-                if (sf) {
-                    countByFolder.set(sf, (countByFolder.get(sf) || 0) + 1);
-                    if (!docsByFolder.has(sf)) docsByFolder.set(sf, []);
-                    docsByFolder.get(sf).push(d);
-                }
-            });
-            folderPathsList.forEach(fp => {
-                docList.appendChild(buildFolderLinkHeader(fp, countByFolder.get(fp) || 0));
-                const docs = docsByFolder.get(fp) || [];
-                docs.forEach(node => {
-                    docList.appendChild(createBriefDocCard(node, sourceId));
-                });
-            });
-            // Also surface any sourceFolders seen on docs that aren't in folderPaths
-            const configuredSet = new Set(folderPathsList);
-            countByFolder.forEach((cnt, sf) => {
-                if (!configuredSet.has(sf)) {
-                    docList.appendChild(buildFolderLinkHeader(sf, cnt));
-                    const docs = docsByFolder.get(sf) || [];
-                    docs.forEach(node => {
-                        docList.appendChild(createBriefDocCard(node, sourceId));
-                    });
-                }
-            });
-        }
+        renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, (doc) => createBriefDocCard(doc, sourceId));
     }
 
     function createBriefDocCard(node, sourceId) {
@@ -770,12 +811,13 @@
         docList.dataset.sourceId = sourceId;
         treePaneHtml.appendChild(docList);
 
-        if (!nodes || nodes.length === 0) {
+        if ((!nodes || nodes.length === 0) && (!folderPaths || folderPaths.length === 0)) {
             docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No HTML preview files found.</div>';
             return;
         }
 
         let docNodes = (nodes || []).filter(n => n.kind === 'document');
+        const folderNodes = (nodes || []).filter(n => n.kind === 'folder');
         docNodes = docNodes.filter(d => {
             const ext = d.name.substring(d.name.lastIndexOf('.')).toLowerCase();
             return ['.html', '.htm'].includes(ext);
@@ -786,59 +828,12 @@
             docNodes = docNodes.filter(d => (d.title || d.name || '').toLowerCase().includes(search));
         }
 
-        if (docNodes.length === 0) {
+        if (docNodes.length === 0 && (search || !folderPaths || folderPaths.length === 0)) {
             docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No matching HTML preview files found.</div>';
             return;
         }
 
-        // Render folder Link headers and their document cards
-        const folderPathsList = folderPaths || [];
-        if (search) {
-            // Group filtered docs by sourceFolder; only show folders with matches.
-            const byFolder = new Map();
-            docNodes.forEach(d => {
-                const sf = d.metadata?.sourceFolder;
-                if (!sf) return;
-                if (!byFolder.has(sf)) byFolder.set(sf, []);
-                byFolder.get(sf).push(d);
-            });
-            [...byFolder.entries()].forEach(([sf, docs]) => {
-                docList.appendChild(buildFolderLinkHeader(sf, docs.length));
-                docs.forEach(doc => {
-                    docList.appendChild(createHtmlDocCard(doc, sourceId));
-                });
-            });
-        } else {
-            // Show every configured folder, even empty ones.
-            const countByFolder = new Map();
-            const docsByFolder = new Map();
-            docNodes.forEach(d => {
-                const sf = d.metadata?.sourceFolder;
-                if (sf) {
-                    countByFolder.set(sf, (countByFolder.get(sf) || 0) + 1);
-                    if (!docsByFolder.has(sf)) docsByFolder.set(sf, []);
-                    docsByFolder.get(sf).push(d);
-                }
-            });
-            folderPathsList.forEach(fp => {
-                docList.appendChild(buildFolderLinkHeader(fp, countByFolder.get(fp) || 0));
-                const docs = docsByFolder.get(fp) || [];
-                docs.forEach(doc => {
-                    docList.appendChild(createHtmlDocCard(doc, sourceId));
-                });
-            });
-            // Also surface any sourceFolders seen on docs that aren't in folderPaths
-            const configuredSet = new Set(folderPathsList);
-            countByFolder.forEach((cnt, sf) => {
-                if (!configuredSet.has(sf)) {
-                    docList.appendChild(buildFolderLinkHeader(sf, cnt));
-                    const docs = docsByFolder.get(sf) || [];
-                    docs.forEach(doc => {
-                        docList.appendChild(createHtmlDocCard(doc, sourceId));
-                    });
-                }
-            });
-        }
+        renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, (doc) => createHtmlDocCard(doc, sourceId));
     }
 
     function createHtmlDocCard(doc, sourceId) {
@@ -886,12 +881,13 @@
         docList.dataset.sourceId = 'images-folder';
         treePaneImages.appendChild(docList);
 
-        if (!nodes || nodes.length === 0) {
+        if ((!nodes || nodes.length === 0) && (!folderPaths || folderPaths.length === 0)) {
             docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No image files found.</div>';
             return;
         }
 
         let docNodes = (nodes || []).filter(n => n.kind === 'document');
+        const folderNodes = (nodes || []).filter(n => n.kind === 'folder');
         docNodes = docNodes.filter(d => {
             const ext = d.name.substring(d.name.lastIndexOf('.')).toLowerCase();
             return ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(ext);
@@ -902,59 +898,12 @@
             docNodes = docNodes.filter(d => (d.title || d.name || '').toLowerCase().includes(search));
         }
 
-        if (docNodes.length === 0) {
+        if (docNodes.length === 0 && (search || !folderPaths || folderPaths.length === 0)) {
             docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No matching image files found.</div>';
             return;
         }
 
-        // Render folder Link headers and their document cards
-        const folderPathsList = folderPaths || [];
-        if (search) {
-            // Group filtered docs by sourceFolder; only show folders with matches.
-            const byFolder = new Map();
-            docNodes.forEach(d => {
-                const sf = d.metadata?.sourceFolder;
-                if (!sf) return;
-                if (!byFolder.has(sf)) byFolder.set(sf, []);
-                byFolder.get(sf).push(d);
-            });
-            [...byFolder.entries()].forEach(([sf, docs]) => {
-                docList.appendChild(buildFolderLinkHeader(sf, docs.length));
-                docs.forEach(doc => {
-                    docList.appendChild(createImageDocCard(doc));
-                });
-            });
-        } else {
-            // Show every configured folder, even empty ones.
-            const countByFolder = new Map();
-            const docsByFolder = new Map();
-            docNodes.forEach(d => {
-                const sf = d.metadata?.sourceFolder;
-                if (sf) {
-                    countByFolder.set(sf, (countByFolder.get(sf) || 0) + 1);
-                    if (!docsByFolder.has(sf)) docsByFolder.set(sf, []);
-                    docsByFolder.get(sf).push(d);
-                }
-            });
-            folderPathsList.forEach(fp => {
-                docList.appendChild(buildFolderLinkHeader(fp, countByFolder.get(fp) || 0));
-                const docs = docsByFolder.get(fp) || [];
-                docs.forEach(doc => {
-                    docList.appendChild(createImageDocCard(doc));
-                });
-            });
-            // Also surface any sourceFolders seen on docs that aren't in folderPaths
-            const configuredSet = new Set(folderPathsList);
-            countByFolder.forEach((cnt, sf) => {
-                if (!configuredSet.has(sf)) {
-                    docList.appendChild(buildFolderLinkHeader(sf, cnt));
-                    const docs = docsByFolder.get(sf) || [];
-                    docs.forEach(doc => {
-                        docList.appendChild(createImageDocCard(doc));
-                    });
-                }
-            });
-        }
+        renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, (doc) => createImageDocCard(doc));
     }
 
     function createImageDocCard(doc) {

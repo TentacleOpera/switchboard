@@ -8,7 +8,7 @@ To get the most out of Switchboard, follow the standard full-lifecycle pipeline:
 
 1. **Define your Project & Constitution**: Register a project and set its inviolate rules (Constitution) in the Project panel.
 2. **Setup your Requirements**: Set up your Design Doc / PRD and Notion links to feed design systems and specifications directly to agents.
-3. **Break into Epics & Plans**: Group tasks into Epics (supporting worktree routing) and individual plan files inside `.switchboard/plans/`.
+3. **Break into Epics & Plans**: Write individual plan files into `.switchboard/plans/`, and group related plans into Epics (Project Panel → EPICS tab) so they can be planned and shipped together — optionally inside an isolated git worktree. See section 5.
 4. **Orchestrate via the Board**: Drag and drop plans through Kanban columns to dispatch work to your CLI or copy prompts for IDE chat agents.
 5. **Multi-Repo Execution**: Coordinate agents across multiple codebases simultaneously using the Control Plane.
 6. **Self-Review**: Run the Reviewer agent to catch bugs and verify implementations against the plans and attached Design Doc.
@@ -68,3 +68,44 @@ In the Setup panel, click "ENABLE TRIAGE PIPELINE" under ClickUp or Linear to au
 
 ### Linear Remote Control
 Drive your board from your phone via the Linear app. Configure in the Kanban REMOTE tab — select boards, set ping mode (manual/constant), and ping frequency (30-120s). Moving a Linear issue between states dispatches the corresponding Kanban column agent; comments are routed to the current column's agent. Toggle from the toolbar remote control button. Config stored in the Kanban DB, not `settings.json`.
+
+---
+
+## 5. Orchestrating with Epics
+
+When a feature is too big for one plan, group its plans into an **Epic** so they move and ship as a unit. Manage epics in the **Project Panel → EPICS** tab.
+
+### Building an epic
+- Click **+ New Epic** (name + optional description; tick **Add to Kanban board** to show it as a card), or select a plan on the board and click **PROMOTE TO EPIC**.
+- Use **+ Subtask** to attach existing plans. Subtasks disappear from the main board (so you don't see duplicates) and travel with the epic when you drag it.
+- Epic cards are easy to spot — purple left border and an `EPIC · N subtasks` badge.
+
+### Three ways to run an epic
+Click the **?** button in the Epics tab for this same cheat-sheet:
+- **Step** — Drag the epic column-to-column on the board. Each column's agent batch-processes every subtask before the epic advances. Best when you want to watch each stage.
+- **Orchestrate** — Click **Orchestrate** on the epic. One Orchestrator agent runs the whole epic end-to-end with native subagents. Enable the **Orchestrator** role in the Kanban Agents tab to dispatch directly; otherwise the button just copies the assembled prompt for you to paste.
+- **Split (recommended)** — Drag the epic to the **Planner** column first so every subtask plan gets improved, *then* click **Orchestrate** to hand the polished epic to the Orchestrator. You get better plans *and* coordinated implementation.
+
+### Worktree isolation
+Bind an epic to its own git worktree/branch so its agents never collide with your main checkout. Manage worktrees from the Kanban **WORKTREES** panel — dispatched agents automatically `cd` into the worktree and switch to its branch, and you can merge or abandon the worktree when the epic is done. This is ideal for running several epics in parallel without branch churn.
+
+> Deleting an epic only detaches its subtasks (they return to the board) — it never destroys the underlying plans.
+
+---
+
+## 6. Design in the Loop (Stitch & Claude)
+
+The Design panel keeps UI work inside the IDE so it can feed straight into plans and code. Two generation paths:
+
+### Google Stitch
+Generate and refine UI screens on the **STITCH** tab. Authenticate once with your Stitch API key or OAuth token (stored in VS Code `SecretStorage`), pick a sync destination folder, and download HTML/PNG output plus design tokens to hand off to coders.
+
+### Claude (claude.ai/design)
+The **CLAUDE** tab turns a claude.ai/design mockup into repo code:
+1. (Optional) Paste a `claude.ai/design` URL or project ID into the project field.
+2. Pick the target workspace/folder.
+3. Click **Copy import prompt** and paste it to a Claude agent (CLI or chat).
+
+The prompt instructs the agent to import the design into your repo **using the repo's existing components and styles**, listing your design projects if you didn't specify one, and running `/design-login` first if you're not authenticated. Nothing is stored in Switchboard — your Claude agent does the import. To automate it from the board, enable the **Claude Designer** agent role.
+
+Both tabs share the panel's folder browsing, **Link to Folder** buttons (copy a configured folder's path to the clipboard), HTML/image previews with zoom, and the **BRIEFS** / **DESIGN SYSTEM** tabs for reference docs.

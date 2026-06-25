@@ -78,10 +78,12 @@
     let _kanbanDefaultRoot = null;
 
     // NEW helper — single source of truth for the Docs tab workspace filter.
-    // Default is the first workspace, NOT "All Workspaces" (aggregate is a browse-only view).
-    // An explicit prior All-Workspaces choice ('') is still honored; only the *absence* of a
-    // selection defaults to a specific workspace. The backend omits unset keys entirely, so an
-    // empty string here means the user deliberately picked All Workspaces.
+    // Resolution order: (1) an explicit restored choice wins — including '' which means the
+    // user deliberately picked All Workspaces; (2) otherwise the Kanban panel's selected
+    // workspace (kanbanRoot arg, falling back to module-level _kanbanDefaultRoot) is used;
+    // (3) otherwise fall back to the first workspace, NOT "All Workspaces" (aggregate is a
+    // browse-only view). The backend omits unset keys entirely, so an empty string in the
+    // restored state means the user deliberately picked All Workspaces.
     function resolveDocsWorkspaceFilter(workspaceItems, kanbanRoot) {
         const items = workspaceItems || [];
         const panel = _restoredPanelState.panel || {};

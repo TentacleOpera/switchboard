@@ -17,7 +17,8 @@ There is nothing to install beyond the extension itself. If you already have you
 - **CLI & IDE agent pipeline** — Combine the strengths of chat-based agents (Windsurf, Cursor, Antigravity) and CLI-based tools (Claude Code, Gemini CLI, Copilot CLI).
 - **Spec-driven governance** — Inject project-wide rules (Constitution) automatically into every agent step.
 - **Multi-repo Control Plane** — Run a single board that orchestrates agents across multiple repositories with a shared local database.
-- **Design-in-the-loop** — Generate UIs with Google Stitch directly inside the IDE to feed requirements straight into plans and code.
+- **Design-in-the-loop** — Generate UIs with Google Stitch *or* import designs from Claude (claude.ai/design) directly inside the IDE to feed requirements straight into plans and code.
+- **Epics & worktrees** — Group related plans into Epics and run them three ways (step the board, hand to a single Orchestrator agent, or split planning from implementation), with optional git-worktree isolation per epic.
 - **PM tool sync** — Map plan states to ClickUp, Linear, and Notion in real time or on completion.
 
 ---
@@ -42,14 +43,20 @@ Commands:
 - `Reset Kanban Database` (`switchboard.resetKanbanDb`)
 Setting: `switchboard.kanban.controlPlaneRoot`
 
-### 3. Design in the Loop (Google Stitch)
-Generate design assets inside the Design panel using Google Stitch. Authenticate by entering your Stitch API key or OAuth access token directly in the Design panel — those credentials are held in VS Code's `SecretStorage`, never in `settings.json`.
+### 3. Design in the Loop (Google Stitch + Claude)
+The Design panel keeps UI generation inside the IDE so design output flows straight into your plans and code. It has six tabs: **STITCH**, **CLAUDE**, **BRIEFS**, **HTML PREVIEWS**, **IMAGES**, and **DESIGN SYSTEM**.
+
+**Google Stitch** — Generate and refine UI screens with Stitch. Authenticate by entering your Stitch API key or OAuth access token directly in the Design panel — those credentials are held in VS Code's `SecretStorage`, never in `settings.json`.
 Settings (`settings.json`):
 - `switchboard.stitch.authMode` (`apiKey` | `oauth`)
 - `switchboard.stitch.defaultProjectId`
 - `switchboard.stitch.defaultOutputFolder`
 - `switchboard.stitch.defaultModelId` (`GEMINI_3_FLASH` | `GEMINI_3_1_PRO`)
 - `switchboard.stitch.defaultCreativeRange` (`EXPLORE` | `REFINE` | `REIMAGINE`)
+
+**Claude (claude.ai/design)** — The CLAUDE tab bridges your workspace to Claude's design tool. Optionally enter a `claude.ai/design` URL or project ID, pick the target folder, then click **Copy import prompt** to get a ready-to-paste prompt that tells a Claude agent to import the design into your repo *using the repo's existing components and styles* (it runs `/design-login` first if needed). The tab also previews local HTML and image files with zoom/pan. No Anthropic API key is stored in Switchboard — the import is run by your Claude agent. The optional **Claude Designer** agent role automates this from the board.
+
+Both Stitch and Claude tabs share the Design panel's folder browsing, **Link to Folder** buttons (copy a configured folder's path to the clipboard), and **BRIEFS** / **DESIGN SYSTEM** infrastructure.
 
 ---
 
@@ -70,6 +77,8 @@ Configure roles:
 - **Acceptance Tester** — Validates finished work.
 - **Analyst** — General research.
 - **Ticket Updater** — Reads imported tickets and posts short triage verdicts (severity, area, recommended action) back to ClickUp/Linear as comments.
+- **Orchestrator** — Runs an entire Epic end-to-end with native subagents (off by default; enable in the Kanban Agents tab).
+- **Claude Designer** — Imports a design from claude.ai/design into the target folder using the repo's existing components and styles (off by default).
 
 You can add custom roles in the Setup panel.
 
@@ -114,7 +123,19 @@ Configure per column:
 
 ## Project Management & Sync
 
-Organize plans into **Projects** (mini-workspaces) and **Epics** (groups of plans, supports worktree dispatch routing).
+Organize plans into **Projects** (mini-workspaces) and **Epics** (groups of related plans with coordinated execution).
+
+### Epics
+An Epic groups several plans (its subtasks) so they can be planned and shipped together. Manage epics in the **Project Panel → EPICS** tab: **+ New Epic** to create one (with an optional "Add to Kanban board"), **+ Subtask** to attach existing plans, **Orchestrate** to hand the whole epic to an Orchestrator agent, and **Delete Epic** (subtasks are detached, never destroyed). You can also select a plan on the board and click **PROMOTE TO EPIC**.
+
+On the Kanban board, epic cards show a purple left border and an `EPIC · N subtasks` badge; their subtasks are hidden from the main board to avoid duplication and travel with the epic when you drag it (cascade move).
+
+**Three ways to run an epic** (see the `?` help in the Epics tab):
+- **Step** — Drag the epic column-to-column on the board; each column's agent batch-processes every subtask.
+- **Orchestrate** — Click **Orchestrate**; one Orchestrator agent runs the whole epic end-to-end with native subagents.
+- **Split (recommended)** — Drag the epic to the **Planner** column to improve every subtask plan, *then* **Orchestrate** to hand the improved epic to the Orchestrator to implement.
+
+**Worktree isolation** — An epic can be bound to a dedicated git worktree/branch so its agents work in isolation. Manage worktrees from the Kanban WORKTREES panel; dispatched agents `cd` into the worktree and switch to its branch automatically, and the worktree can later be merged or abandoned.
 
 ### ClickUp & Linear Sync
 Configure tokens and mappings in Setup.
@@ -211,7 +232,7 @@ Settings:
 - **Planning** (`switchboard.openPlanningPanel`) — Authoring interface.
 - **Project Panel** (`switchboard.openProjectPanel`) — Mini-workspaces, Epics, Constitution files.
   ![Project panel — Constitution](docs/TODO_project_panel.png)
-- **Design Panel** (`switchboard.openDesignPanel`) — Google Stitch interface.
+- **Design Panel** (`switchboard.openDesignPanel`) — Six tabs: STITCH (Google Stitch), CLAUDE (claude.ai/design import), BRIEFS, HTML PREVIEWS, IMAGES, DESIGN SYSTEM.
   ![Design panel — Stitch](docs/TODO_design_panel.png)
 - **Research / LOCAL DOCS Panel** — Manage local research, design system files, and Antigravity Brain artifacts.
   ![Research panel — Local Docs](docs/TODO_research_panel.png)

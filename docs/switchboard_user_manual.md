@@ -14,7 +14,7 @@
 6. [Pair Programming Mode](#6-pair-programming-mode)
 7. [Multi-Repo Control Plane](#7-multi-repo-control-plane)
 8. [Project Panel](#8-project-panel)
-9. [Design Panel (Google Stitch)](#9-design-panel-google-stitch)
+9. [Design Panel (Google Stitch + Claude)](#9-design-panel-google-stitch--claude)
 10. [Research / Local Docs Panel](#10-research--local-docs-panel)
 11. [PM Tool Sync](#11-pm-tool-sync)
 12. [NotebookLM Airlock](#12-notebooklm-airlock)
@@ -94,6 +94,8 @@ Switchboard ships with the following built-in agent roles (defined in `agentConf
 | `researcher` | Researcher | Research tasks. |
 | `splitter` | Splitter Agent | Splits large plans into sub-plans. |
 | `gatherer` | Context Gatherer | Gathers code context before planning. |
+| `orchestrator` | Orchestrator | Runs an entire Epic end-to-end with native subagents. Off by default — enable in the Kanban Agents tab to dispatch epics directly (otherwise **Orchestrate** copies the prompt). Defaults to a subagent-per-subtask policy and can optionally use a git worktree per plan. See §8 (Epics). |
+| `claude_designer` | Claude Designer | Imports a design from claude.ai/design into a target folder using the repo's existing components and styles. Off by default. See §9 (Design Panel → CLAUDE tab). |
 
 ### Custom Roles
 Add custom agents in the Setup panel. Each custom agent supports:
@@ -270,7 +272,25 @@ Open with `switchboard.openProjectPanel`.
 Mini-workspaces for organizing related plans.
 
 ### Epics
-Groups of plans. Supports worktree dispatch routing — agents can be dispatched to git worktrees associated with an epic.
+An **Epic** groups several related plans (its *subtasks*) so they can be planned and shipped as one coordinated unit. Epics are managed in the **EPICS** tab of the Project Panel and stored as files in `.switchboard/epics/`.
+
+**Creating and managing epics**
+- **+ New Epic** — Opens a dialog: *Epic Name* (required), *Description* (optional, markdown), and an *Add to Kanban board* checkbox (show the epic as a card immediately). Click **Create**.
+- **PROMOTE TO EPIC** (Kanban board) — Select a plan on the board and promote it; its file moves from `.switchboard/plans/` to `.switchboard/epics/` and it becomes an epic.
+- **+ Subtask** — Attach an existing plan to the selected epic. Subtasks are hidden from the main Kanban board (to avoid duplication) and reappear there if detached.
+- **Orchestrate** — Assemble the epic + all subtasks into an orchestrator prompt (preview modal with **Copy Prompt** / **Send to Orchestrator**).
+- **Delete Epic** — Deletes the epic only; its subtasks are **detached** (returned to the board), never destroyed.
+
+**Epic cards on the board** — Epic cards have a 4px purple left border, a faint purple tint, and an `EPIC · N subtasks` badge. Selecting one shows a purple glow (overriding the theme's normal selection color). Subtasks travel with the epic: dragging an epic to a new column cascades the move to every subtask.
+
+**Three ways to run an epic** (the **?** button in the Epics tab shows this cheat-sheet):
+1. **Step** — Drag the epic column-to-column on the board; each column's agent batch-processes every subtask before the epic advances.
+2. **Orchestrate** — Click **Orchestrate**; one Orchestrator agent runs the whole epic end-to-end with native subagents. Enable the **Orchestrator** role in the Kanban Agents tab to dispatch directly — otherwise the button copies the assembled prompt to paste manually.
+3. **Split (recommended)** — Drag the epic to the **Planner** column to improve every subtask plan, *then* click **Orchestrate** to hand the improved epic to the Orchestrator to implement.
+
+**Worktree dispatch routing** — An epic can be bound to a dedicated git worktree and branch so its agents work in isolation from your main checkout. Manage worktrees from the Kanban **WORKTREES** panel. Dispatched agents automatically `cd` into the worktree path and `git switch` to its branch before running; a worktree can later be marked `merged` (Switchboard removes it from disk) or `abandoned`. This makes it practical to run several epics in parallel without branch churn.
+
+Epic state is stored in the Kanban database (`plans.is_epic`, `plans.epic_id`, `plans.worktree_id`, `plans.worktree_status`, and the `worktrees` table — see §26).
 
 ### Constitution (Spec-Driven Governance)
 Set inviolate rules and invariants in the Project panel. Switchboard automatically injects them into Planner and Coder prompts using the verbatim header:
@@ -289,18 +309,38 @@ Settings: `switchboard.planner.designDocEnabled`, `switchboard.planner.designDoc
 
 ---
 
-## 9. Design Panel (Google Stitch)
+## 9. Design Panel (Google Stitch + Claude)
 
 Open with `switchboard.openDesignPanel`.
 
-Generate design assets inside the IDE using Google Stitch. Authenticate by entering your Stitch API key or OAuth access token directly in the Design panel — credentials are held in VS Code's `SecretStorage`, never in `settings.json`.
+The Design panel keeps UI generation inside the IDE so output feeds straight into plans and code. It has six tabs: **STITCH**, **CLAUDE**, **BRIEFS**, **HTML PREVIEWS**, **IMAGES**, and **DESIGN SYSTEM**. (For a control-by-control breakdown of every tab, see §27.)
 
-### Settings
+### STITCH tab — Google Stitch
+Generate and refine UI screens with Google Stitch. Authenticate by entering your Stitch API key or OAuth access token directly in the Design panel — credentials are held in VS Code's `SecretStorage`, never in `settings.json`. Output (HTML/PNG) and design tokens download to a chosen sync-destination folder.
+
+Settings:
 - `switchboard.stitch.authMode` — `apiKey` | `oauth`
 - `switchboard.stitch.defaultProjectId` — Default Stitch project ID
 - `switchboard.stitch.defaultOutputFolder` — Default folder for downloaded assets (relative to workspace root)
 - `switchboard.stitch.defaultModelId` — `GEMINI_3_FLASH` | `GEMINI_3_1_PRO` (default: `GEMINI_3_FLASH`)
 - `switchboard.stitch.defaultCreativeRange` — `EXPLORE` | `REFINE` | `REIMAGINE` (default: `EXPLORE`)
+
+### CLAUDE tab — Import from claude.ai/design
+The CLAUDE tab bridges your workspace to Claude's web design tool. It does not call an API or store a key — instead it generates a prompt that a Claude agent (CLI or chat) runs to import a design into your repo.
+
+Workflow:
+1. *(Optional)* Paste a `claude.ai/design` URL or project ID into the **claude.ai/design URL or ID (optional)** field.
+2. Select the target workspace from the workspace filter (falls back to the current workspace root).
+3. Click **Copy import prompt**. The copied prompt reads, roughly:
+   > Import a design from claude.ai/design into this repository, writing the implementation into `<folder>`, built with the repo's existing components and styles. *[If you gave a project: "Use the Claude Design project: `<ref>`." Otherwise: "First list my available claude.ai/design projects and ask me which one (and which screen) to import."]* If you're not logged in to Claude Design, run `/design-login` first.
+4. Paste the prompt to your Claude agent, which imports the design.
+
+The tab's sidebar browses configured folders of local HTML and image files; selecting one previews it (sandboxed iframe for HTML, image viewer for images) with a zoom toolbar (zoom in/out, reset, fit; hold **Space** + scroll/drag to pan & zoom). To automate the import from the Kanban board, enable the **Claude Designer** agent role (off by default; see §3).
+
+> **No Anthropic API key is stored in Switchboard.** Authentication happens inside your Claude agent via `/design-login`.
+
+### Folder management & Link to Folder
+Every folder-browsing tab (CLAUDE, BRIEFS, HTML PREVIEWS, IMAGES, DESIGN SYSTEM) uses a **Manage Folders** button to configure which folders are browsed, and a **Link** button on each folder header that copies that folder's path to the clipboard (handy for pasting into agent prompts). Folder paths are sourced from the `switchboard.research.*` settings (see §10).
 
 ---
 
@@ -1236,7 +1276,7 @@ Adversarial insight extraction and governance tuning:
 
 ### Design Panel (`design.html`)
 
-Hosted by `DesignPanelProvider`. Five tabs:
+Hosted by `DesignPanelProvider`. Six tabs:
 
 **STITCH Tab**
 Google Stitch integration for AI-powered UI generation:
@@ -1246,6 +1286,12 @@ Google Stitch integration for AI-powered UI generation:
 - **Preview Pane** — Screen preview with **DL HTML** / **DL PNG** download buttons, destination folder selector, **Close**.
 - **Refine Row** — Refine prompt input, creative range (Explore/Refine/Reimagine), **Apply Edit**, **+3 Variants** with aspect selection (Layout, Color, Images, Font, Text).
 - **Thumbnail Strip** — Scrollable screen thumbnails with collapse toggle.
+
+**CLAUDE Tab**
+Import a design from claude.ai/design into the repo (no API key stored — see §9):
+- **Controls strip** — Workspace filter, file search, **claude.ai/design URL or ID (optional)** input, **Copy import prompt** button (copies a ready-to-paste import prompt for a Claude agent).
+- **Sidebar** — Browse configured folders of HTML and image files. **Manage Folders** to configure; **Link** on each folder header to copy its path.
+- **Preview pane** ("Claude Previewer") — Renders the selected HTML file (sandboxed iframe) or image, with a zoom toolbar (zoom in/out, reset, fit; hold **Space** + scroll/drag to pan & zoom).
 
 **BRIEFS Tab**
 Design brief management:

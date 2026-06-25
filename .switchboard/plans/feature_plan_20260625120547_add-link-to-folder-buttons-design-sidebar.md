@@ -277,3 +277,77 @@ Repeat the same block in `renderBriefsDocs`, `renderHtmlDocs`, and `renderImages
 ## Recommendation
 
 **Complexity 4/10 → Send to Coder.** The work is a well-scoped parity port: additive frontend (one shared helper + four insertion points) plus one read-only backend handler that mirrors a proven one. The only non-trivial judgment call — root-agnostic multi-root validation — is now fully specified in the corrected handler above.
+
+---
+
+## Code Review (Reviewer Pass)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *Grumble.* Let me get my reading glasses. You said this was a "parity port." Parity means *matching the spec*, not "close enough, ship it."
+
+**[MAJOR] design.js — empty-state early returns nuke the entire reason this feature exists.**
+design.js:516, 634, 773, 789, 889, 905. Every single render function bails to an empty-state string the moment `nodes` (or, for HTML/Images, `docNodes` after extension filtering) is empty. Edge case #3 in *your own plan* says — and I quote — "The folder headers with Link buttons should still render for configured folders even when empty, so the user can copy a folder path before any docs exist." That is the *fresh-setup* scenario. The whole user pain is "tell agents where to write things." If the folder is empty, that's *exactly* when the user needs the Link button most — and you've hidden it behind a "No documents found" message. You implemented the happy path and gatekept the one path the plan called out as critical. Unacceptable.
+
+**[NIT] The plan's pseudocode would have double-rendered every doc card.**
+The plan's example appended folder headers *then* left the existing flat `docNodes.forEach` in place — which would have appended every card a second time. The implementer correctly caught this and replaced the flat iteration with grouped rendering (cards nested under their folder header). Good catch, but it means the implementation diverged from the written plan without the plan being updated. Document your deviations.
+
+**[NIT] `_handleLinkToFolder` is a faithful mirror — no complaints.**
+DesignPanelProvider.ts:3194–3250. Root-agnostic `allowedPaths` union across all four kinds and all roots? Present. Subfolder-id `^\d+:` handling? Present. `isWithinAllowed` containment with `p + path.sep` prefix-spoof guard? Present. `fs.existsSync` before clipboard write? Present. Error toast on failure? Present. This is the one part of this PR I don't want to throw out a window.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is:**
+- Backend handler (`_handleLinkToFolder`) — correct, safe, mirrors the proven planning handler.
+- `buildFolderLinkHeader` shared helper — clean, reused across all four tabs.
+- Grouped card rendering under headers — better UX than the plan's literal pseudocode and avoids the double-render bug.
+- CSS reuse — no stylesheet edits needed (verified present in design.html).
+
+**Fix now (CRITICAL/MAJOR):**
+- The six empty-state early returns that suppress folder headers when a folder is configured but has zero docs. Fix: gate the empty-state message on *both* no docs *and* no configured `folderPaths`; when `folderPaths` is non-empty, fall through to render headers (count `0`). For HTML/Images, preserve the "No matching" message during active search (search-collapse behavior) but allow the no-search empty-folder case to render headers.
+
+**Defer:** Nothing. Scope is tight and the only material issue is fixed.
+
+### Fixes Applied
+
+`src/webview/design.js` — six edits to the empty-state guards across all four render functions:
+- `renderDesignDocs` (line 516): guard now `(!nodes || nodes.length === 0) && (!folderPaths || folderPaths.length === 0)`.
+- `renderBriefsDocs` (line 634): same pattern.
+- `renderHtmlDocs` first guard (line 773): same pattern; second guard (line 789) now `docNodes.length === 0 && (search || !folderPaths || folderPaths.length === 0)` — preserves "No matching" during search, allows empty-configured-folder headers when no search.
+- `renderImagesDocs` first guard (line 889) and second guard (line 905): same as HTML.
+
+Net effect: a configured-but-empty folder now renders its Link header (count `0`) so the user can copy the path — satisfying edge case #3 — while the empty-state message still appears when there are genuinely no configured folders.
+
+### Subfolder Link Buttons (user-requested addition)
+
+Following user feedback ("there should be subfolder link all buttons"), subfolder-level Link buttons were added to all four design tabs. This mirrors `planning.js` lines 2264–2314, where each subfolder within a source folder gets its own `folder-subheader` row with a Link button.
+
+**New helper functions added to `src/webview/design.js`:**
+
+1. `buildSubfolderLinkHeader(folderId, folderName, docCount)` (line 489) — builds a `.folder-subheader` row with a `.folder-link-btn` that sends `vscode.postMessage({ type: 'linkToFolder', folderPath: folderId })` where `folderId` is the `index:relativePath` node id. The backend `_handleLinkToFolder` already handles this format via its `^\d+:` regex branch (DesignPanelProvider.ts:3218).
+
+2. `renderSubfolderGroups(docList, docs, subfolderNodes, createCardFn, showAll)` (line 523) — groups docs by their parent folder id (derived by stripping the last `/`-segment from the doc node id), matches against subfolder node ids, and renders a subfolder Link header + that subfolder's docs. Root-level docs (no matching parent subfolder) are rendered after all subfolder groups. When `showAll=true` (no-search mode), empty subfolders still render their Link header; when `showAll=false` (search mode), only subfolders with matching docs render.
+
+3. `renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, createCardFn)` (line 568) — shared top-level grouping renderer that replaces the four duplicated grouping blocks. Groups folder nodes by `metadata.sourceFolder`, then for each source folder: renders the top-level Link header (via `buildFolderLinkHeader`), then delegates to `renderSubfolderGroups` for subfolder-level headers and doc cards.
+
+**All four render functions refactored** to collect `folderNodes` (`kind === 'folder'`) and call `renderFolderGroupedDocs`:
+- `renderDesignDocs` (line 661): `renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, (doc) => createDesignDocCard(doc, sourceId))`
+- `renderBriefsDocs` (line 733): same pattern with `createBriefDocCard`
+- `renderHtmlDocs` (line 836): same pattern with `createHtmlDocCard`
+- `renderImagesDocs` (line 906): same pattern with `createImageDocCard`
+
+**Backend:** No changes needed — `_handleLinkToFolder` (DesignPanelProvider.ts:3194) already supports `index:relativePath` subfolder ids via its `^\d+:` regex branch, which joins the relative path against all allowed base folders and takes the first that exists on disk.
+
+**Data source verified:** All four `LocalFolderService` scanners (`_scanFolder` for Briefs at line 283, `_scanDesignFolder` for Design at line 1006, `_scanHtmlFolder` for HTML at line 545, `_scanImagesFolder` for Images at line 674) include folder nodes with `isFolder: true`, `id: ${folderIndex}:${relativePath}`, `name: entry.name`, `parentId`, and `sourceFolder: root`. The `_mapLocalFilesToTreeNodes` function (DesignPanelProvider.ts:388) maps these to `kind: 'folder'` tree nodes with `metadata.sourceFolder` preserved.
+
+### Validation Results
+
+- **Typecheck/compile:** SKIPPED per session directives. The edits are pure JS control-flow changes (no new identifiers that aren't locally scoped, no signature changes); `search`, `folderPaths`, `nodes`, and `sourceId` are already in scope at each call site (verified: destructured from `rootEntry` at the top of each function).
+- **Tests:** SKIPPED per session directives — to be run separately by the user.
+- **Static verification performed:** confirmed CSS classes exist in design.html (14 matches including `.folder-subheader`, `.folder-link-btn`); confirmed `_handleLinkToFolder` present and supports `^\d+:` subfolder ids (DesignPanelProvider.ts:3218); confirmed `buildFolderLinkHeader`, `buildSubfolderLinkHeader`, `renderSubfolderGroups`, and `renderFolderGroupedDocs` all wired correctly; confirmed all four render functions now collect `folderNodes` and call `renderFolderGroupedDocs`; confirmed all four `LocalFolderService` scanners emit `isFolder: true` folder nodes; confirmed no `window.confirm` introduced.
+
+### Remaining Risks
+
+- **Manual verification still required:** the user should confirm that (a) a configured-but-empty top-level folder shows its Link button, (b) subfolders within a configured folder each show their own Link button, (c) clicking a subfolder Link button copies the correct absolute subfolder path, and (d) search mode correctly hides subfolders with no matching docs.
+- **Flat subfolder rendering (not nested tree).** Subfolders render as a flat list under their parent source folder, not as a nested tree. This matches `planning.js`'s behavior. A doc in `subfolder/deeper/file.md` appears under the `deeper` subfolder header, not nested inside `subfolder`. If nested tree rendering is desired later, it would require a recursive version of `renderSubfolderGroups`.
+- **`dist/` untouched** per project rules.
