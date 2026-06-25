@@ -7377,6 +7377,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             const isSinglePromote = opts.singlePlanPromote === true;
             const firstTopic = selectedPlans[0]?.topic || '';
+            // Clear any stale empty-name error indicator from a prior open
+            if (nameInput) nameInput.style.borderColor = '';
             if (isSinglePromote) {
                 if (nameInput) nameInput.value = firstTopic;
                 if (titleText) titleText.textContent = 'Promote to Epic';

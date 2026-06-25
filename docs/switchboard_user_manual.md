@@ -13,7 +13,7 @@
 5. [Planning Tools & Workflows](#5-planning-tools--workflows)
 6. [Pair Programming Mode](#6-pair-programming-mode)
 7. [Multi-Repo Control Plane](#7-multi-repo-control-plane)
-8. [Project Panel](#8-project-panel)
+8. [Projects, Epics & Governance](#8-projects-epics--governance)
 9. [Design Panel (Google Stitch + Claude)](#9-design-panel-google-stitch--claude)
 10. [Research / Local Docs Panel](#10-research--local-docs-panel)
 11. [PM Tool Sync](#11-pm-tool-sync)
@@ -264,12 +264,34 @@ Run a single board that orchestrates agents across multiple repositories with a 
 
 ---
 
-## 8. Project Panel
+## 8. Projects, Epics & Governance
 
-Open with `switchboard.openProjectPanel`.
+This section covers **Projects**, **Epics**, the **Constitution**, and the **System** doc. They span two panels:
+- **Projects** (plan grouping + per-project PRD) are created and managed in the **Kanban panel** (`switchboard.openKanban`) — on the board's control strip and its **PROJECTS** tab.
+- **Epics, Constitution, and the System doc** are managed in the **Project Panel** (`switchboard.openProjectPanel`).
 
 ### Projects
-Mini-workspaces for organizing related plans.
+A **Project** is a workspace-scoped grouping of plans *and* the carrier of project-wide context (a PRD / spec). Use projects to slice one repo's board into areas (e.g. `frontend`, `backend`, `infra`) and to give every agent working in that area the same requirements.
+
+**Create a project (on the Kanban board)** — On the Kanban tab control strip, click **+ (Add Project)** and enter a name. The project is created immediately in the workspace's Kanban database.
+
+**Assign plans to a project** — Select one or more plans on the board, choose the target workspace/project in the **Workspace/Project Selector**, and click **ASSIGN**.
+
+**Filter / delete** — The Workspace/Project Selector filters the board to a single project (or "No Project"). The **Delete Project** icon button removes the selected project.
+
+**Per-project PRD (Product Requirements Document)** — Each project can have a PRD: a loose set of requirements respected across every plan in that project, independent of epics. Author it on the Kanban panel's **PROJECTS** tab — pick the project, write the requirements, and click **SAVE PRD**. It is stored at `.switchboard/projects/<project>/prd.md` (git-trackable; a path hint shows the exact file).
+
+**PROJECT CONTEXT toggle** — The **PROJECT CONTEXT** button on the Kanban control strip is off by default. When you turn it on, the active project's PRD is injected into **every dispatched prompt** — planner, lead, coder, reviewer, tester, and orchestrator — under the verbatim header:
+
+```
+PROJECT REQUIREMENTS (PRD):
+```
+
+For most roles the full PRD content is inlined; for the **Orchestrator** a link to the PRD file is passed instead (so the prompt stays slim and subagents read the file directly). This is the modern, per-project replacement for the older workspace-wide planner Design Doc setting (see *Append Design Doc / Legacy* below).
+
+**Projects vs. Epics** — A Project is a *persistent* organizational scope plus a shared spec; it has no run lifecycle. An **Epic** is an *executable* grouping of plans (its subtasks) with three run modes — see below. A plan can belong to a project and an epic at the same time.
+
+Project state is stored in the Kanban database: the `projects` table (`id`, `name`, `workspace_id`, `created_at`) and the `project` / `project_id` columns on `plans` (see §26).
 
 ### Epics
 An **Epic** groups several related plans (its *subtasks*) so they can be planned and shipped as one coordinated unit. Epics are managed in the **EPICS** tab of the Project Panel and stored as files in `.switchboard/epics/`.
@@ -302,8 +324,8 @@ The following are inviolate rules and invariants for this project:
 
 This ensures every agent-generated plan and code change respects your architectural guidelines, security policies, or style guides.
 
-### Append Design Doc
-Attach a Design Doc / PRD to all planner prompts for consistent context delivery. If you use the Google Drive desktop app, you can point to a local synced file so your agents always work from the latest requirements.
+### Append Design Doc (Legacy)
+Before per-project PRDs (above), context was attached workspace-wide and only to the **planner** prompt via these settings. They remain wired for back-compat, but for new work prefer the per-project PRD + **PROJECT CONTEXT** toggle, which applies to *all* roles. If you use the Google Drive desktop app, you can point a Design Doc link at a local synced file so agents always read the latest requirements.
 
 Settings: `switchboard.planner.designDocEnabled`, `switchboard.planner.designDocLink`, `switchboard.planner.designSystemDocEnabled`, `switchboard.planner.designSystemDocLink`
 
@@ -1185,22 +1207,30 @@ Collapsible accordion showing recent dispatch and autoban events. Each entry sho
 
 ### Kanban Board (`kanban.html`)
 
-The central orchestration panel, hosted by `KanbanProvider`. Eight tabs:
+The central orchestration panel, hosted by `KanbanProvider`. Nine tabs: KANBAN, PROJECTS, AGENTS, PROMPTS, AUTOMATION, REMOTE, WORKTREES, UAT, SETUP.
 
 **KANBAN Tab**
 The board itself with drag-and-drop columns. Controls strip:
-- **Workspace/Project Selector** — Filter board by workspace and project. **ASSIGN** button assigns selected plan(s) to the chosen workspace/project.
-- **EPIC** — Convert selected plans to an epic or manage an existing epic.
-- **+ (Add Project)** — Create a new project.
-- **Delete Project** — Remove a project (icon button).
+- **Workspace/Project Selector** — Filter the board by workspace and project. **ASSIGN** button assigns the selected plan(s) to the chosen workspace/project.
+- **PROMOTE TO EPIC** — Convert selected plans to an epic or manage an existing epic.
+- **+ (Add Project)** — Create a new project (prompts for a project name).
+- **Delete Project** — Remove the selected project (icon button).
+- **PROJECT CONTEXT** — Toggle (off by default). When on, the active project's PRD (authored on the PROJECTS tab) is injected into every dispatched prompt across all roles.
 - **Scan Folders** — Force immediate plan scan (`switchboard.triggerPlanScan`).
 - **AUTOBAN** — Start/stop the automation engine.
+- **Remote Control** — Start/stop Linear remote control.
 - **CLI Triggers** — Toggle between CLI terminal dispatch and clipboard prompt mode.
 - **Collapse Coders** — Toggle collapsed view for coder columns.
 - **Pair Programming Mode** dropdown — Select CLI Parallel / Hybrid / Full Clipboard.
 - **CHAT PROMPT** — Copy chat prompt (multi-plan if plans selected, otherwise general consultation).
 - Sub-bar: **Pause/Reset AUTOBAN timers**, status messages, worktree indicator.
 - Column headers: **+ (Add Plan)**, **Import from Clipboard** (multi-plan supported with `### PLAN N START` markers), **Backlog/New toggle** (CREATED column only), card count.
+
+**PROJECTS Tab**
+Authors the per-project **Product Requirements (PRD)** that the PROJECT CONTEXT toggle injects:
+- **Project dropdown** — Pick a project to edit (or "No projects — add one on the Kanban tab (+)").
+- **SAVE PRD** — Write the editor content to `.switchboard/projects/<project>/prd.md` (git-trackable). A path hint shows the exact file path.
+- **Editor** — Markdown textarea for the project's product requirements. See §8 (Projects).
 
 **AGENTS Tab**
 Configure agent visibility and CLI startup commands:
@@ -1223,6 +1253,9 @@ Per-role prompt customization:
 **AUTOMATION Tab**
 Automation panel for configuring AUTOBAN rules and timing per column. Includes batch size, complexity filter, routing mode, max sends per terminal, global session cap, and terminal pool management.
 
+**REMOTE Tab**
+Configure Linear Remote Control — select boards, sync mode (manual/constant), and ping frequency. See §30.
+
 **WORKTREES Tab**
 Manage git worktrees for epic-based dispatch routing. Create, list, and delete worktrees associated with epics.
 
@@ -1238,7 +1271,9 @@ Board-level configuration:
 
 ### Project Panel (`project.html`)
 
-Hosted by `PlanningPanelProvider` (project mode). Four tabs:
+Hosted by `PlanningPanelProvider` (project mode). Five tabs: KANBAN PLANS, EPICS, CONSTITUTION, SYSTEM, TUNING.
+
+> Note: Project *creation*, plan-to-project *assignment*, the **PROJECT CONTEXT** toggle, and the per-project **PRD** editor all live in the **Kanban panel** (`kanban.html`) — see its KANBAN and PROJECTS tabs above — not in this Project Panel. The Project Panel handles Epics, the Constitution, the System doc, and tuning.
 
 **KANBAN PLANS Tab**
 - **Workspace filter**, **Column filter** — Filter plans by workspace and Kanban column.
@@ -1249,10 +1284,11 @@ Hosted by `PlanningPanelProvider` (project mode). Four tabs:
 - Plan list with selection and preview.
 
 **EPICS Tab**
-- **Active Planning Epic** indicator with **Turn off** button.
-- **Workspace filter**, **Set as Active Planning Context**, **+ New Epic**.
-- Epic list pane with selection.
-- **New Epic modal** — Name, description, workspace assignment.
+- **Workspace filter**, **+ New Epic**, **?** (How to Run an Epic — 3 ways).
+- Epic list pane (sidebar) with a preview/edit pane.
+- Per-epic actions: **Orchestrate** (assemble + dispatch the epic orchestration prompt), **+ Subtask** (attach an existing plan), **Delete Epic** (detaches subtasks).
+- **New Epic modal** — Name, description, *Add to Kanban board* checkbox.
+- See §8 (Epics) for the full workflow.
 
 **CONSTITUTION Tab**
 - **Constitution Reference** indicator with **Turn off** button.
@@ -1264,6 +1300,9 @@ Hosted by `PlanningPanelProvider` (project mode). Four tabs:
 - **Delete** — Remove constitution.
 - **⚙ (Set Path)** — Change the constitution file path.
 - Constitution list pane with file selection.
+
+**SYSTEM Tab**
+Authors a **System reference document** (architecture / system notes) the same way as the Constitution tab — **Build via Planner**, **Copy Build Prompt**, **Edit** / **Save** / **Cancel** / **Delete**, with a document list pane and inline editor.
 
 **TUNING Tab**
 Adversarial insight extraction and governance tuning:

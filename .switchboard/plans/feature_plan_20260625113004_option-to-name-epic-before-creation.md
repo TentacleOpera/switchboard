@@ -249,3 +249,45 @@ case 'promoteToEpic': {
 ---
 
 **Recommendation:** Complexity 5/10 → **Send to Coder.**
+
+---
+
+## Code Review (Reviewer-Executor Pass — 2026-06-26)
+
+### Verdict
+**Implementation is faithful to the plan and ships.** All four changes are present and correct; the durability mechanism (DB topic + file `# H1` rewrite, verified against `extractTopic`) works as designed. One low-risk UX gap was fixed in-place. No CRITICAL or MAJOR findings.
+
+### Stage 1 — Grumpy Principal Engineer
+> *Adjusts monocle, sighs at the kanban board.*
+>
+> **[Resolved] The `alert()` ghost.** I came here SHARPENING MY KNIFE, fully expecting to find `alert('Epic name is required.')` lurking in the submit handler like it does in every other webview that's ever broken in this repo. The plan SCREAMED about it. And yet — `kanban.html:9522` — they actually did it: `nameInput.focus()` plus a red `borderColor`, no modal call in sight. Fine. FINE. I'm *delighted*, which is a feeling I resent.
+>
+> **[NIT → fixed] But the border never washed off.** `openEpicCreateModal()` set `nameInput.value` on every open and never once reset `style.borderColor`. So: clear the name, hit submit, get a blood-red border, hit Cancel, reopen — and the field greets you pre-filled with a perfectly valid topic *and a furious red border accusing you of a crime you did not commit*. The valid-submit path resets it (`:9530`); the reopen path forgot. Petty? Yes. The exact UX the plan obsessed over? Also yes. **Fixed.**
+>
+> **[NIT — noted, out of scope] The phantom `_regenerateEpicFile`.** The plan's Change 4 marched straight from `rename` to `_refreshBoard`. The CODE (`KanbanProvider.ts:7776`) sneaks in a `_regenerateEpicFile` the plan never mentioned. My pulse QUICKENED — "aha, an undocumented file write that'll clobber the `# H1` we just so carefully rewrote!" — and then I read it. `:8360`. It only splices a `## Subtasks` block between sentinel comments and preserves everything above, including our heading. It's also exactly what `createEpic` does (`:7876`). So it's not a rogue write, it's *consistency*. Annoyingly defensible.
+>
+> **[NIT — noted, cross-plan] The one-card "Group All Into Epic" two-face.** The submit handler branches on `subtaskPlanIds.length === 1`, full stop — it does NOT consult `opts.singlePlanPromote`. So the sibling "Group All Cards Into Epic" button (`:4914`), which always opens in CREATE mode with the description field proudly visible, will — if a column holds exactly ONE non-epic card — cheerfully dispatch `promoteToEpic` and feed your lovingly-typed description STRAIGHT INTO THE VOID. The modal says "Create Epic"; the wire says "promote." Functionally harmless, spiritually duplicitous. Belongs to the group-all plan, not this one.
+>
+> **[NIT — noted, pre-existing] Move-failure leaves a chimera.** If `fs.rename` throws (`:7771`), the DB `plan_file` reverts but `is_epic` stays `1` and the H1/topic stay rewritten — a plan that's an epic, sitting in `plans/`, now sporting a `## Subtasks` block. Pre-existing; the rename is a same-volume move into a dir `mkdir`'d one line earlier, so this is a comet-strike scenario. Left alone.
+
+### Stage 2 — Balanced Synthesis
+- **Keep:** Inline empty-name guard (no `alert`/`confirm` — compliant with CLAUDE.md), the DB-topic + `# H1` rewrite durability path (regex `/^#\s+.+$/m` matches `extractTopic` at `PlanFileImporter.ts:206` exactly), newline-stripping of the custom name, `effectiveTopic` slug derivation, deferred `selectedCards.clear()`, the optional title-flip (`epic-create-title`), and the `_regenerateEpicFile` call (consistent with `createEpic`; preserves the rewritten H1).
+- **Fixed now:** Stale red error border persisting across modal reopen.
+- **Defer / out of scope:** one-card group-all dispatch mismatch (belongs to the group-all plan); move-failure `is_epic` inconsistency (pre-existing, vanishingly rare).
+
+### Fixes Applied
+- `src/webview/kanban.html` (`openEpicCreateModal`, ~line 7381): added `if (nameInput) nameInput.style.borderColor = '';` so each modal open clears any stale empty-name error indicator.
+
+### Validation
+- Per session directives: **compilation skipped**, **automated tests skipped** (run separately by the user).
+- Static verification (read-only): confirmed all four plan changes present; `updateTopicByPlanFile`/`updatePlanFileByPlanId`/`getPlanByPlanId`/`updateEpicStatus`/`getSubtasksByEpicId` exist (`KanbanDatabase.ts`); `insertFileDerivedPlan` ON CONFLICT re-derives `topic` (`:1328-1329`) and `extractTopic` reads the first `# H1` (`:206`) — durability premise holds; `.modal-input` has `border: 1px solid var(--border-color)` (`:1581`) so the red error border is visible; no `alert(`/`confirm(` anywhere in the epic-create flow.
+
+### Findings by Severity
+- **CRITICAL:** none.
+- **MAJOR:** none.
+- **NIT (fixed):** stale red error border on modal reopen — `kanban.html:openEpicCreateModal`.
+- **NIT (noted, out of scope):** `_regenerateEpicFile` added beyond plan but safe/consistent (`KanbanProvider.ts:7776`); one-card group-all dispatches `promoteToEpic` and discards the description (`kanban.html:4914` + submit branch `:9534`); move-failure leaves `is_epic=1` half-state (`KanbanProvider.ts:7771`, pre-existing).
+
+### Remaining Risks
+- Single-card "Group All Cards Into Epic" silently discards the typed description and promotes in-place. Recommend the **group-all plan** either gate that button to ≥2 cards or have the submit handler key the dispatch on `opts.singlePlanPromote` instead of array length.
+- `fs.rename` failure mid-promotion leaves a half-promoted record (`is_epic=1` in `plans/`). Pre-existing; low probability.

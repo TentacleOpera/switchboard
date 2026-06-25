@@ -6,8 +6,8 @@ Switchboard is a full-lifecycle platform for managing AI agent teams. This guide
 
 To get the most out of Switchboard, follow the standard full-lifecycle pipeline:
 
-1. **Define your Project & Constitution**: Register a project and set its inviolate rules (Constitution) in the Project panel.
-2. **Setup your Requirements**: Set up your Design Doc / PRD and Notion links to feed design systems and specifications directly to agents.
+1. **Define your Project & Constitution**: Create a project on the Kanban board (**+ Add Project**), set repo-wide inviolate rules (Constitution) in the Project Panel, and write the project's requirements in its PRD (Kanban panel → PROJECTS tab).
+2. **Setup your Requirements**: Turn on **PROJECT CONTEXT** so the active project's PRD is injected into every agent prompt; optionally add Notion design-doc links for richer specs.
 3. **Break into Epics & Plans**: Write individual plan files into `.switchboard/plans/`, and group related plans into Epics (Project Panel → EPICS tab) so they can be planned and shipped together — optionally inside an isolated git worktree. See section 5.
 4. **Orchestrate via the Board**: Drag and drop plans through Kanban columns to dispatch work to your CLI or copy prompts for IDE chat agents.
 5. **Multi-Repo Execution**: Coordinate agents across multiple codebases simultaneously using the Control Plane.
@@ -25,9 +25,9 @@ During testing or exploration, use `/memo` to enter capture mode. Each message i
 ## 2. Setting Up Your Constitution & Requirements
 
 The Project Constitution is your spec-driven governance model. Instead of typing the same rules into every prompt:
-- Define rules in the Project panel. They are injected as inviolate invariants in every coding and review prompt.
-- Use the **Append Design Doc** feature to attach your product vision to all planner prompts. If you use the Google Drive desktop app, you can point to a local synced file so your agents always work from the latest requirements.
-- Set up a Notion design doc integration to fetch and cache PRDs directly.
+- Define rules in the Project Panel (CONSTITUTION tab). They are injected as inviolate invariants in every coding and review prompt.
+- **Use per-project PRDs for requirements.** Create a project on the Kanban board, write its requirements on the Kanban panel's **PROJECTS** tab (saved to `.switchboard/projects/<project>/prd.md`), and flip the **PROJECT CONTEXT** toggle on. The active project's PRD is then injected — under the header `PROJECT REQUIREMENTS (PRD):` — into *every* dispatched prompt (planner, lead, coder, reviewer, tester, orchestrator), not just the planner. This is the modern replacement for the legacy planner-only Design Doc setting.
+- Set up a Notion design doc integration to fetch and cache external PRDs directly.
 
 ---
 

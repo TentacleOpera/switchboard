@@ -145,3 +145,72 @@ Confirm the following decisions before implementation:
 ---
 
 **Recommendation:** Complexity 4 → **Send to Coder.**
+
+## Reviewer Pass (2026-06-26)
+
+### Implementation Status: COMPLETE
+
+Changes landed in commit `239a82d` ("many fixes" — bundled with several other plans). The changes specific to THIS plan are isolated to three methods in `src/services/TaskViewerProvider.ts`:
+
+| Method | Lines | Change |
+|--------|-------|--------|
+| `_isTerminalLive` | L5955-5983 | **New.** Liveness check via `_registeredTerminals` (exact → suffixed → normalized-key fallback) + `vscode.window.terminals` open-terminal match. |
+| `_getAgentNameForRoleGlobal` | L5985-6033 | **New.** Iterates `_filterMappedRoots(_getWorkspaceRoots())`, reads each root's `state.json`, collects first role match per root (terminals then chatAgents), applies liveness preference, returns first candidate if none live. |
+| `_getAgentNameForRole` | L6035-6073 | **Refactored.** Preferred-workspace lookup preserved as-is; on miss, delegates to `_getAgentNameForRoleGlobal(role, statePath)`. |
+
+No other files modified for this plan. All call sites (`_resolveAgentTerminalForPlan` L6084, `getAgentNameForRole` L7337, `askAgentTask` L5260, L15911, L18125) inherit the fix through the single choke point with no signature changes.
+
+### Stage 1 — Grumpy Principal Engineer Review
+
+*"Let me get my coffee and squint at this..."*
+
+**NIT-1 — Sixth copy of the find-terminal-by-name dance.** `_isTerminalLive` (L5955-5983) is the SIXTH near-identical "look up a terminal by name with exact → suffixed → normalized-key fallback" loop in this file (cf. L9910, L14955, L15449, L15496, L15949). I get it — the plan said "reuse the matching from `_attemptDirectTerminalPush`," and you did, by copy-pasting it. But at some point someone is going to fix a bug in one of these six copies and not the other five, and we'll be back here. Extract a `_findLiveTerminalByName(name): vscode.Terminal | undefined` helper and call it from all six sites. NOT blocking — the logic is correct — but the tech debt odometer just rolled over.
+
+**NIT-2 — Sync `existsSync` inside an async loop.** L5994 uses `fs.existsSync` (synchronous stat) before `fs.promises.readFile` (async) in the global fallback loop. For N=1-3 workspace folders this is invisible. A purist would wrap the readFile in try/catch and drop the existsSync entirely — the readFile already throws ENOENT on a missing file, which the catch block handles. Cosmetic. Not blocking.
+
+**NIT-3 — Silent catch blocks.** L6017 and L6063 swallow all errors with `// ignore and continue`. A corrupt `state.json` in workspace C is silently skipped with zero telemetry. The original code did the same, so this is consistent — but if a user reports "my planner terminal isn't found" and one of their `state.json` files has a syntax error, there is literally no log line to point at. Consider a `console.warn` in the catch. Not blocking; consistent with existing style.
+
+**Non-issue — `dispatchCustomPromptToRole` was modified by a sibling plan.** The plan states "no changes to call sites," and the commit DID modify `dispatchCustomPromptToRole` (L5267-5276) to add planner rotation. BUT that modification is from the `planner-rotation-all-dispatch-paths` plan bundled in the same commit, not this plan. The signature `(role, prompt, workspaceRoot) => Promise<boolean>` is preserved, and the global fallback remains reachable as the final fallback after rotation misses. No conflict with this plan's requirements. Noted for completeness.
+
+**Verdict on correctness:** The resolution order (preferred → other filtered roots → liveness preference → first candidate) exactly matches the plan's Dependencies item 1 and the liveness hardening from User Review item 2. The `skipStatePath` comparison uses resolved state-file paths (per the plan's Clarification), not raw roots — correct. Mapped children are excluded via `_filterMappedRoots` — correct. `state.chatAgents` is mirrored — correct. The preferred workspace is NOT liveness-checked (pre-existing behavior, User Review item 3) — correct. No confirm dialogs added — correct. I found **zero CRITICAL or MAJOR findings.** The implementation is faithful to the plan.
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Severity | Action |
+|---------|----------|--------|
+| NIT-1: Duplicated terminal-lookup pattern (6th copy) | NIT | **Defer.** Extracting a shared helper is a worthwhile refactor but out of scope for this bugfix. File a tech-debt note. |
+| NIT-2: Sync `existsSync` in async loop | NIT | **Defer.** Invisible at N=1-3. Could simplify to try/catch-only in a future pass. |
+| NIT-3: Silent catch blocks | NIT | **Defer.** Consistent with existing codebase style. A `console.warn` would help debuggability but is not required. |
+
+**No code fixes applied.** All findings are NITs with no material impact on correctness, safety, or the plan's stated requirements. The implementation satisfies every Proposed Changes item and every Edge-Case audit item.
+
+### Verification Results
+
+| Check | Result |
+|-------|--------|
+| Plan requirement: global fallback helper added | ✅ `_getAgentNameForRoleGlobal` L5985-6033 |
+| Plan requirement: wired into `_getAgentNameForRole` choke point | ✅ L6072 |
+| Plan requirement: `_filterMappedRoots` excludes mapped children | ✅ L5986 |
+| Plan requirement: `state.chatAgents` mirrored | ✅ L6009-6016 |
+| Plan requirement: liveness preference (User Review item 2) | ✅ L6024-6032 |
+| Plan requirement: skip already-searched root via state-path comparison | ✅ L5991 |
+| Plan requirement: no call-site signature changes | ✅ All callers unchanged |
+| Plan requirement: no plan-file path changes | ✅ Only terminal resolution broadened |
+| Plan requirement: no confirm dialogs | ✅ None added |
+| Type safety: `skipStatePath` accepts `string \| null` from `_resolveStateFilePath` | ✅ Signature `string \| null \| undefined` |
+| `_isTerminalLive` handles `_registeredTerminals === undefined` | ✅ L5956 guard |
+| `_isTerminalLive` falls back to `vscode.window.terminals` post-switch | ✅ L5974-5982 |
+| Compilation (`npm run compile`) | ⏭️ Skipped per session directive — user to run |
+| Automated tests | ⏭️ Skipped per session directive — user to run |
+| Manual behavioral tests (Verification Plan steps 1-8) | ⏭️ Pending user execution in multi-root workspace |
+
+### Files Changed (this plan)
+
+- `src/services/TaskViewerProvider.ts` — L5955-6073 (3 methods: `_isTerminalLive` new, `_getAgentNameForRoleGlobal` new, `_getAgentNameForRole` refactored)
+
+### Remaining Risks
+
+1. **Preferred-workspace stale entry** (documented, User Review item 3): if the kanban-selected workspace's `state.json` has a stale (closed-terminal) role entry, it shadows live foreign terminals and dispatch fails downstream with "terminal is not running." Pre-existing behavior, not a regression. A future hardening could liveness-check the preferred workspace too, but that would change current same-workspace semantics.
+2. **Tech debt: 6 duplicated terminal-lookup-by-name loops** (NIT-1). A bug fix in one copy won't propagate to the other five.
+3. **No automated test coverage** for `_getAgentNameForRoleGlobal`. The plan's Verification Plan item notes unit tests are optional; the dispatch path is conventionally tested manually. If added, stub `_getWorkspaceRoots`/`_filterMappedRoots`/`_resolveStateFilePath` and fixture `state.json` contents.
+4. **Manual verification steps 1-8 not yet executed** — require a multi-root VS Code workspace with live terminals, which is outside this review session's scope.
