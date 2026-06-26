@@ -14,6 +14,7 @@ export interface LocalFolderConfig {
 export interface LocalFolderPathsConfig {
     localFolderPaths: string[];
     htmlFolderPaths: string[];
+    planningHtmlFolderPaths: string[];   // independent from htmlFolderPaths (Design panel)
     claudeFolderPaths: string[];
     designFolderPaths: string[];
     ticketsFolderPaths: string[];
@@ -93,6 +94,7 @@ export class LocalFolderService {
             if (!parsed) return {
                 localFolderPaths: [],
                 htmlFolderPaths: [],
+                planningHtmlFolderPaths: [],
                 claudeFolderPaths: [],
                 designFolderPaths: [],
                 ticketsFolderPaths: [],
@@ -104,6 +106,7 @@ export class LocalFolderService {
             return {
                 localFolderPaths: parsed.localFolderPaths || [],
                 htmlFolderPaths: parsed.htmlFolderPaths || [],
+                planningHtmlFolderPaths: parsed.planningHtmlFolderPaths || [],
                 claudeFolderPaths: parsed.claudeFolderPaths || [],
                 designFolderPaths: parsed.designFolderPaths || [],
                 ticketsFolderPaths: parsed.ticketsFolderPaths || [],
@@ -116,6 +119,7 @@ export class LocalFolderService {
             return {
                 localFolderPaths: [],
                 htmlFolderPaths: [],
+                planningHtmlFolderPaths: [],
                 claudeFolderPaths: [],
                 designFolderPaths: [],
                 ticketsFolderPaths: [],
@@ -165,6 +169,7 @@ export class LocalFolderService {
                 const cfg: LocalFolderPathsConfig = {
                     localFolderPaths: parsed.localFolderPaths || [],
                     htmlFolderPaths: parsed.htmlFolderPaths || [],
+                    planningHtmlFolderPaths: parsed.planningHtmlFolderPaths || [],
                     claudeFolderPaths: parsed.claudeFolderPaths || [],
                     designFolderPaths: parsed.designFolderPaths || [],
                     ticketsFolderPaths: parsed.ticketsFolderPaths || [],
@@ -180,6 +185,7 @@ export class LocalFolderService {
         return {
             localFolderPaths: [],
             htmlFolderPaths: [],
+            planningHtmlFolderPaths: [],
             claudeFolderPaths: [],
             designFolderPaths: [],
             ticketsFolderPaths: [],
@@ -500,6 +506,76 @@ export class LocalFolderService {
         title?: string;
     }>> {
         const folderPaths = this.getClaudeFolderPaths();
+        if (folderPaths.length === 0) { return []; }
+
+        const items: Array<{
+            id: string;
+            name: string;
+            relativePath: string;
+            isFolder?: boolean;
+            parentId?: string;
+            sourceFolder: string;
+            title?: string;
+        }> = [];
+
+        const seenAbsolutePaths = new Set<string>();
+
+        for (let i = 0; i < folderPaths.length; i++) {
+            const folderPath = folderPaths[i];
+            try {
+                const stat = await fs.promises.stat(folderPath);
+                if (!stat.isDirectory()) { continue; }
+            } catch { continue; }
+
+            await this._scanHtmlFolder(folderPath, folderPath, items, null, i, seenAbsolutePaths, 0);
+        }
+
+        return items;
+    }
+
+    // ── Planning HTML folder source ──
+    // Independent folder list for the Planning panel's HTML tab.
+    // Decoupled from htmlFolderPaths (Design panel) — reuses _scanHtmlFolder scanner.
+
+    getPlanningHtmlFolderPaths(): string[] {
+        const cfg = this._getOrLoadCachedConfig();
+        const seen = new Set<string>();
+        return (cfg.planningHtmlFolderPaths || [])
+            .map(p => this.resolveFolderPath(p))
+            .filter(p => p && !seen.has(p) && seen.add(p) as unknown as boolean);
+    }
+
+    async addPlanningHtmlFolderPath(folderPath: string): Promise<void> {
+        const cfg = await this.loadFolderPathsConfig();
+        const currentPaths = cfg.planningHtmlFolderPaths || [];
+        const resolvedInput = this.resolveFolderPath(folderPath);
+
+        const isDuplicate = currentPaths.some(p => this.resolveFolderPath(p) === resolvedInput);
+        if (!isDuplicate) {
+            cfg.planningHtmlFolderPaths = [...currentPaths, folderPath];
+            await this.saveFolderPathsConfig(cfg);
+        }
+    }
+
+    async removePlanningHtmlFolderPath(folderPath: string): Promise<void> {
+        const cfg = await this.loadFolderPathsConfig();
+        const currentPaths = cfg.planningHtmlFolderPaths || [];
+        const resolvedToRemove = this.resolveFolderPath(folderPath);
+
+        cfg.planningHtmlFolderPaths = currentPaths.filter(p => this.resolveFolderPath(p) !== resolvedToRemove);
+        await this.saveFolderPathsConfig(cfg);
+    }
+
+    async listPlanningHtmlFiles(): Promise<Array<{
+        id: string;
+        name: string;
+        relativePath: string;
+        isFolder?: boolean;
+        parentId?: string;
+        sourceFolder: string;
+        title?: string;
+    }>> {
+        const folderPaths = this.getPlanningHtmlFolderPaths();
         if (folderPaths.length === 0) { return []; }
 
         const items: Array<{

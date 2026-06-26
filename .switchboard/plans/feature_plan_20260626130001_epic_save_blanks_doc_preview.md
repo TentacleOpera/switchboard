@@ -171,3 +171,35 @@ No automated tests are run as part of this session (per session directive — th
 ## Recommendation
 
 Complexity is 4/10 → **Send to Coder**.
+
+---
+
+## Review Pass — 2026-06-26
+
+### Reviewer
+In-place reviewer pass (Grumpy Principal Engineer → Balanced synthesis → verification).
+
+### Files Changed (verified in commit `6c72aa4`)
+- `src/services/PlanningPanelProvider.ts` — `isTimestampedPlan` regex guard at lines 3619-3660; `currentBasename` hoisted to top of try block; rename gated on `isTimestampedPlan && h1Title`.
+- `src/webview/project.js` — `fetchEpicDocuments` postMessage added at line 790 (epics save branch); `!msg.error` guard added at line 387 (kanbanPlanPreviewReady epics branch).
+
+### Findings
+
+| # | Severity | Location | Description | Disposition |
+|---|----------|----------|-------------|-------------|
+| 1 | NIT | `project.js:387` | Silent error swallow on failed epic preview fetch — no `console.warn` when `msg.error` is set and not in edit mode | Defer — path unreachable after fix; add logging in future hardening |
+| 2 | NIT | `project.js:374` | Kanban branch has same unguarded `innerHTML = msg.content || ''` blanking pattern | Defer — explicitly scoped out (line 74); DB-backed plans don't desync; consistent hardening for future |
+
+**No CRITICAL findings. No MAJOR findings. No code fixes applied.**
+
+### Verification Results
+- **Regex validation**: Verified `/^feature_plan_\d{8}_\d{6}_/` against 146 `feature_plan_*` files and 5 epic files on disk. Correctly classifies all naming conventions (timestamped with `_\d{8}_\d{6}_` → rename; hyphen-slugs, `_\d{8}_` only, contiguous 14-digit → no rename).
+- **Control flow trace**: Single `saveFileContent` handler (line 3534); conflict path breaks before rename block (line 3582); watcher suppression unchanged (line 3613); auto-refresh dedupe bypassed by incremented requestId.
+- **Race condition audit**: `renderEpicsList()` (line 1473) reads `_epicSelectedPlan` for highlight only, never clears it. Three async post-save messages (`selectEpic`, `fetchKanbanPlans`, `fetchEpicDocuments`) have no ordering dependency.
+- **Compilation**: Skipped per session directive.
+- **Tests**: Skipped per session directive.
+
+### Remaining Risks
+1. **NIT-1 (deferred)**: If a future regression reintroduces epic preview fetch failures, the silent swallow will make debugging harder. Consider adding `console.warn('[epics] preview fetch failed:', msg.error)` in the `else` branch.
+2. **NIT-2 (deferred)**: The kanban branch blanking pattern (line 374) remains unguarded. If a future change breaks the DB row update on kanban rename (lines 3653-3657), kanban previews could blank the same way. Applying `!msg.error` there would be consistent hardening.
+3. **Pre-existing corrupted file**: `.switchboard/epics/feature_plan__random_plans_to_test_epic_feature.md` remains on disk (per migration rule — not auto-deleted). User can rename or delete manually.

@@ -85,7 +85,7 @@ Caveat for the developer's own machine: if you previously opened the Orchestrato
 - **Side Effects:**
   - **UI ↔ backend consistency:** A and B (webview) plus C (backend) must all change; verification includes inspecting a generated orchestrator prompt to confirm the directives are absent by default.
   - **Role isolation:** only `orchestrator:` lines change. Confirm `coder`/`lead`/`reviewer`/`intern` keep `skipCompilation`/`skipTests`/`switchboardSafeguards = true` and `planner`/`tester`/`analyst` keep their existing values.
-  - **Other orchestrator defaults out of scope:** `gitProhibition` (`KanbanProvider.ts:3324`, `sharedDefaults.js:272/38`), `cavemanOutput`, and `subagentPolicy: 'useSubagents'` remain unchanged; only the three named options flip.
+  - **Other orchestrator defaults out of scope:** `gitProhibition` (`KanbanProvider.ts:3349`, `sharedDefaults.js:272/38`), `cavemanOutput`, and `subagentPolicy: 'useSubagents'` remain unchanged; only the three named options flip.
   - **Existing test:** `src/test/orchestrator-prompt.test.js` is unaffected (passes flags explicitly — see Verification findings).
 - **Dependencies & Conflicts:**
   - **No migration / no shipped state:** orchestrator is unreleased (decided in Goal) — no DB migration. The change is a default flip, not data destruction, so it does not violate the migration rule even if treated conservatively.
@@ -131,14 +131,14 @@ orchestrator: { prompt: '', addons: { switchboardSafeguards: false, gitProhibiti
 - **Logic:** Flip the orchestrator fallback in each of the three `…ByRole` maps from `?? true` to `?? false`.
 - **Implementation:**
 ```ts
-// :3289 — skipCompilationByRole
+// :3314 — skipCompilationByRole
 orchestrator: orchestratorConfig?.addons?.skipCompilation ?? false,   // was ?? true
-// :3303 — skipTestsByRole
+// :3328 — skipTestsByRole
 orchestrator: orchestratorConfig?.addons?.skipTests ?? false,         // was ?? true
-// :3338 — switchboardSafeguardsByRole
+// :3363 — switchboardSafeguardsByRole
 orchestrator: orchestratorConfig?.addons?.switchboardSafeguards ?? false, // was ?? true
 ```
-- **Edge Cases:** Leave every other role's line in these three maps unchanged (e.g. `lead`/`coder`/`reviewer`/`intern` stay `?? true`; `planner`/`tester`/`analyst`/etc. keep their existing values). Do not touch `gitProhibitionByRole.orchestrator` (`:3324`, stays `?? true`) or `useSubagentsByRole.orchestrator` (`:3353`).
+- **Edge Cases:** Leave every other role's line in these three maps unchanged (e.g. `lead`/`coder`/`reviewer`/`intern` stay `?? true`; `planner`/`tester`/`analyst`/etc. keep their existing values). Do not touch `gitProhibitionByRole.orchestrator` (`:3349`, stays `?? true`) or `useSubagentsByRole.orchestrator` (`:3378`).
 
 ## Verification Plan
 
@@ -157,3 +157,49 @@ orchestrator: orchestratorConfig?.addons?.switchboardSafeguards ?? false, // was
 ---
 
 **Recommendation:** Complexity 2/10 → **Send to Intern.** Six role-isolated literal edits across two files, fully enumerated and code-verified, with no migration and no test changes.
+
+---
+
+## Reviewer Pass — Completed 2026-06-26
+
+### Stage 1: Grumpy Principal Engineer (adversarial)
+
+- **CRITICAL:** None. All three locations flipped in lockstep; UI and backend agree. No desync.
+- **MAJOR:** None. Role isolation verified across all three `…ByRole` maps — every non-orchestrator line unchanged. `gitProhibition.orchestrator` (`:3349`) stayed `?? true`. Seed-config siblings (`subagentPolicy: 'useSubagents'`, `ultracode: false`, `cavemanOutput: true`) preserved. Test file independent of defaults. No fourth location found via grep.
+- **NIT-1:** Plan's Location C line numbers (`:3289`/`:3303`/`:3338`) and `gitProhibitionByRole` (`:3324`) had drifted from the actual file (`:3314`/`:3328`/`:3363` and `:3349`) due to intervening commits. Edits landed in the correct place; references were stale. **Fixed in plan file.**
+
+### Stage 2: Balanced Synthesis
+
+- **Keep:** All six code edits — verified correct and role-isolated.
+- **Fix now:** NIT-1 — corrected stale line references in the plan file (Goal, Verification findings, Proposed Changes #3, Edge-Case Audit). No code changes required.
+- **Defer:** Nothing. Closed change.
+
+### Code Fixes Applied
+
+None. The implementation matched the plan's intent exactly. Only the plan file's documentation was corrected (stale line numbers).
+
+### Files Changed by Implementation (verified, not edited by reviewer)
+
+- `src/webview/sharedDefaults.js` — Location A (`:271`, `:275`, `:276`: `default: false`), Location B (`:38`: three `false` values in seed config)
+- `src/services/KanbanProvider.ts` — Location C (`:3314`, `:3328`, `:3363`: `?? false`)
+
+### Files Changed by Reviewer
+
+- `.switchboard/plans/feature_plan_20260626130004_orchestrator_default_checkboxes_off.md` — corrected stale line-number references only.
+
+### Validation Results
+
+- **Compilation:** Skipped per session instructions (run separately by user).
+- **Automated tests:** Skipped per session instructions (run separately by user). `src/test/orchestrator-prompt.test.js` confirmed independent of defaults via static review.
+- **Static verification (performed):**
+  - Location A: 3/3 defaults confirmed `false`. ✓
+  - Location B: 3/3 seed values confirmed `false`, siblings preserved. ✓
+  - Location C: 3/3 fallbacks confirmed `?? false`. ✓
+  - Role isolation: all non-orchestrator lines in the three maps unchanged. ✓
+  - `gitProhibition.orchestrator` (`:3349`) confirmed `?? true` (out of scope, preserved). ✓
+  - No fourth seeding location (grep-confirmed). ✓
+
+### Remaining Risks
+
+- **Dev-machine stale config:** A previously-persisted `roleConfig_orchestrator` with explicit `true` values will mask the new defaults locally (`??` only falls back on null/undefined). Documented in the plan's Goal caveat; not a production issue (role never shipped). Clear `switchboard.prompts.roleConfig_orchestrator` once or re-toggle the three boxes off to pick up new defaults locally.
+- **No other risks identified.** The change is a closed, six-edit default flip with no migration, no schema change, and no test impact.

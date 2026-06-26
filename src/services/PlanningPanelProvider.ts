@@ -102,6 +102,12 @@ export class PlanningPanelProvider {
     private _activePreviewDocId: string | null = null;
     private _activePreviewSourceFolder: string | null = null;
     private _activePreviewWorkspaceRoot: string | undefined;
+    private _planningHtmlFolderWatchers: vscode.FileSystemWatcher[] = [];
+    private _planningHtmlDocsDebounce: NodeJS.Timeout | undefined;
+    private _planningHtmlServers = new Map<string, { server: http.Server; port: number; timeoutId: NodeJS.Timeout }>();
+    private _planningHtmlServerCreationPromises = new Map<string, Promise<{ server: http.Server; port: number; timeoutId: NodeJS.Timeout }>>();
+    private _activePlanningHtmlPreview: { sourceFolder: string; docId: string; sourceId: string } | null = null;
+    private _saveTextDocListener: vscode.Disposable | undefined;
     private _watcherGeneration: number = 0;
     private _activeDesignDocSourceId: string | null = null;
     private _activeDesignDocId: string | null = null;
@@ -526,6 +532,7 @@ export class PlanningPanelProvider {
         // Watch the docs directory for changes and refresh imported docs list
         this._setupDocsFolderWatcher(workspaceRoot);
         this._setupLocalFolderWatchers();
+        this._setupPlanningHtmlFolderWatchers();
 
         this._setupAntigravityWatcher();
         this._setupKanbanPlansWatcher();
@@ -1178,7 +1185,7 @@ export class PlanningPanelProvider {
                     console.log('[PlanningPanel] Auto-refreshing active document:', filePath);
                     this._isAutoRefreshing = true;
                     try {
-                        if (this._activePreviewSourceId === 'local-folder' || this._activePreviewSourceId === 'html-folder') {
+                        if (this._activePreviewSourceId === 'local-folder' || this._activePreviewSourceId === 'html-folder' || this._activePreviewSourceId === 'planning-html-folder') {
                             // Re-fetch local doc or HTML doc
                             await this._handleFetchPreview(workspaceRoot, this._activePreviewSourceId, this._activePreviewDocId!, -1, this._activePreviewSourceFolder!);
                         } else if (this._activePreviewSourceId === 'kanban-plan') {
@@ -1339,6 +1346,322 @@ export class PlanningPanelProvider {
             processedHtml = processedHtml.replace(/<script(?![^>]*\bnonce=)(\s[^>]*)?>/gi, `<script nonce="${this._nonce}"$1>`);
         }
         return processedHtml;
+    }
+
+    // ── Planning HTML preview server infrastructure ──
+    // Serves planning-HTML-tab files over localhost so iframes have a real origin.
+    // Mirrors DesignPanelProvider's HTML server infra, scoped to _planningHtmlServers.
+
+    private _getMimeType(filePath: string): string {
+        const ext = path.extname(filePath).toLowerCase();
+        const mimeMap: Record<string, string> = {
+            '.html': 'text/html; charset=utf-8',
+            '.htm': 'text/html; charset=utf-8',
+            '.css': 'text/css; charset=utf-8',
+            '.js': 'application/javascript; charset=utf-8',
+            '.mjs': 'application/javascript; charset=utf-8',
+            '.json': 'application/json; charset=utf-8',
+            '.png': 'image/png',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.gif': 'image/gif',
+            '.svg': 'image/svg+xml; charset=utf-8',
+            '.ico': 'image/x-icon',
+            '.webp': 'image/webp',
+            '.woff': 'font/woff',
+            '.woff2': 'font/woff2',
+            '.ttf': 'font/ttf',
+            '.eot': 'application/vnd.ms-fontobject',
+            '.webmanifest': 'application/manifest+json',
+            '.xml': 'application/xml',
+            '.txt': 'text/plain; charset=utf-8',
+            '.pdf': 'application/pdf',
+        };
+        return mimeMap[ext] || 'application/octet-stream';
+    }
+
+    private async _getOrCreatePlanningHtmlServer(sourceFolder: string): Promise<{ server: http.Server; port: number; timeoutId: NodeJS.Timeout }> {
+        const existing = this._planningHtmlServers.get(sourceFolder);
+        if (existing) {
+            clearTimeout(existing.timeoutId);
+            existing.timeoutId = this._createPlanningHtmlServerTimeout(sourceFolder);
+            return existing;
+        }
+        const pendingPromise = this._planningHtmlServerCreationPromises.get(sourceFolder);
+        if (pendingPromise) {
+            return pendingPromise;
+        }
+        const creationPromise = this._createPlanningHtmlServer(sourceFolder);
+        this._planningHtmlServerCreationPromises.set(sourceFolder, creationPromise);
+        try {
+            return await creationPromise;
+        } finally {
+            this._planningHtmlServerCreationPromises.delete(sourceFolder);
+        }
+    }
+
+    private _createPlanningHtmlServer(sourceFolder: string): Promise<{ server: http.Server; port: number; timeoutId: NodeJS.Timeout }> {
+        const server = http.createServer((req, res) => {
+            this._handlePlanningHtmlServerRequest(req, res, sourceFolder);
+        });
+        return new Promise((resolve, reject) => {
+            server.listen(0, '127.0.0.1', () => {
+                const address = server.address() as { port: number };
+                const timeoutId = this._createPlanningHtmlServerTimeout(sourceFolder);
+                const entry = { server, port: address.port, timeoutId };
+                this._planningHtmlServers.set(sourceFolder, entry);
+                resolve(entry);
+            });
+            server.on('error', (err: any) => reject(err));
+        });
+    }
+
+    private _buildLocalhostUrl(serverEntry: { port: number }, sourceFolder: string, filePath: string): string {
+        const relativeUrlPath = path.relative(sourceFolder, filePath);
+        const urlPath = relativeUrlPath.split(path.sep).map(encodeURIComponent).join('/');
+        return `http://127.0.0.1:${serverEntry.port}/${urlPath}`;
+    }
+
+    private _handlePlanningHtmlServerRequest(req: http.IncomingMessage, res: http.ServerResponse, sourceFolder: string): void {
+        const parsedUrl = new URL(req.url || '/', `http://127.0.0.1`);
+        const requestedPath = decodeURIComponent(parsedUrl.pathname);
+
+        if (requestedPath === '/' || requestedPath === '') {
+            res.writeHead(403, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
+            res.end('Forbidden: directory listing not available');
+            return;
+        }
+
+        const resolvedPath = path.resolve(sourceFolder, requestedPath.substring(1));
+        const normalizedSource = path.normalize(sourceFolder).replace(/[\\/]+$/, '');
+        const normalizedResolved = path.normalize(resolvedPath);
+
+        if (!normalizedResolved.startsWith(normalizedSource + path.sep) && normalizedResolved !== normalizedSource) {
+            res.writeHead(403, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
+            res.end('Forbidden: path traversal denied');
+            return;
+        }
+
+        const pathParts = normalizedResolved.split(path.sep);
+        for (const part of pathParts) {
+            if (this._SERVER_DENY_LIST.some(denied => part === denied || part.startsWith(denied))) {
+                res.writeHead(403, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
+                res.end('Forbidden: access denied');
+                return;
+            }
+        }
+
+        const fs_node = require('fs');
+        fs_node.readFile(resolvedPath, (err: any, data: Buffer) => {
+            if (err) {
+                res.writeHead(404, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
+                res.end('Not Found');
+                return;
+            }
+            const mimeType = this._getMimeType(resolvedPath);
+            res.writeHead(200, { 'Content-Type': mimeType, 'Cache-Control': 'no-store' });
+            res.end(data);
+        });
+
+        const entry = this._planningHtmlServers.get(sourceFolder);
+        if (entry) {
+            clearTimeout(entry.timeoutId);
+            entry.timeoutId = this._createPlanningHtmlServerTimeout(sourceFolder);
+        }
+    }
+
+    private _createPlanningHtmlServerTimeout(sourceFolder: string): NodeJS.Timeout {
+        return setTimeout(() => {
+            const entry = this._planningHtmlServers.get(sourceFolder);
+            if (entry) {
+                entry.server.close();
+                this._planningHtmlServers.delete(sourceFolder);
+            }
+        }, 10 * 60 * 1000);
+    }
+
+    private async _buildAndSendPlanningHtmlPreview(opts: {
+        sourceId: string;
+        sourceFolder?: string;
+        docId: string;
+        requestId: number;
+        isAutoRefreshed?: boolean;
+    }): Promise<void> {
+        const { sourceId, sourceFolder, docId, requestId, isAutoRefreshed } = opts;
+        try {
+            if (!sourceFolder) throw new Error('sourceFolder is required');
+            const relativePath = docId.includes(':')
+                ? docId.substring(docId.indexOf(':') + 1)
+                : docId;
+
+            const allowedFolders = new Set<string>();
+            for (const root of this._getWorkspaceRoots()) {
+                try {
+                    const svc = this._getLocalFolderService(root);
+                    svc.getPlanningHtmlFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
+                } catch {}
+            }
+            const resolvedFolder = path.resolve(sourceFolder);
+            if (!allowedFolders.has(resolvedFolder)) {
+                throw new Error('sourceFolder is not a configured planning HTML folder');
+            }
+            const absPath = path.resolve(resolvedFolder, relativePath);
+            if (absPath !== resolvedFolder && !absPath.startsWith(resolvedFolder + path.sep)) {
+                throw new Error('Invalid file path');
+            }
+
+            const fileExt = path.extname(relativePath).toLowerCase();
+            const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(fileExt);
+            const isHtmlFile = fileExt === '.html' || fileExt === '.htm';
+
+            let fileContent = '';
+            let webviewUri: string | undefined;
+            if (isImage) {
+                webviewUri = this._panel?.webview.asWebviewUri(vscode.Uri.file(absPath)).toString();
+            } else {
+                fileContent = await fs.promises.readFile(absPath, 'utf8');
+                if (isHtmlFile) {
+                    webviewUri = this._panel?.webview.asWebviewUri(vscode.Uri.file(absPath)).toString();
+                }
+            }
+
+            let iframeSrc: string | undefined;
+            if (isHtmlFile) {
+                try {
+                    const serverEntry = await this._getOrCreatePlanningHtmlServer(resolvedFolder);
+                    iframeSrc = this._buildLocalhostUrl(serverEntry, resolvedFolder, absPath);
+                } catch {
+                    iframeSrc = undefined;
+                }
+            }
+
+            const fileTypeMap: Record<string, string> = {
+                '.json': 'json',
+                '.yaml': 'yaml', '.yml': 'yaml',
+                '.md': 'markdown', '.markdown': 'markdown', '.txt': 'markdown'
+            };
+            const fileType = isImage ? 'image' : (fileTypeMap[fileExt] || 'text');
+
+            this._panel?.webview.postMessage({
+                type: 'previewReady',
+                sourceId,
+                requestId,
+                content: isImage ? '' : fileContent,
+                docName: path.basename(relativePath),
+                filePath: absPath,
+                fileType,
+                isImage,
+                webviewUri,
+                iframeSrc,
+                htmlContent: isHtmlFile ? this._injectLocalCsp(fileContent) : undefined,
+                isAutoRefreshed: isAutoRefreshed || undefined
+            });
+        } catch (err: any) {
+            if (requestId === -1) return;
+            this._panel?.webview.postMessage({
+                type: 'previewError',
+                sourceId,
+                requestId,
+                error: err.message || String(err)
+            });
+        }
+    }
+
+    private async _sendPlanningHtmlDocsReady(): Promise<void> {
+        if (this._planningHtmlDocsDebounce) {
+            clearTimeout(this._planningHtmlDocsDebounce);
+        }
+        this._planningHtmlDocsDebounce = setTimeout(async () => {
+            this._planningHtmlDocsDebounce = undefined;
+            try {
+                const allRoots = this._getWorkspaceRoots();
+                const allFiles: any[] = [];
+                const seenFilePaths = new Set<string>();
+                const configuredFolderPathsByRoot: Record<string, string[]> = {};
+
+                for (const root of allRoots) {
+                    try {
+                        const localFolderService = this._getLocalFolderService(root);
+                        const folderPaths = localFolderService.getPlanningHtmlFolderPaths();
+                        configuredFolderPathsByRoot[root] = folderPaths;
+
+                        const files = await localFolderService.listPlanningHtmlFiles();
+                        for (const f of files) {
+                            const absPath = path.resolve(f.sourceFolder, f.relativePath);
+                            if (!seenFilePaths.has(absPath)) {
+                                seenFilePaths.add(absPath);
+                                allFiles.push({ ...f, _root: root });
+                            }
+                        }
+                    } catch {}
+                }
+
+                if (!this._panel) return;
+
+                this._panel.webview.postMessage({
+                    type: 'planningHtmlDocsReady',
+                    sourceId: 'planning-html-folder',
+                    folderPathsByRoot: configuredFolderPathsByRoot,
+                    nodes: this._mapLocalFilesToTreeNodes(allFiles),
+                    workspaceItems: this._buildKanbanWorkspaceItems()
+                });
+            } catch (err) {
+                this._panel?.webview.postMessage({
+                    type: 'planningHtmlDocsReady',
+                    sourceId: 'planning-html-folder',
+                    folderPathsByRoot: {},
+                    nodes: [],
+                    workspaceItems: this._buildKanbanWorkspaceItems(),
+                    error: String(err)
+                });
+            }
+        }, 300);
+    }
+
+    private _setupPlanningHtmlFolderWatchers(): void {
+        for (const w of this._planningHtmlFolderWatchers) { w.dispose(); }
+        this._planningHtmlFolderWatchers = [];
+
+        const allRoots = this._getWorkspaceRoots();
+        for (const root of allRoots) {
+            try {
+                const service = this._getLocalFolderService(root);
+                const paths = service.getPlanningHtmlFolderPaths();
+                for (const p of paths) {
+                    if (fs.existsSync(p)) {
+                        const pattern = new vscode.RelativePattern(p, '**/*');
+                        const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+                        watcher.onDidChange(() => this._sendPlanningHtmlDocsReady());
+                        watcher.onDidCreate(() => this._sendPlanningHtmlDocsReady());
+                        watcher.onDidDelete(() => this._sendPlanningHtmlDocsReady());
+                        this._planningHtmlFolderWatchers.push(watcher);
+                    }
+                }
+            } catch {}
+        }
+    }
+
+    private _registerSaveTextDocListener(): void {
+        if (this._saveTextDocListener) return;
+        this._saveTextDocListener = vscode.workspace.onDidSaveTextDocument((document) => {
+            if (!this._panel?.visible) return;
+            if (!this._activePlanningHtmlPreview) return;
+            const changedPath = path.resolve(document.uri.fsPath);
+            const active = this._activePlanningHtmlPreview;
+            const relativePath = active.docId.includes(':')
+                ? active.docId.substring(active.docId.indexOf(':') + 1)
+                : active.docId;
+            const activePath = path.resolve(active.sourceFolder, relativePath);
+            if (changedPath !== activePath) return;
+            this._buildAndSendPlanningHtmlPreview({
+                sourceId: active.sourceId,
+                sourceFolder: active.sourceFolder,
+                docId: active.docId,
+                requestId: -1,
+                isAutoRefreshed: true
+            });
+        });
+        this._disposables.push(this._saveTextDocListener);
     }
 
     private _getWorkspaceRoots(): string[] {
@@ -2062,6 +2385,57 @@ export class PlanningPanelProvider {
                 break;
             }
 
+            case 'listPlanningHtmlFolders': {
+                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
+                const service = this._getLocalFolderService(root);
+                const paths = service.getPlanningHtmlFolderPaths();
+                this._panel?.webview.postMessage({ type: 'planningHtmlFoldersListed', paths, workspaceRoot: root });
+                break;
+            }
+            case 'addPlanningHtmlFolder': {
+                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
+                const result = await vscode.window.showOpenDialog({
+                    openLabel: 'Add HTML Folder',
+                    canSelectFiles: false,
+                    canSelectFolders: true,
+                    canSelectMany: false
+                });
+                if (result && result.length > 0) {
+                    const service = this._getLocalFolderService(root);
+                    await service.addPlanningHtmlFolderPath(result[0].fsPath);
+                    this._setupPlanningHtmlFolderWatchers();
+                    await this._sendPlanningHtmlDocsReady();
+                    this._panel?.webview.postMessage({ type: 'planningHtmlFoldersListed', paths: service.getPlanningHtmlFolderPaths(), workspaceRoot: root });
+                }
+                break;
+            }
+            case 'removePlanningHtmlFolder': {
+                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
+                const service = this._getLocalFolderService(root);
+                await service.removePlanningHtmlFolderPath(msg.folderPath);
+                this._setupPlanningHtmlFolderWatchers();
+                await this._sendPlanningHtmlDocsReady();
+                this._panel?.webview.postMessage({ type: 'planningHtmlFoldersListed', paths: service.getPlanningHtmlFolderPaths(), workspaceRoot: root });
+                break;
+            }
+            case 'serveAndOpenHtml': {
+                try {
+                    const rawOpenId = String(msg.docId || '');
+                    const openRelativePath = rawOpenId.includes(':')
+                        ? rawOpenId.substring(rawOpenId.indexOf(':') + 1)
+                        : rawOpenId;
+                    const fullPath = msg.absolutePath
+                        || path.resolve(msg.sourceFolder || this._getWorkspaceRoot() || '', openRelativePath);
+                    const serveFolder = msg.sourceFolder || path.dirname(fullPath);
+                    await fs.promises.access(fullPath, require('fs').constants.R_OK);
+                    const entry = await this._getOrCreatePlanningHtmlServer(path.resolve(serveFolder));
+                    const url = this._buildLocalhostUrl(entry, path.resolve(serveFolder), fullPath);
+                    await vscode.env.openExternal(vscode.Uri.parse(url));
+                } catch (err: any) {
+                    vscode.window.showErrorMessage('Failed to serve HTML file: ' + err.message);
+                }
+                break;
+            }
             case 'refreshSource': {
                 const sourceId = msg.sourceId;
                 // Clear cache for this source to force fresh fetch
@@ -2069,7 +2443,8 @@ export class PlanningPanelProvider {
                 // Refresh only the affected pane to avoid cross-pane flicker
                 if (sourceId === 'local-folder') {
                     await this._sendLocalDocsReady(true);
-
+                } else if (sourceId === 'planning-html-folder') {
+                    await this._sendPlanningHtmlDocsReady();
                 } else {
                     this._sendOnlineDocsReady();
                 }
@@ -6423,6 +6798,7 @@ Read the existing ticket content from the local file if it exists. Determine wha
     private async _handleFetchRoots(forceLocalDocs: boolean = false): Promise<void> {
         await this._sendLocalDocsReady(forceLocalDocs);
         await this._sendOnlineDocsReady();
+        await this._sendPlanningHtmlDocsReady();
         const cyberAnimationDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
         this._panel?.webview.postMessage({ type: 'cyberAnimationSetting', disabled: cyberAnimationDisabled });
         const currentTheme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
@@ -6477,6 +6853,22 @@ Read the existing ticket content from the local file if it exists. Determine wha
         }
 
 
+
+        // Handle planning-html-folder: iframe-based HTML preview with localhost server
+        if (sourceId === 'planning-html-folder') {
+            if (!sourceFolder) {
+                this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: 'sourceFolder is required' });
+                return;
+            }
+            this._activePlanningHtmlPreview = { sourceFolder, docId, sourceId };
+            this._activePreviewSourceId = 'planning-html-folder';
+            this._activePreviewDocId = docId;
+            this._activePreviewSourceFolder = sourceFolder;
+            this._activePreviewWorkspaceRoot = workspaceRoot;
+            this._registerSaveTextDocListener();
+            await this._buildAndSendPlanningHtmlPreview({ sourceId, sourceFolder, docId, requestId });
+            return;
+        }
 
         // Handle local-folder directly without adapter
         if (sourceId === 'local-folder') {
@@ -7753,6 +8145,20 @@ Read the existing ticket content from the local file if it exists. Determine wha
             clearTimeout(this._localDocsDebounce);
             this._localDocsDebounce = undefined;
         }
+        for (const watcher of this._planningHtmlFolderWatchers) {
+            try { watcher.dispose(); } catch (e) {}
+        }
+        this._planningHtmlFolderWatchers = [];
+        if (this._planningHtmlDocsDebounce) {
+            clearTimeout(this._planningHtmlDocsDebounce);
+            this._planningHtmlDocsDebounce = undefined;
+        }
+        for (const [, entry] of this._planningHtmlServers) {
+            clearTimeout(entry.timeoutId);
+            try { entry.server.close(); } catch {}
+        }
+        this._planningHtmlServers.clear();
+        this._planningHtmlServerCreationPromises.clear();
         if (this._kanbanPlansWatchDebounce) {
             clearTimeout(this._kanbanPlansWatchDebounce);
             this._kanbanPlansWatchDebounce = undefined;

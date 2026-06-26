@@ -43,7 +43,12 @@
         designSystemDocSourceId: null,
         designSystemDocId: null,
         _lastLocalDocsMsg: null,
-        _lastOnlineDocsMsg: null
+        _lastOnlineDocsMsg: null,
+        planningHtmlFolderPathsByRoot: {},
+        planningHtmlWorkspaceRootFilter: '',
+        planningHtmlDocsSearch: '',
+        _lastPlanningHtmlDocsMsg: null,
+        htmlPreviewCollapsed: persistedState.htmlPreviewCollapsed || false
     };
 
     let _restoredPanelState = { panel: {}, byRoot: {} };
@@ -1231,6 +1236,9 @@
         } else if (activeTab === 'kanban') {
             state.kanbanListCollapsed = !state.kanbanListCollapsed;
             applySidebarState('kanban', state.kanbanListCollapsed);
+        } else if (activeTab === 'html') {
+            state.htmlPreviewCollapsed = !state.htmlPreviewCollapsed;
+            applySidebarState('html', state.htmlPreviewCollapsed);
         } else {
             state.docsListCollapsed = !state.docsListCollapsed;
             applySidebarState('docs', state.docsListCollapsed);
@@ -1243,7 +1251,8 @@
             ...currentPersisted,
             docsListCollapsed: state.docsListCollapsed,
             ticketsPreviewCollapsed: state.ticketsPreviewCollapsed,
-            kanbanListCollapsed: state.kanbanListCollapsed
+            kanbanListCollapsed: state.kanbanListCollapsed,
+            htmlPreviewCollapsed: state.htmlPreviewCollapsed
         });
     }
 
@@ -1252,6 +1261,7 @@
     applySidebarState('research', state.docsListCollapsed);
     applySidebarState('tickets', state.ticketsPreviewCollapsed);
     applySidebarState('kanban', state.kanbanListCollapsed);
+    applySidebarState('html', state.htmlPreviewCollapsed);
 
     // Bind sidebar toggle listeners
     document.querySelectorAll('.sidebar-toggle-btn').forEach(btn => {
@@ -1286,6 +1296,7 @@
         // 4. Apply sidebar state
         if (tabName === 'tickets') { applySidebarState('tickets', state.ticketsPreviewCollapsed); }
         else if (tabName === 'kanban') { applySidebarState('kanban', state.kanbanListCollapsed); }
+        else if (tabName === 'html') { applySidebarState('html', state.htmlPreviewCollapsed); }
         else if (tabName === 'docs' || tabName === 'local' || tabName === 'research' || tabName === 'online') {
             applySidebarState(tabName === 'docs' ? 'docs' : tabName, state.docsListCollapsed);
         }
@@ -1296,6 +1307,11 @@
         }
         if (tabName === 'docs') {
             vscode.postMessage({ type: 'getPlanningPanelSyncMode' });
+        }
+        if (tabName === 'html') {
+            const root = state.planningHtmlWorkspaceRootFilter || (_workspaceItems[0] && _workspaceItems[0].workspaceRoot) || '';
+            vscode.postMessage({ type: 'listPlanningHtmlFolders', workspaceRoot: root });
+            vscode.postMessage({ type: 'refreshSource', sourceId: 'planning-html-folder' });
         }
         if (tabName === 'tickets') {
             // Restore persisted state only once — re-running it on every tab entry
@@ -2704,7 +2720,46 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
 
     function handlePreviewReady(msg) {
-        const { sourceId, requestId, content, docName, pages, isAutoRefreshed, filePath, htmlContent, webviewUri, isImage } = msg;
+        const { sourceId, requestId, content, docName, pages, isAutoRefreshed, filePath, htmlContent, webviewUri, isImage, iframeSrc } = msg;
+
+        // Handle planning-html-folder: render in dedicated iframe pane
+        if (sourceId === 'planning-html-folder') {
+            if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
+
+            const initialState = document.getElementById('planning-html-initial-state');
+            const loadingState = document.getElementById('planning-html-loading-state');
+            const previewWrapper = document.getElementById('planning-html-preview-wrapper');
+            const iframe = document.getElementById('planning-html-frame');
+            const statusEl = document.getElementById('status-planning-html');
+
+            if (initialState) initialState.style.display = 'none';
+            if (loadingState) loadingState.style.display = 'none';
+
+            if (isImage && webviewUri) {
+                if (previewWrapper) previewWrapper.style.display = 'none';
+                if (statusEl) { statusEl.textContent = isAutoRefreshed ? 'Auto-refreshed' : ''; }
+            } else if (iframeSrc) {
+                if (previewWrapper) previewWrapper.style.display = 'flex';
+                if (iframe) {
+                    iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+                    iframe.removeAttribute('srcdoc');
+                    iframe.src = isAutoRefreshed ? iframeSrc + '?t=' + Date.now() : iframeSrc;
+                }
+                if (statusEl) { statusEl.textContent = isAutoRefreshed ? 'Auto-refreshed' : ''; statusEl.style.color = 'var(--accent-teal)'; }
+            } else if (htmlContent) {
+                if (previewWrapper) previewWrapper.style.display = 'flex';
+                if (iframe) {
+                    iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+                    iframe.removeAttribute('src');
+                    iframe.srcdoc = htmlContent;
+                }
+                if (statusEl) { statusEl.textContent = isAutoRefreshed ? 'Auto-refreshed' : ''; statusEl.style.color = 'var(--accent-teal)'; }
+            } else {
+                if (previewWrapper) previewWrapper.style.display = 'none';
+                if (initialState) initialState.style.display = 'flex';
+            }
+            return; // do not fall through to markdown rendering
+        }
 
         // Auto-refresh notification
         if (isAutoRefreshed) {
@@ -4080,6 +4135,34 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 state.ticketsFolderPathsByRoot[msg.workspaceRoot || ''] = msg.paths || [];
                 renderFolderListModal();
                 break;
+
+            case 'planningHtmlDocsReady': {
+                state._lastPlanningHtmlDocsMsg = msg;
+                state.planningHtmlFolderPathsByRoot = msg.folderPathsByRoot || {};
+                populateWorkspaceDropdown('planning-html-workspace-filter', msg.workspaceItems || [], state.planningHtmlWorkspaceRootFilter);
+                const filteredHtmlNodes = state.planningHtmlWorkspaceRootFilter
+                    ? (msg.nodes || []).filter(n => n.metadata && n.metadata.root === state.planningHtmlWorkspaceRootFilter)
+                    : (msg.nodes || []);
+                const planningHtmlFolderPaths = getCurrentFolderPaths(state.planningHtmlFolderPathsByRoot, state.planningHtmlWorkspaceRootFilter);
+                const statusEl = document.getElementById('status-planning-html');
+                if (statusEl) {
+                    statusEl.textContent = planningHtmlFolderPaths.length === 0 ? 'No folder configured' : '';
+                }
+                renderPlanningHtmlDocs({
+                    sourceId: msg.sourceId || 'planning-html-folder',
+                    nodes: filteredHtmlNodes,
+                    folderPaths: planningHtmlFolderPaths,
+                    error: msg.error
+                });
+                break;
+            }
+
+            case 'planningHtmlFoldersListed': {
+                if (!state.planningHtmlFolderPathsByRoot) state.planningHtmlFolderPathsByRoot = {};
+                state.planningHtmlFolderPathsByRoot[msg.workspaceRoot || ''] = msg.paths || [];
+                renderHtmlFolderList();
+                break;
+            }
             case 'ticketSyncStatusesLoaded': {
                 const provider = msg.provider;
                 const statuses = msg.statuses || {};
@@ -6392,6 +6475,211 @@ Return ONLY the drafted prompt with no additional commentary.`;
     // (The former "Set as Active Planning Context" button has been removed from this panel.)
 
     // Folder modal open logic
+    // ── Planning HTML Tab ──────────────────────────────────────────────────
+
+    function renderPlanningHtmlDocs(rootEntry) {
+        const { sourceId, nodes, folderPaths } = rootEntry;
+        const treePane = document.getElementById('tree-pane-planning-html');
+        if (!treePane) return;
+
+        treePane.innerHTML = '';
+
+        const toggleRow = document.createElement('div');
+        toggleRow.className = 'sidebar-toggle-row';
+
+        const foldersBtn = document.createElement('button');
+        foldersBtn.className = 'sidebar-folders-btn';
+        foldersBtn.title = 'Manage Folders';
+        foldersBtn.textContent = 'Manage Folders';
+        foldersBtn.addEventListener('click', () => openHtmlFolderModal());
+        toggleRow.appendChild(foldersBtn);
+
+        const toggleBtn = document.createElement('button');
+        toggleBtn.className = 'sidebar-toggle-btn';
+        toggleBtn.title = 'Toggle sidebar';
+        toggleBtn.textContent = state.htmlPreviewCollapsed ? '»' : '«';
+        toggleBtn.addEventListener('click', toggleSidebarCollapsed);
+        toggleRow.appendChild(toggleBtn);
+        treePane.appendChild(toggleRow);
+
+        const docList = document.createElement('div');
+        docList.className = 'source-doc-list';
+        docList.dataset.sourceId = sourceId || 'planning-html-folder';
+        treePane.appendChild(docList);
+
+        let docNodes = (nodes || []).filter(n => n.kind === 'document');
+        const folderNodes = (nodes || []).filter(n => n.kind === 'folder');
+        docNodes = docNodes.filter(d => {
+            const ext = d.name.substring(d.name.lastIndexOf('.')).toLowerCase();
+            return ['.html', '.htm'].includes(ext);
+        });
+
+        const search = String(state.planningHtmlDocsSearch || '').trim().toLowerCase();
+        if (search) {
+            docNodes = docNodes.filter(d => (d.title || d.name || '').toLowerCase().includes(search));
+        }
+
+        if (docNodes.length === 0) {
+            if (!folderPaths || folderPaths.length === 0) {
+                docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">Configure a folder using Manage Folders.</div>';
+            } else {
+                docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No HTML files found in configured folders.</div>';
+            }
+            return;
+        }
+
+        docNodes.forEach(doc => {
+            const card = document.createElement('div');
+            card.className = 'source-doc-card';
+            card.dataset.sourceId = sourceId || 'planning-html-folder';
+            card.dataset.nodeId = doc.id;
+            card.dataset.name = doc.name;
+            if (doc.metadata && doc.metadata.sourceFolder) {
+                card.dataset.sourceFolder = doc.metadata.sourceFolder;
+            }
+            if (state.activeSource === (sourceId || 'planning-html-folder') && state.activeDocId === doc.id) {
+                card.classList.add('selected');
+            }
+            const title = document.createElement('div');
+            title.className = 'source-doc-title';
+            title.textContent = doc.name;
+            card.appendChild(title);
+            card.addEventListener('click', () => {
+                loadPlanningHtmlPreview(sourceId || 'planning-html-folder', doc.id, doc.name, doc.metadata && doc.metadata.sourceFolder);
+            });
+            docList.appendChild(card);
+        });
+    }
+
+    function loadPlanningHtmlPreview(sourceId, docId, docName, sourceFolder) {
+        const initialState = document.getElementById('planning-html-initial-state');
+        const loadingState = document.getElementById('planning-html-loading-state');
+        const previewWrapper = document.getElementById('planning-html-preview-wrapper');
+        if (initialState) initialState.style.display = 'none';
+        if (loadingState) loadingState.style.display = 'flex';
+        if (previewWrapper) previewWrapper.style.display = 'none';
+
+        const statusEl = document.getElementById('status-planning-html');
+        if (statusEl) { statusEl.textContent = 'Loading...'; statusEl.style.color = ''; }
+
+        // Mark selection
+        state.activeSource = sourceId;
+        state.activeDocId = docId;
+        state.activeDocName = docName;
+        state.previewRequestId++;
+
+        vscode.postMessage({
+            type: 'fetchPreview',
+            sourceId,
+            docId,
+            requestId: state.previewRequestId,
+            sourceFolder: sourceFolder || undefined
+        });
+    }
+
+    function openHtmlFolderModal() {
+        const modal = document.getElementById('html-folder-modal');
+        if (!modal) return;
+        modal.style.display = 'flex';
+        renderHtmlFolderList();
+        const root = state.planningHtmlWorkspaceRootFilter || (_workspaceItems[0] && _workspaceItems[0].workspaceRoot) || '';
+        vscode.postMessage({ type: 'listPlanningHtmlFolders', workspaceRoot: root });
+    }
+
+    function closeHtmlFolderModal() {
+        const modal = document.getElementById('html-folder-modal');
+        if (modal) modal.style.display = 'none';
+    }
+
+    function renderHtmlFolderList() {
+        const listEl = document.getElementById('html-folder-list-modal');
+        if (!listEl) return;
+        listEl.innerHTML = '';
+
+        const filter = state.planningHtmlWorkspaceRootFilter;
+        const map = state.planningHtmlFolderPathsByRoot || {};
+        const allPaths = filter
+            ? (map[filter] || [])
+            : Object.values(map).flat();
+        const uniquePaths = [...new Set(allPaths)];
+
+        if (uniquePaths.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'folder-list-empty';
+            empty.textContent = 'No folders configured. Click Add Folder to get started.';
+            listEl.appendChild(empty);
+            return;
+        }
+
+        uniquePaths.forEach(folderPath => {
+            const row = document.createElement('div');
+            row.className = 'folder-list-item';
+
+            const pathSpan = document.createElement('span');
+            pathSpan.className = 'folder-path';
+            pathSpan.textContent = folderPath;
+            pathSpan.title = folderPath;
+
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'folder-list-remove-btn';
+            removeBtn.textContent = 'Remove';
+            removeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const root = filter || (_workspaceItems[0] && _workspaceItems[0].workspaceRoot) || '';
+                vscode.postMessage({ type: 'removePlanningHtmlFolder', folderPath, workspaceRoot: root });
+            });
+
+            row.appendChild(pathSpan);
+            row.appendChild(removeBtn);
+            listEl.appendChild(row);
+        });
+    }
+
+    // Wire HTML folder modal buttons
+    document.getElementById('btn-close-html-folder-modal').addEventListener('click', closeHtmlFolderModal);
+    document.getElementById('html-folder-modal').addEventListener('click', (e) => {
+        if (e.target.id === 'html-folder-modal') closeHtmlFolderModal();
+    });
+    document.getElementById('btn-add-html-folder-modal').addEventListener('click', () => {
+        const root = state.planningHtmlWorkspaceRootFilter || (_workspaceItems[0] && _workspaceItems[0].workspaceRoot) || '';
+        vscode.postMessage({ type: 'addPlanningHtmlFolder', workspaceRoot: root });
+    });
+
+    // Wire workspace filter and search for HTML tab
+    const planningHtmlWorkspaceFilter = document.getElementById('planning-html-workspace-filter');
+    if (planningHtmlWorkspaceFilter) {
+        planningHtmlWorkspaceFilter.addEventListener('change', (e) => {
+            state.planningHtmlWorkspaceRootFilter = e.target.value;
+            const msg = state._lastPlanningHtmlDocsMsg;
+            if (!msg) return;
+            const filteredNodes = state.planningHtmlWorkspaceRootFilter
+                ? (msg.nodes || []).filter(n => n.metadata && n.metadata.root === state.planningHtmlWorkspaceRootFilter)
+                : (msg.nodes || []);
+            renderPlanningHtmlDocs({
+                sourceId: msg.sourceId || 'planning-html-folder',
+                nodes: filteredNodes,
+                folderPaths: getCurrentFolderPaths(state.planningHtmlFolderPathsByRoot, state.planningHtmlWorkspaceRootFilter)
+            });
+        });
+    }
+
+    const planningHtmlDocsSearch = document.getElementById('planning-html-docs-search');
+    if (planningHtmlDocsSearch) {
+        planningHtmlDocsSearch.addEventListener('input', (e) => {
+            state.planningHtmlDocsSearch = e.target.value;
+            const msg = state._lastPlanningHtmlDocsMsg;
+            if (!msg) return;
+            const filteredNodes = state.planningHtmlWorkspaceRootFilter
+                ? (msg.nodes || []).filter(n => n.metadata && n.metadata.root === state.planningHtmlWorkspaceRootFilter)
+                : (msg.nodes || []);
+            renderPlanningHtmlDocs({
+                sourceId: msg.sourceId || 'planning-html-folder',
+                nodes: filteredNodes,
+                folderPaths: getCurrentFolderPaths(state.planningHtmlFolderPathsByRoot, state.planningHtmlWorkspaceRootFilter)
+            });
+        });
+    }
+
     function openFoldersModal(scope = 'local') {
         folderModalScope = scope;
         const modal = document.getElementById('folder-modal');
@@ -6451,7 +6739,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             if (modal && modal.style.display !== 'none') {
                 modal.style.display = 'none';
             }
-            const modalHtml = document.getElementById('folder-modal-html');
+            const modalHtml = document.getElementById('html-folder-modal');
             if (modalHtml && modalHtml.style.display !== 'none') {
                 modalHtml.style.display = 'none';
             }

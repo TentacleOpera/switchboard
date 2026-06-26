@@ -1203,7 +1203,7 @@
             if (badge && select) {
                 badge.addEventListener('click', e => {
                     e.stopPropagation();
-                    document.querySelectorAll('.kanban-column-dropdown').forEach(s => s.style.display = 'none');
+                    kanbanListPane.querySelectorAll('.kanban-column-dropdown').forEach(s => s.style.display = 'none');
                     select.style.display = 'block';
                     select.focus();
                 });

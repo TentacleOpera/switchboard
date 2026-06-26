@@ -218,3 +218,37 @@ Automated tests are skipped for this session per directive (the test suite will 
 ---
 
 **Recommendation:** Complexity is 6/10 (multi-file, mirrors an existing pattern, one moderate risk in badge-wiring duplication). **Send to Coder.**
+
+## Code Review Results (Reviewer Pass — 2026-06-26)
+
+### Implementation Status: COMPLETE
+
+All 7 plan steps were implemented correctly in commit `6c72aa4`. The implementation faithfully follows the plan including both MANDATORY adversarial refinements.
+
+### Files Changed (by implementation)
+- `src/webview/project.html` — column filter `<select>` added to epics controls strip; "Add to Kanban board" checkbox removed from New Epic modal.
+- `src/webview/project.js` — `epicsColumnFilter` ref, `epicsFilters.column` state, `populateKanbanFilters()` population, change listener, column filter application in `renderEpicsList()`, column badge rendering (DB-backed + standalone "Doc" degradation), badge/dropdown wiring scoped to `epicsListPane`, column filter reset in `activateKanbanTabAndSelectPlan`, checkbox ref/reset removed, `addToKanbanBoard: true` hardcoded on submit.
+- `src/services/PlanningPanelProvider.ts` — `addToKanbanBoard` defaults to `true` (`!== false`), standalone-creation branch removed, `fetchEpicDocuments` read path preserved.
+
+### Files Changed (by review)
+- `src/webview/project.js:1206` — Kanban badge click handler scoped from `document.querySelectorAll('.kanban-column-dropdown')` to `kanbanListPane.querySelectorAll(...)` for symmetry with the epics-side fix. Prevents cross-tab dropdown interference.
+
+### Findings by Severity
+
+| Severity | Finding | File:Line | Status |
+|----------|---------|-----------|--------|
+| NIT | Kanban badge handler used global `document.querySelectorAll` instead of pane-scoped selector (plan recommended fix for symmetry) | `src/webview/project.js:1206` | **Fixed** — scoped to `kanbanListPane` |
+| NIT | Dead variable `addToKanbanBoard` computed but never read after standalone branch removal | `src/services/PlanningPanelProvider.ts:2976` | **Deferred** — harmless, documents intent |
+
+No CRITICAL or MAJOR findings.
+
+### Verification Results
+- **Compilation:** Skipped per directive.
+- **Tests:** Skipped per directive (user will run separately).
+- **Manual verification items 1–8:** Not executable in this session (require running VS Code webview). All code paths verified by inspection against plan requirements.
+- **Cross-tab dropdown scoping (item 7):** Both badge handlers now use pane-scoped `querySelectorAll` — `kanbanListPane` (line 1206) and `epicsListPane` (line 1564). No global `document.querySelectorAll('.kanban-column-dropdown')` selectors remain.
+
+### Remaining Risks
+1. **Dead variable** (`PlanningPanelProvider.ts:2976`): `addToKanbanBoard` is computed but unused. Harmless but untidy. Can be removed in a future cleanup pass.
+2. **Manual UAT not run:** All 8 manual verification items require a live VS Code webview session. The user should execute them before releasing.
+3. **Standalone epic doc creation permanently removed:** This is a one-way product decision. If any workflow relied on creating off-board epic documents, it can no longer do so. Pre-existing standalone docs remain visible via the preserved `fetchEpicDocuments` read path.
