@@ -41,10 +41,12 @@ The iframe content (and its canvas-drawing scripts) executes when `srcdoc` is
 set. At that moment, the iframe may have zero or incorrect dimensions because:
 
 1. **The preview wrapper starts hidden.** `#html-preview-wrapper` is initially
-   `display: none` and only set to `display: flex` after content loads (design.js
-   lines 1224, 1179). When the script runs inside the iframe, `wrap.clientWidth`
-   may be 0 (or a stale value) because the iframe's container isn't laid out
-   yet, producing zero-size or invisible canvases.
+   `display: none` (design.html line 3759) and only set to `display: flex` after
+   content loads (design.js lines 1224, 1179). Likewise `#claude-preview-wrapper`
+   starts `display: none` (design.html line 3809) and is shown at lines 1167,
+   1185. When the script runs inside the iframe, `wrap.clientWidth` may be 0 (or
+   a stale value) because the iframe's container isn't laid out yet, producing
+   zero-size or invisible canvases.
 
 2. **No redraw on visibility change.** The charts listen only for
    `window.addEventListener('resize', draw)`. When `#html-preview-wrapper`
@@ -65,39 +67,66 @@ mechanism to dispatch a `resize` event into the iframe when it becomes visible.
 trigger exists in `design.js`.
 
 ## Metadata
-**Tags:** bug, design-panel, html-preview, canvas, iframe, rendering
-**Complexity:** 3
-**Repo:** switchboard (source at `/Users/patrickvuleta/Documents/GitHub/switchboard`)
+**Tags:** frontend, ui, bugfix, reliability
+**Complexity:** 4
+
+## User Review Required
+Yes — confirm the reproduction on the current installed VSIX before
+implementation (open `revenuecat-map.html` in the Design HTML preview and verify
+charts are blank until panel reopen). Also confirm whether the `claude`-folder
+preview path (claude.ai/design imports) exhibits the same symptom, since the fix
+now covers both paths.
 
 ## Complexity Audit
 
 ### Routine
-1. Add a visibility-change hook that dispatches a `resize` event into the
-   iframe's `contentWindow` when the preview wrapper becomes visible.
-2. The fix requires no changes to the user's HTML files — it works for any
-   canvas/chart library that listens for `resize`.
+- Add a `notifyIframeResize(iframe)` helper that dispatches a `resize` event
+  into the iframe's `contentWindow` after layout settles (double-rAF), with the
+  visibility check performed *inside* the rAF to avoid TOCTOU races.
+- Call the helper at the four display-toggle sites (html-folder src/srcdoc at
+  lines 1224/1236; claude-folder src/srcdoc at lines 1167/1179).
+- Add an `iframe.onload` fallback at the call sites so charts that parse
+  asynchronously still get an initial `resize` dispatch after the iframe
+  document is ready.
+- Forward the parent webview `window resize` to the preview iframe as a
+  defensive belt-and-suspenders measure.
 
 ### Complex / Risky
-1. **`iframe.contentWindow` cross-origin access.** The iframe uses
-   `sandbox="allow-scripts allow-same-origin"`. With `allow-same-origin`, the
-   parent can access `iframe.contentWindow` and call
-   `contentWindow.dispatchEvent(new Event('resize'))`. If the sandbox were
-   `allow-scripts` only (no `allow-same-origin`), this would throw a
-   cross-origin error. Confirm the sandbox always includes `allow-same-origin`
-   for `srcdoc` previews (it does — design.js lines 1170, 1182, 1227, 1239).
-2. **Timing of the resize dispatch.** The resize must fire AFTER the wrapper's
-   `display: flex` has been applied and the browser has laid out the iframe.
-   A `requestAnimationFrame` (double-rAF) or small `setTimeout` after the
-   display change ensures `wrap.clientWidth` is non-zero when the chart's
-   `draw()` runs.
-3. **`srcdoc` vs `src` previews.** Both paths set the iframe content. The
-   visibility fix applies to both — dispatch resize whenever the wrapper becomes
-   visible, regardless of how content was loaded.
+- **MutationObserver debounce + dual-target coverage.** A single observer
+  covering both `#html-preview-wrapper` and `#claude-preview-wrapper` must be
+  debounced (one trailing rAF gate, not a double-rAF per mutation) to avoid
+  resize storms when style/class mutations fire rapidly. The visibility check
+  must run inside the rAF, not at observer-callback time, to avoid dispatching
+  resize into a wrapper that has since been hidden again.
+- **`iframe.contentWindow` cross-origin access.** The iframe uses
+  `sandbox="allow-scripts allow-same-origin"`. With `allow-same-origin`, the
+  parent can access `iframe.contentWindow` and call
+  `contentWindow.dispatchEvent(new Event('resize'))`. If the sandbox were
+  `allow-scripts` only (no `allow-same-origin`), this would throw a
+  cross-origin error. Confirmed the sandbox always includes `allow-same-origin`
+  for both preview paths (design.js lines 1170, 1182, 1227, 1239; design.html
+  lines 3761, 3811).
 
 ## Edge-Case & Dependency Audit
 
-- **Non-canvas HTML files:** Dispatching a `resize` event into an HTML file that
-  doesn't listen for resize is a no-op. Safe.
+- **Race Conditions:** The MutationObserver must debounce and re-check
+  visibility inside the rAF callback. Without this, rapid none→flex→none
+  toggles (fast tab switching) can dispatch `resize` into a hidden iframe whose
+  `wrap.clientWidth` is 0 — re-introducing the zero-size canvas bug.
+- **Security:** `dispatchEvent(new Event('resize'))` into a same-origin iframe
+  is safe; it only triggers the iframe's own resize listeners. No data crosses
+  the boundary. The `try/catch` in the helper guards against any unexpected
+  cross-origin throw.
+- **Side Effects:** Dispatching `resize` into an HTML file that doesn't listen
+  for resize is a no-op. Safe. Reloading `srcdoc` (the more aggressive
+  alternative) would re-run all scripts and cause flicker/side effects —
+  explicitly rejected in favor of the resize dispatch.
+- **Dependencies & Conflicts:** No new dependencies. The fix is pure DOM
+  manipulation in `design.js`. The MutationObserver is added once at webview
+  init and lives for the panel's lifetime; it does not conflict with the
+  existing `initZoomListeners` calls (lines 365-366) which attach to the same
+  wrappers.
+- **Non-canvas HTML files:** Dispatching `resize` is a no-op. Safe.
 - **Charts that don't listen for resize:** Some chart libraries (e.g. certain
   D3 setups) don't redraw on resize. Those would still not render on visibility
   change. This fix covers the common case (canvas + resize listener, including
@@ -106,98 +135,163 @@ trigger exists in `design.js`.
   The resize dispatch is the minimal, safe fix.
 - **Tab switching away and back:** When the user switches from the HTML preview
   tab to another Design sub-tab and back, the wrapper may be hidden then shown.
-  The fix must dispatch resize on each show.
+  The MutationObserver dispatches resize on each show.
 - **Sidebar collapse/uncollapse:** Collapsing the preview sidebar changes the
-  iframe width. An uncollapse should also trigger a resize so charts re-fit.
+  iframe width. An uncollapse triggers a style change on the wrapper, firing
+  the observer; the parent `resize` forwarder also catches width changes.
+
+## Dependencies
+- None. This is a self-contained bugfix in `src/webview/design.js`.
+
+## Adversarial Synthesis
+Key risks: (1) an undebounced MutationObserver firing a resize storm on rapid
+style/class mutations; (2) a TOCTOU race where the visibility check runs at
+observer-callback time but the rAF fires after the wrapper is hidden again,
+re-introducing the zero-size canvas bug; (3) the original plan only observed
+`#html-preview-wrapper` and missed the parallel `#claude-preview-wrapper` path,
+leaving claude-folder previews broken. Mitigations: debounce the observer with a
+single trailing rAF gate, perform the visibility check *inside* the rAF, and
+attach the observer to both preview wrappers. An `iframe.onload` fallback covers
+async `srcdoc`/`src` parsing for the initial draw.
 
 ## Proposed Changes
 
 ### File: `src/webview/design.js`
 
-**Change 1 — Add a helper to dispatch a resize event into the iframe.**
+**Change 1 — Add a debounced `notifyIframeResize` helper.**
+
+Add near the other preview helpers (e.g. after `injectBaseTag` around line 442).
+The visibility check is performed *inside* the rAF to avoid TOCTOU races. A
+module-level rAF token debounces concurrent calls so only one resize dispatch
+fires per frame.
 
 ```javascript
-function notifyIframeResize(iframe) {
-    if (!iframe || !iframe.contentWindow) return;
-    try {
-        // Allow layout to settle after the wrapper becomes visible.
-        // Double-rAF ensures the browser has committed the display:flex layout
-        // before the chart's draw() reads wrap.clientWidth.
-        requestAnimationFrame(() => {
+let _resizeRafToken = null;
+function notifyIframeResize(iframe, wrapperEl) {
+    if (!iframe) return;
+    if (_resizeRafToken) cancelAnimationFrame(_resizeRafToken);
+    _resizeRafToken = requestAnimationFrame(() => {
+        _resizeRafToken = null;
+        // Re-check visibility INSIDE the rAF — the wrapper may have been
+        // hidden again between the observer callback and this frame.
+        if (wrapperEl && wrapperEl.style.display === 'none') return;
+        if (!iframe.contentWindow) return;
+        try {
+            // Second rAF ensures the browser has committed the display:flex
+            // layout before the chart's draw() reads wrap.clientWidth.
             requestAnimationFrame(() => {
+                if (wrapperEl && wrapperEl.style.display === 'none') return;
+                if (!iframe.contentWindow) return;
                 iframe.contentWindow.dispatchEvent(new Event('resize'));
             });
-        });
-    } catch (e) {
-        // Cross-origin iframe (shouldn't happen with allow-same-origin) — ignore.
-    }
-}
-```
-
-**Change 2 — Dispatch resize after showing the wrapper in the HTML preview
-render path.**
-
-In the `html-folder` preview render (around lines 1224-1248), after setting
-`iframeWrapper.style.display = 'flex'` and setting `srcdoc`/`src`, add:
-
-```javascript
-if (iframeWrapper) iframeWrapper.style.display = 'flex';
-// ... existing iframe src/srcdoc assignment ...
-notifyIframeResize(iframe);
-```
-
-And in the `claude`-folder preview render (around lines 1167-1188), add the same
-`notifyIframeResize(iframe)` after the wrapper is shown.
-
-**Change 3 — Use a MutationObserver as a robust catch-all for visibility
-transitions.**
-
-To cover all paths (tab switch, sidebar toggle, collapse restore, window
-resize), add a MutationObserver on `#html-preview-wrapper` that watches for
-`style`/`class` changes and dispatches resize when the wrapper becomes visible:
-
-```javascript
-const htmlWrapper = document.getElementById('html-preview-wrapper');
-const htmlFrame = document.getElementById('html-preview-frame');
-if (htmlWrapper && htmlFrame) {
-    const observer = new MutationObserver(() => {
-        if (htmlWrapper.style.display !== 'none' &&
-            !htmlWrapper.classList.contains('collapsed')) {
-            notifyIframeResize(htmlFrame);
+        } catch (e) {
+            // Cross-origin iframe (shouldn't happen with allow-same-origin) — ignore.
         }
     });
-    observer.observe(htmlWrapper, {
-        attributes: true,
-        attributeFilter: ['style', 'class']
-    });
 }
 ```
 
-This is the most reliable approach — it catches every visibility transition
-without instrumenting each toggle path individually. Keep Change 2 as
-belt-and-suspenders for the initial-load case; the MutationObserver is the
-primary mechanism for subsequent visibility changes.
+**Change 2 — Dispatch resize after showing the wrapper in all four render
+paths, plus an `iframe.onload` fallback for async content.**
 
-**Change 4 — Also dispatch resize on parent window resize.**
+In the `html-folder` preview render:
 
-When the VS Code webview itself resizes (which changes the iframe's available
-width), the iframe's internal `resize` event may not fire reliably. Add a
-listener on the parent window that forwards resize to the iframe:
+- `src` path (around line 1224): after `iframeWrapper.style.display = 'flex'`
+  and `iframe.src = ...` (line 1229), add:
+  ```javascript
+  notifyIframeResize(iframe, iframeWrapper);
+  if (iframe) iframe.addEventListener('load', () => notifyIframeResize(iframe, iframeWrapper), { once: true });
+  ```
+- `srcdoc` path (around line 1236): after `iframe.srcdoc = ...` (line 1242),
+  add the same two lines.
+
+In the `claude`-folder preview render (`msg.target === 'claude'`):
+
+- `src` path (around line 1167): after `iframe.src = ...` (line 1172), add:
+  ```javascript
+  notifyIframeResize(iframe, iframeWrapper);
+  if (iframe) iframe.addEventListener('load', () => notifyIframeResize(iframe, iframeWrapper), { once: true });
+  ```
+- `srcdoc` path (around line 1179): after `iframe.srcdoc = ...` (line 1185),
+  add the same two lines.
+
+**Change 3 — Add a single debounced MutationObserver covering BOTH preview
+wrappers.**
+
+Add during webview initialization (e.g. near the `initZoomListeners` calls at
+lines 365-366). The observer watches `style`/`class` on both
+`#html-preview-wrapper` and `#claude-preview-wrapper` and delegates to the
+debounced helper. The helper's internal rAF gate ensures only one resize
+dispatch per frame even if both wrappers mutate simultaneously.
+
+```javascript
+function setupPreviewResizeObservers() {
+    const targets = [
+        { wrapperId: 'html-preview-wrapper', frameId: 'html-preview-frame' },
+        { wrapperId: 'claude-preview-wrapper', frameId: 'claude-preview-frame' }
+    ];
+    for (const { wrapperId, frameId } of targets) {
+        const wrapper = document.getElementById(wrapperId);
+        const frame = document.getElementById(frameId);
+        if (!wrapper || !frame) continue;
+        const observer = new MutationObserver(() => {
+            // Visibility re-check happens inside notifyIframeResize's rAF.
+            notifyIframeResize(frame, wrapper);
+        });
+        observer.observe(wrapper, {
+            attributes: true,
+            attributeFilter: ['style', 'class']
+        });
+    }
+}
+// Call alongside the existing initZoomListeners calls (lines 365-366):
+//     initZoomListeners('html-preview-wrapper', '.zoomable-viewport', 'html');
+//     initZoomListeners('claude-preview-wrapper', '.zoomable-viewport', 'claude');
+//     setupPreviewResizeObservers();
+```
+
+This is the primary mechanism for subsequent visibility changes (tab switch,
+sidebar toggle, collapse restore). Change 2 remains as belt-and-suspenders for
+the initial-load case and as the `onload` fallback for async content.
+
+**Change 4 — Forward parent webview `resize` to both preview iframes
+(defensive).**
+
+When the VS Code webview itself resizes, nested iframes usually fire their own
+internal `resize` event, but forwarding is cheap insurance. Add during webview
+init:
 
 ```javascript
 window.addEventListener('resize', () => {
-    notifyIframeResize(document.getElementById('html-preview-frame'));
+    notifyIframeResize(
+        document.getElementById('html-preview-frame'),
+        document.getElementById('html-preview-wrapper')
+    );
+    notifyIframeResize(
+        document.getElementById('claude-preview-frame'),
+        document.getElementById('claude-preview-wrapper')
+    );
 });
 ```
 
 ## Verification Plan
 
+> **Session directives:** Skip compilation (`npm run compile` / webpack) and
+> skip automated tests. Verification is manual via the installed VSIX. The
+> test suite will be run separately by the user.
+
+### Automated Tests
+- None required for this session (skipped per directive). The change is
+  webview-DOM behavior with no unit-test harness in the repo for `design.js`.
+
+### Manual Verification
 1. **Repro on current build:** Open `revenuecat-map.html` in the Design panel
    HTML preview. If graphs render, switch to another Design sub-tab and back —
    confirm the graphs disappear or don't re-render. Alternatively, open the
    preview with the wrapper initially hidden and confirm graphs don't render
    until the panel is closed and reopened.
-2. **Apply the fix** and rebuild.
+2. **Apply the fix** and rebuild (out of scope for this session — user runs
+   `npm run compile` + VSIX install separately).
 3. **Initial-load test:** Open `revenuecat-map.html` in the HTML preview.
    Confirm all 5 canvas charts (MRR by channel, New trials, App Store vs Stripe
    churn, Stripe vs stores retention, Stripe monthly effective price) render
@@ -212,3 +306,14 @@ window.addEventListener('resize', () => {
    Confirm the resize dispatch is a no-op (no errors, no visual change).
 8. **`src`-based preview test:** Open an HTML file that loads via `iframe.src`
    (not `srcdoc`). Confirm the resize dispatch works for that path too.
+9. **Claude-folder preview test:** Open an HTML file in the `claude`-folder
+   preview path. Confirm charts render on initial load and re-render on
+   tab-switch back (validates the dual-wrapper observer coverage added in
+   Change 3).
+10. **Fast-tab-switch stress test:** Rapidly switch between the HTML preview
+    tab and another sub-tab several times. Confirm no console errors, no
+    blank canvases left behind, and no visible jank (validates the debounce).
+
+---
+
+**Recommendation:** Complexity 4 → **Send to Coder**.

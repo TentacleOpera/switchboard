@@ -20,7 +20,7 @@ Every tab in the Project panel (`project.html`) follows a shared layout pattern:
 - Sidebar items rendered from a cache, with a toggle row
 - "Build via Planner" / "Copy Build Prompt" buttons for agent-driven authoring
 
-The Constitution tab (`project.html` lines ~1510) and System tab (~1547)
+The Constitution tab (`project.html` lines 1500-1542) and System tab (1544-1574)
 demonstrate the correct agent-driven pattern:
 ```html
 <button id="btn-build-via-planner" class="strip-btn" disabled>Build via Planner</button>
@@ -75,66 +75,143 @@ Three structural defects:
 **Bug status: STILL PRESENT** (verified in source).
 
 ## Metadata
-**Tags:** bug, project-panel, projects-tab, styling, ux, consistency
-**Complexity:** 5
-**Repo:** switchboard (source at `/Users/patrickvuleta/Documents/GitHub/switchboard`)
+**Tags:** [frontend, ui, ux, bugfix, refactor]
+**Complexity:** 6
+
+## User Review Required
+Yes — this plan restructures a user-facing tab and changes the PRD authoring UX
+from "write in a textarea" to "agent-driven Build via Planner + preview/edit
+toggle." The user should confirm:
+1. The PRD prompt template (Change 7) matches their expectations for what a PRD
+   should contain.
+2. The decision to reuse the shared `enterEditMode`/`exitEditMode` functions
+   (requiring `projects-editor` / `btn-edit-projects` naming) is acceptable vs.
+   writing projects-specific toggle logic.
+3. Whether the pre-existing `#system-list-pane` CSS omission (point 8 of the
+   adversarial review) should be fixed in this same change or tracked
+   separately.
 
 ## Complexity Audit
 
 ### Routine
-1. Restructure the Projects tab HTML to use `.content-row` +
-   `#projects-list-pane` + `.preview-panel-wrapper` with `.cyber-scanlines`.
-2. Add `#projects-list-pane` to the shared CSS selectors that list the other
-   list panes.
-3. Replace the `<select>` project dropdown with a sidebar list of project items
-   (clickable), reusing the existing `_kanbanAllWorkspaceProjects` cache.
-4. Add "Build via Planner" / "Copy Build Prompt" buttons to the controls strip.
+- Restructure the Projects tab HTML to use `.content-row` +
+  `#projects-list-pane` + `.preview-panel-wrapper` with `.cyber-scanlines`.
+- Add `#projects-list-pane` (and the pre-existing-missing `#system-list-pane`)
+  to the shared CSS selectors.
+- Replace the `<select>` project dropdown with a sidebar list of project items
+  (clickable), reusing the existing `_kanbanAllWorkspaceProjects` cache.
+- Add "Build via Planner" / "Copy Build Prompt" buttons to the controls strip.
+- Add `projectsListCollapsed` to the state object, tab-switch handler,
+  `toggleSidebarCollapsed`, and `vscode.setState` persistence.
+- Add `projects` keys to `editMode`, `editOriginalContent`, `dirtyFlags`, and
+  `externalChangePending` state objects.
 
 ### Complex / Risky
-1. **Sidebar population wiring.** The existing `updateProjectsPrdSelect()`
-   (project.js lines 981-1019) populates the `<select>` dropdown. This must be
-   refactored to render project items into `#projects-list-pane` as clickable
-   cards (mirroring `renderKanbanPlans`). The selection state (`projectsPrdSelect.value`)
-   must become a `_selectedProjectName` variable instead.
-2. **PRD preview vs edit mode.** Other tabs have a read-only preview
-   (`#<tab>-preview-content`) and a separate edit mode (textarea toggled by an
-   Edit button). The Projects tab currently is always a textarea. The restructure
-   should add a preview pane that renders the PRD markdown, with an Edit button
-   to switch to the textarea (matching the Kanban/Constitution pattern).
-3. **Sidebar collapse state.** The tab-switch handler (project.js lines 21-31)
-   applies sidebar collapse state per tab but has no `projects` branch. Must add
-   `projectsListCollapsed` to the state object and an `applySidebarState`
-   call for the projects tab.
-4. **"Build via Planner" prompt.** The Constitution tab's "Build via Planner"
-   dispatches a planner prompt to generate a constitution. The Projects tab
-   equivalent must dispatch a planner prompt to generate a PRD for the selected
-   project, passing the project name as context. This requires a new message
-   type (e.g. `buildPrdViaPlanner`) and backend handler, OR reuse the existing
-   `copyKanbanPlanPrompt`-style dispatch with a PRD-specific prompt template.
+- **Sidebar population wiring.** The existing `updateProjectsPrdSelect()`
+  (project.js lines 995-1037) populates the `<select>` dropdown. This must be
+  refactored to render project items into `#projects-items-container` as
+  clickable cards (mirroring `renderKanbanPlans` at line 1096). The selection
+  state (`projectsPrdSelect.value`) must become a `_selectedProjectName`
+  variable instead. All references to `projectsPrdSelect` must be updated,
+  including the stale-response guard in the `projectPrdContent` message handler
+  (line 349).
+- **PRD preview vs edit mode — naming convention reconciliation.** Other tabs
+  have a read-only preview (`#<tab>-preview-content`) and a separate edit mode
+  (textarea toggled by an Edit button). The shared `enterEditMode(tab)` /
+  `exitEditMode(tab)` functions (lines 2248-2282) look for `${tab}-editor`,
+  `btn-edit-${tab}`, `btn-save-${tab}`, `btn-cancel-${tab}`. The Projects tab
+  must use `projects-editor` (NOT `projects-prd-editor`), `btn-edit-projects`,
+  `btn-save-projects`, `btn-cancel-projects` to reuse these functions
+  unchanged. The current `projects-prd-editor` / `btn-save-project-prd` IDs
+  will NOT work with the shared functions.
+- **Markdown rendering for the preview pane.** The backend `getProjectPrd`
+  handler (PlanningPanelProvider.ts line 3211) currently returns RAW markdown
+  (`msg.content`). The preview pane needs HTML. The handler must be extended to
+  call `vscode.commands.executeCommand('markdown.api.render', content)` and
+  return both `content` (HTML) and `rawContent` (markdown) — mirroring the
+  `kanbanPlanPreviewReady` message pattern (line 1247-1256). The
+  `projectPrdContent` message handler in project.js (line 347) must set
+  `projects-preview-content.innerHTML = msg.content` (HTML) and
+  `state.editOriginalContent.projects = msg.rawContent` (markdown for the
+  editor).
+- **"Build via Planner" prompt.** The Constitution tab's "Build via Planner"
+  dispatches a planner prompt to generate a constitution. The Projects tab
+  equivalent must dispatch a planner prompt to generate a PRD for the selected
+  project, passing the project name as context. This requires a new message
+  type (`invokePrdBuilder`) and backend handler, plus a `copyPrdBuildPrompt`
+  handler — both mirroring the Constitution handlers (`invokeConstitutionBuilder`
+  at line 3349, `copyConstitutionPrompt` at line 3266).
 
 ## Edge-Case & Dependency Audit
 
-- **Existing PRD content:** PRDs are stored at
-  `.switchboard/projects/<project>/prd.md`. The restructure must not lose
-  existing PRD content — the preview/edit flow must load and save to the same
-  path.
-- **PROJECT CONTEXT toggle:** The existing `btn-project-context` toggle
-  (injects the selected project's PRD into every dispatched prompt) must be
-  preserved in the new controls strip. It's a per-workspace setting.
-- **No projects in workspace:** The sidebar should show an empty state ("No
-  projects — add one on the Kanban board") rather than a disabled dropdown.
-- **Project selection persistence:** When switching workspace filter, the
-  sidebar should repopulate and preserve the selected project if it still
-  exists.
-- **`hydrateProjectsTab` / `updateProjectsPrdSelect` callers:** These are called
-  from the tab-switch handler and `kanbanPlansReady`. The refactor must keep
-  these call sites working (rename/repurpose as needed).
+- **Race Conditions:**
+  - **Stale PRD response.** The `projectPrdContent` handler (line 347) guards
+    against stale responses by checking `projectsPrdSelect.value ===
+    msg.projectName`. After the refactor, this must check `_selectedProjectName
+    === msg.projectName` instead. Without this, a rapid project switch could
+    load the wrong PRD into the editor.
+  - **In-progress edit clobber.** The current `updateProjectsPrdSelect` (line
+    1032) avoids clobbering an in-progress edit by checking `_prdDirty`. The
+    refactored `renderProjectsList` must preserve this guard — only call
+    `requestProjectPrd()` when the selection differs from `_prdLoadedProject` or
+    `!_prdDirty`.
+
+- **Security:**
+  - PRD content is injected verbatim into every dispatched prompt (same trust
+    boundary as the constitution). The `sanitizeProjectSlug` function
+    (prdUtils.ts line 16) already prevents path traversal via `../../etc`-style
+    project names. No new security surface is introduced.
+  - The `projects-preview-content.innerHTML = msg.content` assignment relies on
+    the backend's `markdown.api.render` output, which is VS Code's built-in
+    markdown renderer (same as Kanban plan previews). No additional XSS risk
+    beyond the existing Kanban preview path.
+
+- **Side Effects:**
+  - **PROJECT CONTEXT toggle.** The existing `btn-project-context` toggle
+    (injects the selected project's PRD into every dispatched prompt) must be
+    preserved in the new controls strip. It's a per-workspace setting backed by
+    `KanbanProvider.getProjectContextEnabled` / `setProjectContextEnabled`. The
+    toggle reads `_selectedProjectName` (was `projectsPrdSelect.value`) to
+    determine which project's PRD to inject.
+  - **`hydrateProjectsTab` / `updateProjectsPrdSelect` callers.** These are
+    called from the tab-switch handler (line 38) and `kanbanPlansReady` (line
+    335). The refactor must keep these call sites working — `hydrateProjectsTab`
+    (line 1056) calls `populateWorkspaceDropdowns`, `updateProjectsPrdSelect`
+    (→ renamed `renderProjectsList`), and `requestProjectContextEnabled`.
+
+- **Dependencies & Conflicts:**
+  - The `getProjectPrdPath` function (prdUtils.ts line 33) is unchanged — PRDs
+    remain at `.switchboard/projects/<slug>/prd.md`.
+  - The `markdown.api.render` VS Code command is already used by
+    `_handleFetchKanbanPlanPreview` (line 1247). No new dependency.
+  - The `dispatchCustomPromptToRole` method on `_taskViewerProvider` is already
+    used by `invokeConstitutionBuilder` (line 3358) and `invokeSystemBuilder`
+    (line 3398). No new dependency.
+
+## Dependencies
+- None — this is a self-contained bugfix with no prerequisite plans.
+
+## Adversarial Synthesis
+Key risks: (1) the `enterEditMode`/`exitEditMode` naming convention mismatch
+would cause silent dead-clicks if the Projects tab uses non-conforming IDs;
+(2) the backend `getProjectPrd` returns raw markdown, so the preview pane would
+show literal `# heading` text unless the handler is extended to render HTML via
+`markdown.api.render`; (3) `toggleSidebarCollapsed` and `vscode.setState` have
+no `projects` branch, making the sidebar toggle a dead click with no
+persistence. Mitigations: follow the `${tab}-editor` / `btn-edit-${tab}` naming
+convention exactly, extend `getProjectPrd` to return both HTML and raw
+markdown, and add `projects` branches to all three sidebar-state code paths.
 
 ## Proposed Changes
 
 ### File: `src/webview/project.html`
 
 **Change 1 — Restructure the Projects tab (replace lines 1435-1458).**
+
+> **Clarification:** The IDs follow the shared `enterEditMode`/`exitEditMode`
+> naming convention (`${tab}-editor`, `btn-edit-${tab}`, `btn-save-${tab}`,
+> `btn-cancel-${tab}`) so the existing functions work unchanged. The old
+> `projects-prd-editor` and `btn-save-project-prd` IDs are retired.
 
 ```html
 <!-- Projects tab (per-project PRDs) -->
@@ -145,8 +222,9 @@ Three structural defects:
         </select>
         <button id="btn-build-prd-via-planner" class="strip-btn" disabled>Build via Planner</button>
         <button id="btn-copy-prd-prompt" class="strip-btn" disabled>Copy Build Prompt</button>
-        <button id="btn-edit-prd" class="strip-btn" disabled>Edit</button>
-        <button id="btn-save-project-prd" class="strip-btn" title="Save this project's PRD" style="display:none;">Save PRD</button>
+        <button id="btn-edit-projects" class="strip-btn" disabled>Edit</button>
+        <button id="btn-save-projects" class="strip-btn" style="display:none;">Save</button>
+        <button id="btn-cancel-projects" class="strip-btn" style="display:none;">Cancel</button>
         <button class="strip-btn" id="btn-project-context" data-tooltip="When on, the selected project's PRD is injected into every dispatched prompt">PROJECT CONTEXT: OFF</button>
         <span id="projects-prd-status" style="font-size:11px; color:var(--text-secondary);"></span>
     </div>
@@ -165,7 +243,7 @@ Three structural defects:
                 <div id="projects-preview-content">
                     <div class="empty-state">Select a project to view its PRD</div>
                 </div>
-                <textarea id="projects-prd-editor" class="markdown-editor" spellcheck="false"
+                <textarea id="projects-editor" class="markdown-editor" spellcheck="false"
                     placeholder="Select a project, then write its product requirements here…"
                     style="display:none;"></textarea>
             </div>
@@ -174,22 +252,110 @@ Three structural defects:
 </div>
 ```
 
-**Change 2 — Add `#projects-list-pane` to the shared CSS selectors.**
+**Change 2 — Add `#projects-list-pane` and `#system-list-pane` to the shared CSS
+selectors (4 locations).**
 
-In every CSS selector that lists the other list panes (the `#kanban-list-pane,
-#epics-list-pane, ...` groups for width/border/flex, the collapsed-state rules,
-and the cyber-theme background rules), append `#projects-list-pane`. This gives
-the projects sidebar the same width, border, scroll, and themed background as
-the other tabs.
+> **Clarification:** `#system-list-pane` is already missing from 3 of the 4
+> rule groups (a pre-existing bug). Add BOTH `#projects-list-pane` and
+> `#system-list-pane` to all 4 groups.
+
+1. **Base width/border/flex rule (line 197):** Already includes
+   `#system-list-pane`. Append `#projects-list-pane`:
+   ```css
+   #kanban-list-pane, #epics-list-pane, #constitution-list-pane, #system-list-pane, #tuning-list-pane, #projects-list-pane {
+   ```
+
+2. **Collapsed-state padding (lines 500-503):** Currently MISSING
+   `#system-list-pane`. Add both:
+   ```css
+   .content-row.collapsed #kanban-list-pane,
+   .content-row.collapsed #epics-list-pane,
+   .content-row.collapsed #constitution-list-pane,
+   .content-row.collapsed #system-list-pane,
+   .content-row.collapsed #tuning-list-pane,
+   .content-row.collapsed #projects-list-pane {
+       padding: 4px;
+       overflow: hidden;
+   }
+   ```
+
+3. **Collapsed-state child hiding (lines 508-511):** Currently MISSING
+   `#system-list-pane`. Add both:
+   ```css
+   .content-row.collapsed #kanban-list-pane > *:not(.sidebar-toggle-row),
+   .content-row.collapsed #epics-list-pane > *:not(.sidebar-toggle-row),
+   .content-row.collapsed #constitution-list-pane > *:not(.sidebar-toggle-row),
+   .content-row.collapsed #system-list-pane > *:not(.sidebar-toggle-row),
+   .content-row.collapsed #tuning-list-pane > *:not(.sidebar-toggle-row),
+   .content-row.collapsed #projects-list-pane > *:not(.sidebar-toggle-row) {
+       display: none !important;
+   }
+   ```
+
+4. **Cyber-theme background (lines 727-730):** Currently MISSING
+   `#system-list-pane`. Add both:
+   ```css
+   .cyber-theme-enabled #kanban-list-pane,
+   .cyber-theme-enabled #epics-list-pane,
+   .cyber-theme-enabled #constitution-list-pane,
+   .cyber-theme-enabled #system-list-pane,
+   .cyber-theme-enabled #tuning-list-pane,
+   .cyber-theme-enabled #projects-list-pane {
+       background: rgba(10, 10, 10, 0.70);
+       backdrop-filter: blur(8px);
+       -webkit-backdrop-filter: blur(8px);
+       border-right-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+   }
+   ```
+
+**Change 2b — Add `#projects-preview-content` to the empty-state CSS selector
+(lines 1159-1163).**
+
+```css
+#kanban-preview-content .empty-state,
+#epics-preview-content .empty-state,
+#constitution-preview-content .empty-state,
+#system-preview-content .empty-state,
+#tuning-preview-content .empty-state,
+#projects-preview-content .empty-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--vscode-editor-foreground, var(--text-secondary));
+    font-size: inherit;
+}
+```
+
+**Change 2c — Add `#projects-preview-content` to the edit-mode hiding rule
+(lines 250-255).**
+
+```css
+.edit-mode #kanban-preview-content,
+.edit-mode #epics-preview-content,
+.edit-mode #constitution-preview-content,
+.edit-mode #system-preview-content,
+.edit-mode #tuning-preview-content,
+.edit-mode #projects-preview-content {
+    display: none;
+}
+```
 
 ### File: `src/webview/project.js`
 
-**Change 3 — Add `projectsListCollapsed` to state and the tab-switch handler.**
+**Change 3 — Add `projectsListCollapsed` to state, persistence, and the
+tab-switch / toggle handlers.**
 
-In the state object (around line 60), add:
+In the state object (line 60-66), add:
 ```javascript
 projectsListCollapsed: false,
 ```
+
+In the persisted-state init (lines 68-74), add:
+```javascript
+state.projectsListCollapsed = persistedState.projectsListCollapsed || false;
+```
+
 In the tab-switch handler (lines 21-31), add a `projects` branch:
 ```javascript
 } else if (targetTab === 'projects') {
@@ -197,13 +363,37 @@ In the tab-switch handler (lines 21-31), add a `projects` branch:
 }
 ```
 
-**Change 4 — Refactor `updateProjectsPrdSelect` into `renderProjectsList`.**
+In `toggleSidebarCollapsed` (lines 103-119), add a `projects` branch:
+```javascript
+} else if (activeTab === 'projects') {
+    state.projectsListCollapsed = !state.projectsListCollapsed;
+    applySidebarState('projects', state.projectsListCollapsed);
+}
+```
 
-Replace the `<select>`-populating logic with a sidebar-render function that
-creates clickable project items in `#projects-items-container`, mirroring
-`renderKanbanPlans`:
+In the `vscode.setState` call (lines 123-130), add:
+```javascript
+projectsListCollapsed: state.projectsListCollapsed,
+```
+
+**Change 3b — Add `projects` keys to the edit-mode state objects (lines 55-58).**
 
 ```javascript
+editMode: { kanban: false, constitution: false, epics: false, system: false, projects: false },
+editOriginalContent: { kanban: null, constitution: null, epics: null, system: null, projects: null },
+dirtyFlags: { kanban: false, constitution: false, epics: false, system: false, projects: false },
+externalChangePending: { kanban: false, constitution: false, epics: false, system: false, projects: false },
+```
+
+**Change 4 — Refactor `updateProjectsPrdSelect` into `renderProjectsList`.**
+
+Replace the `<select>`-populating logic (lines 995-1037) with a
+sidebar-render function that creates clickable project items in
+`#projects-items-container`, mirroring `renderKanbanPlans` (line 1096):
+
+```javascript
+let _selectedProjectName = null;
+
 function renderProjectsList() {
     const container = document.getElementById('projects-items-container');
     const emptyState = document.getElementById('projects-empty-state');
@@ -215,6 +405,11 @@ function renderProjectsList() {
         if (emptyState) emptyState.style.display = '';
         container.style.display = 'none';
         setProjectsPrdEditorEnabled(false);
+        if (projectsPrdPathHint) projectsPrdPathHint.textContent = '';
+        if (projectsPrdStatus) projectsPrdStatus.textContent = '';
+        _prdLoadedProject = null;
+        _prdDirty = false;
+        _selectedProjectName = null;
         return;
     }
     if (emptyState) emptyState.style.display = 'none';
@@ -233,27 +428,152 @@ function renderProjectsList() {
         });
         container.appendChild(item);
     });
-    // Preserve prior selection if still present.
+    // Preserve prior selection, else the board's active project filter, else the first.
+    // Use dataset iteration instead of cssEscape (cssEscape does not exist in this file).
+    let toSelect = null;
     if (_selectedProjectName && projects.includes(_selectedProjectName)) {
-        const sel = container.querySelector(`[data-project="${cssEscape(_selectedProjectName)}"]`);
-        if (sel) sel.classList.add('selected');
+        toSelect = _selectedProjectName;
+    } else if (kanbanFilters.project && kanbanFilters.project !== '__none__' && projects.includes(kanbanFilters.project)) {
+        toSelect = kanbanFilters.project;
     } else {
-        _selectedProjectName = projects[0];
-        const first = container.firstChild;
-        if (first) first.classList.add('selected');
+        toSelect = projects[0];
+    }
+    _selectedProjectName = toSelect;
+    const items = container.querySelectorAll('.kanban-plan-item');
+    for (const el of items) {
+        if (el.dataset.project === toSelect) {
+            el.classList.add('selected');
+            break;
+        }
+    }
+    // Don't clobber an in-progress edit: reload only when the selection differs from
+    // what's loaded, or the current selection has no unsaved changes.
+    if (_selectedProjectName !== _prdLoadedProject || !_prdDirty) {
         requestProjectPrd();
+    } else {
+        setProjectsPrdEditorEnabled(true);
     }
 }
 ```
 
-Replace `projectsPrdSelect.value` references with `_selectedProjectName` in
-`requestProjectPrd`, the save handler, and the PROJECT CONTEXT toggle.
+Replace ALL `projectsPrdSelect.value` references with `_selectedProjectName` in:
+- `requestProjectPrd` (line 1041) — `const projectName = _selectedProjectName;`
+- The `projectPrdContent` message handler stale-response guard (line 349) —
+  `if (_selectedProjectName === msg.projectName) {`
+- The save handler (line 1085) — `const projectName = _selectedProjectName;`
+- The PROJECT CONTEXT toggle (line 1079) — uses `getProjectsTabWorkspaceRoot()`
+  already, no `projectsPrdSelect` reference; but verify the backend
+  `getProjectContextEnabled`/`setProjectContextEnabled` path still resolves the
+  selected project correctly.
+
+Remove the `projectsPrdSelect` element reference (line 279) and its
+`change` listener (lines 1069-1071).
+
+Rename `hydrateProjectsTab` (line 1056) to call `renderProjectsList` instead of
+`updateProjectsPrdSelect`:
+```javascript
+function hydrateProjectsTab() {
+    populateWorkspaceDropdowns();
+    renderProjectsList();
+    requestProjectContextEnabled();
+}
+```
+
+Update the `projectsWorkspaceFilter` change listener (lines 1062-1067) to call
+`renderProjectsList` instead of `updateProjectsPrdSelect`.
+
+Update the `kanbanPlansReady` handler (line 335) to call `renderProjectsList`
+instead of `updateProjectsPrdSelect`.
 
 **Change 5 — Add a preview/edit mode toggle (mirroring Constitution tab).**
 
-Add an `Edit` button that shows the textarea and hides the preview; a `Save`
-button that writes the PRD and switches back to preview. When no PRD exists,
-the preview shows "Not written yet — click Build via Planner to generate."
+Because the HTML now uses `projects-editor`, `btn-edit-projects`,
+`btn-save-projects`, `btn-cancel-projects`, `projects-preview-pane`, and
+`projects-preview-content`, the shared `enterEditMode('projects')` and
+`exitEditMode('projects')` functions (lines 2248-2282) work unchanged.
+
+Wire the buttons:
+```javascript
+const btnEditProjects = document.getElementById('btn-edit-projects');
+const btnSaveProjects = document.getElementById('btn-save-projects');
+const btnCancelProjects = document.getElementById('btn-cancel-projects');
+const projectsEditor = document.getElementById('projects-editor');
+const projectsPreviewContent = document.getElementById('projects-preview-content');
+
+if (btnEditProjects) {
+    btnEditProjects.addEventListener('click', () => {
+        if (!_selectedProjectName) return;
+        enterEditMode('projects');
+    });
+}
+if (btnSaveProjects) {
+    btnSaveProjects.addEventListener('click', () => {
+        if (!_selectedProjectName) return;
+        const wsRoot = getProjectsTabWorkspaceRoot();
+        if (!wsRoot) return;
+        if (projectsPrdStatus) projectsPrdStatus.textContent = 'Saving…';
+        vscode.postMessage({
+            type: 'saveProjectPrd',
+            projectName: _selectedProjectName,
+            content: projectsEditor ? projectsEditor.value : '',
+            workspaceRoot: wsRoot
+        });
+        exitEditMode('projects');
+    });
+}
+if (btnCancelProjects) {
+    btnCancelProjects.addEventListener('click', () => {
+        exitEditMode('projects');
+    });
+}
+if (projectsEditor) {
+    projectsEditor.addEventListener('input', () => {
+        state.dirtyFlags.projects = true;
+        _prdDirty = true;
+    });
+}
+```
+
+Update the `projectPrdContent` message handler (line 347) to populate the
+preview pane with rendered HTML and the editor with raw markdown:
+```javascript
+case 'projectPrdContent': {
+    if (_selectedProjectName === msg.projectName) {
+        if (projectsPreviewContent) {
+            projectsPreviewContent.innerHTML = msg.content || '';  // HTML from markdown.api.render
+        }
+        if (projectsEditor) projectsEditor.value = msg.rawContent || '';  // raw markdown for editing
+        state.editOriginalContent.projects = msg.rawContent || '';
+        setProjectsPrdEditorEnabled(true);
+        if (projectsPrdStatus) projectsPrdStatus.textContent = msg.exists ? '' : 'New PRD — not yet saved';
+        if (projectsPrdPathHint) projectsPrdPathHint.textContent = msg.path || '';
+        _prdLoadedProject = msg.projectName;
+        _prdDirty = false;
+        state.dirtyFlags.projects = false;
+        // Show "not written yet" onboarding when no PRD exists.
+        if (!msg.exists && projectsPreviewContent) {
+            projectsPreviewContent.innerHTML = `
+                <div class="constitution-onboarding">
+                    <p class="constitution-onboarding-title">No PRD found for this project.</p>
+                    <p>A PRD (Product Requirements Document) is a loose set of product requirements respected across all plans in a project — independent of epics. When <strong>PROJECT CONTEXT</strong> is on, this PRD is injected into <em>every</em> dispatched prompt.</p>
+                    <p>Use <strong>Build via Planner</strong> above to generate one, or <strong>Edit</strong> to write it yourself.</p>
+                </div>
+            `;
+        }
+        // Enable Edit button only when a project is selected.
+        if (btnEditProjects) btnEditProjects.disabled = false;
+    }
+    break;
+}
+```
+
+Update `setProjectsPrdEditorEnabled` (line 977) to also toggle the Edit button:
+```javascript
+function setProjectsPrdEditorEnabled(enabled) {
+    if (btnEditProjects) btnEditProjects.disabled = !enabled;
+    // btnSaveProjects / btnCancelProjects visibility is controlled by enterEditMode/exitEditMode.
+}
+```
 
 **Change 6 — Wire "Build via Planner" and "Copy Build Prompt".**
 
@@ -264,7 +584,7 @@ if (btnBuildPrd) {
     btnBuildPrd.addEventListener('click', () => {
         if (!_selectedProjectName) return;
         vscode.postMessage({
-            type: 'buildPrdViaPlanner',
+            type: 'invokePrdBuilder',
             projectName: _selectedProjectName,
             workspaceRoot: getProjectsTabWorkspaceRoot()
         });
@@ -282,48 +602,165 @@ if (btnCopyPrdPrompt) {
 }
 ```
 
-Enable these buttons when a project is selected (in `renderProjectsList` /
-`requestProjectPrd`).
+Enable `btnBuildPrd` and `btnCopyPrdPrompt` when a project is selected (in
+`renderProjectsList` / `requestProjectPrd`):
+```javascript
+if (btnBuildPrd) btnBuildPrd.disabled = !_selectedProjectName;
+if (btnCopyPrdPrompt) btnCopyPrdPrompt.disabled = !_selectedProjectName;
+```
 
 ### File: `src/services/PlanningPanelProvider.ts`
 
-**Change 7 — Add backend handlers for `buildPrdViaPlanner` and
+**Change 7 — Add backend handlers for `invokePrdBuilder` and
 `copyPrdBuildPrompt`.**
 
-Mirror the Constitution tab's `buildConstitutionViaPlanner` handler: assemble a
-PRD-generation prompt with the project name as context, dispatch to the planner
-role (for `buildPrdViaPlanner`) or copy to clipboard (for
-`copyPrdBuildPrompt`). The PRD is saved to
-`.switchboard/projects/<project>/prd.md` on planner completion (or the planner
-output is placed in the editor for review before saving, matching the
-Constitution flow).
+Mirror the Constitution tab's `invokeConstitutionBuilder` handler (line 3349)
+and `copyConstitutionPrompt` handler (line 3266). Add these two cases near the
+existing `getProjectPrd` / `saveProjectPrd` handlers (after line 3254):
+
+```typescript
+case 'invokePrdBuilder': {
+    const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+    if (!wsRoot || typeof msg.projectName !== 'string') { break; }
+    const projectName = msg.projectName;
+    const promptText =
+        `Please act as a product manager. I want to build a Product Requirements Document (PRD) for the project "${projectName}" in the workspace at ${wsRoot}.\n` +
+        `A PRD is a loose set of product requirements respected across all plans in this project — independent of epics. It is NOT a technical spec or a constitution; it captures WHAT the product should do and for whom, not HOW it is built.\n\n` +
+        `Please ask me the following questions one by one or help me draft it:\n` +
+        `1. Vision: In one sentence, what is this project's primary purpose?\n` +
+        `2. Target Users: Who are the primary users, and what is their main pain point?\n` +
+        `3. Key Features: What are the 3-7 core features or capabilities? Give each a short name and one sentence.\n` +
+        `4. Success Criteria: How will we know this project is working? List 2-4 measurable outcomes.\n` +
+        `5. Non-Goals: What are specific things this project will NOT do in its current scope?\n` +
+        `6. Open Questions: What are the top 2-3 unresolved decisions or risks?\n\n` +
+        `Please format the output document strictly as follows:\n` +
+        `# ${projectName} — PRD\n\n` +
+        `> **Vision:** [one sentence]\n\n` +
+        `## Target Users\n[Who they are and their main pain point]\n\n` +
+        `## Key Features\n- **[Name]:** [one sentence]\n\n` +
+        `## Success Criteria\n- [measurable outcome]\n\n` +
+        `## Non-Goals\n- [explicit exclusion]\n\n` +
+        `## Open Questions\n- [unresolved decision or risk]\n\n` +
+        `Save the result to .switchboard/projects/${projectName.toLowerCase().replace(/[^a-z0-9_-]+/g, '-')}/prd.md\n`;
+    if (this._taskViewerProvider) {
+        const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole('planner', promptText, wsRoot);
+        if (dispatched) { break; }
+    }
+    const terminal = vscode.window.terminals.find(t => t.name.toLowerCase().includes('planner') || t.name.toLowerCase().includes('lead'))
+        || vscode.window.createTerminal({ name: 'PRD Builder', cwd: wsRoot });
+    terminal.show();
+    const { sendRobustText } = require('./terminalUtils');
+    await sendRobustText(terminal, promptText);
+    break;
+}
+case 'copyPrdBuildPrompt': {
+    const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+    if (!wsRoot || typeof msg.projectName !== 'string') { break; }
+    const projectName = msg.projectName;
+    const promptText =
+        `Please act as a product manager. I want to build a Product Requirements Document (PRD) for the project "${projectName}" in the workspace at ${wsRoot}.\n` +
+        `A PRD is a loose set of product requirements respected across all plans in this project — independent of epics. It is NOT a technical spec or a constitution; it captures WHAT the product should do and for whom, not HOW it is built.\n\n` +
+        `Please ask me the following questions one by one or help me draft it:\n` +
+        `1. Vision: In one sentence, what is this project's primary purpose?\n` +
+        `2. Target Users: Who are the primary users, and what is their main pain point?\n` +
+        `3. Key Features: What are the 3-7 core features or capabilities? Give each a short name and one sentence.\n` +
+        `4. Success Criteria: How will we know this project is working? List 2-4 measurable outcomes.\n` +
+        `5. Non-Goals: What are specific things this project will NOT do in its current scope?\n` +
+        `6. Open Questions: What are the top 2-3 unresolved decisions or risks?\n\n` +
+        `Please format the output document strictly as follows:\n` +
+        `# ${projectName} — PRD\n\n` +
+        `> **Vision:** [one sentence]\n\n` +
+        `## Target Users\n[Who they are and their main pain point]\n\n` +
+        `## Key Features\n- **[Name]:** [one sentence]\n\n` +
+        `## Success Criteria\n- [measurable outcome]\n\n` +
+        `## Non-Goals\n- [explicit exclusion]\n\n` +
+        `## Open Questions\n- [unresolved decision or risk]\n`;
+    await vscode.env.clipboard.writeText(promptText);
+    this._projectPanel?.webview.postMessage({ type: 'prdPromptCopied' });
+    break;
+}
+```
+
+**Change 7b — Extend `getProjectPrd` to render markdown to HTML (line 3211).**
+
+The current handler returns raw markdown. The preview pane needs HTML. Mirror
+the `kanbanPlanPreviewReady` pattern (line 1247):
+
+```typescript
+case 'getProjectPrd': {
+    const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+    if (wsRoot && typeof msg.projectName === 'string') {
+        const filePath = getProjectPrdPath(wsRoot, msg.projectName);
+        let rawContent = '';
+        let exists = false;
+        try {
+            if (fs.existsSync(filePath)) {
+                rawContent = await fs.promises.readFile(filePath, 'utf8');
+                exists = true;
+            }
+        } catch { /* non-fatal */ }
+        // Render markdown to HTML for the preview pane (mirrors kanbanPlanPreviewReady).
+        let renderedHtml = '';
+        try {
+            renderedHtml = await vscode.commands.executeCommand<string>('markdown.api.render', rawContent);
+        } catch { renderedHtml = ''; }
+        this._projectPanel?.webview.postMessage({
+            type: 'projectPrdContent',
+            projectName: msg.projectName,
+            workspaceRoot: wsRoot,
+            content: renderedHtml,    // HTML for preview pane
+            rawContent,               // raw markdown for editor
+            exists,
+            path: filePath
+        });
+    }
+    break;
+}
+```
 
 ## Verification Plan
+
+### Automated Tests
+> Per session directives, automated tests are NOT run as part of this plan.
+> The test suite will be run separately by the user. The following manual
+> verification steps are for the implementer's self-check.
 
 1. **Visual parity test:** Open the Projects tab. Confirm it uses the same
    layout, sidebar width, cyber-scanlines, and themed background as the Kanban
    and Constitution tabs — no grey box.
 2. **Sidebar list test:** With projects on the kanban board, confirm the
    projects appear as clickable items in the sidebar (not a dropdown). Click
-   each and confirm the PRD loads in the preview pane.
+   each and confirm the PRD loads in the preview pane (rendered as HTML, not
+   literal markdown).
 3. **Empty state test:** Select a workspace with no projects. Confirm the
    sidebar shows "No projects — add one on the Kanban board (+)."
 4. **Not-written-yet test:** Select a project with no PRD. Confirm the preview
-   shows "Not written yet — click Build via Planner to generate" (not an empty
-   textarea).
+   shows the "No PRD found for this project" onboarding message with Build via
+   Planner / Edit guidance (not an empty textarea).
 5. **Build via Planner test:** Click "Build via Planner" for a project with no
-   PRD. Confirm a planner dispatch fires (or a build prompt is copied). Confirm
-   the generated PRD loads into the preview/editor.
-6. **Edit/Save test:** Click Edit, modify the PRD, click Save. Confirm the PRD
-   is written to `.switchboard/projects/<project>/prd.md` and the preview
-   updates.
+   PRD. Confirm a planner dispatch fires (or a build prompt is copied for the
+   Copy variant). Confirm the generated PRD loads into the preview/editor after
+   saving.
+6. **Edit/Save/Cancel test:** Click Edit, confirm the textarea appears with the
+   raw markdown and the preview hides. Modify the PRD, click Save. Confirm the
+   PRD is written to `.switchboard/projects/<project>/prd.md` and the preview
+   updates with rendered HTML. Click Cancel instead of Save — confirm edits are
+   discarded and the original preview restores.
 7. **PROJECT CONTEXT toggle test:** Toggle PROJECT CONTEXT on. Confirm the
    selected project's PRD is injected into a subsequent dispatch (verify via a
    test dispatch or the existing context-injection path).
 8. **Sidebar collapse test:** Collapse the projects sidebar via the toggle.
    Confirm it collapses and restores correctly, and the collapse state
-   persists on tab switch.
+   persists on tab switch (verify `vscode.getState()` includes
+   `projectsListCollapsed`).
 9. **Existing PRD migration test:** For a project with an existing `prd.md`,
-   confirm the content loads into the preview on selection (no data loss).
+   confirm the content loads into the preview as rendered HTML on selection
+   (no data loss). Confirm the Edit button loads the raw markdown into the
+   textarea.
 10. **Tab-switch regression test:** Switch between Kanban, Projects, Epics,
-    Constitution tabs. Confirm each renders correctly with no styling bleed.
+    Constitution, System tabs. Confirm each renders correctly with no styling
+    bleed. Specifically verify the System tab's sidebar now collapses correctly
+    (pre-existing CSS bug fix).
+11. **Stale-response guard test:** Rapidly click two different projects in the
+    sidebar. Confirm the preview ends up showing the second project's PRD (not
+    a stale first-project response).

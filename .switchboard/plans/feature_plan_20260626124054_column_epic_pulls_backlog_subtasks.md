@@ -164,3 +164,62 @@ Per session directives, automated tests are not run in this session — the user
 ---
 
 **Recommendation:** Complexity is 4/10 → **Send to Coder**.
+
+## Reviewer Pass — Completed
+
+### Stage 1: Adversarial Findings (Grumpy Principal Engineer)
+
+| Severity | Finding | File:Line |
+|----------|---------|-----------|
+| CRITICAL | None — plan-scoped code is correct. | — |
+| MAJOR (process) | Commit `6c72aa4` bundled 3 unrelated changes with the one-line fix: (1) new Jules/Re-plan/Splitter button definitions, (2) a pre-existing `completeAll` case-block brace fix, (3) a dynamic review tooltip. Reverting the subtask-leak fix would revert all three. | `src/webview/kanban.html:4546-4559`, `:4840`, `:5327/5339` |
+| NIT | Test regex `\n\s{8}\}` is indentation-fragile — a reformat would break it. Consistent with existing backend test patterns, so acceptable. | `src/test/kanban-subtask-column-leak-regression.test.js:101` |
+| NIT | Plan proposed regex `\n\s{4}\}` but actual closing brace is at 8-space indent. Implementer silently corrected to `\s{8}`. Plan text above still shows the wrong regex (documentation drift). | plan text line 124 |
+
+### Stage 2: Balanced Synthesis
+
+**Keep (no changes needed):**
+- `getAllInColumn` collector fix — both return paths now filter `&& !c.epicId`, exactly mirroring backend `_visibleColumnCards` (`KanbanProvider.ts:364-368`). Correct.
+- Handler-level `!card.epicId` hardening at line 4805 — defense in depth as recommended. Correct.
+- Test block #7 — regex validated against actual source; both CODED_AUTO and default branch assertions pass. Correct.
+- `completeAll` brace fix (line 4840) — this was a real pre-existing structural bug (`case 'completeAll': {` was missing its closing `}`, silently consuming the switch's closing brace). Fixing it was correct even though undocumented.
+
+**Fix now:** Nothing — plan-scoped implementation is complete and correct.
+
+**Defer:**
+- Out-of-scope bundled changes (Jules/Re-plan/Splitter buttons, review tooltip) — functional and wired up, but not this plan's concern. User may want to split into separate commits for hygiene.
+- Backlog-view scoping — explicitly out-of-scope per plan. Defer unless UAT reproduces.
+
+### Files Changed (Plan-Scoped)
+
+| File | Change | Lines |
+|------|--------|-------|
+| `src/webview/kanban.html` | `getAllInColumn` CODED_AUTO branch: added `&& !c.epicId` | 4323 |
+| `src/webview/kanban.html` | `getAllInColumn` default branch: added `&& !c.epicId` | 4325 |
+| `src/webview/kanban.html` | `groupAllIntoEpic` handler: added `&& !card.epicId` (defense in depth) | 4805 |
+| `src/test/kanban-subtask-column-leak-regression.test.js` | New test block #7: frontend `getAllInColumn` static-source regression assertions | 94-115 |
+
+### Files Changed (Out-of-Scope, Bundled in Same Commit)
+
+| File | Change | Lines |
+|------|--------|-------|
+| `src/webview/kanban.html` | New `julesBtn`/`rePlanBtn`/`splitterBtn` button definitions + rendering | 4546-4559, 4584-4586 |
+| `src/webview/kanban.html` | `completeAll` case-block closing brace fix (pre-existing latent structural bug) | 4840 |
+| `src/webview/kanban.html` | Dynamic review tooltip (`reviewTooltip` variable) | 5327, 5339 |
+
+### Verification Results
+
+- **Compilation:** Skipped per session directives.
+- **Tests:** Skipped per session directives. User to run `node src/test/kanban-subtask-column-leak-regression.test.js` separately.
+- **Static verification (performed):**
+  - All 5 `getAllInColumn` consumers confirmed: `moveAll` (4713), `promptAll` (4750), `groupAllIntoEpic` (4798), `completeAll` (4835), `recoverAll` (5501).
+  - Backend `_visibleColumnCards` contract confirmed at `KanbanProvider.ts:364-368` — frontend now mirrors it.
+  - Test regex manually validated against actual source — both branch assertions will pass.
+  - Switch/block brace structure confirmed balanced (lines 4834-4843) after the `completeAll` brace fix.
+  - Out-of-scope button constants (`ICON_JULES`, `ICON_ANALYST_MAP`, `ICON_SPLITTER`) and handlers (`julesSelected`, `rePlanSelected`, `splitterSelected`) confirmed present — no dangling references.
+
+### Remaining Risks
+
+1. **Commit hygiene:** The subtask-leak fix shares a commit with unrelated features. If the fix needs to be reverted, the Jules/Re-plan/Splitter buttons and tooltip change revert with it. Recommend the user split commits in future auto-commit cycles.
+2. **Backlog-view scoping:** The `groupAllIntoEpic` button retains `data-column="CREATED"` in backlog view, where the CREATED column is relabeled "BACKLOG". `getAllInColumn('CREATED')` may return hidden real-CREATED cards instead of visible backlog cards. Documented as out-of-scope; defer unless UAT reproduces.
+3. **Test regex fragility:** The `\n\s{8}\}` pattern depends on exact 8-space indentation of the closing brace. A formatter change would break the test. Acceptable given existing pattern consistency.

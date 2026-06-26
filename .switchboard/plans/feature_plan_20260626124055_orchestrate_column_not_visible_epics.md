@@ -178,3 +178,54 @@ Per session directives, automated tests (unit, integration, e2e) are NOT run in 
 ## Recommendation
 
 Complexity is 5 (mixed: mostly routine refactor + one well-scoped idempotency guard). **Send to Coder.**
+
+---
+
+## Reviewer Pass — 2026-06-26 (post-implementation, in-place)
+
+**Verdict: APPROVED. Implementation is faithful to the plan and correct. No code changes required.**
+
+### What was verified in code
+
+| Plan requirement | Location | Status |
+| :--- | :--- | :--- |
+| `markEpicOrchestrating` helper (idempotency short-circuit + failure logging) | `KanbanProvider.ts:3176-3208` | ✅ Matches plan verbatim |
+| `dispatchEpicOrchestration` refactored to call helper, try/catch preserved | `KanbanProvider.ts:3164-3168` | ✅ Inline teleport removed; helper owns the single `_refreshBoard` |
+| Copy-branch teleport (`'copy'` writes clipboard then `markEpicOrchestrating`) | `PlanningPanelProvider.ts:2903-2906` | ✅ Matches plan |
+| `'preview'` does neither (no clipboard, no teleport) | `PlanningPanelProvider.ts:2897-2907` | ✅ Else-branch builds prompt only; teleport gated on `mode === 'copy'` |
+| `createEpic` project/projectId inheritance | `KanbanProvider.ts:7850-7851, 7894, 7907` | ✅ Present |
+| Refresh ownership (no double-refresh from callers) | `KanbanProvider.ts` | ✅ Only `markEpicOrchestrating` calls `_refreshBoard`; `dispatchEpicOrchestration` does not |
+
+### Supporting facts independently confirmed
+- `moveCardToColumn`/`moveCardToColumnByPlanFile` both return `Promise<boolean>` (`4800`, `4847`) — the `if (!moved)` warn is sound, not a spurious-warn-on-void.
+- `_normalizeLegacyKanbanColumn('ORCHESTRATING')` returns `'ORCHESTRATING'` unchanged (`1989-1992`, only remaps `CODED→LEAD CODED`) — the idempotency guard compares correctly.
+- `_filterDynamicColumns` (`2410-2411`): `epicOnly` columns show iff `occupiedColumns.has(col.id)`; ORCHESTRATING is `epicOnly: true, hideWhenNoAgent: true` (`agentConfig.ts:117`). Teleporting the epic's `kanbanColumn` to ORCHESTRATING makes the (project-filtered) card occupy it → column appears. Mechanism is correct end-to-end.
+- The board's "Copy Planning Prompt" button posts `copyEpicPlannerPrompt` (`project.js:1609`), a distinct planning action — correctly NOT an orchestrate path. The only two orchestration entry points are `requestEpicOrchestration('copy')` and `('send')`, both routed correctly.
+
+### Resolution concern investigated and dissolved (was a candidate CRITICAL)
+The teleport resolves the epic via `db.getPlanByPlanId(epicSessionId)` (`plan_id = ?` only), but the webview sends `_epicSelectedPlan.sessionId || planId` (`project.js:1799`) and `createEpic` writes **distinct** plan_id/session_id UUIDs (`7865-7866`). On its face this looked like it could return `null` for multi-plan-created epics. Investigation against the live `kanban.db`:
+- All 4 epics — including `286f9939`, which has a `createEpic`-style filename `...-epic-286f9939-...md` (5 subtasks) — have `session_id == plan_id`.
+- Cause: `createEpic` embeds the plan_id in the epic filename (`${slug}-${planId}.md`, comment at `7876-7879`); the file watcher re-imports and derives plan_id from that trailing UUID, **normalizing `session_id` to equal `plan_id`** in steady state.
+- Decisive: `markEpicOrchestrating` and `buildEpicOrchestrationPrompt` use the **identical** resolver with the **same argument** in the same handler. The handler `break`s on a null prompt **before** reaching the teleport, so the teleport is only ever reached when resolution already succeeded. The two paths cannot diverge.
+
+Net: every epic resolves correctly in practice; the teleport fires for any epic that orchestration can resolve at all. The reported bug ("prompt copied, column missing") confirms resolution worked in the failing scenario — exactly what this fix targets.
+
+### Findings
+
+- **CRITICAL:** none.
+- **MAJOR:** none.
+- **NIT — preview is not strictly side-effect-free at the doc layer:** `'preview'` still calls `buildEpicOrchestrationPrompt`, which calls `_regenerateEpicFile` (a markdown-file write, introduced by the sibling `slim-orchestrator-prompt-addons-epic-link` plan). The plan's "side-effect-free" contract refers to **board/column state**, which preview honors (no teleport, no clipboard). Doc regeneration applies equally to all three modes and is out of this plan's scope. No action.
+- **NIT — copy path does not wrap `markEpicOrchestrating` in try/catch** (the send path does, `3164-3168`). The helper guards db/epic resolution with early returns and wraps the move/refresh in its own try/catch; the only unguarded throw would be from `getPlanByPlanId`/`ensureReady` (very unlikely), which would surface via the outer `orchestrateEpic` catch after the clipboard was already written. Matches the plan's snippet exactly. No action.
+- **NIT — theoretical double-refresh** in the `moveCardToColumnByPlanFile` fallback (it refreshes internally at `4896`, and the helper refreshes again). Dead in practice: epics always carry a `sessionId`, so the `moveCardToColumn` branch (no internal refresh) is always taken → single refresh. No action.
+
+### Residual risks (carried forward to UAT, unchanged from plan)
+1. **Integration status mapping for ORCHESTRATING:** the first teleport into ORCHESTRATING fires `queueIntegrationSyncForSession(..., 'ORCHESTRATING')` (`4825`). The idempotency guard prevents *re-sync*, but verify the first sync maps to a sane Linear/ClickUp status (plan verification step 8).
+2. **Legacy epics with `project=''`** remain filtered off project boards until backfilled (out of scope; User Review item #3).
+
+### Verification performed
+- Static/structural review of the diff and all supporting call sites (read-only).
+- Live `kanban.db` inspection to resolve the plan_id/session_id resolution question.
+- Per session directives: **compilation and automated tests were NOT run** (user runs the suite separately). No new tests authored.
+
+### Files changed by this reviewer pass
+- None (plan file annotated only; no code edits — implementation was already correct).
