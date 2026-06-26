@@ -2,6 +2,10 @@
 
 ## Goal
 
+Fix the "Review Plan" button so it opens the project panel's Kanban Plans tab
+with the plan's own workspace, project, and column filters set — not the
+widest "All Workspaces / All Projects / All Columns" view.
+
 ### Problem
 Clicking "Review Plan" on a card in `kanban.html` opens the plan in the Project
 panel (`project.html`) Kanban Plans tab, but it defaults to the widest possible
@@ -31,7 +35,8 @@ document.querySelectorAll('.card-btn.review').forEach(btn => {
 });
 ```
 
-The backend handler in `KanbanProvider.ts` (lines 6676-6697) opens/reveals the
+The backend handler in `KanbanProvider.ts` (lines **6749-6771** — corrected from
+the original plan's 6676-6697, which pointed at the `completeAll` case) opens/reveals the
 project panel and posts `activateKanbanTabAndSelectPlan`:
 
 ```typescript
@@ -56,7 +61,7 @@ case 'reviewPlan': {
 }
 ```
 
-The project panel handler in `project.js` (lines 395-431) receives
+The project panel handler in `project.js` (lines 395-434) receives
 `activateKanbanTabAndSelectPlan` and **explicitly clears all filters to the
 widest choice**:
 
@@ -81,7 +86,7 @@ case 'activateKanbanTabAndSelectPlan': {
 ```
 
 ### Root Cause
-The `activateKanbanTabAndSelectPlan` handler (project.js lines 417-425)
+The `activateKanbanTabAndSelectPlan` handler (project.js lines 419-427)
 intentionally clears all filters to `''` ("All") with the comment: *"Clear all
 filters so the target plan is guaranteed to be in the rendered list regardless of
 workspace mapping."* This was a defensive choice to avoid the target plan being
@@ -95,106 +100,132 @@ Additionally, the `reviewPlan` message from `kanban.html` does NOT include the
 plan's `project` or `column` — only `workspaceRoot`, `sessionId`, `planId`,
 `planFile`, `isEpic`. So even if the project panel wanted to set narrow filters,
 it doesn't receive the project/column values. The card data (`cardData`) in
-kanban.html does have `project` and `column` available (the card DOM has
-`data-project` and the card object has `column`), but they aren't passed through.
+kanban.html does have `project` and `column` available (the card object in
+`currentCards` has both fields — confirmed at kanban.html line 4253
+`cardData.column` and line 1235 `card.project`), but they aren't passed through.
+
+**Workspace mapping detail (verified):** The kanban board cards
+(`KanbanProvider.ts` line 1234) set `workspaceRoot: resolvedWorkspaceRoot` where
+`resolvedWorkspaceRoot = path.resolve(workspaceRoot)` — the **actual child folder
+root**. The project panel's plan cache (`PlanningPanelProvider.ts` line 7848)
+sets `workspaceRoot: effectiveRoot` where `effectiveRoot =
+this._resolveEffectiveWorkspaceRoot(workspaceRoot)` — the **mapped parent root**.
+The project panel's workspace dropdown (`_kanbanWorkspaceItems`, built by
+`_buildKanbanWorkspaceItems()`) uses effective roots. So in a multi-root setup
+with mapping, the card's `workspaceRoot` (child) may not be in the project
+panel's workspace dropdown, while the plan cache's `workspaceRoot` (parent) IS
+in the dropdown.
 
 **Bug status: STILL PRESENT** (verified in source).
 
 ## Metadata
-**Tags:** bug, kanban, review-plan, project-panel, filters, navigation
-**Complexity:** 4
-**Repo:** switchboard (source at `/Users/patrickvuleta/Documents/GitHub/switchboard`)
+**Tags:** bugfix, ui, ux
+**Complexity:** 5
+
+## User Review Required
+
+This plan modifies the Review Plan navigation flow across three files. The
+workspace-mapping fallback behavior (narrow → widest after retries) should be
+confirmed as acceptable UX. No destructive operations; no data migration needed.
 
 ## Complexity Audit
 
 ### Routine
-1. Pass `project` and `column` from `kanban.html` in the `reviewPlan` message.
-2. Pass `project` and `column` through the backend `activateKanbanTabAndSelectPlan`
-   message.
-3. In `project.js`, set the narrow filters instead of clearing them.
+- Pass `project` and `column` from `kanban.html` in the `reviewPlan` message.
+- Pass `project` and `column` through the backend `activateKanbanTabAndSelectPlan`
+  message.
+- Declare two new module-level variables (`_pendingKanbanFilterIntent`,
+  `_pendingKanbanSelectionRetries`) near the existing pending-selection
+  declarations.
+- In `project.js`, set the narrow filters instead of clearing them, with
+  option-exists guards.
+- Apply the pending filter intent after dropdowns populate in the
+  `kanbanPlansReady` handler.
+- Add a retry counter to `tryResolvePendingKanbanSelection` with fallback to
+  widest after 3 failed resolutions.
+- Apply the same narrow-filter pattern to the epic review path.
 
 ### Complex / Risky
-1. **Workspace mapping mismatch.** The original comment warns that
-   `card.workspaceRoot` is the child folder while `plan.workspaceRoot` in the
-   cache is the mapped parent. Setting the workspace filter to the child folder
-   value could hide the plan if the filter compares against the parent. The fix
-   must resolve the workspace filter value through the same mapping the plan
-   cache uses, OR set the workspace filter and then verify the target plan is
-   visible (fall back to "All Workspaces" if not found).
-2. **Filter value must exist in the dropdown.** The workspace/project/column
-   dropdowns are populated from `kanbanPlansReady`. If the target plan's
-   workspace/project/column isn't in the dropdown options (e.g. the board shows
-   a column the project panel doesn't know about), setting the filter value
-   silently fails. Must guard: only set the filter if the option exists.
-3. **`tryResolvePendingKanbanSelection` timing.** The selection resolution runs
-   after the kanban tab click fires `fetchKanbanPlans`. If the narrow filter is
-   applied before the fetch returns, the rendered list is filtered correctly and
-   the plan is found. If the fetch returns the full list first and the filter is
-   applied after, there could be a flash. The filter must be set BEFORE the tab
-   click so the fetch + render applies it.
+- **Workspace mapping mismatch.** The card's `workspaceRoot` (child folder) may
+  not be in the project panel's workspace dropdown (which uses effective/mapped
+  parent roots). The option-exists guard skips setting the workspace filter in
+  this case, leaving it at whatever `kanbanPlansReady` lines 321-327 set (the
+  effective root or "All"). This is the correct behavior — the plan cache uses
+  the effective root, so filtering by it shows the plan. The fallback-to-widest
+  handles rare cache divergence.
+- **Filter intent ordering.** The workspace filter intent MUST be applied before
+  `populateKanbanFilters()` so the project dropdown is built from the correct
+  workspace. The project/column intent is applied after `populateKanbanFilters()`.
+  See Change 4a/4b below.
+- **`kanbanPlansReady` lines 321-327 interaction.** After Change 3 clears the
+  workspace filter to '', lines 321-327 set it to `msg.kanbanWorkspaceRoot`
+  (the project panel's current workspace, an effective root) if it's in
+  `_kanbanWorkspaceItems`. Then Change 4a may override it with the card's
+  workspace root. If the card's root isn't in the dropdown, the guard fails and
+  the filter stays at `msg.kanbanWorkspaceRoot` — which is the correct value for
+  the plan cache. No bug here, but the implementer must understand this flow.
 
 ## Edge-Case & Dependency Audit
 
-- **Epic review:** The epic path (lines 396-408) clears the epics workspace
-  filter and switches to the epics tab. The same narrow-filter fix should apply
-  to epics (set the epic's workspace filter, not clear it).
-- **Plan not in cache yet:** `tryResolvePendingKanbanSelection` retries on
+- **Race Conditions:** The tab click fires `fetchKanbanPlans` (async). The
+  filter intent is stashed synchronously in `_pendingKanbanFilterIntent` before
+  the fetch response arrives. When `kanbanPlansReady` fires, the intent is
+  applied. No race — the intent is consumed exactly once (set to `null` after
+  application). If a second `kanbanPlansReady` fires (e.g. from a complexity
+  edit), the intent is already null and doesn't reapply.
+- **Security:** No security implications. Filter values are workspace paths and
+  column/project names from the card data, not user input.
+- **Side Effects:** Changing `kanbanFilters` affects the rendered plan list. The
+  option-exists guards prevent setting a filter to a value not in the dropdown,
+  which would silently fail (browser resets `<select>.value` to '').
+- **Dependencies & Conflicts:** No dependency on other plans or sessions.
+- **Epic review:** The epic path (lines 396-410) clears the epics workspace
+  filter and switches to the epics tab. The same narrow-filter fix applies
+  (Change 6 below).
+- **Plan not in cache yet:** `tryResolvePendingKanbanSelection` retries on each
   `kanbanPlansReady`. If the narrow filter hides the plan due to a mapping
-  mismatch, the retry never finds it. Mitigation: after N retries, fall back to
-  clearing the filters (widest) so the plan is at least visible.
+  mismatch, the retry counter triggers fallback to widest after 3 attempts.
 - **Cross-window project panel:** If the project panel is in another window,
   `revealProject()` is skipped and only the message is posted. The filter values
   travel in the message, so this works regardless of window.
+- **BACKLOG/CREATED column values:** Both 'BACKLOG' and 'CREATED' are valid
+  column IDs in `VALID_KANBAN_COLUMNS` (KanbanDatabase.ts line 618) and both
+  appear in the project panel's column dropdown (PlanningPanelProvider.ts lines
+  7895-7900 adds BACKLOG). The card's `column` field matches the plan cache's
+  `column` field — no mismatch. No special handling needed.
+
+## Dependencies
+
+None.
+
+## Adversarial Synthesis
+
+Key risks: (1) filter intent ordering — workspace intent must precede
+`populateKanbanFilters()` so the project dropdown builds from the correct
+workspace; (2) missing variable declarations would crash the handler in strict
+mode; (3) retry counter must reset on new pending selection and increment only
+on failed match. Mitigations: split Change 4 into 4a (workspace, before
+`populateKanbanFilters`) and 4b (project/column, after); declare variables near
+line 171; specify retry counter lifecycle precisely in Change 5.
 
 ## Proposed Changes
 
-### File: `src/webview/kanban.html`
-
-**Change 1 — Include `project` and `column` in the reviewPlan message (lines
-5130-5143).**
-
-```javascript
-document.querySelectorAll('.card-btn.review').forEach(btn => {
-    btn.addEventListener('click', () => {
-        const pid = btn.dataset.planId || btn.dataset.session || '';
-        const cardData = currentCards.find(c => (c.planId || c.sessionId) === pid);
-        postKanbanMessage({
-            type: 'reviewPlan',
-            sessionId: btn.dataset.session || '',
-            planId: btn.dataset.planId || '',
-            planFile: btn.dataset.planFile || '',
-            workspaceRoot: btn.dataset.workspaceRoot,
-            project: cardData?.project || btn.dataset.project || '',
-            column: cardData?.column || '',
-            isEpic: cardData?.isEpic || false
-        });
-    });
-});
-```
-
-### File: `src/services/KanbanProvider.ts`
-
-**Change 2 — Pass `project` and `column` through to the project panel (lines
-6688-6695).**
-
-```typescript
-this._planningPanelProvider.postMessageToProjectWebview({
-    type: 'activateKanbanTabAndSelectPlan',
-    planId: msg.planId || '',
-    sessionId: reviewId,
-    planFile: msg.planFile || '',
-    workspaceRoot: msg.workspaceRoot || '',
-    project: msg.project || '',
-    column: msg.column || '',
-    isEpic: msg.isEpic === true
-});
-```
-
 ### File: `src/webview/project.js`
 
-**Change 3 — Set narrow filters instead of clearing them (lines 410-431).**
+**Change 0 — Declare new module-level variables (near line 171-173).**
 
-Replace the filter-clearing block with:
+After the existing `let _pendingAutoEdit = false;` declaration (line 173), add:
+
+```javascript
+let _pendingKanbanFilterIntent = null;   // { workspaceRoot, project, column } — applied after dropdowns populate
+let _pendingKanbanSelectionRetries = 0;  // incremented on failed resolution; fallback to widest at 3
+```
+
+**Change 1 — Set narrow filters instead of clearing them (lines 412-433, non-epic path).**
+
+Replace the filter-clearing block in the `activateKanbanTabAndSelectPlan` handler
+(non-epic branch, lines 412-433) with:
+
 ```javascript
 _pendingKanbanSelection = {
     planId: msg.planId || '',
@@ -203,15 +234,21 @@ _pendingKanbanSelection = {
     workspaceRoot: msg.workspaceRoot || ''
 };
 _pendingAutoEdit = msg.autoEdit === true;
+_pendingKanbanSelectionRetries = 0;  // reset retry counter for this selection
 
-// Set the NARROWEST filter (the plan's own workspace/project/column) so the
-// user lands in the plan's context, not the whole board. Each filter is only
-// applied if the value is non-empty AND the corresponding dropdown has a
-// matching option — otherwise it's left at "All" to avoid hiding the plan.
-const desiredWorkspace = msg.workspaceRoot || '';
-const desiredProject = msg.project || '';
-const desiredColumn = msg.column || '';
+// Stash the desired narrow filters. They are applied AFTER the dropdowns
+// populate in the kanbanPlansReady handler (Change 4a/4b). Each filter is
+// only applied if the value is non-empty AND the corresponding dropdown has
+// a matching option — otherwise it's left at "All" to avoid hiding the plan.
+_pendingKanbanFilterIntent = {
+    workspaceRoot: msg.workspaceRoot || '',
+    project: msg.project || '',
+    column: msg.column || ''
+};
 
+// Clear filters to widest NOW — the kanbanPlansReady handler will narrow them
+// via the intent. This ensures the plan is visible if the cache already has
+// data and tryResolvePendingKanbanSelection runs immediately below.
 kanbanFilters.workspaceRoot = '';
 if (kanbanWorkspaceFilter) kanbanWorkspaceFilter.value = '';
 kanbanFilters.project = '';
@@ -219,21 +256,20 @@ if (kanbanProjectFilter) kanbanProjectFilter.value = '';
 kanbanFilters.column = '';
 if (kanbanColumnFilter) kanbanColumnFilter.value = '';
 
-// Stash desired filters to apply AFTER the dropdowns are populated by
-// kanbanPlansReady (the tab click fires fetchKanbanPlans which is async).
-_pendingKanbanFilterIntent = { workspaceRoot: desiredWorkspace, project: desiredProject, column: desiredColumn };
-
 const kanbanTabBtn = document.querySelector('.shared-tab-btn[data-tab="kanban"]');
 if (kanbanTabBtn) kanbanTabBtn.click();
 tryResolvePendingKanbanSelection();
 ```
 
-**Change 4 — Apply the pending filter intent after dropdowns populate.**
+**Change 4a — Apply workspace filter intent BEFORE `populateKanbanFilters()` (kanbanPlansReady handler, between lines 329 and 330).**
 
-In the `kanbanPlansReady` handler (around line 329-338), after
-`populateKanbanFilters()` and before `renderKanbanPlans()`, add:
+After `populateWorkspaceDropdowns();` (line 329) and before
+`populateKanbanFilters();` (line 330), insert:
+
 ```javascript
-// Apply narrow filter intent from a Review Plan navigation.
+// Apply workspace filter intent from a Review Plan navigation.
+// MUST run before populateKanbanFilters() so the project dropdown is
+// built from the correct workspace.
 if (_pendingKanbanFilterIntent) {
     const intent = _pendingKanbanFilterIntent;
     if (intent.workspaceRoot && kanbanWorkspaceFilter) {
@@ -242,7 +278,25 @@ if (_pendingKanbanFilterIntent) {
             kanbanFilters.workspaceRoot = intent.workspaceRoot;
             kanbanWorkspaceFilter.value = intent.workspaceRoot;
         }
+        // If the intent workspace isn't in the dropdown (child folder vs
+        // mapped parent), leave the filter as-is — kanbanPlansReady lines
+        // 321-327 already set it to the effective root, which matches the
+        // plan cache. The plan remains visible.
     }
+}
+```
+
+**Change 4b — Apply project/column filter intent AFTER `populateKanbanFilters()` (between lines 330 and 331).**
+
+After `populateKanbanFilters();` (line 330) and before `renderKanbanPlans();`
+(line 331), insert:
+
+```javascript
+// Apply project/column filter intent from a Review Plan navigation.
+// Runs after populateKanbanFilters() so the project dropdown options are
+// built from the (possibly just-changed) workspace filter.
+if (_pendingKanbanFilterIntent) {
+    const intent = _pendingKanbanFilterIntent;
     if (intent.project && kanbanProjectFilter) {
         const opts = Array.from(kanbanProjectFilter.options).map(o => o.value);
         if (opts.includes(intent.project)) {
@@ -257,30 +311,149 @@ if (_pendingKanbanFilterIntent) {
             kanbanColumnFilter.value = intent.column;
         }
     }
-    _pendingKanbanFilterIntent = null;
+    _pendingKanbanFilterIntent = null;  // consume the intent
 }
 ```
 
-**Change 5 — Fallback to widest if the plan isn't found after N retries.**
+**Change 5 — Retry counter with fallback to widest (function `tryResolvePendingKanbanSelection`, lines 1229-1245).**
 
-In `tryResolvePendingKanbanSelection`, add a retry counter. After ~3 failed
-resolutions (the plan isn't in the filtered list), clear all filters to "All" so
-the plan becomes visible:
+Replace the function with:
+
 ```javascript
-if (_pendingKanbanSelectionRetries++ >= 3) {
-    // Narrow filter may be hiding the plan (workspace mapping mismatch).
-    // Fall back to widest filter so the plan is at least visible.
-    kanbanFilters.workspaceRoot = '';
-    if (kanbanWorkspaceFilter) kanbanWorkspaceFilter.value = '';
-    kanbanFilters.project = '';
-    if (kanbanProjectFilter) kanbanProjectFilter.value = '';
-    kanbanFilters.column = '';
-    if (kanbanColumnFilter) kanbanColumnFilter.value = '';
-    vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+function tryResolvePendingKanbanSelection() {
+    if (!_pendingKanbanSelection) return;
+    const sel = _pendingKanbanSelection;
+    const match = _kanbanPlansCache.find(p =>
+        (sel.planFile && p.planFile === sel.planFile) ||
+        (sel.planId && p.planId === sel.planId) ||
+        (sel.sessionId && p.sessionId === sel.sessionId)
+    );
+    if (!match) {
+        // Plan not in the (filtered) cache. After 3 failed attempts, fall back
+        // to widest filters — the narrow filter may be hiding the plan due to
+        // a workspace mapping mismatch or stale cache.
+        if (++_pendingKanbanSelectionRetries >= 3) {
+            kanbanFilters.workspaceRoot = '';
+            if (kanbanWorkspaceFilter) kanbanWorkspaceFilter.value = '';
+            kanbanFilters.project = '';
+            if (kanbanProjectFilter) kanbanProjectFilter.value = '';
+            kanbanFilters.column = '';
+            if (kanbanColumnFilter) kanbanColumnFilter.value = '';
+            _pendingKanbanSelection = null;  // stop retrying
+            _pendingKanbanFilterIntent = null;  // don't re-narrow
+            vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+        }
+        return;
+    }
+    const itemDiv = kanbanListPane && kanbanListPane.querySelector(`.kanban-plan-item[data-plan-id="${match.planId}"]`);
+    if (!itemDiv) return;
+    itemDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    document.querySelectorAll('.kanban-plan-item').forEach(el => el.classList.remove('selected'));
+    itemDiv.classList.add('selected');
+    loadKanbanPlanPreview(match);
+    _pendingKanbanSelection = null;
 }
+```
+
+**Change 6 — Epic path: set narrow workspace filter (lines 396-410).**
+
+Replace the epic branch of `activateKanbanTabAndSelectPlan` with:
+
+```javascript
+if (msg.isEpic === true) {
+    _pendingEpicSelection = {
+        planId: msg.planId || '',
+        sessionId: msg.sessionId || '',
+        planFile: msg.planFile || '',
+        workspaceRoot: msg.workspaceRoot || ''
+    };
+    // Clear epics filters to widest now; the epicsPlansReady / kanbanPlansReady
+    // handler will narrow them if the intent workspace is in the dropdown.
+    epicsFilters.workspaceRoot = '';
+    epicsFilters.column = '';
+    if (epicsWorkspaceFilter) epicsWorkspaceFilter.value = '';
+    if (epicsColumnFilter) epicsColumnFilter.value = '';
+    // Stash intent for epics (reuse the same mechanism — applied in
+    // kanbanPlansReady after populateWorkspaceDropdowns for the epics
+    // workspace filter).
+    _pendingKanbanFilterIntent = _pendingKanbanFilterIntent || {};
+    _pendingKanbanFilterIntent.epicWorkspaceRoot = msg.workspaceRoot || '';
+    const epicsTabBtn = document.querySelector('.shared-tab-btn[data-tab="epics"]');
+    if (epicsTabBtn) epicsTabBtn.click();
+    tryResolvePendingEpicSelection();
+    break;
+}
+```
+
+Then in Change 4a, after the kanban workspace filter block, add an epics block:
+
+```javascript
+// Apply epics workspace filter intent (from epic Review Plan navigation).
+if (_pendingKanbanFilterIntent && _pendingKanbanFilterIntent.epicWorkspaceRoot && epicsWorkspaceFilter) {
+    const epicWs = _pendingKanbanFilterIntent.epicWorkspaceRoot;
+    const opts = Array.from(epicsWorkspaceFilter.options).map(o => o.value);
+    if (opts.includes(epicWs)) {
+        epicsFilters.workspaceRoot = epicWs;
+        epicsWorkspaceFilter.value = epicWs;
+    }
+    _pendingKanbanFilterIntent.epicWorkspaceRoot = null;  // consume
+}
+```
+
+### File: `src/webview/kanban.html`
+
+**Change 7 — Include `project` and `column` in the reviewPlan message (lines 5130-5143).**
+
+```javascript
+document.querySelectorAll('.card-btn.review').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const pid = btn.dataset.planId || btn.dataset.session || '';
+        const cardData = currentCards.find(c => (c.planId || c.sessionId) === pid);
+        postKanbanMessage({
+            type: 'reviewPlan',
+            sessionId: btn.dataset.session || '',
+            planId: btn.dataset.planId || '',
+            planFile: btn.dataset.planFile || '',
+            workspaceRoot: btn.dataset.workspaceRoot,
+            project: cardData?.project || btn.closest('.kanban-card')?.dataset.project || '',
+            column: cardData?.column || '',
+            isEpic: cardData?.isEpic || false
+        });
+    });
+});
+```
+
+Note: `btn.dataset.project` is NOT used because the review button (line 5342)
+does not have a `data-project` attribute — that attribute is on the parent
+`.kanban-card` div (line 5332). The fallback uses `btn.closest('.kanban-card')`
+to reach it. The primary source is `cardData?.project` from `currentCards`,
+which is reliable.
+
+### File: `src/services/KanbanProvider.ts`
+
+**Change 8 — Pass `project` and `column` through to the project panel (lines 6761-6768).**
+
+```typescript
+this._planningPanelProvider.postMessageToProjectWebview({
+    type: 'activateKanbanTabAndSelectPlan',
+    planId: msg.planId || '',
+    sessionId: reviewId,
+    planFile: msg.planFile || '',
+    workspaceRoot: msg.workspaceRoot || '',
+    project: msg.project || '',
+    column: msg.column || '',
+    isEpic: msg.isEpic === true
+});
 ```
 
 ## Verification Plan
+
+### Automated Tests
+
+No automated tests are part of this verification plan (skipped per session
+directive). The test suite will be run separately by the user.
+
+### Manual Verification
 
 1. **Repro on current build:** Click "Review Plan" on a card in kanban.html.
    Confirm the project panel opens with "All Workspaces / All Projects / All
@@ -291,11 +464,20 @@ if (_pendingKanbanSelectionRetries++ >= 3) {
    project, and column selected, and the target plan is visible and selected.
 4. **Workspace mapping mismatch test:** Review a plan whose card workspaceRoot
    is a child folder but whose cache workspaceRoot is the mapped parent. Confirm
-   the fallback-to-widest kicks in after retries and the plan becomes visible.
+   the workspace filter stays at the effective root (set by kanbanPlansReady
+   lines 321-327) and the plan is visible. If the plan is NOT visible after 3
+   retries, confirm the fallback-to-widest kicks in and the plan becomes visible.
 5. **Epic review test:** Click "Review Plan" on an epic. Confirm the epics tab
-   opens with the epic's workspace filter set (not cleared).
+   opens with the epic's workspace filter set (not cleared to "All").
 6. **Cross-window test:** With the project panel in a separate window, click
    Review Plan. Confirm the narrow filters apply in the other window.
 7. **Dropdown-missing-option test:** Review a plan whose column isn't in the
    project panel's column dropdown. Confirm the column filter stays at "All"
    (guard works) and the plan is visible.
+8. **Retry counter test:** Review a plan that's not in the cache yet (e.g., just
+   created). Confirm the selection retries on each kanbanPlansReady and either
+   resolves when the plan appears or falls back to widest after 3 retries.
+
+---
+
+**Recommendation: Send to Coder** (Complexity 5 — multi-file changes with moderate logic, extending existing patterns with well-scoped risks).

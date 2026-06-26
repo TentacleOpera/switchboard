@@ -4568,7 +4568,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                <img src="${ICON_TESTING_FAIL}" alt="Testing Failed" class="testing-fail-icon">
                            </button>`
                         : '';
-                    buttonArea = `<div class="column-button-area">
+                    // In backlog view, the CREATED column shows BACKLOG cards — a holding
+                    // pen, not a pipeline stage. Suppress the four advance/prompt buttons
+                    // so only the epic-group button remains.
+                    const pipelineButtons = (isCreated && showingBacklog) ? '' : `
                         <button class="column-icon-btn" data-action="moveSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Move selected plans to next stage (triggers CLI if enabled)">
                             <img src="${ICON_MOVE_SELECTED}" alt="Move Selected">
                         </button>
@@ -4580,7 +4583,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         </button>
                         <button class="column-icon-btn" data-action="promptAll" data-column="${escapeAttr(def.id)}" data-tooltip="Copy prompt for all plans in this column and advance">
                             <img src="${ICON_PROMPT_ALL}" alt="Prompt All">
-                        </button>
+                        </button>`;
+                    buttonArea = `<div class="column-button-area">
+                        ${pipelineButtons}
                         ${julesBtn}
                         ${rePlanBtn}
                         ${splitterBtn}
@@ -4795,7 +4800,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             break;
                         }
                         case 'groupAllIntoEpic': {
-                            const allIds = getAllInColumn(column);
+                            // In backlog view, the CREATED column slot displays BACKLOG cards
+                            // (remapped via _effectiveColumn at render time). Resolve to 'BACKLOG'
+                            // so the collector returns the visible BACKLOG cards, not the hidden
+                            // real-CREATED cards.
+                            const effectiveCol = (showingBacklog && column === 'CREATED') ? 'BACKLOG' : column;
+                            const allIds = getAllInColumn(effectiveCol);
                             if (allIds.length === 0) return;
                             selectedCards.clear();
                             document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));

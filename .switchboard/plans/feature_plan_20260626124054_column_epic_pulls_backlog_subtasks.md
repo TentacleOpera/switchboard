@@ -221,5 +221,119 @@ Per session directives, automated tests are not run in this session — the user
 ### Remaining Risks
 
 1. **Commit hygiene:** The subtask-leak fix shares a commit with unrelated features. If the fix needs to be reverted, the Jules/Re-plan/Splitter buttons and tooltip change revert with it. Recommend the user split commits in future auto-commit cycles.
-2. **Backlog-view scoping:** The `groupAllIntoEpic` button retains `data-column="CREATED"` in backlog view, where the CREATED column is relabeled "BACKLOG". `getAllInColumn('CREATED')` may return hidden real-CREATED cards instead of visible backlog cards. Documented as out-of-scope; defer unless UAT reproduces.
+2. ~~**Backlog-view scoping:** The `groupAllIntoEpic` button retains `data-column="CREATED"` in backlog view...~~ **FIXED** — see "Backlog-View Fix" section below.
 3. **Test regex fragility:** The `\n\s{8}\}` pattern depends on exact 8-space indentation of the closing brace. A formatter change would break the test. Acceptable given existing pattern consistency.
+4. ~~**`moveAll`/`promptAll` in backlog view:** These batch actions also use `getAllInColumn(column)` but send `{ type: 'moveAll', column: backendColumn }` to the backend, which re-derives cards via `_visibleColumnCards(workspaceRoot, 'CREATED')`. Even if the frontend collector returned BACKLOG cards, the backend would still operate on CREATED cards — a mismatch.~~ **FIXED** — all pipeline batch-action buttons suppressed in backlog view (see "Backlog-View Button Suppression" section below).
+
+## Backlog-View Fix — Completed
+
+### Problem
+
+In backlog view, the CREATED column slot displays BACKLOG cards (remapped via `_effectiveColumn: 'CREATED'` at `kanban.html:5031`). The `groupAllIntoEpic` button has `data-column="CREATED"` (static column def), so the handler called `getAllInColumn('CREATED')` which returned hidden real-CREATED cards instead of the visible BACKLOG cards. The button grouped the wrong population.
+
+### Fix Applied
+
+**`src/webview/kanban.html` — `groupAllIntoEpic` handler (line 4802):**
+
+Added effective-column resolution before calling `getAllInColumn`:
+
+```js
+const effectiveCol = (showingBacklog && column === 'CREATED') ? 'BACKLOG' : column;
+const allIds = getAllInColumn(effectiveCol);
+```
+
+When `showingBacklog` is true and the button's column is `'CREATED'`, the handler resolves to `'BACKLOG'` so the collector returns visible BACKLOG cards. `getAllInColumn('BACKLOG')` uses the default branch which already has `!c.epicId`, so subtask exclusion is preserved.
+
+This is a **surgical fix** scoped to `groupAllIntoEpic` only. The other `getAllInColumn` consumers (`moveAll`, `promptAll`, `completeAll`, `recoverAll`) are not affected — they have their own backend-side card derivation and need separate fixes if broken in backlog view (see Remaining Risk #4).
+
+### "Promote to Epic" Button with Selected Cards — Verified Working
+
+The "Promote to Epic" button (`btn-epic-action`) with manually selected cards **already works in backlog view** — no fix needed. The full flow is column-agnostic:
+
+1. **Card selection** (`kanban.html:5098-5121`): DOM-based — clicking a card reads `pid` from `data-plan-id`, finds the card in `currentCards` by ID (includes BACKLOG cards), stores in `selectedCards` Map with `{ isEpic, epicId, workspaceRoot, project }`. No column field stored.
+2. **EPIC button enable** (`kanban.html:6708-6733`): `updateEpicActionButton` checks only `selectedCards.values()` for `isEpic` and count. No column check.
+3. **EPIC button click** (`kanban.html:9359-9388`): Checks `selectedCards.values()` for epics/non-epics. Opens `openEpicCreateModal`. No column check.
+4. **Submit** (`kanban.html:9406-9412`): Sends `selectedCards.keys()` (planIds) to backend via `promoteToEpic` or `createEpic`. No column check.
+5. **Backend** (`KanbanProvider.ts:7758-7937`): Both handlers work by planId. `createEpic` resolves the epic's column from subtasks and maps `BACKLOG → CREATED` (line 7863). No restriction on subtask source columns.
+
+### Regression Test Added
+
+**`src/test/kanban-subtask-column-leak-regression.test.js` — Test block #8 (lines 117-132):**
+
+Added static-source assertions for the backlog-view column resolution:
+
+```js
+// 8. groupAllIntoEpic must resolve the effective column in backlog view.
+const groupBlock = html.match(/case 'groupAllIntoEpic':\s*\{[\s\S]*?break;/);
+assert.ok(groupBlock, 'groupAllIntoEpic handler must exist in kanban.html');
+assert.ok(
+    /showingBacklog[\s\S]*'CREATED'[\s\S]*'BACKLOG'/.test(groupBlock[0]),
+    'groupAllIntoEpic must resolve effective column (BACKLOG) when showingBacklog && column === CREATED'
+);
+assert.ok(
+    /getAllInColumn\(effectiveCol\)/.test(groupBlock[0]),
+    'groupAllIntoEpic must call getAllInColumn with the resolved effective column, not the raw column'
+);
+```
+
+All three assertions verified against actual source via `node -e` — all pass.
+
+### Files Changed (Backlog-View Fix)
+
+| File | Change | Lines |
+|------|--------|-------|
+| `src/webview/kanban.html` | `groupAllIntoEpic` handler: added `effectiveCol` resolution for backlog view | 4798-4803 |
+| `src/test/kanban-subtask-column-leak-regression.test.js` | New test block #8: backlog-view column resolution assertions | 117-132 |
+
+### Verification Results (Backlog-View Fix)
+
+- **Compilation:** Skipped per session directives.
+- **Tests:** Skipped per session directives. User to run `node src/test/kanban-subtask-column-leak-regression.test.js` separately.
+- **Static verification (performed):**
+  - `effectiveCol` resolution confirmed: `(showingBacklog && column === 'CREATED') ? 'BACKLOG' : column` at line 4802.
+  - `getAllInColumn(effectiveCol)` call confirmed at line 4803.
+  - Test regex validated via `node -e` — all 3 new assertions pass, all 7 existing assertions still pass.
+  - `showingBacklog` scope confirmed: declared at line 5507 (top-level script scope), accessible from `groupAllIntoEpic` handler at line 4797 (same closure, called at runtime after initialization).
+  - "Promote to Epic" button flow traced end-to-end — column-agnostic, works in backlog view without modification.
+
+## Backlog-View Button Suppression — Completed
+
+### Problem
+
+`moveAll`, `promptAll`, and the other pipeline buttons on the CREATED column are broken in backlog view: the frontend sends `{ type: 'moveAll', column: 'CREATED' }` to the backend, which re-derives cards via `_visibleColumnCards(workspaceRoot, 'CREATED')` — returning hidden real-CREATED cards, not the visible BACKLOG cards. Fixing this properly would require teaching the backend about backlog view and defining pipeline semantics for BACKLOG cards. Instead, suppress the pipeline buttons in backlog view — backlog is a holding pen, not a pipeline stage.
+
+### Fix Applied
+
+**`src/webview/kanban.html` — column button rendering (line 4574):**
+
+Wrapped the four pipeline buttons (`moveSelected`, `moveAll`, `promptSelected`, `promptAll`) in a `pipelineButtons` variable that renders as empty string when `isCreated && showingBacklog`:
+
+```js
+const pipelineButtons = (isCreated && showingBacklog) ? '' : `
+    <button ... data-action="moveSelected" ...>
+    <button ... data-action="moveAll" ...>
+    <button ... data-action="promptSelected" ...>
+    <button ... data-action="promptAll" ...>`;
+```
+
+Only the CREATED column is affected. Other columns' buttons are untouched. The epic-group button remains active.
+
+### Regression Test Added
+
+**`src/test/kanban-subtask-column-leak-regression.test.js` — Test block #9 (lines 134-141):**
+
+```js
+assert.ok(
+    /pipelineButtons = \(isCreated && showingBacklog\) \? '' :/.test(html),
+    'pipeline buttons must be suppressed (empty string) when isCreated && showingBacklog'
+);
+```
+
+Verified via `node -e` — passes.
+
+### Files Changed (Backlog-View Button Suppression)
+
+| File | Change | Lines |
+|------|--------|-------|
+| `src/webview/kanban.html` | Wrapped 4 pipeline buttons in `pipelineButtons` var, suppressed when `isCreated && showingBacklog` | 4571-4594 |
+| `src/test/kanban-subtask-column-leak-regression.test.js` | New test block #9: backlog-view button suppression assertion | 134-141 |

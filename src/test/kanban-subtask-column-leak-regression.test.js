@@ -114,6 +114,32 @@ function run() {
         'getAllInColumn default branch must exclude subtask cards via !c.epicId'
     );
 
+    // 8. groupAllIntoEpic must resolve the effective column in backlog view.
+    //    In backlog view, the CREATED column slot displays BACKLOG cards (remapped
+    //    via _effectiveColumn at render time). The handler must call getAllInColumn
+    //    with 'BACKLOG' when showingBacklog && column === 'CREATED', not the raw
+    //    'CREATED' column — otherwise it groups hidden real-CREATED cards instead
+    //    of the visible BACKLOG cards.
+    const groupBlock = html.match(/case 'groupAllIntoEpic':\s*\{[\s\S]*?break;/);
+    assert.ok(groupBlock, 'groupAllIntoEpic handler must exist in kanban.html');
+    assert.ok(
+        /showingBacklog[\s\S]*'CREATED'[\s\S]*'BACKLOG'/.test(groupBlock[0]),
+        'groupAllIntoEpic must resolve effective column (BACKLOG) when showingBacklog && column === CREATED'
+    );
+    assert.ok(
+        /getAllInColumn\(effectiveCol\)/.test(groupBlock[0]),
+        'groupAllIntoEpic must call getAllInColumn with the resolved effective column, not the raw column'
+    );
+
+    // 9. In backlog view, the four pipeline buttons (moveSelected, moveAll,
+    //    promptSelected, promptAll) must be suppressed on the CREATED column —
+    //    backlog is a holding pen, not a pipeline stage. Only the epic-group
+    //    button should remain. The gate is `(isCreated && showingBacklog)`.
+    assert.ok(
+        /pipelineButtons = \(isCreated && showingBacklog\) \? '' :/.test(html),
+        'pipeline buttons must be suppressed (empty string) when isCreated && showingBacklog'
+    );
+
     console.log('kanban subtask column-leak regression test passed');
 }
 

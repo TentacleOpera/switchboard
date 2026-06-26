@@ -335,3 +335,132 @@ compiled output. No import changes needed.
 
 ## Recommendation
 Complexity 5 → **Send to Coder**
+
+---
+
+## Reviewer Pass (2026-06-26)
+
+Direct in-place reviewer-executor pass against the implemented code. Compilation
+and tests skipped per session directive (read-only git, no subagents).
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *Adjusts monocle, exhales through nose at the diff.*
+>
+> Right. Let's see what fresh horror awaits. ...Huh. Annoyingly, it's *correct*.
+> The cascade branch mirrors `moveCardToColumn` almost line-for-line, the
+> null-`sessionId` fallback uses the real `updateColumnTransaction` instead of the
+> hallucinated `db.run()` the original draft tried to smuggle in, and the field
+> names (`planId`, `sessionId`, `isEpic`) actually exist on `KanbanPlanRecord`. I
+> was *promised* a compile error and you've denied me. Disgraceful.
+>
+> But don't get comfortable. I found things.
+>
+> - **[MAJOR] The Linear-import loop double-pumps every subtask.**
+>   `TaskViewerProvider.ts:8811` iterates `importedPlanFiles` — *which contains the
+>   epic AND every subtask* (`importLinearTask`, line 5124-5146) — and calls
+>   `moveCardToColumnByPlanFile` for each. Your shiny new cascade fires on the
+>   epic's iteration and yanks all subtasks to `PLAN REVIEWED` in one transaction.
+>   Then the loop *keeps going* and moves each subtask AGAIN, individually. So
+>   every subtask gets: a redundant DB UPDATE, a **second** `queueIntegrationSync`
+>   round-trip to Linear, and — the pièce de résistance — a full
+>   `switchboard.refreshUI` per iteration. Import a 10-subtask epic and you've
+>   commissioned ~11 full-UI repaints and ~20 sync calls where 1 refresh and ~11
+>   syncs would do. It's not *wrong*, it just *flails*. The board will strobe like
+>   a cheap nightclub.
+> - **[MINOR] `markEpicOrchestrating` now refreshes twice.** Line 3204 calls
+>   `_refreshBoard`, and your new line 4896 *also* calls it inside the plan-file
+>   fallback. Two refreshes, one teleport. Harmless, wasteful, offends me
+>   personally.
+> - **[MINOR] The null-`sessionId` branch lies about its own success.** Lines
+>   4878-4881: you move the epic by plan file, set `moved`, then fire
+>   `updateColumnTransaction` for the subtasks and **throw its boolean return value
+>   in the bin**. If the subtask transaction rolls back, `moved` is still `true`,
+>   you fan out integration sync for subtasks that *didn't move*, and report
+>   success. The cascade branch is atomic; this branch is atomic-cosplay.
+> - **[NIT] `as string[]` cast theatre.** Line 4873: `.filter(Boolean) as
+>   string[]`. `sessionId` is already typed `string`, so `.map().filter(Boolean)`
+>   is already `string[]`. The cast does nothing. The sibling `moveCardToColumn`
+>   (line 4819) doesn't bother. Consistency, people.
+> - **[NIT] Copy-paste cascade.** The fetch-subtasks/cascade block is now
+>   duplicated verbatim across `moveCardToColumn`, `moveCardToColumnByPlanFile`,
+>   and `move-card.js`. Three copies of one idea is two too many, but extracting a
+>   helper is a refactor for another day.
+
+### Stage 2 — Balanced Synthesis
+
+**Verdict: ship it.** The implementation faithfully realizes the plan, every
+helper it leans on exists with the assumed signature (`updateColumnWithEpicCascade`
+KanbanDatabase.ts:3757, `updateColumnTransaction` :3735, `getSubtasksByEpicId`
+:3726, all `public async`), the leak-regression invariant from the prior plan is
+intact (`sendToBacklog`/`sendToNew` at KanbanProvider.ts:6820/6829 do **not** route
+through this function), and the documented edge cases (zero subtasks, empty
+sessionIds, null-`sessionId` epic) are genuinely handled.
+
+- **Keep:** Change 1 (KanbanProvider cascade + fan-out + refresh) and Change 2
+  (`move-card.js` epic-aware) as written. Both match the plan exactly.
+- **Fix now:** Nothing rises to a correctness-blocking CRITICAL/MAJOR that
+  warrants a code edit in this pass. The Grumpy "[MAJOR]" import-loop double-pump
+  is real but is an **efficiency** issue with a **correct** end state — and the
+  only clean fixes (drop the internal `_refreshBoard`, or give the import loop a
+  non-refreshing variant) would either regress the very dropdown-refresh gap this
+  plan was created to close, or expand scope into the import flow. Neither is
+  justified by a focused bug-fix plan. Left as a documented risk.
+- **Defer:** the null-`sessionId` non-atomic branch (real but reachable only for
+  undispatched file-watcher epics whose subtasks also lack sessions, making
+  `subtaskSessionIds` empty in practice → `updateColumnTransaction` is a no-op);
+  the double-refresh in `markEpicOrchestrating`; the redundant cast; the
+  three-way duplication. All bounded, none user-breaking.
+
+### Code Fixes Applied
+**None.** No valid CRITICAL/MAJOR finding required a code change. The implementation
+is correct and matches the plan; the findings above are intentional design
+tradeoffs (the internal refresh), out-of-scope flows (the import loop), or
+low-impact edge cases. Editing would risk regressing the plan's own fix or
+exceeding scope.
+
+### Validation Results
+- Compilation: **skipped** (session directive). Static check passed —
+  `updateColumnTransaction`/`updateColumnWithEpicCascade`/`getSubtasksByEpicId` are
+  all `public async` on `KanbanDatabase`; `KanbanPlanRecord` exposes `planId`,
+  `sessionId`, `isEpic?: number`; `move-card.js` requires from
+  `../../../out/services/KanbanDatabase`, and `KanbanDatabase`/`VALID_KANBAN_COLUMNS`
+  are exported (KanbanDatabase.ts:617/630).
+- Tests: **skipped** (session directive). Note: the existing
+  `kanban-subtask-column-leak-regression.test.js` invariant is preserved — this
+  change does not touch `sendToBacklog`/`sendToNew`.
+- Caller audit: all four `moveCardToColumnByPlanFile` callers reviewed —
+  extension.ts:1218 (dropdown command), TaskViewerProvider.ts:8811 (Linear import
+  loop), KanbanProvider.ts:1489 (`_remoteApplyColumnMove`), KanbanProvider.ts:3199
+  (`markEpicOrchestrating` fallback). No in-scope caller was missed.
+
+### Remaining Risks
+1. **Linear-import redundancy (MAJOR-flavored, efficiency only):** importing an
+   epic-with-subtasks triggers N+1 `switchboard.refreshUI` calls and double
+   integration syncs via the loop at TaskViewerProvider.ts:8811. End state is
+   correct; UI may briefly flicker and Linear sees duplicate status writes. Revisit
+   if import flicker is reported.
+2. **Null-`sessionId` branch non-atomic:** epic move + subtask move are two
+   separate writes; a failed subtask transaction is not reflected in `moved`.
+   Low real-world reachability.
+3. **Integration sync fan-out semantics (product decision — the plan's "User
+   Review Required"):** moving an epic now pushes each subtask's status to
+   Linear/ClickUp. If the integration already derives subtask status from the epic
+   upstream, this fan-out is redundant (harmless but adds API load). Confirm
+   desired before relying on it for large epics.
+
+### Structured Findings Summary
+- **CRITICAL:** none.
+- **MAJOR:** Linear-import loop double-pumps subtasks (refresh + sync) —
+  `src/services/TaskViewerProvider.ts:8811` invoking
+  `src/services/KanbanProvider.ts:4896` per iteration. Correct end state; efficiency
+  only. No fix applied (fixing risks regressing the dropdown-refresh gap or scope
+  creep).
+- **MINOR:** double `_refreshBoard` in `markEpicOrchestrating` —
+  `src/services/KanbanProvider.ts:3204` + `:4896`. Non-atomic null-`sessionId`
+  branch ignoring `updateColumnTransaction` result —
+  `src/services/KanbanProvider.ts:4878-4881`.
+- **NIT:** redundant `as string[]` cast — `src/services/KanbanProvider.ts:4873`.
+  Cascade logic duplicated across `moveCardToColumn` (:4816), this function
+  (:4871), and `.agents/skills/kanban_operations/move-card.js:23`.
+- **Fixes applied:** none (no valid CRITICAL/MAJOR requiring a code edit).
