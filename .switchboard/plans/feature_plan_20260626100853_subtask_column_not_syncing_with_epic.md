@@ -413,11 +413,21 @@ sessionIds, null-`sessionId` epic) are genuinely handled.
   three-way duplication. All bounded, none user-breaking.
 
 ### Code Fixes Applied
-**None.** No valid CRITICAL/MAJOR finding required a code change. The implementation
-is correct and matches the plan; the findings above are intentional design
-tradeoffs (the internal refresh), out-of-scope flows (the import loop), or
-low-impact edge cases. Editing would risk regressing the plan's own fix or
-exceeding scope.
+**1 fix — subtask integration-sync parity on the drag path.** Follow-up user
+requirement: Linear/ClickUp must stay in **exact sync**, so subtask status changes
+must be pushed on *every* epic move. The original implementation fanned out subtask
+syncs only on the plan-file path (`moveCardToColumnByPlanFile`); the drag path
+(`moveCardToColumn`) cascaded subtask **columns** in the DB but synced only the
+**epic** to Linear/ClickUp — leaving subtasks unsynced after a drag.
+
+Fix applied in `src/services/KanbanProvider.ts` `moveCardToColumn` (~line 4815):
+hoisted `subtaskSessionIds` out of the epic branch and added a
+`Promise.allSettled` fan-out of `queueIntegrationSyncForSession` for each subtask
+after a successful move — mirroring `moveCardToColumnByPlanFile`. Both move paths
+now push epic + all subtask statuses to Linear/ClickUp.
+
+No other CRITICAL/MAJOR finding required a code change; the remaining items are
+intentional tradeoffs (the internal refresh) or low-impact edge cases.
 
 ### Validation Results
 - Compilation: **skipped** (session directive). Static check passed —
@@ -443,11 +453,16 @@ exceeding scope.
 2. **Null-`sessionId` branch non-atomic:** epic move + subtask move are two
    separate writes; a failed subtask transaction is not reflected in `moved`.
    Low real-world reachability.
-3. **Integration sync fan-out semantics (product decision — the plan's "User
-   Review Required"):** moving an epic now pushes each subtask's status to
-   Linear/ClickUp. If the integration already derives subtask status from the epic
-   upstream, this fan-out is redundant (harmless but adds API load). Confirm
-   desired before relying on it for large epics.
+3. **Integration sync fan-out semantics (the plan's "User Review Required") —
+   RESOLVED.** User confirmed exact sync is required: subtask statuses MUST be
+   pushed to Linear/ClickUp on epic moves. Both move paths now fan out subtask
+   syncs (drag path fixed this pass; plan-file path already did). No echo loop —
+   the remote-control poller's column-equality guard (`RemoteControlService.ts:250-252`)
+   plus per-card TTL guard (`:254-260`) neutralize any bounce-back. Residual cost:
+   N additional Linear/ClickUp writes per epic move (debounced per plan file).
+   Note: the manual `move-card.js` CLI fallback still does NOT sync to Linear (it
+   talks to the DB directly, outside the extension process) — exact sync is not
+   maintained when an epic is moved via that script.
 
 ### Structured Findings Summary
 - **CRITICAL:** none.
@@ -463,4 +478,7 @@ exceeding scope.
 - **NIT:** redundant `as string[]` cast — `src/services/KanbanProvider.ts:4873`.
   Cascade logic duplicated across `moveCardToColumn` (:4816), this function
   (:4871), and `.agents/skills/kanban_operations/move-card.js:23`.
-- **Fixes applied:** none (no valid CRITICAL/MAJOR requiring a code edit).
+- **Fixes applied:** 1 — added subtask integration-sync fan-out to the drag path
+  `moveCardToColumn` (`src/services/KanbanProvider.ts:~4815`) so Linear/ClickUp
+  stay in exact sync on every epic move, matching `moveCardToColumnByPlanFile`
+  (per follow-up user requirement).

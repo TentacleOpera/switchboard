@@ -83,12 +83,12 @@ Move the `ultracode` object from the end of the array (line 285) to immediately 
 
 ```js
 orchestrator: [
-    { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
+    { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: false },
     { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true },
     { id: 'clearAntigravityContext', label: 'Clear Antigravity Context', tooltip: 'Instruct agent to ignore previous checkpoint summaries from prior sessions', default: false },
     { id: 'cavemanOutput', label: 'Caveman Output', tooltip: 'Compress responses to reduce output tokens', default: true },
-    { id: 'skipCompilation', label: 'Do not recompile the project', tooltip: 'Skip project compilation step to save tokens', default: true },
-    { id: 'skipTests', label: 'Do not run automated tests', tooltip: 'Skip automated test execution to save tokens', default: true },
+    { id: 'skipCompilation', label: 'Do not recompile the project', tooltip: 'Skip project compilation step to save tokens', default: false },
+    { id: 'skipTests', label: 'Do not run automated tests', tooltip: 'Skip automated test execution to save tokens', default: false },
     { id: 'ultracode', label: 'Ultracode', tooltip: 'Append the "use ultracode" directive so a Claude Code host orchestrates the epic with multi-agent workflows', default: false },
     { id: 'subagentPolicy', label: 'Subagent Policy', tooltip: 'Control how the agent handles subagent spawning', type: 'radio', options: [
         { value: 'default', label: 'Not Specified', tooltip: 'Let the execution platform decide subagent behavior' },
@@ -106,7 +106,7 @@ orchestrator: [
 - **Implementation:** Cut the `ultracode` object from line 285, paste it between `skipTests` (276) and `subagentPolicy` (277). Remove the trailing comma from `workflowFilePath` (now last); add a trailing comma to `ultracode` in its new mid-array position.
 - **Edge Cases:** Trailing-comma correctness (see Edge-Case audit). No other edge cases.
 
-> Note: this plan only reorders. The `default` values shown here are the current ones; changing those defaults to OFF is a separate change (tracked in its own plan).
+> Note: this plan only reorders. The `default` values shown above are the actual current values in `src/webview/sharedDefaults.js` (corrected during review — an earlier draft of this block showed stale `true` defaults for `switchboardSafeguards`, `skipCompilation`, and `skipTests`; the real values are `false`). Changing those defaults is a separate change (tracked in its own plan).
 
 ## Verification Plan
 
@@ -121,3 +121,49 @@ orchestrator: [
 ---
 
 **Recommendation:** Complexity 1/10 → **Send to Intern**.
+
+---
+
+## Review Results (Reviewer-Executor Pass, 2026-06-26)
+
+### Stage 1 — Grumpy Findings
+
+| # | Severity | Finding | Location |
+|---|---|---|---|
+| 1 | NIT | Plan's "Proposed Changes" code block showed stale `default: true` for `switchboardSafeguards`, `skipCompilation`, `skipTests`; actual code has `default: false`. Implementer correctly preserved real defaults. | `feature_plan_...md:86-91` (plan doc, now corrected) |
+
+No CRITICAL or MAJOR findings. The code implementation is correct.
+
+### Stage 2 — Balanced Synthesis
+
+- **Keep:** `ultracode` relocation to line 277 (after `skipTests`, before `subagentPolicy`) — matches plan exactly.
+- **Keep:** Trailing comma on `ultracode` (277), no trailing comma on `workflowFilePath` (285, last element) — comma hygiene correct.
+- **Keep:** Directive/persistence wiring keyed by `id`/boolean across 3 call sites — position-independent, verified unchanged.
+- **Fix now (doc only):** Corrected stale `default` values in plan's proposed code block to match actual code (`false` for the three flagged addons). Updated note at line 109.
+- **Deferred:** Nothing.
+
+### Code Fixes Applied
+
+None. The implementation in `src/webview/sharedDefaults.js:270-286` is correct as-is. Only the plan file's documentation was corrected (stale default values in the proposed code block).
+
+### Files Changed
+
+- `src/webview/sharedDefaults.js` — **no changes required** (implementation already correct: `ultracode` at line 277, comma hygiene correct).
+- `.switchboard/plans/feature_plan_20260626130003_orchestrator_ultracode_option_position.md` — corrected stale `default` values in proposed code block (lines 86-91) and updated note (line 109).
+
+### Validation Results
+
+| Check | Result |
+|---|---|
+| `node --check src/webview/sharedDefaults.js` (parse) | ✅ `PARSE_OK` |
+| `ultracode` position (line 277, after `skipTests`, before `subagentPolicy`) | ✅ Confirmed |
+| Trailing comma on `ultracode`; none on `workflowFilePath` (last) | ✅ Confirmed |
+| `renderRoleAddons` uses `forEach` with no sort/filter (`kanban.html:3290`) | ✅ Confirmed |
+| Directive wiring keyed by `id`/boolean (3 call sites in `KanbanProvider.ts`, `agentPromptBuilder.ts`) | ✅ Confirmed position-independent |
+| Other roles' arrays untouched | ✅ Confirmed |
+
+*Compilation and automated tests skipped per session directive.*
+
+### Remaining Risks
+
+None. The change is a pure array element relocation with correct comma hygiene, verified parse-clean, and all downstream wiring is position-independent.

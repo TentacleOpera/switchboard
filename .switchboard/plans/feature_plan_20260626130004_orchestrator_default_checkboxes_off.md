@@ -28,13 +28,14 @@ This object seeds the webview's `roleConfigs` and is the fallback when no `roleC
 
 **Location C — backend prompt-builder fallbacks (`src/services/KanbanProvider.ts`):** the prompt is actually assembled here with its own `?? <default>` fallbacks, independent of the webview:
 ```ts
-// :3289
+// :3314 (skipCompilationByRole)
 orchestrator: orchestratorConfig?.addons?.skipCompilation ?? true,
-// :3303
+// :3328 (skipTestsByRole)
 orchestrator: orchestratorConfig?.addons?.skipTests ?? true,
-// :3338
+// :3363 (switchboardSafeguardsByRole)
 orchestrator: orchestratorConfig?.addons?.switchboardSafeguards ?? true,
 ```
+*(Line numbers updated post-implementation review; the plan's original :3289/:3303/:3338 references had drifted due to intervening commits.)*
 
 If only A/B change but C is left at `?? true`, a user who never touched the orchestrator config sees the boxes unchecked in the UI but the prompt still injects the safeguards/skip directives. **All three locations must flip to `false` together.**
 
@@ -46,7 +47,7 @@ All claims above were checked directly against `src/` (single source of truth) d
 
 - **Location A** — `ROLE_ADDONS.orchestrator` (`sharedDefaults.js:270-286`): `switchboardSafeguards` (`:271`), `skipCompilation` (`:275`), `skipTests` (`:276`) are each `default: true`. Confirmed exact.
 - **Location B** — `DEFAULT_ROLE_CONFIG.orchestrator` (`sharedDefaults.js:38`): contains `switchboardSafeguards: true, … skipCompilation: true, skipTests: true`, alongside `subagentPolicy: 'useSubagents'`, `cavemanOutput: true`, `gitProhibition: true`, `ultracode: false`, etc. Confirmed exact.
-- **Location C** — `KanbanProvider.ts`: `:3289` (`skipCompilationByRole.orchestrator ?? true`), `:3303` (`skipTestsByRole.orchestrator ?? true`), `:3338` (`switchboardSafeguardsByRole.orchestrator ?? true`). Confirmed exact. Each `…ByRole` map has exactly one line per role keyed by explicit name, so the orchestrator line can be edited without touching any other role.
+- **Location C** — `KanbanProvider.ts`: `:3314` (`skipCompilationByRole.orchestrator ?? true`), `:3328` (`skipTestsByRole.orchestrator ?? true`), `:3363` (`switchboardSafeguardsByRole.orchestrator ?? true`). Confirmed exact. Each `…ByRole` map has exactly one line per role keyed by explicit name, so the orchestrator line can be edited without touching any other role. *(Line numbers reflect post-implementation review state; original plan cited :3289/:3303/:3338.)*
 - **No fourth location** — a repo-wide grep for `skipCompilation`/`skipTests`/`switchboardSafeguards` co-occurring with `orchestrator` returns only Locations A/B/C plus the test file (below). No other code path seeds or reads these orchestrator defaults.
 - **Existing test is independent of the defaults** — `src/test/orchestrator-prompt.test.js` exercises the prompt assembler `buildKanbanBatchPrompt('orchestrator', …)` by passing `switchboardSafeguardsEnabled`/`skipCompilation`/`skipTests` **explicitly** as inputs. It never relies on the webview defaults or the `KanbanProvider` `?? true` fallback, so flipping the defaults does **not** change any assertion. No test changes are required.
 

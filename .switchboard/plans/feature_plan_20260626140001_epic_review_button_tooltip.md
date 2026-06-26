@@ -119,3 +119,40 @@ None applicable — this is a purely cosmetic template-literal change with no te
 3. **Plan card:** Hover the review button on a normal (non-epic) card → tooltip still reads **"Review plan"**.
 4. **Action regression:** Click the review button on both an epic and a plan card → the review action still triggers correctly (the change is tooltip-only; behaviour must be unchanged).
 5. **No tooltip-engine breakage:** Confirm the custom `data-tooltip` tooltip still appears/positions normally for both strings (no JS keyed off the literal text).
+
+## Review Pass (2026-06-26)
+
+### Stage 1 — Grumpy Principal Engineer
+
+Alright, let me look at this. A one-line ternary. The kind of change that should be beneath me, yet here we are.
+
+- **The constant placement.** `reviewTooltip` is declared at `src/webview/kanban.html:5340`, immediately after `cardId` (line 5339) and *before* the `return` template literal (line 5341). Correct scope, correct ordering, no hoisting games. Fine.
+- **The ternary.** `card.isEpic ? 'Review epic' : 'Review plan'`. Uses the same flag that drives the epic badge three lines above it (`epicClass` at 5311, `epicBadge` at 5312). No new data plumbing. The fallback preserves the exact legacy string for non-epic cards. Boringly correct.
+- **The interpolation.** `data-tooltip="${reviewTooltip}"` at line 5352. Both candidate strings are static, alphanumeric, no quotes/angle brackets — no `escapeAttr` needed, and the plan explicitly audited this. No injection surface.
+- **Single render path.** `createCardHtml` is the only card renderer on the Kanban board. A repo-wide grep for `Review plan` / `Review epic` across `src/` returns exactly one hit: the ternary itself at line 5340. No stale literal lingering on a second button, no JS keyed off the old text. The "no tooltip-engine breakage" risk is closed.
+- **`isEpic` population.** `KanbanProvider.ts` populates `isEpic` at four card-assembly sites (lines 1236, 1253, 2140, 2159) via `!!row.isEpic`. The flag is real and already consumed by the badge/worktree chip on the same card. No phantom-undefined risk.
+
+**Verdict:** I went looking for a fire and found a damp match. This is a textbook-correct one-line fix at the confirmed render site, using an already-populated flag, with the legacy string preserved verbatim for the non-epic path. No CRITICAL, no MAJOR, no NIT worth the bytes to type it. The plan's own "Risk is essentially nil" claim holds up.
+
+### Stage 2 — Balanced Synthesis
+
+- **Keep as-is:** The entire implementation. The `reviewTooltip` constant declaration and the `data-tooltip="${reviewTooltip}"` interpolation are exactly what the plan specified, at the specified locations.
+- **Fix now:** Nothing. No valid material findings.
+- **Defer:** Nothing. The change is complete and self-contained.
+
+### Files Changed
+
+- `src/webview/kanban.html:5340` — added `const reviewTooltip = card.isEpic ? 'Review epic' : 'Review plan';`
+- `src/webview/kanban.html:5352` — `data-tooltip="Review plan"` → `data-tooltip="${reviewTooltip}"`
+
+### Validation Results
+
+- **Static grep (Verification Plan step 1):** PASS. `reviewTooltip` declared once (line 5340), interpolated once on the review button (line 5352). No remaining hardcoded `"Review plan"` on the button.
+- **Repo-wide literal scan:** PASS. `grep -n "Review plan\|Review epic"` across `src/` returns only the ternary at line 5340 — no stale literals, no JS keyed off the text.
+- **`isEpic` flag audit:** PASS. Populated at `KanbanProvider.ts:1236,1253,2140,2159`; already consumed by the epic badge and worktree chip on the same card.
+- **Compilation:** Skipped per session policy (`dist/` not used in dev; `src/` is source of truth).
+- **Automated tests:** Skipped per session policy (cosmetic template-literal change, no testable logic path).
+
+### Remaining Risks
+
+None material. The only residual risk is the un-run manual hover checks (steps 2–5 of the Verification Plan), which require a live VSIX install with epic and plan cards present — out of scope for this static review pass.
