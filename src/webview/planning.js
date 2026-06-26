@@ -2751,7 +2751,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (iframe) {
                     iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
                     iframe.removeAttribute('src');
-                    iframe.srcdoc = htmlContent;
+                    iframe.srcdoc = injectBaseTag(htmlContent, webviewUri);
                 }
                 if (statusEl) { statusEl.textContent = isAutoRefreshed ? 'Auto-refreshed' : ''; statusEl.style.color = 'var(--accent-teal)'; }
             } else {
@@ -2909,6 +2909,19 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         const { sourceId, requestId, error } = msg;
 
         if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
+
+        // Handle planning-html-folder: update dedicated HTML preview pane elements
+        if (sourceId === 'planning-html-folder') {
+            const loadingState = document.getElementById('planning-html-loading-state');
+            const initialState = document.getElementById('planning-html-initial-state');
+            const previewWrapper = document.getElementById('planning-html-preview-wrapper');
+            const statusEl = document.getElementById('status-planning-html');
+            if (loadingState) loadingState.style.display = 'none';
+            if (previewWrapper) previewWrapper.style.display = 'none';
+            if (initialState) initialState.style.display = 'flex';
+            if (statusEl) { statusEl.textContent = 'Error: ' + error; statusEl.style.color = 'var(--vscode-errorForeground, #ff6b6b)'; }
+            return;
+        }
 
         const isOnline = ONLINE_SOURCES.includes(sourceId);
         const targetPreview = isOnline ? markdownPreviewOnline : markdownPreview;

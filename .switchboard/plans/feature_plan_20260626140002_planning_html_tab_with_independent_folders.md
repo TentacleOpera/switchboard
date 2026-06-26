@@ -274,6 +274,29 @@ async listPlanningHtmlFiles(): Promise<Array<{ id: string; name: string; relativ
 
 No automated tests will be run as part of this plan (per session directive: SKIP TESTS). The test suite will be run separately by the user.
 
+### Reviewer Pass — Completed 2026-06-26
+
+**Stage 1 (Grumpy) + Stage 2 (Balanced) findings:**
+
+| Severity | Finding | File:Line | Status |
+|----------|---------|-----------|--------|
+| MAJOR-1 | `handlePreviewError` had no `planning-html-folder` branch — preview errors showed infinite spinner, error rendered into hidden `markdownPreview` div | `planning.js:2908` | **FIXED** — Added dedicated branch that hides loading state, restores initial state, shows error in `#status-planning-html` |
+| MAJOR-2 | `_setupActiveDocWatcher` never called for `planning-html-folder` — disk-change auto-refresh didn't work (only editor-save auto-refresh via `_registerSaveTextDocListener`) | `PlanningPanelProvider.ts:6857` | **FIXED** — Added `_activePreviewPath` + `_setupActiveDocWatcher(resolvedPreviewPath)` call in the `planning-html-folder` branch |
+| MAJOR-3 | `_handlePlanningHtmlServerRequest` omits ~130 lines of Babel JSX-rewrite + diagnostic script injection that Design panel's `_handleHtmlServerRequest` includes — React/JSX HTML previews will silently fail | `PlanningPanelProvider.ts:1425` | **DEFERRED** — Plan says "port verbatim" but Babel patch is React/JSX-specific; feature goal is "stakeholder-facing HTML docs" (likely simple HTML). Flag for user decision. |
+| NIT-1 | `injectBaseTag` not used in srcdoc fallback — relative URLs won't resolve in rare fallback case | `planning.js:2754` | **FIXED** — Changed `iframe.srcdoc = htmlContent` to `iframe.srcdoc = injectBaseTag(htmlContent, webviewUri)` |
+| NIT-2 | `renderPlanningHtmlDocs` ignores `error` parameter from `planningHtmlDocsReady` | `planning.js:6481` | DEFERRED — minor UX gap |
+| NIT-3 | `renderPlanningHtmlDocs` uses flat list, no folder grouping (Design uses `renderFolderGroupedDocs`) | `planning.js:6480` | DEFERRED — visual inconsistency, not a bug |
+| NIT-4 | `serveAndOpenHtml` host case is dead code — no UI button triggers it | `PlanningPanelProvider.ts:2421` | DEFERRED — harmless dead code |
+| NIT-5 | Image branch in `handlePreviewReady` doesn't show image element — but unreachable since tree filters to `.html`/`.htm` only | `planning.js:2738` | DEFERRED — dead but harmless |
+
+**Files changed by reviewer:**
+- `src/webview/planning.js` — Added `planning-html-folder` branch to `handlePreviewError` (MAJOR-1 fix); used `injectBaseTag` in srcdoc fallback (NIT-1 fix)
+- `src/services/PlanningPanelProvider.ts` — Added `_setupActiveDocWatcher` call + `_activePreviewPath` set in `planning-html-folder` branch of `_handleFetchPreview` (MAJOR-2 fix)
+
+**Remaining risks:**
+1. **MAJOR-3 (Babel/diagnostic injection)**: If stakeholder HTML files use `<script type="text/babel">` with React JSX, previews will fail silently in the Planning panel. The Design panel handles this via injected Babel patches. User should decide whether to port the full injection logic (~130 lines) or accept the limitation.
+2. **NIT-2 through NIT-5**: Minor UX/consistency gaps, none blocking. Can be addressed in follow-up.
+
 ### Manual Verification
 
 1. **Independence (core requirement #1):**

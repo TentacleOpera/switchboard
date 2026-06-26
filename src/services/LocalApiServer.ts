@@ -13,6 +13,20 @@ interface LocalApiServerOptions {
     getLinearService: () => LinearSyncService | null;
     getAuthToken: () => Promise<string>;
     allRoots: string[];
+    /**
+     * Move a kanban card through the running extension so the move inherits the
+     * epic→subtask cascade, the Linear/ClickUp integration-sync fan-out, and the
+     * board refresh. Used by the kanban_operations fallback script to keep
+     * external trackers in exact sync (its direct-DB path cannot reach the
+     * integration token, which lives in VS Code secret storage). Optional —
+     * absent in headless/test harnesses.
+     */
+    moveCard?: (
+        workspaceRoot: string,
+        sessionId: string,
+        targetColumn: string,
+        planFile?: string
+    ) => Promise<{ success: boolean; error?: string }>;
 }
 
 export class LocalApiServer {
@@ -177,6 +191,53 @@ export class LocalApiServer {
             console.error('[LocalApiServer] postComment error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'postComment failed' }));
+        }
+    }
+
+    /**
+     * POST /kanban/move — move a kanban card via the running extension so the move
+     * inherits the epic→subtask cascade, the Linear/ClickUp sync fan-out, and the
+     * board refresh. Reached by the kanban_operations fallback script over the
+     * bridge; the script's direct-DB path cannot sync to external trackers because
+     * the integration token lives in VS Code secret storage.
+     * Body: { sessionId: string, targetColumn: string, workspaceRoot?: string, planFile?: string }.
+     */
+    private async _handleKanbanMove(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: 'Unauthorized',
+                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
+            }));
+            return;
+        }
+
+        const moveCard = this._options.moveCard;
+        if (!moveCard) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Kanban move not available' }));
+            return;
+        }
+
+        try {
+            const body = await this._parseJsonBody(req);
+            const sessionId = String(body?.sessionId || '').trim();
+            const targetColumn = String(body?.targetColumn || '').trim();
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const planFile = body?.planFile ? String(body.planFile).trim() : undefined;
+            if (!sessionId || !targetColumn) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required fields: sessionId and targetColumn' }));
+                return;
+            }
+
+            const result = await moveCard(workspaceRoot, sessionId, targetColumn, planFile);
+            res.writeHead(result.success ? 200 : 502, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+        } catch (err) {
+            console.error('[LocalApiServer] kanbanMove error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'kanbanMove failed' }));
         }
     }
 
@@ -778,6 +839,8 @@ export class LocalApiServer {
             } else if (pathname.startsWith('/task/clickup/') && req.method === 'PUT') {
                 const taskId = pathname.split('/')[3];
                 await this._handleUpdateClickUpTask(taskId, req, res);
+            } else if (pathname === '/kanban/move' && req.method === 'POST') {
+                await this._handleKanbanMove(req, res);
             } else if (pathname === '/comment' && req.method === 'POST') {
                 await this._handlePostComment(req, res);
             } else if (pathname === '/api/clickup' && req.method === 'POST') {

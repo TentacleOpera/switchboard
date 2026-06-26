@@ -907,7 +907,28 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // Retrieve from VS Code SecretStorage - returns empty string if not set
                 return await this._context.secrets.get('switchboard.apiToken') || '';
             },
-            allRoots: allRoots
+            allRoots: allRoots,
+            moveCard: async (wsRoot, sessionId, targetColumn, planFile) => {
+                // Route the kanban_operations fallback script's move through the
+                // provider so it inherits the epic cascade, integration-sync fan-out,
+                // and board refresh — the script's direct-DB path can't sync to
+                // Linear/ClickUp (the token lives in secret storage).
+                if (!this._kanbanProvider) {
+                    return { success: false, error: 'Kanban provider not available' };
+                }
+                try {
+                    const moved = await this._kanbanProvider.moveCardToColumn(wsRoot, sessionId, targetColumn);
+                    if (moved && planFile) {
+                        const db = await this._getKanbanDb(wsRoot);
+                        if (db && await db.ensureReady()) {
+                            await db.updatePlanFile(sessionId, planFile);
+                        }
+                    }
+                    return { success: moved, error: moved ? undefined : 'Column update failed' };
+                } catch (err) {
+                    return { success: false, error: err instanceof Error ? err.message : String(err) };
+                }
+            }
         });
 
         try {

@@ -6865,6 +6865,10 @@ Read the existing ticket content from the local file if it exists. Determine wha
             this._activePreviewDocId = docId;
             this._activePreviewSourceFolder = sourceFolder;
             this._activePreviewWorkspaceRoot = workspaceRoot;
+            const relPath = docId.includes(':') ? docId.substring(docId.indexOf(':') + 1) : docId;
+            const resolvedPreviewPath = path.resolve(sourceFolder, relPath);
+            this._activePreviewPath = resolvedPreviewPath;
+            this._setupActiveDocWatcher(resolvedPreviewPath);
             this._registerSaveTextDocListener();
             await this._buildAndSendPlanningHtmlPreview({ sourceId, sourceFolder, docId, requestId });
             return;

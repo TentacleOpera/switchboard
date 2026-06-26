@@ -482,3 +482,33 @@ intentional tradeoffs (the internal refresh) or low-impact edge cases.
   `moveCardToColumn` (`src/services/KanbanProvider.ts:~4815`) so Linear/ClickUp
   stay in exact sync on every epic move, matching `moveCardToColumnByPlanFile`
   (per follow-up user requirement).
+
+### Follow-up: `move-card.js` exact-sync routing (post-review)
+
+The manual fallback script `move-card.js` wrote the kanban DB directly, which
+cannot sync to Linear/ClickUp (the integration token lives in VS Code secret
+storage, unreachable from a standalone Node process) — and with real-time sync on,
+a direct-DB change could be reconciled away on the next inbound poll. Per the
+user's exact-sync requirement, the script now routes through the running
+extension. Changes:
+
+- **`src/services/LocalApiServer.ts`** — added an optional `moveCard` to
+  `LocalApiServerOptions`, a `POST /kanban/move` route, and the `_handleKanbanMove`
+  handler (body `{ sessionId, targetColumn, workspaceRoot?, planFile? }`).
+- **`src/services/TaskViewerProvider.ts`** (LocalApiServer wire-up, ~line 900) —
+  wired `moveCard` to `this._kanbanProvider.moveCardToColumn(...)` (inherits epic
+  cascade + sync fan-out + board refresh), plus optional `updatePlanFile`.
+- **`.agents/skills/kanban_operations/move-card.js`** — rewritten as a hybrid:
+  Path 1 (preferred) discovers `.switchboard/api-server-port.txt`, health-checks,
+  and POSTs `/kanban/move` so the extension performs the synced move; when the
+  extension is reachable it is authoritative (a refused move fails, no silent
+  fallback). Path 2 (fallback) is the original direct-DB write, used only when no
+  API server is reachable — subtasks still cascade but no external sync. The
+  `KanbanDatabase` require is lazied into Path 2 so Path 1 works even where the
+  compiled `out/` is absent.
+- **`.agents/skills/kanban_operations/SKILL.md`** — documented the two paths and
+  the sync implications.
+
+Validation: `tsc -p . --noEmit` — zero new errors in changed files (the 2
+project-wide errors are pre-existing `TS2835` module-resolution issues in
+`ClickUpSyncService.ts:2837` and `KanbanProvider.ts:5783`, unrelated to this work).
