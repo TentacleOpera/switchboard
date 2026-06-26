@@ -2902,6 +2902,7 @@ export class PlanningPanelProvider {
                         }
                         if (mode === 'copy') {
                             await vscode.env.clipboard.writeText(assembled.prompt);
+                            await this._kanbanProvider.markEpicOrchestrating(wsRoot, sessionId);
                         }
                         this._projectPanel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: true, mode, prompt: assembled.prompt, epicTopic: assembled.epicTopic, subtaskCount: assembled.subtaskCount, totalSubtasks: assembled.totalSubtasks });
                     }
@@ -2972,26 +2973,11 @@ export class PlanningPanelProvider {
                         this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Epic name is required.' });
                         break;
                     }
-                    const addToKanbanBoard = !!msg.addToKanbanBoard;
+                    const addToKanbanBoard = msg.addToKanbanBoard !== false;
                     const description = msg.description ? String(msg.description).trim() : '';
                     const yamlSafeName = name.replace(/'/g, "''");
                     const yamlSafeDesc = description.replace(/'/g, "''");
                     const epicContent = `---\ndescription: '${yamlSafeName}'\n---\n\n# ${name}\n\n${description}`;
-
-                    if (!addToKanbanBoard) {
-                        // Epic-only: just a document in .switchboard/epics/. No DB record,
-                        // no kanban board entry. The user can set it as active planning
-                        // context from the Epics tab to inject it into planner prompts.
-                        const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'epic';
-                        const epicDocPath = path.join(wsRoot, '.switchboard', 'epics', `${slug}.md`);
-                        await fs.promises.mkdir(path.dirname(epicDocPath), { recursive: true });
-                        await fs.promises.writeFile(epicDocPath, epicContent, 'utf8');
-                        // Refresh the epics list so the new document appears.
-                        this._handleMessage({ type: 'fetchEpicDocuments' }, true).catch(err => {
-                            console.error('[PlanningPanelProvider] createEpic fetchEpicDocuments failed:', err);
-                        });
-                        break;
-                    }
 
                     // Add to kanban board: create a DB plan record + file in epics/
                     const db = KanbanDatabase.forWorkspace(wsRoot);
@@ -3632,16 +3618,21 @@ Please format the updated output document strictly as follows:
                     let renameWsRoot: string | undefined;  // track which workspace root was used for the rename
                     if (tab === 'kanban' || tab === 'epics') {
                         try {
+                            const currentBasename = path.basename(resolved);
+                            // Only auto-rename files that follow the feature_plan_<YYYYMMDD>_<HHMMSS>_<slug>.md
+                            // convention. Epic files use hyphen slugs (.switchboard/epics/<slug>.md) and legacy
+                            // hand-named plans do NOT round-trip through the slug logic — renaming them produces
+                            // a corrupt `feature_plan__<slug>.md` (empty timestamp) and desyncs the preview path.
+                            const isTimestampedPlan = /^feature_plan_\d{8}_\d{6}_/.test(currentBasename);
                             const h1Match = content.match(/^#\s+(.+)$/m);
                             const h1Title = h1Match ? h1Match[1].trim() : '';
-                            if (h1Title) {
+                            if (isTimestampedPlan && h1Title) {
                                 // Generate the slug the file *should* have
                                 // TODO: extract to shared PlanSlug utility — duplicated from _toPlanSlug() in TaskViewerProvider.ts:15387
                                 const newSlug = h1Title
                                     .toLowerCase()
                                     .replace(/[^a-z0-9]+/g, '_')
                                     .replace(/^_+|_+$/g, '') || 'new_plan';
-                                const currentBasename = path.basename(resolved);
                                 const currentSlug = currentBasename.replace(/^feature_plan_\d{8}_\d{6}_/, '').replace(/\.md$/, '');
                                 if (newSlug !== currentSlug) {
                                     const timestamp = currentBasename.match(/^feature_plan_(\d{8}_\d{6})_/)?.[1] || '';

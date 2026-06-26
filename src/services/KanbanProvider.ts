@@ -3157,8 +3157,56 @@ export class KanbanProvider implements vscode.Disposable {
         if (this._taskViewerProvider) {
             sent = await this._taskViewerProvider.dispatchCustomPromptToRole('orchestrator', assembled.prompt, workspaceRoot);
         }
+        // Teleport the epic into the ORCHESTRATING column (non-dispatching move — the
+        // orchestrator was already dispatched above). This is the occupancy trigger that
+        // makes the epic-only Orchestrator column appear on the board. Without this, the
+        // column is permanently inert (epicOnly + hideWhenNoAgent = invisible unless occupied).
+        try {
+            await this.markEpicOrchestrating(workspaceRoot, epicSessionId);
+        } catch (teleportErr) {
+            console.warn(`[KanbanProvider] dispatchEpicOrchestration: teleport to ORCHESTRATING failed (prompt was still dispatched): ${teleportErr}`);
+        }
         return { assembled, sent };
     }
+
+    /**
+     * Teleport the epic into the ORCHESTRATING column.
+     * Consolidates the teleport logic, provides an idempotency short-circuit, and handles logging.
+     */
+    public async markEpicOrchestrating(workspaceRoot: string, epicSessionId: string): Promise<void> {
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) {
+            console.warn(`[KanbanProvider] markEpicOrchestrating: db not ready for ${epicSessionId}`);
+            return;
+        }
+        const epic = await db.getPlanByPlanId(epicSessionId);
+        if (!epic || !epic.isEpic) {
+            console.warn(`[KanbanProvider] markEpicOrchestrating: no epic found for ${epicSessionId}`);
+            return;
+        }
+        // Idempotency: skip the move (and the integration sync it would fire) if the
+        // epic is already in ORCHESTRATING. Prevents re-syncing a no-op status change
+        // to Linear/ClickUp when the user re-orchestrates an already-orchestrating epic.
+        const currentColumn = this._normalizeLegacyKanbanColumn(epic.kanbanColumn) || '';
+        if (currentColumn === 'ORCHESTRATING') {
+            return; // already there — no move, no sync, no refresh needed
+        }
+        try {
+            let moved = false;
+            if (epic.sessionId) {
+                moved = await this.moveCardToColumn(workspaceRoot, epic.sessionId, 'ORCHESTRATING');
+            } else if (epic.planFile) {
+                moved = await this.moveCardToColumnByPlanFile(workspaceRoot, epic.planFile, 'ORCHESTRATING');
+            }
+            if (!moved) {
+                console.warn(`[KanbanProvider] markEpicOrchestrating: move to ORCHESTRATING returned false for ${epicSessionId}`);
+            }
+            await this._refreshBoard(workspaceRoot);
+        } catch (err) {
+            console.warn(`[KanbanProvider] markEpicOrchestrating: teleport to ORCHESTRATING failed for ${epicSessionId}: ${err}`);
+        }
+    }
+
 
     /**
      * Returns true if the orchestrator agent is both visible (enabled) and has
@@ -3263,7 +3311,7 @@ export class KanbanProvider implements vscode.Disposable {
                 splitter: splitterConfig?.addons?.skipCompilation ?? false,
                 ticket_updater: ticketUpdaterConfig?.addons?.skipCompilation ?? false,
                 code_researcher: codeResearcherConfig?.addons?.skipCompilation ?? false,
-                orchestrator: orchestratorConfig?.addons?.skipCompilation ?? true,
+                orchestrator: orchestratorConfig?.addons?.skipCompilation ?? false,
             },
             skipTestsByRole: {
                 planner: plannerConfig?.addons?.skipTests ?? false,
@@ -3277,7 +3325,7 @@ export class KanbanProvider implements vscode.Disposable {
                 splitter: splitterConfig?.addons?.skipTests ?? false,
                 ticket_updater: ticketUpdaterConfig?.addons?.skipTests ?? false,
                 code_researcher: codeResearcherConfig?.addons?.skipTests ?? false,
-                orchestrator: orchestratorConfig?.addons?.skipTests ?? true,
+                orchestrator: orchestratorConfig?.addons?.skipTests ?? false,
             },
             gitProhibitionEnabled: plannerConfig?.addons?.gitProhibition ?? config.get<boolean>('planner.gitProhibitionEnabled', false),
             codeResearcher: {
@@ -3312,7 +3360,7 @@ export class KanbanProvider implements vscode.Disposable {
                 splitter: splitterConfig?.addons?.switchboardSafeguards ?? true,
                 ticket_updater: ticketUpdaterConfig?.addons?.switchboardSafeguards ?? true,
                 code_researcher: codeResearcherConfig?.addons?.switchboardSafeguards ?? true,
-                orchestrator: orchestratorConfig?.addons?.switchboardSafeguards ?? true,
+                orchestrator: orchestratorConfig?.addons?.switchboardSafeguards ?? false,
             },
             useSubagentsByRole: {
                 planner: plannerConfig?.addons?.subagentPolicy === 'useSubagents' || (plannerConfig?.addons?.subagentPolicy === undefined && plannerConfig?.addons?.useSubagents === true),
@@ -4818,9 +4866,34 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
             }
 
-            const moved = await db.updateColumnByPlanFile(planFile, workspaceId, targetColumn);
+            let moved: boolean;
+            let subtaskSessionIds: string[] = [];
+            if (previousRecord && previousRecord.isEpic) {
+                const subtasks = await db.getSubtasksByEpicId(previousRecord.planId);
+                subtaskSessionIds = subtasks.map(st => st.sessionId).filter(Boolean) as string[];
+                const epicSessionId = previousRecord.sessionId || '';
+                if (epicSessionId) {
+                    moved = await db.updateColumnWithEpicCascade(epicSessionId, subtaskSessionIds, targetColumn);
+                } else {
+                    moved = await db.updateColumnByPlanFile(planFile, workspaceId, targetColumn);
+                    if (moved && subtaskSessionIds.length > 0) {
+                        await db.updateColumnTransaction(subtaskSessionIds, targetColumn);
+                    }
+                }
+            } else {
+                moved = await db.updateColumnByPlanFile(planFile, workspaceId, targetColumn);
+            }
+
             if (moved) {
                 await this.queueIntegrationSyncForPlanFile(workspaceRoot, planFile, targetColumn);
+                if (subtaskSessionIds.length > 0) {
+                    await Promise.allSettled(
+                        subtaskSessionIds.map(sid =>
+                            this.queueIntegrationSyncForSession(workspaceRoot, sid, targetColumn)
+                        )
+                    );
+                }
+                await this._refreshBoard(workspaceRoot);
             }
             return moved;
         } catch (err) {
@@ -7768,6 +7841,14 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     vscode.window.showWarningMessage('No valid subtasks found for epic creation.');
                     break;
                 }
+                // Inherit project from subtasks so the epic appears on the same project-filtered
+                // board as its children. Without this, the new epic record has project='' /
+                // project_id=NULL and is filtered off any project-specific board view — the
+                // epic card never appears, which is the reported "not appearing as epic" bug.
+                // promoteToEpic doesn't have this problem because it promotes an existing plan
+                // that already carries its project.
+                const epicProject = subtasks.find(st => st.project)?.project || '';
+                const epicProjectId = subtasks.find(st => st.projectId != null)?.projectId ?? null;
                 const customColumns = await this._getCustomKanbanColumns(workspaceRoot);
                 const columnDefs = await this._buildKanbanColumns([], customColumns);
                 const ordinalMap = new Map<string, number>();
@@ -7810,6 +7891,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     complexity: 'Unknown',
                     tags: '',
                     repoScope: '',
+                    project: epicProject,
                     workspaceId,
                     createdAt: now,
                     updatedAt: now,
@@ -7821,7 +7903,8 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     dispatchedAgent: '',
                     dispatchedIde: '',
                     isEpic: 1,
-                    epicId: ''
+                    epicId: '',
+                    projectId: epicProjectId
                 });
 
                 if (!upsertOk) {

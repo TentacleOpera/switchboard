@@ -214,12 +214,12 @@
     const kanbanEditor = document.getElementById('kanban-editor');
  
     const epicsWorkspaceFilter = document.getElementById('epics-workspace-filter');
+    const epicsColumnFilter = document.getElementById('epics-column-filter');
     const btnSetActiveEpic = document.getElementById('btn-set-active-epic');
     const btnNewEpic = document.getElementById('btn-new-epic');
     const newEpicModal = document.getElementById('new-epic-modal');
     const newEpicName = document.getElementById('new-epic-name');
     const newEpicDescription = document.getElementById('new-epic-description');
-    const newEpicAddToKanban = document.getElementById('new-epic-add-to-kanban');
     const btnNewEpicCancel = document.getElementById('btn-new-epic-cancel');
     const btnNewEpicSubmit = document.getElementById('btn-new-epic-submit');
     const epicsListPane = document.getElementById('epics-list-pane');
@@ -287,7 +287,7 @@
     let _prdDirty = false;          // user has typed since the last load → don't clobber
 
     const kanbanFilters = { column: '', workspaceRoot: '', project: '', search: '' };
-    const epicsFilters = { workspaceRoot: '' };
+    const epicsFilters = { workspaceRoot: '', column: '' };
     const projectsFilters = { workspaceRoot: '' };
 
     // Initialize Webview Content
@@ -384,7 +384,7 @@
                 if (epicsPreviewContent && _epicPreviewFilePath && _epicPreviewFilePath === msg.filePath) {
                     if (state.editMode.epics) {
                         state.externalChangePending.epics = true;
-                    } else {
+                    } else if (!msg.error) {
                         epicsPreviewContent.innerHTML = msg.content || '';
                         state.editOriginalContent.epics = msg.rawContent || '';
                         const dynamicEditEpicsBtn = document.getElementById('btn-edit-epics');
@@ -401,7 +401,9 @@
                         workspaceRoot: msg.workspaceRoot || ''
                     };
                     epicsFilters.workspaceRoot = '';
+                    epicsFilters.column = '';
                     if (epicsWorkspaceFilter) epicsWorkspaceFilter.value = '';
+                    if (epicsColumnFilter) epicsColumnFilter.value = '';
                     const epicsTabBtn = document.querySelector('.shared-tab-btn[data-tab="epics"]');
                     if (epicsTabBtn) epicsTabBtn.click();
                     tryResolvePendingEpicSelection();
@@ -785,6 +787,7 @@
                         }
                         if (_epicSelectedPlan) selectEpic(_epicSelectedPlan);
                         vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+                        vscode.postMessage({ type: 'fetchEpicDocuments' });
                     }
                 } else {
                     showToast('Save failed: ' + (msg.error || 'Unknown error'), 'error');
@@ -906,6 +909,17 @@
                 opt.textContent = c.label;
                 if (c.id === currentCol) opt.selected = true;
                 kanbanColumnFilter.appendChild(opt);
+            });
+        }
+        if (epicsColumnFilter) {
+            const currentCol = epicsFilters.column;
+            epicsColumnFilter.innerHTML = '<option value="">All Columns</option>';
+            _kanbanAvailableColumns.forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = c.id;
+                opt.textContent = c.label;
+                if (c.id === currentCol) opt.selected = true;
+                epicsColumnFilter.appendChild(opt);
             });
         }
     }
@@ -1467,6 +1481,9 @@
         if (epicsFilters.workspaceRoot) {
             filtered = filtered.filter(plan => plan.workspaceRoot === epicsFilters.workspaceRoot);
         }
+        if (epicsFilters.column) {
+            filtered = filtered.filter(plan => plan.column === epicsFilters.column);
+        }
 
         epicsListPane.innerHTML = '';
 
@@ -1497,14 +1514,27 @@
                 itemDiv.classList.add('selected');
             }
 
+            const columnDef = plan.column ? _kanbanAvailableColumns.find(c => c.id === plan.column) : null;
+            const columnBadge = plan.column
+                ? `<span class="kanban-column-badge clickable" data-column="${escapeHtml(plan.column)}">${escapeHtml(columnDef ? columnDef.label : plan.column)}</span>
+                   <select class="kanban-column-dropdown" style="display:none;" data-plan-file="${escapeHtml(plan.planFile || '')}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}">
+                       ${_kanbanAvailableColumns.map(col => `<option value="${escapeHtml(col.id)}" ${col.id === plan.column ? 'selected' : ''}>${escapeHtml(col.label)}</option>`).join('')}
+                   </select>`
+                : `<span class="kanban-column-badge" style="opacity:0.6;">Doc</span>`;
+
             const isManageable = plan && !plan.isEpicDocument;
             const actionButtons = isManageable ? `
                 <div class="kanban-plan-actions" style="margin-top: 6px;">
+                    ${columnBadge}
                     ${plan.planFile ? `<button class="kanban-plan-copy-link epic-card-action" data-plan-file="${escapeHtml(plan.planFile)}">Copy Link</button>` : ''}
                     ${plan.sessionId || plan.planId ? `<button class="kanban-plan-copy-prompt epic-card-action" data-session-id="${escapeHtml(plan.sessionId || plan.planId)}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}">Copy Planning Prompt</button>` : ''}
                     ${plan.sessionId || plan.planId ? `<button class="epic-send-to-planner epic-card-action" data-plan-file="${escapeHtml(plan.planFile || '')}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}">Send to Planner</button>` : ''}
                 </div>
-            ` : '';
+            ` : `
+                <div class="kanban-plan-actions" style="margin-top: 6px;">
+                    ${columnBadge}
+                </div>
+            `;
 
             const displayTime = plan.mtime > 0 ? formatRelativeTime(plan.mtime) : 'unknown';
             itemDiv.innerHTML = `
@@ -1518,12 +1548,37 @@
             `;
 
             itemDiv.addEventListener('click', e => {
-                if (e.target.tagName === 'SUMMARY' || e.target.closest('.epic-accordion') || e.target.closest('.epic-card-action')) return;
+                if (e.target.tagName === 'SUMMARY' || e.target.closest('.epic-accordion') || e.target.closest('.epic-card-action') || e.target.closest('.kanban-column-badge') || e.target.closest('.kanban-column-dropdown')) return;
                 if (state.dirtyFlags.epics) exitEditMode('epics');
                 document.querySelectorAll('.epic-plan-item').forEach(el => el.classList.remove('selected'));
                 itemDiv.classList.add('selected');
                 selectEpic(plan);
             });
+
+            // Column Badge & Dropdown Wiring
+            const badge = itemDiv.querySelector('.kanban-column-badge.clickable');
+            const select = itemDiv.querySelector('.kanban-column-dropdown');
+            if (badge && select) {
+                badge.addEventListener('click', e => {
+                    e.stopPropagation();
+                    epicsListPane.querySelectorAll('.kanban-column-dropdown').forEach(s => s.style.display = 'none');
+                    select.style.display = 'block';
+                    select.focus();
+                });
+                select.addEventListener('change', e => {
+                    e.stopPropagation();
+                    vscode.postMessage({
+                        type: 'moveKanbanPlanColumn',
+                        planFile: select.dataset.planFile,
+                        newColumn: select.value,
+                        workspaceRoot: select.dataset.workspaceRoot
+                    });
+                    select.style.display = 'none';
+                });
+                select.addEventListener('blur', () => {
+                    setTimeout(() => select.style.display = 'none', 200);
+                });
+            }
 
             // Copy Link
             const epicCopyLinkBtn = itemDiv.querySelector('.epic-card-action.kanban-plan-copy-link');
@@ -1833,6 +1888,13 @@
     if (epicsWorkspaceFilter) {
         epicsWorkspaceFilter.addEventListener('change', () => {
             epicsFilters.workspaceRoot = epicsWorkspaceFilter.value;
+            renderEpicsList();
+        });
+    }
+
+    if (epicsColumnFilter) {
+        epicsColumnFilter.addEventListener('change', () => {
+            epicsFilters.column = epicsColumnFilter.value;
             renderEpicsList();
         });
     }
@@ -2224,7 +2286,6 @@
         btnNewEpic.addEventListener('click', () => {
             if (newEpicName) newEpicName.value = '';
             if (newEpicDescription) newEpicDescription.value = '';
-            if (newEpicAddToKanban) newEpicAddToKanban.checked = false;
             newEpicModal.style.display = 'flex';
             if (newEpicName) newEpicName.focus();
         });
@@ -2250,7 +2311,7 @@
                 description,
                 workspaceRoot: epicsFilters.workspaceRoot,
                 subtaskPlanIds: [],
-                addToKanbanBoard: !!(newEpicAddToKanban && newEpicAddToKanban.checked)
+                addToKanbanBoard: true
             });
             newEpicModal.style.display = 'none';
         });

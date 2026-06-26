@@ -1470,6 +1470,9 @@
                 <select id="epics-workspace-filter">
                     <option value="">All Workspaces</option>
                 </select>
+                <select id="epics-column-filter">
+                    <option value="">All Columns</option>
+                </select>
                 <!-- "Set as Active Planning Context" removed: PRDs are now per-project (Projects tab + PROJECT CONTEXT toggle), decoupled from epics. The Epics tab is orchestration-only. The legacy planner.designDocLink setter remains wired for back-compat. -->
                 <button id="btn-new-epic" class="strip-btn">+ New Epic</button>
                 <button id="btn-epic-modes-help" class="strip-btn" title="How to run an epic (3 ways)" style="font-weight: bold; min-width: 28px; padding: 2px 8px;">?</button>
@@ -1620,10 +1623,6 @@
                 <div style="display: flex; flex-direction: column; gap: 4px;">
                     <label for="new-epic-description" style="font-size: 11px; color: var(--text-secondary);">Description</label>
                     <textarea id="new-epic-description" placeholder="Enter description" style="background: #111; border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px; border-radius: 4px; font-size: 12px; height: 100px; resize: vertical; font-family: var(--font-family);"></textarea>
-                </div>
-                <div style="display: flex; align-items: center; gap: 6px;">
-                    <input type="checkbox" id="new-epic-add-to-kanban" style="margin: 0;" />
-                    <label for="new-epic-add-to-kanban" style="font-size: 11px; color: var(--text-secondary); cursor: pointer;">Add to Kanban board</label>
                 </div>
             </div>
             <div class="kanban-log-close" style="display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px;">

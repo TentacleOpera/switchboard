@@ -18,8 +18,15 @@ if (!VALID_KANBAN_COLUMNS.has(targetColumn)) {
 
 const db = KanbanDatabase.forWorkspace(workspaceRoot);
 db.ensureReady().then(async () => {
-  // Update column
-  const columnSuccess = await db.updateColumn(sessionId, targetColumn);
+  const plan = await db.getPlanBySessionId(sessionId);
+  let columnSuccess;
+  if (plan && plan.isEpic) {
+    const subtasks = await db.getSubtasksByEpicId(plan.planId);
+    const subtaskSessionIds = subtasks.map(st => st.sessionId).filter(Boolean);
+    columnSuccess = await db.updateColumnWithEpicCascade(sessionId, subtaskSessionIds, targetColumn);
+  } else {
+    columnSuccess = await db.updateColumn(sessionId, targetColumn);
+  }
 
   // Update plan_file if provided
   let planFileSuccess = true;

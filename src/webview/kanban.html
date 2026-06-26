@@ -4320,9 +4320,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         function getAllInColumn(col) {
             if (col === 'CODED_AUTO') {
                 const CODED_IDS = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
-                return currentCards.filter(c => CODED_IDS.includes(c.column)).map(c => c.planId || c.sessionId || '').filter(Boolean);
+                return currentCards.filter(c => CODED_IDS.includes(c.column) && !c.epicId).map(c => c.planId || c.sessionId || '').filter(Boolean);
             }
-            return currentCards.filter(c => c.column === col).map(c => c.planId || c.sessionId || '').filter(Boolean);
+            return currentCards.filter(c => c.column === col && !c.epicId).map(c => c.planId || c.sessionId || '').filter(Boolean);
         }
 
         function escapeAttr(value) {
@@ -4543,6 +4543,21 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         </button>
                     </div>`;
                 } else {
+                    const julesBtn = (isPlanReviewed && lastVisibleAgents.jules !== false)
+                        ? `<button class="column-icon-btn" data-action="julesSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Send selected plans to Jules">
+                               <img src="${ICON_JULES}" alt="Jules">
+                           </button>`
+                        : '';
+                    const rePlanBtn = (isPlanReviewed && lastVisibleAgents.planner !== false)
+                        ? `<button class="column-icon-btn" data-action="rePlanSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Re-plan selected plans (trigger high-reasoning refinement)">
+                               <img src="${ICON_ANALYST_MAP}" alt="Re-plan">
+                           </button>`
+                        : '';
+                    const splitterBtn = (isPlanReviewed && lastVisibleAgents.splitter !== false)
+                        ? `<button class="column-icon-btn" data-action="splitterSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Split selected plans into Routine and Complex files">
+                               <img src="${ICON_SPLITTER}" alt="Splitter">
+                           </button>`
+                        : '';
                     const epicGroupBtn = isCreated
                         ? `<button class="column-icon-btn" data-action="groupAllIntoEpic" data-column="${escapeAttr(def.id)}" data-tooltip="Group all plans in this column into an epic">
                                <img src="${ICON_CODE_MAP}" alt="Group Into Epic">
@@ -4787,7 +4802,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             const nonEpicCards = [];
                             for (const id of allIds) {
                                 const card = currentCards.find(c => (c.planId || c.sessionId) === id);
-                                if (card && !card.isEpic) {
+                                if (card && !card.isEpic && !card.epicId) {
                                     selectedCards.set(id, card);
                                     nonEpicCards.push(card);
                                     const cardEl = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-session="${CSS.escape(id)}"]`);
@@ -4822,6 +4837,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             postKanbanMessage({ type: 'completeAll', workspaceRoot: getActiveWorkspaceRoot() });
                             ids.forEach(id => selectedCards.delete(id));
                             break;
+                        }
                     }
                 });
             });
@@ -5311,6 +5327,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-6"/></svg>
                    </button>`;
             const cardId = escapeAttr(card.planId || card.sessionId || '');
+            const reviewTooltip = card.isEpic ? 'Review epic' : 'Review plan';
             return `
                 <div class="kanban-card${completedClass}${epicClass}" draggable="true" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}">
                     <div class="card-topic">${epicBadge}${escapeHtml(shortTopic)}${wtButton}</div>
@@ -5322,7 +5339,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             ${backlogActionBtn}
                         </div>
                         <div style="display: flex; gap: 4px;">
-                            <button class="card-btn icon-btn review" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-plan-file="${escapeAttr(card.planFile || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Review plan">
+                            <button class="card-btn icon-btn review" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-plan-file="${escapeAttr(card.planFile || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="${reviewTooltip}">
                                 <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z"/></svg>
                             </button>
                             ${completeOrDoneBtn}

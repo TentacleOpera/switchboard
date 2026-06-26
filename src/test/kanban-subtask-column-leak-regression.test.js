@@ -91,6 +91,29 @@ function run() {
         'completeAll must branch on card.isEpic to detect epic cards'
     );
 
+    // 7. Frontend collector: getAllInColumn must exclude subtask cards (!c.epicId)
+    //    on BOTH return paths, mirroring the backend _visibleColumnCards contract.
+    //    The backend was fixed in commit 3fff80a but the frontend collector was
+    //    never touched — this test prevents that exact regression.
+    const htmlPath = path.join(process.cwd(), 'src', 'webview', 'kanban.html');
+    const html = fs.readFileSync(htmlPath, 'utf8');
+
+    const collectorMatch = html.match(/function getAllInColumn\(col\)\s*\{[\s\S]*?\n\s{8}\}/);
+    assert.ok(collectorMatch, 'getAllInColumn function must exist in kanban.html');
+
+    // Both the CODED_AUTO branch and the default branch must exclude subtasks.
+    const collectorBody = collectorMatch[0];
+    const codedAutoFilter = collectorBody.match(/CODED_IDS\.includes\(c\.column\)([^)]*)\)/);
+    assert.ok(
+        codedAutoFilter && /!c\.epicId/.test(codedAutoFilter[0]),
+        'getAllInColumn CODED_AUTO branch must exclude subtask cards via !c.epicId'
+    );
+    const defaultFilter = collectorBody.match(/c\.column === col([^)]*)\)/);
+    assert.ok(
+        defaultFilter && /!c\.epicId/.test(defaultFilter[0]),
+        'getAllInColumn default branch must exclude subtask cards via !c.epicId'
+    );
+
     console.log('kanban subtask column-leak regression test passed');
 }
 
