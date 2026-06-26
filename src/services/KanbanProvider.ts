@@ -4813,16 +4813,26 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 return false;
             }
             let moved: boolean;
+            let subtaskSessionIds: string[] = [];
             if (plan && plan.isEpic) {
                 // Atomic: move epic + all subtasks in one transaction
                 const subtasks = await db.getSubtasksByEpicId(plan.planId);
-                const subtaskSessionIds = subtasks.map(st => st.sessionId).filter(Boolean);
+                subtaskSessionIds = subtasks.map(st => st.sessionId).filter(Boolean);
                 moved = await db.updateColumnWithEpicCascade(sessionId, subtaskSessionIds, targetColumn);
             } else {
                 moved = await db.updateColumn(sessionId, targetColumn);
             }
             if (moved) {
                 await this.queueIntegrationSyncForSession(workspaceRoot, sessionId, targetColumn);
+                // Exact sync: fan out integration sync for subtasks so Linear/ClickUp
+                // reflect the cascaded subtask status. Mirrors moveCardToColumnByPlanFile.
+                if (subtaskSessionIds.length > 0) {
+                    await Promise.allSettled(
+                        subtaskSessionIds.map(sid =>
+                            this.queueIntegrationSyncForSession(workspaceRoot, sid, targetColumn)
+                        )
+                    );
+                }
             }
             return moved;
         } catch (err) {
