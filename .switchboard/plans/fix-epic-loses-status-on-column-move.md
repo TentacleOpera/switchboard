@@ -39,9 +39,9 @@ The `session_id` column is a legacy from when Claude's process session ID was th
 
 ## User Review Required
 
-Yes — confirm two cleanups:
-1. Whether to delete the now-dead session_id-keyed `updateColumnWithEpicCascade` (line 3843) and `updateColumnTransaction` (line 3821), or keep them as deprecated scaffolding. Leaving them risks a future contributor re-calling the session_id-keyed path and reintroducing this exact bug.
-2. Whether to add the early-return guard `if (!sessionId) return false;` to `moveCardToColumn` (the correct residual-gap fix) in addition to the already-applied cascade change.
+None — both cleanups previously flagged here are now RESOLVED in code (verified by the 2026-06-28 reviewer pass; see the Reviewer Pass section at the end of this file):
+1. ~~Whether to delete the now-dead session_id-keyed `updateColumnWithEpicCascade` and `updateColumnTransaction`.~~ **DONE** — both methods are deleted from `KanbanDatabase.ts`; only two doc/inline comments still name them (no definitions, no call sites).
+2. ~~Whether to add the early-return guard `if (!sessionId) return false;` to `moveCardToColumn`.~~ **DONE** — the guard is applied at `KanbanProvider.ts:4878`.
 
 ## Complexity Audit
 

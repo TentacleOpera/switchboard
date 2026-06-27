@@ -10,7 +10,7 @@ Notion backup restore (`NotionBackupService.restoreFromNotion`) updates each res
 
 ## Metadata
 
-**Tags:** bugfix, backend, database, notion, epics
+**Tags:** bugfix, backend, database
 **Complexity:** 4
 
 ## User Review Required
@@ -30,8 +30,10 @@ Notion backup restore (`NotionBackupService.restoreFromNotion`) updates each res
 - Reuses `getSubtasksByEpicId` and a new cascade call (either the existing `updateColumnWithEpicCascadeByPlanId` or the atomic variant from the "Atomic Race-Free Cascade" plan, whichever is available).
 
 ### Complex / Risky
-- **`epic_id` preservation on upsert.** The restored record from `_notionPageToPlanRecord` omits `epicId`. The `UPSERT_PLAN_SQL` conflict clause handles `epic_id` via `CASE WHEN excluded.epic_id IS NOT NULL AND excluded.epic_id != '' THEN excluded.epic_id ELSE epic_id END` (line 595). Since the restored record's `epicId` is `undefined` → serialized as `NULL` or `''` by the upsert parameter binding, the `CASE` preserves the existing local `epic_id`. **This must be verified** — if the upsert binds `undefined` as a non-null empty string, the `!= ''` check fails and `epic_id` is preserved; if it binds as `NULL`, the `IS NOT NULL` check fails and `epic_id` is preserved. Either way it should be safe, but the binding behavior of `record.epicId ?? undefined` through `upsertPlans` needs confirmation.
+- **`epic_id` preservation on upsert — VERIFIED SAFE.** The restored record from `_notionPageToPlanRecord` (line 456) omits `epicId`. `upsertPlans` (line 1251) binds `record.epicId || ''` (line 1284) → empty string `''`. The `UPSERT_PLAN_SQL` conflict clause (line 595): `epic_id = CASE WHEN excluded.epic_id IS NOT NULL AND excluded.epic_id != '' THEN excluded.epic_id ELSE epic_id END`. Since `excluded.epic_id` is `''`, the condition `IS NOT NULL AND != ''` is FALSE → ELSE preserves the existing local `epic_id`. **Confirmed by tracing the binding chain.** No change needed to the upsert clause.
+- **File-based plan gap in the proposed cascade code.** The `columnUpdates` array (built at lines 129-131) uses `plan.sessionId` as the key. For file-based plans, `sessionId` is `''`. The original proposed code uses `getPlanBySessionId(sessionId)` which would match a random plan for empty sessionId, then "guards" by skipping empty sessionId — but this means file-based epics restored from Notion DON'T CASCADE. **Fix:** carry `planId` in the `columnUpdates` tuples and use `getPlanByPlanId(planId)` for the cascade lookup. The restored record has `planId` from Notion's 'Plan ID' property (verified at `_notionPageToPlanRecord` line 467).
 - **Fresh-workspace restore gap (option (b) only).** If restoring to a workspace with no pre-existing local data, the local DB has no `is_epic`/`epic_id` relationships to cascade from. The upsert creates rows with `is_epic=0` (default) and `epic_id=''` (default) because Notion doesn't carry these fields. The post-restore cascade pass finds no epics and no subtasks — nothing cascades. This is an inherent limitation of option (b); documented as a remaining risk, not a bug.
+- **Unchanged-epic-column edge case.** The `columnUpdates` array is built only when `local.kanbanColumn !== plan.kanbanColumn` (line 129) — i.e., only for plans whose column CHANGED. An epic whose column didn't change but whose subtasks are in wrong columns won't be re-aligned by the cascade. This is a minor limitation of the restore path, not a bug — restore is typically used to recover from data loss where columns have drifted. Documented as a known limitation.
 
 ## Edge-Case & Dependency Audit
 
@@ -55,15 +57,38 @@ Notion backup restore (`NotionBackupService.restoreFromNotion`) updates each res
 ## Proposed Changes
 
 ### `src/services/NotionBackupService.ts`
-- **Context:** Notion backup/restore service. Restore path upserts plans and updates columns individually.
+- **Context:** Notion backup/restore service. Verified: `restoreFromNotion` at line 88, `upsertPlans` at line 138, `updateColumn` loop at lines 140-142, `columnUpdates` built at lines 129-131 with `{ sessionId: plan.sessionId, column: plan.kanbanColumn }`. `_notionPageToPlanRecord` at line 456 omits `isEpic`/`epicId` (verified). `_planToNotionProperties` at line 436 omits `is_epic`/`epic_id` (verified). All required KanbanDatabase methods verified: `getPlanBySessionId` (2556), `getPlanByPlanId` (2648), `getSubtasksByEpicId` (3811), `updateColumnWithEpicCascadeByPlanId` (3826), `updateStatus` (1656), `updateColumn` (1463). `cascadeEpicByPlanId` does NOT yet exist (Plan 2 adds it).
 - **Logic:**
-  1. After the `upsertPlans` + `updateColumn` loop (line 142), add a post-restore epic cascade pass:
+  1. **Extend `columnUpdates` to carry `planId`** (lines 129-131): change the push to include `planId` from the restored record:
+     ```typescript
+     columnUpdates.push({ sessionId: plan.sessionId, planId: plan.planId, column: plan.kanbanColumn });
+     ```
+     This fixes the file-based-plan gap — file-based plans have `sessionId=''` but `planId` is always present from Notion's 'Plan ID' property.
+
+  2. After the `upsertPlans` + `updateColumn` loop (line 142), add a post-restore epic cascade pass. **Two code paths depending on whether Plan 2 is implemented:**
+
+     **Preferred path (Plan 2 implemented — atomic, race-free):**
      ```typescript
      // Post-restore: cascade epic column (and status) to subtasks.
-     // The upsert preserves local is_epic (Class 1 CASE fix) and epic_id (CASE clause),
+     // The upsert preserves local is_epic (Class 1 CASE fix) and epic_id (CASE clause, verified safe),
      // so we can query the local DB for epic/subtask relationships after restore.
-     for (const { sessionId, column } of columnUpdates) {
-         const epic = await kanbanDb.getPlanBySessionId(sessionId) ?? await kanbanDb.getPlanByPlanId(sessionId);
+     for (const { planId, column } of columnUpdates) {
+         if (!planId) continue; // skip if no planId (shouldn't happen — Notion always has Plan ID)
+         const epic = await kanbanDb.getPlanByPlanId(planId);
+         if (epic && epic.isEpic) {
+             // Use atomic cascade from Plan 2 — handles both column + status in one transaction.
+             // For COMPLETED epics, cascade status='completed'; for others, column-only.
+             const targetStatus = epic.status === 'completed' ? 'completed' : undefined;
+             await kanbanDb.cascadeEpicByPlanId(epic.planId, column, targetStatus);
+         }
+     }
+     ```
+
+     **Stopgap path (Plan 2 NOT yet implemented — read-then-write, manual status loop):**
+     ```typescript
+     for (const { planId, column } of columnUpdates) {
+         if (!planId) continue;
+         const epic = await kanbanDb.getPlanByPlanId(planId);
          if (epic && epic.isEpic) {
              const subtasks = await kanbanDb.getSubtasksByEpicId(epic.planId);
              const subtaskPlanIds = subtasks.map(st => st.planId).filter(Boolean) as string[];
@@ -79,12 +104,17 @@ Notion backup restore (`NotionBackupService.restoreFromNotion`) updates each res
          }
      }
      ```
-  2. Guard: skip the cascade if `sessionId` is empty (file-based plan — `getPlanBySessionId('')` matches a random plan). Use `?? getPlanByPlanId(sessionId)` as fallback, and skip if both return null.
-- **Edge Cases:** Fresh-workspace restore (no local epic data) → cascade is a no-op (finds no epics); documented as inherent limitation of option (b). `epic_id` preservation on upsert must be verified.
+
+  3. **Use `planId` as the lookup key, NOT `sessionId`.** The original proposed code used `getPlanBySessionId(sessionId)` which is dangerous for file-based plans (sessionId='' matches a random plan). The corrected code uses `getPlanByPlanId(planId)` directly — `planId` is always present from Notion's 'Plan ID' property.
+- **Edge Cases:** Fresh-workspace restore (no local epic data) → cascade is a no-op (finds no epics); documented as inherent limitation of option (b). `epic_id` preservation on upsert — VERIFIED SAFE (no change needed). Unchanged-epic-column edge case: an epic whose column didn't change won't be in `columnUpdates`, so its subtasks won't be re-aligned — documented as a known limitation.
 
 ## Verification Plan
 
 > Per project conventions: skip compilation and automated tests during implementation; the user runs the suite separately.
+
+### Automated Tests
+
+Skipped per session directive — the user runs the test suite separately. No compilation or automated test steps are included in this plan.
 
 ### Manual tests
 - Restore a Notion backup over a workspace with an existing epic in COMPLETED → epic + all subtasks move to COMPLETED, subtask `status` also becomes `completed`.

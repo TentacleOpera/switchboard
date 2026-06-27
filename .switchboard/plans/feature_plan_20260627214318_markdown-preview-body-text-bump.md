@@ -230,3 +230,64 @@ No automated tests run as part of this session (per session directive — the te
 ## Recommendation
 
 Complexity 2/10 → **Send to Intern**. This is a mechanical three-file CSS value bump plus a pinned comment sweep, with all line numbers verified and no logic, state, or migration surface.
+
+---
+
+## Code Review (Reviewer Pass)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*"You want me to review a three-line CSS bump? Fine. Let me see if the intern managed to not screw up finding-and-replacing a number."*
+
+**CRITICAL:** None.
+
+**MAJOR:** None.
+
+**NIT-1:** The plan's audit claimed "4 stale comments per file" and listed exact line numbers. The actual code has a **5th** `/* Inherits from container's 14px */` comment per file (planning.html:1345, design.html:1370, project.html:1169) on the `.empty-state` rule. This comment pre-dated the change — it already said `14px` while the container was `13px`, making it a **pre-existing stale comment** that the plan's audit completely missed. The bump accidentally made it correct. The plan's verification grep ("Expect 12 matches" for new 14px comments) would have **failed** — it returns 15, not 12. Sloppy audit work, but harmless outcome. (`src/webview/planning.html:1345`, `src/webview/design.html:1370`, `src/webview/project.html:1169`)
+
+**NIT-2:** Plan says planning.html container is at "line ~1022". Actual line is **1026**. Within `~` tolerance, but the Proposed Changes block hardcoded `1022` in the comment. The implementer found the right line anyway. (`src/webview/planning.html:1026`)
+
+**NIT-3:** The plan's Verification Plan step 2 says "Expect 12 matches" for the new-14px-comment grep. Actual result is **15 matches** (5 per file, not 4) due to NIT-1. The verification expectation was wrong, not the code.
+
+*"Honestly? The implementation is clean. Every in-scope change is correct, every out-of-scope `13px` is untouched, and the counts reconcile perfectly (22→17, 22→17, 6→1). The only black mark is on the plan's audit, not the code. The intern did better than the planner. Dismissed."*
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is:**
+- All 15 code changes (3 container bumps + 12 comment updates). Verified correct via git diff and live grep.
+- Out-of-scope `13px` values: all 35 remaining references confirmed unrelated to the markdown preview block (toggle labels, kanban topics, ticket bodies, code blocks, etc.).
+
+**Fix now:** None needed. No CRITICAL or MAJOR findings.
+
+**Defer:**
+- NIT-1 (5th pre-existing comment): No action — the comment is now accurate post-bump. Documenting it here is sufficient.
+- NIT-2/NIT-3 (plan line-number/expectation drift): Documentation-only; no code impact.
+
+### Verification Results
+
+| Check | Expected | Actual | Status |
+|-------|----------|--------|--------|
+| Stale `13px base` / `Inherits from container's 13px` comments | 0 matches | 0 matches | PASS |
+| New `14px base` / `Inherits from container's 14px` comments | 12 matches | 15 matches | PASS (see NIT-1) |
+| Container `font-size: 14px` in preview block | 1 per file | planning:1026, design:1022, project:847 | PASS |
+| `13px` count — planning.html | 17 | 17 | PASS |
+| `13px` count — design.html | 17 | 17 | PASS |
+| `13px` count — project.html | 1 | 1 | PASS |
+| Inline code `0.85em` untouched | 3 matches (1 per file) | 3 matches | PASS |
+| h4/h5/h6 `em` rules — no stale base comments | No `13px`/`14px` base comments | Confirmed (h4 uses `1em` with no base comment) | PASS |
+
+**Compilation:** Skipped per session directive (pre-compiled state).
+**Tests:** Skipped per session directive (user runs separately).
+
+### Files Changed (Committed)
+
+All changes were committed in `116def1` (auto-commit before code review):
+- `src/webview/planning.html` — 5 changes (1 container + 4 comments)
+- `src/webview/design.html` — 5 changes (1 container + 4 comments)
+- `src/webview/project.html` — 5 changes (1 container + 4 comments)
+
+### Remaining Risks
+
+1. **`kanban.html` inconsistency (out of scope, deferred):** `src/webview/kanban.html` still uses `13px` for its markdown preview (9 matches). Typography will be inconsistent between kanban.html and the three bumped views. Flagged for optional follow-up — do not touch in this plan.
+2. **Pre-existing stale comment (benign):** The 5th "Inherits from container's 14px" comment per file was stale before the bump and correct after. No action needed, but future base changes must update all 5 comment sites per file, not 4.
+3. **Visual verification pending:** Manual VSIX visual check (step 5) not performed in this session — user to confirm readability and theme behavior.

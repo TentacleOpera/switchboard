@@ -49,11 +49,11 @@ Two related defects remain in the epic cascade paths after the comprehensive epi
 **Dependencies & Conflicts**
 - Depends on the comprehensive epic fix (already implemented) — specifically `updateColumnWithEpicCascadeByPlanId` and the caller sites it created.
 - The Notion restore cascade plan should use `cascadeEpicByPlanId` if this plan is implemented first.
-- The `move-card.js` skill script (line 128) uses the old `updateColumnWithEpicCascade` in its direct-DB fallback — that should also be updated to use the new method, but it's in the "Replace Raw Prompt SQL" plan's scope (or a separate fix).
+- The `move-card.js` skill script (line 128) calls `updateColumnWithEpicCascade` — a method that does NOT EXIST in KanbanDatabase.ts — in its direct-DB fallback. This is a crash (TypeError), not a logic bug. The "Replace Raw Prompt SQL" plan (Plan 1) fixes this by replacing the call with `updateColumnWithEpicCascadeByPlanId` or `cascadeEpicByPlanId` (from this plan).
 
 ## Adversarial Synthesis
 
-Key risks: (1) the `WHERE epic_id = ? AND status = 'active'` filter is correct for forward moves but wrong for recovery/restore paths (uncomplete, restore-from-archive) where you want to catch ALL subtasks regardless of status — these sites need the filter relaxed; (2) the integration sync fan-out still needs `getSubtasksByEpicId` to know which subtask `sessionId`s to sync, so the read step isn't fully eliminated at `moveCardToColumn`/`moveCardToColumnByPlanFile` — only the cascade's race is closed, not the sync's; (3) `cascadeEpicByPlanId` with no `targetStatus` must omit `status` from the SET clause entirely (not set it to NULL or empty), so non-completion moves don't accidentally clear subtask status.
+Key risks: (1) the `WHERE epic_id = ? AND status = 'active'` filter is correct for forward moves but wrong for recovery/restore paths (uncompleteCard, _restoreRunSheet) where you want to catch ALL subtasks regardless of status — these sites need `includeAllSubtasks=true`; (2) the integration sync fan-out still needs `getSubtasksByEpicId` to know which subtask `sessionId`s to sync, so the read step isn't fully eliminated at `moveCardToColumn`/`moveCardToColumnByPlanFile` — only the cascade's race is closed, not the sync's; (3) `cascadeEpicByPlanId` with no `targetStatus` must omit `status` from the SET clause entirely (not set it to NULL or empty), so non-completion moves don't accidentally clear subtask status; (4) redundant `updateStatus` calls at completion sites (lines 6825, 6855, 6899, 14072) become harmless no-ops for epics but must NOT be removed — non-epic plans still need them; (5) all line numbers in the original plan were stale and three function names were wrong (`testingFailureReport`→`testingFailed`, `_restoreFromArchive`→`_restoreRunSheet`, `markPlanComplete`→unnamed case handler) — corrected above. Mitigations: use `includeAllSubtasks=true` only at uncompleteCard and _restoreRunSheet; document the redundant-but-necessary `updateStatus` pattern; verify all line numbers against current source before editing.
 
 ## Proposed Changes
 
@@ -124,36 +124,42 @@ public async cascadeEpicByPlanId(
 - **Edge Cases:** `targetStatus` omitted → status not touched. `includeAllSubtasks=true` → catches completed/deleted subtasks (recovery/restore). Column validation matches sibling methods.
 
 ### `src/services/KanbanProvider.ts`
-- **Context:** Webview handlers + card-move orchestration.
-- **Logic:** Replace each Class 2/3/7 cascade site:
+- **Context:** Webview handlers + card-move orchestration. All line numbers below are VERIFIED against current source (previous plan had stale numbers).
+- **Logic:** Replace each Class 2/3/7 cascade site. **Important note on redundant `updateStatus` calls:** at `completePlan`, `completeSelected`, `completeAll`, and the unnamed handler at line 14077, the epic's OWN `status` is set separately AFTER the cascade via `db.updateStatus(sessionId, 'completed')` (lines 6825, 6855, 6899, 14072 respectively). With the new `cascadeEpicByPlanId(planId, 'COMPLETED', 'completed')` setting the epic's status atomically, these `updateStatus` calls become redundant for epics (harmless double-write — same value). **Do NOT remove them** — they're called unconditionally for both epic and non-epic plans, and non-epic plans still need the status update. The cascade only replaces the `getSubtasksByEpicId` + `updateColumnWithEpicCascadeByPlanId` read-then-write block, not the `updateStatus` call.
 
-1. **`moveCardToColumn` (~4839-4842):** Replace `getSubtasksByEpicId` + `updateColumnWithEpicCascadeByPlanId` with `cascadeEpicByPlanId(plan.planId, targetColumn)`. Keep the `getSubtasksByEpicId` call ONLY for the integration sync fan-out (`subtaskSessionIds`).
+1. **`moveCardToColumn` (cascade at lines 4894-4897):** Replace `getSubtasksByEpicId` + `updateColumnWithEpicCascadeByPlanId` with `cascadeEpicByPlanId(plan.planId, targetColumn)`. Keep the `getSubtasksByEpicId` call ONLY for the integration sync fan-out (`subtaskSessionIds`).
 
-2. **`moveCardToColumnByPlanFile` (~4905-4908):** Same replacement with `cascadeEpicByPlanId(previousRecord.planId, targetColumn)`. Keep `getSubtasksByEpicId` for sync fan-out.
+2. **`moveCardToColumnByPlanFile` (cascade at lines 4967-4970):** Same replacement with `cascadeEpicByPlanId(previousRecord.planId, targetColumn)`. Keep `getSubtasksByEpicId` for sync fan-out.
 
-3. **`completePlan` (~6694-6698):** Replace with `cascadeEpicByPlanId(plan.planId, 'COMPLETED', 'completed')`. Remove the separate `getSubtasksByEpicId` + explicit-ID construction.
+3. **`completePlan` (cascade at lines 6813-6815, status at line 6825):** Replace with `cascadeEpicByPlanId(plan.planId, 'COMPLETED', 'completed')`. Remove the separate `getSubtasksByEpicId` + explicit-ID construction. **Keep** the `updateStatus(resolvedSessionId, 'completed')` at line 6825 — it's a no-op for epics (status already set by cascade) but needed for non-epic plans in the same code path.
 
-4. **`completeSelected` (~6720-6724):** Same — `cascadeEpicByPlanId(plan.planId, 'COMPLETED', 'completed')` in the loop.
+4. **`completeSelected` (cascade at lines 6843-6845, status at line 6855):** Same — `cascadeEpicByPlanId(plan.planId, 'COMPLETED', 'completed')` in the loop. Keep `updateStatus(sessionId, 'completed')` at line 6855.
 
-5. **`completeAll` (~6762-6764):** Same — `cascadeEpicByPlanId(card.planId, 'COMPLETED', 'completed')`.
+5. **`completeAll` (cascade at lines 6887-6889, status at line 6899):** Same — `cascadeEpicByPlanId(card.planId, 'COMPLETED', 'completed')`. Keep `updateStatus(cardKey, 'completed')` at line 6899.
 
-6. **`uncompleteCard` (~6800-6813 + rollback ~6827):** Forward: `cascadeEpicByPlanId(epicPlanId, targetColumn, 'active', true)` — `includeAllSubtasks=true` because recovering an epic must pull ALL subtasks back, not just active ones (a completed subtask should be re-activated when the epic is recovered). Rollback: `cascadeEpicByPlanId(epicPlanId, 'COMPLETED', 'completed')`.
+6. **`uncompleteCard` (cascade at lines 6929-6942, status at line 6940, rollback at lines 6958-6971):** Forward: `cascadeEpicByPlanId(epicPlanId, targetColumn, 'active', true)` — `includeAllSubtasks=true` because recovering an epic must pull ALL subtasks back, not just active ones (a completed subtask should be re-activated when the epic is recovered). Keep `updateStatus(sessionId, 'active')` at line 6940 (no-op for epics, needed for non-epics). Rollback: `cascadeEpicByPlanId(epicPlanId, 'COMPLETED', 'completed')` — **no `includeAllSubtasks` needed here** because the forward path already re-activated all subtasks (set them to `status='active'`), so the rollback's `WHERE status = 'active'` filter catches them. This is subtle but correct — the rollback only runs after a failed forward path, at which point all subtasks are already `status='active'`.
 
-7. **`testingFailureReport` (~7108-7112):** Replace with `cascadeEpicByPlanId(plan.planId, 'LEAD CODED')` — no `targetStatus` (plan stays active, only column changes).
+7. **`testingFailed` (cascade at lines 7302-7304, previously misnamed `testingFailureReport`):** Replace with `cascadeEpicByPlanId(plan.planId, 'LEAD CODED')` — no `targetStatus` (plan stays active, only column changes). No `updateStatus` call to worry about — `testingFailed` doesn't set DB status (line 7313 is a file write via `_schedulePlanStateWrite`, not a DB status update).
+
+**Class 8 follow-up note:** `completeMultipleByPlanFile` (line 2878, cascade at lines 2900-2903) already uses the atomic `WHERE epic_id = ? AND status = 'active'` form with both column+status. This is nearly identical to `cascadeEpicByPlanId`. A follow-up refactoring should make Class 8 call `cascadeEpicByPlanId` to eliminate the duplicate implementation — but this is out of scope for this plan to keep changes contained.
 
 ### `src/services/TaskViewerProvider.ts`
-- **Context:** Sidebar/agent dispatch fallbacks.
+- **Context:** Sidebar/agent dispatch fallbacks. All line numbers and function names VERIFIED against current source (previous plan had wrong function names).
 - **Logic:**
 
-8. **`_updateKanbanColumnForSession` fallback (~2260-2263):** Replace with `cascadeEpicByPlanId(plan.planId, column)`. Keep the empty-sessionId guard.
+8. **`_updateKanbanColumnForSession` fallback (cascade at lines 2261-2263):** Replace with `cascadeEpicByPlanId(plan.planId, column)`. Keep the empty-sessionId guard.
 
-9. **`_restoreFromArchive` fallback (~11644-11648):** Replace with `cascadeEpicByPlanId(restorePlan.planId, 'CREATED', 'active', true)` — `includeAllSubtasks=true` because restoring from archive must catch all subtasks regardless of prior status.
+9. **`_restoreRunSheet` fallback (cascade at lines 11646-11648, previously misnamed `_restoreFromArchive`):** Replace with `cascadeEpicByPlanId(restorePlan.planId, 'CREATED', 'active', true)` — `includeAllSubtasks=true` because restoring from archive must catch all subtasks regardless of prior status. Note: `updateStatus(sessionId, 'active')` at line 11639 stays (no-op for epics, needed for non-epics — same pattern as KanbanProvider completion sites).
 
-10. **`markPlanComplete` fallback (~14077-14081):** Replace with `cascadeEpicByPlanId(completePlan.planId, 'COMPLETED', 'completed')`.
+10. **Unnamed case handler (cascade at lines 14078-14081, previously misnamed `markPlanComplete`):** Replace with `cascadeEpicByPlanId(completePlan.planId, 'COMPLETED', 'completed')`. Note: `updateStatus(sessionId, 'completed')` at line 14072 stays (no-op for epics, needed for non-epics).
 
 ## Verification Plan
 
 > Per project conventions: skip compilation and automated tests during implementation; the user runs the suite separately.
+
+### Automated Tests
+
+Skipped per session directive — the user runs the test suite separately. No compilation or automated test steps are included in this plan.
 
 ### Manual tests
 - Complete an epic via card Done button → epic + all subtasks get `kanban_column=COMPLETED` AND `status=completed` (verify with `SELECT plan_id, kanban_column, status FROM plans WHERE epic_id = '<epicPlanId>'`).
@@ -170,4 +176,4 @@ public async cascadeEpicByPlanId(
 
 ## Recommendation
 
-Complexity 5 (Medium: new DB method + 10 mechanical caller updates, with the `includeAllSubtasks` flag being the only non-obvious design decision) → **Send to Coder**. The implementer must pay attention to which sites need `includeAllSubtasks=true` (uncompleteCard, _restoreFromArchive) vs. the default `false` (forward moves, completions, testing failure). The `targetStatus` parameter must be omitted (not set to empty string) for non-completion moves.
+Complexity 5 (Medium: new DB method + 10 mechanical caller updates, with the `includeAllSubtasks` flag and the redundant-`updateStatus`-keeping pattern being the only non-obvious design decisions) → **Send to Coder**. The implementer must pay attention to: (1) which sites need `includeAllSubtasks=true` (`uncompleteCard`, `_restoreRunSheet`) vs. the default `false` (forward moves, completions, `testingFailed`); (2) the `targetStatus` parameter must be omitted (not set to empty string) for non-completion moves; (3) the separate `updateStatus` calls at completion sites (lines 6825, 6855, 6899, 14072, 11639) must be KEPT — they're no-ops for epics but required for non-epic plans; (4) all line numbers have been verified against current source — re-verify before editing as they may shift if other changes land first.
