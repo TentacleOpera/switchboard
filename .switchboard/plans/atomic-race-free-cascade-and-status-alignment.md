@@ -12,7 +12,7 @@ Two related defects remain in the epic cascade paths after the comprehensive epi
 
 ## Metadata
 
-**Tags:** bugfix, backend, database, epics
+**Tags:** bugfix, backend, database
 **Complexity:** 5
 
 ## User Review Required
@@ -58,8 +58,8 @@ Key risks: (1) the `WHERE epic_id = ? AND status = 'active'` filter is correct f
 ## Proposed Changes
 
 ### `src/services/KanbanDatabase.ts`
-- **Context:** Central DB layer. New atomic cascade method.
-- **Logic:** Add `cascadeEpicByPlanId` after `updateColumnWithEpicCascadeByPlanId` (line ~3909):
+- **Context:** Central DB layer. New atomic cascade method. Verified: `updateColumnWithEpicCascadeByPlanId` exists at line 3826 (not ~3909 as previously stated). `cascadeEpicByPlanId` does NOT yet exist. All required symbols verified: `VALID_KANBAN_COLUMNS` (line 631), `SAFE_COLUMN_NAME_RE` (line 638), `ensureReady` (line 1136), `_persist` (line 5456), `_db` (line 1104), `getSubtasksByEpicId` (line 3811), `updateColumn` (line 1463), `updateStatus` (line 1656). Class 8 reference: `completeMultipleByPlanFile` at line 2878 uses the atomic `WHERE epic_id = ? AND status = 'active'` form with both column+status (lines 2900-2903) — this is the pattern to replicate.
+- **Logic:** Add `cascadeEpicByPlanId` after `updateColumnWithEpicCascadeByPlanId` (line 3826):
 
 ```typescript
 /**

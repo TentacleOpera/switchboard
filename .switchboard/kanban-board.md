@@ -1,6 +1,6 @@
 # Kanban Board
 
-*Workspace: 038bffef-9842-4574-96a1-69a43a280b3c* · *Updated: 2026-06-27T21:42:08.791Z*
+*Workspace: 038bffef-9842-4574-96a1-69a43a280b3c* · *Updated: 2026-06-27T21:43:35.110Z*
 
 ## CREATED
 
@@ -51,9 +51,9 @@ _No plans_
 
 ## PLAN REVIEWED
 
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/atomic-race-free-cascade-and-status-alignment.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/atomic-race-free-cascade-and-status-alignment.md) — Atomic Race-Free Epic Cascade + Subtask Status Alignment <!-- planId:3a41ec5f-765c-4e44-b2f7-ab04df8a8a9a -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/replace-prompt-sql-with-move-card-skill.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/replace-prompt-sql-with-move-card-skill.md) — Replace Raw Agent-Prompt SQL with move-card.js Skill Calls <!-- planId:1e2e0d80-d366-4d2f-adf1-7cca57ac679c -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/notion-restore-epic-subtask-cascade.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/notion-restore-epic-subtask-cascade.md) — Notion Restore: Epic Subtask Cascade <!-- planId:54ccba8e-2bb9-46c5-8c7b-3a2f70c621ec -->
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/atomic-race-free-cascade-and-status-alignment.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/atomic-race-free-cascade-and-status-alignment.md) — Atomic Race-Free Epic Cascade + Subtask Status Alignment <!-- planId:3a41ec5f-765c-4e44-b2f7-ab04df8a8a9a -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260628071745_epic-tab-subtask-links-in-markdown-preview.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260628071745_epic-tab-subtask-links-in-markdown-preview.md) — Fix: Epic tab subtask links in markdown doc preview do not work <!-- planId:1802d264-4834-4ab2-adb5-d781f64195ab -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/linear-bidirectional-description-sync.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/linear-bidirectional-description-sync.md) — Linear Bidirectional Description Sync <!-- planId:4cf51efb-6d7d-43bc-8945-cd2cbb2faa69 subtask-of:"Linear Sync & Channel Features" -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/linear-free-tier-auto-archive-on-completion.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/linear-free-tier-auto-archive-on-completion.md) — Linear Free-Tier: Auto-Archive Issues on Plan Completion <!-- planId:e38b7126-9fca-410a-a0d1-5a43e76f711e subtask-of:"Linear Sync & Channel Features" -->
@@ -95,6 +95,7 @@ _No plans_
 
 ## CODE REVIEWED
 
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260627160953_fix-suggest-epics-prompt.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260627160953_fix-suggest-epics-prompt.md) — Fix Suggest Epics Prompt: Hardcoded Backlog Count & Backlog Question Hijacking Approval Flow <!-- planId:597fdb97-d5ac-4a5e-9b21-a15a825af044 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-create-epic-not-setting-is-epic.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-create-epic-not-setting-is-epic.md) — Fix: Epics Lose is_epic Status When Epic Files Are Edited (Atomic Write Race) <!-- planId:c4a2d1ff-5d7f-430f-9f32-318c59b5d82c -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-epic-loses-status-on-column-move.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-epic-loses-status-on-column-move.md) — Fix: Epics Lose is_epic Status When Moved Between Columns <!-- planId:11b58b9b-4a81-4617-84f0-bcace5c202a8 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/bug-epic-kanban-card-no-orchestrate-button-uat-failure.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/bug-epic-kanban-card-no-orchestrate-button-uat-failure.md) — UAT Failure: Epic Kanban Board Cards Have No Orchestrate Button and ORCHESTRATING Column Never Appears <!-- planId:e9396ead-e916-48af-b4ff-ba645d7691e8 -->

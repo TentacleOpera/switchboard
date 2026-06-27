@@ -218,3 +218,48 @@ No existing tests cover `_buildSuggestEpicsPrompt` output content (verified — 
    - Step 6 includes the "repeat steps 2-5" loop-back instruction.
    - Steps flow sequentially: SCAN → READ → PROPOSE → CONFIRM → EXECUTE → BACKLOG (optional).
 3. **Paste the prompt into an agent chat**: Confirm the agent proposes groupings, waits for approval, executes, and only then asks about backlog — without conflating "yes" responses.
+
+---
+
+## Review Pass — Completed
+
+### Reviewer
+Direct reviewer-executor pass (in-place), 2026-06-28.
+
+### Stage 1 (Grumpy) Findings
+
+| ID | Severity | File:Line | Description |
+|----|----------|-----------|-------------|
+| — | CRITICAL | — | None found. |
+| — | MAJOR | — | None found. |
+| NIT-1 | NIT | KanbanProvider.ts:8914 | Step 6 says "repeat steps 2-5" but step 1 (SCAN) says "Ignore BACKLOG." Minor wording tension for pedantic agents; no functional impact. Defer. |
+| NIT-2 | NIT (non-issue) | KanbanProvider.ts:8879-8906 | Plan's "Full replacement" block showed simplified PROPOSE/EXECUTE steps; actual code preserves richer existing content (Goal/How-Subtasks-Achieve-This). This is correct — the plan's block was labeled "for clarity." |
+
+### Stage 2 (Balanced) — Code Fixes Applied
+
+**None required.** The implementation faithfully matches both plan requirements:
+1. `backlogCount` parameter and computation fully removed (signature + sole call site). `candidateCards` correctly preserved for zero-check and status message.
+2. Backlog question evicted from PROPOSE (step 3) and relocated to new step 6 (BACKLOG — OPTIONAL) after EXECUTE. Hijack vector closed.
+
+### Verification Results
+
+| Check | Result |
+|-------|--------|
+| `grep backlogCount` in KanbanProvider.ts | 0 matches — fully removed |
+| `grep "Analyse those too"` in KanbanProvider.ts | 0 matches — old question evicted |
+| `grep _buildSuggestEpicsPrompt` in KanbanProvider.ts | 2 matches (def + sole caller) — no orphaned callers |
+| `grep` in `src/test/` for suggest-epics symbols | 0 matches — no test gap created |
+| `create-epic.js` / `assign-to-epic.js` existence | Confirmed present at referenced paths |
+| Method signature | `_buildSuggestEpicsPrompt(workspaceRoot: string): string` — correct |
+| Call site (line 8151) | `this._buildSuggestEpicsPrompt(workspaceRoot)` — correct, no second arg |
+| Compilation (`npm run compile`) | Skipped per session directives |
+| Automated tests (`npm test`) | Skipped per session directives |
+
+### Files Changed (by implementation, pre-review)
+
+- `src/services/KanbanProvider.ts` — lines 8136-8154 (call site: removed `backlogCount` computation + param pass), lines 8848-8919 (method: removed param, removed backlog question from PROPOSE, added step 6 BACKLOG)
+
+### Remaining Risks
+
+1. **NIT-1 (deferred):** Step 6 loop-back says "repeat steps 2-5" while step 1 says "Ignore BACKLOG." A pedantic agent could theoretically hesitate, but step 6 independently instructs the agent to re-read the board and identify BACKLOG plans, so the loop body (READ → PROPOSE → CONFIRM → EXECUTE) is well-defined. No fix needed now; revisit if agent confusion is observed in practice.
+2. **No automated test coverage:** `_buildSuggestEpicsPrompt` output content has no unit tests. The change is low-risk (string template + unused param removal), but a snapshot test would guard against future regressions in prompt structure. Defer to a separate hardening task.

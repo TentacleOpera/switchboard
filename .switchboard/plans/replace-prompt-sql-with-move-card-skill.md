@@ -73,11 +73,29 @@ Key risks: (1) the `move-card.js` fallback at line 128 calls `updateColumnWithEp
 ## Proposed Changes
 
 ### `.agents/skills/kanban_operations/move-card.js`
-- **Context:** Skill script for moving kanban cards. Two paths: extension API (preferred) + direct DB (fallback).
+- **Context:** Skill script for moving kanban cards (161 lines). Two paths: extension API (preferred) + direct DB (fallback). Verified argv: [2]=sessionId/planId/planFile, [3]=targetColumn, [4]=optionalPlanFile, [5]=workspaceRoot.
 - **Logic:**
-  1. **Fix direct-DB fallback (line 123-131):** replace `updateColumnWithEpicCascade` with `updateColumnWithEpicCascadeByPlanId` (or `cascadeEpicByPlanId` if Plan 2 is implemented). Use `plan.planId` and `subtasks.map(st => st.planId)` instead of `sessionId`:
+  1. **Resolve planFile to planId FIRST (new step, before any cascade lookup):** if argv[2] looks like a file path (contains `/` or ends in `.md`), resolve it to a planId:
      ```javascript
-     const plan = await db.getPlanBySessionId(sessionId);
+     let effectiveKey = process.argv[2]; // sessionId, planId, or planFile
+     let resolvedPlanFile = optionalPlanFile;
+     if (effectiveKey.includes('/') || effectiveKey.endsWith('.md')) {
+         // It's a plan file path — resolve to planId for both API and fallback paths.
+         // In the fallback path, use db.getPlanByPlanFile(planFile, workspaceId) (KanbanDatabase.ts line 2669).
+         // In the API path, pass the resolved planId as the key (or pass planFile in the planFile field).
+         resolvedPlanFile = effectiveKey;
+         // effectiveKey will be resolved to planId inside the fallback (see step 2).
+     }
+     ```
+  2. **Fix direct-DB fallback (line 128):** replace the call to non-existent `updateColumnWithEpicCascade` with `updateColumnWithEpicCascadeByPlanId` (or `cascadeEpicByPlanId` if Plan 2 is implemented). If the key was a planFile, resolve via `getPlanByPlanFile` first:
+     ```javascript
+     // Resolve the plan: use getPlanByPlanFile if the key is a file path, else getPlanBySessionId.
+     let plan;
+     if (resolvedPlanFile) {
+         plan = await db.getPlanByPlanFile(resolvedPlanFile, workspaceRoot);
+     } else {
+         plan = await db.getPlanBySessionId(effectiveKey);
+     }
      let columnSuccess;
      if (plan && plan.isEpic) {
          // Use plan_id-keyed cascade (works for file-based plans with session_id='').
@@ -85,17 +103,16 @@ Key risks: (1) the `move-card.js` fallback at line 128 calls `updateColumnWithEp
          const cascadeFn = db.cascadeEpicByPlanId || db.updateColumnWithEpicCascadeByPlanId;
          columnSuccess = await cascadeFn.call(db, plan.planId, targetColumn);
      } else {
-         columnSuccess = await db.updateColumn(sessionId, targetColumn);
+         columnSuccess = await db.updateColumn(plan ? plan.sessionId : effectiveKey, targetColumn);
      }
      ```
-  2. **Accept `planFile` as alternative key:** if the first arg looks like a file path (contains `/` or ends in `.md`), resolve it to a planId via `db.getPlanByPlanFile(planFile, workspaceId)` before proceeding. This supports the Split Plan agent prompt which has `plan_file` but not `plan_id`.
-  3. **Update usage text:** document that the first arg can be `sessionId`, `planId`, or `planFile` (relative path).
-- **Edge Cases:** `out/` not compiled → direct-DB fallback fails with module error; the extension API path is the only option. Pre-existing, not introduced here.
+  3. **Update usage text:** document that the first arg (argv[2]) can be `sessionId`, `planId`, or `planFile` (relative path). When a planFile is passed, the script resolves it to a planId internally.
+- **Edge Cases:** `out/` not compiled → `require('../../../out/services/KanbanDatabase')` at line 112 fails with module error; the extension API path is the only option. This is a regression from raw-SQL (which always worked) — the prompt should document this and include a clear error message. `getPlanByPlanFile` returns null for unregistered plan files → script prints `FAILED`, agent notifies user to manually drag the card.
 
 ### `src/services/KanbanProvider.ts`
-- **Context:** Scheduler prompt generation — batch and single-plan variants.
+- **Context:** Scheduler prompt generation — batch and single-plan variants. Verified: batch prompt with raw `sqlite3` UPDATE at lines 3573-3587, null-next-column guard at lines 3554-3568, `batchPlans = columnPlans.slice(-batchSize)` at line 3548.
 - **Logic:**
-  1. **Batch prompt (line 3576):** replace the `sqlite3` command block with:
+  1. **Batch prompt (lines 3573-3587):** replace the `sqlite3` command block (which contains two UPDATEs + `SELECT total_changes()`) with:
      ```bash
      # After completing the coding work, move each plan to the next column.
      # Uses the kanban_operations skill (routes through the extension for cascade + sync).
@@ -103,29 +120,29 @@ Key risks: (1) the `move-card.js` fallback at line 128 calls `updateColumnWithEp
          node .agents/skills/kanban_operations/move-card.js "$plan_id" "${resolvedNextColumn}" "" "${workspaceRoot}"
      done
      ```
-     Remove the `SELECT total_changes()` verification text — `move-card.js` prints `OK`/`FAILED`.
-  2. **Single-plan prompt (line 3619):** replace with:
+     Remove the `SELECT total_changes()` verification text — `move-card.js` prints `OK`/`FAILED` (verified at lines 146/150/156).
+  2. **Single-plan prompt (in the same scheduler prompt builder):** replace the `sqlite3` command with:
      ```bash
      node .agents/skills/kanban_operations/move-card.js "${oldestPlan.planId}" "${resolvedNextColumn}" "" "${workspaceRoot}"
      ```
-  3. **Null-next-column guard (line 3554-3568):** keep the existing guard that emits a "do NOT move" warning when `resolvedNextColumn === null`. The `sqlite3 SELECT` inspection command can stay (it's read-only and useful for debugging).
-- **Edge Cases:** `move-card.js` not found → agent reports error, user moves card manually. Extension not running → `move-card.js` falls back to direct DB (works if `out/` exists).
+  3. **Null-next-column guard (lines 3554-3568):** keep the existing guard that emits a "do NOT move" warning when `resolvedNextColumn === null`. The `sqlite3 SELECT` inspection command can stay (it's read-only and useful for debugging).
+- **Edge Cases:** `move-card.js` not found → agent reports error, user moves card manually. Extension not running → `move-card.js` falls back to direct DB (works if `out/` exists; fails if not — document this in the prompt).
 
 ### `src/services/agentPromptBuilder.ts`
-- **Context:** Split Plan agent prompt generation.
+- **Context:** Split Plan agent prompt generation. Verified: both prompt sites at lines 1118 and 1144 use `plan_file = '<relative_path>'` in the SQL WHERE clause (NOT `plan_id`), with raw `sqlite3` UPDATE + `SELECT total_changes()`.
 - **Logic:**
   1. **Both Split Plan prompt sites (lines 1118, 1144):** replace the `sqlite3` command with:
      ```bash
      node .agents/skills/kanban_operations/move-card.js "<relative_path>" "PLAN REVIEWED" "" "$(pwd)"
      ```
-     The `move-card.js` script resolves `<relative_path>` (a plan_file) to a planId internally (per the `move-card.js` change above). Use `"$(pwd)"` as the workspace root since the Split Plan agent runs in the workspace root.
+     The `move-card.js` script detects that `<relative_path>` is a plan file path (contains `/` or ends in `.md`), resolves it to a planId via `getPlanByPlanFile` (per the `move-card.js` change above, step 1). Use `"$(pwd)"` as the workspace root since the Split Plan agent runs in the workspace root.
   2. Update the verification text: "If the output is `OK`: success. If the output is `FAILED`: the file may not be registered yet; notify the user to manually drag the card to the Planned column."
-- **Edge Cases:** `<relative_path>` is a plan_file, not a planId — `move-card.js` must handle this (per the `move-card.js` change above).
+- **Edge Cases:** `<relative_path>` is a plan_file, not a planId — `move-card.js` must handle this via `getPlanByPlanFile` resolution (per the `move-card.js` change above). If the plan file is not yet registered in the DB, `getPlanByPlanFile` returns null → script prints `FAILED`.
 
 ### `src/services/LocalApiServer.ts`
-- **Context:** API server endpoint for kanban moves.
+- **Context:** API server endpoint for kanban moves. Verified: JSDoc at line 230, handler `_handleKanbanMove` at line 237, body parsing at lines 256-259 reads `sessionId`, `targetColumn`, `workspaceRoot`, `planFile` (does NOT currently accept `planId`).
 - **Logic:**
-  1. **Accept `planId` as alternative to `sessionId` (line 256):** add `const planId = String(body?.planId || '').trim()` and use it as a fallback when `sessionId` is empty:
+  1. **Accept `planId` as alternative to `sessionId` (lines 256-259):** add `const planId = String(body?.planId || '').trim()` and use it as a fallback when `sessionId` is empty:
      ```typescript
      const sessionId = String(body?.sessionId || '').trim();
      const planId = String(body?.planId || '').trim();
@@ -133,12 +150,17 @@ Key risks: (1) the `move-card.js` fallback at line 128 calls `updateColumnWithEp
      if (!effectiveKey || !targetColumn) { ... }
      const result = await moveCard(workspaceRoot, effectiveKey, targetColumn, planFile);
      ```
-  2. Update the JSDoc (line 235) to document `planId` as an accepted field.
+  2. Update the JSDoc (line 230) to document `planId` as an accepted field.
+  3. **Verification note:** `getPlanBySessionId` (KanbanDatabase.ts line 2556) already has a planId fallback at lines 2566-2575 — it tries session_id first, then falls back to plan_id lookup. This means passing a planId in the existing `sessionId` field may already work through the API path. The explicit `planId` field is primarily a **clarity/documentation improvement**, not a functional necessity. The implementer should verify whether `moveCard` → `moveCardToColumn` → `getPlanBySessionId` already handles planId-as-sessionId before deciding whether the new field is strictly needed.
 - **Edge Cases:** Both `sessionId` and `planId` provided → prefer `sessionId` (backward compat). Only `planId` → works via `getPlanBySessionId` planId fallback in `moveCardToColumn`.
 
 ## Verification Plan
 
 > Per project conventions: skip compilation and automated tests during implementation; the user runs the suite separately.
+
+### Automated Tests
+
+Skipped per session directive — the user runs the test suite separately. No compilation or automated test steps are included in this plan.
 
 ### Manual tests
 - Scheduler agent processes a file-based epic (`session_id=''`) → `move-card.js` moves the epic + cascades subtasks (extension running). Verify `OK` output.
@@ -153,4 +175,4 @@ Key risks: (1) the `move-card.js` fallback at line 128 calls `updateColumnWithEp
 
 ## Recommendation
 
-Complexity 5 (Medium: 4 prompt text edits + `move-card.js` fallback fix + API server planId support, with the `planFile`-as-key extension being the only non-obvious part) → **Send to Coder**. The implementer should confirm User Review #1 (agent hosts run in-workspace) before proceeding. If Plan 2 (Atomic Race-Free Cascade) is implemented first, use `cascadeEpicByPlanId` in the `move-card.js` fallback; otherwise use `updateColumnWithEpicCascadeByPlanId` as a stopgap.
+Complexity 5 (Medium: 4 prompt text edits + `move-card.js` fallback fix [crash → working method] + planFile-to-planId resolution + API server planId support, with the planFile resolution being the only non-obvious part) → **Send to Coder**. The implementer should confirm User Review #1 (agent hosts run in-workspace) before proceeding. If Plan 2 (Atomic Race-Free Cascade) is implemented first, use `cascadeEpicByPlanId` in the `move-card.js` fallback; otherwise use `updateColumnWithEpicCascadeByPlanId` as a stopgap. **Critical:** the planFile-to-planId resolution (step 1 of the move-card.js changes) must be implemented BEFORE the fallback fix (step 2) — otherwise the Split Plan prompt path will call `getPlanBySessionId` with a file path and fail.
