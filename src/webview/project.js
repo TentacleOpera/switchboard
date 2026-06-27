@@ -1796,6 +1796,9 @@
         vscode.postMessage({
             type: 'orchestrateEpic',
             mode, // 'copy' | 'send' | 'preview'
+            // planId is the PRIMARY identifier — the backend resolves the epic via
+            // getPlanByPlanId, and a locally-created epic's sessionId !== planId.
+            planId: _epicSelectedPlan.planId || '',
             sessionId: _epicSelectedPlan.sessionId || _epicSelectedPlan.planId,
             workspaceRoot: _epicSelectedPlan.workspaceRoot
         });

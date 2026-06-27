@@ -251,3 +251,53 @@ This is a one-line change. The variable is named `sessionId` but is used as the 
 ---
 
 **Recommendation:** Complexity is 5 (multi-file change with one moderate architectural risk — the webview routing mismatch). **Send to Coder.**
+
+---
+
+## Reviewer-Executor Pass — 2026-06-28
+
+The original implementation (committed in `352fad9` "epic fixes" + auto-commit `116def1`) was **materially incomplete**: it added only the kanban-board button HTML and a (dead) `epicOrchestrationResult` feedback handler. It omitted the plan's single most-emphasized requirement — the `KanbanProvider` backend handler — and skipped *all* of the `planId`-vs-`sessionId` identifier fixes. Result: both UAT-reported paths were still broken. All material findings have now been fixed in code.
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *Adjusts monocle, exhales through nose.*
+>
+> **[CRITICAL] The headline fix was never written.** This entire plan — the Root Cause, the Adversarial Synthesis, an entire Proposed-Changes section in bold — screams ONE thing: *the kanban board is a separate webview and needs its own `case 'orchestrateEpic'` in `KanbanProvider._handleMessage`.* I grepped the file. It is not there. `grep -c "case 'orchestrateEpic'" src/services/KanbanProvider.ts` → **0**. The shiny `🎯 Orchestrate` button posts `orchestrateEpic` into a switch that has no such case and no `default`, so the message evaporates into the void. The button does *literally nothing*. We shipped a placebo. (`KanbanProvider.ts:5126` switch — no handler.)
+>
+> **[CRITICAL] The click handler hand-feeds the lookup its own poison.** `kanban.html:5298` did `const sessionId = btn.dataset.session || btn.dataset.planId` and posted *only* `sessionId`. The whole plan is a 250-line monument to the fact that `getPlanByPlanId` queries `WHERE plan_id = ?` and that `sessionId !== planId` for every locally-created epic. So even in the parallel universe where the backend handler existed, it would have been handed the session UUID and returned `null`. We didn't just forget the fix — we actively implemented the bug.
+>
+> **[CRITICAL] The "confirmed second bug" was confirmed, then ignored.** `project.js:1799` still shipped `sessionId: …` with no `planId`. `PlanningPanelProvider.ts:3256` still read `String(msg.sessionId || '')`. The Epics-tab path the plan *proved* was broken? Still broken. Identically. The fix was a one-liner and a one-field addition, both spelled out verbatim in the plan, and neither was applied.
+>
+> **[MAJOR] Completed epics get a button to nowhere.** Plan said `(card.isEpic && !isCompleted)`. Code said `card.isEpic`. So a `✓ Done` epic in COMPLETED renders a 🎯 Orchestrate button that — once everything else is fixed — would happily teleport a finished epic back into ORCHESTRATING. Verification step 6 explicitly forbids this.
+>
+> **[NIT] Label drift.** Plan's User-Review item asked to confirm `Orchestrate` vs `🎯 Orchestrate`; the Epics tab uses plain text. The board shipped the emoji. Cosmetic, and it's the documented user-decision item — left as-is.
+>
+> **[Credit where due]** The `epicOrchestrationResult` feedback handler at `kanban.html:6502` is genuinely nicer than the plan's `setTimeout` stub — it does proper "Copied!" → animation → reset. It was just dead code, because nothing posted the message. Wired up now.
+
+### Stage 2 — Balanced Synthesis
+
+- **Keep:** the button HTML + data attributes (`data-plan-id` already carries the correct `plan_id`), the `epicOrchestrationResult` feedback handler, the emoji label (documented user-decision, cosmetic).
+- **Fix now (done):** the four CRITICALs and the one MAJOR — the missing backend handler, the click-handler identifier, the two Epics-tab identifier fixes, and the `!isCompleted` guard.
+- **Defer:** renaming the `sessionId` variable in `PlanningPanelProvider`/`KanbanProvider` to `epicId` (it's a misnomer but a no-op refactor; out of scope per plan §"Fix `orchestrateEpic` to prefer planId").
+
+### Fixes Applied
+
+1. **`src/services/KanbanProvider.ts` (`_handleMessage`, after `case 'sendToNew'`, ~line 7067)** — Added `case 'orchestrateEpic'`. Resolves the epic by `msg.planId` (falling back to `msg.sessionId`), resolves the workspace root via `_resolveWorkspaceRoot`. **copy** mode: `buildEpicOrchestrationPrompt` → clipboard → `markEpicOrchestrating`. **send** mode: `dispatchEpicOrchestration` (teleports internally) → clipboard. Posts `epicOrchestrationResult` (echoing the button's identifier so the existing feedback handler re-matches) **and** `showStatusMessage` on success/failure. Null-resolution and exceptions surface a user-visible error — no silent no-op.
+2. **`src/webview/kanban.html` (orchestrate click handler, ~line 5295)** — Now sends `planId: btn.dataset.planId` as the primary identifier plus `sessionId` for button re-matching (was sending only a session-preferring `sessionId`).
+3. **`src/webview/kanban.html` (button render, line 5410)** — `card.isEpic` → `(card.isEpic && !isCompleted)`.
+4. **`src/webview/project.js` (`requestEpicOrchestration`, line 1801)** — Added `planId: _epicSelectedPlan.planId || ''` to the payload (covers both Epics-tab copy and send via the shared function).
+5. **`src/services/PlanningPanelProvider.ts` (`case 'orchestrateEpic'`, line 3260)** — `String(msg.sessionId || '')` → `String(msg.planId || msg.sessionId || '')`.
+
+### Validation
+
+- **Typecheck/compile:** Skipped per session directive (SKIP COMPILATION). `_handleMessage(msg: any)` so the new `msg.*` reads are untyped-safe; `_panel?.webview.postMessage`, `vscode.env.clipboard.writeText`, `_resolveWorkspaceRoot`, `dispatchEpicOrchestration`, `buildEpicOrchestrationPrompt`, `markEpicOrchestrating` all verified to exist with the signatures used.
+- **Tests:** Skipped per session directive (SKIP TESTS) — user runs the suite separately.
+- **Static checks performed:** `grep -c "case 'orchestrateEpic'"` → exactly 1 in `KanbanProvider.ts`; all five edits grep-confirmed in place; `showStatusMessage` handler (`kanban.html:6058`) consumes `msg.message`/`msg.isError` — payload shapes match; `epicOrchestrationResult` handler (`kanban.html:6502`) matches `msg.sessionId` against `data-session` then `data-plan-id` — echoed `sessionId` satisfies both.
+- **Root-cause re-verified at HEAD:** `createEpicFromPlanIds` generates `planId`/`sessionId` as independent UUIDs (`KanbanProvider.ts:8664-8665`); `getPlanByPlanId` is `WHERE plan_id = ?` only with no session fallback (`KanbanDatabase.ts:2648-2657`).
+
+### Remaining Risks
+
+- **`markEpicOrchestrating` returns `void`** — if the DB move silently returns `false` (e.g. file deleted on disk), the prompt is still copied and the status says "moved to ORCHESTRATING" even though it didn't. Pre-existing design limitation called out in the plan; out of scope.
+- **Send-mode from the board is unreachable today** — the board button hard-codes `mode: 'copy'`. The backend `send` branch is implemented and correct, but only the Epics-tab overlay can trigger it. Intentional; no board-side "Send" entry point was in scope.
+- **Manual verification still required** — items 1-10 of the Verification Plan above were not executed in this pass (no running VSIX in this session). The fixes are code-complete and statically verified; behavioral UAT remains for the user.
+- **Variable misnomer** — `sessionId` in both `orchestrateEpic` handlers actually holds a `plan_id`. Harmless but a future-reader trap; deferred per plan.

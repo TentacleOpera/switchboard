@@ -3253,7 +3253,11 @@ export class PlanningPanelProvider {
                 // Assemble the orchestrator prompt for one epic and either copy it (default,
                 // Decision #6) or also dispatch it to the orchestrator terminal. Copy always
                 // happens so the action works even when no orchestrator terminal exists.
-                const sessionId = String(msg.sessionId || '');
+                // Prefer planId — buildEpicOrchestrationPrompt / markEpicOrchestrating resolve the
+                // epic via getPlanByPlanId, and a locally-created epic's sessionId !== planId (two
+                // independent UUIDs in createEpicFromPlanIds). Passing sessionId silently fails the
+                // lookup, which is why the Epics-tab Orchestrate action never moved the epic.
+                const sessionId = String(msg.planId || msg.sessionId || '');
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
                 const mode = msg.mode === 'send' ? 'send' : (msg.mode === 'preview' ? 'preview' : 'copy');
                 if (!sessionId || !wsRoot || !this._kanbanProvider) {

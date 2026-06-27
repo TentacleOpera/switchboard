@@ -152,4 +152,50 @@ No automated tests required — this is a pure visual/CSS change in a webview HT
 
 ---
 
+## Review Results (Reviewer Pass)
+
+**Reviewer:** Direct in-place reviewer pass
+**Date:** 2026-06-28
+**Verdict:** ✅ APPROVED — no code fixes required
+
+### Files Changed (Verified)
+
+| File | Lines | Change |
+|------|-------|--------|
+| `src/webview/kanban.html` | 5394 | `epicBadge` set to `''` with comment (badge removed from `.card-topic`) |
+| `src/webview/kanban.html` | 5396–5398 | `cardMetaContent` conditional added — epic branch renders `EPIC: X SUBTASKS · <time>`, non-epic branch unchanged |
+| `src/webview/kanban.html` | 5423 | `.card-meta` template updated to use `${cardMetaContent}` |
+| `src/webview/kanban.html` | 921–924 | `.epic-subtask-label` CSS class added (`color: #7c3aed; font-weight: 700`) |
+| `src/webview/kanban.html` | (deleted) | `.epic-badge` CSS rule fully purged — zero references remain in `src/` |
+
+### Findings by Severity
+
+| Severity | Finding | Location | Action |
+|----------|---------|----------|--------|
+| NIT | Dead variable `epicBadge = ''` left in code — could be removed entirely and inlined in template | `src/webview/kanban.html:5394` | **Keep as-is** — matches plan spec, comment documents intent. Not material. |
+| NIT | Trailing blank line after `cardMetaContent` declaration | `src/webview/kanban.html:5399` | **Defer** — cosmetic whitespace, zero functional impact. |
+
+No CRITICAL or MAJOR findings.
+
+### Verification Performed (Static)
+
+- **Grep audit**: `epic-badge` has zero references in `src/` — dead CSS fully purged. ✅
+- **Variable scope**: `timeAgo` (5333), `complexityClass` (5337), `category` (5336) all defined before `cardMetaContent` (5396). ✅
+- **Data plumbing**: `subtaskCount` populated in `KanbanProvider.ts` (1242, 1259, 2163, 2182) and `PlanningPanelProvider.ts` (8267). `|| 0` fallback handles `undefined`. ✅
+- **No test references**: No test files reference `epic-badge`, `epicBadge`, or `epic-subtask-label`. ✅
+- **Template integrity**: `cardMetaContent` interpolated at line 5423; `epicBadge` interpolated at line 5422. ✅
+- **Theme compatibility**: `.epic-subtask-label` child `color: #7c3aed` wins over inherited claudify grey `!important` on parent. `· <time>` text node remains grey. ✅
+- **Flex layout**: Epic variant (2 flex items) and non-epic variant (3 flex items) both use same `gap: 4px` pattern — no height increase, no layout shift. ✅
+- **Singular/plural**: `(count || 0) !== 1 ? 'S' : ''` — 0→SUBTASKS, 1→SUBTASK, 4→SUBTASKS. ✅
+- **`wtButton` integrity**: Still gated on `card.isEpic`, rendered after topic text. Unaffected by badge removal. ✅
+
+*Note: Compilation and automated tests skipped per session instructions. Manual visual verification per the Manual Verification checklist above is recommended.*
+
+### Remaining Risks
+
+- **None material.** The only residual items are two NIT-level cosmetic notes (dead variable, blank line) that have zero functional impact.
+- Manual visual confirmation is still recommended per the Verification Plan checklist (especially claudify theme rendering and singular/plural display).
+
+---
+
 **Recommendation:** Complexity 2 → Send to Intern

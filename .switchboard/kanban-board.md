@@ -1,6 +1,6 @@
 # Kanban Board
 
-*Workspace: 038bffef-9842-4574-96a1-69a43a280b3c* · *Updated: 2026-06-27T21:38:35.138Z*
+*Workspace: 038bffef-9842-4574-96a1-69a43a280b3c* · *Updated: 2026-06-27T21:40:35.148Z*
 
 ## CREATED
 
@@ -96,8 +96,9 @@ _No plans_
 
 ## CODE REVIEWED
 
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/remote-control-dispatch-acknowledgment-writeback.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/remote-control-dispatch-acknowledgment-writeback.md) — Remote Control Dispatch Acknowledgment Write-Back <!-- planId:d2f1c01f-a207-40c6-bcc7-5e76ae26746f -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/bug-epic-kanban-card-no-orchestrate-button-uat-failure.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/bug-epic-kanban-card-no-orchestrate-button-uat-failure.md) — UAT Failure: Epic Kanban Board Cards Have No Orchestrate Button and ORCHESTRATING Column Never Appears <!-- planId:e9396ead-e916-48af-b4ff-ba645d7691e8 -->
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/epic-card-subtask-count-meta-line.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/epic-card-subtask-count-meta-line.md) — Epic Card Layout: Replace Complexity with Subtask Count <!-- planId:1ddd67e5-472a-408e-8fb7-0cb6d8b317cb -->
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/remote-control-dispatch-acknowledgment-writeback.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/remote-control-dispatch-acknowledgment-writeback.md) — Remote Control Dispatch Acknowledgment Write-Back <!-- planId:d2f1c01f-a207-40c6-bcc7-5e76ae26746f -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/comprehensive-epic-is-epic-clobber-fix.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/comprehensive-epic-is-epic-clobber-fix.md) — Comprehensive Fix: All Epic is_epic Clobbering and Cascade Bugs <!-- planId:c7f3201a-113b-403d-a9d6-f3df28744c3b -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/notion-remote-control-and-delta-polling.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/notion-remote-control-and-delta-polling.md) — Notion as a Remote-Control Provider (MCP Control Surface) + Delta Polling for Linear & Notion <!-- planId:3518d83c-78de-4a01-a308-c34899291657 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/brain_a9e24b96c97bacd159df4f63d11c9e33f68093b575a1d270290749c10783bdb3.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/brain_a9e24b96c97bacd159df4f63d11c9e33f68093b575a1d270290749c10783bdb3.md) — Fix "Suggest Epics" Agent Workflow <!-- planId:a9e24b96c97bacd159df4f63d11c9e33f68093b575a1d270290749c10783bdb3 -->

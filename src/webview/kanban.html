@@ -5294,13 +5294,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             document.querySelectorAll('.card-btn.orchestrate').forEach(btn => {
                 btn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    const sessionId = btn.dataset.session || btn.dataset.planId || '';
-                    const workspaceRoot = btn.dataset.workspaceRoot || '';
+                    e.stopPropagation(); // Prevent triggering card selection/drag.
+                    // Pass planId as the PRIMARY identifier — the backend resolves the epic via
+                    // getPlanByPlanId, and a locally-created epic's sessionId !== planId. Send
+                    // sessionId too so the epicOrchestrationResult handler can re-match this button.
                     postKanbanMessage({
                         type: 'orchestrateEpic',
-                        sessionId: sessionId,
-                        workspaceRoot: workspaceRoot,
+                        planId: btn.dataset.planId || '',
+                        sessionId: btn.dataset.session || '',
+                        workspaceRoot: btn.dataset.workspaceRoot || '',
                         mode: 'copy'
                     });
                 });
@@ -5405,7 +5407,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                        </span>`
                     : '';
             }
-            const orchestrateBtn = card.isEpic
+            const orchestrateBtn = (card.isEpic && !isCompleted)
                 ? `<button class="card-btn orchestrate" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Orchestrate Epic">🎯 Orchestrate</button>`
                 : '';
             const completeOrDoneBtn = isCompleted
