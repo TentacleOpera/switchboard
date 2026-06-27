@@ -7902,17 +7902,22 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (!workspaceRoot) break;
                 // Pre-coding columns are the only place loose plans worth grouping live.
                 // Exclude existing epics and already-assigned subtasks.
-                const preCodingColumns = ['CREATED', 'BACKLOG', 'CONTEXT GATHERER', 'PLAN REVIEWED'];
+                const preCodingColumns = ['CREATED', 'CONTEXT GATHERER', 'PLAN REVIEWED'];
                 const candidateCards = this._lastCards.filter(card =>
                     card.workspaceRoot === workspaceRoot &&
                     preCodingColumns.includes(card.column) &&
                     !card.isEpic && !card.epicId
                 );
                 if (candidateCards.length === 0) {
-                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'No loose pre-coding cards to group into epics.', isError: true });
+                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'No loose active pre-coding cards to group into epics.', isError: true });
                     break;
                 }
-                const prompt = this._buildSuggestEpicsPrompt(workspaceRoot);
+                const backlogCount = this._lastCards.filter(card =>
+                    card.workspaceRoot === workspaceRoot &&
+                    card.column === 'BACKLOG' &&
+                    !card.isEpic && !card.epicId
+                ).length;
+                const prompt = this._buildSuggestEpicsPrompt(workspaceRoot, backlogCount);
                 await vscode.env.clipboard.writeText(prompt);
                 this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Suggest-epics prompt copied (${candidateCards.length} pre-coding card(s)). Paste into chat.`, isError: false });
                 break;
@@ -8607,27 +8612,49 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
      * then run create-epic.js per approved group. Copied to the clipboard (host-agnostic,
      * matching the CHAT PROMPT button) rather than auto-dispatched to a terminal.
      */
-    private _buildSuggestEpicsPrompt(workspaceRoot: string): string {
+    private _buildSuggestEpicsPrompt(workspaceRoot: string, backlogCount: number): string {
         return [
             'You are grouping loose Switchboard plans into epics. Follow this flow exactly — do not create any epic before the user approves.',
             '',
-            '1. SCAN. Read the board state:',
+            '1. SCAN',
+            `   Read the board snapshot:`,
+            `     cat ${workspaceRoot}/.switchboard/kanban-board.md`,
+            '',
+            '   Scope: CREATED, CONTEXT GATHERER, and PLAN REVIEWED columns only.',
+            '   Ignore BACKLOG and all post-coding columns.',
+            '   Each plan line ends with an HTML comment, e.g.:',
+            '     - [.switchboard/plans/foo.md](...) — Foo <!-- planId:abc-123 -->',
+            '     - [.switchboard/epics/epic-def.md](...) — Bar Epic <!-- planId:def-456 epic -->',
+            '     - [.switchboard/plans/baz.md](...) — Baz <!-- planId:ghi-789 subtask-of:"Bar Epic" -->',
+            '   Skip lines tagged `epic` (they are epics) or `subtask-of:...` (already assigned).',
+            '   Use the `planId:` value from the comment — NOT the filename — when calling create-epic.js.',
+            '   (A path under .switchboard/epics/ also indicates an epic, but subtask detection',
+            '   requires the subtask-of tag — do not rely on filenames alone.)',
+            '',
+            '2. READ PLAN BODIES',
+            '   For each candidate plan in scope, read the full plan file.',
+            '   Extract: goal, problem summary, dependencies, tags.',
+            '   Use this — not just titles — to determine groupings.',
+            '   Read plans in parallel where possible. If >25 candidates, first-pass cluster by',
+            '   title then deep-read within each cluster.',
+            '',
+            '3. PROPOSE (single message, all groups at once)',
+            '   Group by underlying capability theme, not by surface keyword.',
+            '   Cross-provider plans that address the same capability go into one epic.',
+            '   Minimum 2 plans per epic. Single-plan "groups" go in the Standalone section.',
+            '   Flag POSSIBLE OVERLAP / REDUNDANCY / GAP where detected.',
+            '   For each proposed epic: epic name, member plans with planId and one-line summary.',
+            '   List genuinely standalone plans separately. Then stop and wait.',
+            '',
+            `   After the proposal, ask: "BACKLOG has ${backlogCount} ungrouped plan(s). Analyse those too? (yes/no)"`,
+            '',
+            '4. CONFIRM',
+            '   Wait for user approval or edits. Do not touch the database until confirmed.',
+            '',
+            '5. EXECUTE',
+            '   For each approved group:',
             '   ```bash',
-            `   node .agents/skills/kanban_operations/get-state.js "${workspaceRoot}"`,
-            '   ```',
-            '   Look only at the pre-coding columns: CREATED, BACKLOG, CONTEXT GATHERER, PLAN REVIEWED.',
-            '   Ignore cards that are already epics or already assigned to an epic (they carry an epicId).',
-            '',
-            '2. PROPOSE. In a SINGLE chat message, propose every epic grouping at once. For each group give:',
-            '   - a short epic name',
-            '   - the member plans by topic, with their `planId` (NOT sessionId — watcher-imported plans have an empty sessionId)',
-            '   Leave genuinely standalone plans ungrouped and say so. Then stop and wait.',
-            '',
-            '3. CONFIRM. Let the user approve or edit the groupings in one reply. Do not touch anything until they do.',
-            '',
-            '4. EXECUTE. After approval, run once per approved group (no further confirmation):',
-            '   ```bash',
-            `   node .agents/skills/kanban_operations/create-epic.js "<epic name>" '["planId1","planId2"]' "${workspaceRoot}"`,
+            `   node .agents/skills/kanban_operations/create-epic.js "<epic name>" '["planId1","planId2",...]' "${workspaceRoot}"`,
             '   ```',
             '   To add more plans to an epic later, use assign-to-epic.js with the epic planId from the create-epic.js output.',
             '',

@@ -5388,6 +5388,13 @@ FROM plans
             if (!workspaceId) return;
 
             const allPlans = await this.getBoard(workspaceId);
+            // Build epic-id -> topic lookup so subtask lines can name their parent epic.
+            const epicTopicById = new Map<string, string>();
+            for (const plan of allPlans) {
+                if (plan.isEpic) {
+                    epicTopicById.set(plan.planId, plan.topic);
+                }
+            }
             const columns = new Map<string, KanbanPlanRecord[]>();
             for (const col of VALID_KANBAN_COLUMNS) {
                 columns.set(col, []);
@@ -5408,7 +5415,16 @@ FROM plans
                         const filePath = path.isAbsolute(plan.planFile)
                             ? plan.planFile
                             : path.join(this._workspaceRoot, plan.planFile);
-                        md += `- [${plan.planFile}](${filePath}) — ${plan.topic}\n`;
+                        // Append planId + epic assignment in an HTML comment so the visible
+                        // board is unchanged but the "Suggest Epics" agent can parse them
+                        // without falling back to the 1.3 MB get-state.js JSON blob.
+                        const parts = [`planId:${plan.planId}`];
+                        if (plan.isEpic) { parts.push('epic'); }
+                        if (plan.epicId) {
+                            const epicTopic = epicTopicById.get(plan.epicId);
+                            parts.push(epicTopic ? `subtask-of:"${epicTopic}"` : `subtask-of:${plan.epicId}`);
+                        }
+                        md += `- [${plan.planFile}](${filePath}) — ${plan.topic} <!-- ${parts.join(' ')} -->\n`;
                     }
                     md += `\n`;
                 }
