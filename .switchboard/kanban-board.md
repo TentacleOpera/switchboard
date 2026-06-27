@@ -1,6 +1,6 @@
 # Kanban Board
 
-*Workspace: 038bffef-9842-4574-96a1-69a43a280b3c* · *Updated: 2026-06-27T23:30:36.295Z*
+*Workspace: 038bffef-9842-4574-96a1-69a43a280b3c* · *Updated: 2026-06-27T23:31:06.303Z*
 
 ## CREATED
 
@@ -91,6 +91,7 @@ _No plans_
 
 ## CODE REVIEWED
 
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260628071745_epic-tab-subtask-links-in-markdown-preview.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260628071745_epic-tab-subtask-links-in-markdown-preview.md) — Fix: Epic tab subtask links in markdown doc preview do not work <!-- planId:1802d264-4834-4ab2-adb5-d781f64195ab -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/replace-prompt-sql-with-move-card-skill.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/replace-prompt-sql-with-move-card-skill.md) — Replace Raw Agent-Prompt SQL with move-card.js Skill Calls <!-- planId:1e2e0d80-d366-4d2f-adf1-7cca57ac679c -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-epic-default-column-from-subtasks.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-epic-default-column-from-subtasks.md) — Fix: Epic Column Clobbered to CREATED by File-Watcher Re-INSERT <!-- planId:ca079f74-9fbd-4a88-8a71-edbbe672ff76 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/epic-card-subtask-column-status-display.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/epic-card-subtask-column-status-display.md) — Enhancement: Epic File Subtask List Should Show Each Subtask's Current Kanban Column <!-- planId:d7898e5f-16a7-4b16-bf0f-b8421929d787 -->
