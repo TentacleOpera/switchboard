@@ -52,11 +52,60 @@ public async postComment(remoteId: string, body: string): Promise<void> {
 }
 ```
 
-### 4. Fire the acknowledgment in `RemoteControlService._applyStateMirror`
+### 4. Change `onColumnMove` return type in `RemoteControlServiceDeps`
+
+**File:** `src/services/RemoteControlService.ts`, line 68
+
+```typescript
+// Before
+onColumnMove: (plan: KanbanPlanRecord, targetColumn: string) => Promise<void>;
+
+// After
+onColumnMove: (plan: KanbanPlanRecord, targetColumn: string) => Promise<{ dispatched: boolean }>;
+```
+
+### 5. Return `dispatched` from `_remoteDispatchColumnAgent` in `KanbanProvider`
+
+**File:** `src/services/KanbanProvider.ts`
+
+Change `_remoteDispatchColumnAgent` to return `Promise<boolean>` — `true` if an agent was actually dispatched, `false` for every early-return (no sessionId, agentless column, canDispatch check failed):
+
+```typescript
+private async _remoteDispatchColumnAgent(workspaceRoot: string, sessionId: string, column: string): Promise<boolean> {
+    if (!sessionId) { return false; }
+    const spec = await this._resolveKanbanDispatchSpec(workspaceRoot, column);
+    const role = spec?.role || this._columnToRole(column);
+    if (!role) { return false; }
+    const canDispatch = await this._canAssignRole(workspaceRoot, role);
+    if (!canDispatch) { return false; }
+    const instruction = role === 'planner' ? 'improve-plan' : undefined;
+    await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot);
+    return true;
+}
+```
+
+Update `_remoteApplyColumnMove` to propagate this:
+
+```typescript
+private async _remoteApplyColumnMove(workspaceRoot: string, plan: KanbanPlanRecord, targetColumn: string): Promise<{ dispatched: boolean }> {
+    await this.moveCardToColumnByPlanFile(workspaceRoot, plan.planFile, targetColumn);
+    const sessionId = plan.sessionId || (await this._getKanbanDb(workspaceRoot).getPlanByPlanFile(plan.planFile, await this._getKanbanDb(workspaceRoot).getWorkspaceId() || ''))?.sessionId || '';
+    const dispatched = await this._remoteDispatchColumnAgent(workspaceRoot, sessionId, targetColumn);
+    return { dispatched };
+}
+```
+
+Update the `onColumnMove` callback registration to match:
+
+```typescript
+onColumnMove: async (plan, targetColumn) => {
+    return this._remoteApplyColumnMove(resolved, plan, targetColumn);
+},
+```
+
+### 6. Gate the ack on `dispatched` in `RemoteControlService._applyStateMirror`
 
 **File:** `src/services/RemoteControlService.ts`, around line 301
-
-After the successful `onColumnMove` call, fire-and-forget the ack comment:
 
 ```typescript
 private async _applyStateMirror(
@@ -70,19 +119,20 @@ private async _applyStateMirror(
     this._log(`State mirror: ${remoteId} → column ${targetColumn} (from ${plan.kanbanColumn}).`);
     try {
         await provider.refreshLocalPlanFromRemote(remoteId);
-        await this._deps.onColumnMove(plan, targetColumn);
-        // Fire-and-forget: post acknowledgment back to the remote card.
-        provider.postComment(
-            remoteId,
-            `Switchboard received this status change and dispatched the local agent for the **${targetColumn}** column. Check back in a few minutes.`
-        ).catch(e => this._log(`Dispatch ack comment failed for ${plan.planId}: ${e instanceof Error ? e.message : String(e)}`));
+        const { dispatched } = await this._deps.onColumnMove(plan, targetColumn);
+        if (dispatched) {
+            provider.postComment(
+                remoteId,
+                `Switchboard received this status change and dispatched the local agent for the **${targetColumn}** column. Check back in a few minutes.`
+            ).catch(e => this._log(`Dispatch ack comment failed for ${plan.planId}: ${e instanceof Error ? e.message : String(e)}`));
+        }
     } catch (e) {
         this._log(`onColumnMove failed for ${plan.planId}: ${e instanceof Error ? e.message : String(e)}`);
     }
 }
 ```
 
-The `.catch()` pattern (rather than try/catch around an await) keeps the dispatch itself unblocked — the ack is best-effort.
+The `.catch()` pattern keeps dispatch unblocked — the ack is best-effort.
 
 ---
 
@@ -90,7 +140,7 @@ The `.catch()` pattern (rather than try/catch around an await) keeps the dispatc
 
 **Echo guard:** `postManagedComment` stamps `<!-- switchboard -->` (Linear/ClickUp) or sets `From = "Switchboard"` (Notion) on outbound comments. The `authoredBySelf` flag on the resulting `RemoteCommentDelta` is `true` → the comment stream skips it → no feedback loop.
 
-**Agentless columns:** The message says "dispatched the local agent for the **X** column." If no agent is configured for that column, `_remoteDispatchColumnAgent` silently no-ops — the card moved but nothing ran. The ack still fires, which is slightly inaccurate. Acceptable for now: the card movement itself is meaningful state, and if no agent ran, the comment is the only signal the remote side receives. A follow-up could thread a `dispatched: boolean` return from `onColumnMove` to gate the message wording.
+**Agentless columns:** `_remoteDispatchColumnAgent` now returns `false` for agentless columns. `_applyStateMirror` only fires the ack when `dispatched === true`, so a card move onto an agentless column produces no comment. The card's status change in Notion/Linear is the only visible signal in that case, which is correct.
 
 **Comment post failure:** Logged, swallowed. Dispatch already succeeded; the ack is best-effort.
 
@@ -105,11 +155,12 @@ The `.catch()` pattern (rather than try/catch around an await) keeps the dispatc
 | `src/services/remote/RemoteProvider.ts` | Add `postComment` method to interface |
 | `src/services/remote/LinearRemoteProvider.ts` | Implement `postComment` |
 | `src/services/remote/NotionRemoteProvider.ts` | Implement `postComment` |
-| `src/services/RemoteControlService.ts` | Fire ack after `onColumnMove` in `_applyStateMirror` |
+| `src/services/RemoteControlService.ts` | Change `onColumnMove` return type; gate ack on `dispatched` in `_applyStateMirror` |
+| `src/services/KanbanProvider.ts` | `_remoteDispatchColumnAgent` returns `boolean`; `_remoteApplyColumnMove` returns `{ dispatched }`; update callback registration |
 
 ---
 
 ## Metadata
 
-**Complexity:** 2
+**Complexity:** 3
 **Tags:** backend, reliability, feature
