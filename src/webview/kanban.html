@@ -918,16 +918,9 @@
             border-left: 4px solid #7c3aed;
             background: rgba(124, 58, 237, 0.06);
         }
-        .epic-badge {
-            display: inline-block;
-            font-size: 0.7em;
+        .epic-subtask-label {
+            color: #7c3aed;
             font-weight: 700;
-            text-transform: uppercase;
-            background: #7c3aed;
-            color: white;
-            padding: 1px 6px;
-            border-radius: 3px;
-            margin-right: 4px;
         }
 
         /* During drag, prevent child elements from interfering with drop targets */
@@ -5396,7 +5389,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     : '';
 
             const epicClass = card.isEpic ? ' epic-card' : '';
-            const epicBadge = card.isEpic ? `<span class="epic-badge">EPIC · ${card.subtaskCount || 0} subtask${(card.subtaskCount || 0) !== 1 ? 's' : ''}</span>` : '';
+            const epicBadge = ''; // Badge removed; epic identity shown via purple border + meta line
+            
+            const cardMetaContent = card.isEpic
+                ? `<span class="epic-subtask-label">EPIC: ${card.subtaskCount || 0} SUBTASK${(card.subtaskCount || 0) !== 1 ? 'S' : ''}</span> · ${timeAgo}`
+                : `Complexity: <span class="complexity-indicator ${complexityClass}">${category}</span> · ${timeAgo}`;
             
             let wtButton = '';
             if (card.isEpic) {
@@ -5421,7 +5418,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             return `
                 <div class="kanban-card${completedClass}${epicClass}" draggable="true" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}">
                     <div class="card-topic">${epicBadge}${escapeHtml(shortTopic)}${wtButton}</div>
-                    <div class="card-meta">Complexity: <span class="complexity-indicator ${complexityClass}">${category}</span> · ${timeAgo}</div>
+                    <div class="card-meta">${cardMetaContent}</div>
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">
                         <div style="display: flex; gap: 4px;">
                             ${pairProgramBtn}

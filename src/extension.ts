@@ -499,6 +499,16 @@ export async function activate(context: vscode.ExtensionContext) {
         (watchedRoot: string) => kanbanProvider?.getDisplayedProjectForRoot(watchedRoot) ?? null
     );
 
+    // Let the watcher re-derive an epic's kanban_column from its subtasks after
+    // every epic-file import, self-healing the clobber where insertFileDerivedPlan
+    // hardcodes 'CREATED' on fresh INSERT (re-import after the 3000ms suppression
+    // window, or the atomic-write DELETE->re-INSERT race). Mirrors the is_epic
+    // re-assert already in _handlePlanFile; "new file" must NOT imply "CREATED".
+    globalPlanWatcher.setEpicColumnRecomputer(
+        (epicPlanId: string, watchedRoot: string) =>
+            kanbanProvider?.recomputeEpicColumnFromSubtasks(epicPlanId, watchedRoot) ?? Promise.resolve()
+    );
+
     const workspaceModeSetting = getEnforcedSwitchboardBooleanSetting('runtime.workspaceMode', false);
 
     // Workspace exclusion management (replaces legacy _runGitignoreMigrationV1)

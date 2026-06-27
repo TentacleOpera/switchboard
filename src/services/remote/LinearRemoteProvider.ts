@@ -145,6 +145,13 @@ export class LinearRemoteProvider implements RemoteProvider {
         }
     }
 
+    public async postComment(remoteId: string, body: string): Promise<void> {
+        const result = await this._linear.postManagedComment(remoteId, body);
+        if (!result.success) {
+            throw new Error(`Linear postComment failed for ${remoteId}: ${result.error || 'unknown error'}`);
+        }
+    }
+
     private _renderIssue(issue: { title?: string; description?: string } | null, remoteId: string): string {
         if (!issue) { return ''; }
         const title = issue.title || `Linear Issue ${remoteId}`;

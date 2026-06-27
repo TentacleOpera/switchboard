@@ -93,6 +93,28 @@ Copy the Planning prompt, enrich the plans, and drag cards to trigger agents.
 
 ---
 
+## Using Switchboard with claude.ai
+
+All Switchboard planning workflows are available directly in [claude.ai](https://claude.ai) — no VS Code required for the planning phase.
+
+### Quick start
+
+Type `/sw` in any claude.ai chat to enter Switchboard's consultative planning mode. The skill reads your committed `kanban-board.md` snapshot so you can reference your board by column name:
+
+> "What's in the Created column?"
+> "Review all plans in Backlog and tell me which ones have missing dependencies."
+
+### Chaining workflows
+
+Once you've identified plans with `/sw`, you can run other Switchboard workflows across them in the same session:
+
+- **`/improve-plan`** — deep-plan with adversarial review. Ask Claude to run it on every plan in a given column at once, rather than one at a time.
+- **`/memo`** — capture a burst of new ideas as plan stubs without interrupting your flow.
+
+**Example:** Open claude.ai, type `/sw`, ask "show me everything in Created", then say "run `/improve-plan` on each of those" — Claude will work through all of them in one session.
+
+---
+
 ## The AUTOBAN
 
 The AUTOBAN is the central control surface. Dragging a card triggers terminal execution or copies the prompt.

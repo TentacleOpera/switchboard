@@ -50,6 +50,7 @@ function makeService(db, provider, sinks) {
             // Mirror the real move: the DB now reflects the new column, so the next poll's
             // equality check no-ops the card's own re-surfaced delta.
             plan.kanbanColumn = col;
+            return { dispatched: true };
         },
         onComment: async (plan, body) => {
             sinks.comments.push({ planId: plan.planId, body });
@@ -73,6 +74,7 @@ async function run() {
             fetchCommentDeltas: async () => { fetchedComments = true; return { deltas: [], nextCursor: 'x' }; },
             stateKeyToColumn: () => undefined,
             refreshLocalPlanFromRemote: async () => {},
+            postComment: async () => {},
         };
         const sinks = { moves: [], comments: [] };
         await poll(makeService(db, provider, sinks));
@@ -96,6 +98,7 @@ async function run() {
             fetchCommentDeltas: async () => ({ deltas: [], nextCursor: '2026-01-01T00:00:00.000Z' }),
             stateKeyToColumn: (k) => (k === 'S_CODED' ? 'CODER CODED' : undefined),
             refreshLocalPlanFromRemote: async (id) => { order.push('refresh:' + id); },
+            postComment: async () => {},
         };
         const sinks = { moves: [], comments: [], order };
         const svc = makeService(db, provider, sinks);
@@ -124,6 +127,7 @@ async function run() {
             fetchCommentDeltas: async () => ({ deltas, nextCursor: '2026-01-02T00:01:00.000Z' }),
             stateKeyToColumn: () => undefined,
             refreshLocalPlanFromRemote: async () => {},
+            postComment: async () => {},
         };
         const sinks = { moves: [], comments: [] };
         const svc = makeService(db, provider, sinks);
@@ -149,6 +153,7 @@ async function run() {
             ], nextCursor: '2026-01-02T00:00:00.000Z' }),
             stateKeyToColumn: () => undefined,
             refreshLocalPlanFromRemote: async () => {},
+            postComment: async () => {},
         };
         const sinks = { moves: [], comments: [], failComment: true };
         await poll(makeService(db, provider, sinks));
@@ -168,6 +173,7 @@ async function run() {
             fetchCommentDeltas: async () => ({ deltas: [], nextCursor: '2026-01-01T00:00:00.000Z' }),
             stateKeyToColumn: (k) => k,
             refreshLocalPlanFromRemote: async () => {},
+            postComment: async () => {},
         };
         const sinks = { moves: [], comments: [] };
         const svc = makeService(db, provider, sinks);
@@ -190,6 +196,7 @@ async function run() {
             stateKeyToColumn: (k) => k,
             refreshLocalPlanFromRemote: async () => {},
             importRemotePlan: async (id) => { imported = id; return makePlan({ planId: 'imported', notionPageId: id, kanbanColumn: 'CREATED', linearIssueId: '' }); },
+            postComment: async () => {},
         };
         const sinks = { moves: [], comments: [] };
         await poll(makeService(db, provider, sinks));

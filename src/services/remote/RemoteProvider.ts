@@ -69,4 +69,12 @@ export interface RemoteProvider {
      * pages) on the next ping.
      */
     importRemotePlan(remoteId: string): Promise<KanbanPlanRecord | null>;
+
+    /**
+     * Post a comment on the remote card. Used to acknowledge dispatch back to the
+     * remote agent. Implementations delegate to the provider's postManagedComment —
+     * the stamp marker is applied there, ensuring authoredBySelf = true on ingest
+     * (no feedback loop).
+     */
+    postComment(remoteId: string, body: string): Promise<void>;
 }

@@ -66,6 +66,21 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
         this._resolveDisplayedProject = fn;
     }
 
+    /**
+     * Live re-deriver into the KanbanProvider for an epic's kanban_column. Called
+     * after the is_epic re-assert in _handlePlanFile to self-heal the
+     * kanban_column clobber from insertFileDerivedPlan's hardcoded 'CREATED' on
+     * fresh INSERT (re-import after the 3000ms registerPendingCreation window, or
+     * the atomic-write DELETE->re-INSERT race). Re-derives from DB state
+     * (subtasks) so "new file" does NOT imply "CREATED column". No-op when the
+     * epic has no subtasks yet (the provider guards that case).
+     */
+    private _recomputeEpicColumn?: (epicPlanId: string, workspaceRoot: string) => Promise<void>;
+
+    public setEpicColumnRecomputer(fn: (epicPlanId: string, workspaceRoot: string) => Promise<void>): void {
+        this._recomputeEpicColumn = fn;
+    }
+
     public setCurrentProject(workspaceRoot: string, project: string | null): void {
         // Translate sentinel to empty string — the sentinel '__unassigned__' is a UI filter value
         // and must never be stored as a plan's project name.
@@ -577,6 +592,12 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 if (relativePath.startsWith('.switchboard/epics/')) {
                     await db.updateEpicStatus(newRecord.planId, 1, '');
                     newRecord.isEpic = 1;
+                    // Re-assert kanban_column from subtasks: insertFileDerivedPlan
+                    // hardcodes 'CREATED' on fresh INSERT, so a re-import (after the
+                    // 3000ms suppression window) would clobber the epic's resolved
+                    // column. Mirror the is_epic re-assert above. No-op when the
+                    // epic has no subtasks yet (provider guards that case).
+                    await this._recomputeEpicColumn?.(newRecord.planId, workspaceRoot);
                 }
                 plan = newRecord;
 
@@ -617,6 +638,12 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 if (relativePath.startsWith('.switchboard/epics/')) {
                     await db.updateEpicStatus(updatedRecord.planId, 1, '');
                     updatedRecord.isEpic = 1;
+                    // Same clobber vector as above (the atomic-write DELETE->re-INSERT
+                    // race hits this branch: _handlePlanDelete deletes the row, then
+                    // this branch's insertFileDerivedPlan re-INSERTs with
+                    // kanban_column='CREATED'). Re-derive from subtasks so the
+                    // epic's column survives the race. No-op when no subtasks yet.
+                    await this._recomputeEpicColumn?.(updatedRecord.planId, workspaceRoot);
                 }
                 plan = updatedRecord;
 

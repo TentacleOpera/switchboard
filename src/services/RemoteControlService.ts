@@ -65,7 +65,7 @@ interface RemoteControlDeps {
     /** Build the provider for the active backend (or null if its integration isn't configured). */
     getProvider: (kind: RemoteProviderKind) => RemoteProvider | null;
     /** Apply a remote-driven column move + dispatch the destination column's agent (§9). */
-    onColumnMove: (plan: KanbanPlanRecord, targetColumn: string) => Promise<void>;
+    onColumnMove: (plan: KanbanPlanRecord, targetColumn: string) => Promise<{ dispatched: boolean }>;
     /** Route an inbound comment to the card's current column agent (§7). */
     onComment: (plan: KanbanPlanRecord, commentBody: string) => Promise<void>;
     log?: (msg: string) => void;
@@ -294,11 +294,18 @@ export class RemoteControlService {
         // outbound push re-surfaces as a delta with the column we just set → no-op here.
         if (targetColumn === plan.kanbanColumn) { return; }
 
-        this._log(`State mirror: ${this._remoteIdOf(provider.kind, plan)} → column ${targetColumn} (from ${plan.kanbanColumn}).`);
+        const remoteId = this._remoteIdOf(provider.kind, plan);
+        this._log(`State mirror: ${remoteId} → column ${targetColumn} (from ${plan.kanbanColumn}).`);
         try {
             // Pull the remote-authored body/description into the local plan BEFORE dispatch.
-            await provider.refreshLocalPlanFromRemote(this._remoteIdOf(provider.kind, plan));
-            await this._deps.onColumnMove(plan, targetColumn);
+            await provider.refreshLocalPlanFromRemote(remoteId);
+            const { dispatched } = await this._deps.onColumnMove(plan, targetColumn);
+            if (dispatched) {
+                provider.postComment(
+                    remoteId,
+                    `Switchboard received this status change and dispatched the local agent for the **${targetColumn}** column. Check back in a few minutes.`
+                ).catch(e => this._log(`Dispatch ack comment failed for ${plan.planId}: ${e instanceof Error ? e.message : String(e)}`));
+            }
         } catch (e) {
             this._log(`onColumnMove failed for ${plan.planId}: ${e instanceof Error ? e.message : String(e)}`);
         }

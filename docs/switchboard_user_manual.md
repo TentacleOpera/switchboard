@@ -37,6 +37,7 @@
 29. [Automated Triage Pipeline](#29-automated-triage-pipeline)
 30. [Linear Remote Control](#30-linear-remote-control)
 31. [Troubleshooting / FAQ](#31-troubleshooting--faq)
+32. [Using Switchboard with claude.ai](#32-using-switchboard-with-claudeai)
 
 ---
 
@@ -1582,3 +1583,44 @@ A: Close and reopen any open Switchboard panels (Kanban, Setup, Planning). The t
 ### Agent File Opening
 **Q: Files keep auto-closing when I'm trying to work**
 A: `switchboard.preventAgentFileOpening` is enabled. Disable it via the status bar toggle or run `switchboard.togglePreventAgentFileOpening`. To open a specific file while the guard is active, right-click and select "Override Open" (`switchboard.forceOpenFile`).
+
+## 32. Using Switchboard with claude.ai
+
+Switchboard's planning workflows are not limited to VS Code. You can drive the planning phase — kanban triage, plan authoring, improvement runs — entirely from [claude.ai](https://claude.ai), with the extension running locally to execute the resulting plans.
+
+### Prerequisites
+
+- The Switchboard extension must be open in VS Code so that `kanban-board.md` stays up to date (it is written on every board change).
+- `kanban-board.md` must not be gitignored (Switchboard manages this automatically from Setup → Git Ignore Strategy → `targetedGitignore`).
+
+### Entering planning mode: `/sw`
+
+Type `/sw` in any claude.ai chat. This loads the Switchboard Operator persona: a consultative planner that gathers requirements, challenges assumptions, and produces implementation plans — but does not write code until you approve a plan.
+
+Once active, the skill reads `.switchboard/kanban-board.md` so you can address your board by column:
+
+> "What's in the Created column?"
+> "Which plans in Backlog have no complexity score?"
+> "Summarise everything currently in Code Reviewed."
+
+### Available workflows on claude.ai
+
+All slash-command workflows work on claude.ai:
+
+| Command | What it does |
+|---------|--------------|
+| `/sw` | Enter consultative planning mode (Switchboard Operator) |
+| `/improve-plan` | Deep-plan a draft with dependency checks and adversarial review |
+| `/memo` | Capture a burst of ideas as plan stubs — exits with `process memo` |
+| `/accuracy` | High-accuracy mode with self-review for precision tasks |
+
+### Chaining: triage then bulk-improve
+
+The most powerful pattern is to chain `/sw` with `/improve-plan` across a whole column:
+
+1. Type `/sw` and ask Claude to list everything in a column (e.g. "show me all Created plans").
+2. Claude reads `kanban-board.md` and lists the plans with titles and file paths.
+3. Say "run `/improve-plan` on each of those" — Claude works through all of them in the same session, one after another, producing improved plan files it commits back to `.switchboard/plans/`.
+
+This lets you queue up a full planning sprint from your phone or a browser tab while the local extension handles execution.
+

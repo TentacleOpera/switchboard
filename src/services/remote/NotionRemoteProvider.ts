@@ -165,6 +165,13 @@ export class NotionRemoteProvider implements RemoteProvider {
         }
     }
 
+    public async postComment(remoteId: string, body: string): Promise<void> {
+        const result = await this._deps.notion.postManagedComment(remoteId, body);
+        if (!result.success) {
+            throw new Error(`Notion postComment failed for ${remoteId}: ${result.error || 'unknown error'}`);
+        }
+    }
+
     public async importRemotePlan(remoteId: string): Promise<KanbanPlanRecord | null> {
         try {
             if (!this._deps.getPlansDir) { return null; }

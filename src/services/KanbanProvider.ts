@@ -1459,7 +1459,7 @@ export class KanbanProvider implements vscode.Disposable {
                 });
             },
             onColumnMove: async (plan, targetColumn) => {
-                await this._remoteApplyColumnMove(resolved, plan, targetColumn);
+                return this._remoteApplyColumnMove(resolved, plan, targetColumn);
             },
             onComment: async (plan, body) => {
                 await this._remoteDispatchComment(resolved, plan, body);
@@ -1504,10 +1504,11 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     /** §9 — apply a Linear-driven column move, then dispatch the destination column's agent. */
-    private async _remoteApplyColumnMove(workspaceRoot: string, plan: KanbanPlanRecord, targetColumn: string): Promise<void> {
+    private async _remoteApplyColumnMove(workspaceRoot: string, plan: KanbanPlanRecord, targetColumn: string): Promise<{ dispatched: boolean }> {
         await this.moveCardToColumnByPlanFile(workspaceRoot, plan.planFile, targetColumn);
         const sessionId = plan.sessionId || (await this._getKanbanDb(workspaceRoot).getPlanByPlanFile(plan.planFile, await this._getKanbanDb(workspaceRoot).getWorkspaceId() || ''))?.sessionId || '';
-        await this._remoteDispatchColumnAgent(workspaceRoot, sessionId, targetColumn);
+        const dispatched = await this._remoteDispatchColumnAgent(workspaceRoot, sessionId, targetColumn);
+        return { dispatched };
     }
 
     /**
@@ -1529,19 +1530,20 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     /** Dispatch the agent assigned to a column, the same command a manual drag uses. */
-    private async _remoteDispatchColumnAgent(workspaceRoot: string, sessionId: string, column: string): Promise<void> {
-        if (!sessionId) { return; }
+    private async _remoteDispatchColumnAgent(workspaceRoot: string, sessionId: string, column: string): Promise<boolean> {
+        if (!sessionId) { return false; }
         const spec = await this._resolveKanbanDispatchSpec(workspaceRoot, column);
         const role = spec?.role || this._columnToRole(column);
         if (!role) {
             // No agent on this column → comment/move triggers nothing (matches a manual
             // move onto an agentless column). No special handling, no reply comment.
-            return;
+            return false;
         }
         const canDispatch = await this._canAssignRole(workspaceRoot, role);
-        if (!canDispatch) { return; }
+        if (!canDispatch) { return false; }
         const instruction = role === 'planner' ? 'improve-plan' : undefined;
         await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot);
+        return true;
     }
 
     /**
@@ -4728,6 +4730,58 @@ This step is what moves the plan forward in the Switchboard pipeline.
         const filter = this._projectFilter;
         if (!filter || filter === KanbanDatabase.UNASSIGNED_PROJECT_FILTER) return null;
         return filter;
+    }
+
+    /**
+     * Re-derive an epic's kanban_column from its subtasks (minimum ordinal /
+     * weakest-link: the epic is only as far along as its least-complete subtask)
+     * and persist it. Mirrors createEpicFromPlanIds' resolution exactly so the
+     * two never disagree. No-op (returns without writing) when the epic has zero
+     * subtasks or all subtasks have empty kanbanColumn — in those cases there is
+     * nothing to derive and we must NOT overwrite an existing column with the
+     * new-file default.
+     *
+     * Used by the file watcher to self-heal the kanban_column clobber from
+     * insertFileDerivedPlan's hardcoded 'CREATED' on fresh INSERT: a re-import
+     * after the 3000ms registerPendingCreation window, or the atomic-write
+     * DELETE->re-INSERT race, forces kanban_column='CREATED' on the epic. The
+     * is_epic re-assert already survives that race; this is the matching
+     * kanban_column re-assert. Re-deriving from DB state (subtasks) rather than
+     * from the file is what makes "new file" NOT imply "CREATED column".
+     */
+    public async recomputeEpicColumnFromSubtasks(epicPlanId: string, workspaceRoot: string): Promise<void> {
+        try {
+            const db = this._getKanbanDb(workspaceRoot);
+            if (!db || !(await db.ensureReady())) return;
+            const epic = await db.getPlanByPlanId(epicPlanId);
+            if (!epic || !epic.isEpic) return;
+            const subtasks = await db.getSubtasksByEpicId(epicPlanId);
+            const columns = subtasks
+                .map((st: any) => this._normalizeLegacyKanbanColumn(st.kanbanColumn))
+                .filter((col: string | null): col is string => !!col);
+            // No subtask columns to derive from — leave the existing column alone.
+            // This guard is load-bearing: without it, a brand-new epic with no
+            // linked subtasks yet would itself be forced to 'CREATED'.
+            if (columns.length === 0) return;
+            const customColumns = await this._getCustomKanbanColumns(workspaceRoot);
+            const columnDefs = await this._buildKanbanColumns([], customColumns);
+            const ordinalMap = new Map<string, number>();
+            columnDefs.forEach((def, idx) => ordinalMap.set(def.id, idx));
+            if (!ordinalMap.has('BACKLOG')) {
+                ordinalMap.set('BACKLOG', -1);
+            }
+            let resolved = columns.sort(
+                (a: string, b: string) => (ordinalMap.get(a) ?? Infinity) - (ordinalMap.get(b) ?? Infinity)
+            )[0];
+            if (resolved === 'BACKLOG') resolved = 'CREATED';
+            const current = this._normalizeLegacyKanbanColumn(epic.kanbanColumn) || 'CREATED';
+            if (resolved === current) return; // already correct, skip the write
+            const workspaceId = await db.getWorkspaceId();
+            if (!workspaceId) return;
+            await db.updateColumnByPlanFile(epic.planFile, workspaceId, resolved);
+        } catch (err) {
+            console.warn(`[KanbanProvider] recomputeEpicColumnFromSubtasks failed for ${epicPlanId}:`, err);
+        }
     }
 
     public setProjectFilter(filter: string | null): void {
@@ -8041,12 +8095,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'No loose active pre-coding cards to group into epics.', isError: true });
                     break;
                 }
-                const backlogCount = this._lastCards.filter(card =>
-                    card.workspaceRoot === workspaceRoot &&
-                    card.column === 'BACKLOG' &&
-                    !card.isEpic && !card.epicId
-                ).length;
-                const prompt = this._buildSuggestEpicsPrompt(workspaceRoot, backlogCount);
+                const prompt = this._buildSuggestEpicsPrompt(workspaceRoot);
                 await vscode.env.clipboard.writeText(prompt);
                 this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Suggest-epics prompt copied (${candidateCards.length} pre-coding card(s)). Paste into chat.`, isError: false });
                 break;
@@ -8663,7 +8712,8 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         // Quote YAML values to prevent frontmatter breakage from names containing ---, :, etc.
         const yamlSafeName = epicName.replace(/'/g, "''");
         const epicDesc = (description ? String(description).replace(/[\r\n]+/g, ' ').trim() : '');
-        const epicContent = `---\ndescription: '${yamlSafeName}'\n---\n\n# ${epicName}\n\n${epicDesc}`;
+        const goalSection = epicDesc ? `## Goal\n\n${epicDesc}\n` : '';
+        const epicContent = `---\ndescription: '${yamlSafeName}'\n---\n\n# ${epicName}\n\n${goalSection}`;
 
         // Register before writing so the file watcher skips this file —
         // the DB record is already committed above with is_epic=1.
@@ -8742,7 +8792,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
      * then run create-epic.js per approved group. Copied to the clipboard (host-agnostic,
      * matching the CHAT PROMPT button) rather than auto-dispatched to a terminal.
      */
-    private _buildSuggestEpicsPrompt(workspaceRoot: string, backlogCount: number): string {
+    private _buildSuggestEpicsPrompt(workspaceRoot: string): string {
         return [
             'You are grouping loose Switchboard plans into epics. Follow this flow exactly — do not create any epic before the user approves.',
             '',
@@ -8773,20 +8823,43 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             '   Cross-provider plans that address the same capability go into one epic.',
             '   Minimum 2 plans per epic. Single-plan "groups" go in the Standalone section.',
             '   Flag POSSIBLE OVERLAP / REDUNDANCY / GAP where detected.',
-            '   For each proposed epic: epic name, member plans with planId and one-line summary.',
+            '   For each proposed epic, write:',
+            '     - Epic name',
+            '     - Goal: 2-4 sentences describing what the epic achieves, what problem it',
+            '       solves, and why these plans are grouped together.',
+            '     - How the Subtasks Achieve This: one bullet per member plan explaining what',
+            '       it does and how it contributes to the epic\'s goal. Format:',
+            '         - **Plan Name**: <what it does and how it contributes>',
+            '     - Member plans with planId and one-line summary',
             '   List genuinely standalone plans separately. Then stop and wait.',
-            '',
-            `   After the proposal, ask: "BACKLOG has ${backlogCount} ungrouped plan(s). Analyse those too? (yes/no)"`,
             '',
             '4. CONFIRM',
             '   Wait for user approval or edits. Do not touch the database until confirmed.',
             '',
             '5. EXECUTE',
-            '   For each approved group:',
+            '   For each approved group, pass the Goal text as the description argument.',
+            '   Escape any double quotes in the Goal text (replace " with \") or rephrase to',
+            '   avoid them, so the bash command does not break. Also avoid $ and backticks',
+            '   in the Goal text — these are shell metacharacters inside double quotes.',
             '   ```bash',
-            `   node .agents/skills/kanban_operations/create-epic.js "<epic name>" '["planId1","planId2",...]' "${workspaceRoot}"`,
+            `   node .agents/skills/kanban_operations/create-epic.js "<epic name>" '["planId1","planId2",...]' "${workspaceRoot}" "<goal text with escaped quotes>"`,
             '   ```',
+            '   The description becomes the ## Goal section in the epic file.',
+            '   After all epics are created, write the ## How the Subtasks Achieve This section',
+            '   into each epic file manually (the create-epic script only writes the Goal).',
+            '   Use the text from your step 3 proposal — paste it between the Goal and the',
+            '   <!-- BEGIN SUBTASKS --> marker. This section is preserved by _regenerateEpicFile',
+            '   on subsequent subtask changes, so it only needs to be written once.',
             '   To add more plans to an epic later, use assign-to-epic.js with the epic planId from the create-epic.js output.',
+            '',
+            '6. BACKLOG (optional, after execution)',
+            '   Re-read the board snapshot to get current BACKLOG state:',
+            `     cat ${workspaceRoot}/.switchboard/kanban-board.md`,
+            '   Check whether the BACKLOG column contains any ungrouped plans',
+            '   (i.e. lines that are NOT tagged `epic` or `subtask-of:...`).',
+            '   If yes, ask: "BACKLOG also has ungrouped plans. Would you like me to analyse those for epic groupings too?"',
+            '   If the user says yes, repeat steps 2-5 for the BACKLOG plans.',
+            '   If no ungrouped backlog plans exist, skip this step silently.',
             '',
             'Note: epic creation updates the Switchboard board and writes a .switchboard/epics/ file. It does NOT sync to Linear/ClickUp.',
         ].join('\n');

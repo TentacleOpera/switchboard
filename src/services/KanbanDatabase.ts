@@ -590,7 +590,7 @@ ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     notion_page_id = excluded.notion_page_id,
     worktree_id = excluded.worktree_id,
     -- is_epic is STICKY via upsert: once 1, it can only be cleared by updateEpicStatus(planId, 0, '').
-    -- Callers pass `record.isEpic ?? 0` (literal 0, never NULL), so COALESCE(0, is_epic) clobbered epics.
+    -- Callers pass record.isEpic ?? 0 (literal 0, never NULL), so COALESCE(0, is_epic) clobbered epics.
     is_epic = CASE WHEN excluded.is_epic > 0 THEN excluded.is_epic ELSE plans.is_epic END,
     epic_id = CASE WHEN excluded.epic_id IS NOT NULL AND excluded.epic_id != '' THEN excluded.epic_id ELSE epic_id END,
     workspace_name = excluded.workspace_name,

@@ -15,6 +15,7 @@ export class WorkspaceExcludeService {
         '!.switchboard/CLIENT_CONFIG.md',
         '!.switchboard/README.md',
         '!.switchboard/SWITCHBOARD_PROTOCOL.md',
+        '!.switchboard/kanban-board.md',
         '',
         '# Notion page content cache',
         '.switchboard/notion-cache.md',
