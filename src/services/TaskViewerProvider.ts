@@ -928,6 +928,30 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 } catch (err) {
                     return { success: false, error: err instanceof Error ? err.message : String(err) };
                 }
+            },
+            createEpic: async (wsRoot, name, planIds, description) => {
+                // Route the create-epic.js script through the provider so it inherits
+                // the DB upsert, subtask linking, epic-file write, and board refresh.
+                if (!this._kanbanProvider) {
+                    return { success: false, error: 'Kanban provider not available' };
+                }
+                try {
+                    return await this._kanbanProvider.createEpicFromPlanIds(wsRoot, name, planIds, description);
+                } catch (err) {
+                    return { success: false, error: err instanceof Error ? err.message : String(err) };
+                }
+            },
+            assignToEpic: async (wsRoot, epicPlanId, planIds) => {
+                // Route the assign-to-epic.js script through the provider for batch
+                // subtask linking + a single board refresh.
+                if (!this._kanbanProvider) {
+                    return { success: false, assigned: [], skipped: [], error: 'Kanban provider not available' };
+                }
+                try {
+                    return await this._kanbanProvider.assignPlansToEpic(wsRoot, epicPlanId, planIds);
+                } catch (err) {
+                    return { success: false, assigned: [], skipped: [], error: err instanceof Error ? err.message : String(err) };
+                }
             }
         });
 

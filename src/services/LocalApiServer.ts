@@ -27,6 +27,29 @@ interface LocalApiServerOptions {
         targetColumn: string,
         planFile?: string
     ) => Promise<{ success: boolean; error?: string }>;
+    /**
+     * Create an epic from a set of subtask plan IDs through the running extension so
+     * the create inherits the DB upsert, subtask linking, epic-file write, and board
+     * refresh. Used by the kanban_operations create-epic.js script. Optional — absent
+     * in headless/test harnesses. Note: epic creation does NOT sync to Linear/ClickUp.
+     */
+    createEpic?: (
+        workspaceRoot: string,
+        name: string,
+        planIds: string[],
+        description?: string
+    ) => Promise<{ success: boolean; epicPlanId?: string; epicSessionId?: string; error?: string }>;
+    /**
+     * Batch-assign existing plans to an existing epic through the running extension.
+     * Used by the kanban_operations assign-to-epic.js script. Plans already on another
+     * epic (or that are themselves epics / missing) are reported in `skipped`, not
+     * treated as a failure. Optional — absent in headless/test harnesses.
+     */
+    assignToEpic?: (
+        workspaceRoot: string,
+        epicPlanId: string,
+        planIds: string[]
+    ) => Promise<{ success: boolean; assigned: string[]; skipped: string[]; error?: string }>;
 }
 
 export class LocalApiServer {
@@ -238,6 +261,105 @@ export class LocalApiServer {
             console.error('[LocalApiServer] kanbanMove error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'kanbanMove failed' }));
+        }
+    }
+
+    /**
+     * POST /kanban/epic — create an epic from a set of subtask plan IDs via the running
+     * extension (DB upsert + subtask linking + epic-file write + board refresh). Reached
+     * by the kanban_operations create-epic.js script. Epic creation does NOT sync to
+     * Linear/ClickUp. Body: { name: string, planIds: string[], workspaceRoot?: string, description?: string }.
+     */
+    private async _handleKanbanCreateEpic(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: 'Unauthorized',
+                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
+            }));
+            return;
+        }
+
+        const createEpic = this._options.createEpic;
+        if (!createEpic) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Epic creation not available' }));
+            return;
+        }
+
+        try {
+            const body = await this._parseJsonBody(req);
+            const name = String(body?.name || '').trim();
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const planIds = Array.isArray(body?.planIds) ? body.planIds.map((p: any) => String(p)) : null;
+            const description = body?.description ? String(body.description) : undefined;
+            if (!name) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required field: name' }));
+                return;
+            }
+            if (!planIds || planIds.length === 0) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'planIds must be a non-empty array' }));
+                return;
+            }
+
+            const result = await createEpic(workspaceRoot, name, planIds, description);
+            res.writeHead(result.success ? 200 : 502, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+        } catch (err) {
+            console.error('[LocalApiServer] kanbanCreateEpic error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'kanbanCreateEpic failed' }));
+        }
+    }
+
+    /**
+     * POST /kanban/epic/assign — batch-assign existing plans to an existing epic via the
+     * running extension. Reached by the kanban_operations assign-to-epic.js script. Plans
+     * already on another epic are reported in `skipped`, not treated as a failure.
+     * Body: { epicPlanId: string, planIds: string[], workspaceRoot?: string }.
+     */
+    private async _handleKanbanAssignEpic(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: 'Unauthorized',
+                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
+            }));
+            return;
+        }
+
+        const assignToEpic = this._options.assignToEpic;
+        if (!assignToEpic) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Epic assignment not available' }));
+            return;
+        }
+
+        try {
+            const body = await this._parseJsonBody(req);
+            const epicPlanId = String(body?.epicPlanId || '').trim();
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const planIds = Array.isArray(body?.planIds) ? body.planIds.map((p: any) => String(p)) : null;
+            if (!epicPlanId) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required field: epicPlanId' }));
+                return;
+            }
+            if (!planIds || planIds.length === 0) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'planIds must be a non-empty array' }));
+                return;
+            }
+
+            const result = await assignToEpic(workspaceRoot, epicPlanId, planIds);
+            res.writeHead(result.success ? 200 : 502, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+        } catch (err) {
+            console.error('[LocalApiServer] kanbanAssignEpic error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'kanbanAssignEpic failed' }));
         }
     }
 
@@ -841,6 +963,10 @@ export class LocalApiServer {
                 await this._handleUpdateClickUpTask(taskId, req, res);
             } else if (pathname === '/kanban/move' && req.method === 'POST') {
                 await this._handleKanbanMove(req, res);
+            } else if (pathname === '/kanban/epic' && req.method === 'POST') {
+                await this._handleKanbanCreateEpic(req, res);
+            } else if (pathname === '/kanban/epic/assign' && req.method === 'POST') {
+                await this._handleKanbanAssignEpic(req, res);
             } else if (pathname === '/comment' && req.method === 'POST') {
                 await this._handlePostComment(req, res);
             } else if (pathname === '/api/clickup' && req.method === 'POST') {

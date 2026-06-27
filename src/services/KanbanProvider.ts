@@ -7834,116 +7834,39 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             case 'createEpic': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) break;
-                const name = msg.name ? String(msg.name).trim() : '';
+                // Delegate to the shared public method so the webview path and the
+                // agent/API path (LocalApiServer → createEpicFromPlanIds) run identical
+                // logic. No upsert/link/file-write code lives here — it would double-execute.
                 const subtaskPlanIds = Array.isArray(msg.subtaskPlanIds) ? msg.subtaskPlanIds : [];
-                if (!name || subtaskPlanIds.length === 0) {
-                    vscode.window.showWarningMessage('Epic name and at least one subtask are required.');
+                const result = await this.createEpicFromPlanIds(
+                    workspaceRoot,
+                    msg.name ? String(msg.name) : '',
+                    subtaskPlanIds,
+                    msg.description ? String(msg.description) : undefined
+                );
+                if (!result.success) {
+                    vscode.window.showWarningMessage(result.error || 'Failed to create epic.');
+                }
+                break;
+            }
+            case 'suggestEpics': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                // Pre-coding columns are the only place loose plans worth grouping live.
+                // Exclude existing epics and already-assigned subtasks.
+                const preCodingColumns = ['CREATED', 'BACKLOG', 'CONTEXT GATHERER', 'PLAN REVIEWED'];
+                const candidateCards = this._lastCards.filter(card =>
+                    card.workspaceRoot === workspaceRoot &&
+                    preCodingColumns.includes(card.column) &&
+                    !card.isEpic && !card.epicId
+                );
+                if (candidateCards.length === 0) {
+                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'No loose pre-coding cards to group into epics.', isError: true });
                     break;
                 }
-                const db = this._getKanbanDb(workspaceRoot);
-                if (!db || !(await db.ensureReady())) break;
-                const subtasks: any[] = [];
-                for (const pid of subtaskPlanIds) {
-                    const plan = await db.getPlanByPlanId(pid);
-                    if (plan) subtasks.push(plan);
-                }
-                if (subtasks.length === 0) {
-                    vscode.window.showWarningMessage('No valid subtasks found for epic creation.');
-                    break;
-                }
-                // Inherit project from subtasks so the epic appears on the same project-filtered
-                // board as its children. Without this, the new epic record has project='' /
-                // project_id=NULL and is filtered off any project-specific board view — the
-                // epic card never appears, which is the reported "not appearing as epic" bug.
-                // promoteToEpic doesn't have this problem because it promotes an existing plan
-                // that already carries its project.
-                const epicProject = subtasks.find(st => st.project)?.project || '';
-                const epicProjectId = subtasks.find(st => st.projectId != null)?.projectId ?? null;
-                const customColumns = await this._getCustomKanbanColumns(workspaceRoot);
-                const columnDefs = await this._buildKanbanColumns([], customColumns);
-                const ordinalMap = new Map<string, number>();
-                columnDefs.forEach((def, idx) => ordinalMap.set(def.id, idx));
-                if (!ordinalMap.has('BACKLOG')) {
-                    ordinalMap.set('BACKLOG', -1);
-                }
-                const resolvedColumn = subtasks
-                     .map((st: any) => this._normalizeLegacyKanbanColumn(st.kanbanColumn))
-                     .filter((col: string | null): col is string => !!col)
-                     .sort((a: string, b: string) => (ordinalMap.get(a) ?? Infinity) - (ordinalMap.get(b) ?? Infinity))[0] || this._normalizeLegacyKanbanColumn(subtasks[0].kanbanColumn) || 'CREATED';
-                const effectiveColumn = resolvedColumn === 'BACKLOG' ? 'CREATED' : resolvedColumn;
-                console.log(`[KanbanProvider] createEpic: subtask columns = [${subtasks.map(st => st.kanbanColumn).join(', ')}], resolvedColumn=${resolvedColumn}, effectiveColumn=${effectiveColumn}`);
-                const planId = crypto.randomUUID();
-                const sessionId = crypto.randomUUID();
-                const workspaceId = await db.getWorkspaceId();
-                if (!workspaceId) {
-                    vscode.window.showWarningMessage('Workspace ID not found. Cannot create epic.');
-                    break;
-                }
-
-                const slug = (name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'epic');
-                const epicDir = path.join(workspaceRoot, '.switchboard', 'epics');
-                await fs.promises.mkdir(epicDir, { recursive: true });
-                // Embed the full planId in the filename so the link survives re-import:
-                // subtask→epic links are keyed on the epic's plan_id, and the watcher derives
-                // the plan_id back from this trailing UUID (see GlobalPlanWatcherService). A
-                // bare slug would let a re-import mint a fresh random id and orphan every subtask.
-                const epicPlanFile = path.join('.switchboard', 'epics', `${slug}-${planId}.md`);
-                const epicPath = path.join(workspaceRoot, epicPlanFile);
-
-                const now = new Date().toISOString();
-                const upsertOk = await db.upsertPlan({
-                    planId,
-                    sessionId,
-                    topic: name,
-                    planFile: epicPlanFile,
-                    kanbanColumn: effectiveColumn,
-                    status: 'active',
-                    complexity: 'Unknown',
-                    tags: '',
-                    repoScope: '',
-                    project: epicProject,
-                    workspaceId,
-                    createdAt: now,
-                    updatedAt: now,
-                    lastAction: '',
-                    sourceType: 'local',
-                    brainSourcePath: '',
-                    mirrorPath: '',
-                    routedTo: '',
-                    dispatchedAgent: '',
-                    dispatchedIde: '',
-                    isEpic: 1,
-                    epicId: '',
-                    projectId: epicProjectId
-                });
-
-                if (!upsertOk) {
-                    vscode.window.showErrorMessage('Failed to create epic: DB upsert failed. The epic file was not written.');
-                    break;
-                }
-
-                // Quote YAML values to prevent frontmatter breakage from names containing ---, :, etc.
-                const yamlSafeName = name.replace(/'/g, "''");
-                const yamlSafeDesc = (msg.description ? String(msg.description).trim() : '').replace(/'/g, "''");
-                const epicContent = `---\ndescription: '${yamlSafeName}'\n---\n\n# ${name}\n\n${msg.description ? String(msg.description).trim() : ''}`;
-
-                // Register before writing so the file watcher skips this file —
-                // the DB record is already committed above with is_epic=1.
-                GlobalPlanWatcherService.registerPendingCreation(epicPath);
-                await fs.promises.writeFile(epicPath, epicContent, 'utf8');
-                for (const st of subtasks) {
-                    // Use planId (not sessionId) — file-watcher-imported plans have session_id=''
-                    // and getPlanBySessionId('') would find an arbitrary other plan instead.
-                    await db.updateEpicStatus(st.planId || st.sessionId, 0, planId);
-                }
-                await this._regenerateEpicFile(workspaceRoot, planId, db);
-                // Re-assert is_epic=1 as the FINAL DB write before refresh — defensive hardening
-                // so any intermediate file-watcher/scan event that might touch the record leaves
-                // is_epic=1 as the last-write-wins state. (Plan Change 1)
-                await db.updateEpicStatus(planId, 1, '');
-                const verifyEpic = await db.getPlanByPlanId(planId);
-                console.log(`[KanbanProvider] createEpic: verify is_epic=${verifyEpic?.isEpic}, kanbanColumn=${verifyEpic?.kanbanColumn}, project=${verifyEpic?.project}, projectId=${(verifyEpic as any)?.projectId}, planFile=${verifyEpic?.planFile}, activeProjectFilter=${this._projectFilter}`);
-                await this._refreshBoard(workspaceRoot);
+                const prompt = this._buildSuggestEpicsPrompt(workspaceRoot);
+                await vscode.env.clipboard.writeText(prompt);
+                this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Suggest-epics prompt copied (${candidateCards.length} pre-coding card(s)). Paste into chat.`, isError: false });
                 break;
             }
             case 'removeSubtaskFromEpic': {
@@ -8451,5 +8374,216 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         }
         GlobalPlanWatcherService.registerPendingCreation(epicAbsPath);
         await fs.promises.writeFile(epicAbsPath, newContent, 'utf8');
+    }
+
+    /**
+     * Create an epic from a set of subtask plan IDs and link those subtasks to it.
+     * Shared entry point for BOTH the webview `createEpic` message and the agent/API
+     * path (LocalApiServer `/kanban/epic` → TaskViewerProvider → here). Mirrors the
+     * webview behaviour exactly: DB upsert + epic file write + subtask linking +
+     * board refresh. Does NOT sync to Linear/ClickUp — epic creation has never fanned
+     * out to external trackers, and `registerPendingCreation` makes the watcher skip
+     * the new file. Returns a result object instead of showing VS Code dialogs so the
+     * caller decides how to surface failures.
+     */
+    public async createEpicFromPlanIds(
+        workspaceRoot: string,
+        name: string,
+        planIds: string[],
+        description?: string
+    ): Promise<{ success: boolean; epicPlanId?: string; epicSessionId?: string; error?: string }> {
+        // Strip newlines so a multi-line name cannot inject a second YAML key or H1 heading.
+        const epicName = (name || '').replace(/[\r\n]+/g, ' ').trim();
+        const subtaskPlanIds = Array.isArray(planIds) ? planIds : [];
+        if (!epicName || subtaskPlanIds.length === 0) {
+            return { success: false, error: 'Epic name and at least one subtask are required.' };
+        }
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) {
+            return { success: false, error: 'Kanban database not available.' };
+        }
+        const subtasks: any[] = [];
+        for (const pid of subtaskPlanIds) {
+            const plan = await db.getPlanByPlanId(pid);
+            if (plan) subtasks.push(plan);
+        }
+        if (subtasks.length === 0) {
+            return { success: false, error: 'No valid subtasks found for epic creation.' };
+        }
+        // Inherit project from subtasks so the epic appears on the same project-filtered
+        // board as its children. Without this, the new epic record has project='' /
+        // project_id=NULL and is filtered off any project-specific board view — the
+        // epic card never appears, which is the reported "not appearing as epic" bug.
+        const epicProject = subtasks.find(st => st.project)?.project || '';
+        const epicProjectId = subtasks.find(st => st.projectId != null)?.projectId ?? null;
+        const customColumns = await this._getCustomKanbanColumns(workspaceRoot);
+        const columnDefs = await this._buildKanbanColumns([], customColumns);
+        const ordinalMap = new Map<string, number>();
+        columnDefs.forEach((def, idx) => ordinalMap.set(def.id, idx));
+        if (!ordinalMap.has('BACKLOG')) {
+            ordinalMap.set('BACKLOG', -1);
+        }
+        const resolvedColumn = subtasks
+             .map((st: any) => this._normalizeLegacyKanbanColumn(st.kanbanColumn))
+             .filter((col: string | null): col is string => !!col)
+             .sort((a: string, b: string) => (ordinalMap.get(a) ?? Infinity) - (ordinalMap.get(b) ?? Infinity))[0] || this._normalizeLegacyKanbanColumn(subtasks[0].kanbanColumn) || 'CREATED';
+        const effectiveColumn = resolvedColumn === 'BACKLOG' ? 'CREATED' : resolvedColumn;
+        console.log(`[KanbanProvider] createEpicFromPlanIds: subtask columns = [${subtasks.map(st => st.kanbanColumn).join(', ')}], resolvedColumn=${resolvedColumn}, effectiveColumn=${effectiveColumn}`);
+        const planId = crypto.randomUUID();
+        const sessionId = crypto.randomUUID();
+        const workspaceId = await db.getWorkspaceId();
+        if (!workspaceId) {
+            return { success: false, error: 'Workspace ID not found. Cannot create epic.' };
+        }
+
+        const slug = (epicName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'epic');
+        const epicDir = path.join(workspaceRoot, '.switchboard', 'epics');
+        await fs.promises.mkdir(epicDir, { recursive: true });
+        // Embed the full planId in the filename so the link survives re-import:
+        // subtask→epic links are keyed on the epic's plan_id, and the watcher derives
+        // the plan_id back from this trailing UUID (see GlobalPlanWatcherService). A
+        // bare slug would let a re-import mint a fresh random id and orphan every subtask.
+        const epicPlanFile = path.join('.switchboard', 'epics', `${slug}-${planId}.md`);
+        const epicPath = path.join(workspaceRoot, epicPlanFile);
+
+        const now = new Date().toISOString();
+        const upsertOk = await db.upsertPlan({
+            planId,
+            sessionId,
+            topic: epicName,
+            planFile: epicPlanFile,
+            kanbanColumn: effectiveColumn,
+            status: 'active',
+            complexity: 'Unknown',
+            tags: '',
+            repoScope: '',
+            project: epicProject,
+            workspaceId,
+            createdAt: now,
+            updatedAt: now,
+            lastAction: '',
+            sourceType: 'local',
+            brainSourcePath: '',
+            mirrorPath: '',
+            routedTo: '',
+            dispatchedAgent: '',
+            dispatchedIde: '',
+            isEpic: 1,
+            epicId: '',
+            projectId: epicProjectId
+        });
+
+        if (!upsertOk) {
+            return { success: false, error: 'Failed to create epic: DB upsert failed. The epic file was not written.' };
+        }
+
+        // Quote YAML values to prevent frontmatter breakage from names containing ---, :, etc.
+        const yamlSafeName = epicName.replace(/'/g, "''");
+        const epicDesc = (description ? String(description).replace(/[\r\n]+/g, ' ').trim() : '');
+        const epicContent = `---\ndescription: '${yamlSafeName}'\n---\n\n# ${epicName}\n\n${epicDesc}`;
+
+        // Register before writing so the file watcher skips this file —
+        // the DB record is already committed above with is_epic=1.
+        GlobalPlanWatcherService.registerPendingCreation(epicPath);
+        await fs.promises.writeFile(epicPath, epicContent, 'utf8');
+        for (const st of subtasks) {
+            // Use planId (not sessionId) — file-watcher-imported plans have session_id=''
+            // and getPlanBySessionId('') would find an arbitrary other plan instead.
+            await db.updateEpicStatus(st.planId || st.sessionId, 0, planId);
+        }
+        await this._regenerateEpicFile(workspaceRoot, planId, db);
+        // Re-assert is_epic=1 as the FINAL DB write before refresh — defensive hardening
+        // so any intermediate file-watcher/scan event that might touch the record leaves
+        // is_epic=1 as the last-write-wins state.
+        await db.updateEpicStatus(planId, 1, '');
+        const verifyEpic = await db.getPlanByPlanId(planId);
+        console.log(`[KanbanProvider] createEpicFromPlanIds: verify is_epic=${verifyEpic?.isEpic}, kanbanColumn=${verifyEpic?.kanbanColumn}, project=${verifyEpic?.project}, projectId=${(verifyEpic as any)?.projectId}, planFile=${verifyEpic?.planFile}, activeProjectFilter=${this._projectFilter}`);
+        await this._refreshBoard(workspaceRoot);
+        return { success: true, epicPlanId: planId, epicSessionId: sessionId };
+    }
+
+    /**
+     * Batch-assign existing plans to an existing epic. Batch form of the single-card
+     * `addSubtaskToEpic` webview handler — but where that handler aborts on the first
+     * already-assigned plan, this one skips-and-reports so one bad id doesn't sink the
+     * whole batch. Re-checks each plan's `epicId` immediately before writing to narrow
+     * (not eliminate) the check-then-act race with concurrent webview edits. Honors the
+     * same `epic_lock_columns` guard, evaluated once up-front for the whole batch.
+     * Regenerates the epic file + refreshes the board ONCE after the loop.
+     */
+    public async assignPlansToEpic(
+        workspaceRoot: string,
+        epicPlanId: string,
+        planIds: string[]
+    ): Promise<{ success: boolean; assigned: string[]; skipped: string[]; error?: string }> {
+        const ids = Array.isArray(planIds) ? planIds : [];
+        if (!epicPlanId) {
+            return { success: false, assigned: [], skipped: [], error: 'Epic planId is required.' };
+        }
+        if (ids.length === 0) {
+            return { success: false, assigned: [], skipped: [], error: 'No planIds provided.' };
+        }
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) {
+            return { success: false, assigned: [], skipped: [], error: 'Kanban database not available.' };
+        }
+        const epic = await db.getPlanByPlanId(epicPlanId);
+        if (!epic || !epic.isEpic) {
+            return { success: false, assigned: [], skipped: [], error: 'Epic not found.' };
+        }
+        const lockColumnsRaw = await db.getConfig('epic_lock_columns');
+        const lockColumns = (lockColumnsRaw || 'IN PROGRESS,CODE REVIEW,REVIEWED,DONE').split(',').map((c: string) => c.trim());
+        if (lockColumns.includes(epic.kanbanColumn)) {
+            return { success: false, assigned: [], skipped: [], error: 'Cannot modify subtasks of an epic in a locked column.' };
+        }
+        const assigned: string[] = [];
+        const skipped: string[] = [];
+        for (const pid of ids) {
+            const subtask = await db.getPlanByPlanId(pid);
+            // Skip-and-report: missing, itself an epic, or already on a different epic.
+            if (!subtask || subtask.isEpic) { skipped.push(pid); continue; }
+            if (subtask.epicId && subtask.epicId !== epic.planId) { skipped.push(pid); continue; }
+            await db.updateEpicStatus(subtask.planId, 0, epic.planId);
+            assigned.push(pid);
+        }
+        if (assigned.length > 0) {
+            await this._regenerateEpicFile(workspaceRoot, epic.planId, db);
+            await this._refreshBoard(workspaceRoot);
+        }
+        return { success: true, assigned, skipped };
+    }
+
+    /**
+     * Build the clipboard prompt for the "Suggest Epics" board button. Instructs the
+     * agent to scan pre-coding columns, propose ALL groupings at once for one approval,
+     * then run create-epic.js per approved group. Copied to the clipboard (host-agnostic,
+     * matching the CHAT PROMPT button) rather than auto-dispatched to a terminal.
+     */
+    private _buildSuggestEpicsPrompt(workspaceRoot: string): string {
+        return [
+            'You are grouping loose Switchboard plans into epics. Follow this flow exactly — do not create any epic before the user approves.',
+            '',
+            '1. SCAN. Read the board state:',
+            '   ```bash',
+            `   node .agents/skills/kanban_operations/get-state.js "${workspaceRoot}"`,
+            '   ```',
+            '   Look only at the pre-coding columns: CREATED, BACKLOG, CONTEXT GATHERER, PLAN REVIEWED.',
+            '   Ignore cards that are already epics or already assigned to an epic (they carry an epicId).',
+            '',
+            '2. PROPOSE. In a SINGLE chat message, propose every epic grouping at once. For each group give:',
+            '   - a short epic name',
+            '   - the member plans by topic, with their `planId` (NOT sessionId — watcher-imported plans have an empty sessionId)',
+            '   Leave genuinely standalone plans ungrouped and say so. Then stop and wait.',
+            '',
+            '3. CONFIRM. Let the user approve or edit the groupings in one reply. Do not touch anything until they do.',
+            '',
+            '4. EXECUTE. After approval, run once per approved group (no further confirmation):',
+            '   ```bash',
+            `   node .agents/skills/kanban_operations/create-epic.js "<epic name>" '["planId1","planId2"]' "${workspaceRoot}"`,
+            '   ```',
+            '   To add more plans to an epic later, use assign-to-epic.js with the epic planId from the create-epic.js output.',
+            '',
+            'Note: epic creation updates the Switchboard board and writes a .switchboard/epics/ file. It does NOT sync to Linear/ClickUp.',
+        ].join('\n');
     }
 }
