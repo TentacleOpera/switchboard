@@ -230,6 +230,80 @@
     const activeEpicNameSpan = document.getElementById('active-epic-name');
     const btnDisableEpic = document.getElementById('btn-disable-epic');
 
+    // Intercept clicks on <a> tags inside the rendered epic markdown preview.
+    // Subtask links in the auto-generated "## Subtasks" section are rendered as
+    // <a href="../plans/basename.md" data-href="../plans/basename.md"> by VS Code's
+    // markdown renderer (markdown.api.render). In the sandboxed webview these do
+    // nothing — we resolve them and load the subtask into the preview pane,
+    // mirroring the sidebar subtask-link behavior.
+    //
+    // NOTE: This listener is attached once (delegation). It is NOT re-attached on
+    // each render — innerHTML replacement preserves the container's event listeners.
+    // NOTE: Path resolution assumes forward-slash paths, which is guaranteed by the
+    // DB planFile format (.switchboard/epics/<file>).
+    // NOTE: Read getAttribute('data-href') first (pre-normalization value), then
+    // fall back to getAttribute('href'). Never use the .href DOM property — it
+    // resolves to an absolute CDN URL and loses the relative form (VS Code PR #228633).
+    // NOTE: decodeURIComponent is needed because markdown-it's normalizeLink
+    // percent-encodes special characters (e.g., spaces → %20).
+    if (epicsPreviewContent) {
+        epicsPreviewContent.addEventListener('click', (e) => {
+            const anchor = e.target.closest('a');
+            if (!anchor) return;
+            // Prefer data-href (pre-normalization) over href; both are byte-identical
+            // for bare relative paths, but data-href is more defensively correct.
+            const rawHref = anchor.getAttribute('data-href') || anchor.getAttribute('href') || '';
+            if (!rawHref) return;
+
+            // Decode percent-encoded characters (e.g., %20 → space) before processing.
+            let href;
+            try {
+                href = decodeURIComponent(rawHref);
+            } catch {
+                href = rawHref; // malformed URI sequence — use raw value as fallback
+            }
+
+            // Only intercept links to local .md files (plan files).
+            // External URLs (http://, https://, mailto:, #anchors) are left alone.
+            if (!href.endsWith('.md')) return;
+            if (/^(https?:|mailto:|tel:|#)/i.test(href)) return;
+
+            e.preventDefault();
+
+            // Resolve the relative href against the directory of the currently-
+            // displayed file. The epic lives at .switchboard/epics/<file>, so
+            // ../plans/foo.md resolves to .switchboard/plans/foo.md.
+            const basePath = _epicPreviewFilePath || (_epicSelectedPlan && _epicSelectedPlan.planFile) || '';
+            if (!basePath) {
+                showToast('Cannot resolve subtask link — no file context.', 'error');
+                return;
+            }
+
+            const baseDir = basePath.includes('/') ? basePath.substring(0, basePath.lastIndexOf('/')) : '';
+            // Normalize the joined path: split on /, process .. and . segments.
+            const segments = (baseDir + '/' + href).split('/');
+            const resolved = [];
+            for (const seg of segments) {
+                if (seg === '..') resolved.pop();
+                else if (seg !== '.' && seg !== '') resolved.push(seg);
+            }
+            const resolvedPath = resolved.join('/');
+
+            if (state.editMode.epics) exitEditMode('epics');
+            _epicPreviewFilePath = resolvedPath;
+            epicsPreviewContent.innerHTML = '<div class="kanban-empty-state">Loading preview...</div>';
+            vscode.postMessage({
+                type: 'fetchKanbanPlanPreview',
+                filePath: resolvedPath,
+                requestId: ++_kanbanPreviewRequestId
+            });
+            // Hide the Edit button while a subtask is previewed (not the epic itself).
+            const btnEdit = document.getElementById('btn-edit-epics');
+            if (btnEdit) btnEdit.style.display = 'none';
+        });
+    }
+
+
     const btnBuildViaPlanner = document.getElementById('btn-build-via-planner');
     const btnCopyBuildPrompt = document.getElementById('btn-copy-build-prompt');
     const btnUpdateViaPlanner = document.getElementById('btn-update-via-planner');

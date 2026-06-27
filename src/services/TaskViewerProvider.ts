@@ -918,11 +918,23 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     return { success: false, error: 'Kanban provider not available' };
                 }
                 try {
-                    const moved = await this._kanbanProvider.moveCardToColumn(wsRoot, sessionId, targetColumn);
-                    if (moved && planFile) {
+                    let targetSessionId = sessionId;
+                    let targetPlanFile = planFile;
+                    if (sessionId.includes('/') || sessionId.endsWith('.md')) {
+                        targetPlanFile = sessionId;
                         const db = await this._getKanbanDb(wsRoot);
                         if (db && await db.ensureReady()) {
-                            await db.updatePlanFile(sessionId, planFile);
+                            const plan = await db.getPlanByPlanFile(sessionId, wsRoot);
+                            if (plan) {
+                                targetSessionId = plan.sessionId || plan.planId;
+                            }
+                        }
+                    }
+                    const moved = await this._kanbanProvider.moveCardToColumn(wsRoot, targetSessionId, targetColumn);
+                    if (moved && targetPlanFile) {
+                        const db = await this._getKanbanDb(wsRoot);
+                        if (db && await db.ensureReady()) {
+                            await db.updatePlanFile(targetSessionId, targetPlanFile);
                         }
                     }
                     return { success: moved, error: moved ? undefined : 'Column update failed' };

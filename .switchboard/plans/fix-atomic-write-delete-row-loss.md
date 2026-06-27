@@ -1,10 +1,12 @@
-# Fix: Atomic-Write DELETE Event Permanently Drops the Plan/Epic Row (Root-Cause Race Fix)
+# Fix: Atomic-Write DELETE Event Permanently Drops the Plan/Epic Row (Definitive Symptom Fix + Safety Net)
 
 ## Goal
 
-Close the **root-cause** atomic-write race in `GlobalPlanWatcherService` that the two `is_epic`/`kanban_column` plans only patched symptomatically. When an epic or plan file is saved by any tool that writes atomically (temp file + rename — the `write` tool, agents, and most editors do this), a spurious DELETE event can win the debounce-ordering and **permanently remove the DB row** until the next manual scan or panel reopen. The card simply vanishes from the board.
+Close the atomic-write race in `GlobalPlanWatcherService` that the two `is_epic`/`kanban_column` plans only patched symptomatically. When an epic or plan file is saved by any tool that writes atomically (temp file + rename — the `write` tool, agents, and most editors do this), a spurious DELETE event can win the debounce-ordering and **permanently remove the DB row** until the next manual scan or panel reopen. The card simply vanishes from the board.
 
 This is the residual risk flagged by the 2026-06-28 reviewer pass on `fix-create-epic-not-setting-is-epic.md` (remaining risk #1). The sibling plans close the *common* interleaving (delete-before-insert, where `is_epic`/`kanban_column` are re-asserted after re-INSERT). This plan closes the *reverse* interleaving (delete-after-insert) and the broader "row disappears entirely" failure, by making the DELETE handler verify the file is actually gone before destroying its row.
+
+**Framing clarification (from adversarial review):** This is the **definitive symptom fix** — it makes the permanent-row-loss failure impossible by guarding the destructive path. The *true* root cause (divergent debounce keys for CREATE vs DELETE that fail to coalesce) is explicitly scoped out as future work (see Adversarial Synthesis). This guard is a general safety net that covers all callers of `_handlePlanDelete`, not a redesign of the debounce-key architecture.
 
 ### Root Cause
 
@@ -38,7 +40,7 @@ Checking existence *at event time* (as the native watcher does) is necessary but
 ## Metadata
 
 **Complexity:** 2
-**Tags:** bugfix, backend, reliability, file-watcher
+**Tags:** bugfix, backend, reliability
 
 ## User Review Required
 
@@ -53,7 +55,7 @@ None. The correct behavior is unambiguous: a DELETE event for a path that still 
 
 ### Complex / Risky
 - The guard runs in an async hot path; `fs.existsSync` is a synchronous syscall. One stat per delete event is negligible and matches the existing synchronous-existence checks in this same file, but it is technically a sync call inside an `async` method (acceptable, consistent with local convention).
-- TOCTOU window: the file can be deleted in the instant *after* the existence check. Mitigated below (self-heals via a subsequent delete event / next scan).
+- TOCTOU window: the file can be deleted in the instant *after* the existence check. Bounded staleness — the stale row lingers until the next `triggerScan` (up to 10s via `_scanIntervalMs`) or panel reopen, not instant self-healing. Acceptable for a delete-skip path.
 - This does NOT redesign the divergent debounce keys (create vs delete). That coalescing redesign is a larger behavioral change and is explicitly scoped out (see Adversarial Synthesis).
 
 ## Edge-Case & Dependency Audit
@@ -63,7 +65,7 @@ None. The correct behavior is unambiguous: a DELETE event for a path that still 
 - *Genuine delete* — file is gone → `fs.existsSync` is `false` → delete proceeds exactly as today. ✅ No regression.
 - *Delete-then-recreate within 300 ms* (the delete debounce coalesces to one run): by execution time the file exists again → skip → correct (the plan still exists).
 - *Create-then-delete within 300 ms*: by delete-execution time the file is gone → delete proceeds. A racing `_handlePlanFile` that tries to re-import reads the now-missing file (`fs.promises.readFile`, line 517) and throws → caught by the outer try/catch → no phantom row is inserted. ✅
-- *TOCTOU (exists at check, deleted immediately after)*: the delete is skipped this cycle, leaving the row briefly stale; a real deletion fires another DELETE event (file now gone) which removes it, and `triggerScan` reconciles on next panel open. Self-healing; bounded staleness.
+- *TOCTOU (exists at check, deleted immediately after)*: the delete is skipped this cycle, leaving the row briefly stale (up to 10s — the `_scanIntervalMs` interval — until the next `triggerScan` reconciles, or panel reopen). Bounded staleness, not instant self-healing; acceptable for a delete-skip path where the alternative is permanent row loss.
 
 **Security**
 - None. `uri.fsPath` is derived from the watched `.switchboard/{plans,epics}/**/*.md` pattern; no untrusted input reaches the check. `fs.existsSync` on a path already constrained to the workspace subtree introduces no new surface.
@@ -85,11 +87,7 @@ None. The correct behavior is unambiguous: a DELETE event for a path that still 
 
 ## Adversarial Synthesis
 
-Key risks and mitigations:
-- **"Skipping deletes will leak rows for files that are actually gone."** No — the guard skips only when the file *currently exists*; a genuine delete leaves the file absent and proceeds unchanged. The TOCTOU window self-heals via a follow-up delete event / next scan.
-- **"Why not fix the divergent debounce keys so create cancels delete?"** Considered and rejected for this plan: coalescing create/delete onto one key is a larger behavioral change (a real delete arriving just after a change could be silently cancelled, and ordering semantics across the VS Code + native watchers would need re-derivation). The `fs.existsSync` guard is surgical, matches the native watcher's existing intent, and fully resolves the reported "card disappears" symptom. The coalescing redesign is noted as possible future work, not adopted here.
-- **"Check at the VS Code `onDidDelete` callback instead."** Wrong location: at event-dispatch time the atomic rename may not have completed yet, so the file could legitimately be absent for a few ms. The post-debounce point inside `_handlePlanDelete` is the only place where the rename is guaranteed to have landed. Centralizing there also covers both watcher paths.
-- **Residual:** the guard does not eliminate the brief inconsistency window during a genuine rapid delete+recreate; it bounds it and prevents the permanent-row-loss outcome.
+Key risks: (1) TOCTOU after the existence check leaves a stale row for up to 10s (`_scanIntervalMs`) — bounded staleness, acceptable vs. permanent row loss; (2) this is a definitive *symptom* fix (safety net on the destructive path), not a root-cause redesign of the divergent CREATE/DELETE debounce keys, which is explicitly scoped out as future work; (3) `fs.existsSync` is a sync syscall in an async method — consistent with the 11 existing `existsSync` calls in this file and negligible given 300ms debounce coalescing. Mitigations: the guard is surgical, idempotent, covers both watcher paths, and makes the reported "card disappears" failure impossible without touching DB/cascade/migration logic.
 
 ## Proposed Changes
 

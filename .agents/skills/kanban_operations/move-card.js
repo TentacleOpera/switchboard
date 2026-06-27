@@ -19,14 +19,19 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 
-const sessionId = process.argv[2];
+const effectiveKey = process.argv[2];
 const targetColumn = process.argv[3];
 const optionalPlanFile = process.argv[4];
 const workspaceRoot = process.argv[5] || '.';
 
-if (!sessionId || !targetColumn) {
-  console.error('Usage: node move-card.js <session_id> <target_column> [plan_file] [workspace_root]');
+if (!effectiveKey || !targetColumn) {
+  console.error('Usage: node move-card.js <session_id|plan_id|plan_file> <target_column> [plan_file] [workspace_root]');
   process.exit(1);
+}
+
+let resolvedPlanFile = optionalPlanFile;
+if (effectiveKey && (effectiveKey.includes('/') || effectiveKey.endsWith('.md'))) {
+  resolvedPlanFile = effectiveKey;
 }
 
 // ── Discover the running extension's API server: walk up for the port file. ──
@@ -90,10 +95,10 @@ async function tryViaExtension() {
 
   try {
     const move = await httpJson('POST', port, '/kanban/move', {
-      sessionId,
+      sessionId: effectiveKey,
       targetColumn,
       workspaceRoot,
-      planFile: optionalPlanFile || undefined
+      planFile: resolvedPlanFile || undefined
     }, 15000);
     let parsed = {};
     try { parsed = JSON.parse(move.body); } catch { /* non-JSON body */ }
@@ -120,19 +125,26 @@ async function viaDirectDb() {
   const db = KanbanDatabase.forWorkspace(workspaceRoot);
   await db.ensureReady();
 
-  const plan = await db.getPlanBySessionId(sessionId);
+  let plan;
+  if (resolvedPlanFile) {
+    plan = await db.getPlanByPlanFile(resolvedPlanFile, workspaceRoot);
+  } else {
+    plan = await db.getPlanBySessionId(effectiveKey);
+  }
+
   let columnSuccess;
   if (plan && plan.isEpic) {
-    const subtasks = await db.getSubtasksByEpicId(plan.planId);
-    const subtaskSessionIds = subtasks.map(st => st.sessionId).filter(Boolean);
-    columnSuccess = await db.updateColumnWithEpicCascade(sessionId, subtaskSessionIds, targetColumn);
+    const cascadeFn = db.cascadeEpicByPlanId || db.updateColumnWithEpicCascadeByPlanId;
+    columnSuccess = await cascadeFn.call(db, plan.planId, targetColumn);
+  } else if (plan) {
+    columnSuccess = await db.updateColumnByPlanFile(plan.planFile, plan.workspaceId, targetColumn);
   } else {
-    columnSuccess = await db.updateColumn(sessionId, targetColumn);
+    columnSuccess = await db.updateColumn(effectiveKey, targetColumn);
   }
 
   let planFileSuccess = true;
-  if (optionalPlanFile) {
-    planFileSuccess = await db.updatePlanFile(sessionId, optionalPlanFile);
+  if (resolvedPlanFile) {
+    planFileSuccess = await db.updatePlanFile(plan ? plan.sessionId : effectiveKey, resolvedPlanFile);
   }
 
   if (typeof db.close === 'function') db.close();

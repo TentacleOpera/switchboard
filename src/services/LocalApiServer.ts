@@ -232,7 +232,7 @@ export class LocalApiServer {
      * board refresh. Reached by the kanban_operations fallback script over the
      * bridge; the script's direct-DB path cannot sync to external trackers because
      * the integration token lives in VS Code secret storage.
-     * Body: { sessionId: string, targetColumn: string, workspaceRoot?: string, planFile?: string }.
+     * Body: { sessionId?: string, planId?: string, targetColumn: string, workspaceRoot?: string, planFile?: string }.
      */
     private async _handleKanbanMove(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
@@ -254,16 +254,18 @@ export class LocalApiServer {
         try {
             const body = await this._parseJsonBody(req);
             const sessionId = String(body?.sessionId || '').trim();
+            const planId = String(body?.planId || '').trim();
+            const effectiveKey = sessionId || planId;
             const targetColumn = String(body?.targetColumn || '').trim();
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
             const planFile = body?.planFile ? String(body.planFile).trim() : undefined;
-            if (!sessionId || !targetColumn) {
+            if (!effectiveKey || !targetColumn) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Missing required fields: sessionId and targetColumn' }));
+                res.end(JSON.stringify({ error: 'Missing required fields: sessionId/planId and targetColumn' }));
                 return;
             }
 
-            const result = await moveCard(workspaceRoot, sessionId, targetColumn, planFile);
+            const result = await moveCard(workspaceRoot, effectiveKey, targetColumn, planFile);
             res.writeHead(result.success ? 200 : 502, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(result));
         } catch (err) {

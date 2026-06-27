@@ -103,7 +103,7 @@ export class NotionBackupService {
         const localByPlanId = new Map(localPlans.map(p => [p.planId, p]));
 
         const toRestore: KanbanPlanRecord[] = [];
-        const columnUpdates: Array<{ sessionId: string; column: string }> = [];
+        const columnUpdates: Array<{ sessionId: string; planId: string; column: string }> = [];
         let skipped = 0;
 
         for (let i = 0; i < notionPages.length; i++) {
@@ -127,7 +127,7 @@ export class NotionBackupService {
                 plan.dispatchedIde = local.dispatchedIde;
                 // Track column change to update separately
                 if (local.kanbanColumn !== plan.kanbanColumn) {
-                    columnUpdates.push({ sessionId: plan.sessionId, column: plan.kanbanColumn });
+                    columnUpdates.push({ sessionId: plan.sessionId, planId: plan.planId, column: plan.kanbanColumn });
                 }
             }
             toRestore.push(plan);
@@ -139,6 +139,16 @@ export class NotionBackupService {
         }
         for (const { sessionId, column } of columnUpdates) {
             await kanbanDb.updateColumn(sessionId, column);
+        }
+
+        // Post-restore: cascade epic column (and status) to subtasks.
+        for (const { planId, column } of columnUpdates) {
+            if (!planId) continue;
+            const epic = await kanbanDb.getPlanByPlanId(planId);
+            if (epic && epic.isEpic) {
+                const targetStatus = epic.status === 'completed' ? 'completed' : undefined;
+                await kanbanDb.cascadeEpicByPlanId(epic.planId, column, targetStatus, true);
+            }
         }
 
         config.lastRestoreAt = new Date().toISOString();

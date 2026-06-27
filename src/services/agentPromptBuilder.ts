@@ -1110,15 +1110,11 @@ After creating both files:
 
 Automated actions (execute these yourself):
 1. For each new file (both the complex original and the _routine.md companion), immediately after creation:
-   a. Read workspace config:
-      WORKSPACE_ID=$(head -n 1 .switchboard/workspace-id)
-      DB_PATH=$(head -n 2 .switchboard/workspace-id | tail -n 1)
-      [ -z "$DB_PATH" ] && DB_PATH=".switchboard/kanban.db"
-   b. Run SQL UPDATE + verification in a single command (workspace-root-relative path, e.g. .switchboard/plans/my_plan_routine.md):
-      sqlite3 "$DB_PATH" "UPDATE plans SET kanban_column = 'PLAN REVIEWED' WHERE plan_file = '<relative_path>' AND workspace_id = '$WORKSPACE_ID'; UPDATE plans SET kanban_column = 'PLAN REVIEWED' WHERE epic_id = (SELECT plan_id FROM plans WHERE plan_file = '<relative_path>' AND workspace_id = '$WORKSPACE_ID') AND status = 'active'; SELECT total_changes();"
-      - total_changes() returns the sum of BOTH updates (the plan's own move + any cascaded subtasks), so:
-      - If output is 0: the file may not be registered yet; notify the user to manually drag the card to the Planned column
-      - If output is >= 1: success (the plan moved; if it is an epic, its active subtasks moved too)
+   a. Run the kanban_operations move-card script (pass the workspace-root-relative path, e.g. .switchboard/plans/my_plan_routine.md):
+      node .agents/skills/kanban_operations/move-card.js "<relative_path>" "PLAN REVIEWED" "" "$(pwd)"
+   b. Verify output:
+      - If the output is "OK": success.
+      - If the output is "FAILED": the file may not be registered yet; notify the user to manually drag the card to the Planned column.
 
 Manual actions (instruct the USER to perform):
 2. Manually drag the original file (Complex) to the Lead Coder column
@@ -1136,15 +1132,11 @@ After creating both files:
 
 Automated actions (execute these yourself):
 1. For each new file (both the complex original and the _routine.md companion), immediately after creation:
-   a. Read workspace config:
-      WORKSPACE_ID=$(head -n 1 .switchboard/workspace-id)
-      DB_PATH=$(head -n 2 .switchboard/workspace-id | tail -n 1)
-      [ -z "$DB_PATH" ] && DB_PATH=".switchboard/kanban.db"
-   b. Run SQL UPDATE + verification in a single command (workspace-root-relative path, e.g. .switchboard/plans/my_plan_routine.md):
-      sqlite3 "$DB_PATH" "UPDATE plans SET kanban_column = 'PLAN REVIEWED' WHERE plan_file = '<relative_path>' AND workspace_id = '$WORKSPACE_ID'; UPDATE plans SET kanban_column = 'PLAN REVIEWED' WHERE epic_id = (SELECT plan_id FROM plans WHERE plan_file = '<relative_path>' AND workspace_id = '$WORKSPACE_ID') AND status = 'active'; SELECT total_changes();"
-      - total_changes() returns the sum of BOTH updates (the plan's own move + any cascaded subtasks), so:
-      - If output is 0: the file may not be registered yet; notify the user to manually drag the card to the Planned column
-      - If output is >= 1: success (the plan moved; if it is an epic, its active subtasks moved too)
+   a. Run the kanban_operations move-card script (pass the workspace-root-relative path, e.g. .switchboard/plans/my_plan_routine.md):
+      node .agents/skills/kanban_operations/move-card.js "<relative_path>" "PLAN REVIEWED" "" "$(pwd)"
+   b. Verify output:
+      - If the output is "OK": success.
+      - If the output is "FAILED": the file may not be registered yet; notify the user to manually drag the card to the Planned column.
 
 Manual actions (instruct the USER to perform):
 2. Manually drag the original file (Complex) to the Lead Coder column

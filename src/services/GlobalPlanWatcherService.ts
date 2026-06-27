@@ -682,6 +682,22 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
 
     private async _handlePlanDelete(uri: vscode.Uri, workspaceRoot: string): Promise<void> {
         try {
+            // Atomic-write guard. External tools (the write tool, agents, most editors) save
+            // via temp-file + rename, which fires a DELETE event for the target path even though
+            // the rename immediately recreated it. The VS Code FileSystemWatcher's onDidDelete
+            // (unlike the native fs.watch path) does not re-check the filesystem, and the create
+            // vs delete debounce timers are separately keyed so they do not coalesce — so without
+            // this guard a spurious delete can win the ordering and hard-delete the row for a file
+            // that still exists, racing a concurrent _handlePlanFile re-insert. Checked here, AFTER
+            // the 300ms debounce, so the rename has definitely landed (an event-time check, as the
+            // native watcher does at line 419-425, can fire mid-rename).
+            if (fs.existsSync(uri.fsPath)) {
+                this._outputChannel?.appendLine(
+                    `[GlobalPlanWatcher] Skipping delete; file still exists (atomic write/rename): ${uri.fsPath}`
+                );
+                return;
+            }
+
             const db = KanbanDatabase.forWorkspace(workspaceRoot);
             await db.ensureReady();
             

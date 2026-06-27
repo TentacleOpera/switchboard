@@ -3570,18 +3570,19 @@ sqlite3 "${db.dbPath}" "SELECT plan_file, kanban_column, status FROM plans WHERE
 
 ---
 
-**IMPORTANT: After completing the coding work for these plans, update the kanban database to move them to the next column.**
+**IMPORTANT: After completing the coding work for these plans, move each plan to the next column.**
 
-Run the following command (uses the sqlite3 CLI — it must be installed):
+Run the following command (uses the kanban_operations skill to route through the extension/DB with proper cascades and syncs):
 
-\`\`\`bash
-sqlite3 "${db.dbPath}" "UPDATE plans SET kanban_column = '${resolvedNextColumn}', updated_at = datetime('now') WHERE plan_id IN (${batchPlans.map(p => `'${p.planId}'`).join(', ')}) AND workspace_id = '${workspaceId}'; UPDATE plans SET kanban_column = '${resolvedNextColumn}', updated_at = datetime('now') WHERE epic_id IN (${batchPlans.map(p => `'${p.planId}'`).join(', ')}) AND status = 'active' AND workspace_id = '${workspaceId}'; SELECT total_changes();"
-\`\`\`
+```bash
+for plan_id in ${batchPlans.map(p => `'${p.planId}'`).join(' ')}; do
+    node .agents/skills/kanban_operations/move-card.js "$plan_id" "${resolvedNextColumn}" "" "${workspaceRoot}"
+done
+```
 
-Verify that the output is at least the number of plans moved (total_changes() sums BOTH the plan moves and any cascaded epic subtasks, so it is >= the batch size when any plan is an epic). If it is \`0\`, no rows matched — check that the plan_ids and workspace_id are correct.
+Verify that the output for each plan is `OK`. If the output is `FAILED`, the extension may not be running or compiled. Check the logs or notify the user to move the card manually.
 
-Database: \`${db.dbPath}\`
-Target column: \`${resolvedNextColumn}\`
+Target column: `${resolvedNextColumn}`
 
 This step is what moves the plans forward in the Switchboard pipeline.
 `;
@@ -3613,22 +3614,17 @@ sqlite3 "${db.dbPath}" "SELECT plan_file, kanban_column, status FROM plans WHERE
 
 ---
 
-**IMPORTANT: After completing the coding work for this plan, update the kanban database to move it to the next column.**
+**IMPORTANT: After completing the coding work for this plan, move it to the next column.**
 
-Run the following command (uses the sqlite3 CLI — it must be installed):
+Run the following command (uses the kanban_operations skill to route through the extension/DB with proper cascades and syncs):
 
-\`\`\`bash
-sqlite3 "${db.dbPath}" "UPDATE plans SET kanban_column = '${resolvedNextColumn}', updated_at = datetime('now') WHERE plan_file = '${oldestPlan.planFile}' AND workspace_id = '${workspaceId}'; UPDATE plans SET kanban_column = '${resolvedNextColumn}', updated_at = datetime('now') WHERE epic_id = (SELECT plan_id FROM plans WHERE plan_file = '${oldestPlan.planFile}' AND workspace_id = '${workspaceId}') AND status = 'active'; SELECT total_changes();"
-\`\`\`
+```bash
+node .agents/skills/kanban_operations/move-card.js "${oldestPlan.planId}" "${resolvedNextColumn}" "" "${workspaceRoot}"
+```
 
-Verify that the output is \`>= 1\` (total_changes() sums BOTH the plan's own move and any cascaded epic subtasks, so an epic with subtasks reports more than 1). If it is \`0\`, the plan_file path may not match — check the DB with:
+Verify that the output is `OK`. If the output is `FAILED`, the extension may not be running or compiled. Check the logs or notify the user to move the card manually.
 
-\`\`\`bash
-sqlite3 "${db.dbPath}" "SELECT plan_file, kanban_column FROM plans WHERE workspace_id = '${workspaceId}';"
-\`\`\`
-
-Database: \`${db.dbPath}\`
-Target column: \`${resolvedNextColumn}\`
+Target column: `${resolvedNextColumn}`
 
 This step is what moves the plan forward in the Switchboard pipeline.
 `;
@@ -8751,7 +8747,10 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
 
         // Quote YAML values to prevent frontmatter breakage from names containing ---, :, etc.
         const yamlSafeName = epicName.replace(/'/g, "''");
-        const epicDesc = (description ? String(description).replace(/[\r\n]+/g, ' ').trim() : '');
+        // The description lives in the markdown body under ## Goal (after the closed
+        // frontmatter block), so newlines are safe and preserve the agent's multi-line
+        // goal formatting. Only normalize CRLF and trim — no flattening.
+        const epicDesc = (description ? String(description).replace(/\r\n/g, '\n').trim() : '');
         const goalSection = epicDesc ? `## Goal\n\n${epicDesc}\n` : '';
         const epicContent = `---\ndescription: '${yamlSafeName}'\n---\n\n# ${epicName}\n\n${goalSection}`;
 
@@ -8879,8 +8878,8 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             '5. EXECUTE',
             '   For each approved group, pass the Goal text as the description argument.',
             '   Escape any double quotes in the Goal text (replace " with \") or rephrase to',
-            '   avoid them, so the bash command does not break. Also avoid $ and backticks',
-            '   in the Goal text — these are shell metacharacters inside double quotes.',
+            '   avoid them, so the bash command does not break. Also avoid $, backticks, and',
+            '   backslashes in the Goal text — these are shell metacharacters inside double quotes.',
             '   ```bash',
             `   node .agents/skills/kanban_operations/create-epic.js "<epic name>" '["planId1","planId2",...]' "${workspaceRoot}" "<goal text with escaped quotes>"`,
             '   ```',
