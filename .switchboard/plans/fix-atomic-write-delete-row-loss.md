@@ -138,3 +138,48 @@ No other code changes. The existing `_recentRenames` check (line 692) and comple
 - Delete then immediately re-save a plan within ~300 ms → the plan remains (delete skipped because the file exists at execution time).
 - Check the output channel: an atomic write should log `Skipping delete; file still exists (atomic write/rename): …`; a real delete should log `Deleted plan: …`.
 - DB check after an atomic-write edit: `SELECT plan_id, is_epic, kanban_column FROM plans WHERE plan_id = '<epic_id>'` — the row exists and is unchanged.
+
+## Reviewer Pass (2026-06-28)
+
+### Stage 1 — Adversarial Findings
+
+| Severity | Finding | Location |
+|----------|---------|----------|
+| NIT | Redundant double-check on native watcher path (event-time guard at line 420 + new execution-time guard). Defense-in-depth, strictly more correct. Plan explicitly calls this intentional. | `GlobalPlanWatcherService.ts:694` vs `:420` |
+| NIT | Line references in comment ("line 419-425") will rot with future edits. Pre-existing convention; comment is descriptive enough to survive. | `GlobalPlanWatcherService.ts:692` |
+| NIT | TOCTOU window: file deleted in the instant after `existsSync` returns true → stale row until next `triggerScan` (≤10s). Bounded staleness vs. permanent loss — acceptable. Plan documents this explicitly. | `GlobalPlanWatcherService.ts:694` |
+
+No CRITICAL findings. No MAJOR findings.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is:** The `fs.existsSync` guard, the skip-path log line, and the explanatory comment block. All correct, surgical, consistent with file conventions.
+
+**Fix now:** Nothing — no CRITICAL/MAJOR findings to fix.
+
+**Defer (explicitly scoped out):** Redesigning the divergent CREATE/DELETE debounce keys to coalesce (the true root cause). The guard is a definitive safety net that makes the symptom impossible regardless of debounce ordering.
+
+### Claim Verification (all confirmed against source)
+
+1. Divergent debounce keys: `_debounceHandleFile` keys on `uri.fsPath` (line 439), `_debounceHandleDelete` keys on `delete:${uri.fsPath}` (line 451). ✅
+2. VS Code `onDidDelete` routes unconditionally to `_debounceHandleDelete` (line 382-385), no existence check. ✅
+3. `deletePlanByPlanFile` is a hard `DELETE FROM plans` (`KanbanDatabase.ts:1900-1906`). ✅
+4. `fs` imported (line 4), `existsSync` is the existing idiom (11+ calls). ✅
+5. `_handlePlanDelete` has exactly one caller (debounce timer, line 457) — guard covers the entire call surface. ✅
+
+### Files Changed
+
+- `src/services/GlobalPlanWatcherService.ts` — +16 lines, 0 removed. Exactly the guard specified in Proposed Changes. No other files touched by this plan (other files in commit 0f81f7c are concurrent unrelated work).
+
+### Validation Results
+
+- **Diff inspection:** 16-line addition matches plan verbatim. ✅
+- **Call-graph inspection:** Single caller confirmed; guard covers full surface. ✅
+- **Regression analysis:** Genuine deletes (file absent at execution time) proceed unchanged. `_recentRenames` fast-path and completed-plan skip remain intact below the guard. ✅
+- **Compilation/tests:** Deferred to user per review instructions.
+
+### Remaining Risks
+
+1. **TOCTOU staleness (NIT, accepted):** A file deleted immediately after the `existsSync` check leaves a stale row for ≤10s until the next `triggerScan`. Bounded, self-healing, strictly better than permanent row loss.
+2. **Debounce-key divergence (deferred):** The CREATE and DELETE timers still use different keys and do not coalesce. Both still fire for atomic writes. The guard makes the destructive path safe, but the underlying architectural divergence remains as future work.
+3. **Platform event reliability:** Assumes both DELETE and CREATE/CHANGE events fire for an atomic rename. If a platform fires only DELETE (pathological), the guard skips the delete and the row stays with old content until the next 10s scan — bounded staleness, not permanent loss.
