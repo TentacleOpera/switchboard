@@ -472,24 +472,26 @@
         return baseTag + html;
     }
 
-    let _resizeRafToken = null;
+    const _resizeRafTokens = new WeakMap();
     function notifyIframeResize(iframe, wrapperEl) {
         if (!iframe) return;
-        if (_resizeRafToken) cancelAnimationFrame(_resizeRafToken);
-        _resizeRafToken = requestAnimationFrame(() => {
-            _resizeRafToken = null;
+        const prev = _resizeRafTokens.get(iframe);
+        if (prev) cancelAnimationFrame(prev);
+        const token = requestAnimationFrame(() => {
+            _resizeRafTokens.delete(iframe);
             if (wrapperEl && wrapperEl.style.display === 'none') return;
             if (!iframe.contentWindow) return;
-            try {
-                requestAnimationFrame(() => {
-                    if (wrapperEl && wrapperEl.style.display === 'none') return;
-                    if (!iframe.contentWindow) return;
+            requestAnimationFrame(() => {
+                if (wrapperEl && wrapperEl.style.display === 'none') return;
+                if (!iframe.contentWindow) return;
+                try {
                     iframe.contentWindow.dispatchEvent(new Event('resize'));
-                });
-            } catch (e) {
-                // cross-origin wrapper check / dispatch security catch
-            }
+                } catch (e) {
+                    // cross-origin dispatch guard
+                }
+            });
         });
+        _resizeRafTokens.set(iframe, token);
     }
 
     function getCurrentFolderPaths(folderPathsByRoot, filterRoot) {

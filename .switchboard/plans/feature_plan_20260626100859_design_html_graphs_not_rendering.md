@@ -317,3 +317,45 @@ window.addEventListener('resize', () => {
 ---
 
 **Recommendation:** Complexity 4 → **Send to Coder**.
+
+---
+
+## Reviewer Pass (2026-06-28)
+
+### Stage 1 — Adversarial Findings
+
+| # | Severity | File:Line | Finding |
+|---|----------|-----------|---------|
+| 1 | CRITICAL | `design.js:475-493` (pre-fix) | Single module-level `_resizeRafToken` shared across both iframes. The window-resize forwarder (Change 4) calls `notifyIframeResize` twice back-to-back; the second call cancels the first's rAF. Only the claude iframe receives a resize dispatch on webview resize; the html iframe's dispatch is silently dropped. The plan's "one dispatch per frame" was actually a cross-iframe suppressor. |
+| 2 | MAJOR | `design.js:483-491` (pre-fix) | `try/catch` wrapped the synchronous `requestAnimationFrame()` call, not the async `dispatchEvent` inside the rAF callback. The cross-origin guard was structurally dead — a SecurityError from `contentWindow.dispatchEvent` would propagate as an uncaught rAF exception, never entering the catch. Stated safety mechanism was broken code. |
+| 3 | NIT | `design.js:484-488` (pre-fix) | Inner rAF not token-tracked; rapid calls can stack inner rAFs after the outer fires and clears the token. Safe due to visibility re-check, but debounce guarantee is only half-kept. |
+| 4 | NIT | `design.js:1228,1243,1291,1306` | `onload` listener with `{ once: true }` added per render; if `src`/`srcdoc` is replaced before `load` fires, a stale listener fires on the new load (extra no-op resize). Bounded by `{ once: true }`, harmless. |
+| 5 | NIT | `design.js:384-387` | MutationObserver only watches the wrapper's own `style`/`class`. If a parent container's display toggles without changing the wrapper's attributes, the observer won't fire. Call-site dispatches (Change 2) cover the initial-load case. |
+
+### Stage 2 — Balanced Synthesis
+
+- **Fix now:** Findings 1 and 2 — both in the `notifyIframeResize` helper, fixable in one edit.
+- **Keep:** All four call-site dispatches + `onload` fallback (Change 2) correctly placed in all four render paths (claude src/srcdoc, html-folder src/srcdoc). MutationObserver setup (Change 3) correctly structured with dual-wrapper coverage. TOCTOU visibility re-check inside rAF is correct.
+- **Defer:** Findings 3, 4, 5 — low impact, safe due to existing guards.
+
+### Fixes Applied
+
+**File: `src/webview/design.js` (lines 475-495)**
+
+Replaced the single `_resizeRafToken` with a per-iframe `WeakMap` (`_resizeRafTokens`) keyed by the iframe element. Each iframe now has its own independent debounce gate — concurrent calls for different iframes no longer clobber each other. The window-resize forwarder now correctly dispatches to both iframes.
+
+Moved the `try/catch` inside the inner rAF callback, wrapping `iframe.contentWindow.dispatchEvent(new Event('resize'))`. The cross-origin guard now actually catches SecurityErrors thrown during the async dispatch.
+
+### Verification
+
+- **Compilation:** Skipped per session directive.
+- **Automated tests:** Skipped per session directive.
+- **Static verification:** Confirmed no stale references to `_resizeRafToken` remain. All 12 `notifyIframeResize` call sites intact (1 definition + 1 observer + 2 window-resize + 8 render-path calls). `const _resizeRafTokens` TDZ is safe — `notifyIframeResize` is only invoked at runtime after module evaluation. Function hoisting makes `notifyIframeResize` available at observer/forwarder sites defined earlier in the file.
+- **Manual verification:** Pending user VSIX install + test (per Verification Plan steps 1-10).
+
+### Remaining Risks
+
+1. **(NIT 3)** Inner rAF untracked — rapid calls can stack inner dispatches. Safe due to visibility re-check. No fix needed.
+2. **(NIT 4)** Stale `onload` listener on rapid re-render — bounded by `{ once: true }`, extra no-op resize at worst. No fix needed.
+3. **(NIT 5)** MutationObserver scope limited to wrapper attributes — parent-container visibility toggles won't trigger observer. Call-site dispatches cover initial load. If tab-switch mechanics are found to toggle a parent rather than the wrapper, observer scope would need widening. Verify during manual testing (step 4).
+4. **Charts without resize listeners** (e.g., some D3 setups) still won't redraw on visibility change. Out of scope — resize dispatch is the minimal safe fix; reloading `srcdoc` was explicitly rejected due to script re-execution side effects.

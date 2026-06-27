@@ -142,3 +142,52 @@ Add a `_regenerateEpicFile` call after every successful column change that can a
 ## Recommendation
 
 Complexity 4 → **Send to Coder.** The template change is trivial, but the column-move regeneration wiring across multiple call sites is the kind of coordinated, multi-site edit that benefits from a Coder's attention to correctly resolving the epicId at each site.
+
+---
+
+## Reviewer Pass — Completed
+
+### Review Date
+2026-06-28
+
+### Implementation Status: COMPLETE — all plan requirements met
+
+#### Files Changed (committed in `352fad9` "epic fixes")
+- `src/services/KanbanProvider.ts` — template change at `_regenerateEpicFile` (L8629-8630) + 16 regeneration call sites across `moveCardToColumn`, `moveCardToColumnByPlanFile`, `completePlan`, `completeSelected`, `completeAll`, `uncompleteCard` (+ rollback), `sendToLead/copyPrompt`.
+
+#### Change A — Template (verified)
+`KanbanProvider.ts:8629-8630` — verbatim match to plan spec:
+```typescript
+const column = this._normalizeLegacyKanbanColumn(st.kanbanColumn) || 'CREATED';
+return `- [ ] [${topic}](../plans/${basename}) — **${column}**`;
+```
+Em-dash confirmed as U+2014 (`e2 80 94`). Normalization via `_normalizeLegacyKanbanColumn` (L2010) handles `CODED`→`LEAD CODED`.
+
+#### Change B — Regeneration on column moves (verified)
+All 8 `cascadeEpicByPlanId` calls followed by `_regenerateEpicFile`. All 9 `db.updateColumn`/`updateColumnByPlanFile` calls (except epic-recompute at L4777, which only changes the epic's own column — non-issue) followed by conditional `_regenerateEpicFile` based on `isEpic`/`epicId`. Drag-and-drop path routes through `_updateKanbanColumnForSession` → `moveCardToColumn` (regenerates). All `await`ed (not fire-and-forget).
+
+#### Consumer Compatibility (verified)
+No regex parser of the `## Subtasks` block exists in `src/`. `TaskViewerProvider.ts:18561` checks heading line-equality only. `project.js:249` click-interceptor operates on rendered `<a>` tags (badge is outside link). Epic-prompt generator (`KanbanProvider.ts:3126`) reads subtasks from DB, not file. Non-breaking.
+
+### Findings by Severity
+
+| Severity | Finding | Location | Status |
+|----------|---------|----------|--------|
+| CRITICAL | *(none)* | — | — |
+| MAJOR | *(none)* | — | — |
+| NIT | No-provider fallback skips regeneration | `TaskViewerProvider.ts:2265-2275`, `11652-11659`, `14083-14090` | Documented — degenerate state (`_kanbanProvider` null), not fix-worthy |
+| NIT | NotionBackupService restore skips regeneration | `NotionBackupService.ts:140-152` | Documented — out of plan scope, rare operation |
+| NIT | Redundant `\|\| 'CREATED'` fallback | `KanbanProvider.ts:8629` | Plan-acknowledged, harmless, matches convention |
+
+### Fixes Applied
+None — implementation matches plan exactly. No CRITICAL or MAJOR findings to fix.
+
+### Verification Results
+- **Typecheck**: Skipped per session directive (SKIP COMPILATION). Types verified by inspection: `st.kanbanColumn` is `string` (KanbanPlanRecord L36), `_normalizeLegacyKanbanColumn` accepts `string | null | undefined`, template interpolation is type-safe.
+- **Tests**: Skipped per session directive (SKIP TESTS). User to run `src/services/__tests__/KanbanProvider.test.ts` separately.
+- **Code inspection**: All 16 regeneration sites verified present and correctly guarded by `isEpic`/`epicId` checks. All `cascadeEpicByPlanId` calls followed by regeneration.
+
+### Remaining Risks
+1. **No-provider fallback paths** (3 sites in TaskViewerProvider): When `_kanbanProvider` is null, column changes bypass epic-file regeneration. Degenerate state only — `_kanbanProvider` is always set in production. Badge drift self-corrects on next normal column move.
+2. **NotionBackupService restore**: Bulk column restore from Notion backup does not regenerate epic files. All epic badges stale after restore until next column move. Fix would require threading KanbanProvider into NotionBackupService — defer to separate plan if reported.
+3. **Concurrent column moves on same epic**: Two simultaneous drag-and-drops on subtasks of the same epic could interleave read-modify-write cycles in `_regenerateEpicFile` and lose one update. Low probability (user-driven, sequential) and self-correcting. No transactional change needed (per plan's race-condition audit).
