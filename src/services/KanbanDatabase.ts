@@ -3817,56 +3817,6 @@ export class KanbanDatabase {
         return this._readRows(stmt);
     }
 
-    /** @deprecated session_id-keyed; no live callers (moveCardToColumnByPlanFile now uses updateColumnWithEpicCascadeByPlanId). File-based subtasks have session_id='' so this no-ops for them. */
-    public async updateColumnTransaction(sessionIds: string[], targetColumn: string): Promise<boolean> {
-        if (!(await this.ensureReady()) || !this._db) return false;
-        if (sessionIds.length === 0) return true;
-        const now = new Date().toISOString();
-        const placeholders = sessionIds.map(() => '?').join(',');
-        try {
-            this._db.run('BEGIN');
-            this._db.run(
-                `UPDATE plans SET kanban_column = ?, updated_at = ? WHERE session_id IN (${placeholders})`,
-                [targetColumn, now, ...sessionIds]
-            );
-            this._db.run('COMMIT');
-            await this._persist();
-            return true;
-        } catch (err) {
-            try { this._db.run('ROLLBACK'); } catch { /* ignore */ }
-            console.error('[KanbanDatabase] updateColumnTransaction failed:', err);
-            return false;
-        }
-    }
-
-    /** Move an epic and all its subtasks to a target column atomically. */
-    public async updateColumnWithEpicCascade(epicSessionId: string, subtaskSessionIds: string[], targetColumn: string): Promise<boolean> {
-        if (!(await this.ensureReady()) || !this._db) return false;
-        const now = new Date().toISOString();
-        try {
-            this._db.run('BEGIN');
-            // Move the epic itself
-            this._db.run(
-                `UPDATE plans SET kanban_column = ?, updated_at = ? WHERE session_id = ?`,
-                [targetColumn, now, epicSessionId]
-            );
-            // Move all subtasks
-            if (subtaskSessionIds.length > 0) {
-                const placeholders = subtaskSessionIds.map(() => '?').join(',');
-                this._db.run(
-                    `UPDATE plans SET kanban_column = ?, updated_at = ? WHERE session_id IN (${placeholders})`,
-                    [targetColumn, now, ...subtaskSessionIds]
-                );
-            }
-            this._db.run('COMMIT');
-            await this._persist();
-            return true;
-        } catch (err) {
-            try { this._db.run('ROLLBACK'); } catch { /* ignore */ }
-            console.error('[KanbanDatabase] updateColumnWithEpicCascade failed:', err);
-            return false;
-        }
-    }
 
     /**
      * Move an epic and all its subtasks to a target column atomically, keyed by plan_id.

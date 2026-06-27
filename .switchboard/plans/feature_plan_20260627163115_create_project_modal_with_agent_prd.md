@@ -6,38 +6,53 @@
 The "Create Project" button (`#btn-add-project`) in `kanban.html` currently posts an `addProject` message to `KanbanProvider.ts`, which handles it by calling `vscode.window.showInputBox()` — a native VS Code popup that only accepts a plain project name. This is inconsistent with the premium in-webview modal UX used elsewhere in the kanban board (e.g. Testing Fail Modal, Routing Map Modal, Integration Settings Modal, Custom Agent Modal). More critically, there is no option during project creation to have an agent auto-generate a PRD that would appear in the `project.html` Projects tab's PRD editor.
 
 ### Root Cause
-1. **`KanbanProvider.ts` line 5322**: The `addProject` case uses `vscode.window.showInputBox()` — a minimal VS Code native input — instead of rendering an in-webview modal with richer fields.
-2. **No PRD generation flow exists**: The per-project PRD system (stored at `.switchboard/projects/<slug>/prd.md`, managed via `prdUtils.ts`) only supports manual editing in `project.html`'s textarea. There is no "Generate PRD" trigger that dispatches to an agent.
+1. **`KanbanProvider.ts` line 5316–5335**: The `addProject` case uses `vscode.window.showInputBox()` (line 5319) — a minimal VS Code native input — instead of rendering an in-webview modal with richer fields.
+2. **No PRD generation flow exists**: The per-project PRD system (stored at `.switchboard/projects/<slug>/prd.md`, managed via `prdUtils.ts`) only supports manual editing in `project.html`'s textarea. There is no "Generate PRD" trigger that produces a prompt the user can paste into an agent.
 
 ### What Success Looks Like
 - Clicking the `+` button next to the project dropdown opens a styled in-webview modal (matching existing modal patterns in `kanban.html`).
-- The modal contains: project name input, optional project description textarea, and a "Generate PRD with Agent" checkbox/button.
-- On submit, the project is created in the database AND, if the user opted in, a PRD generation task is dispatched to an agent terminal, with the resulting PRD saved to `.switchboard/projects/<slug>/prd.md` and visible in the Projects tab.
+- The modal contains: project name input, optional project description textarea, and a "Copy PRD Prompt" button.
+- On submit, the project is created in the database.
+- The "Copy PRD Prompt" button copies a ready-to-paste PRD-generation prompt to the clipboard (matching the established kanban copy-prompt pattern used 20+ times in `KanbanProvider.ts`). The user pastes it into their agent of choice (Claude, Cursor, etc.); the agent writes the PRD to `.switchboard/projects/<slug>/prd.md`, which the Projects tab picks up on demand via the existing `getProjectPrd` handler.
+- Duplicate project names are detected and reported to the user via a status message (the DB silently returns `false` on duplicates today — this plan fixes that gap).
 
 ## Metadata
-- **Tags**: `kanban`, `project`, `modal`, `prd`, `ux`, `agent-dispatch`
-- **Complexity**: 7/10
+- **Tags:** `frontend`, `ui`, `ux`, `feature`
+- **Complexity:** 4/10
+
+## User Review Required
+- [ ] Confirm the "Copy PRD Prompt" button approach (copy-to-clipboard) is preferred over auto-dispatching to a terminal. This plan adopts copy-to-clipboard per user directive; the original auto-dispatch design was rejected as over-engineered and dependent on a terminal-dispatch API that does not match the codebase.
+- [ ] Confirm the PRD prompt content/sections (see Component 3) match expectations.
 
 ## Complexity Audit
 
-| Aspect | Classification | Rationale |
-|--------|----------------|-----------|
-| Modal HTML/CSS | Routine | Kanban.html has 5+ modal patterns to copy (Testing Fail, Routing Map, Integration Settings, Custom Agent, etc.) — all use `.modal-overlay` / `.modal-content` / `.modal-header` / `.modal-body` / `.modal-footer` structure |
-| Frontend JS (webview) | Routine | Button click → show modal → gather inputs → `postKanbanMessage()`. Pattern is identical to testing-fail-modal flow |
-| Backend handler refactor | Routine | Replace `showInputBox()` with webview message handling. Same pattern as every other modal in KanbanProvider |
-| Agent PRD dispatch | **Complex/Risky** | No existing "generate PRD" flow exists. Must compose a prompt, find/create a terminal, send the prompt, and wire a watcher to pick up the resulting `prd.md` file. Needs to integrate with the existing prompt dispatch system and terminal rotation logic |
-| PRD file watcher | Moderate | `prdUtils.ts` already knows the path convention. The Projects tab in `project.js` already handles `projectPrdContent` messages. May need a file watcher or a one-shot read-after-dispatch |
-| Cross-panel sync | Moderate | After PRD generation, the Projects tab in `project.html` must reflect the new content. The `allWorkspaceProjects` cache invalidation + refresh already exists (line 5332) |
+### Routine
+- Modal HTML structure — `kanban.html` has 5+ modal patterns to copy (Testing Fail at line 3018, Routing Map at 3038, Integration Settings at 3074, Kanban Column at 3107, Epic Create at 3130). All use `.modal-overlay` / `.modal-content` / `.modal-header` / `.modal-body` / `.modal-footer` structure.
+- All required CSS classes already exist and are Claudify-aware: `.modal-overlay`, `.modal-content`, `.modal-header`, `.modal-body`, `.modal-footer`, `.modal-input` (line 1577), `.modal-textarea` (line 1487), `.modal-label` (line 1553), `.checkbox-label` (line 1563), `.modal-btn-primary`, `.modal-btn-secondary`. **No new CSS needed.**
+- Frontend JS — button click → show modal → gather inputs → `postKanbanMessage()`. Pattern is identical to every other modal in `kanban.html`. `postKanbanMessage` helper exists at line 3920; `currentWorkspaceRoot` variable exists at line 3770.
+- Backend handler refactor — replace `showInputBox()` with reading `msg.projectName` from the webview payload. Same pattern as every other modal handler in `KanbanProvider.ts`.
+- Copy-prompt to clipboard — `vscode.env.clipboard.writeText(prompt)` + `showStatusMessage` is the established pattern, used 20+ times in `KanbanProvider.ts` (e.g. line 730, 6018, 6078, 7961). The webview already handles `showStatusMessage` with `{message, isError}` payload at line 6006–6028.
+- PRD path resolution — `getProjectPrdPath(workspaceRoot, projectName)` exists in `prdUtils.ts` (line 33) and returns `path.join(workspaceRoot, '.switchboard', 'projects', slug, 'prd.md')`. Already imported/required in `KanbanProvider.ts` (line 2884) and `PlanningPanelProvider.ts` (line 32).
+
+### Complex / Risky
+- None. The original "Complex/Risky" item (agent terminal dispatch) is removed by the copy-to-clipboard approach. The remaining work is localized, pattern-reusing, and single-session.
 
 ## Edge-Case & Dependency Audit
 
-1. **Empty project name**: Validate client-side before enabling submit button (mirror the `showInputBox` `validateInput` logic).
-2. **Duplicate project name**: The DB `addProject()` method should handle this — verify it doesn't throw but instead shows a user-friendly error.
-3. **Agent PRD dispatch without registered terminals**: If no planner/coder terminals are registered, the "Generate PRD" option must be disabled or show a warning. Check `_terminalAgentInfo` availability.
-4. **Workspace context**: The modal must respect the currently selected workspace from the dropdown (`workspace-project-select`), same as the current `addProject` handler does.
-5. **Claudify theme**: All new modal elements must work with both Afterburner (teal) and Claudify (terracotta) themes. The existing `.modal-*` CSS classes already have Claudify overrides.
-6. **Long-running PRD generation**: The modal should close immediately after dispatching; a status message or sub-bar notification should indicate PRD generation is in progress.
-7. **PRD generation prompt**: Must include project name, optional description, and workspace context to produce a useful PRD. Should reference the existing PRD template format used in `project.html`.
+1. **Empty project name**: Validate client-side before enabling the submit button (mirrors the current `showInputBox` `validateInput` logic). Submit button is `disabled` until `nameInput.value.trim()` is non-empty.
+2. **Duplicate project name**: `KanbanDatabase.addProject()` (line 2259–2271) catches the UNIQUE-constraint error and returns `false` — it does **not** throw. The current handler ignores this return value (silent no-op bug). **Fix:** the rewritten handler must check the boolean return and post a `showStatusMessage` error ("Project '{name}' may already exist") when `addProject` returns `false`.
+3. **Clipboard API availability**: `vscode.env.clipboard.writeText` runs in the extension host (not the webview sandbox) and is a stable VS Code API used 20+ times in this file. No availability risk.
+4. **Workspace context**: The modal must respect the currently selected workspace from the dropdown (`workspace-project-select`), same as the current `addProject` handler does (line 3793–3795 reads `selectedOption?.dataset?.workspaceRoot`). The modal stores this in `modal.dataset.workspaceRoot`.
+5. **Claudify theme**: All new modal elements use existing `.modal-*` CSS classes which already have Claudify (terracotta) overrides (see lines 50, 1578, 1591). No theme-specific work.
+6. **PRD prompt built with correct absolute path**: The prompt must tell the agent the exact `prd.md` path so the file lands where the Projects tab expects it. Use `getProjectPrdPath(workspaceRoot, projectName)` server-side — do **not** duplicate the slug logic in the webview.
+7. **Cross-panel PRD visibility**: No file watcher is needed. `PlanningPanelProvider` handles `getProjectPrd` (line 3586–3608) by reading `prd.md` on demand when the user selects the project in the Projects tab and posts `projectPrdContent` to `project.js` (handled at line 347). After the agent writes the file, the user simply opens/selects the project in the Projects tab and the PRD content appears.
+8. **Copy PRD Prompt without creating the project first**: The "Copy PRD Prompt" button is independent of "Create Project" — it builds the prompt from the current name/description inputs without requiring the project to exist in the DB. This is fine because the PRD path is name-derived (not DB-keyed); the agent writes to the path regardless. The user may copy the prompt before or after creating the project.
+
+## Dependencies
+- None — this plan is self-contained and reuses only existing, verified APIs.
+
+## Adversarial Synthesis
+Key risks: (1) the original plan invented a terminal-dispatch API (`getRegisteredTerminals`/`sendTextToTerminal`) that does not exist on `TaskViewerProvider` — resolved by switching to the established `vscode.env.clipboard.writeText` copy-prompt pattern; (2) `KanbanDatabase.addProject()` silently returns `false` on duplicate names and the current handler ignores it — the rewritten handler must check the return value and report duplicates via `showStatusMessage`; (3) the original status-message helper used the wrong message type (`statusMessage`/`text` vs the verified `showStatusMessage`/`{message, isError}`) and is redundant given 28 existing inline uses — deleted. Mitigations: all three are fixed in the Proposed Changes below by reusing verified patterns and adding the missing return-value check.
 
 ## Proposed Changes
 
@@ -47,7 +62,9 @@ The "Create Project" button (`#btn-add-project`) in `kanban.html` currently post
 
 #### [MODIFY] [kanban.html](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/webview/kanban.html)
 
-**Add a new "Create Project" modal** after the existing modals (near line 3074, after the integration-settings-modal). Use the established `.modal-overlay` / `.modal-content` pattern.
+**Add a new "Create Project" modal after the `integration-settings-modal` closes (line 3104) and before the `<!-- Kanban Column Modal -->` comment (line 3106).** Use the established `.modal-overlay` / `.modal-content` pattern.
+
+> **Insertion point:** Insert immediately after line 3104 (the closing `</div>` of `integration-settings-modal`) and before the blank line + `<!-- Kanban Column Modal -->` at line 3106. Do **not** insert at line 3074 — that is the *opening* tag of the integration-settings modal and would nest the new modal inside it.
 
 ```html
 <!-- Create Project Modal -->
@@ -59,26 +76,25 @@ The "Create Project" button (`#btn-add-project`) in `kanban.html` currently post
         </div>
         <div class="modal-body">
             <label class="modal-label" for="create-project-name">Project name</label>
-            <input id="create-project-name" class="modal-input" type="text" 
+            <input id="create-project-name" class="modal-input" type="text"
                    placeholder="e.g. frontend, backend, infrastructure"
                    autocomplete="off">
             <label class="modal-label" for="create-project-description">Description (optional — used as context for PRD generation)</label>
             <textarea id="create-project-description" class="modal-textarea" rows="4"
                       placeholder="Brief description of the project's purpose, target users, key features..."></textarea>
-            <label class="checkbox-label">
-                <input type="checkbox" id="create-project-generate-prd">
-                Generate PRD with agent — the PRD will appear in the Projects tab
-            </label>
         </div>
         <div class="modal-footer">
             <button class="modal-btn modal-btn-secondary" id="create-project-cancel">Cancel</button>
+            <button class="modal-btn modal-btn-secondary" id="create-project-copy-prd" disabled>Copy PRD Prompt</button>
             <button class="modal-btn modal-btn-primary" id="create-project-submit" disabled>Create Project</button>
         </div>
     </div>
 </div>
 ```
 
-**No new CSS needed** — all classes (`.modal-overlay`, `.modal-content`, `.modal-header`, `.modal-body`, `.modal-footer`, `.modal-input`, `.modal-textarea`, `.modal-label`, `.checkbox-label`, `.modal-btn-primary`, `.modal-btn-secondary`) already exist and are Claudify-aware.
+**No new CSS needed** — all classes (`.modal-overlay`, `.modal-content`, `.modal-header`, `.modal-body`, `.modal-footer`, `.modal-input`, `.modal-textarea`, `.modal-label`, `.modal-btn-primary`, `.modal-btn-secondary`) already exist and are Claudify-aware.
+
+> **Design note (per user directive):** The original plan used a "Generate PRD with Agent" checkbox that auto-dispatched a prompt to a terminal. That approach was rejected as over-engineered and dependent on a non-existent terminal-dispatch API. Replaced with a "Copy PRD Prompt" button that copies a ready-to-paste prompt to the clipboard — matching the established kanban copy-prompt pattern (see `KanbanProvider.ts` lines 730, 6018, 6078, 7961).
 
 ---
 
@@ -89,20 +105,20 @@ The "Create Project" button (`#btn-add-project`) in `kanban.html` currently post
 **Replace the existing `btnAddProject` click handler** (lines 3792–3797) to open the modal instead of posting a message directly:
 
 ```javascript
-// REPLACE the existing handler:
+// REPLACE the existing handler (lines 3792-3797):
 btnAddProject?.addEventListener('click', () => {
     const select = document.getElementById('workspace-project-select');
     const selectedOption = select?.selectedOptions?.[0];
     const workspaceRoot = selectedOption?.dataset?.workspaceRoot || currentWorkspaceRoot;
-    
-    // Store workspace root for the modal submit handler
+
+    // Store workspace root for the modal handlers
     const modal = document.getElementById('create-project-modal');
     if (modal) {
         modal.dataset.workspaceRoot = workspaceRoot;
         document.getElementById('create-project-name').value = '';
         document.getElementById('create-project-description').value = '';
-        document.getElementById('create-project-generate-prd').checked = false;
         document.getElementById('create-project-submit').disabled = true;
+        document.getElementById('create-project-copy-prd').disabled = true;
         modal.classList.remove('hidden');
         document.getElementById('create-project-name').focus();
     }
@@ -117,72 +133,92 @@ btnAddProject?.addEventListener('click', () => {
     const modal = document.getElementById('create-project-modal');
     const nameInput = document.getElementById('create-project-name');
     const descInput = document.getElementById('create-project-description');
-    const generatePrdCheckbox = document.getElementById('create-project-generate-prd');
     const submitBtn = document.getElementById('create-project-submit');
+    const copyPrdBtn = document.getElementById('create-project-copy-prd');
     const cancelBtn = document.getElementById('create-project-cancel');
     const closeBtn = document.getElementById('create-project-close');
-    
+
     if (!modal || !nameInput || !submitBtn) return;
-    
+
     function closeModal() {
         modal.classList.add('hidden');
     }
-    
-    // Enable submit only when name is non-empty
+
+    // Enable submit + copy-prd only when name is non-empty
     nameInput.addEventListener('input', () => {
-        submitBtn.disabled = !nameInput.value.trim();
+        const valid = !!nameInput.value.trim();
+        submitBtn.disabled = !valid;
+        copyPrdBtn.disabled = !valid;
     });
-    
+
     // Enter key submits if name is valid
     nameInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && nameInput.value.trim()) {
             submitBtn.click();
         }
     });
-    
+
     // Escape closes
     modal.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') closeModal();
     });
-    
+
     // Close buttons
     cancelBtn?.addEventListener('click', closeModal);
     closeBtn?.addEventListener('click', closeModal);
-    
+
     // Backdrop click closes
     modal.addEventListener('click', (e) => {
         if (e.target === modal) closeModal();
     });
-    
-    // Submit
+
+    // Submit — create the project
     submitBtn.addEventListener('click', () => {
         const projectName = nameInput.value.trim();
         if (!projectName) return;
-        
+
         const workspaceRoot = modal.dataset.workspaceRoot || currentWorkspaceRoot;
         const description = descInput?.value?.trim() || '';
-        const generatePrd = generatePrdCheckbox?.checked || false;
-        
+
         postKanbanMessage({
             type: 'addProject',
             workspaceRoot,
             projectName,
-            description,
-            generatePrd
+            description
         });
-        
+
         closeModal();
+    });
+
+    // Copy PRD Prompt — copy a ready-to-paste prompt to the clipboard (does NOT close modal)
+    copyPrdBtn?.addEventListener('click', () => {
+        const projectName = nameInput.value.trim();
+        if (!projectName) return;
+
+        const workspaceRoot = modal.dataset.workspaceRoot || currentWorkspaceRoot;
+        const description = descInput?.value?.trim() || '';
+
+        postKanbanMessage({
+            type: 'copyPrdPrompt',
+            workspaceRoot,
+            projectName,
+            description
+        });
+
+        // Visual feedback
+        copyPrdBtn.textContent = 'COPIED!';
+        setTimeout(() => { copyPrdBtn.textContent = 'Copy PRD Prompt'; }, 1500);
     });
 })();
 ```
 
 ---
 
-### Component 3: Backend Handler (KanbanProvider.ts)
+### Component 3: Backend Handlers (KanbanProvider.ts)
 
 #### [MODIFY] [KanbanProvider.ts](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/services/KanbanProvider.ts)
 
-**Replace the `addProject` case** (lines 5319–5337) to accept the project name from the message payload (no more `showInputBox`) and optionally dispatch a PRD generation task:
+**Replace the `addProject` case** (lines 5316–5335) to accept the project name from the message payload (no more `showInputBox`) and **check the `addProject` return value** to report duplicates:
 
 ```typescript
 case 'addProject': {
@@ -200,40 +236,41 @@ case 'addProject': {
     if (!workspaceId) break;
 
     const db = this._getKanbanDb(workspaceRoot);
-    await db.addProject(workspaceId, projectName);
-    this._allWorkspaceProjectsCache = null;
+    const created = await db.addProject(workspaceId, projectName);
+    this._allWorkspaceProjectsCache = null; // Invalidate cache
     await this._refreshBoard(workspaceRoot);
 
-    // Optional: generate PRD via agent dispatch
-    if (msg.generatePrd) {
-        const description = typeof msg.description === 'string' ? msg.description.trim() : '';
-        await this._dispatchPrdGeneration(workspaceRoot, projectName, description);
+    // addProject returns false on duplicate (UNIQUE constraint) — report it
+    if (!created) {
+        this._panel?.webview.postMessage({
+            type: 'showStatusMessage',
+            message: `Project "${projectName}" may already exist.`,
+            isError: true
+        });
     }
     break;
 }
 ```
 
-**Add a new private method `_dispatchPrdGeneration`** to KanbanProvider:
+> **Bug fix:** the original handler (line 5328) ignored the boolean return of `db.addProject()`. `KanbanDatabase.addProject()` (line 2259–2271) catches the UNIQUE-constraint error and returns `false` without throwing. The new handler checks the return value and posts an error status so the user gets feedback instead of a silent no-op.
+
+**Add a new `copyPrdPrompt` case** (immediately after the `addProject` case, before `deleteProject` at line 5336). This builds a PRD-generation prompt using the verified `getProjectPrdPath` and copies it to the clipboard — matching the established copy-prompt pattern:
 
 ```typescript
-/**
- * Dispatch a PRD-generation prompt to an available planner terminal.
- * The agent writes the PRD to .switchboard/projects/<slug>/prd.md,
- * which the Projects tab will pick up on next refresh.
- */
-private async _dispatchPrdGeneration(
-    workspaceRoot: string,
-    projectName: string,
-    description: string
-): Promise<void> {
-    const { getProjectPrdPath } = await import('./prdUtils');
+case 'copyPrdPrompt': {
+    const workspaceRoot = msg.workspaceRoot || this._currentWorkspaceRoot;
+    const projectName = typeof msg.projectName === 'string' ? msg.projectName.trim() : '';
+    if (!workspaceRoot || !projectName) break;
+
+    const description = typeof msg.description === 'string' ? msg.description.trim() : '';
+    const { getProjectPrdPath } = require('./prdUtils');
     const prdPath = getProjectPrdPath(workspaceRoot, projectName);
-    
+
     const prompt = [
         `You are a product requirements document (PRD) writer.`,
         `Create a concise but comprehensive PRD for the project "${projectName}".`,
         description ? `\nProject description: ${description}` : '',
-        `\nWrite the PRD in markdown format and save it to: ${prdPath}`,
+        `\nSave the PRD as markdown to this exact file path: ${prdPath}`,
         `\nThe PRD should include:`,
         `- Project overview and purpose`,
         `- Target users / audience`,
@@ -244,100 +281,87 @@ private async _dispatchPrdGeneration(
         `\nKeep it practical and actionable. This PRD will be injected into agent prompts as project context.`,
     ].filter(Boolean).join('\n');
 
-    // Use the existing terminal dispatch infrastructure
-    // Find a planner terminal or fall back to any available terminal
     try {
-        const terminals = this._taskViewerProvider?.getRegisteredTerminals?.() || [];
-        const plannerTerminal = terminals.find(t => 
-            t.role === 'planner' || t.role === 'lead'
-        ) || terminals[0];
-        
-        if (plannerTerminal) {
-            await this._taskViewerProvider?.sendTextToTerminal?.(
-                plannerTerminal.id, 
-                prompt
-            );
-            this._showStatusMessage(`PRD generation dispatched for "${projectName}" — check the Projects tab shortly.`);
-        } else {
-            // No terminals available — write a starter template instead
-            const fs = await import('fs');
-            const path = await import('path');
-            const dir = path.dirname(prdPath);
-            await fs.promises.mkdir(dir, { recursive: true });
-            await fs.promises.writeFile(prdPath, [
-                `# ${projectName} — Product Requirements Document`,
-                '',
-                description ? `## Overview\n${description}\n` : '## Overview\n[Describe the project purpose here]\n',
-                '## Target Users',
-                '[Who is this for?]\n',
-                '## Core Features',
-                '- [Feature 1]',
-                '- [Feature 2]\n',
-                '## Non-Functional Requirements',
-                '- [Performance, security, scalability notes]\n',
-                '## Success Criteria',
-                '- [How do we know this project is done?]\n',
-                '## Out of Scope',
-                '- [What this project explicitly does NOT cover]\n',
-            ].join('\n'), 'utf8');
-            this._showStatusMessage(`PRD template created for "${projectName}" — edit it in the Projects tab.`);
-        }
+        await vscode.env.clipboard.writeText(prompt);
+        this._panel?.webview.postMessage({
+            type: 'showStatusMessage',
+            message: `PRD prompt copied to clipboard — paste into your agent. It will save to ${prdPath}`,
+            isError: false
+        });
     } catch (err) {
-        console.error('[KanbanProvider] PRD generation dispatch failed:', err);
-        this._showStatusMessage(`Project "${projectName}" created, but PRD generation failed.`);
+        console.error('[KanbanProvider] copyPrdPrompt failed:', err);
+        this._panel?.webview.postMessage({
+            type: 'showStatusMessage',
+            message: `Failed to copy PRD prompt to clipboard.`,
+            isError: true
+        });
     }
+    break;
 }
 ```
 
-> **Note**: The exact terminal dispatch API (`sendTextToTerminal`, `getRegisteredTerminals`) must be verified against the actual `TaskViewerProvider` interface. The pattern above mirrors how `pairProgramCard` and prompt dispatch work. If the terminal dispatch API differs, adapt accordingly — the key contract is: compose prompt → send to a terminal → agent writes the file → Projects tab picks it up on next refresh.
+> **Pattern conformance:** this mirrors the existing clipboard copy at `KanbanProvider.ts` line 7961 (Suggest Epics) and line 6018 (batch planner prompt). `vscode.env.clipboard.writeText` is the extension-host clipboard API (not the webview `navigator.clipboard`), and the `showStatusMessage` payload shape `{message, isError}` matches the webview handler at `kanban.html` line 6006–6028.
+>
+> **No status-message helper needed:** `KanbanProvider` already inlines `this._panel?.webview.postMessage({ type: 'showStatusMessage', message: ..., isError: ... })` 28 times. Adding a `_showStatusMessage` wrapper (as the original plan proposed) is unnecessary and used the wrong message type (`statusMessage`/`text` instead of `showStatusMessage`/`{message, isError}`).
 
 ---
 
-### Component 4: Status Message Helper
+### Component 4 (DELETED — No Longer Needed)
 
-#### [MODIFY] [KanbanProvider.ts](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/services/KanbanProvider.ts)
+The original plan's Component 4 proposed a `_showStatusMessage` helper. This is **deleted** because:
+1. It used the wrong message type (`statusMessage`/`text`) — the webview handler listens for `showStatusMessage` with `{message, isError}` (verified at `kanban.html` line 6006).
+2. The inline pattern is already established (28 uses in `KanbanProvider.ts`) — no wrapper is warranted.
 
-If `_showStatusMessage` doesn't already exist, add a helper that posts a status flash to the webview sub-bar:
-
-```typescript
-private _showStatusMessage(text: string): void {
-    this._panel?.webview.postMessage({ type: 'statusMessage', text });
-}
-```
-
-Verify: the kanban webview already handles `statusMessage` messages (check the `window.addEventListener('message', ...)` handler for `statusMessage` case). If not, add a handler that updates `#status-message`.
+The original plan's `_dispatchPrdGeneration` method (terminal dispatch + fallback template writer) is also **deleted** because:
+1. It called non-existent APIs (`getRegisteredTerminals()`, `sendTextToTerminal()`) on `TaskViewerProvider`.
+2. The copy-to-clipboard approach (Component 3 `copyPrdPrompt` case) replaces it entirely with a simpler, host-agnostic, terminal-independent flow.
 
 ---
 
 ## Verification Plan
 
+> **Per session directives:** No compilation step (`tsc`/webpack) and no automated test execution is run as part of this plan. The test authoring below is for the user to run separately. Manual verification is the primary path.
+
 ### Automated Tests
 
-1. **HTML structure test**: Assert `kanban.html` contains `id="create-project-modal"`, the modal input/textarea/checkbox/button IDs.
-   ```bash
-   node src/test/project-panel-kanban-create-button.test.js
-   ```
-   (Update this test or create a new one for the modal structure.)
+1. **New HTML structure test** — create a **new** test file (e.g. `src/test/kanban-create-project-modal.test.js`) that asserts `kanban.html` contains `id="create-project-modal"`, the input/textarea/button IDs, and that the modal uses `modal-overlay`/`modal-content` classes.
+   > **Note:** the original plan referenced `src/test/project-panel-kanban-create-button.test.js` — that file tests a *different* feature (the "Create Kanban Plan" button in `project.html`, not the "Add Project" button in `kanban.html`). Do not modify it; create a new dedicated test.
 
-2. **Backend handler test**: Assert `KanbanProvider.ts` `addProject` case no longer calls `showInputBox` and instead reads `msg.projectName`.
+2. **Backend handler test** — assert `KanbanProvider.ts` `addProject` case no longer calls `showInputBox` and instead reads `msg.projectName`; assert the `addProject` return value is checked; assert a `copyPrdPrompt` case exists.
    ```bash
-   grep -c "showInputBox" src/services/KanbanProvider.ts
-   # Should return 0 (or at least not in the addProject case)
+   grep -c "showInputBox" src/services/KanbanProvider.ts   # should be 0 in the addProject case
+   grep "case 'copyPrdPrompt'" src/services/KanbanProvider.ts   # should match
+   grep "if (!created)" src/services/KanbanProvider.ts   # should match (duplicate check)
    ```
 
-3. **PRD path test**: Verify `prdUtils.ts` `getProjectPrdPath` is called correctly:
+3. **PRD path test** — verify `getProjectPrdPath` is called in the `copyPrdPrompt` case:
    ```bash
    grep "getProjectPrdPath" src/services/KanbanProvider.ts
    ```
 
-### Manual Verification
+4. **Clipboard pattern test** — verify `copyPrdPrompt` uses `vscode.env.clipboard.writeText` and `showStatusMessage` (not the rejected `statusMessage`/`_showStatusMessage`):
+   ```bash
+   grep -c "vscode.env.clipboard.writeText" src/services/KanbanProvider.ts   # should increase by 1
+   grep "_showStatusMessage\|type: 'statusMessage'" src/services/KanbanProvider.ts   # should return 0 matches
+   ```
 
+### Manual Verification
 1. Open the Switchboard kanban board in VS Code.
 2. Click the `+` button next to the workspace/project dropdown.
 3. **Expect**: A styled modal opens (not a VS Code popup).
-4. Type a project name → submit button enables.
-5. Check "Generate PRD with Agent" → submit.
-6. **Expect**: Project appears in the dropdown. If a terminal is registered, a PRD generation prompt is dispatched. If not, a template `prd.md` is created.
-7. Switch to the Projects tab → select the new project → PRD content should appear.
-8. Test with both Afterburner and Claudify themes — modal should be styled correctly.
-9. Test edge cases: empty name (submit disabled), Escape key closes, backdrop click closes, Enter key submits.
+4. Type a project name → both "Create Project" and "Copy PRD Prompt" buttons enable.
+5. Click "Create Project" → project appears in the dropdown, modal closes.
+6. Open the modal again, type a name + description, click "Copy PRD Prompt" → button shows "COPIED!", a status message appears with the PRD path.
+7. Paste the clipboard into an agent (Claude/Cursor) → the agent generates the PRD and saves it to the path shown.
+8. Switch to the Projects tab → select the new project → PRD content appears (via the existing `getProjectPrd` → `projectPrdContent` flow in `PlanningPanelProvider.ts` line 3586 + `project.js` line 347).
+9. Test duplicate: create a project that already exists → expect an error status message "Project '...' may already exist."
+10. Test with both Afterburner (teal) and Claudify (terracotta) themes — modal should be styled correctly.
+11. Test edge cases: empty name (both buttons disabled), Escape key closes, backdrop click closes, Enter key submits.
+
+---
+
+## Recommendation
+
+**Complexity: 4/10 → Send to Coder.**
+
+The work is multi-file (`kanban.html` + `KanbanProvider.ts`) but entirely routine — every piece reuses verified existing patterns (modal structure, `postKanbanMessage`, `vscode.env.clipboard.writeText`, `showStatusMessage`, `getProjectPrdPath`). The only non-trivial addition is the duplicate-name return-value check, which is a one-line `if (!created)` guard. No new architectural patterns, no data-consistency risks, no breaking changes.

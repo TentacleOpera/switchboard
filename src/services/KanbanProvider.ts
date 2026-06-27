@@ -3573,10 +3573,10 @@ sqlite3 "${db.dbPath}" "SELECT plan_file, kanban_column, status FROM plans WHERE
 Run the following command (uses the sqlite3 CLI — it must be installed):
 
 \`\`\`bash
-sqlite3 "${db.dbPath}" "UPDATE plans SET kanban_column = '${resolvedNextColumn}', updated_at = datetime('now') WHERE plan_id IN (${batchPlans.map(p => `'${p.planId}'`).join(', ')}) AND workspace_id = '${workspaceId}'; UPDATE plans SET kanban_column = '${resolvedNextColumn}', updated_at = datetime('now') WHERE epic_id IN (${batchPlans.map(p => `'${p.planId}'`).join(', ')}) AND status = 'active' AND workspace_id = '${workspaceId}'; SELECT changes();"
+sqlite3 "${db.dbPath}" "UPDATE plans SET kanban_column = '${resolvedNextColumn}', updated_at = datetime('now') WHERE plan_id IN (${batchPlans.map(p => `'${p.planId}'`).join(', ')}) AND workspace_id = '${workspaceId}'; UPDATE plans SET kanban_column = '${resolvedNextColumn}', updated_at = datetime('now') WHERE epic_id IN (${batchPlans.map(p => `'${p.planId}'`).join(', ')}) AND status = 'active' AND workspace_id = '${workspaceId}'; SELECT total_changes();"
 \`\`\`
 
-Verify that the output matches the number of updated rows.
+Verify that the output is at least the number of plans moved (total_changes() sums BOTH the plan moves and any cascaded epic subtasks, so it is >= the batch size when any plan is an epic). If it is \`0\`, no rows matched — check that the plan_ids and workspace_id are correct.
 
 Database: \`${db.dbPath}\`
 Target column: \`${resolvedNextColumn}\`
@@ -3616,10 +3616,10 @@ sqlite3 "${db.dbPath}" "SELECT plan_file, kanban_column, status FROM plans WHERE
 Run the following command (uses the sqlite3 CLI — it must be installed):
 
 \`\`\`bash
-sqlite3 "${db.dbPath}" "UPDATE plans SET kanban_column = '${resolvedNextColumn}', updated_at = datetime('now') WHERE plan_file = '${oldestPlan.planFile}' AND workspace_id = '${workspaceId}'; UPDATE plans SET kanban_column = '${resolvedNextColumn}', updated_at = datetime('now') WHERE epic_id = (SELECT plan_id FROM plans WHERE plan_file = '${oldestPlan.planFile}' AND workspace_id = '${workspaceId}') AND status = 'active'; SELECT changes();"
+sqlite3 "${db.dbPath}" "UPDATE plans SET kanban_column = '${resolvedNextColumn}', updated_at = datetime('now') WHERE plan_file = '${oldestPlan.planFile}' AND workspace_id = '${workspaceId}'; UPDATE plans SET kanban_column = '${resolvedNextColumn}', updated_at = datetime('now') WHERE epic_id = (SELECT plan_id FROM plans WHERE plan_file = '${oldestPlan.planFile}' AND workspace_id = '${workspaceId}') AND status = 'active'; SELECT total_changes();"
 \`\`\`
 
-Verify that the output is \`1\` (one row updated). If it is \`0\`, the plan_file path may not match — check the DB with:
+Verify that the output is \`>= 1\` (total_changes() sums BOTH the plan's own move and any cascaded epic subtasks, so an epic with subtasks reports more than 1). If it is \`0\`, the plan_file path may not match — check the DB with:
 
 \`\`\`bash
 sqlite3 "${db.dbPath}" "SELECT plan_file, kanban_column FROM plans WHERE workspace_id = '${workspaceId}';"
@@ -4821,6 +4821,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         sessionId: string,
         targetColumn: string
     ): Promise<boolean> {
+        if (!sessionId) return false;
         try {
             const db = this._getKanbanDb(workspaceRoot);
             if (!await db.ensureReady()) return false;
@@ -4853,6 +4854,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             this.queueIntegrationSyncForSession(workspaceRoot, sid, targetColumn)
                         )
                     );
+                }
+                if (plan) {
+                    if (plan.isEpic) {
+                        await this._regenerateEpicFile(workspaceRoot, plan.planId, db);
+                    } else if (plan.epicId) {
+                        await this._regenerateEpicFile(workspaceRoot, plan.epicId, db);
+                    }
                 }
             }
             return moved;
@@ -4918,6 +4926,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             this.queueIntegrationSyncForSession(workspaceRoot, sid, targetColumn)
                         )
                     );
+                }
+                if (previousRecord) {
+                    if (previousRecord.isEpic) {
+                        await this._regenerateEpicFile(workspaceRoot, previousRecord.planId, db);
+                    } else if (previousRecord.epicId) {
+                        await this._regenerateEpicFile(workspaceRoot, previousRecord.epicId, db);
+                    }
                 }
                 await this._refreshBoard(workspaceRoot);
             }
@@ -5315,21 +5330,69 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 break;
             case 'addProject': {
                 const workspaceRoot = msg.workspaceRoot || this._currentWorkspaceRoot;
-                if (workspaceRoot) {
-                    const projectName = await vscode.window.showInputBox({
-                        prompt: 'Enter project name',
-                        placeHolder: 'e.g. frontend, backend, infrastructure',
-                        validateInput: (v) => v.trim() ? null : 'Project name cannot be empty'
+                if (!workspaceRoot) break;
+
+                const projectName = typeof msg.projectName === 'string' ? msg.projectName.trim() : '';
+                if (!projectName) {
+                    break;
+                }
+
+                const workspaceId = await this._readWorkspaceId(workspaceRoot);
+                if (!workspaceId) break;
+
+                const db = this._getKanbanDb(workspaceRoot);
+                const created = await db.addProject(workspaceId, projectName);
+                this._allWorkspaceProjectsCache = null; // Invalidate cache
+                await this._refreshBoard(workspaceRoot);
+
+                // addProject returns false on duplicate (UNIQUE constraint) — report it
+                if (!created) {
+                    this._panel?.webview.postMessage({
+                        type: 'showStatusMessage',
+                        message: `Project "${projectName}" may already exist.`,
+                        isError: true
                     });
-                    if (projectName?.trim()) {
-                        const workspaceId = await this._readWorkspaceId(workspaceRoot);
-                        if (workspaceId) {
-                            const db = this._getKanbanDb(workspaceRoot);
-                            await db.addProject(workspaceId, projectName.trim());
-                            this._allWorkspaceProjectsCache = null; // Invalidate cache
-                            await this._refreshBoard(workspaceRoot);
-                        }
-                    }
+                }
+                break;
+            }
+            case 'copyPrdPrompt': {
+                const workspaceRoot = msg.workspaceRoot || this._currentWorkspaceRoot;
+                const projectName = typeof msg.projectName === 'string' ? msg.projectName.trim() : '';
+                if (!workspaceRoot || !projectName) break;
+
+                const description = typeof msg.description === 'string' ? msg.description.trim() : '';
+                const { getProjectPrdPath } = require('./prdUtils');
+                const prdPath = getProjectPrdPath(workspaceRoot, projectName);
+
+                const prompt = [
+                    `You are a product requirements document (PRD) writer.`,
+                    `Create a concise but comprehensive PRD for the project "${projectName}".`,
+                    description ? `\nProject description: ${description}` : '',
+                    `\nSave the PRD as markdown to this exact file path: ${prdPath}`,
+                    `\nThe PRD should include:`,
+                    `- Project overview and purpose`,
+                    `- Target users / audience`,
+                    `- Core features and requirements`,
+                    `- Non-functional requirements (performance, security, etc.)`,
+                    `- Success criteria`,
+                    `- Out of scope items`,
+                    `\nKeep it practical and actionable. This PRD will be injected into agent prompts as project context.`,
+                ].filter(Boolean).join('\n');
+
+                try {
+                    await vscode.env.clipboard.writeText(prompt);
+                    this._panel?.webview.postMessage({
+                        type: 'showStatusMessage',
+                        message: `PRD prompt copied to clipboard — paste into your agent. It will save to ${prdPath}`,
+                        isError: false
+                    });
+                } catch (err) {
+                    console.error('[KanbanProvider] copyPrdPrompt failed:', err);
+                    this._panel?.webview.postMessage({
+                        type: 'showStatusMessage',
+                        message: `Failed to copy PRD prompt to clipboard.`,
+                        isError: true
+                    });
                 }
                 break;
             }
@@ -6696,8 +6759,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                 const subtasks = await db.getSubtasksByEpicId(plan.planId);
                                 const subtaskPlanIds = subtasks.map(st => st.planId).filter(Boolean) as string[];
                                 await db.updateColumnWithEpicCascadeByPlanId(plan.planId, subtaskPlanIds, 'COMPLETED');
+                                await this._regenerateEpicFile(workspaceRoot, plan.planId, db);
                             } else {
                                 await db.updateColumn(resolvedSessionId, 'COMPLETED');
+                                if (plan && plan.epicId) {
+                                    await this._regenerateEpicFile(workspaceRoot, plan.epicId, db);
+                                }
                             }
                             _schedulePlanStateWrite(db, workspaceRoot, resolvedSessionId, 'COMPLETED',
                                 'completed').catch(() => { /* fire-and-forget */ });
@@ -6722,8 +6789,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             const subtasks = await db.getSubtasksByEpicId(plan.planId);
                             const subtaskPlanIds = subtasks.map(st => st.planId).filter(Boolean) as string[];
                             await db.updateColumnWithEpicCascadeByPlanId(plan.planId, subtaskPlanIds, 'COMPLETED');
+                            await this._regenerateEpicFile(workspaceRoot, plan.planId, db);
                         } else {
                             await db.updateColumn(sessionId, 'COMPLETED');
+                            if (plan && plan.epicId) {
+                                await this._regenerateEpicFile(workspaceRoot, plan.epicId, db);
+                            }
                         }
                         _schedulePlanStateWrite(db, workspaceRoot, sessionId, 'COMPLETED',
                             'completed').catch(() => { /* fire-and-forget */ });
@@ -6762,8 +6833,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             const subtasks = await dbAll.getSubtasksByEpicId(card.planId);
                             const subtaskPlanIds = subtasks.map(st => st.planId).filter(Boolean) as string[];
                             await dbAll.updateColumnWithEpicCascadeByPlanId(card.planId, subtaskPlanIds, 'COMPLETED');
+                            await this._regenerateEpicFile(workspaceRoot, card.planId, dbAll);
                         } else {
                             await dbAll.updateColumn(cardKey, 'COMPLETED');
+                            if (card.epicId) {
+                                await this._regenerateEpicFile(workspaceRoot, card.epicId, dbAll);
+                            }
                         }
                         _schedulePlanStateWrite(dbAll, workspaceRoot, cardKey, 'COMPLETED',
                             'completed').catch(() => { /* fire-and-forget */ });
@@ -6811,8 +6886,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     await db.updateStatus(sessionId, 'active');
                     if (epicPlanId) {
                         await db.updateColumnWithEpicCascadeByPlanId(epicPlanId, subtaskPlanIds, targetColumn);
+                        await this._regenerateEpicFile(workspaceRoot, epicPlanId, db);
                     } else {
                         await db.updateColumn(sessionId, targetColumn);
+                        const record = await db.getPlanBySessionId(sessionId);
+                        if (record && record.epicId) {
+                            await this._regenerateEpicFile(workspaceRoot, record.epicId, db);
+                        }
                     }
                     _schedulePlanStateWrite(db, workspaceRoot, sessionId, targetColumn,
                         targetColumn === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
@@ -6825,8 +6905,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         await db.updateStatus(sessionId, 'completed');
                         if (epicPlanId) {
                             await db.updateColumnWithEpicCascadeByPlanId(epicPlanId, subtaskPlanIds, 'COMPLETED');
+                            await this._regenerateEpicFile(workspaceRoot, epicPlanId, db);
                         } else {
                             await db.updateColumn(sessionId, 'COMPLETED');
+                            const record = await db.getPlanBySessionId(sessionId);
+                            if (record && record.epicId) {
+                                await this._regenerateEpicFile(workspaceRoot, record.epicId, db);
+                            }
                         }
                         _schedulePlanStateWrite(db, workspaceRoot, sessionId, 'COMPLETED',
                             'completed').catch(() => { /* fire-and-forget */ });
@@ -7110,8 +7195,12 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                                 const subtasks = await db.getSubtasksByEpicId(plan.planId);
                                 const subtaskPlanIds = subtasks.map(st => st.planId).filter(Boolean) as string[];
                                 await db.updateColumnWithEpicCascadeByPlanId(plan.planId, subtaskPlanIds, 'LEAD CODED');
+                                await this._regenerateEpicFile(workspaceRoot, plan.planId, db);
                             } else {
                                 await db.updateColumn(sid, 'LEAD CODED');
+                                if (plan && plan.epicId) {
+                                    await this._regenerateEpicFile(workspaceRoot, plan.epicId, db);
+                                }
                             }
                             _schedulePlanStateWrite(db, workspaceRoot, sid, 'LEAD CODED',
                                 'active').catch(() => { /* fire-and-forget */ });
@@ -8452,7 +8541,8 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         const subtaskLines = subtasks.map(st => {
             const basename = path.basename(st.planFile);
             const topic = st.topic || basename;
-            return `- [ ] [${topic}](../plans/${basename})`;
+            const column = this._normalizeLegacyKanbanColumn(st.kanbanColumn) || 'CREATED';
+            return `- [ ] [${topic}](../plans/${basename}) — **${column}**`;
         });
         const subtaskSection = `<!-- BEGIN SUBTASKS (auto-generated, do not edit) -->\n## Subtasks\n${subtaskLines.join('\n') || '- [ ] (no subtasks)'}\n<!-- END SUBTASKS -->`;
         let newContent: string;

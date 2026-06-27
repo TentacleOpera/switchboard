@@ -448,3 +448,64 @@ The caller (`SessionActionLog.ts:582`) needs no change — the cascade is intern
 ## Recommendation
 
 Complexity 7 (High: multi-file coordination across DB + 3 providers + agent-prompt text, with the Class 6 prompt-SQL category being a distinct fix kind and the empty-`sessionId` / stickiness / atomicity risks) → **Send to Lead Coder**. The implementer must honor the User Review Required decisions (especially #3 the empty-`sessionId` guard, #1 the stickiness comment, and #5 the Class 6 prompt-SQL strategy) before merging. Classes 1-5 and 7-8 are code-level and share the cascade mechanism; Class 6 is prompt-text and needs separate care.
+
+---
+
+## Reviewer Pass (in-place review, executed 2026-06-27)
+
+Implementation verified present for all 8 bug classes against source. Stage 1 adversarial review + Stage 2 synthesis + code fixes applied. Existing implementation steps above are preserved unchanged.
+
+### Stage 1 — Grumpy Principal Engineer findings (severity-tagged)
+
+- **MAJOR — Class 6 `SELECT changes()` is a filthy liar after the cascade append.** `src/services/KanbanProvider.ts:3576,3619`; `src/services/agentPromptBuilder.ts:1118,1143`. The fix tacked a second `UPDATE ... WHERE epic_id = ... AND status = 'active'` onto each prompt's single `sqlite3` invocation but left `SELECT changes();` at the end. `changes()` returns rows from the MOST RECENTLY completed statement — i.e. the subtask cascade, NOT the epic's own move. So: a non-epic that moved perfectly (epic UPDATE=1, cascade UPDATE=0) reports `0`, and the prompt then instructs the autonomous agent to "notify the user to manually drag the card to the Planned column" — for a card that already moved. A theater of false negatives, acted out by a headless agent at 3am. An epic with 3 subtasks reports `3`, and the verification text (which only defined "1" and "0") leaves the agent with no branch. The plan added the cascade but never updated the verification semantics to account for the second statement. Direct regression introduced by the Class 6 fix.
+- **NIT — Orphaned `updateColumnWithEpicCascade` left without a toe tag.** `src/services/KanbanDatabase.ts:3843`. The plan loudly deprecates `updateColumnTransaction` (its sibling) the instant it's orphaned, and grep confirms zero callers. But the OLD session_id-keyed `updateColumnWithEpicCascade` is now ALSO orphaned — all 3 callers defected to `updateColumnWithEpicCascadeByPlanId` — and it got no `@deprecated` tag. A future contributor reaching for "the epic cascade method" by name picks the session_id-keyed one and silently no-ops every file-based epic. The plan demanded symmetry for the sibling; it owed the same courtesy here.
+- **OBSERVATION (out of scope, NOT fixed) — NotionBackupService restore doesn't cascade.** `src/services/NotionBackupService.ts:141`. `kanbanDb.updateColumn(sessionId, column)` on Notion restore is the same epic-agnostic shape as Class 7, but the plan explicitly scoped Notion out (User Review Required #2 — is_epic capture "out of scope here"). Notion restore is a rare manual bulk replace, not a pipeline card move, and subtask relationships may not be coherent in the remote backup. Documented as a remaining risk; not fixed (would expand scope + require the deferred Notion-restore semantic decision).
+- **OBSERVATION (pre-existing, NOT fixed) — subtask `status` not cascaded by Class 3/7.** Class 8 cascades BOTH `status='completed'` AND `kanban_column='COMPLETED'` for subtasks (`KanbanDatabase.ts:2901`), but Class 3 (`completePlan`/`completeSelected`/`completeAll`) and Class 7 only cascade `kanban_column`, leaving subtask `status='active'`. This mirrors the PRE-EXISTING `completeAll` behavior the plan told Class 3 to copy, so it is not a regression — but it is an inconsistency: a subtask completed via run-sheet flip (Class 8) ends up `status='completed'`, while one completed via the card Done button (Class 3) ends up `column=COMPLETED` + `status='active'`. A later Class 6 prompt cascade (`WHERE epic_id = ? AND status = 'active'`) would then re-yank that "completed" subtask on the next epic move. Latent; deferred to a future plan.
+
+### Stage 2 — Balanced synthesis
+
+- **Fix now (MAJOR):** swap `SELECT changes()` → `SELECT total_changes()` in all 4 Class 6 prompt sites and update the verification text to `>= 1` / "at least one row" semantics. `total_changes()` returns the sum of both UPDATEs since connection open (non-epic moved = 1; epic + N subtasks = 1 + N; nothing moved = 0), which restores correct success/failure detection without altering the cascade logic. Low-risk, surgical, fully within the spirit of the Class 6 fix — the plan simply didn't track the verification consequence of appending a second statement.
+- **Fix now (NIT):** add `@deprecated` to the orphaned `updateColumnWithEpicCascade`. Zero-risk symmetry with the sibling deprecation; closes a latent footgun. Trivial.
+- **Defer (OBSERVATION 3 & 4):** Notion restore cascade and subtask-`status` cascade. Both are outside the plan's explicit scope, both require separate semantic decisions, neither is a regression. Documented as remaining risks below; code untouched.
+
+### Code fixes applied
+
+1. `src/services/agentPromptBuilder.ts:1118,1144` — `SELECT changes();` → `SELECT total_changes();`; verification text rewritten to "total_changes() returns the sum of BOTH updates … If output is 0: … If output is >= 1: success (the plan moved; if it is an epic, its active subtasks moved too)". (Both Split-Plan prompt sites, via replace_all.)
+2. `src/services/KanbanProvider.ts:3576` — scheduler batch prompt: `SELECT changes();` → `SELECT total_changes();`; verification text rewritten to "at least the number of plans moved … If it is `0`, no rows matched — check that the plan_ids and workspace_id are correct."
+3. `src/services/KanbanProvider.ts:3619` — scheduler single-plan prompt: `SELECT changes();` → `SELECT total_changes();`; verification text rewritten to "`>= 1` (total_changes() sums BOTH the plan's own move and any cascaded epic subtasks, so an epic with subtasks reports more than 1). If it is `0`, the plan_file path may not match …".
+4. `src/services/KanbanDatabase.ts:3842` — added `@deprecated` JSDoc to the orphaned session_id-keyed `updateColumnWithEpicCascade`, mirroring the sibling `updateColumnTransaction` deprecation and pointing callers to `updateColumnWithEpicCascadeByPlanId`.
+
+### Verification (this session)
+
+Per session directives: **project compilation (`npm run compile` / `tsc` / webpack) and automated tests were SKIPPED** — the test suite will be run separately by the user.
+
+- Static verification performed: grep-confirmed all 4 Class 6 prompt sites now emit `SELECT total_changes()` and no `SELECT changes()` remains in `src/services/` (`KanbanProvider.ts:3576,3619`; `agentPromptBuilder.ts:1118,1144`).
+- Template-literal integrity: the JS template-literal escapes for the prompts' own backticks (`\`\`\`bash` fences, `${...}` interpolations) are preserved unchanged around the edited `sqlite3` lines; only the trailing `; SELECT changes();` → `; SELECT total_changes();` and the adjacent verification prose were modified.
+- Pre-existing implementation re-verified present and correct against plan requirements:
+  - Class 1 — `KanbanDatabase.ts:592-594` `CASE WHEN excluded.is_epic > 0 ...` + stickiness comment. ✓
+  - Class 2 — `updateColumnWithEpicCascadeByPlanId` (`KanbanDatabase.ts:3876-3909`, column-validated, transactional); all 3 callers (`moveCardToColumn:4842`, `moveCardToColumnByPlanFile:4908`, `completeAll:6764`) switched to `plan_id`; `updateColumnTransaction` deprecated (`3820`); empty-session fallback branch removed. ✓
+  - Class 3 — `completePlan:6694-6698` and `completeSelected:6720-6724` epic-check-then-cascade. ✓
+  - Class 4 — `_updateKanbanColumnForSession` fallback (`TaskViewerProvider.ts:2252-2265`) with empty-`sessionId` guard + epic cascade. ✓
+  - Class 5 — `GlobalPlanWatcherService.ts:610-620` unconditional `updateEpicStatus` + explanatory comment (already in source; VSIX rebuild still required for running installs). ✓
+  - Class 6 — batch `plan_id IN` + `epic_id IN (...)` cascade (`KanbanProvider.ts:3576`); single + Split-Plan `epic_id = (SELECT plan_id ...)` cascade (`KanbanProvider.ts:3619`, `agentPromptBuilder.ts:1118,1144`). ✓ (plus the `total_changes()` fix above)
+  - Class 7 — `uncompleteCard` + rollback (`KanbanProvider.ts:6798-6829`), `testingFailureReport` (`7108-7114`), `_restoreFromArchive` fallback (`TaskViewerProvider.ts:11642-11651`), `markPlanComplete` fallback (`14075-14084`); TaskViewerProvider fallbacks carry the empty-`sessionId` guard. ✓
+  - Class 8 — `completeMultipleByPlanFile` (`KanbanDatabase.ts:2878-2913`) epic check + `WHERE epic_id = ? AND status = 'active'` cascade inside the existing `BEGIN`/`COMMIT`; caller `SessionActionLog.ts:582` unchanged. ✓
+  - NotionBackupService — no `isEpic`/`is_epic` references (grep-confirmed); Class 1 `CASE` incidentally preserves local `is_epic` on restore. ✓ (no code change, as planned)
+- Helper dependency check: `getSubtasksByEpicId` (`3811`), `getPlanByPlanId` (`2648`), `updateEpicStatus` (`1470`), `VALID_KANBAN_COLUMNS` (`631`), `SAFE_COLUMN_NAME_RE` (`638`) all present; `VALID_KANBAN_COLUMNS` contains every column the new method receives (CREATED/COMPLETED/LEAD CODED/CODE REVIEWED/PLAN REVIEWED), so validation never rejects a legitimate move. ✓
+- Caller-sweep check: no remaining callers of the old session_id-keyed `updateColumnWithEpicCascade` or `updateColumnTransaction` in `src/` (grep-confirmed). ✓
+
+### Files changed by this review pass
+
+- `src/services/agentPromptBuilder.ts` (lines 1118-1121, 1144-1147) — Class 6 verification fix (2 sites).
+- `src/services/KanbanProvider.ts` (lines 3576-3579, 3619-3622) — Class 6 verification fix (2 sites).
+- `src/services/KanbanDatabase.ts` (line 3842) — `@deprecated` tag on orphaned `updateColumnWithEpicCascade`.
+
+### Remaining risks
+
+1. **Notion restore does not cascade epic subtasks** (`NotionBackupService.ts:141`). Same shape as Class 7 but explicitly scoped out by User Review Required #2. A future plan should decide whether Notion restore should cascade (and whether Notion backup should capture `is_epic` / `epic_id` to make subtask relationships coherent in the remote backup).
+2. **Subtask `status` field is not cascaded by Class 3/7** (only `kanban_column`). Pre-existing (mirrors old `completeAll`), not a regression, but inconsistent with Class 8 (which cascades both). A subtask completed via the card Done button has `column=COMPLETED` + `status='active'`, so a later Class 6 prompt cascade (`WHERE epic_id = ? AND status = 'active'`) could re-yank it on the next epic move. A future plan should align all completion paths on cascading both `status` and `kanban_column` for subtasks.
+3. **Class 6 atomicity gap (unchanged, inherent).** The epic's own UPDATE and the subtask-cascade UPDATE are two statements inside one `sqlite3` invocation — SQLite wraps them in an implicit transaction per the CLI, but a crash mid-invocation can still orphan subtasks. `total_changes()` does not change this; only User Review Required #5 option (b) (route through the Switchboard skill / validated DB layer) closes it.
+4. **Read-then-write subtask race (inherited, unchanged).** The explicit-`subtaskPlanIds[]` form (Class 2/3/7) reads subtasks via `getSubtasksByEpicId` then updates them in a separate call; a subtask added/removed between read and write is missed. Class 8 uses the atomic `WHERE epic_id = ?` form and is race-free. User Review Required #4 (switch Class 2/3/7 to the `WHERE epic_id = ?` form) remains open.
+5. **`is_epic` stickiness contract (intentional).** `upsertPlans` can no longer clear `is_epic` to 0 (the `CASE` preserves it); demotion must go through `updateEpicStatus(planId, 0, '')`. Documented in the SQL comment (`KanbanDatabase.ts:592-593`); future callers must honor it.
+6. **VSIX rebuild still required for Class 5.** The file-watcher fix is in source but not yet in running installs; editing epic files with external tools will continue to clobber `is_epic` to 0 in the running build until the extension is recompiled and reinstalled. Covered by the normal release flow.
+

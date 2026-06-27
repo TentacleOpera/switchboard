@@ -3103,6 +3103,30 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         </div>
     </div>
 
+    <!-- Create Project Modal -->
+    <div id="create-project-modal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Create Project</h3>
+                <button class="modal-close-btn" id="create-project-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <label class="modal-label" for="create-project-name">Project name</label>
+                <input id="create-project-name" class="modal-input" type="text"
+                       placeholder="e.g. frontend, backend, infrastructure"
+                       autocomplete="off">
+                <label class="modal-label" for="create-project-description">Description (optional — used as context for PRD generation)</label>
+                <textarea id="create-project-description" class="modal-textarea" rows="4"
+                          placeholder="Brief description of the project's purpose, target users, key features..."></textarea>
+            </div>
+            <div class="modal-footer">
+                <button class="modal-btn modal-btn-secondary" id="create-project-cancel">Cancel</button>
+                <button class="modal-btn modal-btn-secondary" id="create-project-copy-prd" disabled>Copy PRD Prompt</button>
+                <button class="modal-btn modal-btn-primary" id="create-project-submit" disabled>Create Project</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Kanban Column Modal -->
     <div id="kanban-column-modal" class="modal-overlay hidden">
         <div class="modal-card" style="max-width: 520px;">
@@ -3793,7 +3817,18 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const select = document.getElementById('workspace-project-select');
             const selectedOption = select?.selectedOptions?.[0];
             const workspaceRoot = selectedOption?.dataset?.workspaceRoot || currentWorkspaceRoot;
-            postKanbanMessage({ type: 'addProject', workspaceRoot });
+
+            // Store workspace root for the modal handlers
+            const modal = document.getElementById('create-project-modal');
+            if (modal) {
+                modal.dataset.workspaceRoot = workspaceRoot;
+                document.getElementById('create-project-name').value = '';
+                document.getElementById('create-project-description').value = '';
+                document.getElementById('create-project-submit').disabled = true;
+                document.getElementById('create-project-copy-prd').disabled = true;
+                modal.classList.remove('hidden');
+                document.getElementById('create-project-name').focus();
+            }
         });
 
         document.getElementById('btn-scan-folders')?.addEventListener('click', () => {
@@ -5264,6 +5299,20 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 });
             });
 
+            document.querySelectorAll('.card-btn.orchestrate').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const sessionId = btn.dataset.session || btn.dataset.planId || '';
+                    const workspaceRoot = btn.dataset.workspaceRoot || '';
+                    postKanbanMessage({
+                        type: 'orchestrateEpic',
+                        sessionId: sessionId,
+                        workspaceRoot: workspaceRoot,
+                        mode: 'copy'
+                    });
+                });
+            });
+
             requestAnimationFrame(() => restoreBoardViewState(viewState));
             updateReassignButtonVisibility();
             updateEpicActionButton();
@@ -5359,6 +5408,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                        </span>`
                     : '';
             }
+            const orchestrateBtn = card.isEpic
+                ? `<button class="card-btn orchestrate" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Orchestrate Epic">🎯 Orchestrate</button>`
+                : '';
             const completeOrDoneBtn = isCompleted
                 ? `<span class="card-done-badge">✓ Done</span>`
                 : `<button class="card-btn icon-btn complete" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Complete and archive">
@@ -5375,6 +5427,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             ${pairProgramBtn}
                             ${primaryActionBtn}
                             ${backlogActionBtn}
+                            ${orchestrateBtn}
                         </div>
                         <div style="display: flex; gap: 4px;">
                             <button class="card-btn icon-btn review" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-plan-file="${escapeAttr(card.planFile || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="${reviewTooltip}">
@@ -6449,6 +6502,39 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                     break;
                 }
+                case 'epicOrchestrationResult': {
+                    let btn = null;
+                    if (msg.sessionId) {
+                        btn = document.querySelector(`.card-btn.orchestrate[data-session="${CSS.escape(msg.sessionId)}"]`) || document.querySelector(`.card-btn.orchestrate[data-plan-id="${CSS.escape(msg.sessionId)}"]`);
+                    }
+                    if (btn) {
+                        if (msg.ok) {
+                            btn.textContent = 'Copied!';
+                            btn.classList.add('copied');
+                            btn.disabled = true;
+
+                            let fallbackTimer = null;
+                            const resetBtn = () => {
+                                btn.textContent = '🎯 Orchestrate';
+                                btn.classList.remove('copied');
+                                btn.disabled = false;
+                                btn.removeEventListener('animationend', onAnimationEnd);
+                                if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
+                            };
+                            const onAnimationEnd = () => {
+                                fallbackTimer = null;
+                                resetBtn();
+                            };
+                            btn.addEventListener('animationend', onAnimationEnd);
+                            fallbackTimer = setTimeout(resetBtn, 2000);
+                        } else {
+                            btn.textContent = '🎯 Orchestrate';
+                            btn.classList.remove('copied');
+                            btn.disabled = false;
+                        }
+                    }
+                    break;
+                }
                 case 'remoteConfig':
                     if (typeof msg.active === 'boolean') { remoteControlActive = msg.active; applyRemoteControlButtonState(); }
                     renderRemoteConfig(msg.config, msg);
@@ -7091,6 +7177,89 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         document.getElementById('integration-settings-modal')?.addEventListener('click', function(e) {
             if (e.target === e.currentTarget) closeIntegrationSettings();
         });
+
+        // Create Project Modal handlers
+        (function initCreateProjectModal() {
+            const modal = document.getElementById('create-project-modal');
+            const nameInput = document.getElementById('create-project-name');
+            const descInput = document.getElementById('create-project-description');
+            const submitBtn = document.getElementById('create-project-submit');
+            const copyPrdBtn = document.getElementById('create-project-copy-prd');
+            const cancelBtn = document.getElementById('create-project-cancel');
+            const closeBtn = document.getElementById('create-project-close');
+
+            if (!modal || !nameInput || !submitBtn) return;
+
+            function closeModal() {
+                modal.classList.add('hidden');
+            }
+
+            // Enable submit + copy-prd only when name is non-empty
+            nameInput.addEventListener('input', () => {
+                const valid = !!nameInput.value.trim();
+                submitBtn.disabled = !valid;
+                copyPrdBtn.disabled = !valid;
+            });
+
+            // Enter key submits if name is valid
+            nameInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && nameInput.value.trim()) {
+                    submitBtn.click();
+                }
+            });
+
+            // Escape closes
+            modal.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') closeModal();
+            });
+
+            // Close buttons
+            cancelBtn?.addEventListener('click', closeModal);
+            closeBtn?.addEventListener('click', closeModal);
+
+            // Backdrop click closes
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) closeModal();
+            });
+
+            // Submit — create the project
+            submitBtn.addEventListener('click', () => {
+                const projectName = nameInput.value.trim();
+                if (!projectName) return;
+
+                const workspaceRoot = modal.dataset.workspaceRoot || currentWorkspaceRoot;
+                const description = descInput?.value?.trim() || '';
+
+                postKanbanMessage({
+                    type: 'addProject',
+                    workspaceRoot,
+                    projectName,
+                    description
+                });
+
+                closeModal();
+            });
+
+            // Copy PRD Prompt — copy a ready-to-paste prompt to the clipboard (does NOT close modal)
+            copyPrdBtn?.addEventListener('click', () => {
+                const projectName = nameInput.value.trim();
+                if (!projectName) return;
+
+                const workspaceRoot = modal.dataset.workspaceRoot || currentWorkspaceRoot;
+                const description = descInput?.value?.trim() || '';
+
+                postKanbanMessage({
+                    type: 'copyPrdPrompt',
+                    workspaceRoot,
+                    projectName,
+                    description
+                });
+
+                // Visual feedback
+                copyPrdBtn.textContent = 'COPIED!';
+                setTimeout(() => { copyPrdBtn.textContent = 'Copy PRD Prompt'; }, 1500);
+            });
+        })();
 
         // Linear and ClickUp request IDs for correlation
         let linearContentRequestId = 0;
