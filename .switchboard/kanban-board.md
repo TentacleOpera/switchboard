@@ -1,6 +1,6 @@
 # Kanban Board
 
-*Workspace: 038bffef-9842-4574-96a1-69a43a280b3c* · *Updated: 2026-06-27T21:40:35.148Z*
+*Workspace: 038bffef-9842-4574-96a1-69a43a280b3c* · *Updated: 2026-06-27T21:40:50.992Z*
 
 ## CREATED
 
@@ -91,11 +91,11 @@ _No plans_
 
 ## CODER CODED
 
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-epic-loses-status-on-column-move.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-epic-loses-status-on-column-move.md) — Fix: Epics Lose is_epic Status When Moved Between Columns <!-- planId:11b58b9b-4a81-4617-84f0-bcace5c202a8 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/epic-card-subtask-column-status-display.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/epic-card-subtask-column-status-display.md) — Enhancement: Epic File Subtask List Should Show Each Subtask's Current Kanban Column <!-- planId:d7898e5f-16a7-4b16-bf0f-b8421929d787 -->
 
 ## CODE REVIEWED
 
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-epic-loses-status-on-column-move.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-epic-loses-status-on-column-move.md) — Fix: Epics Lose is_epic Status When Moved Between Columns <!-- planId:11b58b9b-4a81-4617-84f0-bcace5c202a8 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/bug-epic-kanban-card-no-orchestrate-button-uat-failure.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/bug-epic-kanban-card-no-orchestrate-button-uat-failure.md) — UAT Failure: Epic Kanban Board Cards Have No Orchestrate Button and ORCHESTRATING Column Never Appears <!-- planId:e9396ead-e916-48af-b4ff-ba645d7691e8 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/epic-card-subtask-count-meta-line.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/epic-card-subtask-count-meta-line.md) — Epic Card Layout: Replace Complexity with Subtask Count <!-- planId:1ddd67e5-472a-408e-8fb7-0cb6d8b317cb -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/remote-control-dispatch-acknowledgment-writeback.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/remote-control-dispatch-acknowledgment-writeback.md) — Remote Control Dispatch Acknowledgment Write-Back <!-- planId:d2f1c01f-a207-40c6-bcc7-5e76ae26746f -->
