@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as https from 'https';
 import { KanbanDatabase } from './KanbanDatabase';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
+import { loadNotionRemoteSetup } from './remote/notionRemoteConfig';
 
 export interface NotionConfig {
   pageUrl: string;
@@ -199,6 +200,77 @@ export class NotionFetchService {
       const result = await this.httpRequest('GET', '/users/me', undefined, 2000);
       return result.status === 200;
     } catch { return false; }
+  }
+
+  /**
+   * §7/§9 — the integration bot id from `GET /v1/users/me`. Matches `created_by.id` on
+   * rows the integration authored (research-confirmed), so the poll can skip its own
+   * Comments-DB rows without any text marker. Returns null on failure — the caller must
+   * then SKIP comment ingestion that cycle (never fail loud, never loop).
+   *
+   * PAT caveat: a Personal Access Token returns a `person` user (not `bot`); the id still
+   * matches `created_by`, only the `type` differs — so id-comparison stays correct.
+   */
+  async getBotId(): Promise<string | null> {
+    try {
+      const result = await this.httpRequest('GET', '/users/me', undefined, 5000);
+      if (result.status !== 200) { return null; }
+      const id = result.data?.id;
+      return typeof id === 'string' && id ? id : null;
+    } catch { return null; }
+  }
+
+  /**
+   * §8 — host-side comment write-back for Notion. Inserts a row into the "Switchboard
+   * Comments" database (NOT a native page comment — see D3) with `From = Switchboard` and
+   * a `Plan` relation to the card's page. `created_by` is auto-populated with the bot id,
+   * which is how the poll skips this row on ingest. Token stays host-side.
+   *
+   * `pageId` is the plans-DB page id (the card's `notionPageId`). Returns
+   * `notConfigured: true` when remote setup hasn't run, so the bridge can answer 503.
+   */
+  async postManagedComment(pageId: string, body: string): Promise<{ success: boolean; error?: string; notConfigured?: boolean }> {
+    const cleanPageId = String(pageId || '').trim();
+    const text = String(body || '').trim();
+    if (!cleanPageId || !text) {
+      return { success: false, error: 'Notion comment requires a page id and non-empty body' };
+    }
+    let setup;
+    try {
+      const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
+      await db.ensureReady();
+      setup = await loadNotionRemoteSetup(db);
+    } catch (err: any) {
+      return { success: false, error: `Failed to load Notion remote setup: ${String(err)}` };
+    }
+    if (!setup?.commentsDatabaseId) {
+      return {
+        success: false,
+        notConfigured: true,
+        error: 'Notion Comments database not configured — run "Run Notion setup sync" in the Remote tab first.'
+      };
+    }
+
+    // Notion title cells cap a single rich-text run; keep the message bounded.
+    const MAX = 2000;
+    const message = text.length > MAX ? text.slice(0, MAX - 12) + ' …[truncated]' : text;
+
+    try {
+      const result = await this.httpRequest('POST', '/pages', {
+        parent: { database_id: setup.commentsDatabaseId },
+        properties: {
+          Message: { title: [{ type: 'text', text: { content: message } }] },
+          Plan: { relation: [{ id: cleanPageId }] },
+          From: { select: { name: 'Switchboard' } }
+        }
+      }, 15000);
+      if (result.status >= 200 && result.status < 300) {
+        return { success: true };
+      }
+      return { success: false, error: result.data?.message || `Notion comment insert failed (HTTP ${result.status})` };
+    } catch (err: any) {
+      return { success: false, error: String(err) };
+    }
   }
 
   // ── URL Parsing ─────────────────────────────────────────────

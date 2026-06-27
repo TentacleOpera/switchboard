@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { NotionFetchService } from './NotionFetchService';
 import { KanbanDatabase, KanbanPlanRecord } from './KanbanDatabase';
+import { loadNotionRemoteSetup, saveNotionRemoteSetup } from './remote/notionRemoteConfig';
 
 export interface NotionBackupConfig {
     databaseUrl?: string;
@@ -189,7 +190,9 @@ export class NotionBackupService {
                     { name: 'local', color: 'blue' },
                     { name: 'brain', color: 'purple' },
                     { name: 'clickup-automation', color: 'green' },
-                    { name: 'linear-automation', color: 'yellow' }
+                    { name: 'linear-automation', color: 'yellow' },
+                    { name: 'notion-automation', color: 'pink' },
+                    { name: 'notion-import', color: 'red' }
                 ] } },
                 'ClickUp Task ID': { rich_text: {} },
                 'Linear Issue ID': { rich_text: {} }
@@ -213,6 +216,166 @@ export class NotionBackupService {
         return { success: true, databaseUrl };
     }
 
+    // ── Remote-Control setup (§10) ────────────────────────────────
+
+    /**
+     * One-time Notion Remote-Control setup, run from the Remote tab. Idempotent — safe to
+     * re-run (it reuses existing databases and only extends the column select).
+     *
+     * 1. Ensure the plans DB exists (reuse the backup DB), back up the selected boards'
+     *    plans so each has a page, and write each page id back to `notionPageId` — this is
+     *    the gap `_upsertPlanToNotion` otherwise leaves open (cards with no page id can't be
+     *    polled).
+     * 2. Populate the `Kanban Column` select from the REAL board columns (not the hardcoded
+     *    8) or state mirroring silently fails for any column not in the select.
+     * 3. Ensure the "Switchboard Comments" DB exists (the async message bus).
+     * 4. Cache the bot id + database ids; seed both cursors to "now" (no history replay).
+     */
+    async setupRemoteControl(
+        workspaceRoot: string,
+        boards: string[],
+        columnNames: string[]
+    ): Promise<{ success: boolean; backedUp?: number; plansDatabaseUrl?: string; commentsDatabaseId?: string; error?: string }> {
+        const kanbanDb = KanbanDatabase.forWorkspace(workspaceRoot);
+        await kanbanDb.ensureReady();
+        const workspaceId = await kanbanDb.getWorkspaceId();
+        if (!workspaceId) {
+            return { success: false, error: 'Workspace ID not found in database' };
+        }
+
+        // 1. Ensure the plans DB.
+        let config = await this.loadConfig();
+        if (!config?.databaseId) {
+            const created = await this.autoCreateDatabase();
+            if (!created.success) { return { success: false, error: created.error || 'Failed to create plans database' }; }
+            config = await this.loadConfig();
+        }
+        const plansDatabaseId = config?.databaseId;
+        if (!plansDatabaseId) { return { success: false, error: 'Plans database id unavailable after setup' }; }
+
+        // 2. Extend the Kanban Column select to cover every real board column + whatever
+        //    columns existing cards already sit in.
+        const allPlans = await kanbanDb.getAllPlans(workspaceId);
+        const boardSet = new Set(boards);
+        const dbColumns = Array.from(new Set(allPlans.map(p => String(p.kanbanColumn || '').trim()).filter(Boolean)));
+        const allColumns = Array.from(new Set([...(columnNames || []), ...dbColumns].map(c => String(c).trim()).filter(Boolean)));
+        await this._ensureColumnSelectOptions(plansDatabaseId, allColumns);
+
+        // 3. Back up the participating plans and write page ids back.
+        const participating = allPlans.filter(p => p.status !== 'deleted' && boardSet.has(p.project || ''));
+        let backedUp = 0;
+        for (let i = 0; i < participating.length; i++) {
+            const plan = participating[i];
+            const result = await this._upsertPlanToNotion(plansDatabaseId, plan);
+            if (result.success && result.pageId) {
+                await kanbanDb.updateNotionPageIdByPlanFile(plan.planFile, workspaceId, result.pageId);
+                // Surface the id to the local triager/reply agent (mirror Linear's
+                // `**Linear Issue ID:**`) so it can post replies via the notion_api skill.
+                await this._writeNotionPageIdMetadata(plan.planFile, result.pageId);
+                backedUp++;
+            }
+            if (participating.length > 1) { await this._delay(350); }
+        }
+
+        // 4. Ensure the Comments DB.
+        const existingSetup = await loadNotionRemoteSetup(kanbanDb);
+        let commentsDatabaseId = existingSetup?.commentsDatabaseId || '';
+        if (commentsDatabaseId) {
+            const access = await this.validateDatabaseAccess(commentsDatabaseId);
+            if (!access.success) { commentsDatabaseId = ''; }
+        }
+        if (!commentsDatabaseId) {
+            const created = await this._ensureCommentsDatabase(plansDatabaseId);
+            if (!created.databaseId) { return { success: false, error: created.error || 'Failed to create Comments database' }; }
+            commentsDatabaseId = created.databaseId;
+        }
+
+        // 5. Cache ids + bot id; seed cursors to "now" so history is not replayed.
+        const botId = (await this._notionFetchService.getBotId()) || existingSetup?.botId || '';
+        await saveNotionRemoteSetup(kanbanDb, { plansDatabaseId, commentsDatabaseId, botId });
+
+        const now = new Date().toISOString();
+        // Cursor + seen keys MUST match RemoteControlService's `remote.{state,comment}Cursor.notion`.
+        await kanbanDb.setConfig('remote.stateCursor.notion', now);
+        await kanbanDb.setConfig('remote.commentCursor.notion', now);
+        await kanbanDb.setConfig('remote.commentSeen.notion', '[]');
+
+        return { success: true, backedUp, plansDatabaseUrl: config?.databaseUrl, commentsDatabaseId };
+    }
+
+    /**
+     * Insert/replace a `> **Notion Page ID:** <id>` metadata line in the plan file so the
+     * local triager/reply agent can resolve the id for the notion_api bridge skill.
+     * Idempotent: replaces an existing line rather than appending a duplicate.
+     */
+    private async _writeNotionPageIdMetadata(planFileAbs: string, pageId: string): Promise<void> {
+        try {
+            if (!planFileAbs || !pageId) { return; }
+            let content: string;
+            try { content = await fs.promises.readFile(planFileAbs, 'utf8'); }
+            catch { return; } // plan file not on disk (DB-only record) — nothing to stamp
+            const line = `> **Notion Page ID:** ${pageId}`;
+            if (content.includes('**Notion Page ID:**')) {
+                const replaced = content.replace(/^>?\s*\*\*Notion Page ID:\*\*.*$/m, line);
+                if (replaced === content) { return; }
+                await fs.promises.writeFile(planFileAbs, replaced, 'utf8');
+                return;
+            }
+            // Insert right after the first line (usually the H1) to mirror Linear's stub layout.
+            const lines = content.split('\n');
+            const insertAt = lines.length > 0 && lines[0].startsWith('# ') ? 1 : 0;
+            lines.splice(insertAt, 0, insertAt === 1 ? '' : '', line);
+            await fs.promises.writeFile(planFileAbs, lines.join('\n'), 'utf8');
+        } catch (e) {
+            console.warn('[NotionBackupService] _writeNotionPageIdMetadata failed:', e);
+        }
+    }
+
+    /** Create/extend the plans DB `Kanban Column` select so every real column round-trips. */
+    private async _ensureColumnSelectOptions(databaseId: string, columns: string[]): Promise<void> {
+        if (!columns.length) { return; }
+        try {
+            const dbResult = await this._notionFetchService.httpRequest('GET', `/databases/${databaseId}`, undefined, 10000);
+            if (dbResult.status !== 200) { return; }
+            const existing: any[] = dbResult.data?.properties?.['Kanban Column']?.select?.options || [];
+            const existingNames = new Set(existing.map((o: any) => String(o.name)));
+            const additions = columns.filter(c => !existingNames.has(c));
+            if (additions.length === 0) { return; }
+            const options = [...existing.map((o: any) => ({ name: o.name, color: o.color })), ...additions.map(name => ({ name }))];
+            await this._notionFetchService.httpRequest('PATCH', `/databases/${databaseId}`, {
+                properties: { 'Kanban Column': { select: { options } } }
+            }, 10000);
+        } catch (e) {
+            console.warn('[NotionBackupService] _ensureColumnSelectOptions failed:', e);
+        }
+    }
+
+    /** Create the agent-operated "Switchboard Comments" database under the configured parent page. */
+    private async _ensureCommentsDatabase(plansDatabaseId: string): Promise<{ databaseId?: string; error?: string }> {
+        const notionConfig = await this._notionFetchService.loadConfig();
+        const parentPageId = notionConfig?.pageId;
+        if (!parentPageId) {
+            return { error: 'No Notion page configured. Set up Notion integration in the Integrations tab first.' };
+        }
+        const payload = {
+            parent: { page_id: parentPageId },
+            title: [{ type: 'text', text: { content: 'Switchboard Comments' } }],
+            properties: {
+                'Message': { title: {} },
+                'Plan': { relation: { database_id: plansDatabaseId, type: 'single_property', single_property: {} } },
+                'From': { select: { options: [
+                    { name: 'Remote', color: 'blue' },
+                    { name: 'Switchboard', color: 'green' }
+                ] } }
+            }
+        };
+        const result = await this._notionFetchService.httpRequest('POST', '/databases', payload, 15000);
+        if (result.status !== 200) {
+            return { error: `Failed to create Comments database (HTTP ${result.status}): ${JSON.stringify(result.data)?.slice(0, 200)}` };
+        }
+        return { databaseId: String(result.data?.id || '') };
+    }
+
     // ── Validation ────────────────────────────────────────────────
 
     async validateDatabaseAccess(databaseId: string): Promise<{ success: boolean; error?: string }> {
@@ -228,7 +391,7 @@ export class NotionBackupService {
 
     // ── Private helpers ───────────────────────────────────────────
 
-    private async _upsertPlanToNotion(databaseId: string, plan: KanbanPlanRecord): Promise<{ success: boolean }> {
+    private async _upsertPlanToNotion(databaseId: string, plan: KanbanPlanRecord): Promise<{ success: boolean; pageId?: string }> {
         try {
             // Query for existing page by Plan ID
             const queryResult = await this._notionFetchService.httpRequest('POST', `/databases/${databaseId}/query`, {
@@ -239,13 +402,14 @@ export class NotionBackupService {
             const properties = this._planToNotionProperties(plan);
             if (existing) {
                 await this._notionFetchService.httpRequest('PATCH', `/pages/${existing.id}`, { properties }, 10000);
+                return { success: true, pageId: String(existing.id || '') };
             } else {
-                await this._notionFetchService.httpRequest('POST', '/pages', {
+                const created = await this._notionFetchService.httpRequest('POST', '/pages', {
                     parent: { database_id: databaseId },
                     properties
                 }, 15000);
+                return { success: true, pageId: String(created.data?.id || '') };
             }
-            return { success: true };
         } catch {
             return { success: false };
         }
@@ -320,7 +484,9 @@ export class NotionBackupService {
                 dispatchedAgent: '',
                 dispatchedIde: '',
                 clickupTaskId: getRichText(p['ClickUp Task ID']),
-                linearIssueId: getRichText(p['Linear Issue ID'])
+                linearIssueId: getRichText(p['Linear Issue ID']),
+                // The row's own page id is the Notion Remote-Control linkage.
+                notionPageId: String(page.id || '')
             };
         } catch {
             return null;

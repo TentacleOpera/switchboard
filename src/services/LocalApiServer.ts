@@ -4,6 +4,7 @@ import * as path from 'path';
 import { URL } from 'url';
 import { ClickUpSyncService } from './ClickUpSyncService';
 import { LinearSyncService } from './LinearSyncService';
+import type { NotionFetchService } from './NotionFetchService';
 
 interface LocalApiServerOptions {
     workspaceRoot: string;
@@ -11,6 +12,7 @@ interface LocalApiServerOptions {
     linearMetadataPath: string;
     getClickUpService: () => ClickUpSyncService | null;
     getLinearService: () => LinearSyncService | null;
+    getNotionService: () => NotionFetchService | null;
     getAuthToken: () => Promise<string>;
     allRoots: string[];
     /**
@@ -173,9 +175,9 @@ export class LocalApiServer {
 
     /**
      * §8 — POST /comment. Host-side comment write-back reached by agents over the bridge.
-     * Body: { provider: 'linear' | 'clickup', id: string, body: string }.
-     * The host stamps the self-marker and truncates (postManagedComment); the agent
-     * never touches the token or the marker.
+     * Body: { provider: 'linear' | 'clickup' | 'notion', id: string, body: string }.
+     * The host stamps the self-marker (Linear/ClickUp) or inserts a Comments-DB row with
+     * `From = Switchboard` (Notion); the agent never touches the token or the marker.
      */
     private async _handlePostComment(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
@@ -192,7 +194,7 @@ export class LocalApiServer {
             const provider = String(body?.provider || '').trim().toLowerCase();
             const id = String(body?.id || '').trim();
             const text = String(body?.body || '');
-            if ((provider !== 'linear' && provider !== 'clickup') || !id || !text.trim()) {
+            if ((provider !== 'linear' && provider !== 'clickup' && provider !== 'notion') || !id || !text.trim()) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: 'Missing or invalid provider/id/body' }));
                 return;
@@ -200,7 +202,9 @@ export class LocalApiServer {
 
             const service = provider === 'linear'
                 ? this._options.getLinearService()
-                : this._options.getClickUpService();
+                : provider === 'clickup'
+                    ? this._options.getClickUpService()
+                    : this._options.getNotionService();
             if (!service) {
                 res.writeHead(503, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: `${provider} service not available` }));
@@ -208,7 +212,12 @@ export class LocalApiServer {
             }
 
             const result = await service.postManagedComment(id, text);
-            res.writeHead(result.success ? 200 : 502, { 'Content-Type': 'application/json' });
+            // Notion surfaces a "setup not run" case as `notConfigured` → 503 so the agent
+            // knows to ask the user to run the Remote-tab setup, not retry blindly.
+            const code = result.success
+                ? 200
+                : (result as { notConfigured?: boolean }).notConfigured ? 503 : 502;
+            res.writeHead(code, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(result));
         } catch (err) {
             console.error('[LocalApiServer] postComment error:', err);

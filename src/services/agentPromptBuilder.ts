@@ -958,12 +958,14 @@ You read ONE imported ticket (its title, description, and any captured comments 
 file) and post a single short triage verdict back to the source ticket as a comment.
 
 Resolve the provider ticket ID from the plan metadata: the "**ClickUp Task ID:**" line
-(ClickUp) or the "**Linear Issue ID:**" line (Linear). Use that ID — not the legacy
-"**Ticket:**" field. If neither ID is present, skip posting and notify the user.
+(ClickUp), the "**Linear Issue ID:**" line (Linear), or the "**Notion Page ID:**" line
+(Notion). Use that ID — not the legacy "**Ticket:**" field. If none is present, skip posting
+and notify the user.
 
-Post the verdict as a comment using the clickup_api skill (ClickUp) or the linear_api skill
-(Linear). These post through the Switchboard local API bridge — never call the provider API
-directly and never touch tokens. NEVER overwrite the ticket description — comment only.
+Post the verdict as a comment using the clickup_api skill (ClickUp), the linear_api skill
+(Linear), or the notion_api skill (Notion). These post through the Switchboard local API
+bridge — never call the provider API directly and never touch tokens. NEVER overwrite the
+ticket description — comment only.
 
 Your verdict MUST be a single short comment, target ≤ 120 words, in exactly this shape:
 

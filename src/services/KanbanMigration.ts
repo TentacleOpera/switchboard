@@ -13,7 +13,7 @@ export type LegacyKanbanSnapshotRow = {
     createdAt: string;
     updatedAt: string;
     lastAction: string;
-    sourceType: 'local' | 'brain' | 'clickup-automation' | 'linear-automation' | 'clickup-import' | 'linear-import';
+    sourceType: KanbanPlanRecord['sourceType'];
 };
 
 export class KanbanMigration {

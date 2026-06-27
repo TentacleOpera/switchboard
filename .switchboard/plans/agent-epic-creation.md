@@ -40,12 +40,14 @@ Agents can already move kanban cards (via `kanban_operations/move-card.js`), but
 - Dual-path like `move-card.js`:
   - Preferred: `POST /kanban/epic` on the running extension's API server → full flow (DB upsert, subtask linking, epic file write, board refresh). **Clarification:** unlike card *moves*, epic *creation* does NOT currently fan out to Linear/ClickUp — the existing `createEpic` webview handler (KanbanProvider.ts:7834–7947) calls no sync service, and `GlobalPlanWatcherService.registerPendingCreation(epicPath)` (line 7932) intentionally makes the watcher *skip* the new file. So the preferred path matches webview behavior exactly: DB + file + board refresh, **no external-tracker sync**. See Edge-Case Audit.
   - Fallback: direct DB write via `KanbanDatabase` (no board refresh, no sync). Requires `out/` to be built (see Dependencies note on `out/`).
+  - ⚠ **IMPLEMENTATION NOTE (post-review):** the direct-DB fallback was NOT implemented. The plan's own Proposed Changes / Adversarial note (see line ~197) endorsed skipping it — replicating the full webview flow (project inheritance, column resolution, YAML-safe file write, per-subtask linking) in raw DB calls would risk an orphaned epic. `create-epic.js` fails with a clear "start the extension" message when the API server is unreachable. This reconciles the §1 "Dual-path" narrative with the Proposed Changes decision. See Post-Implementation Review.
 - Output: JSON `{ ok, epicPlanId, epicSessionId }`
 
 **`assign-to-epic.js`**
 - Args: `<epic_plan_id> <plan_ids_json> [workspace_root]`
 - Assigns additional plans to an existing epic (batch form of the existing single-card `addSubtaskToEpic` webview handler at KanbanProvider.ts:7737)
 - Same dual-path routing (`POST /kanban/epic/assign`)
+- ⚠ **IMPLEMENTATION NOTE (post-review):** like `create-epic.js`, `assign-to-epic.js` has NO direct-DB fallback (plan-endorsed — assignment must also regenerate the epic markdown via `KanbanProvider._regenerateEpicFile`, unreachable from a standalone process). It fails with a clear "start the extension" message when the API server is down. See Post-Implementation Review.
 - Output: JSON `{ ok, assigned, skipped }` — `skipped` lists planIds that were already on another epic (the `addSubtaskToEpic` handler rejects these at line 7759; the batch version skips-and-reports rather than aborting the whole batch)
 
 ### 2. New API endpoints in `LocalApiServer.ts`
@@ -113,7 +115,7 @@ This is documented in SKILL.md so the agent follows it consistently, not just ad
 | `src/services/LocalApiServer.ts` | Add `createEpic`/`assignToEpic` callbacks to `LocalApiServerOptions` (line 8); add `_handleKanbanCreateEpic` + `_handleKanbanAssignEpic` handlers modeled on `_handleKanbanMove` (line 205); wire two routes into `_handleRequest` dispatch (after line 843) |
 | `src/services/TaskViewerProvider.ts` | Wire `createEpic` and `assignToEpic` callbacks in `_startLocalApiServer()` (line 900–932), delegating to `KanbanProvider` |
 | `src/webview/kanban.html` | Add "SUGGEST EPICS" `strip-btn` in `kanban-sub-bar` (line 2516–2533) |
-| `src/webview/project.js` | Handle `suggestEpics` button click → `vscode.postMessage({ type:'suggestEpics', workspaceRoot })` (pattern from line 2308) |
+| `src/webview/project.js` | Handle `suggestEpics` button click → `vscode.postMessage({ type:'suggestEpics', workspaceRoot })` (pattern from line 2308) — ⚠ **NOT IMPLEMENTED HERE:** `project.js` is loaded by `PlanningPanelProvider`, not the kanban board. The kanban `kanban-sub-bar` uses inline `<script>` in `kanban.html` (the sibling `btn-chat-copy-prompt` wires its listener inline at kanban.html:7241). The implementer correctly placed the `btn-suggest-epics` click handler inline in `kanban.html` instead. See Post-Implementation Review. |
 | `.agents/skills/kanban_operations/create-epic.js` | New script — copy `move-card.js` dual-path skeleton (lines 33–161), replace `/kanban/move` with `/kanban/epic` |
 | `.agents/skills/kanban_operations/assign-to-epic.js` | New script — same skeleton, `/kanban/epic/assign` |
 | `.agents/skills/kanban_operations/SKILL.md` | Updated docs + workflow |
@@ -231,3 +233,91 @@ This is documented in SKILL.md so the agent follows it consistently, not just ad
 ## Recommendation
 
 Complexity is **6** (multi-file coordination, two new scripts, one new UI entry point, but all reusing existing patterns and existing epic internals — no new architectural patterns, no data-model changes). **Send to Coder.**
+
+---
+
+## Post-Implementation Review (in-place reviewer pass, 2026-06-27)
+
+Implementation commit: `a9636da` ("switchboard: auto-commit before code review (Plan: Agent Epic Creation & Grouping, 2026-06-27T02-44-18)"). Working tree clean at review time. Review covered the full diff plus structural verification of the surrounding code (interface shapes, sibling-handler patterns, webview helpers).
+
+### Stage 1 — Grumpy Principal Engineer (adversarial findings)
+
+> Listen. I read every line of this diff against the plan, and I went looking for blood. Here's what I found — and what I didn't.
+
+- **CRITICAL — none.** I tried. The auth gates are on both new routes (`_checkAuth(req, true)` in `_handleKanbanCreateEpic` and `_handleKanbanAssignEpic`, mirroring `_handleKanbanMove` exactly). The `createEpic` webview case was gutted to a pure delegate — no residual upsert code, so no double-execution. The DB-upsert-then-file-write order is preserved. `registerPendingCreation` is still called before the file write. The lock-column guard runs once up-front before the batch loop. I cannot manufacture a data-loss or auth-bypass path here. Annoying.
+
+- **MAJOR — none.** The plan's §1 screamed "Dual-path like move-card.js" with a direct-DB fallback, and the implementer shipped NO fallback. ordinarily I'd burn that down. But the plan's OWN Proposed Changes (line ~197) and Adversarial note explicitly said "preferably, throw a clear error directing the user to run the extension, since replicating the full webview flow in raw DB calls duplicates significant logic." So the implementer followed the plan's stated preference over its §1 narrative. The two scripts fail loudly with "Switchboard extension not reachable … Open the workspace in VS Code with Switchboard active and retry." That's the right call — a half-formed epic (DB row, no file, unlinked subtasks) is worse than a clean failure. The §1 text is stale; I've annotated it inline. Not a code defect.
+
+- **MAJOR (candidate, dismissed) — `project.js` click handler missing.** The Critical Files table swore the `suggestEpics` click handler lives in `src/webview/project.js`. It doesn't — it's inline in `kanban.html`. I checked: `project.js` is loaded by `PlanningPanelProvider.ts` (line 402), NOT by the kanban board. The kanban `kanban-sub-bar` uses inline `<script>` — its sibling `btn-chat-copy-prompt` wires its own listener inline at `kanban.html:7241`. So the implementer put `btn-suggest-epics` exactly where the existing sibling button's handler lives. The plan's path was wrong; the implementation is correct. Annotated inline. Not a code defect.
+
+- **NIT-1 — inconsistent `planId` fallback in `assignPlansToEpic`.** `createEpicFromPlanIds` links subtasks with `st.planId || st.sessionId` (defensive, copied from the original). `assignPlansToEpic` uses bare `subtask.planId` (KanbanProvider.ts ~line 8530). Harmless — the record was fetched via `getPlanByPlanId(pid)`, so `planId` is the lookup key and is guaranteed non-empty. But the inconsistency made me squint. Not worth fixing; the guarantee holds.
+
+- **NIT-2 — server coerces `planIds` instead of validating type.** Both new handlers do `body.planIds.map((p: any) => String(p))` (LocalApiServer.ts:298, 343) where the plan said "validate that `planIds` is an array of strings." Coercion is arguably safer than rejection (a stray `123` becomes `"123"`), and the scripts validate strictly client-side (`planIds.every(p => typeof p === 'string')`). Acceptable; noting for fidelity.
+
+- **NIT-3 — re-assigning a plan already on the SAME epic reports it as `assigned`.** `assignPlansToEpic` only skips when `subtask.epicId && subtask.epicId !== epic.planId`. A plan already on this epic falls through to an idempotent `updateEpicStatus` no-op and lands in `assigned` (KanbanProvider.ts ~line 8528). Harmless (re-link writes the same value), but a pedant would put it in `skipped`. Not worth the branch.
+
+- **NIT-4 — empty `planIds` exits in the script, doesn't "call through."** Plan edge-case (line ~203) said an empty array should "still call through (server returns {success:false, error})." The scripts exit with a usage error before any HTTP call (create-epic.js:31, assign-to-epic.js:29). Moot — the server also 400s on empty arrays — and the script's early-exit is better UX. Noting only.
+
+- **NIT-5 — no success status message in the `createEpic` webview case.** Only failures get `showWarningMessage` (KanbanProvider.ts:7847-7849); success relies on `_refreshBoard` (called inside `createEpicFromPlanIds`). The original handler behaved identically. The plan said "post a status message" — ambiguous. Leave it.
+
+- **NIT-6 — `workspaceRoot` interpolated into double-quoted bash inside the copied prompt.** `_buildSuggestEpicsPrompt` emits `node ... get-state.js "${workspaceRoot}"` (KanbanProvider.ts:8582). A workspace root containing a literal `"` would produce a malformed command in the *copied prompt text*. It's a clipboard prompt for a human/agent to read, not auto-executed, so no real injection — but a path with a quote char yields a confusing instruction. Matches the existing `chatCopyPrompt` characteristic. Defer.
+
+### Stage 2 — Balanced synthesis
+
+**Keep as-is (no code change):**
+- The no-fallback design for both scripts — plan-endorsed (Proposed Changes + Adversarial note), and a clean failure beats an orphaned epic. SKILL.md already documents "no direct-DB fallback" correctly.
+- Inline `kanban.html` click handler — correct file; `project.js` was a plan misdiagnosis.
+- `createEpicFromPlanIds` newline-stripping of `name`/`description` (`replace(/[\r\n]+/g, ' ')`) — a defensive *improvement* over the original (which only slug-stripped), aligning with the plan's security intent (prevent YAML/H1 injection). Endorsed.
+- `_refreshBoard` called once after the batch in `assignPlansToEpic`, skipped when `assigned.length === 0` — matches the plan's "once, not per-item" requirement.
+- Lock-column guard evaluated once up-front; re-check of `subtask.epicId` per-item before writing (narrows the check-then-act race per the Edge-Case Audit).
+- Both new routes reuse `_checkAuth(req, true)` + `_parseJsonBody` + the 200/502/500 response shape of `_handleKanbanMove`.
+
+**Fix now:** none required. No CRITICAL or MAJOR code findings. The only edits applied were plan-documentation reconciliations (inline ⚠ notes at the stale "Dual-path" bullets and the `project.js` table row), which are non-destructive additions.
+
+**Defer (NITs, not blocking):** NIT-1 through NIT-6 above. None affect correctness, security, or data integrity. Capture as backlog if desired; do not block merge.
+
+### Code fixes applied
+
+None to source. Plan-documentation corrections (additive inline ⚠ notes) applied to `.switchboard/plans/agent-epic-creation.md` only:
+1. After the `create-epic.js` "Fallback" bullet — records the no-fallback decision.
+2. After the `assign-to-epic.js` "Same dual-path routing" bullet — same.
+3. On the `src/webview/project.js` Critical Files row — records the inline-`kanban.html` correction.
+
+### Files changed (this review)
+
+- `.switchboard/plans/agent-epic-creation.md` — inline reconciliation notes + this appended review section. No source files modified.
+
+### Implementation files verified (commit a9636da)
+
+| File | Status |
+|------|--------|
+| `.agents/skills/kanban_operations/create-epic.js` | New, 141 lines. API-only (no fallback, plan-endorsed). Output shape `{ok, epicPlanId, epicSessionId}` matches plan. |
+| `.agents/skills/kanban_operations/assign-to-epic.js` | New, 134 lines. API-only. Output shape `{ok, assigned, skipped}` matches plan. |
+| `.agents/skills/kanban_operations/SKILL.md` | +41 lines. Create/Assign/Suggest-workflow sections present; `planId`-not-`sessionId` note present; "no Linear/ClickUp sync" note present; "requires running extension, no direct-DB fallback" note present. |
+| `src/services/KanbanProvider.ts` | `createEpic` case refactored to pure delegate (no residual upsert). New `createEpicFromPlanIds()` (public), `assignPlansToEpic()` (public), `_buildSuggestEpicsPrompt()` (private). New `suggestEpics` case. Class boundary intact (closes at line 8589). |
+| `src/services/LocalApiServer.ts` | `createEpic`/`assignToEpic` callbacks added to `LocalApiServerOptions`. `_handleKanbanCreateEpic` + `_handleKanbanAssignEpic` mirror `_handleKanbanMove`. Two routes wired into `_handleRequest` after `/kanban/move`. |
+| `src/services/TaskViewerProvider.ts` | `createEpic` + `assignToEpic` callbacks wired in `_startLocalApiServer()` next to `moveCard`, delegating to the new `KanbanProvider` methods with null-guard + try/catch. |
+| `src/webview/kanban.html` | `SUGGEST EPICS` `strip-btn` added after `btn-chat-copy-prompt`. Click handler inline (correct — matches sibling pattern at line 7241). Posts `{type:'suggestEpics', workspaceRoot}`. |
+
+### Verification results
+
+- **Compilation:** SKIPPED per session directive (`SKIP COMPILATION`). Manual type/structure eyeball performed: return shapes match interface signatures; `KanbanCard` has `workspaceRoot`/`column`/`isEpic?`/`epicId?` (used by `suggestEpics`); `this._options.workspaceRoot` exists (used as fallback in both new handlers); no new imports required in `KanbanProvider.ts` (all used symbols pre-existing).
+- **Automated tests:** SKIPPED per session directive (`SKIP TESTS`). To be run separately by the user.
+- **Static checks performed:**
+  - `git show a9636da --stat` → 8 plan-relevant files changed (1 unrelated `notion-remote-control…md` plan ignored per FOCUS DIRECTIVE).
+  - `addSubtaskToEpic` handler (KanbanProvider.ts:7737-7767) cross-checked — lock-columns default `'IN PROGRESS,CODE REVIEW,REVIEWED,DONE'` matches `assignPlansToEpic` exactly; `epic.planId` linking pattern matches.
+  - Webview helpers `getActiveWorkspaceRoot()` (kanban.html:3893), `postKanbanMessage()` (3897), `showStatusMessage` case (5983) all present and shape-compatible with the new `suggestEpics` handler's postMessage.
+  - `get-state.js`, `move-card.js` present in `kanban_operations/` (prompt references valid).
+  - No residual inline `createEpic` upsert code (the case body is a pure delegate).
+
+### Remaining risks
+
+1. **`out/` fallback dependency is now moot for these scripts** — both new scripts have no direct-DB path, so the inherited `out/` staleness risk from `move-card.js` does NOT extend to `create-epic.js`/`assign-to-epic.js`. (If a fallback is ever added later, the `out/` requirement would re-apply.)
+2. **Check-then-act race in `assignPlansToEpic`** — narrowed (per-item `epicId` re-check) but not eliminated across the HTTP boundary. Acceptable for a single-user local tool, per the plan's Edge-Case Audit.
+3. **No external-tracker sync on epic create/assign** — preserved as current behavior; flagged for user review (plan §User Review Required). If sync-on-create is later desired, it is a separate scope decision.
+4. **`_lastCards` staleness in `suggestEpics`** — if the board hasn't rendered, the button reports "No loose pre-coding cards." Acceptable (the visible board is the source of truth the user is acting on).
+5. **NIT-6 (workspaceRoot with `"` in copied prompt)** — produces a malformed bash snippet in the clipboard text only; no execution risk. Defer.
+
+### Outcome
+
+**APPROVED.** No CRITICAL or MAJOR code findings. All plan requirements are implemented; the two deviations from the plan's letter (no direct-DB fallback; inline `kanban.html` handler instead of `project.js`) are plan-endorsed or plan-path corrections, respectively, and are documented inline above. Six NITs recorded, none blocking. Ready for the user's separate test-suite run.

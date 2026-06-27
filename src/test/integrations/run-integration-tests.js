@@ -8,7 +8,8 @@ const suites = {
         'src/test/integrations/notion/notion-url-parsing.test.js',
         'src/test/integrations/notion/notion-markdown-conversion.test.js',
         'src/test/integrations/notion/notion-fetch-service.test.js',
-        'src/test/integrations/notion/notion-regression.test.js'
+        'src/test/integrations/notion/notion-regression.test.js',
+        'src/test/integrations/notion/notion-remote-provider.test.js'
     ],
     clickup: [
         'src/test/integrations/clickup/clickup-sync-service.test.js',
@@ -22,10 +23,12 @@ const suites = {
         'src/test/integrations/linear/linear-sync-service.test.js',
         'src/test/integrations/linear/linear-import-flow.test.js',
         'src/test/integrations/linear/linear-automation-service.test.js',
-        'src/test/integrations/linear/linear-regression.test.js'
+        'src/test/integrations/linear/linear-regression.test.js',
+        'src/test/integrations/linear/linear-remote-provider.test.js'
     ],
     shared: [
-        'src/test/integrations/shared/integration-auto-pull-service.test.js'
+        'src/test/integrations/shared/integration-auto-pull-service.test.js',
+        'src/test/integrations/shared/remote-control-service.test.js'
     ],
     regression: [
         'src/test/integrations/sync-hang-regression.test.js'

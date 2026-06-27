@@ -222,7 +222,7 @@ type LinearImportNode = {
 type PlanRegistryEntry = {
     planId: string;
     ownerWorkspaceId: string;
-    sourceType: 'local' | 'brain' | 'clickup-automation' | 'linear-automation' | 'clickup-import' | 'linear-import';
+    sourceType: KanbanPlanRecord['sourceType'];
     localPlanPath?: string;
     brainSourcePath?: string;
     mirrorPath?: string;
@@ -903,6 +903,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             linearMetadataPath: cacheService['_linearMetadataPath'],
             getClickUpService: () => this._getClickUpService(effectiveRoot),
             getLinearService: () => this._getLinearService(effectiveRoot),
+            getNotionService: () => this._getNotionService(effectiveRoot),
             getAuthToken: async () => {
                 // Retrieve from VS Code SecretStorage - returns empty string if not set
                 return await this._context.secrets.get('switchboard.apiToken') || '';

@@ -43,7 +43,7 @@ export interface KanbanPlanRecord {
     createdAt: string;
     updatedAt: string;
     lastAction: string;
-    sourceType: 'local' | 'brain' | 'clickup-automation' | 'linear-automation' | 'clickup-import' | 'linear-import';
+    sourceType: 'local' | 'brain' | 'clickup-automation' | 'linear-automation' | 'clickup-import' | 'linear-import' | 'notion-import' | 'notion-automation';
     brainSourcePath: string;
     mirrorPath: string;
     routedTo: string;        // agent role dispatched to: 'lead' | 'coder' | 'intern' | ''
@@ -51,6 +51,7 @@ export interface KanbanPlanRecord {
     dispatchedIde: string;   // IDE name: 'Visual Studio Code', 'Cursor', 'Windsurf', etc.
     clickupTaskId?: string;
     linearIssueId?: string;
+    notionPageId?: string;
     worktreeId?: number;
     worktreeStatus?: string; // 'none' | 'active' | 'merged' | 'deleted'
     isEpic?: number;
@@ -132,6 +133,7 @@ CREATE TABLE IF NOT EXISTS plans (
     dispatched_ide    TEXT DEFAULT '',
     clickup_task_id   TEXT DEFAULT '',
     linear_issue_id   TEXT DEFAULT '',
+    notion_page_id    TEXT DEFAULT '',
     worktree_id       INTEGER,
     worktree_status   TEXT DEFAULT 'none',
     is_epic           INTEGER DEFAULT 0,
@@ -182,6 +184,7 @@ const SCHEMA_INDEX_STATEMENTS: string[] = [
     `CREATE INDEX IF NOT EXISTS idx_plans_project_id ON plans(project_id)`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_plans_plan_file_workspace ON plans(plan_file, workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_projects_workspace ON projects(workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_plans_notion_page ON plans(workspace_id, notion_page_id)`,
 ];
 
 // Migration SQL to add new columns to existing databases
@@ -241,6 +244,14 @@ const MIGRATION_V9_SQL = [
 const MIGRATION_V12_SQL = [
     `ALTER TABLE plans ADD COLUMN linear_issue_id TEXT DEFAULT ''`,
     `CREATE INDEX IF NOT EXISTS idx_plans_linear_issue ON plans(workspace_id, linear_issue_id)`,
+];
+
+// V39: Notion Remote-Control linkage. Mirrors linear_issue_id (V12). The column never
+// shipped, but the ALTER is still required so existing installs gain it (CREATE TABLE
+// IF NOT EXISTS skips the already-present table).
+const MIGRATION_V39_SQL = [
+    `ALTER TABLE plans ADD COLUMN notion_page_id TEXT DEFAULT ''`,
+    `CREATE INDEX IF NOT EXISTS idx_plans_notion_page ON plans(workspace_id, notion_page_id)`,
 ];
 
 const MIGRATION_V13_SQL = [
@@ -551,9 +562,9 @@ INSERT INTO plans (
     plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
     repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
     brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-    clickup_task_id, linear_issue_id, worktree_id, is_epic, epic_id,
+    clickup_task_id, linear_issue_id, notion_page_id, worktree_id, is_epic, epic_id,
     workspace_name, project_id
- ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     topic = excluded.topic,
     plan_file = excluded.plan_file,
@@ -576,6 +587,7 @@ ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     dispatched_ide = excluded.dispatched_ide,
     clickup_task_id = excluded.clickup_task_id,
     linear_issue_id = excluded.linear_issue_id,
+    notion_page_id = excluded.notion_page_id,
     worktree_id = excluded.worktree_id,
     is_epic = COALESCE(excluded.is_epic, is_epic),
     epic_id = CASE WHEN excluded.epic_id IS NOT NULL AND excluded.epic_id != '' THEN excluded.epic_id ELSE epic_id END,
@@ -589,7 +601,7 @@ const ORPHAN_PURGE_CONFIRMATION_DELAY_MS = 350;
 const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
                        repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
                        brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-                       clickup_task_id, linear_issue_id, worktree_id, worktree_status, is_epic, epic_id,
+                       clickup_task_id, linear_issue_id, notion_page_id, worktree_id, worktree_status, is_epic, epic_id,
                        workspace_name, project_id`;
 
 // Parse column definitions from SCHEMA_SQL's plans table for schema reconciliation.
@@ -1264,11 +1276,12 @@ export class KanbanDatabase {
                     record.dispatchedIde || '',   // 20
                     record.clickupTaskId || '',   // 21
                     record.linearIssueId || '',   // 22
-                    record.worktreeId ?? null,      // 23
-                    record.isEpic ?? 0,              // 24 — DEFAULT 0, not NULL (prevents is_epic=NULL clobber)
-                    record.epicId || '',             // 25
-                    record.workspaceName || '',      // 26
-                    record.projectId ?? null         // 27
+                    record.notionPageId || '',    // 23
+                    record.worktreeId ?? null,      // 24
+                    record.isEpic ?? 0,              // 25 — DEFAULT 0, not NULL (prevents is_epic=NULL clobber)
+                    record.epicId || '',             // 26
+                    record.workspaceName || '',      // 27
+                    record.projectId ?? null         // 28
                 ]);
             }
             this._db.run('COMMIT');
@@ -1323,8 +1336,8 @@ export class KanbanDatabase {
                 plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
                 repo_scope, project, project_id, workspace_id, created_at, updated_at, last_action, source_type,
                 brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-                clickup_task_id, linear_issue_id, workspace_name
-            ) VALUES (?, ?, ?, ?, 'CREATED', 'active', ?, ?, '', ?, ?, ?, ?, ?, '', ?, '', '', '', '', '', '', '', ?)
+                clickup_task_id, linear_issue_id, notion_page_id, workspace_name
+            ) VALUES (?, ?, ?, ?, 'CREATED', 'active', ?, ?, '', ?, ?, ?, ?, ?, '', ?, '', '', '', '', '', '', '', '', ?)
             ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
                 topic = excluded.topic,
                 complexity = excluded.complexity,
@@ -1847,6 +1860,39 @@ export class KanbanDatabase {
         const plan = await this.getPlanBySessionId(sessionId);
         if (!plan) { return false; }
         return this.updateClickUpTaskIdByPlanFile(plan.planFile, plan.workspaceId, clickupTaskId);
+    }
+
+    public async updateNotionPageIdByPlanFile(planFile: string, workspaceId: string, notionPageId: string): Promise<boolean> {
+        const normalizedPageId = String(notionPageId || '').trim();
+        const normalized = this._ensureRelativePlanFile(planFile);
+        const persisted = await this._persistedUpdate(
+            'UPDATE plans SET notion_page_id = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+            [normalizedPageId, new Date().toISOString(), normalized, workspaceId]
+        );
+        if (!persisted) {
+            return false;
+        }
+
+        const updatedPlan = await this.getPlanByPlanFile(planFile, workspaceId);
+        if (!updatedPlan) {
+            console.error(`[KanbanDatabase] Failed to update notion_page_id for missing plan ${planFile}.`);
+            return false;
+        }
+        if (String(updatedPlan.notionPageId || '').trim() !== normalizedPageId) {
+            console.error(
+                `[KanbanDatabase] Failed to verify notion_page_id update for plan ${planFile}. ` +
+                `Expected "${normalizedPageId}", found "${String(updatedPlan.notionPageId || '').trim()}".`
+            );
+            return false;
+        }
+        return true;
+    }
+
+    /** @deprecated session_id is no longer the unique key; use updateNotionPageIdByPlanFile instead. */
+    public async updateNotionPageId(sessionId: string, notionPageId: string): Promise<boolean> {
+        const plan = await this.getPlanBySessionId(sessionId);
+        if (!plan) { return false; }
+        return this.updateNotionPageIdByPlanFile(plan.planFile, plan.workspaceId, notionPageId);
     }
 
     public async deletePlanByPlanFile(planFile: string, workspaceId: string): Promise<boolean> {
@@ -2569,6 +2615,29 @@ export class KanbanDatabase {
              ORDER BY updated_at DESC
              LIMIT 1`,
             [workspaceId, normalizedIssueId]
+        );
+        const rows = this._readRows(stmt);
+        return rows.length > 0 ? rows[0] : null;
+    }
+
+    public async findPlanByNotionPageId(
+        workspaceId: string,
+        notionPageId: string
+    ): Promise<KanbanPlanRecord | null> {
+        if (!(await this.ensureReady()) || !this._db) return null;
+        const normalizedPageId = String(notionPageId || '').trim();
+        if (!normalizedPageId) {
+            return null;
+        }
+
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE workspace_id = ?
+               AND notion_page_id = ?
+               AND status != 'deleted'
+             ORDER BY updated_at DESC
+             LIMIT 1`,
+            [workspaceId, normalizedPageId]
         );
         const rows = this._readRows(stmt);
         return rows.length > 0 ? rows[0] : null;
@@ -4870,6 +4939,21 @@ export class KanbanDatabase {
                 // Do NOT stamp version — retry on next init
             }
         }
+
+        // V39: add notion_page_id column to plans (Notion Remote-Control linkage).
+        const v39 = await this.getMigrationVersion();
+        if (v39 < 39) {
+            for (const sql of MIGRATION_V39_SQL) {
+                try { this._db.exec(sql); } catch (e) {
+                    const msg = e instanceof Error ? e.message : String(e);
+                    if (!msg.includes('duplicate column') && !msg.includes('already exists')) {
+                        console.warn('[KanbanDatabase] V39 migration step failed:', msg);
+                    }
+                }
+            }
+            await this.setMigrationVersion(39);
+            console.log('[KanbanDatabase] V39 migration completed: notion_page_id column added to plans');
+        }
     }
 
     /**
@@ -5761,6 +5845,7 @@ FROM plans
                         const st = String(row.source_type || 'local');
                         return st === 'brain' || st === 'clickup-automation' || st === 'linear-automation'
                             || st === 'clickup-import' || st === 'linear-import'
+                            || st === 'notion-import' || st === 'notion-automation'
                             ? st
                             : 'local';
                     })(),
@@ -5771,6 +5856,7 @@ FROM plans
                     dispatchedIde: String(row.dispatched_ide || ""),
                     clickupTaskId: String(row.clickup_task_id || ""),
                     linearIssueId: String(row.linear_issue_id || ""),
+                    notionPageId: String(row.notion_page_id || ""),
                     worktreeId: row.worktree_id !== null && row.worktree_id !== undefined ? Number(row.worktree_id) : undefined,
                     worktreeStatus: String(row.worktree_status || 'none') as 'none' | 'active' | 'merged' | 'deleted',
                     isEpic: row.is_epic !== null && row.is_epic !== undefined ? Number(row.is_epic) : undefined,

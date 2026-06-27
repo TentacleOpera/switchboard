@@ -87,6 +87,8 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | `query_archive` | Query the DuckDB archive directly using duckdb CLI |
 | `complexity_scoring` | Assess and assign numeric complexity scores (1-10) to plans and tasks |
 | `linear_api` | Direct Linear API access via LocalApiServer proxy (replaces call_linear_api) |
+| `notion_api` | Post a reply back to a Notion-driven Remote Control card via the `/comment` bridge (provider `notion`) |
+| `switchboard_remote_notion` | Orient a claude.ai session on driving a Switchboard board through Notion via the Notion MCP connector |
 | `web_research` | User asks to "research X", "investigate Y", or needs authoritative sources |
 | `deep_planning` | User requests complex code changes requiring architecture understanding |
 | `memo` | User invokes `/memo` or says "start memo capture" to enter progressive capture mode — agent appends each user message to `.switchboard/memo.md` without analysis. |

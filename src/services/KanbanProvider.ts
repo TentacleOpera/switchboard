@@ -31,9 +31,13 @@ import { ClickUpSyncService, type ClickUpConfig, type ClickUpSyncResult } from '
 import { ClickUpDocsAdapter } from './ClickUpDocsAdapter';
 import { LinearAutomationService } from './LinearAutomationService';
 import { LinearSyncService, type LinearConfig } from './LinearSyncService';
-import { RemoteControlService, type RemoteConfig } from './RemoteControlService';
+import { RemoteControlService, type RemoteConfig, type RemoteProviderKind } from './RemoteControlService';
+import type { RemoteProvider } from './remote/RemoteProvider';
+import { LinearRemoteProvider } from './remote/LinearRemoteProvider';
+import { NotionRemoteProvider } from './remote/NotionRemoteProvider';
 import { LinearDocsAdapter } from './LinearDocsAdapter';
 import { NotionFetchService } from './NotionFetchService';
+import { NotionBackupService } from './NotionBackupService';
 import { type AutoPullIntegration, type AutoPullIntervalMinutes, IntegrationAutoPullService } from './IntegrationAutoPullService';
 import { ContinuousSyncService } from './ContinuousSyncService';
 import type { LiveSyncState } from '../models/LiveSyncTypes';
@@ -1438,7 +1442,22 @@ export class KanbanProvider implements vscode.Disposable {
         const service = new RemoteControlService({
             getDb: () => this._getKanbanDb(resolved),
             getWorkspaceId: async () => (await this._getKanbanDb(resolved).getWorkspaceId()) || '',
-            getLinearService: () => this._getLinearService(resolved),
+            getProvider: (kind: RemoteProviderKind): RemoteProvider | null => {
+                const getWorkspaceId = async () => (await this._getKanbanDb(resolved).getWorkspaceId()) || '';
+                const getPlansDir = () => this._getIntegrationImportDir(resolved);
+                const log = (m: string) => this._outputChannel?.appendLine(m);
+                if (kind === 'notion') {
+                    return new NotionRemoteProvider({
+                        notion: this._getNotionService(resolved),
+                        db: this._getKanbanDb(resolved),
+                        getWorkspaceId, getPlansDir, log,
+                    });
+                }
+                return new LinearRemoteProvider(this._getLinearService(resolved), {
+                    db: this._getKanbanDb(resolved),
+                    getWorkspaceId, getPlansDir, log,
+                });
+            },
             onColumnMove: async (plan, targetColumn) => {
                 await this._remoteApplyColumnMove(resolved, plan, targetColumn);
             },
@@ -5422,6 +5441,35 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     const config = await rc.getConfig();
                     const payload = await this._buildRemoteConfigPayload(workspaceRoot, config, rc);
                     this._panel?.webview.postMessage(payload);
+                }
+                break;
+            }
+            case 'runNotionRemoteSetup': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (workspaceRoot) {
+                    const rc = this._getRemoteControl(workspaceRoot);
+                    const config = await rc.getConfig();
+                    try {
+                        const columns = await this._getCurrentClickUpColumns(workspaceRoot);
+                        const backup = new NotionBackupService(this.resolveEffectiveWorkspaceRoot(workspaceRoot), this._context.secrets);
+                        const result = await backup.setupRemoteControl(
+                            this.resolveEffectiveWorkspaceRoot(workspaceRoot),
+                            config.boards,
+                            columns
+                        );
+                        this._panel?.webview.postMessage({
+                            type: 'notionRemoteSetupResult',
+                            success: result.success,
+                            backedUp: result.backedUp,
+                            error: result.error,
+                        });
+                    } catch (e) {
+                        this._panel?.webview.postMessage({
+                            type: 'notionRemoteSetupResult',
+                            success: false,
+                            error: e instanceof Error ? e.message : String(e),
+                        });
+                    }
                 }
                 break;
             }

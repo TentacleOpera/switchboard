@@ -2545,13 +2545,24 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
     <div id="remote-tab-content" class="shared-tab-content">
         <div style="padding:12px; overflow-y:auto; height:100%; max-width:640px;">
             <div class="db-subsection">
-                <div class="subsection-header"><span>Remote Control (Linear)</span></div>
+                <div class="subsection-header"><span id="remote-subsection-title">Remote Control</span></div>
                 <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:12px;">
-                    Drive your boards from the Linear app on your phone. Moving a card between Linear
-                    states moves it here and dispatches that column's agent; comments are routed to the
-                    current column's agent, which replies back as a Linear comment. Polling only — no
-                    webhooks, nothing to expose.
+                    Drive your boards remotely. Moving a card between remote states moves it here and
+                    dispatches that column's agent; comments are routed to the current column's agent,
+                    which replies back through the remote. Polling only — no webhooks, nothing to expose.
+                    <br><strong>Notion</strong> has no active-issue cap — pick it when Linear's free-tier
+                    limit gets in the way. Notion is an <em>agent</em> control surface: connect Notion to
+                    claude.ai and let the remote Claude session drive it via the Notion MCP connector.
                 </div>
+
+                <!-- Provider selector -->
+                <label style="display:block; margin-bottom:10px;">
+                    <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Provider</span>
+                    <select id="remote-provider" class="workspace-project-select">
+                        <option value="linear">Linear</option>
+                        <option value="notion">Notion</option>
+                    </select>
+                </label>
 
                 <!-- Workspace selector -->
                 <label style="display:block; margin-bottom:10px;">
@@ -2587,6 +2598,18 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Ping frequency (seconds, 30–120)</span>
                     <input type="number" id="remote-ping-frequency" class="remote-number-input" min="30" max="120" step="5" value="60">
                 </label>
+
+                <!-- Notion-only one-time setup: creates the plans + comments databases,
+                     backs up the selected boards, and matches the column select to the board. -->
+                <div id="remote-notion-setup" style="display:none; margin-top:6px; margin-bottom:10px; padding-top:10px; border-top:1px solid var(--border-color, rgba(127,127,127,0.2));">
+                    <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
+                        Run this once after selecting boards. It creates the Notion plans + "Switchboard
+                        Comments" databases, backs up the selected boards' cards, and matches the
+                        <code>Kanban Column</code> options to your board.
+                    </div>
+                    <button id="btn-notion-remote-setup" class="strip-btn">Run Notion setup sync</button>
+                    <span id="remote-notion-setup-status" style="display:block; margin-top:6px; font-size:10px; color:var(--text-secondary);"></span>
+                </div>
 
                 <span id="remote-config-status" style="font-size:10px; color:var(--text-secondary);"></span>
             </div>
@@ -6434,6 +6457,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     remoteControlActive = !!msg.active;
                     applyRemoteControlButtonState();
                     break;
+                case 'notionRemoteSetupResult': {
+                    const statusEl = document.getElementById('remote-notion-setup-status');
+                    if (statusEl) {
+                        statusEl.textContent = msg.success
+                            ? `Setup complete — ${msg.backedUp || 0} card(s) backed up. Connect Notion to claude.ai and drive it from there.`
+                            : `Setup failed: ${msg.error || 'unknown error'}`;
+                    }
+                    break;
+                }
                 case 'updateAutobanConfig':
                     autobanConfig = msg.state || null;
                     if (autobanConfig && autobanConfig.automationMode) {
@@ -6925,6 +6957,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
 
             if (config) {
+                const providerEl = document.getElementById('remote-provider');
+                if (providerEl) providerEl.value = config.provider === 'notion' ? 'notion' : 'linear';
                 const silent = document.getElementById('remote-silent-sync');
                 if (silent) silent.checked = config.silentSync === true;
                 const mode = config.pingMode === 'constant' ? 'constant' : 'manual';
@@ -6933,6 +6967,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 const freq = document.getElementById('remote-ping-frequency');
                 if (freq) freq.value = config.pingFrequencySeconds || 60;
             }
+            applyRemoteProviderUi();
         }
 
         function remoteCollectConfig() {
@@ -6940,13 +6975,25 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 document.querySelectorAll('#remote-boards-list input[data-role="remote-board"]:checked')
             ).map(cb => cb.value);   // keeps '' — do NOT filter by truthiness
             const modeEl = document.querySelector('input[name="remote-ping-mode"]:checked');
+            const providerEl = document.getElementById('remote-provider');
             return {
+                provider: providerEl && providerEl.value === 'notion' ? 'notion' : 'linear',
                 boards,
                 silentSync: document.getElementById('remote-silent-sync')?.checked === true,
                 pingMode: modeEl && modeEl.value === 'constant' ? 'constant' : 'manual',
                 pingFrequencySeconds: Math.min(120, Math.max(30,
                     parseInt(document.getElementById('remote-ping-frequency')?.value, 10) || 60)),
             };
+        }
+
+        // Show/hide the Notion-only setup block and keep the header in sync with the provider.
+        function applyRemoteProviderUi() {
+            const providerEl = document.getElementById('remote-provider');
+            const provider = providerEl ? providerEl.value : 'linear';
+            const setup = document.getElementById('remote-notion-setup');
+            if (setup) setup.style.display = provider === 'notion' ? 'block' : 'none';
+            const title = document.getElementById('remote-subsection-title');
+            if (title) title.textContent = provider === 'notion' ? 'Remote Control (Notion)' : 'Remote Control (Linear)';
         }
 
         function remoteAutosave() {
@@ -6965,7 +7012,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 postKanbanMessage({ type: 'getRemoteConfig', workspaceRoot: e.target.value });
                 return;
             }
+            if (e.target.id === 'remote-provider') {
+                applyRemoteProviderUi();
+            }
             remoteAutosave();
+        });
+        // Notion one-time setup sync (creates the plans + comments DBs, backs up boards).
+        document.getElementById('btn-notion-remote-setup')?.addEventListener('click', () => {
+            const wsSel = document.getElementById('remote-workspace');
+            const statusEl = document.getElementById('remote-notion-setup-status');
+            if (statusEl) statusEl.textContent = 'Running setup sync…';
+            postKanbanMessage({ type: 'runNotionRemoteSetup', workspaceRoot: wsSel ? wsSel.value : undefined });
         });
         // Debounce the frequency text input so rapid keystrokes don't spam setRemoteConfig
         // (each call writes the DB config row and may reschedule the ping timer).

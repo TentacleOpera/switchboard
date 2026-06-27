@@ -1,29 +1,42 @@
 import type { KanbanDatabase, KanbanPlanRecord } from './KanbanDatabase';
-import type { LinearSyncService } from './LinearSyncService';
-import { hasMarker } from './commentMarker';
+import type { RemoteProvider } from './remote/RemoteProvider';
 
 /**
- * §7/§9/§10 — Remote Control (Linear only).
+ * §7/§9/§10 — Remote Control (provider-agnostic: Linear or Notion).
  *
- * Polls Linear on a timer (no webhooks) for the user's selected boards and:
- *  - mirrors Linear state changes onto the Kanban column, dispatching that column's
- *    agent the same way a manual drag would (§9);
- *  - ingests new issue comments and routes them to the current column's agent (§7).
+ * Polls the active provider on a timer (no webhooks) for the user's selected boards and:
+ *  - mirrors remote state changes onto the Kanban column, dispatching that column's agent
+ *    the same way a manual drag would (§9);
+ *  - ingests new comments and routes them to the current column's agent (§7).
  *
- * The two loop-closing mechanisms create cycles, so guards are load-bearing:
- *  - self-comment marker (commentMarker): outbound comments are skipped on ingest;
- *  - state echo guard: a state that maps to the card's *current* column is never
- *    re-applied (covers the local-drag → outbound-push → inbound-echo loop), plus a
- *    short-TTL per-card guard for the window before the DB reflects an applied move;
- *  - per-card sequential queue: comments for one card never run two agents at once;
- *  - the comment cursor is advanced only AFTER dispatch, so an extension reload mid-
- *    dispatch re-fetches the comment on the next poll (delayed, not lost).
+ * Delta polling (D4): instead of fetching every tracked card each cycle, the provider is
+ * asked "what changed since my cursor?" — usually nothing. State and comments are TWO
+ * separate streams with TWO cursors (a Linear comment does not bump the issue `updatedAt`;
+ * a Notion native comment does not bump the page `last_edited_time`).
+ *
+ * The loop-closing guards are load-bearing. They prevent the system's OWN round-trip
+ * (outbound push → bumped remote timestamp → inbound delta) from feeding itself — NOT a
+ * human editing both sides at once (that's last-write-wins, not a case we defend):
+ *  - state: a delta whose column equals the card's CURRENT column is a no-op. Once a move
+ *    is applied the local column matches, so our own outbound push re-surfacing as a delta
+ *    just no-ops here. That single equality check is the whole guard.
+ *  - authoredBySelf: outbound comments (Linear marker / Notion `created_by` = bot) are
+ *    skipped on ingest;
+ *  - processed-comment-id set: this is Notion-API hygiene, not race defense — Notion rounds
+ *    `created_time` to the minute and only supports an inclusive filter, so the boundary
+ *    minute's comments re-appear each poll; the seen-set de-dups them;
+ *  - the comment cursor advances only AFTER dispatch, so a reload mid-dispatch re-fetches
+ *    on the next poll (delayed, not lost).
  */
 
+export type RemoteProviderKind = 'linear' | 'notion';
+
 export interface RemoteConfig {
-    /** Project board names that participate in Linear sync/ping. */
+    /** Which remote backend drives the board. One active at a time (no hot-swap). */
+    provider: RemoteProviderKind;
+    /** Project board names that participate in sync/ping. */
     boards: string[];
-    /** Stay synced with Linear even while pinging is off. */
+    /** Stay synced with the provider even while pinging is off. */
     silentSync: boolean;
     /** Constant = always pinging; Manual = only while the toolbar toggle is on. */
     pingMode: 'constant' | 'manual';
@@ -32,6 +45,7 @@ export interface RemoteConfig {
 }
 
 export const DEFAULT_REMOTE_CONFIG: RemoteConfig = {
+    provider: 'linear',
     boards: [],
     silentSync: false,
     pingMode: 'manual',
@@ -39,15 +53,18 @@ export const DEFAULT_REMOTE_CONFIG: RemoteConfig = {
 };
 
 const REMOTE_CONFIG_KEY = 'remote.config';
-const COMMENT_CURSORS_KEY = 'remote.commentCursors';
-const PER_POLL_CARD_CAP = 100;
-const ECHO_GUARD_TTL_MS = 5 * 60 * 1000;
+const COMMENT_SEEN_CAP = 500;
+
+const stateCursorKey = (kind: RemoteProviderKind) => `remote.stateCursor.${kind}`;
+const commentCursorKey = (kind: RemoteProviderKind) => `remote.commentCursor.${kind}`;
+const commentSeenKey = (kind: RemoteProviderKind) => `remote.commentSeen.${kind}`;
 
 interface RemoteControlDeps {
     getDb: () => KanbanDatabase | null;
     getWorkspaceId: () => Promise<string>;
-    getLinearService: () => LinearSyncService | null;
-    /** Apply a Linear-driven column move + dispatch the destination column's agent (§9). */
+    /** Build the provider for the active backend (or null if its integration isn't configured). */
+    getProvider: (kind: RemoteProviderKind) => RemoteProvider | null;
+    /** Apply a remote-driven column move + dispatch the destination column's agent (§9). */
     onColumnMove: (plan: KanbanPlanRecord, targetColumn: string) => Promise<void>;
     /** Route an inbound comment to the card's current column agent (§7). */
     onComment: (plan: KanbanPlanRecord, commentBody: string) => Promise<void>;
@@ -59,9 +76,6 @@ export class RemoteControlService {
     private _timer?: NodeJS.Timeout;
     private _polling = false;
     private _active = false;
-    private _echoGuards = new Map<string, { lastAppliedState: string; ts: number }>();
-    /** Per-card promise chain — serializes comment processing for a single plan. */
-    private _queues = new Map<string, Promise<void>>();
 
     constructor(deps: RemoteControlDeps) {
         this._deps = deps;
@@ -83,6 +97,7 @@ export class RemoteControlService {
             if (!raw) { return { ...DEFAULT_REMOTE_CONFIG }; }
             const parsed = JSON.parse(raw);
             return {
+                provider: parsed.provider === 'notion' ? 'notion' : 'linear',
                 boards: this._normalizeBoards(parsed.boards),
                 silentSync: parsed.silentSync === true,
                 pingMode: parsed.pingMode === 'constant' ? 'constant' : 'manual',
@@ -97,6 +112,7 @@ export class RemoteControlService {
         const db = this._deps.getDb();
         if (!db || !(await db.ensureReady())) { return; }
         const normalized: RemoteConfig = {
+            provider: config.provider === 'notion' ? 'notion' : 'linear',
             boards: this._normalizeBoards(config.boards),
             silentSync: config.silentSync === true,
             pingMode: config.pingMode === 'constant' ? 'constant' : 'manual',
@@ -144,7 +160,7 @@ export class RemoteControlService {
         }
         this._active = true;
         this._scheduleTimer(config.pingFrequencySeconds);
-        this._log(`Started (mode=${config.pingMode}, every ${config.pingFrequencySeconds}s, ${config.boards.length} board(s)).`);
+        this._log(`Started (provider=${config.provider}, mode=${config.pingMode}, every ${config.pingFrequencySeconds}s, ${config.boards.length} board(s)).`);
     }
 
     /** Stop pinging. Silent sync, when on, continues elsewhere; the ping loop stops here. */
@@ -156,8 +172,6 @@ export class RemoteControlService {
 
     public dispose(): void {
         this.stop();
-        this._echoGuards.clear();
-        this._queues.clear();
     }
 
     private _scheduleTimer(frequencySeconds: number): void {
@@ -173,57 +187,28 @@ export class RemoteControlService {
         }
     }
 
-    // ── Poll cycle ──────────────────────────────────────────────────
+    // ── Poll cycle (provider-agnostic) ──────────────────────────────
 
     private async _poll(): Promise<void> {
         if (this._polling) { return; } // skip overlapping cycles
         this._polling = true;
         try {
             const db = this._deps.getDb();
-            const linear = this._deps.getLinearService();
-            if (!db || !linear || !(await db.ensureReady())) { return; }
+            if (!db || !(await db.ensureReady())) { return; }
 
             const config = await this.getConfig();
             if (config.boards.length === 0) { return; }
 
+            const provider = this._deps.getProvider(config.provider);
+            if (!provider) { this._log(`No provider available for '${config.provider}'.`); return; }
+
             const workspaceId = await this._deps.getWorkspaceId();
             const boardSet = new Set(config.boards);
             const allPlans = await db.getAllPlans(workspaceId);
+            const byRemoteId = this._indexByRemoteId(provider.kind, allPlans, boardSet);
 
-            const synced = allPlans.filter((p) =>
-                (p.sourceType === 'linear-import' || p.sourceType === 'linear-automation')
-                && !!p.linearIssueId
-                && p.status !== 'deleted'
-                && boardSet.has(p.project || '')
-            );
-
-            // Per-poll card cap — defer the rest (most-recently-updated first) to next cycle.
-            const ordered = synced.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
-            const batch = ordered.slice(0, PER_POLL_CARD_CAP);
-            if (ordered.length > PER_POLL_CARD_CAP) {
-                this._log(`Card cap: polling ${PER_POLL_CARD_CAP} of ${ordered.length}; remainder deferred to next cycle.`);
-            }
-            if (batch.length === 0) { return; }
-
-            const linearConfig = await linear.loadConfig();
-            const stateIdToColumn = this._reverseStateMap(linearConfig?.columnToStateId || {});
-
-            const updates = await linear.fetchIssueUpdates(
-                batch.map((p) => p.linearIssueId).filter((id): id is string => !!id)
-            );
-            const cursors = await this._loadCursors();
-
-            for (const plan of batch) {
-                if (!plan.linearIssueId) { continue; }
-                const upd = updates[plan.linearIssueId];
-                if (!upd) { continue; }
-
-                // §9 — state → column mirror.
-                await this._applyStateMirror(plan, upd.stateId, stateIdToColumn);
-
-                // §7 — inbound comment ingestion.
-                await this._ingestComments(plan, upd.comments, cursors);
-            }
+            await this._pollState(db, provider, byRemoteId);
+            await this._pollComments(db, provider, byRemoteId);
         } catch (e) {
             this._log(`Poll error: ${e instanceof Error ? e.message : String(e)}`);
         } finally {
@@ -231,104 +216,166 @@ export class RemoteControlService {
         }
     }
 
-    private _reverseStateMap(columnToStateId: Record<string, string>): Record<string, string> {
-        const reversed: Record<string, string> = {};
-        for (const [column, stateId] of Object.entries(columnToStateId || {})) {
-            if (stateId) { reversed[stateId] = column; }
+    /** Map remoteId → local plan, filtered to the active provider's synced cards on a selected board. */
+    private _indexByRemoteId(
+        kind: RemoteProviderKind,
+        allPlans: KanbanPlanRecord[],
+        boardSet: Set<string>
+    ): Map<string, KanbanPlanRecord> {
+        const map = new Map<string, KanbanPlanRecord>();
+        for (const p of allPlans) {
+            if (p.status === 'deleted') { continue; }
+            if (!boardSet.has(p.project || '')) { continue; }
+            if (kind === 'linear') {
+                if ((p.sourceType === 'linear-import' || p.sourceType === 'linear-automation') && p.linearIssueId) {
+                    map.set(p.linearIssueId, p);
+                }
+            } else {
+                // Notion: key on page-id presence (set by the one-time setup backup), NOT
+                // sourceType. The common case is enabling Notion remote on an EXISTING board
+                // whose plans are 'local'/etc; reclassifying them to 'notion-*' would clobber
+                // their other links. notion-* source types still flow through normalization.
+                if (p.notionPageId) {
+                    map.set(p.notionPageId, p);
+                }
+            }
         }
-        return reversed;
+        return map;
+    }
+
+    private _remoteIdOf(kind: RemoteProviderKind, plan: KanbanPlanRecord): string {
+        return (kind === 'linear' ? plan.linearIssueId : plan.notionPageId) || '';
+    }
+
+    // ── State stream (§9) ───────────────────────────────────────────
+
+    private async _pollState(
+        db: KanbanDatabase,
+        provider: RemoteProvider,
+        byRemoteId: Map<string, KanbanPlanRecord>
+    ): Promise<void> {
+        const key = stateCursorKey(provider.kind);
+        const cursor = await db.getConfig(key);
+        if (!cursor) {
+            // Seed-on-first-poll: baseline to "now" and process nothing, so an existing
+            // board's history isn't replayed as a burst of agent runs.
+            await db.setConfig(key, new Date().toISOString());
+            return;
+        }
+
+        const { deltas, nextCursor } = await provider.fetchStateDeltas(cursor);
+        for (const d of deltas) {
+            let plan: KanbanPlanRecord | null | undefined = byRemoteId.get(d.remoteId);
+            if (!plan) {
+                // New remote item (a plan authored in Linear/Notion) with no local file →
+                // import it as a new markdown plan, then treat it like any tracked card.
+                plan = await provider.importRemotePlan(d.remoteId);
+                if (!plan) { continue; }
+                byRemoteId.set(d.remoteId, plan);
+                this._log(`Imported new ${provider.kind} plan ${d.remoteId} → ${plan.planFile}.`);
+            }
+            const column = provider.stateKeyToColumn(d.stateKey);
+            if (!column) { continue; }
+            await this._applyStateMirror(provider, plan, column);
+        }
+        // Advance AFTER processing. State idempotency comes from the echo guard, so a
+        // re-fetched (same-minute / inclusive-cursor) item simply no-ops.
+        if (nextCursor && nextCursor !== cursor) {
+            await db.setConfig(key, nextCursor);
+        }
     }
 
     private async _applyStateMirror(
+        provider: RemoteProvider,
         plan: KanbanPlanRecord,
-        stateId: string,
-        stateIdToColumn: Record<string, string>
+        targetColumn: string
     ): Promise<void> {
-        if (!stateId) { return; }
-        const targetColumn = stateIdToColumn[stateId];
-        if (!targetColumn) { return; }
-        // Column-equality is the primary echo guard: a state that maps to the card's
-        // current column (e.g. one we just pushed via a local drag) is a no-op.
+        // The whole echo guard: never re-apply the column the card is already in. Our own
+        // outbound push re-surfaces as a delta with the column we just set → no-op here.
         if (targetColumn === plan.kanbanColumn) { return; }
 
-        const now = Date.now();
-        const guard = this._echoGuards.get(plan.planId);
-        if (guard && guard.lastAppliedState === stateId && (now - guard.ts) < ECHO_GUARD_TTL_MS) {
-            return; // already applied this state moments ago; wait for DB to settle
-        }
-
-        this._echoGuards.set(plan.planId, { lastAppliedState: stateId, ts: now });
-        this._log(`State mirror: ${plan.linearIssueId} → column ${targetColumn} (from ${plan.kanbanColumn}).`);
+        this._log(`State mirror: ${this._remoteIdOf(provider.kind, plan)} → column ${targetColumn} (from ${plan.kanbanColumn}).`);
         try {
+            // Pull the remote-authored body/description into the local plan BEFORE dispatch.
+            await provider.refreshLocalPlanFromRemote(this._remoteIdOf(provider.kind, plan));
             await this._deps.onColumnMove(plan, targetColumn);
         } catch (e) {
             this._log(`onColumnMove failed for ${plan.planId}: ${e instanceof Error ? e.message : String(e)}`);
         }
     }
 
-    private async _ingestComments(
-        plan: KanbanPlanRecord,
-        comments: Array<{ id: string; body: string; createdAt: string; author: string }>,
-        cursors: Record<string, string>
+    // ── Comment stream (§7) ─────────────────────────────────────────
+
+    private async _pollComments(
+        db: KanbanDatabase,
+        provider: RemoteProvider,
+        byRemoteId: Map<string, KanbanPlanRecord>
     ): Promise<void> {
-        const linearIssueId = plan.linearIssueId;
-        if (!linearIssueId) { return; }
-        const cursor = cursors[linearIssueId] || '';
-        // First encounter (no cursor): seed the baseline to the latest existing comment
-        // WITHOUT dispatching. Otherwise the whole comment history of an existing issue is
-        // replayed as agent runs the instant remote control starts — exactly the runaway
-        // dispatch the plan's Adversarial Synthesis warns about. Only comments posted after
-        // remote control starts (i.e. after this baseline) are acted on. Reload-safe: the
-        // cursor persists in the DB config table, so this seeding happens once per card.
+        const key = commentCursorKey(provider.kind);
+        const cursor = await db.getConfig(key);
         if (!cursor) {
-            const latest = comments.reduce((max, c) => (c.createdAt && c.createdAt > max ? c.createdAt : max), '');
-            if (latest) { await this._advanceCursor(linearIssueId, latest); }
+            // Seed-on-first-poll. For existing Linear installs this also supersedes the old
+            // per-card `remote.commentCursors` (we baseline to "now" — no history replay).
+            await db.setConfig(key, new Date().toISOString());
             return;
         }
-        // New = created after the cursor AND not authored by Switchboard (marker).
-        const fresh = comments
-            .filter((c) => c.createdAt && (!cursor || c.createdAt > cursor) && !hasMarker(c.body))
-            .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-        if (fresh.length === 0) { return; }
 
-        // Enqueue per-card so rapid-fire comments serialize on one plan.
-        const prior = this._queues.get(plan.planId) || Promise.resolve();
-        const next = prior.then(async () => {
-            for (const comment of fresh) {
-                try {
-                    await this._deps.onComment(plan, comment.body);
-                    // Advance cursor only AFTER dispatch completes (reload-safe).
-                    await this._advanceCursor(linearIssueId, comment.createdAt);
-                } catch (e) {
-                    this._log(`onComment failed for ${plan.planId} — cursor NOT advanced: ${e instanceof Error ? e.message : String(e)}`);
-                    break; // stop; the next poll re-fetches from the un-advanced cursor
+        const { deltas } = await provider.fetchCommentDeltas(cursor);
+        if (deltas.length === 0) { return; }
+
+        const seen = await this._loadSeen(provider.kind);
+        const sorted = deltas.slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+        let advanced = cursor;
+
+        for (const d of sorted) {
+            // Self-authored, already-processed, or unroutable → mark handled + advance, but
+            // never dispatch. (authoredBySelf prevents the feedback loop; the seen-set
+            // prevents re-dispatch under Notion's inclusive minute-rounded cursor.)
+            if (d.authoredBySelf || seen.has(d.commentId) || !byRemoteId.get(d.remoteId)) {
+                if (!d.authoredBySelf && !seen.has(d.commentId) && !byRemoteId.get(d.remoteId)) {
+                    this._log(`Comment ${d.commentId} targets an untracked card (${d.remoteId}) — skipped.`);
                 }
+                seen.add(d.commentId);
+                if (d.createdAt > advanced) { advanced = d.createdAt; }
+                continue;
             }
-        }).catch(() => { /* isolate queue failures */ });
-        this._queues.set(plan.planId, next);
+
+            const plan = byRemoteId.get(d.remoteId)!;
+            try {
+                await this._deps.onComment(plan, d.body);
+                seen.add(d.commentId);
+                if (d.createdAt > advanced) { advanced = d.createdAt; }
+            } catch (e) {
+                // Stop here; do NOT advance past the failed comment. The next poll re-fetches
+                // from `advanced` and retries (at-least-once).
+                this._log(`onComment failed for ${plan.planId} — cursor NOT advanced past ${d.commentId}: ${e instanceof Error ? e.message : String(e)}`);
+                break;
+            }
+        }
+
+        await this._saveSeen(provider.kind, seen);
+        if (advanced !== cursor) { await db.setConfig(key, advanced); }
     }
 
-    // ── Comment cursors (DB config table) ───────────────────────────
+    // ── Processed-comment-id set (DB config table) ──────────────────
 
-    private async _loadCursors(): Promise<Record<string, string>> {
+    private async _loadSeen(kind: RemoteProviderKind): Promise<Set<string>> {
         const db = this._deps.getDb();
-        if (!db) { return {}; }
+        if (!db) { return new Set(); }
         try {
-            const raw = await db.getConfig(COMMENT_CURSORS_KEY);
-            return raw ? (JSON.parse(raw) || {}) : {};
+            const raw = await db.getConfig(commentSeenKey(kind));
+            const arr = raw ? JSON.parse(raw) : [];
+            return new Set(Array.isArray(arr) ? arr.map((s: unknown) => String(s)) : []);
         } catch {
-            return {};
+            return new Set();
         }
     }
 
-    private async _advanceCursor(issueId: string, createdAt: string): Promise<void> {
+    private async _saveSeen(kind: RemoteProviderKind, seen: Set<string>): Promise<void> {
         const db = this._deps.getDb();
         if (!db) { return; }
-        const cursors = await this._loadCursors();
-        const existing = cursors[issueId] || '';
-        if (!existing || createdAt > existing) {
-            cursors[issueId] = createdAt;
-            await db.setConfig(COMMENT_CURSORS_KEY, JSON.stringify(cursors));
-        }
+        let arr = Array.from(seen);
+        if (arr.length > COMMENT_SEEN_CAP) { arr = arr.slice(arr.length - COMMENT_SEEN_CAP); }
+        await db.setConfig(commentSeenKey(kind), JSON.stringify(arr));
     }
 }
