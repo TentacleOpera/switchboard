@@ -184,3 +184,71 @@ Skipped per session directive — the user runs the test suite separately. No co
 ## Recommendation
 
 Complexity 5 (Medium: new DB method + 10 mechanical caller updates, with the `includeAllSubtasks` flag and the redundant-`updateStatus`-keeping pattern being the only non-obvious design decisions) → **Send to Coder**. The implementer must pay attention to: (1) which sites need `includeAllSubtasks=true` (`uncompleteCard`, `_restoreRunSheet`) vs. the default `false` (forward moves, completions, `testingFailed`); (2) the `targetStatus` parameter must be omitted (not set to empty string) for non-completion moves; (3) the separate `updateStatus` calls at completion sites (lines 6825, 6855, 6899, 14072, 11639) must be KEPT — they're no-ops for epics but required for non-epic plans; (4) all line numbers have been verified against current source — re-verify before editing as they may shift if other changes land first.
+
+---
+
+## Review Pass — Completed
+
+### Stage 1: Grumpy Principal Engineer Review
+
+*Theatrical grumpy voice engaged. Findings severity-tagged.*
+
+**CRITICAL:** None. The implementation is correct. I hate saying that.
+
+**MAJOR:** None. All 10 call sites match the plan spec exactly. The new `cascadeEpicByPlanId` method (`KanbanDatabase.ts:3877-3917`) is a faithful clone of the plan's proposed code — same `statusClause` conditional, same `subtaskStatusFilter` logic, same BEGIN/COMMIT/ROLLBACK transaction pattern, same column validation. The `includeAllSubtasks=true` flag is correctly applied at exactly the two sites the plan specifies (`uncompleteCard` line 6931, `_restoreRunSheet` line 11644) and omitted everywhere else. The `targetStatus` parameter is correctly omitted at `moveCardToColumn` (4896), `moveCardToColumnByPlanFile` (4968), `testingFailed` (7291), and `_updateKanbanColumnForSession` (2261) — status is NOT touched on non-completion moves. The redundant `updateStatus` calls are all kept as instructed (lines 6821, 6849, 6891, 6929, 6948, 11637, 14068). I verified `getPlanBySessionId` has a plan_id fallback (line 2566), so the redundant `updateStatus(cardKey, ...)` calls where `cardKey = planId` don't silently fail — they resolve via the fallback. The old `updateColumnWithEpicCascadeByPlanId` is retained with zero callers (dead code, as the plan's option (a) intended). Class 8 (`completeMultipleByPlanFile` line 2878) still uses its inline form — correctly out of scope per the plan's follow-up note. The regression test at `src/test/kanban-subtask-column-leak-regression.test.js:86` asserts `completeAll` uses `cascadeEpicByPlanId`. I have nothing to yell about. This is infuriating.
+
+**NIT-1:** `updateColumnWithEpicCascadeByPlanId` (`KanbanDatabase.ts:3826`) is now dead code — zero callers in `src/`. The plan says to keep it for backward compat (option a), but it should be marked `@deprecated` to signal to future readers that `cascadeEpicByPlanId` is the replacement. Not a bug, just hygiene.
+
+**NIT-2:** The `move-card.js` skill script (`kanban_operations/move-card.js:128`) still calls the non-existent `updateColumnWithEpicCascade` method — a TypeError crash in its direct-DB fallback. The plan explicitly defers this to "Plan 1" (Replace Raw Prompt SQL). Confirmed still broken; confirmed out of scope for this plan.
+
+**NIT-3:** Class 8 (`completeMultipleByPlanFile` lines 2900-2903) duplicates the `WHERE epic_id = ? AND status = 'active'` pattern inline instead of calling `cascadeEpicByPlanId`. The plan notes this as a follow-up refactoring. Confirmed still inline; confirmed out of scope.
+
+**NIT-4:** In `uncompleteCard`, if `msg.targetColumn === 'COMPLETED'` (edge case — semantically nonsensical but possible if a caller passes it), the cascade at line 6931 sets subtasks to `kanban_column='COMPLETED'` + `status='active'` (inconsistent state). The `_schedulePlanStateWrite` at line 6940-6941 correctly maps this to `status='completed'` for the file write, but the DB would have `status='active'`. This is a pre-existing edge case in the `uncompleteCard` handler (the target column comes from `msg.targetColumn || 'CODE REVIEWED'`), not introduced by this plan. The default `'CODE REVIEWED'` avoids it. Not worth fixing here.
+
+### Stage 2: Balanced Synthesis
+
+**Keep as-is:**
+- All 10 call site replacements — verified correct against plan spec.
+- The `cascadeEpicByPlanId` method implementation — matches plan exactly.
+- The redundant `updateStatus` calls — correctly kept (no-ops for epics, required for non-epics).
+- The `getSubtasksByEpicId` reads at `moveCardToColumn` (4894) and `moveCardToColumnByPlanFile` (4966) — correctly retained for integration sync fan-out.
+- The `uncompleteCard` rollback logic — the `WHERE status = 'active'` filter without `includeAllSubtasks` is correct because the forward path already re-activated all subtasks.
+
+**Fix now:** None. No CRITICAL or MAJOR findings.
+
+**Defer (out of scope, tracked by other plans):**
+- `move-card.js` direct-DB fallback crash → Plan 1 (Replace Raw Prompt SQL).
+- Class 8 inline cascade duplication → follow-up refactoring noted in plan.
+- `@deprecated` marker on `updateColumnWithEpicCascadeByPlanId` → cosmetic hygiene, can be done in a future cleanup pass.
+
+### Code Fixes Applied
+
+None. The implementation is correct and complete. No code changes were needed.
+
+### Verification Results
+
+- **Compilation:** Skipped per session directive.
+- **Automated tests:** Skipped per session directive.
+- **Static verification performed:**
+  - Confirmed `cascadeEpicByPlanId` exists at `KanbanDatabase.ts:3877` with correct signature and logic.
+  - Confirmed all 10 call sites use `cascadeEpicByPlanId` with correct arguments (grep: 16 matches across 3 source files + 1 test file).
+  - Confirmed zero remaining callers of `updateColumnWithEpicCascadeByPlanId` in `src/` (only the definition + docstring reference remain).
+  - Confirmed `getSubtasksByEpicId` retained only at sync-fan-out sites (lines 4894, 4966) and unrelated display/helper sites.
+  - Confirmed `KanbanCard` interface has `planId: string` (line 91) — `card.planId` at `completeAll` line 6881 is valid.
+  - Confirmed `getPlanBySessionId` has plan_id fallback (line 2566) — redundant `updateStatus` calls with planId-as-sessionId resolve correctly.
+  - Confirmed Class 8 (`completeMultipleByPlanFile` line 2878) still uses inline form — out of scope, no regression.
+  - Confirmed regression test asserts `completeAll` uses `cascadeEpicByPlanId` (`kanban-subtask-column-leak-regression.test.js:86`).
+
+### Files Changed (by implementation, not by this review)
+
+- `src/services/KanbanDatabase.ts` — added `cascadeEpicByPlanId` method (lines 3877-3917).
+- `src/services/KanbanProvider.ts` — 8 call site replacements (lines 4896, 4968, 6811, 6839, 6881, 6931, 6950, 7291).
+- `src/services/TaskViewerProvider.ts` — 3 call site replacements (lines 2261, 11644, 14075).
+- `src/test/kanban-subtask-column-leak-regression.test.js` — test assertion updated to check `cascadeEpicByPlanId` (line 86).
+
+### Remaining Risks
+
+1. **`move-card.js` direct-DB fallback** (`kanban_operations/move-card.js:128`) still calls non-existent `updateColumnWithEpicCascade` — TypeError crash. Fix is tracked by Plan 1 (Replace Raw Prompt SQL), which should use `cascadeEpicByPlanId` from this plan.
+2. **Class 8 inline duplication** — `completeMultipleByPlanFile` (lines 2900-2903) duplicates the cascade logic inline instead of calling `cascadeEpicByPlanId`. Behavioral equivalence verified, but future drift risk if one is updated without the other. Follow-up refactoring noted in plan.
+3. **`uncompleteCard` with `targetColumn='COMPLETED'`** — edge case producing inconsistent `column=COMPLETED` + `status='active'` in DB. Pre-existing, not introduced by this plan, default target is `'CODE REVIEWED'`.
+4. **Dead code** — `updateColumnWithEpicCascadeByPlanId` has zero callers. Intentionally retained per plan option (a) for backward compat. Should be marked `@deprecated` in a future pass.

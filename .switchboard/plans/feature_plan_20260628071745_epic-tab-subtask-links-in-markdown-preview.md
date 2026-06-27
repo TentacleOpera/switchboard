@@ -33,7 +33,7 @@ The fix: add a delegated click listener on `epicsPreviewContent` that intercepts
 
 ## User Review Required
 
-No — this is a straightforward bugfix that mirrors an existing pattern (`renderEpicSubtasks` sidebar links). The change is isolated to a single delegated event listener in `project.js`. No backend, DB, or schema changes. However, see **## Uncertain Assumptions** below — the user should verify the `markdown.api.render` href preservation assumption before implementation.
+No — this is a straightforward bugfix that mirrors an existing pattern (`renderEpicSubtasks` sidebar links). The change is isolated to a single delegated event listener in `project.js`. No backend, DB, or schema changes. The `markdown.api.render` href preservation assumption has been confirmed via web research (see `docs/imported_document_2026_06_27t21_53_57.md`): relative hrefs are preserved verbatim, and a `data-href` attribute is added alongside `href` holding the same pre-normalization value.
 
 ## Complexity Audit
 
@@ -45,8 +45,8 @@ No — this is a straightforward bugfix that mirrors an existing pattern (`rende
 - The response routing (`kanbanPlanPreviewReady` → project.js line 384) already works — same code path as sidebar links.
 
 ### Complex / Risky
-- **`markdown.api.render` href format**: The fix assumes the rendered HTML preserves relative `href` attributes as-is (e.g., `<a href="../plans/foo.md">`). If VS Code's markdown engine rewrites or transforms hrefs, the `href.endsWith('.md')` guard would fail. See **## Uncertain Assumptions**.
 - **Path resolution correctness**: The hand-rolled resolver assumes forward-slash paths. This is safe because `planFile` values in the DB always use forward slashes, but the assumption is undocumented in the original code.
+- **Percent-encoded hrefs**: markdown-it's `normalizeLink` percent-encodes special characters in paths (e.g., spaces become `%20`). The handler must `decodeURIComponent` the raw href before path resolution. Confirmed via web research.
 
 ## Edge-Case & Dependency Audit
 
@@ -97,20 +97,36 @@ Add a delegated click listener on `epicsPreviewContent` that intercepts clicks o
 ```javascript
 // Intercept clicks on <a> tags inside the rendered epic markdown preview.
 // Subtask links in the auto-generated "## Subtasks" section are rendered as
-// <a href="../plans/basename.md"> by VS Code's markdown renderer. In the
-// sandboxed webview these do nothing — we resolve them and load the subtask
-// into the preview pane, mirroring the sidebar subtask-link behavior.
+// <a href="../plans/basename.md" data-href="../plans/basename.md"> by VS Code's
+// markdown renderer (markdown.api.render). In the sandboxed webview these do
+// nothing — we resolve them and load the subtask into the preview pane,
+// mirroring the sidebar subtask-link behavior.
 //
 // NOTE: This listener is attached once (delegation). It is NOT re-attached on
 // each render — innerHTML replacement preserves the container's event listeners.
 // NOTE: Path resolution assumes forward-slash paths, which is guaranteed by the
 // DB planFile format (.switchboard/epics/<file>).
+// NOTE: Read getAttribute('data-href') first (pre-normalization value), then
+// fall back to getAttribute('href'). Never use the .href DOM property — it
+// resolves to an absolute CDN URL and loses the relative form (VS Code PR #228633).
+// NOTE: decodeURIComponent is needed because markdown-it's normalizeLink
+// percent-encodes special characters (e.g., spaces → %20).
 if (epicsPreviewContent) {
     epicsPreviewContent.addEventListener('click', (e) => {
         const anchor = e.target.closest('a');
         if (!anchor) return;
-        const href = anchor.getAttribute('href') || '';
-        if (!href) return;
+        // Prefer data-href (pre-normalization) over href; both are byte-identical
+        // for bare relative paths, but data-href is more defensively correct.
+        const rawHref = anchor.getAttribute('data-href') || anchor.getAttribute('href') || '';
+        if (!rawHref) return;
+
+        // Decode percent-encoded characters (e.g., %20 → space) before processing.
+        let href;
+        try {
+            href = decodeURIComponent(rawHref);
+        } catch {
+            href = rawHref; // malformed URI sequence — use raw value as fallback
+        }
 
         // Only intercept links to local .md files (plan files).
         // External URLs (http://, https://, mailto:, #anchors) are left alone.
