@@ -924,7 +924,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         targetPlanFile = sessionId;
                         const db = await this._getKanbanDb(wsRoot);
                         if (db && await db.ensureReady()) {
-                            const plan = await db.getPlanByPlanFile(sessionId, wsRoot);
+                            // getPlanByPlanFile requires the DB workspace_id (a UUID), NOT the
+                            // workspace root path. Resolve it from the DB before querying.
+                            const wsId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+                            const plan = await db.getPlanByPlanFile(sessionId, wsId);
                             if (plan) {
                                 targetSessionId = plan.sessionId || plan.planId;
                             }

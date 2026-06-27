@@ -127,15 +127,26 @@ async function viaDirectDb() {
 
   let plan;
   if (resolvedPlanFile) {
-    plan = await db.getPlanByPlanFile(resolvedPlanFile, workspaceRoot);
+    // getPlanByPlanFile requires the DB workspace_id (a UUID), NOT the workspace root path.
+    // Resolve it from the DB config / dominant workspace before querying.
+    const wsId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+    plan = await db.getPlanByPlanFile(resolvedPlanFile, wsId);
   } else {
     plan = await db.getPlanBySessionId(effectiveKey);
   }
 
   let columnSuccess;
   if (plan && plan.isEpic) {
-    const cascadeFn = db.cascadeEpicByPlanId || db.updateColumnWithEpicCascadeByPlanId;
-    columnSuccess = await cascadeFn.call(db, plan.planId, targetColumn);
+    // Prefer the atomic, race-free cascadeEpicByPlanId (Plan 2). Fall back to
+    // updateColumnWithEpicCascadeByPlanId only if it's missing — note the signatures
+    // differ (the latter requires an explicit subtaskPlanIds[] array).
+    if (typeof db.cascadeEpicByPlanId === 'function') {
+      columnSuccess = await db.cascadeEpicByPlanId(plan.planId, targetColumn);
+    } else {
+      const subtasks = await db.getSubtasksByEpicId(plan.planId);
+      const subtaskPlanIds = subtasks.map(st => st.planId).filter(Boolean);
+      columnSuccess = await db.updateColumnWithEpicCascadeByPlanId(plan.planId, subtaskPlanIds, targetColumn);
+    }
   } else if (plan) {
     columnSuccess = await db.updateColumnByPlanFile(plan.planFile, plan.workspaceId, targetColumn);
   } else {

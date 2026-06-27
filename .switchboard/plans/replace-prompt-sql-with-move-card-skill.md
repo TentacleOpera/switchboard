@@ -57,7 +57,7 @@ The Class 6 fix in the comprehensive epic plan appended a subtask-cascade UPDATE
 
 **Dependencies & Conflicts**
 - **Depends on the comprehensive epic fix** (already implemented) — `updateColumnWithEpicCascadeByPlanId` (KanbanDatabase.ts line 3826) must exist for the `move-card.js` fallback fix. Verified: exists.
-- **Depends on Plan 2 (Atomic Race-Free Cascade) if implemented first** — `cascadeEpicByPlanId` would be the preferred method for the `move-card.js` fallback. If Plan 2 is not yet implemented, use `updateColumnWithEpicCascadeByPlanId` (from the comprehensive fix) as a stopgap. Verified: `cascadeEpicByPlanId` does NOT yet exist.
+- **Depends on Plan 2 (Atomic Race-Free Cascade) if implemented first** — `cascadeEpicByPlanId` would be the preferred method for the `move-card.js` fallback. If Plan 2 is not yet implemented, use `updateColumnWithEpicCascadeByPlanId` (from the comprehensive fix) as a stopgap. **Reviewer update 2026-06-28:** `cascadeEpicByPlanId` now EXISTS (KanbanDatabase.ts:3877, commit 957df2a) and is the active cascade method used by `move-card.js`.
 - **Conflict with `move-card.js` line 128:** the direct-DB fallback calls `updateColumnWithEpicCascade` — a method that does NOT EXIST in KanbanDatabase.ts. This is a crash (TypeError), not just a logic bug. This must be fixed in this plan.
 
 ## Dependencies
@@ -153,6 +153,37 @@ Key risks: (1) the `move-card.js` fallback at line 128 calls `updateColumnWithEp
   2. Update the JSDoc (line 230) to document `planId` as an accepted field.
   3. **Verification note:** `getPlanBySessionId` (KanbanDatabase.ts line 2556) already has a planId fallback at lines 2566-2575 — it tries session_id first, then falls back to plan_id lookup. This means passing a planId in the existing `sessionId` field may already work through the API path. The explicit `planId` field is primarily a **clarity/documentation improvement**, not a functional necessity. The implementer should verify whether `moveCard` → `moveCardToColumn` → `getPlanBySessionId` already handles planId-as-sessionId before deciding whether the new field is strictly needed.
 - **Edge Cases:** Both `sessionId` and `planId` provided → prefer `sessionId` (backward compat). Only `planId` → works via `getPlanBySessionId` planId fallback in `moveCardToColumn`.
+
+## Reviewer Pass — 2026-06-28
+
+### Findings (Grumpy → Balanced)
+
+| # | Severity | File:Line | Finding | Fix Applied |
+|---|----------|-----------|---------|-------------|
+| 1 | CRITICAL | `move-card.js:130` | `getPlanByPlanFile(resolvedPlanFile, workspaceRoot)` passes the filesystem root path as `workspaceId`, but `workspace_id` in the DB is a UUID (e.g. `038bffef-…`). The planFile-to-planId resolution in the direct-DB fallback ALWAYS returned null → `FAILED` for every Split Plan prompt when extension not running. | Resolved `wsId = await db.getWorkspaceId() \|\| await db.getDominantWorkspaceId() \|\| ''` before calling `getPlanByPlanFile`. |
+| 2 | CRITICAL | `TaskViewerProvider.ts:927` | Same bug in the `moveCard` API callback: `getPlanByPlanFile(sessionId, wsRoot)` passed `wsRoot` as `workspaceId`. The API path also failed to resolve planFiles. Pre-existing, but this plan made it load-bearing (Split Plan prompt now routes through it). | Same fix: resolve `wsId` from DB before `getPlanByPlanFile`. |
+| 3 | MAJOR | `move-card.js:137` | `\|\|` fallback between `cascadeEpicByPlanId(epicPlanId, targetColumn)` [2 args] and `updateColumnWithEpicCascadeByPlanId(epicPlanId, subtaskPlanIds[], targetColumn)` [3 args] — incompatible signatures. 2-arg `.call()` worked for the first (always picked since `cascadeEpicByPlanId` now exists) but would silently pass `targetColumn` as `subtaskPlanIds` if the fallback were ever hit. Latent time bomb. | Replaced `\|\|` with explicit `if (typeof db.cascadeEpicByPlanId === 'function')` branch; fallback now fetches subtaskPlanIds via `getSubtasksByEpicId` and passes all 3 args correctly. |
+| 4 | NIT | Plan text line 60 | Plan states `cascadeEpicByPlanId` "does NOT yet exist" — it now exists (KanbanDatabase.ts:3877, commit 957df2a). The `\|\|` fallback was dead code. | Updated plan text below. |
+
+### Files Changed (Reviewer Pass)
+
+- `.agents/skills/kanban_operations/move-card.js` — lines 128-149: workspaceId resolution fix + cascade signature fix.
+- `src/services/TaskViewerProvider.ts` — lines 923-935: workspaceId resolution fix in `moveCard` API callback.
+
+### Validation Results
+
+- **Grep: `sqlite3.*UPDATE plans SET kanban_column` in `src/services/`** → 0 matches in prompt files (only in KanbanDatabase.ts DB layer). ✅
+- **Grep: `sqlite3` in `agentPromptBuilder.ts`** → 0 matches. ✅
+- **Grep: `updateColumnWithEpicCascade\b` (non-existent method) in `move-card.js`** → 0 matches. ✅
+- **Grep: `getPlanByPlanFile(sessionId, wsRoot)` in `TaskViewerProvider.ts`** → 0 matches (bug eliminated). ✅
+- **Compilation:** Skipped per session directive.
+- **Automated tests:** Skipped per session directive.
+
+### Remaining Risks
+
+1. **`out/` compilation requirement** (pre-existing, documented in plan): the direct-DB fallback in `move-card.js` requires `require('../../../out/services/KanbanDatabase')`. In uncompiled dev environments, the fallback fails with a module-not-found error. The extension API path is the only option. This is a regression from raw-SQL (which always worked), documented in the prompt error message.
+2. **`getDominantWorkspaceId` fallback**: if both `getWorkspaceId()` and `getDominantWorkspaceId()` return null (empty DB or fresh workspace), `wsId` is `''`. `getPlanByPlanFile` will query `WHERE workspace_id = ''` which won't match. This is an edge case for completely empty workspaces — the plan file wouldn't be registered yet anyway, so `FAILED` is the correct outcome.
+3. **`updatePlanFile` at `move-card.js:158`**: when `plan` is null (unregistered plan file), it passes `effectiveKey` (a planFile path) as `sessionId` to `updatePlanFile`, which calls `getPlanBySessionId` — this won't match a file path and returns false. This is the correct error behavior (plan not found → `FAILED`), not a bug.
 
 ## Verification Plan
 

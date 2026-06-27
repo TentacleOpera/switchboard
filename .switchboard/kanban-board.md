@@ -1,6 +1,6 @@
 # Kanban Board
 
-*Workspace: 038bffef-9842-4574-96a1-69a43a280b3c* · *Updated: 2026-06-27T23:26:36.264Z*
+*Workspace: 038bffef-9842-4574-96a1-69a43a280b3c* · *Updated: 2026-06-27T23:30:36.295Z*
 
 ## CREATED
 
@@ -87,10 +87,11 @@ _No plans_
 
 ## CODER CODED
 
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/replace-prompt-sql-with-move-card-skill.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/replace-prompt-sql-with-move-card-skill.md) — Replace Raw Agent-Prompt SQL with move-card.js Skill Calls <!-- planId:1e2e0d80-d366-4d2f-adf1-7cca57ac679c -->
+_No plans_
 
 ## CODE REVIEWED
 
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/replace-prompt-sql-with-move-card-skill.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/replace-prompt-sql-with-move-card-skill.md) — Replace Raw Agent-Prompt SQL with move-card.js Skill Calls <!-- planId:1e2e0d80-d366-4d2f-adf1-7cca57ac679c -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-epic-default-column-from-subtasks.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-epic-default-column-from-subtasks.md) — Fix: Epic Column Clobbered to CREATED by File-Watcher Re-INSERT <!-- planId:ca079f74-9fbd-4a88-8a71-edbbe672ff76 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/epic-card-subtask-column-status-display.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/epic-card-subtask-column-status-display.md) — Enhancement: Epic File Subtask List Should Show Each Subtask's Current Kanban Column <!-- planId:d7898e5f-16a7-4b16-bf0f-b8421929d787 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260626100859_design_html_graphs_not_rendering.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260626100859_design_html_graphs_not_rendering.md) — Bug: Design Panel HTML Preview Graphs Don't Render Until Reopen <!-- planId:c3f39a07-c049-404f-87d2-0da387db76f5 -->
