@@ -369,6 +369,37 @@
     initZoomListeners('image-preview-container-images', '.zoomable-viewport', 'images');
     initZoomListeners('image-preview-container-design', '.zoomable-viewport', 'design');
 
+    function setupPreviewResizeObservers() {
+        const targets = [
+            { wrapperId: 'html-preview-wrapper', frameId: 'html-preview-frame' },
+            { wrapperId: 'claude-preview-wrapper', frameId: 'claude-preview-frame' }
+        ];
+        for (const { wrapperId, frameId } of targets) {
+            const wrapper = document.getElementById(wrapperId);
+            const frame = document.getElementById(frameId);
+            if (!wrapper || !frame) continue;
+            const observer = new MutationObserver(() => {
+                notifyIframeResize(frame, wrapper);
+            });
+            observer.observe(wrapper, {
+                attributes: true,
+                attributeFilter: ['style', 'class']
+            });
+        }
+    }
+    setupPreviewResizeObservers();
+
+    window.addEventListener('resize', () => {
+        notifyIframeResize(
+            document.getElementById('html-preview-frame'),
+            document.getElementById('html-preview-wrapper')
+        );
+        notifyIframeResize(
+            document.getElementById('claude-preview-frame'),
+            document.getElementById('claude-preview-wrapper')
+        );
+    });
+
     // Hold Space to pan/zoom over HTML previews. The iframe swallows mouse events,
     // so a capture layer is shown only while Space is held — the rest of the time
     // the previewed page stays fully interactive.
@@ -439,6 +470,26 @@
             return html.slice(0, index) + baseTag + html.slice(index);
         }
         return baseTag + html;
+    }
+
+    let _resizeRafToken = null;
+    function notifyIframeResize(iframe, wrapperEl) {
+        if (!iframe) return;
+        if (_resizeRafToken) cancelAnimationFrame(_resizeRafToken);
+        _resizeRafToken = requestAnimationFrame(() => {
+            _resizeRafToken = null;
+            if (wrapperEl && wrapperEl.style.display === 'none') return;
+            if (!iframe.contentWindow) return;
+            try {
+                requestAnimationFrame(() => {
+                    if (wrapperEl && wrapperEl.style.display === 'none') return;
+                    if (!iframe.contentWindow) return;
+                    iframe.contentWindow.dispatchEvent(new Event('resize'));
+                });
+            } catch (e) {
+                // cross-origin wrapper check / dispatch security catch
+            }
+        });
     }
 
     function getCurrentFolderPaths(folderPathsByRoot, filterRoot) {
@@ -1173,6 +1224,8 @@
                 }
                 const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
                 if (iframeViewport) applyZoom('claude', iframeViewport);
+                notifyIframeResize(iframe, iframeWrapper);
+                if (iframe) iframe.addEventListener('load', () => notifyIframeResize(iframe, iframeWrapper), { once: true });
             } else if (htmlContent) {
                 if (imageContainer) imageContainer.style.display = 'none';
                 if (imageImg) imageImg.removeAttribute('src');
@@ -1186,6 +1239,8 @@
                     const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
                     if (iframeViewport) applyZoom('claude', iframeViewport);
                 }
+                notifyIframeResize(iframe, iframeWrapper);
+                if (iframe) iframe.addEventListener('load', () => notifyIframeResize(iframe, iframeWrapper), { once: true });
             }
             return;
         }
@@ -1232,6 +1287,8 @@
                 if (imageImg) imageImg.removeAttribute('src');
                 const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
                 if (iframeViewport) applyZoom('html', iframeViewport);
+                notifyIframeResize(iframe, iframeWrapper);
+                if (iframe) iframe.addEventListener('load', () => notifyIframeResize(iframe, iframeWrapper), { once: true });
             } else if (htmlContent) {
                 if (iframeWrapper) iframeWrapper.style.display = 'flex';
                 if (htmlWrapper) htmlWrapper.classList.add('scanlines-suppressed');
@@ -1245,6 +1302,8 @@
                 }
                 if (imageContainer) imageContainer.style.display = 'none';
                 if (imageImg) imageImg.removeAttribute('src');
+                notifyIframeResize(iframe, iframeWrapper);
+                if (iframe) iframe.addEventListener('load', () => notifyIframeResize(iframe, iframeWrapper), { once: true });
             }
             const statusHtml = document.getElementById('status-html');
             if (statusHtml) {

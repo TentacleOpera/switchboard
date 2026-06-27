@@ -83,8 +83,8 @@ function run() {
     //    to COMPLETED (same rigid-unit model — an epic's subtasks share its column).
     const completeBlock = getCaseBlock(source, 'completeAll');
     assert.ok(
-        completeBlock.includes('updateColumnWithEpicCascade('),
-        'completeAll must cascade epic column updates via updateColumnWithEpicCascade'
+        completeBlock.includes('updateColumnWithEpicCascadeByPlanId('),
+        'completeAll must cascade epic column updates via updateColumnWithEpicCascadeByPlanId'
     );
     assert.ok(
         completeBlock.includes('card.isEpic'),

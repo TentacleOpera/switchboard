@@ -2252,6 +2252,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (!this._kanbanProvider) {
             const db = await this._getKanbanDb(workspaceRoot);
             if (!db) return false;
+            // Fallback: direct DB update with epic check (Class 4).
+            // Guard: an empty sessionId (file-based plan) would make getPlanBySessionId('') match a
+            // random empty-session plan (WHERE session_id='' LIMIT 1). Refuse to guess — return false.
+            if (!sessionId) return false;
+            const plan = await db.getPlanBySessionId(sessionId) ?? await db.getPlanByPlanId(sessionId);
+            if (plan && plan.isEpic) {
+                const subtasks = await db.getSubtasksByEpicId(plan.planId);
+                const subtaskPlanIds = subtasks.map(st => st.planId).filter(Boolean) as string[];
+                return db.updateColumnWithEpicCascadeByPlanId(plan.planId, subtaskPlanIds, column);
+            }
             return !!(await db.updateColumn(sessionId, column));
         }
         return this._kanbanProvider.moveCardToColumn(workspaceRoot, sessionId, column);
@@ -11629,8 +11639,16 @@ What would you like to find?`;
                 await db.updateStatus(sessionId, 'active');
                 if (this._kanbanProvider) {
                     await this._kanbanProvider.moveCardToColumn(workspaceRoot, sessionId, 'CREATED');
-                } else {
-                    await db.updateColumn(sessionId, 'CREATED');
+                } else if (sessionId) {
+                    // No-provider fallback with epic cascade + empty-sessionId guard (Class 7).
+                    const restorePlan = await db.getPlanBySessionId(sessionId) ?? await db.getPlanByPlanId(sessionId);
+                    if (restorePlan && restorePlan.isEpic) {
+                        const subtasks = await db.getSubtasksByEpicId(restorePlan.planId);
+                        const subtaskPlanIds = subtasks.map(st => st.planId).filter(Boolean) as string[];
+                        await db.updateColumnWithEpicCascadeByPlanId(restorePlan.planId, subtaskPlanIds, 'CREATED');
+                    } else {
+                        await db.updateColumn(sessionId, 'CREATED');
+                    }
                 }
             }
 
@@ -14054,8 +14072,16 @@ What would you like to find?`;
                 await db.updateStatus(sessionId, 'completed');
                 if (this._kanbanProvider) {
                     await this._kanbanProvider.moveCardToColumn(resolvedWorkspaceRoot, sessionId, 'COMPLETED');
-                } else {
-                    await db.updateColumn(sessionId, 'COMPLETED');
+                } else if (sessionId) {
+                    // No-provider fallback with epic cascade + empty-sessionId guard (Class 7).
+                    const completePlan = await db.getPlanBySessionId(sessionId) ?? await db.getPlanByPlanId(sessionId);
+                    if (completePlan && completePlan.isEpic) {
+                        const subtasks = await db.getSubtasksByEpicId(completePlan.planId);
+                        const subtaskPlanIds = subtasks.map(st => st.planId).filter(Boolean) as string[];
+                        await db.updateColumnWithEpicCascadeByPlanId(completePlan.planId, subtaskPlanIds, 'COMPLETED');
+                    } else {
+                        await db.updateColumn(sessionId, 'COMPLETED');
+                    }
                 }
             }
             await this._logEvent('plan_management', {

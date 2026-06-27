@@ -1115,7 +1115,7 @@ Automated actions (execute these yourself):
       DB_PATH=$(head -n 2 .switchboard/workspace-id | tail -n 1)
       [ -z "$DB_PATH" ] && DB_PATH=".switchboard/kanban.db"
    b. Run SQL UPDATE + verification in a single command (workspace-root-relative path, e.g. .switchboard/plans/my_plan_routine.md):
-      sqlite3 "$DB_PATH" "UPDATE plans SET kanban_column = 'PLAN REVIEWED' WHERE plan_file = '<relative_path>' AND workspace_id = '$WORKSPACE_ID'; SELECT changes();"
+      sqlite3 "$DB_PATH" "UPDATE plans SET kanban_column = 'PLAN REVIEWED' WHERE plan_file = '<relative_path>' AND workspace_id = '$WORKSPACE_ID'; UPDATE plans SET kanban_column = 'PLAN REVIEWED' WHERE epic_id = (SELECT plan_id FROM plans WHERE plan_file = '<relative_path>' AND workspace_id = '$WORKSPACE_ID') AND status = 'active'; SELECT changes();"
       - If output is 1: success (card moved to Planned column)
       - If output is 0: the file may not be registered yet; notify the user to manually drag the card to the Planned column
 
@@ -1140,7 +1140,7 @@ Automated actions (execute these yourself):
       DB_PATH=$(head -n 2 .switchboard/workspace-id | tail -n 1)
       [ -z "$DB_PATH" ] && DB_PATH=".switchboard/kanban.db"
    b. Run SQL UPDATE + verification in a single command (workspace-root-relative path, e.g. .switchboard/plans/my_plan_routine.md):
-      sqlite3 "$DB_PATH" "UPDATE plans SET kanban_column = 'PLAN REVIEWED' WHERE plan_file = '<relative_path>' AND workspace_id = '$WORKSPACE_ID'; SELECT changes();"
+      sqlite3 "$DB_PATH" "UPDATE plans SET kanban_column = 'PLAN REVIEWED' WHERE plan_file = '<relative_path>' AND workspace_id = '$WORKSPACE_ID'; UPDATE plans SET kanban_column = 'PLAN REVIEWED' WHERE epic_id = (SELECT plan_id FROM plans WHERE plan_file = '<relative_path>' AND workspace_id = '$WORKSPACE_ID') AND status = 'active'; SELECT changes();"
       - If output is 1: success (card moved to Planned column)
       - If output is 0: the file may not be registered yet; notify the user to manually drag the card to the Planned column
 

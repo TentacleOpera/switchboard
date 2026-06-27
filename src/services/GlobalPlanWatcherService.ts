@@ -607,8 +607,15 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     updatedAt: fileMtime
                 };
                 await db.insertFileDerivedPlan(updatedRecord);
-                if (relativePath.startsWith('.switchboard/epics/') && !plan.isEpic) {
-                    await db.updateEpicStatus(plan.planId, 1, '');
+                // Always assert is_epic=1 for epic files. The conditional check on
+                // !plan.isEpic is unsafe: plan was fetched before insertFileDerivedPlan,
+                // and a concurrent _handlePlanDelete (from an atomic write: temp+rename)
+                // can delete the row between the fetch and the insert. insertFileDerivedPlan
+                // then INSERTs a fresh row with is_epic=0 (column default), but the stale
+                // plan.isEpic=1 skips updateEpicStatus — leaving the new row stuck at 0.
+                // Unconditional update is idempotent and cheap.
+                if (relativePath.startsWith('.switchboard/epics/')) {
+                    await db.updateEpicStatus(updatedRecord.planId, 1, '');
                     updatedRecord.isEpic = 1;
                 }
                 plan = updatedRecord;

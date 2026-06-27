@@ -2,51 +2,124 @@
 
 ## Goal
 
-Epic files created by `createEpicFromPlanIds` contain almost no content — just a YAML frontmatter description, an H1 title, and a one-line description. They lack a meaningful description of what the epic is about, why the plans are grouped together, and a list of subtasks with context. The orchestrator agent opening an epic file has no idea what the epic is or what needs to be done.
+Epic files created by `createEpicFromPlanIds` contain almost no content — just a YAML frontmatter description, an H1 title, and a one-line description. They lack a meaningful description of what the epic is about, why the plans are grouped together, and how each subtask contributes to the epic's goal. The orchestrator agent opening an epic file has no idea what the epic is or what needs to be done.
 
 ### Root Cause
 
-`createEpicFromPlanIds` in `KanbanProvider.ts` (line 8536) generates the epic file content as:
+Two problems:
 
+1. **The suggest-epics prompt doesn't instruct the agent to write epic descriptions.** The `_buildSuggestEpicsPrompt` method (line 8615) tells the agent to propose epics with "epic name, member plans with planId and one-line summary" (line 8646) — but doesn't ask for a Goal statement or per-subtask narrative. The `create-epic.js` call at line 8657 only passes the epic name and plan IDs, not a description. The script already accepts a description as the 4th argument (line 26) and the API endpoint passes it through — the plumbing exists, the prompt just doesn't use it.
+
+2. **The epic file content template is a bare stub.** `createEpicFromPlanIds` (line 8536) writes only:
 ```typescript
-const epicDesc = (description ? String(description).replace(/[\r\n]+/g, ' ').trim() : '');
 const epicContent = `---\ndescription: '${yamlSafeName}'\n---\n\n# ${epicName}\n\n${epicDesc}`;
 ```
+Even when a description IS passed, it's a single line with no structure. The `_regenerateEpicFile` method appends subtask links but no summaries.
 
-This is a bare-minimum stub. The `description` parameter is the one-line description passed by the caller (e.g., "Making epic parent/child relationships work round-trip across Linear, ClickUp, and Notion"). No subtask information, no goal statement, no context about why these plans are grouped, and no subtask list is included in the initial file write.
+### What the Epic File Should Contain
 
-The `_regenerateEpicFile` method (line 8403) does append a `## Subtasks` section with checkbox links, but it only runs AFTER the initial file write, and it only includes subtask names and file links — no summaries of what each subtask does.
-
-The result is an epic file that looks like:
+The epic file should follow this structure (matching the hand-written epics in the current board):
 
 ```markdown
 ---
-description: 'Cross-Provider Epic Structure (Import, Sync, Mirroring)'
+description: 'Epic Name'
 ---
 
-# Cross-Provider Epic Structure (Import, Sync, Mirroring)
+# Epic Name
 
-Making epic parent/child relationships work round-trip across Linear, ClickUp, and Notion
+## Goal
+
+<Full problem statement — what's broken today, what the epic solves, why these plans are grouped together. 2-4 sentences.>
+
+## How the Subtasks Achieve This
+
+- **Subtask Plan Name**: <What this plan does and how it contributes to the epic's goal. 1-2 sentences.>
+- **Subtask Plan Name**: <What this plan does and how it contributes to the epic's goal. 1-2 sentences.>
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Plan: Linear Import — Parent-with-Subtasks Always Becomes Epic](../plans/linear-import-epic-linking.md)
-...
+- [ ] [Subtask Name](../plans/plan-file.md)
 <!-- END SUBTASKS -->
 ```
 
-This is useless to an orchestrator agent. It needs a description of the epic's purpose, the capability it represents, and a list of subtasks with one-line summaries of what each does.
+The `## Goal` and `## How the Subtasks Achieve This` sections are written by the agent at proposal time — they require understanding what each subtask does and how it relates to the epic's theme. The code can't generate these automatically; the prompt must instruct the agent to write them.
 
 ## Metadata
 
-**Complexity:** 4
+**Complexity:** 3
 **Tags:** feature, backend, kanban, epic, agent-prompt
 
 ## Files to Modify
 
-### 1. `src/services/KanbanProvider.ts`
+### 1. `src/services/KanbanProvider.ts` — `_buildSuggestEpicsPrompt` (line 8615)
 
-**a. Enrich the initial epic file content** (line 8536) — include a goal section, a subtask summary table, and the subtask links:
+**Update the prompt to instruct the agent to write epic descriptions and pass them to create-epic.js.**
+
+The current step 3 (PROPOSE) says:
+```
+For each proposed epic: epic name, member plans with planId and one-line summary.
+```
+
+The current step 5 (EXECUTE) says:
+```
+node .agents/skills/kanban_operations/create-epic.js "<epic name>" '["planId1","planId2",...]' "${workspaceRoot}"
+```
+
+Both need to change:
+
+```typescript
+// Step 3 — PROPOSE (line 8641-8647):
+// Before:
+'3. PROPOSE (single message, all groups at once)',
+'   Group by underlying capability theme, not by surface keyword.',
+'   Cross-provider plans that address the same capability go into one epic.',
+'   Minimum 2 plans per epic. Single-plan "groups" go in the Standalone section.',
+'   Flag POSSIBLE OVERLAP / REDUNDANCY / GAP where detected.',
+'   For each proposed epic: epic name, member plans with planId and one-line summary.',
+'   List genuinely standalone plans separately. Then stop and wait.',
+
+// After:
+'3. PROPOSE (single message, all groups at once)',
+'   Group by underlying capability theme, not by surface keyword.',
+'   Cross-provider plans that address the same capability go into one epic.',
+'   Minimum 2 plans per epic. Single-plan "groups" go in the Standalone section.',
+'   Flag POSSIBLE OVERLAP / REDUNDANCY / GAP where detected.',
+'   For each proposed epic, write:',
+'     - Epic name',
+'     - Goal: 2-4 sentences describing what the epic achieves, what problem it',
+'       solves, and why these plans are grouped together.',
+'     - How the Subtasks Achieve This: one bullet per member plan explaining what',
+'       it does and how it contributes to the epic\'s goal. Format:',
+'         - **Plan Name**: <what it does and how it contributes>',
+'     - Member plans with planId and one-line summary',
+'   List genuinely standalone plans separately. Then stop and wait.',
+```
+
+```typescript
+// Step 5 — EXECUTE (line 8654-8658):
+// Before:
+'5. EXECUTE',
+'   For each approved group:',
+'   ```bash',
+`   node .agents/skills/kanban_operations/create-epic.js "<epic name>" '["planId1","planId2",...]' "${workspaceRoot}"`,
+'   ```',
+
+// After:
+'5. EXECUTE',
+'   For each approved group, pass the Goal text as the description argument:',
+'   ```bash',
+`   node .agents/skills/kanban_operations/create-epic.js "<epic name>" '["planId1","planId2",...]' "${workspaceRoot}" "<goal text>"`,
+'   ```',
+'   The description becomes the ## Goal section in the epic file.',
+'   After all epics are created, write the ## How the Subtasks Achieve This section',
+'   into each epic file manually (the create-epic script only writes the Goal).',
+'   Use the text from your step 3 proposal — paste it between the Goal and the',
+'   <!-- BEGIN SUBTASKS --> marker.',
+```
+
+### 2. `src/services/KanbanProvider.ts` — `createEpicFromPlanIds` (line 8536)
+
+**Improve the epic file template to use the description as a proper Goal section:**
 
 ```typescript
 // Before (line 8536):
@@ -55,72 +128,41 @@ const epicContent = `---\ndescription: '${yamlSafeName}'\n---\n\n# ${epicName}\n
 
 // After:
 const epicDesc = (description ? String(description).replace(/[\r\n]+/g, ' ').trim() : '');
-
-// Build subtask summary table for the initial content
-const subtaskSummaryRows = subtasks.map(st => {
-    const basename = path.basename(st.planFile);
-    const topic = st.topic || basename;
-    const complexity = st.complexity || 'Unknown';
-    const column = st.kanbanColumn || 'CREATED';
-    return `| ${topic} | ${complexity} | ${column} | [plan](../plans/${basename}) |`;
-}).join('\n');
-
-const subtaskSummaryTable = subtasks.length > 0
-    ? `## Subtask Summary\n\n| Plan | Complexity | Column | Link |\n|------|-----------|--------|------|\n${subtaskSummaryRows}\n`
-    : '';
-
-const epicContent = `---\ndescription: '${yamlSafeName}'\n---\n\n# ${epicName}\n\n## Goal\n\n${epicDesc}\n\n${subtaskSummaryTable}`;
+const goalSection = epicDesc ? `## Goal\n\n${epicDesc}\n` : '';
+const epicContent = `---\ndescription: '${yamlSafeName}'\n---\n\n# ${epicName}\n\n${goalSection}`;
 ```
 
-**b. Enrich `_regenerateEpicFile`** (line 8403) — include subtask complexity and column in the subtask links:
+This puts the description under a `## Goal` heading instead of as a bare paragraph after the H1. If no description is passed, the file has just the H1 and the auto-generated subtask section.
+
+### 3. `src/services/KanbanProvider.ts` — `_regenerateEpicFile` (line 8403)
+
+**Preserve the `## How the Subtasks Achieve This` section during regeneration.**
+
+`_regenerateEpicFile` rewrites the epic file on every subtask change. It must NOT clobber the `## Goal` or `## How the Subtasks Achieve This` sections — only the `<!-- BEGIN SUBTASKS -->` block should be replaced.
+
+Check the current implementation — if it already preserves content outside the subtask block (by splitting on the markers), no change needed. If it rewrites the whole file, fix it to only replace the subtask block:
 
 ```typescript
-// Before (line 8412-8416):
-const subtaskLines = subtasks.map(st => {
-    const basename = path.basename(st.planFile);
-    const topic = st.topic || basename;
-    return `- [ ] [${topic}](../plans/${basename})`;
-});
-
-// After:
-const subtaskLines = subtasks.map(st => {
-    const basename = path.basename(st.planFile);
-    const topic = st.topic || basename;
-    const complexity = st.complexity || 'Unknown';
-    const column = st.kanbanColumn || 'CREATED';
-    return `- [ ] [${topic}](../plans/${basename}) — ${complexity} · ${column}`;
-});
-```
-
-**c. Add a `## Context` section placeholder** — after the goal, add a prompt for the orchestrator to fill in or read:
-
-```typescript
-const epicContent = `---\ndescription: '${yamlSafeName}'\n---\n\n# ${epicName}\n\n## Goal\n\n${epicDesc}\n\n## Context\n\nThis epic groups ${subtasks.length} plan(s) that share a common capability. See the subtask summary below for what each plan covers.\n\n${subtaskSummaryTable}`;
-```
-
-### 2. `src/services/KanbanProvider.ts` — `buildEpicOrchestrationPrompt`
-
-**Enrich the orchestrator prompt** — the `buildEpicOrchestrationPrompt` method (line 3114) already reads the epic file and appends subtask plans. Ensure the prompt includes the subtask summary table and column status so the orchestrator knows what needs to be done:
-
-```typescript
-// After line 3128 (after fetching subtasks):
-const subtaskStatusLines = subtasks.map(st => {
-    return `- ${st.topic} — ${st.complexity || 'Unknown'} · ${st.kanbanColumn || 'CREATED'}`;
-}).join('\n');
-
-// Add to the prompt plans or as a preamble:
-const statusSummary = `\n## Subtask Status\n\n${subtaskStatusLines}\n`;
+// If _regenerateEpicFile rewrites the whole file, change it to:
+const beginMarker = '<!-- BEGIN SUBTASKS (auto-generated, do not edit) -->';
+const endMarker = '<!-- END SUBTASKS -->';
+const beginIdx = existingContent.indexOf(beginMarker);
+const endIdx = existingContent.indexOf(endMarker);
+if (beginIdx !== -1 && endIdx !== -1) {
+    // Replace only the subtask block, preserve everything else
+    const before = existingContent.slice(0, beginIdx);
+    const after = existingContent.slice(endIdx + endMarker.length);
+    const newContent = before + newSubtaskBlock + after;
+} else {
+    // No existing subtask block — append it
+    const newContent = existingContent + '\n' + newSubtaskBlock;
+}
 ```
 
 ## Verification
 
-- Create an epic via `create-epic.js` with a description and 3 subtask plans
-- Open the epic file — it must contain:
-  - YAML frontmatter with description
-  - H1 title
-  - `## Goal` section with the description text
-  - `## Context` section explaining the grouping
-  - `## Subtask Summary` table with plan name, complexity, column, and link for each subtask
-  - `## Subtasks` section (auto-generated) with checkbox links including complexity and column
-- The subtask summary table must have the correct plan names, complexity values, and current columns
-- After moving a subtask to a different column and regenerating the epic file, the table and subtask links must reflect the new column
+- Click "Suggest Epics" on the board → the copied prompt must instruct the agent to write Goal and How-Subtasks-Achieve-This text for each proposed epic
+- Agent proposes epics → each proposal must include a Goal statement and per-subtask narrative bullets
+- Agent executes create-epic.js with the description argument → epic file must contain `## Goal` section with the passed text
+- Agent writes the How-Subtasks-Achieve-This section into the file → file must have both `## Goal` and `## How the Subtasks Achieve This` sections
+- Move a subtask to a different column → `_regenerateEpicFile` must NOT clobber the Goal or How-Subtasks-Achieve-This sections (only the subtask block between the markers should be updated)

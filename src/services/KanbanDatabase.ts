@@ -589,7 +589,9 @@ ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     linear_issue_id = excluded.linear_issue_id,
     notion_page_id = excluded.notion_page_id,
     worktree_id = excluded.worktree_id,
-    is_epic = COALESCE(excluded.is_epic, is_epic),
+    -- is_epic is STICKY via upsert: once 1, it can only be cleared by updateEpicStatus(planId, 0, '').
+    -- Callers pass `record.isEpic ?? 0` (literal 0, never NULL), so COALESCE(0, is_epic) clobbered epics.
+    is_epic = CASE WHEN excluded.is_epic > 0 THEN excluded.is_epic ELSE plans.is_epic END,
     epic_id = CASE WHEN excluded.epic_id IS NOT NULL AND excluded.epic_id != '' THEN excluded.epic_id ELSE epic_id END,
     workspace_name = excluded.workspace_name,
     project_id = COALESCE(excluded.project_id, plans.project_id)
@@ -2886,6 +2888,20 @@ export class KanbanDatabase {
                     'UPDATE plans SET status = ?, kanban_column = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
                     ['completed', 'COMPLETED', now, normalized, workspaceId]
                 );
+                // Cascade: if this plan is an epic, complete its active subtasks too (Class 8).
+                // WHERE epic_id = ? AND status = 'active' is atomic within this BEGIN/COMMIT and race-free.
+                const stmt = this._db.prepare(
+                    'SELECT plan_id, is_epic FROM plans WHERE plan_file = ? AND workspace_id = ? LIMIT 1',
+                    [normalized, workspaceId]
+                );
+                let isEpic = false; let epicPlanId = '';
+                try { if (stmt.step()) { const r = stmt.getAsObject(); isEpic = !!Number(r.is_epic); epicPlanId = String(r.plan_id); } } finally { stmt.free(); }
+                if (isEpic && epicPlanId) {
+                    this._db.run(
+                        "UPDATE plans SET status = 'completed', kanban_column = 'COMPLETED', updated_at = ? WHERE epic_id = ? AND status = 'active'",
+                        [now, epicPlanId]
+                    );
+                }
             }
             this._db.run('COMMIT');
         } catch (error) {
@@ -3801,6 +3817,7 @@ export class KanbanDatabase {
         return this._readRows(stmt);
     }
 
+    /** @deprecated session_id-keyed; no live callers (moveCardToColumnByPlanFile now uses updateColumnWithEpicCascadeByPlanId). File-based subtasks have session_id='' so this no-ops for them. */
     public async updateColumnTransaction(sessionIds: string[], targetColumn: string): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
         if (sessionIds.length === 0) return true;
@@ -3847,6 +3864,46 @@ export class KanbanDatabase {
         } catch (err) {
             try { this._db.run('ROLLBACK'); } catch { /* ignore */ }
             console.error('[KanbanDatabase] updateColumnWithEpicCascade failed:', err);
+            return false;
+        }
+    }
+
+    /**
+     * Move an epic and all its subtasks to a target column atomically, keyed by plan_id.
+     * File-based epics/subtasks have session_id='' — the session_id-keyed updateColumnWithEpicCascade
+     * silently matches zero rows for them. This plan_id-keyed variant is the correct path (Class 2).
+     */
+    public async updateColumnWithEpicCascadeByPlanId(
+        epicPlanId: string,
+        subtaskPlanIds: string[],
+        targetColumn: string
+    ): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        // Validate column name (custom columns flow in from user config) — matches updateColumnByPlanFile.
+        if (!VALID_KANBAN_COLUMNS.has(targetColumn) && !SAFE_COLUMN_NAME_RE.test(targetColumn)) {
+            console.error(`[KanbanDatabase] updateColumnWithEpicCascadeByPlanId rejected invalid column: ${targetColumn}`);
+            return false;
+        }
+        const now = new Date().toISOString();
+        try {
+            this._db.run('BEGIN');
+            this._db.run(
+                `UPDATE plans SET kanban_column = ?, updated_at = ? WHERE plan_id = ?`,
+                [targetColumn, now, epicPlanId]
+            );
+            if (subtaskPlanIds.length > 0) {
+                const placeholders = subtaskPlanIds.map(() => '?').join(',');
+                this._db.run(
+                    `UPDATE plans SET kanban_column = ?, updated_at = ? WHERE plan_id IN (${placeholders})`,
+                    [targetColumn, now, ...subtaskPlanIds]
+                );
+            }
+            this._db.run('COMMIT');
+            await this._persist();
+            return true;
+        } catch (err) {
+            try { this._db.run('ROLLBACK'); } catch { /* ignore */ }
+            console.error('[KanbanDatabase] updateColumnWithEpicCascadeByPlanId failed:', err);
             return false;
         }
     }
