@@ -7064,6 +7064,59 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 this.refresh();
                 break;
             }
+            case 'orchestrateEpic': {
+                // Kanban-board Orchestrate button (epic cards). The board is a SEPARATE webview
+                // from the Epics tab (PlanningPanelProvider), so it needs its own handler — the
+                // PlanningPanelProvider 'orchestrateEpic' case never receives board messages.
+                // Resolve the epic by plan_id: buildEpicOrchestrationPrompt / markEpicOrchestrating
+                // both look up via getPlanByPlanId, and a locally-created epic's sessionId !== planId
+                // (two independent UUIDs in createEpicFromPlanIds), so passing sessionId would
+                // silently fail the lookup and the ORCHESTRATING column would never appear.
+                const epicId = String(msg.planId || msg.sessionId || '');
+                const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const mode: 'send' | 'copy' = msg.mode === 'send' ? 'send' : 'copy';
+                // Echo back whatever identifier the button carries so the kanban-side
+                // epicOrchestrationResult handler can re-match the originating button (it matches
+                // msg.sessionId against data-session, then data-plan-id).
+                const echoId = String(msg.sessionId || msg.planId || '');
+                if (!epicId || !wsRoot) {
+                    this._panel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: false, mode, sessionId: echoId, error: 'Orchestrate failed: missing plan or workspace.' });
+                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'Orchestrate failed: missing plan or workspace.', isError: true });
+                    break;
+                }
+                try {
+                    let assembled: { prompt: string; epicTopic: string; subtaskCount: number; totalSubtasks: number } | null = null;
+                    let sent = false;
+                    if (mode === 'send') {
+                        // dispatchEpicOrchestration teleports to ORCHESTRATING internally.
+                        const res = await this.dispatchEpicOrchestration(wsRoot, epicId);
+                        assembled = res.assembled;
+                        sent = res.sent;
+                    } else {
+                        assembled = await this.buildEpicOrchestrationPrompt(wsRoot, epicId);
+                    }
+                    if (!assembled) {
+                        this._panel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: false, mode, sessionId: echoId, error: 'Could not resolve this epic for orchestration.' });
+                        this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'Could not resolve this epic for orchestration.', isError: true });
+                        break;
+                    }
+                    await vscode.env.clipboard.writeText(assembled.prompt);
+                    if (mode === 'copy') {
+                        // Copy path must teleport explicitly (send path already did above).
+                        await this.markEpicOrchestrating(wsRoot, epicId);
+                    }
+                    const statusMsg = mode === 'send'
+                        ? (sent ? 'Orchestrator prompt sent and copied. Epic moved to ORCHESTRATING.' : 'No orchestrator terminal — prompt copied. Epic moved to ORCHESTRATING.')
+                        : 'Orchestrator prompt copied. Epic moved to ORCHESTRATING.';
+                    this._panel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: true, mode, sent, sessionId: echoId, prompt: assembled.prompt, epicTopic: assembled.epicTopic, subtaskCount: assembled.subtaskCount, totalSubtasks: assembled.totalSubtasks });
+                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: statusMsg, isError: false });
+                } catch (err) {
+                    console.error('[KanbanProvider] orchestrateEpic failed:', err);
+                    this._panel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: false, mode, sessionId: echoId, error: String(err) });
+                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Orchestrate failed: ${String(err)}`, isError: true });
+                }
+                break;
+            }
             case 'importFromClipboard':
                 await vscode.commands.executeCommand('switchboard.importPlanFromClipboard', msg.markdownText);
                 break;

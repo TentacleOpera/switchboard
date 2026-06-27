@@ -271,3 +271,75 @@ The ack is fire-and-forget with `.catch()`, so a no-op stub is sufficient — th
 ---
 
 **Recommendation:** Complexity is 4 → **Send to Coder.**
+
+---
+
+## Reviewer Pass (In-Place)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*Cracks knuckles. Reads the diff. Reads it again. Squints.*
+
+Alright, listen up. I went through every file this plan touches and traced every call site. Here's what I found.
+
+**NIT-1 — Recommended test for `dispatched === false` was NOT added.** The plan's Verification Plan (line 264) explicitly recommends — "New test coverage (recommended)" — a test case asserting the ack is NOT posted when `onColumnMove` returns `{ dispatched: false }`. The test file (`remote-control-service.test.js`) has tests A–F, all with `return { dispatched: true }`. There is zero coverage for the `dispatched === false` branch of the `if (dispatched)` gate in `_applyStateMirror` (line 303). The plan said "recommended," not "required," so I'm not calling this a MAJOR — but the one branch that actually distinguishes this feature from "always post a comment" is completely untested. The gate is three lines of code and the whole point of the `dispatched` return-type change. Test it. <ref_snippet file="/Users/patrickvuleta/Documents/GitHub/switchboard/src/services/RemoteControlService.ts" lines="302-308" />
+
+**That's it.** No CRITICAL. No MAJOR. I looked hard.
+
+- `postComment` wrappers in both providers check `result.success` and throw on failure — the silent-swallow trap the plan flagged is closed. <ref_snippet file="/Users/patrickvuleta/Documents/GitHub/switchboard/src/services/remote/LinearRemoteProvider.ts" lines="148-153" /> <ref_snippet file="/Users/patrickvuleta/Documents/GitHub/switchboard/src/services/remote/NotionRemoteProvider.ts" lines="168-173" />
+- `onColumnMove` return type is `Promise<{ dispatched: boolean }>` — interface, implementation, callback registration, and test mock all consistent. <ref_snippet file="/Users/patrickvuleta/Documents/GitHub/switchboard/src/services/RemoteControlService.ts" lines="68-68" /> <ref_snippet file="/Users/patrickvuleta/Documents/GitHub/switchboard/src/services/KanbanProvider.ts" lines="1461-1463" />
+- `_remoteDispatchColumnAgent` returns `boolean` — all three early returns are `return false`, the success path is `return true`. The `_remoteDispatchComment` caller (line 1529) discards the boolean, which is backward compatible. <ref_snippet file="/Users/patrickvuleta/Documents/GitHub/switchboard/src/services/KanbanProvider.ts" lines="1533-1547" />
+- All 6 mock providers in the test file have `postComment: async () => {}` stubs. The mock `onColumnMove` returns `{ dispatched: true }`. No `TypeError` from destructuring `undefined`. <ref_snippet file="/Users/patrickvuleta/Documents/GitHub/switchboard/src/test/integrations/shared/remote-control-service.test.js" lines="47-54" />
+- The ack is fire-and-forget: `provider.postComment(...).catch(...)` is NOT awaited. Dispatch is never blocked by ack failure. Synchronous throws (e.g., `postComment` not a function) are caught by the outer try/catch; async rejections are caught by `.catch()`. <ref_snippet file="/Users/patrickvuleta/Documents/GitHub/switchboard/src/services/RemoteControlService.ts" lines="299-311" />
+- Echo guard is intact: `stampMarker` is applied inside `postManagedComment` (Linear) and `created_by` is auto-populated with the bot id (Notion). The ack comment will be `authoredBySelf = true` on ingest → skipped. No feedback loop.
+
+The implementation is clean. The plan was thorough, the code matches it, and the one gap is a missing recommended test. I've seen worse. Much worse.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is:**
+- All 6 files in the "Files Changed" table are correctly modified and match the plan spec.
+- The `postComment` return-value hardening (throw on `{ success: false }`) is the load-bearing safety fix — it's in place.
+- The fire-and-forget `.catch()` pattern is correct and intentional.
+- The `dispatched` gate correctly suppresses ack comments for agentless columns.
+
+**Fix now:** None required. No CRITICAL or MAJOR findings.
+
+**Defer (optional):**
+- NIT-1: Add a test case for `dispatched === false` to `remote-control-service.test.js`. This is the only gap between the plan's Verification Plan and the actual test file. It's a 10-line test that asserts `postComment` was NOT called. Low effort, high value for the one branch that defines the feature's gating behavior. Deferring is acceptable since the plan marked it "recommended," but it should be picked up before the next release.
+
+### Code Fixes Applied
+
+None — no CRITICAL or MAJOR findings required code changes.
+
+### Validation Results
+
+- **Typecheck/compile:** Skipped per session instructions (SKIP COMPILATION).
+- **Automated tests:** Skipped per session instructions (SKIP TESTS). The user will run the suite separately.
+- **Static verification (manual trace):** All 6 files in "Files Changed" verified against the plan spec. All call sites of `onColumnMove`, `_remoteDispatchColumnAgent`, and `_remoteApplyColumnMove` traced — no missed consumers. `postManagedComment` return signatures on both `LinearSyncService` (line 1182) and `NotionFetchService` (line 232) confirmed to return `{ success: boolean; error?: string }` without always throwing — the `postComment` wrappers correctly check `result.success`. Echo guard primitives (`stampMarker`/`hasMarker` in `commentMarker.ts`, Notion `created_by === botId` check at `NotionRemoteProvider.ts` line 132) confirmed present.
+
+### Remaining Risks
+
+1. **NIT-1 (deferred):** The `dispatched === false` branch in `_applyStateMirror` (line 303) has no test coverage. The plan recommended it; it was not added. Risk is low (the branch is a simple `if` gate), but the feature's distinguishing behavior is untested.
+2. **Manual verification not yet run:** The plan's Manual Verification steps (trigger a real remote status change, confirm ack appears; move to agentless column, confirm no ack; disable Notion Comments DB, confirm failure is logged) require a live Linear/Notion integration and were not executed in this review.
+3. **Ack comment wording is hardcoded:** The plan flagged this under "User Review Required" — the wording (`Switchboard received this status change and dispatched the local agent for the **${targetColumn}** column. Check back in a few minutes.`) is not configurable. Acceptable per the plan's fire-and-forget design, but the user should confirm the wording is acceptable before release.
+
+### Files Changed (Verified)
+
+| File | Change | Status |
+|---|---|---|
+| `src/services/remote/RemoteProvider.ts` | Add `postComment` method to interface (lines 73-79) | ✓ Verified |
+| `src/services/remote/LinearRemoteProvider.ts` | Implement `postComment` with return-value check (lines 148-153) | ✓ Verified |
+| `src/services/remote/NotionRemoteProvider.ts` | Implement `postComment` with return-value check (lines 168-173) | ✓ Verified |
+| `src/services/RemoteControlService.ts` | `onColumnMove` return type (line 68); gate ack on `dispatched` in `_applyStateMirror` (lines 302-308) | ✓ Verified |
+| `src/services/KanbanProvider.ts` | `_remoteDispatchColumnAgent` returns `boolean` (lines 1533-1547); `_remoteApplyColumnMove` returns `{ dispatched }` (lines 1507-1512); callback registration (lines 1461-1463) | ✓ Verified |
+| `src/test/integrations/shared/remote-control-service.test.js` | Mock `onColumnMove` returns `{ dispatched: true }` (line 53); `postComment` stubs on all 6 mock providers (lines 77, 101, 130, 156, 176, 199) | ✓ Verified |
+
+### Summary
+
+| Severity | Finding | File:Line | Fix |
+|---|---|---|---|
+| NIT | Recommended `dispatched === false` test not added | `src/test/integrations/shared/remote-control-service.test.js` | Deferred (plan marked "recommended") |
+
+**Fixes applied:** None (no CRITICAL/MAJOR findings).
+**Remaining risks:** NIT-1 (untested `dispatched === false` branch); manual verification pending; hardcoded ack wording pending user confirmation.
