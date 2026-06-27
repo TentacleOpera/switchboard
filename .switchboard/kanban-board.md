@@ -1,6 +1,6 @@
 # Kanban Board
 
-*Workspace: 038bffef-9842-4574-96a1-69a43a280b3c* · *Updated: 2026-06-27T22:14:42.420Z*
+*Workspace: 038bffef-9842-4574-96a1-69a43a280b3c* · *Updated: 2026-06-27T22:14:49.058Z*
 
 ## CREATED
 
@@ -92,6 +92,7 @@ _No plans_
 
 ## CODE REVIEWED
 
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260627141653_docs_tab_preview_width_parity.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260627141653_docs_tab_preview_width_parity.md) — Docs Tab Preview Width Parity with Kanban Plans <!-- planId:5b0e1527-3b6b-414b-a1b8-572c75c5ce11 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-atomic-write-delete-row-loss.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-atomic-write-delete-row-loss.md) — Fix: Atomic-Write DELETE Event Permanently Drops the Plan/Epic Row (Definitive Symptom Fix + Safety Net) <!-- planId:96a75d5d-d0c0-4031-beeb-c9b13f90462b -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260627163115_create_project_modal_with_agent_prd.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260627163115_create_project_modal_with_agent_prd.md) — Replace Create Project VS Code Popup with In-Webview Modal + Agent PRD Generation <!-- planId:a2cd6537-8cb3-4b92-9c88-bef72017724a -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260626100859_design_html_graphs_not_rendering.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260626100859_design_html_graphs_not_rendering.md) — Bug: Design Panel HTML Preview Graphs Don't Render Until Reopen <!-- planId:c3f39a07-c049-404f-87d2-0da387db76f5 -->
