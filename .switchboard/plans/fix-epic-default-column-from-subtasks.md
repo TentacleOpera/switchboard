@@ -223,3 +223,81 @@ Key residual risk: the ordinal map in the DB helper must match `createEpicFromPl
 - **Headline regression check:** create an epic whose subtasks are all in `PLAN REVIEWED`, then edit the epic file with an external atomic-write tool (temp + rename) → the epic must STAY in `PLAN REVIEWED`, not revert to `CREATED`.
 - **Self-heal check:** take an existing epic stuck in `CREATED` whose subtasks are all in `PLAN REVIEWED`; trigger any epic-file watcher event (reopen panel / edit the epic file) → the epic must move to `PLAN REVIEWED` without a manual drag.
 - Check DB after creation and after edit: `SELECT plan_id, is_epic, kanban_column FROM plans WHERE plan_id = '<epic_id>'` — `is_epic=1` and `kanban_column='PLAN REVIEWED'` in both cases.
+
+---
+
+## Post-Implementation Review (reviewer pass)
+
+### Implementation deviation from plan (intentional, approved)
+
+The plan proposed `recomputeEpicColumnFromSubtasks` on `KanbanDatabase.ts` with a new `_buildLiveOrdinalMap` DB helper. The actual implementation placed the helper on `KanbanProvider.ts` (lines 4748-4781) and wired it to the watcher via a new `setEpicColumnRecomputer` callback on `GlobalPlanWatcherService` (lines 78-82), registered in `extension.ts` (lines 507-510). This mirrors the existing `setDisplayedProjectResolver` callback pattern.
+
+**This deviation is an improvement, not a regression.** It reuses the provider's existing `_buildKanbanColumns([], customColumns)` (which honors `_getEffectiveKanbanOrderOverrides()`) directly — the exact same call `createEpicFromPlanIds` makes (line 8688). This eliminates the plan's own flagged "Complex / Risky" residual risk: *"the ordinal map in the DB helper must match createEpicFromPlanIds's map... or the first post-creation watcher event flips the column."* By sharing one code path, divergence is structurally impossible. No `_buildLiveOrdinalMap` duplication was needed.
+
+### Stage 1 — Grumpy Principal Engineer review
+
+> *"Let me get my reading glasses. I've seen 'clobber' bugs before, and they're usually fixed by some junior slapping a band-aid on the INSERT. Let me see what we've got..."*
+
+**NIT-1 — Redundant `getWorkspaceId()` call.** `KanbanProvider.ts:4775-4776`. The helper fetches `const workspaceId = await db.getWorkspaceId();` when `epic.workspaceId` is already in hand from the `db.getPlanByPlanId` call at line 4752. One extra DB round-trip per re-assert that actually writes. The plan's own proposed code used `epic.workspaceId` directly. Not a bug — `getWorkspaceId()` returns the same value for a per-workspace DB instance — but it's a needless hop. Defer; the write path is rare (only when the column actually differs).
+
+**NIT-2 — Return type `void` vs plan's `boolean`.** `KanbanProvider.ts:4748`. The plan proposed `Promise<boolean>`; the implementation returns `Promise<void>`. No caller inspects the return value (the watcher calls `await this._recomputeEpicColumn?.(...)` and discards the result). Harmless. Defer.
+
+> *"That's it? Two nits? Let me look harder..."*
+
+I checked:
+- The zero-subtasks guard (`if (columns.length === 0) return;`, line 4761) is present and load-bearing — prevents the re-assert itself from forcing `CREATED` on a brand-new epic before subtasks are linked. ✓
+- The `is_epic` re-assert (`updateEpicStatus(..., 1, '')`) runs BEFORE the column re-assert in both watcher branches (lines 593→600, 639→646), so `db.getPlanByPlanId` inside the helper sees `isEpic=1` and passes the `!epic.isEpic` guard. ✓
+- The ordinal computation (lines 4762-4772) is character-for-character identical to `createEpicFromPlanIds` (lines 8687-8697): same `_buildKanbanColumns([], customColumns)`, same `BACKLOG → -1`, same min-ordinal sort, same `BACKLOG → CREATED` coercion. ✓
+- The idempotency short-circuit (`if (resolved === current) return;`, line 4774) avoids needless writes on every watcher event. ✓
+- Both `_handlePlanFile` branches (new-record line 600, existing-record line 646) are wired. ✓
+- The callback is optional (`?.`) — safe during early init before `setEpicColumnRecomputer` is called. ✓
+- `updateColumnByPlanFile` (KanbanDatabase.ts:1433) validates the column name against `VALID_KANBAN_COLUMNS` / `SAFE_COLUMN_NAME_RE` before writing. No untrusted-input vector. ✓
+- Error handling wraps the whole helper in try/catch with a `console.warn` — a failure in re-derivation does not crash the watcher flush. ✓
+- Root cause still present and correctly un-touched: `insertFileDerivedPlan` (KanbanDatabase.ts:1342) still hardcodes `'CREATED'` on INSERT and omits `kanban_column` from the ON CONFLICT SET clause (lines 1343-1349). The fix re-derives AFTER the insert rather than teaching the file to set the column — respecting the design note that "the file has no business setting DB-owned columns." ✓
+
+> *"Fine. It's clean. I hate it when code is clean — it means I can't yell at anyone. Two nits, both deferrable, no material issues. The architecture deviation actually solved the plan's own biggest risk by construction. Ship it."*
+
+### Stage 2 — Balanced synthesis
+
+**Keep as-is:**
+- Helper location on `KanbanProvider` (not `KanbanDatabase`) — eliminates ordinal-map duplication risk.
+- Callback wiring via `setEpicColumnRecomputer` — consistent with `setDisplayedProjectResolver` pattern.
+- Zero-subtasks no-op guard — load-bearing, correctly implemented.
+- Idempotency short-circuit — avoids needless writes.
+- Both watcher branches wired adjacent to the `is_epic` re-assert.
+- Optional change #4 (creation-time re-assert) correctly NOT applied — redundant with the watcher safety net, as the plan stated.
+
+**Fix now:** None. No CRITICAL or MAJOR findings.
+
+**Defer (optional, non-blocking):**
+- NIT-1: Replace `db.getWorkspaceId()` with `epic.workspaceId` to save one DB round-trip on the write path.
+- NIT-2: Align return type to `Promise<boolean>` if future callers need success/failure signal.
+
+### Code fixes applied
+
+None. The implementation is correct and complete as committed.
+
+### Validation results
+
+- **Compilation:** Skipped per session instructions (`src/` is source of truth; `dist/` not used in dev).
+- **Automated tests:** Skipped per session instructions (deferred to user).
+- **Static verification (performed):**
+  - `recomputeEpicColumnFromSubtasks` exists at `KanbanProvider.ts:4748` with correct signature. ✓
+  - `setEpicColumnRecomputer` callback registered at `extension.ts:507-510`. ✓
+  - Both `_handlePlanFile` epic branches call `this._recomputeEpicColumn?.(...)` (lines 600, 646). ✓
+  - Ordinal logic identical between helper and `createEpicFromPlanIds` (same `_buildKanbanColumns` call). ✓
+  - Root cause (`insertFileDerivedPlan` hardcoded `'CREATED'`) confirmed still present and correctly un-touched. ✓
+  - `updateColumnByPlanFile` validates column names. ✓
+  - Zero-subtasks guard present. ✓
+
+### Files changed (in commit 116def1)
+
+- `src/services/KanbanProvider.ts` — new `recomputeEpicColumnFromSubtasks` method (lines 4748-4781); `createEpicFromPlanIds` ordinal block refactored to use `_buildKanbanColumns` (lines 8687-8693, now matching the helper).
+- `src/services/GlobalPlanWatcherService.ts` — new `_recomputeEpicColumn` field + `setEpicColumnRecomputer` setter (lines 78-82); two re-assert calls in `_handlePlanFile` (lines 600, 646).
+- `src/extension.ts` — callback registration (lines 507-510).
+
+### Remaining risks
+
+1. **Brief observable window:** Between the clobber (`insertFileDerivedPlan` INSERT with `'CREATED'`) and the re-assert (`recomputeEpicColumnFromSubtasks`), a concurrent board refresh could momentarily read `CREATED`. Self-heals on the same debounced flush. Acceptable — same transient window the `is_epic` re-assert already has.
+2. **NIT-1/NIT-2:** Deferrable micro-optimizations; no functional impact.
+3. **No automated test coverage yet:** The plan's suggested tests (recompute helper, watcher race simulation) are deferred to the user. Recommend the user add the regression test for the headline atomic-write race before closing this ticket.
