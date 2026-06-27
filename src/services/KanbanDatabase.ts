@@ -5348,6 +5348,7 @@ FROM plans
                     dispatchedIde: p.dispatched_ide || p.dispatchedIde || '',
                     clickupTaskId: p.clickup_task_id || p.clickupTaskId || '',
                     linearIssueId: p.linear_issue_id || p.linearIssueId || '',
+                    notionPageId: p.notion_page_id || p.notionPageId || '',
                     worktreeId: p.worktree_id ?? p.worktreeId ?? undefined,
                     workspaceName: p.workspace_name || p.workspaceName || '',
                     projectId: p.project_id !== null && p.project_id !== undefined ? Number(p.project_id) : (p.projectId !== null && p.projectId !== undefined ? Number(p.projectId) : null)
@@ -5360,7 +5361,8 @@ FROM plans
                         record.project,
                         record.workspaceId, record.createdAt, record.updatedAt, record.lastAction, record.sourceType,
                         record.brainSourcePath, record.mirrorPath, record.routedTo, record.dispatchedAgent,
-                        record.dispatchedIde, record.clickupTaskId, record.linearIssueId, record.worktreeId ?? null,
+                        record.dispatchedIde, record.clickupTaskId, record.linearIssueId, record.notionPageId || '',
+                        record.worktreeId ?? null,
                         record.isEpic ?? null, record.epicId || '',
                         record.workspaceName || '', record.projectId ?? null
                     ]);

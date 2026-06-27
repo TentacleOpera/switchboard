@@ -206,6 +206,7 @@ interface RemoteProvider {
   - Add `notion_page_id` to `UPSERT_PLAN_SQL` (lines 549–584) INSERT column list + VALUES placeholders + the `ON CONFLICT` UPDATE set clause (mirror `linear_issue_id = excluded.linear_issue_id` at line 578).
   - Add `notion_page_id` to `PLAN_COLUMNS` (lines 589–593) and to `insertFileDerivedPlan` INSERT (lines 1321–1327).
   - Add `notionPageId` to the row-read mapping in `upsertPlans` (~line 1265–1266) and `restoreFromBackup` (~line 5265–5266).
+  - **[REVIEW FIX 2026-06-27]** `restoreFromBackup` was MISSED in the initial implementation — it passed 27 params to the 28-placeholder `UPSERT_PLAN_SQL` (the new `notion_page_id` at column #23), misaligning every field from `worktree_id` onward and breaking backup restore for ALL users (not just Notion). Fixed: added `notionPageId` to the restored record object and `record.notionPageId || '',` at param position 23. Verified placeholder count (28) == param count (28).
   - Add `updateNotionPageIdByPlanFile(planFile, workspaceId, notionPageId)` and deprecated `updateNotionPageId(sessionId, notionPageId)` mirroring `updateLinearIssueIdByPlanFile` (lines 1786–1810) and `updateLinearIssueId` (lines 1812–1817).
 - **Edge Cases:** Update the **source-type read normalization** at lines 5760–5766 — currently unknown values silently become `'local'`. Add `'notion-import'` and `'notion-automation'` to the allow-list or Notion plans will be misread as `'local'` and skipped by the poll filter. Tolerate other unknown legacy types (don't throw).
 
@@ -342,3 +343,62 @@ Tests are defined in Task 9 (`src/test/integrations/notion/`, `src/test/integrat
 Key risks: (1) the delta-polling cursor model is a structural break from the existing per-card comment cursors — existing Linear installs must re-seed without replaying history, and the cursor migrates from per-card to global (resolved: both providers use global cursors, see Task 2); (2) the original plan assumed a Linear comment bumps the issue's `updatedAt` — **research proved this wrong**, and the fix (a separate `comments`-entity query) has been applied to Task 2 — missing this would have made all inbound Linear comments invisible; (3) Notion's minute-level timestamp rounding means same-minute updates can't be ordered — mitigated by inclusive `on_or_after` + at-least-once + idempotency; (4) the `Kanban Column` select must be populated from real board columns at setup, not the hardcoded 8, or state mirroring silently fails. The three Notion API behaviors the design hinges on (`last_edited_time`/`created_time` filters, `created_by` bot-id, `/v1/users/me`) are all **research-confirmed** (see `docs/technical_platform_integration_analysis.md`). Remaining open item: the D1 tie-break when both providers are configured (User Review Required). The skill-generation pipeline gap (MIRROR_MANIFEST) and the TaskViewerProvider→KanbanProvider misattribution are mechanical fixes already captured in the tasks.
 
 **Recommendation:** Complexity 8 → Send to Lead Coder.
+
+---
+
+## Code Review Pass (2026-06-27) — Findings, Fixes & Validation
+
+Reviewer-executor pass against the implemented commit `9fbceb4` ("remote automation fixes"). Each task was assessed against this plan as the source of truth. Two code fixes applied; NITs and remaining risks recorded below. Per session directives, compilation (`tsc`/webpack) and automated tests were NOT run — the test suite is to be executed separately by the user.
+
+### Stage 1 — Adversarial findings (severity-tagged)
+
+| Severity | Finding | Location |
+|:---|:---|:---|
+| **CRITICAL** | `restoreFromBackup` passed 27 params to the 28-placeholder `UPSERT_PLAN_SQL` after `notion_page_id` was added as column #23. The `upsertPlans` caller was updated; `restoreFromBackup` was missed. Result: every column from `worktree_id` onward shifted one slot (`worktree_id`←`isEpic`, `is_epic`←`epicId` [type error: INTEGER←string], `epic_id`←`workspaceName`, `workspace_name`←`projectId`, `project_id`←missing). Backup restore either throws per-plan (silently skipped) or corrupts restored rows. Blast radius: ALL users, not just Notion. Plan Task 1 explicitly required this update. | `src/services/KanbanDatabase.ts:5357` (params) + `:5349` (record) |
+| NIT | `MIGRATION_V39_SQL` declared between V12 and V13 in source order, not after V35 (the numerically-last declaration). Functionally correct (top-level const; runner executes it after V38 at line 4944). Cosmetic. | `src/services/KanbanDatabase.ts:252` |
+| NIT | V39 migration runner lacks the `BEGIN/COMMIT/ROLLBACK` transaction wrapper its siblings (V34/V35) use. Safe because both ops are idempotent (`ALTER` guarded by duplicate-column check, `CREATE INDEX IF NOT EXISTS`), but stylistically inconsistent. | `src/services/KanbanDatabase.ts:4944-4956` |
+| NIT | Dead ternary `insertAt === 1 ? '' : ''` — both branches return `''`, a no-op conditional that inserts a stray leading blank line for H1-less plans and misrepresents intent. **FIXED.** | `src/services/NotionBackupService.ts:327` |
+| NIT | `_getCurrentClickUpColumns` is misnamed — it returns LOCAL kanban column ids, not ClickUp's. Now called from the Notion setup path (`runNotionRemoteSetup`), widening the misnomer. Returns correct data. Pre-existing. | `src/services/KanbanProvider.ts:1625`, used at `:5453` |
+| NIT | Task 9 lists a test for "`refreshLocalPlanFromRemote` overwrites the local plan from the Notion page body before dispatch." No test asserts the actual file-overwrite (shared test B verifies refresh runs before move; the empty-render guard exists but is untested). | test coverage gap |
+
+### Stage 2 — Synthesis (what was fixed / deferred)
+
+- **Fixed now (CRITICAL):** `restoreFromBackup` — added `notionPageId` to the restored record object and `record.notionPageId || '',` at param position 23. Placeholder count (28) == param count (28), aligned with the `UPSERT_PLAN_SQL` column order.
+- **Fixed now (NIT, trivial):** `_writeNotionPageIdMetadata` — collapsed the dead `'' : ''` ternary to a plain `''`. Output semantics preserved (no behavioral change); dead code removed.
+- **Deferred (cosmetic/pre-existing):** `MIGRATION_V39_SQL` declaration ordering; V39 transaction-wrapper inconsistency; `_getCurrentClickUpColumns` rename (touches callers, risk of regression — defer to a dedicated cleanup). These are non-functional; flagged, not fixed.
+- **Deferred (test gap):** `refreshLocalPlanFromRemote` overwrite assertion — per session directives no tests were written/run this pass; flagged for the user's separate test run.
+- **No fix (design-aligned risk):** State cursor advances unconditionally after the delta loop even if `onColumnMove` threw (`RemoteControlService.ts:283-285`), while comments do NOT advance past a failed dispatch (`:349-352`). This matches the plan's stated "persist nextCursor AFTER processing" for state. A transient state-dispatch failure can lose the mirror until the remote card is touched again. Recorded as a remaining risk; changing it would deviate from the source-of-truth design.
+
+### Files changed by this review pass
+
+- `src/services/KanbanDatabase.ts` — `restoreFromBackup`: +`notionPageId` record field, +param #23 (2 lines added).
+- `src/services/NotionBackupService.ts` — `_writeNotionPageIdMetadata`: dead ternary collapsed (1 line changed).
+
+### Validation results (manual, no compile/test per directives)
+
+- [x] V39 migration (`ALTER TABLE plans ADD COLUMN notion_page_id TEXT DEFAULT ''` + index) present and idempotent-guarded — existing installs gain the column without data loss.
+- [x] Source-type read normalization (`KanbanDatabase.ts:5866`) preserves `'notion-import'`/`'notion-automation'` (does not collapse to `'local'`).
+- [x] `MIRROR_MANIFEST` (`ClaudeCodeMirrorService.ts:56,58`) contains both `notion_api.md` and `switchboard_remote_notion.md` → `.claude/skills/` copies will generate.
+- [x] `/comment` route (`LocalApiServer.ts:197,207`) accepts `provider:"notion"` and dispatches to `getNotionService()`; missing-setup surfaces as 503 `notConfigured`.
+- [x] `KanbanPlanRecord` interface (`KanbanDatabase.ts:54`) has `notionPageId?: string` → the `restoreFromBackup` fix is type-valid.
+- [x] `UPSERT_PLAN_SQL` VALUES placeholders == 28; `restoreFromBackup` params == 28 (post-fix). Aligned.
+- [x] No other `INSERT INTO plans` callers were missed (only `plans_v20`/`plans_v11` migration temp tables remain, both unrelated).
+
+### Remaining risks (post-fix)
+
+1. **State-cursor advance-on-failure asymmetry** — a transient `onColumnMove` failure loses the state mirror until the remote card is re-touched (comments retry, state does not). Design-aligned per the plan; not changed.
+2. **`postManagedComment` opens `KanbanDatabase.forWorkspace(this._workspaceRoot)`** rather than an injected DB handle (`NotionFetchService.ts`). `forWorkspace` caches instances, so the connection is reused — acceptable, but a DI purist would prefer the DB passed in.
+3. **D1 tie-break unresolved** — when both Linear and Notion are configured, the dropdown default is unspecified (the code defaults to `'linear'` in `getConfig`/`setConfig`). User Review item still open.
+4. **Test gaps** — `refreshLocalPlanFromRemote` file-overwrite assertion missing (Task 9); user's separate test run should add it.
+
+### Tasks 2–9 spot-check (no issues requiring code change)
+
+- **Task 2 (LinearRemoteProvider):** two separate queries (`issues`/`updatedAt` + `comments`/`createdAt`) confirmed; `authoredBySelf` via marker; reverse state map; global cursor model; seed-on-first-poll. ✓
+- **Task 3 (NotionRemoteProvider):** filter shape `{ timestamp, [ts]: { on_or_after } }` with NO `property` field (tested); `created_by` self-id with bot-id fail-safe (skip, retry); `Plan`-relation routing; empty-render clobber guard; ~350ms limiter + paging backstop. ✓
+- **Task 4 (NotionBackupService.setupRemoteControl):** plans DB reuse, page-id write-back via `updateNotionPageIdByPlanFile`, `_writeNotionPageIdMetadata`, `_ensureColumnSelectOptions` from real board columns, Comments DB creation, cursor seeding to "now". ✓
+- **Task 5 (LocalApiServer):** `getNotionService` added; provider guard accepts `notion`; ternary→dispatch; `notConfigured`→503. ✓
+- **Task 6 (switchboard_remote_notion.md):** orientation skill authored in `.agents/skills/`, registered in `AGENTS.md` + `MIRROR_MANIFEST`; covers body-first-then-column convention, `Plan` relation requirement, capability note. ✓
+- **Task 7 (notion_api.md):** reply-bridge skill mirrors `linear_api.md`; `**Notion Page ID:**` metadata surfaced; `agentPromptBuilder.ts` triager instructions updated for the notion_api skill + Notion ID line. ✓
+- **Task 8 (kanban.html Remote tab):** provider dropdown, Notion setup button + status, `remoteCollectConfig` carries `provider`, `applyRemoteProviderUi` toggles setup block + header, `runNotionRemoteSetup` handler in `KanbanProvider.ts`. ✓
+- **Task 9 (tests):** three test files added + registered in `run-integration-tests.js`; cover state/comment delta separation, filter shape, self-id, dedup, seed, advance-after-failure, Notion page-id keying, remote import. (Not run this pass.) ✓ (coverage gap noted above)
+- **Provider seam (D5):** `RemoteProvider` interface extracted; `RemoteControlService` is provider-agnostic; echo guard / per-card queue / seed-on-first-poll / advance-after-dispatch preserved. An `importRemotePlan` method was added to the interface beyond the plan's original signature — a reasonable extension for picking up remotely-authored new items. ✓

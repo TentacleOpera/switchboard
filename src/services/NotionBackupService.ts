@@ -324,7 +324,7 @@ export class NotionBackupService {
             // Insert right after the first line (usually the H1) to mirror Linear's stub layout.
             const lines = content.split('\n');
             const insertAt = lines.length > 0 && lines[0].startsWith('# ') ? 1 : 0;
-            lines.splice(insertAt, 0, insertAt === 1 ? '' : '', line);
+            lines.splice(insertAt, 0, '', line);
             await fs.promises.writeFile(planFileAbs, lines.join('\n'), 'utf8');
         } catch (e) {
             console.warn('[NotionBackupService] _writeNotionPageIdMetadata failed:', e);
