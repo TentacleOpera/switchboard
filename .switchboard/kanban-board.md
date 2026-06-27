@@ -1,6 +1,6 @@
 # Kanban Board
 
-*Workspace: 038bffef-9842-4574-96a1-69a43a280b3c* · *Updated: 2026-06-27T22:14:05.474Z*
+*Workspace: 038bffef-9842-4574-96a1-69a43a280b3c* · *Updated: 2026-06-27T22:14:35.892Z*
 
 ## CREATED
 
@@ -92,6 +92,7 @@ _No plans_
 
 ## CODE REVIEWED
 
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260626100859_design_html_graphs_not_rendering.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260626100859_design_html_graphs_not_rendering.md) — Bug: Design Panel HTML Preview Graphs Don't Render Until Reopen <!-- planId:c3f39a07-c049-404f-87d2-0da387db76f5 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-atomic-write-delete-row-loss.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-atomic-write-delete-row-loss.md) — Fix: Atomic-Write DELETE Event Permanently Drops the Plan/Epic Row (Definitive Symptom Fix + Safety Net) <!-- planId:96a75d5d-d0c0-4031-beeb-c9b13f90462b -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-epic-file-content-generation.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-epic-file-content-generation.md) — Fix: Epic Files Have No Content — Improve Epic Generation Prompt <!-- planId:e12018b7-0c35-4e17-9706-fa0c43f90a64 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/atomic-race-free-cascade-and-status-alignment.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/atomic-race-free-cascade-and-status-alignment.md) — Atomic Race-Free Epic Cascade + Subtask Status Alignment <!-- planId:3a41ec5f-765c-4e44-b2f7-ab04df8a8a9a -->
