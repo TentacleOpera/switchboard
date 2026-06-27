@@ -4893,8 +4893,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 // session_id-keyed cascade silently no-ops for file-based plans (session_id='').
                 const subtasks = await db.getSubtasksByEpicId(plan.planId);
                 subtaskSessionIds = subtasks.map(st => st.sessionId).filter(Boolean);
-                const subtaskPlanIds = subtasks.map(st => st.planId).filter(Boolean) as string[];
-                moved = await db.updateColumnWithEpicCascadeByPlanId(plan.planId, subtaskPlanIds, targetColumn);
+                moved = await db.cascadeEpicByPlanId(plan.planId, targetColumn);
             } else {
                 moved = await db.updateColumn(sessionId, targetColumn);
             }
@@ -4966,8 +4965,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 // where the old session_id-keyed path + updateColumnTransaction fallback no-opped.
                 const subtasks = await db.getSubtasksByEpicId(previousRecord.planId);
                 subtaskSessionIds = subtasks.map(st => st.sessionId).filter(Boolean) as string[];
-                const subtaskPlanIds = subtasks.map(st => st.planId).filter(Boolean) as string[];
-                moved = await db.updateColumnWithEpicCascadeByPlanId(previousRecord.planId, subtaskPlanIds, targetColumn);
+                moved = await db.cascadeEpicByPlanId(previousRecord.planId, targetColumn);
             } else {
                 moved = await db.updateColumnByPlanFile(planFile, workspaceId, targetColumn);
             }
@@ -6810,9 +6808,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             // Epic-aware completion: cascade subtasks to COMPLETED (Class 3).
                             const plan = await db.getPlanByPlanId(resolvedSessionId) ?? await db.getPlanBySessionId(resolvedSessionId);
                             if (plan && plan.isEpic) {
-                                const subtasks = await db.getSubtasksByEpicId(plan.planId);
-                                const subtaskPlanIds = subtasks.map(st => st.planId).filter(Boolean) as string[];
-                                await db.updateColumnWithEpicCascadeByPlanId(plan.planId, subtaskPlanIds, 'COMPLETED');
+                                await db.cascadeEpicByPlanId(plan.planId, 'COMPLETED', 'completed');
                                 await this._regenerateEpicFile(workspaceRoot, plan.planId, db);
                             } else {
                                 await db.updateColumn(resolvedSessionId, 'COMPLETED');
@@ -6840,14 +6836,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         // Epic-aware completion: cascade subtasks to COMPLETED (Class 3).
                         const plan = await db.getPlanByPlanId(sessionId) ?? await db.getPlanBySessionId(sessionId);
                         if (plan && plan.isEpic) {
-                            const subtasks = await db.getSubtasksByEpicId(plan.planId);
-                            const subtaskPlanIds = subtasks.map(st => st.planId).filter(Boolean) as string[];
-                            await db.updateColumnWithEpicCascadeByPlanId(plan.planId, subtaskPlanIds, 'COMPLETED');
+                            await db.cascadeEpicByPlanId(plan.planId, 'COMPLETED', 'completed');
                             await this._regenerateEpicFile(workspaceRoot, plan.planId, db);
                         } else {
                             await db.updateColumn(sessionId, 'COMPLETED');
                             if (plan && plan.epicId) {
-                                await this._regenerateEpicFile(workspaceRoot, plan.epicId, db);
+                                    await this._regenerateEpicFile(workspaceRoot, plan.epicId, db);
                             }
                         }
                         _schedulePlanStateWrite(db, workspaceRoot, sessionId, 'COMPLETED',
@@ -6884,9 +6878,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         // would orphan subtasks in CODE REVIEWED when the epic completes.
                         if (card.isEpic) {
                             // plan_id-keyed cascade (Class 2): works for file-based epics (session_id='').
-                            const subtasks = await dbAll.getSubtasksByEpicId(card.planId);
-                            const subtaskPlanIds = subtasks.map(st => st.planId).filter(Boolean) as string[];
-                            await dbAll.updateColumnWithEpicCascadeByPlanId(card.planId, subtaskPlanIds, 'COMPLETED');
+                            await dbAll.cascadeEpicByPlanId(card.planId, 'COMPLETED', 'completed');
                             await this._regenerateEpicFile(workspaceRoot, card.planId, dbAll);
                         } else {
                             await dbAll.updateColumn(cardKey, 'COMPLETED');
@@ -6919,15 +6911,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     let planId: string | null = null;
                     // Epic-aware recovery (Class 7): recovering an epic must pull its subtasks back too.
                     let epicPlanId: string | null = null;
-                    let subtaskPlanIds: string[] = [];
                     if (await db.ensureReady()) {
                         const record = await db.getPlanBySessionId(sessionId);
                         if (record) {
                             planId = record.planId;
                             if (record.isEpic) {
                                 epicPlanId = record.planId;
-                                const subtasks = await db.getSubtasksByEpicId(record.planId);
-                                subtaskPlanIds = subtasks.map(st => st.planId).filter(Boolean) as string[];
                             }
                         }
                     }
@@ -6939,7 +6928,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     // that could see stale 'completed' status and re-sync a duplicate entry.
                     await db.updateStatus(sessionId, 'active');
                     if (epicPlanId) {
-                        await db.updateColumnWithEpicCascadeByPlanId(epicPlanId, subtaskPlanIds, targetColumn);
+                        await db.cascadeEpicByPlanId(epicPlanId, targetColumn, 'active', true);
                         await this._regenerateEpicFile(workspaceRoot, epicPlanId, db);
                     } else {
                         await db.updateColumn(sessionId, targetColumn);
@@ -6958,7 +6947,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         // Rollback DB changes if restore failed (re-cascade epic subtasks to COMPLETED).
                         await db.updateStatus(sessionId, 'completed');
                         if (epicPlanId) {
-                            await db.updateColumnWithEpicCascadeByPlanId(epicPlanId, subtaskPlanIds, 'COMPLETED');
+                            await db.cascadeEpicByPlanId(epicPlanId, 'COMPLETED', 'completed');
                             await this._regenerateEpicFile(workspaceRoot, epicPlanId, db);
                         } else {
                             await db.updateColumn(sessionId, 'COMPLETED');
@@ -7299,9 +7288,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                             // Epic-aware (Class 7): an epic sent back for fixes must take its subtasks too.
                             const plan = await db.getPlanByPlanId(sid) ?? await db.getPlanBySessionId(sid);
                             if (plan && plan.isEpic) {
-                                const subtasks = await db.getSubtasksByEpicId(plan.planId);
-                                const subtaskPlanIds = subtasks.map(st => st.planId).filter(Boolean) as string[];
-                                await db.updateColumnWithEpicCascadeByPlanId(plan.planId, subtaskPlanIds, 'LEAD CODED');
+                                await db.cascadeEpicByPlanId(plan.planId, 'LEAD CODED');
                                 await this._regenerateEpicFile(workspaceRoot, plan.planId, db);
                             } else {
                                 await db.updateColumn(sid, 'LEAD CODED');

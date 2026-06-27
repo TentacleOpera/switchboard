@@ -38,7 +38,7 @@ Notion backup restore (`NotionBackupService.restoreFromNotion`) updates each res
 ## Edge-Case & Dependency Audit
 
 **Race Conditions**
-- The post-restore cascade reads subtasks via `getSubtasksByEpicId` and updates them in a separate call — same read-then-write race as the existing Class 2/3/7 paths. If the "Atomic Race-Free Cascade" plan is implemented first, use its atomic `WHERE epic_id = ?` variant here too.
+- The stopgap post-restore cascade reads subtasks via `getSubtasksByEpicId` and updates them in a separate call — same read-then-write race as the existing Class 2/3/7 paths. If the "Atomic Race-Free Cascade" plan (Plan 2) is implemented first, use its atomic `cascadeEpicByPlanId` method (preferred path above) which eliminates the race.
 
 **Side Effects**
 - Notion restore will now move subtask cards to match the epic's restored column. Previously, subtasks stayed wherever they were. This is a behavior change — but it's the correct one (an epic and its subtasks should be in the same column after restore).
@@ -46,13 +46,17 @@ Notion backup restore (`NotionBackupService.restoreFromNotion`) updates each res
 
 **Dependencies & Conflicts**
 - Depends on the Class 1 `CASE` fix (already implemented) preserving `is_epic` on upsert — verified.
-- Depends on `epic_id` being preserved by the upsert's `CASE` clause when the restored record omits it — needs verification (see Complexity Audit).
-- If the "Atomic Race-Free Cascade" plan is implemented first, this plan should use its atomic cascade method instead of `updateColumnWithEpicCascadeByPlanId`.
+- Depends on `epic_id` being preserved by the upsert's `CASE` clause when the restored record omits it — **VERIFIED SAFE** (traced binding chain: `record.epicId || ''` → `''` → CASE ELSE preserves existing `epic_id`).
+- If the "Atomic Race-Free Cascade" plan is implemented first, this plan should use its atomic cascade method (`cascadeEpicByPlanId`) instead of `updateColumnWithEpicCascadeByPlanId`.
 
 ## Dependencies
 
 - **Comprehensive Epic Fix** (already implemented) — Class 1 `CASE` fix preserves `is_epic` on upsert; Class 2 `updateColumnWithEpicCascadeByPlanId` provides the cascade method.
-- **Atomic Race-Free Cascade plan** (if implemented first) — provides a race-free cascade method that this plan should use.
+- **Atomic Race-Free Cascade plan** (if implemented first) — provides `cascadeEpicByPlanId` (race-free, atomic, optional status cascade) that this plan should use as the preferred path.
+
+## Adversarial Synthesis
+
+Key risks: (1) the original proposed code used `getPlanBySessionId(sessionId)` as the lookup key, but for file-based plans `sessionId` is `''` — this either matches a random plan or gets skipped by the guard, meaning file-based epics don't cascade — **fix: use `getPlanByPlanId(planId)` and carry `planId` in `columnUpdates`**; (2) the `epic_id` preservation uncertainty is resolved — verified safe by tracing the binding chain (`record.epicId || ''` → `''` → CASE ELSE preserves existing); (3) the stopgap status cascade is N separate `updateStatus` calls (not atomic) — if Plan 2 is implemented first, use `cascadeEpicByPlanId` for atomic column+status in one transaction; (4) unchanged-epic-column edge case: epics whose column didn't change aren't in `columnUpdates`, so scattered subtasks won't be re-aligned — documented as a known limitation. Mitigations: use `planId` as lookup key; present both code paths (Plan 2 atomic preferred, stopgap fallback); document the unchanged-column limitation.
 
 ## Proposed Changes
 
@@ -122,7 +126,8 @@ Skipped per session directive — the user runs the test suite separately. No co
 - Restore a Notion backup where a subtask was in a different column than its epic before backup → subtask now matches the epic's restored column (epic-as-rigid-unit model).
 - Restore over a fresh workspace (no pre-existing local data) → no cascade occurs (no local epic relationships); plans restore with `is_epic=0`. Documented limitation.
 - Verify `epic_id` is preserved after restore: restore a workspace with epic/subtask links, then query `SELECT plan_id, epic_id, is_epic FROM plans WHERE is_epic = 1 OR epic_id != ''` — links should be intact.
+- Restore a Notion backup with a file-based epic (`sessionId=''`) → epic + subtasks cascade correctly via `getPlanByPlanId(planId)` lookup (the `planId`-based fix). Verify subtask columns match the epic's restored column.
 
 ## Recommendation
 
-Complexity 4 (Medium: single-file change, reuses existing cascade mechanism, but requires verifying `epic_id` preservation on upsert and has the fresh-workspace limitation) → **Send to Coder**. Implement option (b) (local DB relationships) as the default; option (a) (extend Notion schema) can be a follow-up if cross-workspace restore is needed.
+Complexity 4 (Medium: single-file change, reuses existing cascade mechanism, `epic_id` preservation verified safe, but has the fresh-workspace limitation and the file-based-plan lookup fix) → **Send to Coder**. Implement option (b) (local DB relationships) as the default; option (a) (extend Notion schema) can be a follow-up if cross-workspace restore is needed. **Critical:** use `planId` (not `sessionId`) as the cascade lookup key — the original proposed code's `sessionId`-based lookup silently drops file-based epics. If Plan 2 is implemented first, use the atomic `cascadeEpicByPlanId` path; otherwise use the stopgap with `updateColumnWithEpicCascadeByPlanId` + manual `updateStatus` loop.

@@ -3858,6 +3858,64 @@ export class KanbanDatabase {
         }
     }
 
+    /**
+     * Atomic, race-free epic cascade: move an epic and all its active subtasks
+     * to a target column in one transaction. Optionally also update status.
+     *
+     * Unlike updateColumnWithEpicCascadeByPlanId (which takes explicit subtaskPlanIds[]
+     * and has a read-then-write race), this uses `WHERE epic_id = ?` inside the UPDATE
+     * — subtasks added between the epic move and the subtask move are still caught.
+     *
+     * @param epicPlanId    The epic's plan_id.
+     * @param targetColumn  Target kanban column (validated against VALID_KANBAN_COLUMNS).
+     * @param targetStatus  Optional status to also set for the epic + subtasks (e.g. 'completed').
+     *                      When omitted, status is NOT touched (correct for non-completion moves).
+     * @param includeAllSubtasks When true, do NOT filter subtasks by status='active' (needed for
+     *                      recovery/restore paths that must catch completed/deleted subtasks too).
+     *                      Default false (only active subtasks cascade on forward moves).
+     */
+    public async cascadeEpicByPlanId(
+        epicPlanId: string,
+        targetColumn: string,
+        targetStatus?: string,
+        includeAllSubtasks: boolean = false
+    ): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        if (!VALID_KANBAN_COLUMNS.has(targetColumn) && !SAFE_COLUMN_NAME_RE.test(targetColumn)) {
+            console.error(`[KanbanDatabase] cascadeEpicByPlanId rejected invalid column: ${targetColumn}`);
+            return false;
+        }
+        const now = new Date().toISOString();
+        const statusClause = targetStatus ? ', status = ?' : '';
+        const subtaskStatusFilter = includeAllSubtasks ? '' : " AND status = 'active'";
+        try {
+            this._db.run('BEGIN');
+            // Move the epic itself
+            const epicParams: unknown[] = targetStatus
+                ? [targetColumn, targetStatus, now, epicPlanId]
+                : [targetColumn, now, epicPlanId];
+            this._db.run(
+                `UPDATE plans SET kanban_column = ?${statusClause}, updated_at = ? WHERE plan_id = ?`,
+                epicParams
+            );
+            // Cascade subtasks atomically (no read-then-write race)
+            const subtaskParams: unknown[] = targetStatus
+                ? [targetColumn, targetStatus, now, epicPlanId]
+                : [targetColumn, now, epicPlanId];
+            this._db.run(
+                `UPDATE plans SET kanban_column = ?${statusClause}, updated_at = ? WHERE epic_id = ?${subtaskStatusFilter}`,
+                subtaskParams
+            );
+            this._db.run('COMMIT');
+            await this._persist();
+            return true;
+        } catch (err) {
+            try { this._db.run('ROLLBACK'); } catch { /* ignore */ }
+            console.error('[KanbanDatabase] cascadeEpicByPlanId failed:', err);
+            return false;
+        }
+    }
+
     /** Check if a session is owned by this workspace and active. */
     public async isOwnedActive(sessionId: string, workspaceId: string): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;

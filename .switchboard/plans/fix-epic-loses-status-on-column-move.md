@@ -136,15 +136,17 @@ is_epic = CASE WHEN excluded.is_epic > 0 THEN excluded.is_epic ELSE plans.is_epi
 
 This preserves the existing `is_epic` value unless the caller explicitly sets `isEpic: 1`. Callers that want to clear `is_epic` (e.g., `updateEpicStatus`) already use dedicated UPDATE statements, not the upsert path. This is the change that actually closes the is_epic-clobber-on-refresh path in this plan's Root Cause.
 
-**c. Dead-code cleanup (NOT applied — proposed) — Status: PROPOSED**
+**c. Dead-code cleanup — Status: APPLIED (corrected 2026-06-28 reviewer pass; was mislabeled PROPOSED)**
 
-`updateColumnWithEpicCascade` (line 3843, session_id-keyed) and `updateColumnTransaction` (line 3821, session_id-keyed) now have ZERO live callers (verified by grep across `src/services`). They are marked `@deprecated` but remain. Delete them (or leave with the deprecation marker) to prevent a future contributor from re-calling the session_id-keyed path and reintroducing this bug. User decision required (see User Review Required).
+`updateColumnWithEpicCascade` (session_id-keyed) and `updateColumnTransaction` (session_id-keyed) have been DELETED from `KanbanDatabase.ts`. Reviewer-pass grep across `src/` confirms ZERO definitions and ZERO call sites remain — the only surviving references are two explanatory comments (`KanbanDatabase.ts:3823`, `KanbanProvider.ts:4966`) that name the old methods to explain why the plan_id-keyed path replaced them. The regression vector (a future contributor re-calling the session_id-keyed path) is closed.
 
 ### `src/services/KanbanProvider.ts`
 
-**a. `moveCardToColumn` (line 4819-4863) — cascade: APPLIED (line 4842); lookup: RESIDUAL GAP**
+**a. `moveCardToColumn` — cascade: APPLIED; guard: APPLIED (corrected 2026-06-28 reviewer pass)**
 
-The cascade call is already plan_id-keyed (line 4842):
+> **Reviewer correction (2026-06-28):** The residual-gap fix is no longer a gap. The early-return guard `if (!sessionId) return false;` IS applied at `KanbanProvider.ts:4878` (verified). The "ineffective `getPlanByPlanId ?? getPlanBySessionId` lookup" the original plan worried about was correctly NOT taken; the guard is the implemented fix. The analysis below is retained for the historical rationale.
+
+The cascade call is already plan_id-keyed (now at `KanbanProvider.ts:4897`):
 ```typescript
 const subtasks = await db.getSubtasksByEpicId(plan.planId);
 subtaskSessionIds = subtasks.map(st => st.sessionId).filter(Boolean);
@@ -223,3 +225,59 @@ if (plan && plan.isEpic) {
 - Check DB: `SELECT plan_id, is_epic, kanban_column FROM plans WHERE plan_id = '<epic_id>'` — `is_epic` must be `1` after every move
 - **Residual-gap check (if the early-return guard is applied):** attempt a move with an empty session id → must return `false` and touch no rows.
 - **Dead-code check (if cleanup is applied):** grep `updateColumnWithEpicCascade\b` and `updateColumnTransaction` — only the `ByPlanId` variant should remain.
+
+---
+
+## Reviewer Pass — 2026-06-28 (in-place reviewer-executor)
+
+Adversarial review of the **actual `src/` code** against this plan's requirements. No compilation, automated tests, or state-mutating git per session policy.
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *Pulls glasses down the nose.* "Another plan that swears the work is done. Let me guess — you wrote 'APPLIED' next to everything and called it a day? Let's see what actually crawled into `src/`.
+>
+> **First crime: your own plan lies to me.** Section (c) screams `Status: PROPOSED` and the User Review section begs me to decide whether to delete `updateColumnTransaction`. I grepped. The methods are *gone*. Deleted. Vaporized. The only thing left is two comments wearing the corpse's name like a trophy. You did the work and then *forgot to tell your own plan*. A reviewer reading this cold would have re-deleted already-deleted code chasing a ghost. **MAJOR (documentation):** stale `PROPOSED` labels on work that shipped.
+>
+> **Second:** you spent three paragraphs agonizing over the `getPlanByPlanId ?? getPlanBySessionId` lookup being 'ineffective for empty strings,' then — plot twist — line 4878 just says `if (!sessionId) return false;`. The guard you flagged as 'NOT applied' is *the very first line of the method*. So which is it?! **MAJOR (documentation):** the residual gap is closed; the plan still calls it open.
+>
+> **Now the part that actually scares me.** That guard fail-CLOSES. File-based plans have `session_id = ''`. If even ONE caller hands `moveCardToColumn` a bare empty session id for a real card, that card *silently refuses to move* and the user files a 'drag does nothing' bug. You have ~18 callers. Did you check ALL of them, or did you wave your hands at `markEpicOrchestrating` and pray? **CRITICAL (if true):** fail-closed guard could brick column moves for the entire file-based install base.
+>
+> **And the UPSERT CASE clause** — `is_epic = CASE WHEN excluded.is_epic > 0 THEN excluded.is_epic ELSE plans.is_epic END`. Cute. So `is_epic` is now write-once-ish. What happens when something legitimately needs to demote an epic to a plain plan through the upsert path? Did you audit that, or is there a feature three commits from now that'll mysteriously fail to clear the flag? **MAJOR:** prove the demotion path doesn't go through upsert.
+>
+> **Finally**, `uncompleteCard` at 6924 uses bare `getPlanBySessionId(sessionId)` while the complete-handlers got the shiny `getPlanByPlanId ?? getPlanBySessionId` upgrade. Inconsistent. Smells. Explain yourself."
+
+### Stage 2 — Balanced Synthesis
+
+Running each Grumpy finding to ground against the code:
+
+- **Stale `PROPOSED` labels (MAJOR-doc) — VALID, FIXED.** Both the dead-code cleanup (section c) and the `moveCardToColumn` guard shipped. Grep proves the methods are deleted (zero defs, zero call sites, two naming comments) and the guard is at `KanbanProvider.ts:4878`. Corrected the inline status labels and the User Review section in this file above.
+- **Residual gap "still open" (MAJOR-doc) — VALID, FIXED.** The early-return guard is the implemented fix; the plan's hand-wringing about the ineffective lookup is now historical context (annotated as such above).
+- **Fail-closed guard bricks file-based moves (CRITICAL-if-true) — INVESTIGATED, NOT REAL.** `_cardId(card)` returns `card.planId || card.sessionId` (`KanbanProvider.ts:344`), and `_resolveSessionId` returns `sessionId ?? planId` (375). Every persisted card has a non-empty `plan_id` (canonical PK), so callers pass the planId for file-based plans, never `''`. `getPlanBySessionId(planId)` then resolves via its plan_id fallback (gated by `if (sessionId)`, true for a non-empty planId — `KanbanDatabase.ts:2567`). `markEpicOrchestrating` (3217) routes empty-sessionId epics to `moveCardToColumnByPlanFile`, never to `moveCardToColumn`. The guard fires only for a malformed both-ids-empty card, where failing closed is strictly safer than the old behavior (which matched an *arbitrary* file-based row via `WHERE session_id = '' LIMIT 1` and mutated the wrong plan). Net: a fail-closed return is a strict improvement over silent wrong-row corruption. No fix needed.
+- **UPSERT CASE makes is_epic write-once (MAJOR) — VALID CONCERN, NOT A DEFECT.** Demotion (1→0) is owned by the dedicated `updateEpicStatus(planId, 0, '')` UPDATE (`KanbanDatabase.ts:1470`), never the upsert path. The CASE clause's own comment (line 592-593) documents this contract. Verified no caller relies on the upsert path to clear `is_epic`. Intentional, documented design.
+- **`uncompleteCard` lookup inconsistency (NIT) — VALID, DEFERRED.** `uncompleteCard:6924` uses bare `getPlanBySessionId`; complete-handlers use `getPlanByPlanId ?? getPlanBySessionId`. Both resolve correctly for real card ids (a card id that is a planId resolves through `getPlanBySessionId`'s plan_id fallback). The only divergence would require a stored `session_id` that equals some other plan's UUID — impossible in practice (session ids are Claude session strings, planIds are UUIDs). Cosmetic consistency only; out of this plan's scope (Plan documented `uncompleteCard`'s lookup as-is). No change.
+
+### Code Fixes Applied
+
+**None.** The implementation is correct and complete; no CRITICAL/MAJOR *code* defect survived Stage 2. The only valid material findings were documentation drift in this plan file (the work shipped further than the plan claimed), now corrected inline above.
+
+### Files Changed (this reviewer pass)
+
+- `.switchboard/plans/fix-epic-loses-status-on-column-move.md` — corrected stale `PROPOSED` → `APPLIED` labels (sections c and "Proposed Changes → KanbanProvider.ts a"), resolved the User Review Required section, added this Reviewer Pass section. No source files modified.
+
+### Validation Results
+
+- Compilation: SKIPPED (session policy).
+- Automated tests: SKIPPED (session policy; user runs separately).
+- Static verification (grep/read) performed:
+  - `is_epic = CASE WHEN excluded.is_epic > 0 ...` present at `KanbanDatabase.ts:594`. ✓
+  - `updateColumnWithEpicCascadeByPlanId` present with column validation at `KanbanDatabase.ts:3826-3859`. ✓
+  - `moveCardToColumn` guard `if (!sessionId) return false;` at `KanbanProvider.ts:4878`; plan_id-keyed cascade at 4897. ✓
+  - `moveCardToColumnByPlanFile` plan_id-keyed cascade at `KanbanProvider.ts:4970`. ✓
+  - Complete/uncomplete handlers all use `updateColumnWithEpicCascadeByPlanId` (6815, 6845, 6889, 6942, 6961). ✓
+  - Session_id-keyed `updateColumnWithEpicCascade` / `updateColumnTransaction`: zero definitions, zero call sites (deleted). ✓
+
+### Remaining Risks
+
+1. **Fail-closed semantics (accepted):** `moveCardToColumn` now returns `false` for an empty session id instead of mutating an arbitrary row. Correct, but any future caller that constructs an id from a source other than `_cardId`/`_resolveSessionId` must pass a non-empty plan_id or the move no-ops. Low risk; strictly safer than the prior behavior.
+2. **`uncompleteCard` lookup (cosmetic):** retains bare `getPlanBySessionId`; harmless today, worth aligning with the complete-handlers' `getPlanByPlanId ?? getPlanBySessionId` pattern in a future tidy-up.
+3. **Integration sync for file-based subtasks:** `queueIntegrationSyncForSession` keys on session_id, which is empty for file-based subtasks, so Linear/ClickUp sync may no-op for them (pre-existing, not introduced here — documented in the Edge-Case audit above).

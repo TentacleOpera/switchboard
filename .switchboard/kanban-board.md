@@ -1,6 +1,6 @@
 # Kanban Board
 
-*Workspace: 038bffef-9842-4574-96a1-69a43a280b3c* · *Updated: 2026-06-27T21:45:18.589Z*
+*Workspace: 038bffef-9842-4574-96a1-69a43a280b3c* · *Updated: 2026-06-27T21:53:05.300Z*
 
 ## CREATED
 
@@ -52,7 +52,6 @@ _No plans_
 ## PLAN REVIEWED
 
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/notion-restore-epic-subtask-cascade.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/notion-restore-epic-subtask-cascade.md) — Notion Restore: Epic Subtask Cascade <!-- planId:54ccba8e-2bb9-46c5-8c7b-3a2f70c621ec -->
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/atomic-race-free-cascade-and-status-alignment.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/atomic-race-free-cascade-and-status-alignment.md) — Atomic Race-Free Epic Cascade + Subtask Status Alignment <!-- planId:3a41ec5f-765c-4e44-b2f7-ab04df8a8a9a -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/replace-prompt-sql-with-move-card-skill.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/replace-prompt-sql-with-move-card-skill.md) — Replace Raw Agent-Prompt SQL with move-card.js Skill Calls <!-- planId:1e2e0d80-d366-4d2f-adf1-7cca57ac679c -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260628071745_epic-tab-subtask-links-in-markdown-preview.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260628071745_epic-tab-subtask-links-in-markdown-preview.md) — Fix: Epic tab subtask links in markdown doc preview do not work <!-- planId:1802d264-4834-4ab2-adb5-d781f64195ab -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/linear-bidirectional-description-sync.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/linear-bidirectional-description-sync.md) — Linear Bidirectional Description Sync <!-- planId:4cf51efb-6d7d-43bc-8945-cd2cbb2faa69 subtask-of:"Linear Sync & Channel Features" -->
@@ -91,14 +90,16 @@ _No plans_
 
 ## CODER CODED
 
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/atomic-race-free-cascade-and-status-alignment.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/atomic-race-free-cascade-and-status-alignment.md) — Atomic Race-Free Epic Cascade + Subtask Status Alignment <!-- planId:3a41ec5f-765c-4e44-b2f7-ab04df8a8a9a -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/epic-card-subtask-column-status-display.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/epic-card-subtask-column-status-display.md) — Enhancement: Epic File Subtask List Should Show Each Subtask's Current Kanban Column <!-- planId:d7898e5f-16a7-4b16-bf0f-b8421929d787 -->
 
 ## CODE REVIEWED
 
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/sw-alias-rename-kanban-visibility-claudeai-docs.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/sw-alias-rename-kanban-visibility-claudeai-docs.md) — Rename /Sw → /sw, Unignore kanban-board.md, and Add Claude.ai Usage Docs <!-- planId:1085aab6-d8d5-4124-bdbb-d3309c9c097d -->
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-create-epic-not-setting-is-epic.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-create-epic-not-setting-is-epic.md) — Fix: Epics Lose is_epic Status When Epic Files Are Edited (Atomic Write Race) <!-- planId:c4a2d1ff-5d7f-430f-9f32-318c59b5d82c -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-epic-loses-status-on-column-move.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-epic-loses-status-on-column-move.md) — Fix: Epics Lose is_epic Status When Moved Between Columns <!-- planId:11b58b9b-4a81-4617-84f0-bcace5c202a8 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260627214318_markdown-preview-body-text-bump.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260627214318_markdown-preview-body-text-bump.md) — Bump markdown preview body text +1pt in planning, design, and project views <!-- planId:a3d16399-46f4-48cc-9b58-266143d6b491 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260627160953_fix-suggest-epics-prompt.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260627160953_fix-suggest-epics-prompt.md) — Fix Suggest Epics Prompt: Hardcoded Backlog Count & Backlog Question Hijacking Approval Flow <!-- planId:597fdb97-d5ac-4a5e-9b21-a15a825af044 -->
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-create-epic-not-setting-is-epic.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-create-epic-not-setting-is-epic.md) — Fix: Epics Lose is_epic Status When Epic Files Are Edited (Atomic Write Race) <!-- planId:c4a2d1ff-5d7f-430f-9f32-318c59b5d82c -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/bug-epic-kanban-card-no-orchestrate-button-uat-failure.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/bug-epic-kanban-card-no-orchestrate-button-uat-failure.md) — UAT Failure: Epic Kanban Board Cards Have No Orchestrate Button and ORCHESTRATING Column Never Appears <!-- planId:e9396ead-e916-48af-b4ff-ba645d7691e8 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/epic-card-subtask-count-meta-line.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/epic-card-subtask-count-meta-line.md) — Epic Card Layout: Replace Complexity with Subtask Count <!-- planId:1ddd67e5-472a-408e-8fb7-0cb6d8b317cb -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/remote-control-dispatch-acknowledgment-writeback.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/remote-control-dispatch-acknowledgment-writeback.md) — Remote Control Dispatch Acknowledgment Write-Back <!-- planId:d2f1c01f-a207-40c6-bcc7-5e76ae26746f -->

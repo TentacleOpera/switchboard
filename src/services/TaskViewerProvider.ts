@@ -2258,9 +2258,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             if (!sessionId) return false;
             const plan = await db.getPlanBySessionId(sessionId) ?? await db.getPlanByPlanId(sessionId);
             if (plan && plan.isEpic) {
-                const subtasks = await db.getSubtasksByEpicId(plan.planId);
-                const subtaskPlanIds = subtasks.map(st => st.planId).filter(Boolean) as string[];
-                return db.updateColumnWithEpicCascadeByPlanId(plan.planId, subtaskPlanIds, column);
+                return db.cascadeEpicByPlanId(plan.planId, column);
             }
             return !!(await db.updateColumn(sessionId, column));
         }
@@ -11643,9 +11641,7 @@ What would you like to find?`;
                     // No-provider fallback with epic cascade + empty-sessionId guard (Class 7).
                     const restorePlan = await db.getPlanBySessionId(sessionId) ?? await db.getPlanByPlanId(sessionId);
                     if (restorePlan && restorePlan.isEpic) {
-                        const subtasks = await db.getSubtasksByEpicId(restorePlan.planId);
-                        const subtaskPlanIds = subtasks.map(st => st.planId).filter(Boolean) as string[];
-                        await db.updateColumnWithEpicCascadeByPlanId(restorePlan.planId, subtaskPlanIds, 'CREATED');
+                        await db.cascadeEpicByPlanId(restorePlan.planId, 'CREATED', 'active', true);
                     } else {
                         await db.updateColumn(sessionId, 'CREATED');
                     }
@@ -14076,9 +14072,7 @@ What would you like to find?`;
                     // No-provider fallback with epic cascade + empty-sessionId guard (Class 7).
                     const completePlan = await db.getPlanBySessionId(sessionId) ?? await db.getPlanByPlanId(sessionId);
                     if (completePlan && completePlan.isEpic) {
-                        const subtasks = await db.getSubtasksByEpicId(completePlan.planId);
-                        const subtaskPlanIds = subtasks.map(st => st.planId).filter(Boolean) as string[];
-                        await db.updateColumnWithEpicCascadeByPlanId(completePlan.planId, subtaskPlanIds, 'COMPLETED');
+                        await db.cascadeEpicByPlanId(completePlan.planId, 'COMPLETED', 'completed');
                     } else {
                         await db.updateColumn(sessionId, 'COMPLETED');
                     }

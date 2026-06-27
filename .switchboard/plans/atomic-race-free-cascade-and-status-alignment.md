@@ -51,6 +51,13 @@ Two related defects remain in the epic cascade paths after the comprehensive epi
 - The Notion restore cascade plan should use `cascadeEpicByPlanId` if this plan is implemented first.
 - The `move-card.js` skill script (line 128) calls `updateColumnWithEpicCascade` — a method that does NOT EXIST in KanbanDatabase.ts — in its direct-DB fallback. This is a crash (TypeError), not a logic bug. The "Replace Raw Prompt SQL" plan (Plan 1) fixes this by replacing the call with `updateColumnWithEpicCascadeByPlanId` or `cascadeEpicByPlanId` (from this plan).
 
+## Dependencies
+
+- **Comprehensive Epic Fix** (already implemented) — provides `updateColumnWithEpicCascadeByPlanId` (KanbanDatabase.ts line 3826) and the 10 caller sites that this plan refactors to use the new atomic method.
+- **Replace Raw Prompt SQL plan** (Plan 1, if implemented after) — uses `cascadeEpicByPlanId` from this plan in the `move-card.js` direct-DB fallback fix.
+- **Notion Restore plan** (Plan 3, if implemented after) — uses `cascadeEpicByPlanId` from this plan as the preferred cascade method in the post-restore cascade pass.
+- **Recommended implementation order:** Plan 2 (this plan) → Plan 1 → Plan 3. This ensures `cascadeEpicByPlanId` is available for both downstream plans.
+
 ## Adversarial Synthesis
 
 Key risks: (1) the `WHERE epic_id = ? AND status = 'active'` filter is correct for forward moves but wrong for recovery/restore paths (uncompleteCard, _restoreRunSheet) where you want to catch ALL subtasks regardless of status — these sites need `includeAllSubtasks=true`; (2) the integration sync fan-out still needs `getSubtasksByEpicId` to know which subtask `sessionId`s to sync, so the read step isn't fully eliminated at `moveCardToColumn`/`moveCardToColumnByPlanFile` — only the cascade's race is closed, not the sync's; (3) `cascadeEpicByPlanId` with no `targetStatus` must omit `status` from the SET clause entirely (not set it to NULL or empty), so non-completion moves don't accidentally clear subtask status; (4) redundant `updateStatus` calls at completion sites (lines 6825, 6855, 6899, 14072) become harmless no-ops for epics but must NOT be removed — non-epic plans still need them; (5) all line numbers in the original plan were stale and three function names were wrong (`testingFailureReport`→`testingFailed`, `_restoreFromArchive`→`_restoreRunSheet`, `markPlanComplete`→unnamed case handler) — corrected above. Mitigations: use `includeAllSubtasks=true` only at uncompleteCard and _restoreRunSheet; document the redundant-but-necessary `updateStatus` pattern; verify all line numbers against current source before editing.

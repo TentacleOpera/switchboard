@@ -141,3 +141,63 @@ This prevents `upsertPlans` from clobbering `is_epic` to 0 when callers pass `is
 - Rapidly edit 3 epic files in succession → all 3 must have `is_epic = 1` after all edits complete
 - Check DB after edits: `SELECT plan_id, is_epic FROM plans WHERE plan_id = '<epic_id>'` — must be `1`
 - **Residual check (expected to still fail until the sibling plan lands):** after an atomic-write edit, confirm `kanban_column` is NOT clobbered to `'CREATED'`. If it is, that is the `fix-epic-default-column-from-subtasks.md` scope, not a regression of this fix.
+
+---
+
+## Reviewer Pass — 2026-06-28 (in-place reviewer-executor)
+
+Adversarial review of the **actual `src/` code** against this plan's requirements. No compilation, automated tests, or state-mutating git per session policy.
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *Cracks knuckles.* "A race condition 'fix' that admits in its own Goal that the underlying race is still alive. Bold. Let me find where the bodies are buried.
+>
+> **The headline fix:** you made `updateEpicStatus` unconditional for epic files. Fine. But you call it AFTER `insertFileDerivedPlan`. So if the malicious `_handlePlanDelete` slips in *between* the insert and the updateEpicStatus, your re-assert writes `is_epic = 1` onto a row that's about to be deleted, and then — poof — the delete lands and the row is gone entirely. Worse than `is_epic = 0`: now there's NO ROW. Did you even look at `_handlePlanDelete`? **CRITICAL (if true):** delete-last interleaving nukes the row permanently.
+>
+> **`_handlePlanDelete` itself (683):** it deletes the DB row on a delete event *without checking whether the file still exists on disk*. An atomic write is temp+rename — the real file is RIGHT THERE after the rename — and you blow away its row anyway, relying on `_recentRenames`, which your own Background section admits is only populated for extension-initiated renames, NOT external atomic writes. So the suppression you're counting on **does not fire for the exact scenario this plan exists to fix.** **MAJOR:** the delete guard is blind to on-disk reality.
+>
+> **`updateEpicStatus(updatedRecord.planId, 1, '')`** — you pass `epicId = ''`. That SQL is `SET is_epic = ?, epic_id = ?`. You're stamping `epic_id = ''` on the row every single time. If this is ever an epic that somehow carries an epic_id, you just wiped it. Prove epics never have an epic_id, or this is a silent data-clobber. **MAJOR.**
+>
+> **The null guard you waved off:** 'belt-and-suspenders, not strictly required given the branch structure.' Famous last words. If someone refactors that `if (!plan) / else` into something flatter, your `...plan` spread on line 622 NPEs. You're one careless edit from a crash and you *chose* not to add a one-line guard. **NIT, escalating to MAJOR if the branch ever moves.**
+>
+> **And the UPSERT CASE clause shared with the sibling plan** — same write-once-is_epic concern. Who clears the flag now?"
+
+### Stage 2 — Balanced Synthesis
+
+Running each Grumpy finding to ground against the code:
+
+- **Delete-last interleaving nukes the row (CRITICAL-if-true) — REAL but CORRECTLY SCOPED OUT.** Traced `_handlePlanDelete` (`GlobalPlanWatcherService.ts:683-711`): it does NOT check `fs.existsSync` before deleting, and `_recentRenames` is only populated by `registerRename` (extension-initiated), so an external atomic-write delete event is NOT suppressed. If the debounced delete is processed *after* `_handlePlanFile`'s insert+`updateEpicStatus`, the row is deleted until the next `triggerScan`/panel reopen. **This is exactly the "underlying DELETE-during-atomic-write race is still live" that this plan's own Complexity Audit and Adversarial Synthesis explicitly declare out of scope** ("symptomatic mitigation… the underlying race is still live"). The plan closes the `is_epic = 0`-on-re-INSERT vector (the common case, where the delete lands *before* the insert), which is the documented goal. The delete-last full-row-loss case is rarer (requires the delete to win the debounce-flush ordering) and belongs to a broader watcher-race fix, not this plan. **No fix applied — honoring plan scope.** Logged as remaining risk #1 below with a concrete hardening suggestion.
+- **`_handlePlanDelete` blind to on-disk reality (MAJOR) — REAL, OUT OF SCOPE.** A robust fix is `if (fs.existsSync(uri.fsPath)) return;` at the top of `_handlePlanDelete` (a delete event for a path that still exists ⇒ it was a rename, not a real delete). That is a behavioral change to the delete path that **neither this plan nor the sibling proposes**, has its own edge cases (the temp-file delete event carries a different path), and needs its own testing. Deliberately NOT applied here. Logged as remaining risk #1.
+- **`epic_id = ''` clobber (MAJOR) — INVESTIGATED, NOT REAL.** Epics do not carry an `epic_id` — `epic_id` is the *subtask→epic* foreign key (a subtask's `epic_id` points at its epic's `plan_id`; see `getSubtasksByEpicId` `WHERE epic_id = ?`). An epic's own `epic_id` is empty by design, so `updateEpicStatus(planId, 1, '')` writing `epic_id = ''` on the epic row is a no-op-equivalent, not a clobber. Correct as written.
+- **Missing null guard (NIT) — VALID, ACCEPTED AS-IS.** Confirmed the existing-record branch (the `else` at `GlobalPlanWatcherService.ts:605`) is only reachable when `plan` is non-null — the preceding `if (!plan) { …new-record… }` at line 535 owns the null case. So `{ ...plan }` at line 622 cannot spread null on the current control flow. The plan already reached this exact conclusion ("not strictly required given the branch structure"). Matches the verified code. No change.
+- **UPSERT CASE write-once is_epic (shared concern) — NOT A DEFECT.** Same finding as the sibling plan: demotion is owned by `updateEpicStatus(planId, 0, '')`, never the upsert path. Documented contract at `KanbanDatabase.ts:592-594`. Verified.
+
+### Bonus observation (outside this plan's two changes)
+
+The watcher now ALSO calls `this._recomputeEpicColumn?.(...)` in **both** the new-record branch (`GlobalPlanWatcherService.ts:600`) and the existing-record branch (646), immediately after the `is_epic` re-assert. That is the sibling `fix-epic-default-column-from-subtasks.md` work — the `kanban_column`-clobber mitigation this plan deferred. It appears to have landed alongside these changes. So the "Residual check (expected to still fail)" bullet in the Verification Plan above may now PASS for epics that have subtasks (the column is re-derived after re-INSERT). For an epic with **no** subtasks yet, `_recomputeEpicColumn` is a documented no-op, so the `kanban_column='CREATED'` clobber from the delete-last race can still surface there. Out of this plan's scope; noted for the sibling plan's reviewer.
+
+### Code Fixes Applied
+
+**None.** Both of this plan's changes (`UPSERT_PLAN_SQL` CASE clause; unconditional `updateEpicStatus` for epic files, both branches, keyed off `updatedRecord.planId`) are correctly applied and verified. The one CRITICAL-shaped finding (delete-last row loss) is the live underlying race this plan *deliberately and explicitly* scopes out; fixing it would be scope-creep into the watcher's delete path. No source files modified.
+
+### Files Changed (this reviewer pass)
+
+- `.switchboard/plans/fix-create-epic-not-setting-is-epic.md` — added this Reviewer Pass section. No source files modified.
+
+### Validation Results
+
+- Compilation: SKIPPED (session policy).
+- Automated tests: SKIPPED (session policy; user runs separately).
+- Static verification (grep/read) performed:
+  - `UPSERT_PLAN_SQL` `is_epic = CASE WHEN excluded.is_epic > 0 THEN excluded.is_epic ELSE plans.is_epic END` at `KanbanDatabase.ts:594`. ✓
+  - New-record branch unconditional `updateEpicStatus(newRecord.planId, 1, '')` at `GlobalPlanWatcherService.ts:592-594`. ✓
+  - Existing-record branch unconditional `updateEpicStatus(updatedRecord.planId, 1, '')` at `GlobalPlanWatcherService.ts:638-640` (keyed off `updatedRecord`, not stale `plan`). ✓
+  - `insertFileDerivedPlan` INSERT omits `is_epic` (→ column default 0) and its ON CONFLICT set omits `is_epic` (→ preserved), confirming the race mechanism the fix targets (`KanbanDatabase.ts:1336-1350`). ✓
+  - Existing-record `else` branch is null-safe by construction (guarded by `if (!plan)` at line 535). ✓
+  - `updateEpicStatus` keys on `getPlanByPlanId(planId)` and `epic_id=''` is harmless for epics (`KanbanDatabase.ts:1470-1478`). ✓
+
+### Remaining Risks
+
+1. **Underlying atomic-write DELETE race is still live (accepted, documented):** if the debounced delete event is processed *after* `_handlePlanFile`'s insert+re-assert, the epic row is deleted until the next scan/panel reopen. Concrete hardening for a future plan: add `if (fs.existsSync(uri.fsPath)) return;` to the top of `_handlePlanDelete` so a delete event for a path that still exists on disk (the atomic-rename case) is ignored. Intentionally NOT applied here — out of this plan's scope.
+2. **`kanban_column` clobber for subtask-less epics:** `_recomputeEpicColumn` is a no-op when the epic has no subtasks, so the `'CREATED'` clobber from the same race can still demote a freshly-created, subtask-less epic's column. Tracked in `fix-epic-default-column-from-subtasks.md`.
+3. **Brief inconsistency window:** between the DELETE and the re-INSERT + re-assert, a concurrent reader (board refresh, `getSubtasksByEpicId`, integration sync) can momentarily see a missing row or `is_epic = 0`. Pre-existing; inherent to the symptomatic mitigation.

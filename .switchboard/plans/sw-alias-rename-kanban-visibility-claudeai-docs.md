@@ -280,3 +280,54 @@ This lets you queue up a full planning sprint from your phone or a browser tab w
 ## Recommendation
 
 Complexity is 3 → **Send to Intern**.
+
+---
+
+## Reviewer Pass (2026-06-28)
+
+### Stage 1 — Adversarial Findings
+
+| # | Finding | Severity | File:Line |
+|---|---------|----------|-----------|
+| 1 | ~~`sw/SKILL.md` has no YAML frontmatter — skill appears in registry with blank description~~ **FIXED** | NIT | `.claude/skills/sw/SKILL.md:1` |
+| 2 | CLAUDE.md Skills table missing `notion_api` + `switchboard_remote_notion` rows that AGENTS.md has (pre-existing, out of scope) | NIT | `CLAUDE.md:122` (gap after `linear_api`) |
+
+No CRITICAL or MAJOR findings.
+
+### Stage 2 — Balanced Synthesis
+
+All 7 proposed changes implemented correctly. No code fixes required. Both NITs are cosmetic/pre-existing and deferred.
+
+- **Keep as-is:** All 7 changes (rename, gitignore exclusion, WorkspaceExcludeService, Kanban State section x2, AGENTS.md tables, CLAUDE.md tables, README section, user manual section+TOC).
+- **Fix now:** Added YAML frontmatter to `sw/SKILL.md` (name + description) so the alias shows up in the skill registry with a proper description.
+- **Defer:** Sync CLAUDE.md Skills table with AGENTS.md (`notion_api`, `switchboard_remote_notion` rows) — pre-existing gap, separate plan.
+
+### Files Changed (Verified)
+
+- `.claude/skills/sw/SKILL.md` — created (alias content + YAML frontmatter, renamed from `Sw/`)
+- `.claude/skills/Sw/` — deleted (renamed to `sw/`)
+- `src/services/WorkspaceExcludeService.ts:18` — added `'!.switchboard/kanban-board.md'` to TARGETED_RULES
+- `.gitignore:81` — added `!.switchboard/kanban-board.md` to managed block
+- `.switchboard/kanban-board.md` — now git-tracked (previously ignored)
+- `.agents/workflows/switchboard-chat.md:18-20` — added `## Kanban State` section
+- `.claude/skills/switchboard-chat/SKILL.md:19-21` — added `## Kanban State` section
+- `AGENTS.md:21` — Workflow Registry row updated with `/sw`; `AGENTS.md:95` — new `switchboard-chat` Skills row
+- `CLAUDE.md:53` — Workflow Registry row updated with `/sw`; `CLAUDE.md:125` — new `switchboard-chat` Skills row
+- `README.md:96-114` — new "Using Switchboard with claude.ai" section
+- `docs/switchboard_user_manual.md:40` — TOC entry 32; `docs/switchboard_user_manual.md:1587-1625` — section 32
+
+### Validation Results
+
+- `git check-ignore .switchboard/kanban-board.md` → exit 1 (not ignored) ✓
+- `git ls-files .switchboard/kanban-board.md` → tracked ✓
+- `git ls-files .claude/skills/sw/SKILL.md` → tracked as lowercase `sw` ✓
+- No stale `/Sw` references in source files (only in this plan file + kanban-board.md plan title listing) ✓
+- All markdown sections in correct locations ✓
+- Compilation: SKIP (per session directive)
+- Tests: SKIP (per session directive)
+
+### Remaining Risks
+
+1. **Git repo bloat** — `kanban-board.md` (~280KB, rewritten per board change) now commits diffs. Accepted trade-off per plan.
+2. **Dual `.gitignore` blocks** — manual block (lines 41-64) lacks `kanban-board.md` negation; if managed block is removed via strategy switch, file re-ignores. Pre-existing, documented.
+3. **`sw` skill discoverability** — ~~no frontmatter means blank description in skill registry~~ **FIXED** — frontmatter added with name + description.
