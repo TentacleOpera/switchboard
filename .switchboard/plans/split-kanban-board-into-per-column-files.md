@@ -18,6 +18,8 @@ The single `kanban-board.md` file has grown to 276 KB+. Agents can work around t
 
 ## Column Slug Mapping
 
+### Built-in columns (always generated)
+
 | Column Name | File |
 |---|---|
 | CREATED | `kanban-state-created.md` |
@@ -29,6 +31,12 @@ The single `kanban-board.md` file has grown to 276 KB+. Agents can work around t
 | CODE REVIEWED | `kanban-state-code-reviewed.md` |
 | CODED | `kanban-state-coded.md` |
 | COMPLETED | `kanban-state-completed.md` |
+
+### Custom columns (currently silently dropped — bug)
+
+Users can define custom columns (validated by `SAFE_COLUMN_NAME_RE = /^[a-zA-Z0-9 _-]{1,128}$/`). Examples from the codebase: `QA REVIEW`, `custom_column_docs_ready`, `CUSTOM_USER`. Plans in custom columns are never written to `kanban-board.md` today because the `columns` map is only seeded from `VALID_KANBAN_COLUMNS`, so the `if (list)` guard on line 5471 silently discards them.
+
+Slug rule for custom columns: same as built-in — lowercase + spaces/underscores → hyphens. E.g. `QA REVIEW` → `kanban-state-qa-review.md`.
 
 ---
 
@@ -74,6 +82,8 @@ New flow:
    | ... | ... |
    ```
 4. Atomic-write the index to `_stateFilePath` as before.
+
+5. For custom columns: after distributing plans into the built-in `columns` map, collect any plan whose `kanbanColumn` is not in `VALID_KANBAN_COLUMNS` into a separate `customColumns` map keyed by column name. Write a per-column file for each (`kanban-state-{slug}.md`) using the same atomic pattern. Include custom column links in the `kanban-board.md` index under a `### Custom Columns` subsection (or inline after the built-in table, whichever is cleaner).
 
 All writes are fire-and-forget and chained via `_writeTail` — no change to the concurrency model.
 
