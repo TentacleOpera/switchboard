@@ -53,6 +53,8 @@ Migration should run once during extension activation (version-gated or always-s
 - Remove the three `_getRoleConfig` calls and config extraction blocks for splitter, code_researcher, gatherer (lines ~3263–3298).
 - Remove the three roles from the non-execution roles condition (lines ~4008–4009).
 - Remove any column-to-role mapping entries for these three (lines ~3042, ~3046 conditional branches).
+- Remove `'CONTEXT GATHERER'` from the `preCodingColumns` array (line ~8124).
+- Remove the column-to-role mapping entry for `'CONTEXT GATHERER'` → `'gatherer'` (line ~8305).
 
 ### Step 6 — TaskViewerProvider (`src/services/TaskViewerProvider.ts`)
 - Remove `case 'CONTEXT GATHERER': return 'gatherer'`, `case 'CODE_RESEARCHER': return 'code_researcher'`, `case 'SPLITTER': return 'splitter'` from the column-to-role switch (lines ~2020–2023).
@@ -66,22 +68,31 @@ Migration should run once during extension activation (version-gated or always-s
 ### Step 8 — implementation.html (`src/webview/implementation.html`)
 - Remove `gatherer: false` from the `visibleAgents` object (line 3713). Leave the remaining keys untouched.
 
-### Step 9 — Migration code
+### Step 9 — KanbanDatabase (`src/services/KanbanDatabase.ts`)
+- Remove `'CONTEXT GATHERER'` from the `VALID_KANBAN_COLUMNS` set (line ~631). This set drives `exportStateToFile()`, which writes `.switchboard/kanban-board.md` — leaving the entry in would cause an orphaned heading to appear in the markdown export whenever a migration hasn't run yet, and would allow cards to be persisted to a column that no longer exists.
+- Check whether `'SPLITTER'` and `'CODE_RESEARCHER'` are also in this set and remove them if so.
+
+### Step 10 — ClickUpSyncService (`src/services/ClickUpSyncService.ts`)
+- Remove `'CONTEXT GATHERER'` from the `CANONICAL_COLUMNS` array (line ~136). This array mirrors `VALID_KANBAN_COLUMNS` for ClickUp sync purposes. Leaving it would cause sync attempts to a non-existent column.
+
+### Step 11 — Migration code
 Add a one-time migration in the extension activation path (likely `extension.ts` or the KanbanProvider init):
 - For each workspace with a kanban state, check for cards in `CONTEXT GATHERER`, `CODE_RESEARCHER`, and `SPLITTER` columns.
 - Move any found cards to `PLAN REVIEWED`.
 - This check is idempotent — once those column IDs are removed from built-in definitions, the migration guard can remain in place safely.
 
-### Step 10 — Persona file
+### Step 12 — Persona file
 - Rename `.agents/personas/gatherer.md` → `.agents/personas/gatherer.md.migrated.bak`.
 
-### Step 11 — Tests (5 files)
+### Step 13 — Tests (7 files)
 Update to remove references to the deleted roles:
 - `src/test/kanban-default-prompt-previews.test.js` — remove visible-agents assertions for these three keys.
 - `src/services/__tests__/KanbanProvider.test.ts` — remove column definition tests and agent config tests for these roles.
 - `src/services/__tests__/agentPromptBuilder.test.ts` — remove prompt-building tests for gatherer, splitter, code_researcher.
 - `src/test/agent-prompt-builder-subagents.test.js` — remove subagent policy tests for these roles.
 - `src/test/minimal-prompt.test.js` — remove any references to these three roles.
+- `src/test/kanban-auto-export.test.ts` — update any assertions that expect `CONTEXT GATHERER` (or SPLITTER/CODE_RESEARCHER) to appear as a column in the markdown export.
+- `src/test/builtin-role-dispatch-coverage.test.js` — this regression test validates that built-in roles are consistent across files; remove the three deleted roles from its expected set so it stays green.
 
 ## Out of Scope
 
