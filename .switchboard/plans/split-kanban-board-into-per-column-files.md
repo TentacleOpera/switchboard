@@ -2,11 +2,11 @@
 
 ## Goal
 
-The single `kanban-board.md` file has grown to 276 KB+, exceeding the Read tool's 256 KB limit and making it impossible for agents to read in one shot. This plan splits the export into one small file per column, and converts `kanban-board.md` into a lightweight index that links to each per-column file.
+The single `kanban-board.md` file has grown to 276 KB+. Agents can work around this (grep for a column heading, then read forward), but that's a fragile two-step every time. This plan splits the export into one file per column so agents can read exactly what they need in a single operation, and converts `kanban-board.md` into a lightweight index that links to each per-column file.
 
 ### Core Problem
 
-`exportStateToFile()` writes all columns into a single file. At ~4,000 installs with active plans, this file will only grow. Agents that need to check a specific column (e.g. "what's in CREATED?") are forced to load the entire board anyway.
+`exportStateToFile()` writes all columns into a single file. Targeted column access requires grepping for the heading and reading forward — workable but unnecessarily fiddly. Per-column files make the access pattern direct and self-evident.
 
 ### Solution
 
