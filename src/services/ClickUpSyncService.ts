@@ -132,7 +132,7 @@ export interface ClickUpSyncResult {
   skippedReason?: ClickUpSyncSkipReason;
 }
 
-// Canonical Switchboard kanban columns (mirrors KanbanDatabase.ts VALID_KANBAN_COLUMNS)
+// Canonical Switchboard kanban columns (derived from DEFAULT_KANBAN_COLUMNS + legacy columns)
 export const CANONICAL_COLUMNS = [
   ...DEFAULT_KANBAN_COLUMNS.map(c => c.id),
   'BACKLOG',

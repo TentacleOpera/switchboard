@@ -8275,8 +8275,8 @@ Read the existing ticket content from the local file if it exists. Determine wha
         const visibleAgentDefaults: Record<string, boolean> = {
             lead: true, coder: true, intern: true, reviewer: true,
             tester: false, planner: true, analyst: true, jules: false,
-            gatherer: false, ticket_updater: false, researcher: false,
-            splitter: false, code_researcher: false, orchestrator: true
+            ticket_updater: false, researcher: false,
+            orchestrator: true
         };
         let visibleAgents: Record<string, boolean> = { ...visibleAgentDefaults };
         try {

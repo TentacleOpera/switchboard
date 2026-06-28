@@ -1473,6 +1473,31 @@ export class KanbanDatabase {
         return this.updateColumnByPlanFile(plan.planFile, plan.workspaceId, newColumn);
     }
 
+    /**
+     * One-time migration: move any cards stranded in deprecated columns
+     * (CONTEXT GATHERER, CODE_RESEARCHER, SPLITTER) to PLAN REVIEWED.
+     * Idempotent — once no cards remain in those columns, this is a no-op.
+     */
+    public async migrateDeprecatedColumns(workspaceId: string): Promise<number> {
+        const deprecatedColumns = ['CONTEXT GATHERER', 'CODE_RESEARCHER', 'SPLITTER'];
+        const placeholders = deprecatedColumns.map(() => '?').join(', ');
+        const sql = `UPDATE plans SET kanban_column = ?, updated_at = ? WHERE workspace_id = ? AND kanban_column IN (${placeholders})`;
+        const params: unknown[] = ['PLAN REVIEWED', new Date().toISOString(), workspaceId, ...deprecatedColumns];
+        if (!(await this.ensureReady()) || !this._db) return 0;
+        try {
+            this._db.run(sql, params);
+            // Count affected rows by checking how many were in deprecated columns (best-effort)
+            const checkSql = `SELECT COUNT(*) as cnt FROM plans WHERE workspace_id = ? AND kanban_column IN (${placeholders})`;
+            const remaining = this._db.exec(checkSql, [workspaceId, ...deprecatedColumns]);
+            const migrated = remaining.length > 0 ? 0 : 1; // If no rows remain, migration cleared them
+            console.log(`[KanbanDatabase] migrateDeprecatedColumns: workspaceId=${workspaceId}, remaining in deprecated columns=${remaining.length > 0 ? remaining[0].values[0][0] : 0}`);
+            return migrated;
+        } catch (error) {
+            console.error('[KanbanDatabase] migrateDeprecatedColumns failed:', error);
+            return 0;
+        }
+    }
+
     /** @deprecated session_id lookup risk; callers should migrate to plan_id-based updates */
     public async updateEpicStatus(planId: string, isEpic: number, epicId: string): Promise<boolean> {
         const plan = await this.getPlanByPlanId(planId);

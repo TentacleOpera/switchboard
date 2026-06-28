@@ -235,23 +235,8 @@ function testUnknownRoleThrows() {
     console.log('  PASS: Unknown role correctly throws error');
 }
 
-function testCodeResearcherAndResearcherPrompts() {
-    console.log('Testing code_researcher and researcher prompt templates...');
-    
-    // Code Researcher default
-    const prompt1 = buildKanbanBatchPrompt('code_researcher', plans1);
-    assert.ok(prompt1.includes('You are a Code Researcher Agent.'), 'Should start with base persona');
-    assert.ok(prompt1.includes('STEP 1 — Review'), 'Should include review step');
-    assert.ok(prompt1.includes('STEP 2 — If uncertainties exist'), 'Should include stop and wait step');
-    assert.ok(prompt1.includes('.agents/skills/advise_research/SKILL.md'), 'Should reference the research skill file');
-    assert.ok(prompt1.includes('## Uncertain Assumptions'), 'Should instruct writing the Uncertain Assumptions section');
-    assert.ok(!prompt1.includes('DEEP RESEARCH MODE'), 'Should not contain the autonomous deep-research directive');
-
-    // Code Researcher has no depth dependency
-    const prompt2 = buildKanbanBatchPrompt('code_researcher', plans1, { researchDepth: 'quick' });
-    assert.ok(prompt2.includes('You are a Code Researcher Agent.'), 'Should start with base persona');
-    assert.ok(!prompt2.includes('depth set to "quick"'), 'Should not include depth text');
-    assert.ok(!prompt2.includes('DEEP RESEARCH MODE'), 'Should not inject deep-research directive regardless of depth option');
+function testResearcherPrompts() {
+    console.log('Testing researcher prompt templates...');
 
     // Researcher quick depth, save to local docs disabled
     const prompt3 = buildKanbanBatchPrompt('researcher', plans1, { researchDepth: 'quick', saveToLocalDocs: false });
@@ -265,7 +250,7 @@ function testCodeResearcherAndResearcherPrompts() {
     assert.ok(prompt4.includes('depth set to "deep" (Deep (50-100+ sources))'), 'Should use default deep depth');
     assert.ok(prompt4.includes('IMPORTANT: After completing the research, save the results to .switchboard/docs/ using the write_to_file tool so I can review them later.'), 'Should include save instruction');
 
-    console.log('  PASS: code_researcher and researcher prompt templates correctly implemented');
+    console.log('  PASS: researcher prompt templates correctly implemented');
 }
 
 function testResolveBaseInstructions() {
@@ -357,7 +342,7 @@ try {
     testDefaultWorkflowPathGeneratesMinimalPrompt();
     testCustomWorkflowWithAddons();
     testInternAnalystPrompts();
-    testCodeResearcherAndResearcherPrompts();
+    testResearcherPrompts();
     testResolveBaseInstructions();
     testUseSubagentsInstruction();
     testUnknownRoleThrows();

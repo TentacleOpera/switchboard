@@ -430,6 +430,21 @@ export async function activate(context: vscode.ExtensionContext) {
     kanbanProvider = new KanbanProvider(context.extensionUri, context, outputChannel);
     const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
 
+    // Migrate any cards stranded in deprecated columns (CONTEXT GATHERER, CODE_RESEARCHER, SPLITTER)
+    // to PLAN REVIEWED. Runs once at activation; idempotent (no-op once no cards remain).
+    if (workspaceRoot) {
+        try {
+            const db = (kanbanProvider as any)._getKanbanDb(workspaceRoot);
+            await db.ensureReady();
+            const workspaceId = await (kanbanProvider as any)._readWorkspaceId(workspaceRoot);
+            if (workspaceId) {
+                await db.migrateDeprecatedColumns(workspaceId);
+            }
+        } catch (e) {
+            console.warn('[Switchboard] Deprecated column migration skipped:', e);
+        }
+    }
+
     // Version-gated protocol migration: when the extension version changes,
     // ensure the workspace protocol files (AGENTS.md / CLAUDE.md + .claude/ mirror)
     // are updated to the latest bundled version. Gated on the SAME predicate the

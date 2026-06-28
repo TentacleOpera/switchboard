@@ -15873,10 +15873,6 @@ What would you like to find?`;
                 includeInlineChallenge,
                 gitProhibitionEnabled
             });
-        } else if (role === 'gatherer') {
-            messagePayload = await this._kanbanProvider.generateUnifiedPrompt('gatherer', [dispatchPlan], effectiveWorkspaceRoot, {
-                gitProhibitionEnabled
-            });
         } else if (customAgent || role.startsWith('custom_agent_')) {
             messagePayload = await this._kanbanProvider.generateUnifiedPrompt(role, [dispatchPlan], effectiveWorkspaceRoot);
         } else {

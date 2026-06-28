@@ -4,6 +4,16 @@ import * as os from 'os';
 import * as path from 'path';
 import { KanbanDatabase, VALID_KANBAN_COLUMNS } from '../services/KanbanDatabase';
 
+function columnSlug(col: string): string {
+    return col.toLowerCase().replace(/\s+/g, '-');
+}
+
+function readPerColumnFiles(dir: string): string {
+    const switchboardDir = path.join(dir, '.switchboard');
+    const files = fs.readdirSync(switchboardDir).filter(f => f.startsWith('kanban-state-') && f.endsWith('.md'));
+    return files.map(f => fs.readFileSync(path.join(switchboardDir, f), 'utf8')).join('\n');
+}
+
 suite('Kanban Auto-Export (Markdown)', () => {
     let tempDir: string;
     let db: KanbanDatabase;
@@ -40,9 +50,17 @@ suite('Kanban Auto-Export (Markdown)', () => {
         assert.ok(content.includes(`*Workspace: ${workspaceId}*`), 'Should include workspace ID');
         assert.ok(content.includes('*Updated:'), 'Should include timestamp');
 
-        // All VALID_KANBAN_COLUMNS should appear as h2 headings
+        // kanban-board.md now contains a table with links to per-column files.
+        // Each VALID_KANBAN_COLUMNS entry should appear as a link to kanban-state-{slug}.md.
         for (const col of VALID_KANBAN_COLUMNS) {
-            assert.ok(content.includes(`## ${col}`), `Should contain heading for column: ${col}`);
+            const slug = columnSlug(col);
+            assert.ok(content.includes(`kanban-state-${slug}.md`), `Should contain table link for column: ${col}`);
+        }
+
+        // Each per-column file should exist and contain the column heading.
+        const perColumnContent = readPerColumnFiles(tempDir);
+        for (const col of VALID_KANBAN_COLUMNS) {
+            assert.ok(perColumnContent.includes(`## ${col}`), `Per-column file should contain heading for column: ${col}`);
         }
     });
 
@@ -84,19 +102,19 @@ suite('Kanban Auto-Export (Markdown)', () => {
         await db.setWorkspaceId(workspaceId);
         await new Promise(resolve => setTimeout(resolve, 300));
 
-        const exportPath = path.join(tempDir, '.switchboard', 'kanban-board.md');
-        const content = fs.readFileSync(exportPath, 'utf8');
+        // Plans now live in per-column files, not in kanban-board.md (which is a table of links).
+        const perColumnContent = readPerColumnFiles(tempDir);
 
-        // Plans should appear as markdown links under their column headings
-        assert.ok(content.includes('[sess-1]'), 'Should include plan 1 link');
-        assert.ok(content.includes('Topic 1'), 'Should include plan 1 topic');
-        assert.ok(content.includes('[sess-2]'), 'Should include plan 2 link');
-        assert.ok(content.includes('Topic 2'), 'Should include plan 2 topic');
-        assert.ok(content.includes('[sess-3]'), 'Should include plan 3 link');
-        assert.ok(content.includes('Topic 3'), 'Should include plan 3 topic');
+        // Plans should appear as markdown links in their per-column files
+        assert.ok(perColumnContent.includes('[sess-1]'), 'Should include plan 1 link');
+        assert.ok(perColumnContent.includes('Topic 1'), 'Should include plan 1 topic');
+        assert.ok(perColumnContent.includes('[sess-2]'), 'Should include plan 2 link');
+        assert.ok(perColumnContent.includes('Topic 2'), 'Should include plan 2 topic');
+        assert.ok(perColumnContent.includes('[sess-3]'), 'Should include plan 3 link');
+        assert.ok(perColumnContent.includes('Topic 3'), 'Should include plan 3 topic');
 
-        // Empty columns should show "_No plans_"
-        assert.ok(content.includes('_No plans_'), 'Empty columns should show placeholder');
+        // Empty columns should show "_No plans_" in their per-column files
+        assert.ok(perColumnContent.includes('_No plans_'), 'Empty columns should show placeholder');
     });
 
     test('Old kanban-state.json is cleaned up on first markdown write', async function() {
@@ -177,10 +195,13 @@ suite('Kanban Auto-Export (Markdown)', () => {
         await new Promise(resolve => setTimeout(resolve, 300));
 
         const exportPath = path.join(tempDir, '.switchboard', 'kanban-board.md');
-        const content = fs.readFileSync(exportPath, 'utf8');
+        assert.strictEqual(fs.existsSync(exportPath), true, 'Markdown export file should exist');
 
-        assert.ok(content.includes('sess-active-1'), 'Active plan should be in export');
-        assert.ok(!content.includes('sess-completed-1'), 'Completed plan should NOT be in export');
+        // Plans now live in per-column files, not in kanban-board.md
+        const perColumnContent = readPerColumnFiles(tempDir);
+
+        assert.ok(perColumnContent.includes('sess-active-1'), 'Active plan should be in export');
+        assert.ok(!perColumnContent.includes('sess-completed-1'), 'Completed plan should NOT be in export');
     });
 
     test('Dispose triggers a final export flush', async function() {

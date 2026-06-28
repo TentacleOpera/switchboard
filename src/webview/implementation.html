@@ -2490,7 +2490,6 @@
                 : [
                     { id: 'CREATED', label: 'New' },
                     { id: 'PLAN REVIEWED', label: 'Planned' },
-                    { id: 'CONTEXT GATHERER', label: 'Context Gatherer' },
                     { id: 'INTERN CODED', label: 'Intern' },
                     { id: 'LEAD CODED', label: 'Lead Coder' },
                     { id: 'CODER CODED', label: 'Coder' },
@@ -3710,7 +3709,7 @@ Work through all plans in the list, using the marker format above.`;
                 analyst: document.getElementById('onboard-cli-analyst').value,
                 orchestrator: document.getElementById('onboard-cli-orchestrator')?.value || (lastStartupCommands.orchestrator || '')
             };
-            const visibleAgents = { lead: true, coder: true, intern: true, reviewer: true, tester: false, planner: true, analyst: true, jules: false, gatherer: false, orchestrator: true };
+            const visibleAgents = { lead: true, coder: true, intern: true, reviewer: true, tester: false, planner: true, analyst: true, jules: false, orchestrator: true };
             document.querySelectorAll('.onboard-agent-toggle').forEach(cb => {
                 const role = cb.dataset.role;
                 if (role) visibleAgents[role] = cb.checked;

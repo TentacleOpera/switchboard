@@ -168,7 +168,7 @@ export interface PromptBuilderOptions {
 
     /** Controls ticket update behavior: disabled, comment-only, refine-ticket, or research-and-refine */
     ticketUpdateMode?: 'disabled' | 'comment-only' | 'refine-ticket' | 'research-and-refine';
-    /** When false (explicitly), splitter omits the complexity-scoring step. Defaults to enabled (undefined). */
+    /** When false (explicitly), omits the complexity-scoring step. Defaults to enabled (undefined). */
     complexityScoringSkill?: boolean;
     /** When true, researcher prompt includes instruction to save results to local docs folder (.switchboard/docs/). */
     saveToLocalDocs?: boolean;

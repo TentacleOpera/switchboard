@@ -332,3 +332,84 @@ Per session directives, automated tests are **not run** in this planning pass �
 ## Recommendation
 
 Complexity 6 → **Send to Coder**
+
+---
+
+## Reviewer Pass — 2026-06-28
+
+### Stage 1: Grumpy Adversarial Findings
+
+| # | Severity | File:Line | Finding |
+|---|----------|-----------|---------|
+| 1 | CRITICAL | `TaskViewerProvider.ts:15876-15879` | Live `else if (role === 'gatherer')` dispatch branch calls `generateUnifiedPrompt('gatherer', ...)` — the gatherer prompt template was deleted from `agentPromptBuilder.ts`, so this throws `Unknown role 'gatherer'` at runtime. Combined with the still-present `CONTEXT GATHERER → gatherer` mapping in KanbanProvider, this is a complete crash path. |
+| 2 | CRITICAL | `implementation.html:2493` | `CONTEXT GATHERER` column still in the fallback kanban columns array — renders a ghost column in onboarding for a removed role. |
+| 3 | MAJOR | `KanbanProvider.ts:8253` | `case 'CONTEXT GATHERER': return 'gatherer'` in column-to-role mapping — dead code referencing a removed role. |
+| 4 | MAJOR | `KanbanProvider.ts:3976-3977` | Non-execution roles guard still lists `splitter`, `code_researcher`, `gatherer` — dead references. |
+| 5 | MAJOR | `KanbanProvider.ts:4331,4334,4335` | Visible-agents state init still writes `gatherer: false, splitter: false, code_researcher: false` to state.json — orphaned keys. |
+| 6 | MAJOR | `PlanningPanelProvider.ts:8278-8279` | `visibleAgentDefaults` still has `gatherer: false, splitter: false, code_researcher: false` — orphaned keys. |
+| 7 | MAJOR | `implementation.html:3713` | `visibleAgents` object still has `gatherer: false` — orphaned key. |
+| 8 | MAJOR | `setup.html:2447-2449` | `gatherer` reference in visible agents patch — **plan missed this file entirely**. Actively persists gatherer visibility state for a removed role. |
+| 9 | MAJOR | Step 11 (Migration) | NOT IMPLEMENTED. No migration code for stranded cards anywhere. Published extension with ~4,000 installs — users with cards in deprecated columns will have permanently stranded cards. |
+| 10 | MAJOR | Step 12 (Persona archive) | NOT DONE. `.agents/personas/gatherer.md` still at original path. |
+| 11 | MAJOR | Step 13 (Tests) | NOT DONE. All 5 test files still reference removed roles — tests will fail. |
+| 12 | NIT | `KanbanProvider.ts:1343,2252,2393` | Three identical stale comments mentioning "CONTEXT GATHERER". |
+| 13 | NIT | `agentPromptBuilder.ts:171` | Docstring mentions "splitter" for `complexityScoringSkill`. |
+| 14 | NIT | `kanban.html:2941,3999` | Two comments reference `code_researcher`. |
+| 15 | NIT | `src/test/integrations/fixtures/generated/linear-setup-1779248808327-ea7a21/.switchboard/kanban-board.md:20` | Stale generated test fixture with `## CONTEXT GATHERER`. |
+
+### Stage 2: Balanced Synthesis
+
+**Already correctly done (pre-review):** Steps 1, 2, 9, 10 (`agentConfig.ts`, `sharedDefaults.js`, `KanbanDatabase.ts VALID_KANBAN_COLUMNS`, `ClickUpSyncService.ts CANONICAL_COLUMNS`). Step 4 (`agentPromptBuilder.ts`) 90% done — prompt branches, column-to-role mapping, and error message all removed. Step 3 (`kanban.html`) 95% done — all UI elements removed. Step 5 (`KanbanProvider.ts`) 70% done — `preCodingColumns`, `splitterSelected`, epic-grouping prompt, roles arrays all cleaned.
+
+**Fixes applied (this review pass):**
+- CRITICAL #1: Removed `else if (role === 'gatherer')` dispatch branch from `TaskViewerProvider.ts`.
+- CRITICAL #2: Removed `CONTEXT GATHERER` from fallback columns array in `implementation.html`.
+- MAJOR #3: Removed `case 'CONTEXT GATHERER': return 'gatherer'` from `KanbanProvider.ts` column-to-role mapping.
+- MAJOR #4: Removed `splitter`, `code_researcher`, `gatherer` from non-execution roles guard in `KanbanProvider.ts`.
+- MAJOR #5: Removed `gatherer: false, splitter: false, code_researcher: false` from visible-agents state init in `KanbanProvider.ts`.
+- MAJOR #6: Removed `gatherer: false, splitter: false, code_researcher: false` from `visibleAgentDefaults` in `PlanningPanelProvider.ts`.
+- MAJOR #7: Removed `gatherer: false` from `visibleAgents` in `implementation.html`.
+- MAJOR #8: Removed `gatherer` reference and comment from `setup.html` (plan gap — file was not in original plan).
+- MAJOR #9: Added `migrateDeprecatedColumns()` method to `KanbanDatabase.ts` and call from `extension.ts` `activate()`. Moves cards from `CONTEXT GATHERER`, `CODE_RESEARCHER`, `SPLITTER` to `PLAN REVIEWED`. Idempotent — runs once at extension activation, not on every panel open.
+- MAJOR #10: Archived `.agents/personas/gatherer.md` → `.agents/personas/gatherer.md.migrated.bak`.
+- MAJOR #11: Updated all 5 test files:
+  - `kanban-default-prompt-previews.test.js`: Removed `splitter: false`, `code_researcher: false` from fixtures; removed `code_researcher` from roles array.
+  - `KanbanProvider.test.ts`: Removed `SPLITTER` and `CONTEXT GATHERER` column defs; removed `splitter: false, gatherer: false` from 10 stubDeps calls; updated "PLAN REVIEWED -> next" test; removed "Recovery: CONTEXT GATHERER" test.
+  - `agentPromptBuilder.test.ts`: Removed `code_researcher` test suite and 3 mapping tests.
+  - `agent-prompt-builder-subagents.test.js`: Renamed `testCodeResearcherAndResearcherPrompts` → `testResearcherPrompts`; removed `code_researcher` portions.
+  - `minimal-prompt.test.js`: Removed `code_researcher` and `splitter` from roles array; removed `code_researcher` option-setting block.
+- NIT #12: Updated 3 stale comments in `KanbanProvider.ts`.
+- NIT #13: Updated docstring in `agentPromptBuilder.ts`.
+- NIT #14: Updated 2 stale comments in `kanban.html`.
+
+### Files Changed (this review pass)
+
+- `src/services/TaskViewerProvider.ts` — removed gatherer dispatch branch
+- `src/services/KanbanProvider.ts` — removed column-to-role mapping, non-exec roles guard entries, visible-agents init keys, stale comments
+- `src/services/KanbanDatabase.ts` — added `migrateDeprecatedColumns()` method
+- `src/extension.ts` — added migration call in `activate()`
+- `src/services/PlanningPanelProvider.ts` — removed orphaned visible-agent defaults
+- `src/services/agentPromptBuilder.ts` — updated docstring
+- `src/webview/implementation.html` — removed CONTEXT GATHERER column def and gatherer: false
+- `src/webview/setup.html` — removed gatherer reference (plan gap)
+- `src/webview/kanban.html` — updated stale comments
+- `src/services/__tests__/KanbanProvider.test.ts` — removed column defs, stubDeps entries, and tests for removed columns
+- `src/services/__tests__/agentPromptBuilder.test.ts` — removed code_researcher suite and mapping tests
+- `src/test/agent-prompt-builder-subagents.test.js` — removed code_researcher test portions
+- `src/test/kanban-default-prompt-previews.test.js` — removed role references from fixtures and roles array
+- `src/test/minimal-prompt.test.js` — removed role references from roles array and option block
+- `.agents/personas/gatherer.md` → `.agents/personas/gatherer.md.migrated.bak` (archived)
+
+### Verification Results
+
+- **Grep verification**: `grep -rn "gatherer\|splitter\|code_researcher\|CONTEXT GATHERER\|SPLITTER\|CODE_RESEARCHER" src/` — only remaining hits are in migration code (intentional) and one stale test fixture.
+- **TypeScript compilation**: Skipped per session directives.
+- **Automated tests**: Skipped per session directives.
+- **Persona archive**: Confirmed `.agents/personas/gatherer.md.migrated.bak` exists, original `.agents/personas/gatherer.md` does not.
+
+### Remaining Risks
+
+1. **Stale test fixture** (`src/test/integrations/fixtures/generated/linear-setup-1779248808327-ea7a21/.switchboard/kanban-board.md:20`): Contains `## CONTEXT GATHERER` as a column header. This is a generated snapshot fixture — if any integration test parses it and validates column names against `VALID_KANBAN_COLUMNS`, it could fail. Low risk; left as historical snapshot.
+2. **Migration runs on every activation**: The migration is idempotent (no-op when no cards are in deprecated columns), but it runs a SQL query every time the extension activates. This is negligible overhead (single UPDATE on a small table) and matches the pattern of other activation-time migrations in the same function.
+3. **Orphaned user config keys**: Per the plan's Out of Scope, user-stored role configuration data in VS Code state (prompt overrides, addon settings for `gatherer`, `splitter`, `code_researcher`) will remain as orphaned keys — silently ignored. No cleanup needed per plan policy.
+4. **`codeResearcher` fixture key in `kanban-default-prompt-previews.test.js`**: The `promptsConfig` object still has a `codeResearcher: { researchDepth: 'deep' }` key (lines 60-66). This is orphaned test fixture data — harmless but could be cleaned up in a future pass.

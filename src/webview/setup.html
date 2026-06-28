@@ -2443,10 +2443,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // reinstall, before the cache hydrates) would WIPE the user's real
             // startup commands. Omitting the field leaves the stored value untouched.
             const visibleAgents = {
-                ...getCustomVisibleAgentsPatch(),
-                // gatherer is a built-in agent toggled via the Agents tab checkboxes.
-                // Include it explicitly so the server persists the user's preference.
-                gatherer: lastVisibleAgents['gatherer'] !== false
+                ...getCustomVisibleAgentsPatch()
             };
             lastGitIgnoreConfig = {
                 ...lastGitIgnoreConfig,

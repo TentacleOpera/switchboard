@@ -42,9 +42,7 @@ async function run() {
                 intern: false,
                 analyst: false,
                 researcher: false,
-                splitter: false,
-                ticket_updater: false,
-                code_researcher: false
+                ticket_updater: false
             },
             skipTestsByRole: {
                 planner: false,
@@ -55,9 +53,7 @@ async function run() {
                 intern: false,
                 analyst: false,
                 researcher: false,
-                splitter: false,
-                ticket_updater: false,
-                code_researcher: false
+                ticket_updater: false
             },
             gitProhibitionByRole: {},
             switchboardSafeguardsByRole: {},
@@ -82,7 +78,7 @@ async function run() {
         // The actual implementation of _getDefaultPromptPreviews copied from KanbanProvider.ts
         async _getDefaultPromptPreviews(workspaceRoot) {
             const previews = {};
-            const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'code_researcher'];
+            const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst'];
             const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
             for (const role of roles) {
                 try {

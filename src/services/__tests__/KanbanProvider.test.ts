@@ -140,8 +140,6 @@ suite('KanbanProvider', () => {
             { id: 'CREATED', label: 'New', order: 0, kind: 'created', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
             { id: 'RESEARCHER', label: 'Researcher', role: 'researcher', order: 90, kind: 'review', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt', hideWhenNoAgent: true },
             { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner', order: 100, kind: 'review', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
-            { id: 'SPLITTER', label: 'Splitter', role: 'splitter', order: 110, kind: 'review', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt', hideWhenNoAgent: true },
-            { id: 'CONTEXT GATHERER', label: 'Context Gatherer', role: 'gatherer', order: 50, kind: 'review', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli', hideWhenNoAgent: true },
             { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 180, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
             { id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
             { id: 'INTERN CODED', label: 'Intern', role: 'intern', order: 200, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli', hideWhenNoAgent: true },
@@ -160,61 +158,55 @@ suite('KanbanProvider', () => {
         };
 
         test('CREATED -> next skips hidden RESEARCHER when researcher not visible', async () => {
-            stubDeps({ researcher: false, splitter: false, gatherer: false, tester: false, ticket_updater: false }, false);
+            stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
             const next = await (provider as any)._getNextColumnId('CREATED', workspaceRoot);
             assert.strictEqual(next, 'PLAN REVIEWED');
         });
 
-        test('PLAN REVIEWED -> next skips SPLITTER and CONTEXT GATHERER when invisible', async () => {
-            stubDeps({ researcher: false, splitter: false, gatherer: false, tester: false, ticket_updater: false }, false);
+        test('PLAN REVIEWED -> next goes to LEAD CODED directly', async () => {
+            stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
             const next = await (provider as any)._getNextColumnId('PLAN REVIEWED', workspaceRoot);
             assert.strictEqual(next, 'LEAD CODED');
         });
 
         test('CODE REVIEWED -> next returns null when tester inactive (skips ACCEPTANCE TESTED and COMPLETED bypass)', async () => {
-            stubDeps({ researcher: false, splitter: false, gatherer: false, tester: false, ticket_updater: false }, false);
+            stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
             const next = await (provider as any)._getNextColumnId('CODE REVIEWED', workspaceRoot);
             assert.strictEqual(next, null);
         });
 
         test('CODE REVIEWED -> next goes to ACCEPTANCE TESTED when tester active and design doc configured', async () => {
-            stubDeps({ researcher: false, splitter: false, gatherer: false, tester: true, ticket_updater: false }, true);
+            stubDeps({ researcher: false, tester: true, ticket_updater: false }, true);
             const next = await (provider as any)._getNextColumnId('CODE REVIEWED', workspaceRoot);
             assert.strictEqual(next, 'ACCEPTANCE TESTED');
         });
 
         test('LEAD CODED -> next exits parallel lane to CODE REVIEWED', async () => {
-            stubDeps({ researcher: false, splitter: false, gatherer: false, tester: false, ticket_updater: false }, false);
+            stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
             const next = await (provider as any)._getNextColumnId('LEAD CODED', workspaceRoot);
             assert.strictEqual(next, 'CODE REVIEWED');
         });
 
         test('CODER CODED -> next exits parallel lane to CODE REVIEWED', async () => {
-            stubDeps({ researcher: false, splitter: false, gatherer: false, tester: false, ticket_updater: false }, false);
+            stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
             const next = await (provider as any)._getNextColumnId('CODER CODED', workspaceRoot);
             assert.strictEqual(next, 'CODE REVIEWED');
         });
 
         test('INTERN CODED -> next exits parallel lane to CODE REVIEWED', async () => {
-            stubDeps({ researcher: false, splitter: false, gatherer: false, tester: false, ticket_updater: false }, false);
+            stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
             const next = await (provider as any)._getNextColumnId('INTERN CODED', workspaceRoot);
             assert.strictEqual(next, 'CODE REVIEWED');
         });
 
         test('Recovery: RESEARCHER -> next advances to PLAN REVIEWED even when researcher invisible', async () => {
-            stubDeps({ researcher: false, splitter: false, gatherer: false, tester: false, ticket_updater: false }, false);
+            stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
             const next = await (provider as any)._getNextColumnId('RESEARCHER', workspaceRoot);
             assert.strictEqual(next, 'PLAN REVIEWED');
         });
 
-        test('Recovery: CONTEXT GATHERER -> next advances to LEAD CODED even when gatherer invisible', async () => {
-            stubDeps({ researcher: false, splitter: false, gatherer: false, tester: false, ticket_updater: false }, false);
-            const next = await (provider as any)._getNextColumnId('CONTEXT GATHERER', workspaceRoot);
-            assert.strictEqual(next, 'LEAD CODED');
-        });
-
         test('Last column returns null', async () => {
-            stubDeps({ researcher: false, splitter: false, gatherer: false, tester: false, ticket_updater: false }, false);
+            stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
             const next = await (provider as any)._getNextColumnId('COMPLETED', workspaceRoot);
             assert.strictEqual(next, null);
         });

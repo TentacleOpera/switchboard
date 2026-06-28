@@ -1340,7 +1340,7 @@ export class KanbanProvider implements vscode.Disposable {
             const effectiveModes: Record<string, 'cli' | 'prompt' | 'disabled'> = {};
             for (const col of columns) {
                 // Built-in 'disabled' is a hard constraint — never let a persisted override
-                // reinstate CLI dispatch for columns like CONTEXT GATHERER.
+                // reinstate CLI dispatch for built-in columns that disable it.
                 effectiveModes[col.id] = col.dragDropMode === 'disabled'
                     ? 'disabled'
                     : (this._columnDragDropModes[col.id] || col.dragDropMode || 'cli');
@@ -2249,7 +2249,7 @@ export class KanbanProvider implements vscode.Disposable {
             const effectiveModes: Record<string, 'cli' | 'prompt' | 'disabled'> = {};
             for (const col of columns) {
                 // Built-in 'disabled' is a hard constraint — never let a persisted override
-                // reinstate CLI dispatch for columns like CONTEXT GATHERER.
+                // reinstate CLI dispatch for built-in columns that disable it.
                 effectiveModes[col.id] = col.dragDropMode === 'disabled'
                     ? 'disabled'
                     : (this._columnDragDropModes[col.id] || col.dragDropMode || 'cli');
@@ -2390,7 +2390,7 @@ export class KanbanProvider implements vscode.Disposable {
             const effectiveModes: Record<string, 'cli' | 'prompt' | 'disabled'> = {};
             for (const col of columns) {
                 // Built-in 'disabled' is a hard constraint — never let a persisted override
-                // reinstate CLI dispatch for columns like CONTEXT GATHERER.
+                // reinstate CLI dispatch for built-in columns that disable it.
                 effectiveModes[col.id] = col.dragDropMode === 'disabled'
                     ? 'disabled'
                     : (this._columnDragDropModes[col.id] || col.dragDropMode || 'cli');
@@ -3973,8 +3973,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
         if (!targetRole || (
             targetRole !== 'lead' && targetRole !== 'coder' && targetRole !== 'intern' &&
             targetRole !== 'planner' && targetRole !== 'reviewer' && targetRole !== 'tester' &&
-            targetRole !== 'researcher' && targetRole !== 'splitter' && targetRole !== 'analyst' &&
-            targetRole !== 'ticket_updater' && targetRole !== 'code_researcher' && targetRole !== 'gatherer' &&
+            targetRole !== 'researcher' && targetRole !== 'analyst' &&
+            targetRole !== 'ticket_updater' &&
             !targetRole.startsWith('custom_agent_')
         )) {
             const hasHighComplexity = this._dynamicComplexityRoutingEnabled
@@ -4328,11 +4328,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
             planner: true,
             analyst: true,
             jules: false,
-            gatherer: false,
             ticket_updater: false,
-            researcher: false,
-            splitter: false,
-            code_researcher: false
+            researcher: false
         };        const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
         try {
             if (fs.existsSync(statePath)) {
@@ -8250,7 +8247,6 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             case 'ORCHESTRATING': return 'orchestrator';
             case 'CODE REVIEWED': return 'reviewer';
             case 'ACCEPTANCE TESTED': return 'tester';
-            case 'CONTEXT GATHERER': return 'gatherer';
             case 'COMPLETED': return null;
             default: return column.startsWith('custom_agent_') ? column : null;
         }

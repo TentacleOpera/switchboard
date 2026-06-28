@@ -180,7 +180,7 @@ function testPromptLineBreaksAreNormalized() {
 
 function testNoTripleNewlinesInAnyRole() {
     console.log('Testing no triple newlines in any role across option combinations...');
-    const roles = ['planner', 'reviewer', 'tester', 'lead', 'coder', 'intern', 'analyst', 'ticket_updater', 'researcher', 'code_researcher', 'splitter'];
+    const roles = ['planner', 'reviewer', 'tester', 'lead', 'coder', 'intern', 'analyst', 'ticket_updater', 'researcher'];
 
     const optionCombos = [
         // All options disabled (minimal prompt)
@@ -216,9 +216,6 @@ function testNoTripleNewlinesInAnyRole() {
             }
             if (role === 'coder') {
                 promptOpts.accurateCodingEnabled = true;
-            }
-            if (role === 'code_researcher') {
-                promptOpts.researchDepth = 'deep';
             }
             if (role === 'researcher') {
                 promptOpts.researchDepth = 'deep';
