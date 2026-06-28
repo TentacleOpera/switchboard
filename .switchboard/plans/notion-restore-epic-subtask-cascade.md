@@ -131,3 +131,36 @@ Skipped per session directive — the user runs the test suite separately. No co
 ## Recommendation
 
 Complexity 4 (Medium: single-file change, reuses existing cascade mechanism, `epic_id` preservation verified safe, but has the fresh-workspace limitation and the file-based-plan lookup fix) → **Send to Coder**. Implement option (b) (local DB relationships) as the default; option (a) (extend Notion schema) can be a follow-up if cross-workspace restore is needed. **Critical:** use `planId` (not `sessionId`) as the cascade lookup key — the original proposed code's `sessionId`-based lookup silently drops file-based epics. If Plan 2 is implemented first, use the atomic `cascadeEpicByPlanId` path; otherwise use the stopgap with `updateColumnWithEpicCascadeByPlanId` + manual `updateStatus` loop.
+
+## Implementation Status
+
+**Status:** ✅ Implemented + Reviewed  
+**Implemented Path:** Preferred (atomic `cascadeEpicByPlanId` — Plan 2 was available)
+
+### Files Changed
+
+| File | Lines | Description |
+|------|-------|-------------|
+| [NotionBackupService.ts](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/services/NotionBackupService.ts#L106) | 106, 130, 140-156 | Extended `columnUpdates` with `planId`, added post-restore epic cascade loop |
+
+### Review Findings
+
+| # | Severity | Finding | Location | Resolution |
+|---|----------|---------|----------|------------|
+| F1 | **MAJOR** | `updateColumn(sessionId, column)` at line 140 still used session-based lookup — file-based plans (sessionId='') match a random row via `getPlanBySessionId('')` | [NotionBackupService.ts:140-142](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/services/NotionBackupService.ts#L140-L142) (pre-fix) | **Fixed** — replaced dual-loop (sessionId updateColumn + planId cascade) with single unified planId-based loop. Epics use `cascadeEpicByPlanId`; non-epics use `getPlanByPlanId` → `updateColumnByPlanFile`. SessionId removed from `columnUpdates` type entirely. |
+| F2 | **NIT** | Redundant epic column update: `updateColumn` updates epic column, then `cascadeEpicByPlanId` updates it again | [NotionBackupService.ts:140-150](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/services/NotionBackupService.ts#L140-L150) (pre-fix) | **Fixed by F1** — single loop eliminates the redundancy. |
+| F3 | **NIT** | `includeAllSubtasks: true` passed without documenting rationale | [NotionBackupService.ts:150](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/services/NotionBackupService.ts#L152) | **Fixed** — added inline comment explaining restore cascades ALL subtasks. |
+| F4 | **NIT** | `_notionPageToPlanRecord` omits `isEpic`/`epicId` — implicit dependency on upsert CASE clauses | [NotionBackupService.ts:476-500](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/services/NotionBackupService.ts#L476-L500) | **Deferred** — by design; verified safe in plan's complexity audit (binding chain traced). |
+
+### Verification Results
+
+- **Compilation:** Skipped per session directive
+- **Automated tests:** Skipped per session directive
+- **Static analysis:** `sessionId` no longer used in any column update path (verified via grep); `updateColumnByPlanFile` signature matches call site; `cascadeEpicByPlanId` 4th arg `includeAllSubtasks=true` is correct for restore semantics
+
+### Remaining Risks
+
+1. **Fresh-workspace restore** — option (b) inherent limitation: restoring to a workspace with no pre-existing local data finds no epics/subtasks to cascade. Documented in plan; no code fix possible without extending Notion schema (option (a)).
+2. **Unchanged-epic-column edge case** — epics whose column didn't change aren't in `columnUpdates`, so scattered subtasks won't be re-aligned by restore. Documented as known limitation.
+3. **Status not restored from Notion** — upsert's `status` CASE clause preserves the local status (only transitions deleted→active). If Notion says 'completed' but local is 'active', cascade reads 'active' and doesn't cascade status. This is by design (status is intentionally sticky) but means status cascade only works when the local DB already has the correct epic status.
+

@@ -661,6 +661,10 @@
             min-height: 100%;
         }
 
+        /* Docs tab sidebar: fixed width to match project.html kanban layout.
+           The generic .content-row > :first-child { flex: 1 } rule would
+           otherwise grow this pane proportionally (25% of the row), making
+           the preview narrower than the kanban plans view. */
         #tree-pane {
             flex: 0 0 320px;
         }

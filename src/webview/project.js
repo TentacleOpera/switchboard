@@ -269,6 +269,7 @@
             if (/^(https?:|mailto:|tel:|#)/i.test(href)) return;
 
             e.preventDefault();
+            e.stopPropagation();
 
             // Resolve the relative href against the directory of the currently-
             // displayed file. The epic lives at .switchboard/epics/<file>, so
@@ -302,7 +303,6 @@
             if (btnEdit) btnEdit.style.display = 'none';
         });
     }
-
 
     const btnBuildViaPlanner = document.getElementById('btn-build-via-planner');
     const btnCopyBuildPrompt = document.getElementById('btn-copy-build-prompt');

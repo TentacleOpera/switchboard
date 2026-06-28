@@ -213,3 +213,64 @@ No automated tests are required for this change. The fix is a UI interaction han
 ## Recommendation
 
 Complexity is 3/10 → **Send to Coder** (complexity 4-6 threshold is for multi-file; this is a single-file change but requires verifying the `markdown.api.render` assumption, so Coder is appropriate over Intern).
+
+---
+
+## Code Review (Reviewer Pass — 2026-06-28)
+
+### Implementation Location
+
+- **File changed:** `src/webview/project.js` lines 233–304 (delegated click listener on `epicsPreviewContent`).
+- **Committed in:** `0f81f7c` (bundled into the atomic-write DELETE fix auto-commit — the commit message does not mention this change, but the diff confirms the listener was added there).
+- **No other files changed** — matches the plan's "No other files need changes" section.
+
+### Stage 1 — Grumpy Principal Engineer Review
+
+> *"You wrote a delegated event listener. Good. You didn't re-invent the wheel — you mirrored `renderEpicSubtasks`. Also good. But let me poke at every seam."*
+
+**NIT-1 — Missing `e.stopPropagation()` (line 250).** The sidebar subtask links call `e.stopPropagation()` (line 1835) before doing anything. Your new handler calls `e.preventDefault()` but NOT `e.stopPropagation()`. If any ancestor ever grows a click handler, this will silently double-fire. I verified there is currently no parent/ancestor click listener on `epicsPreviewPane` or `document` — so today this is harmless. But the inconsistency with the established pattern is sloppy. **Verdict: NIT — not a bug today, but add it for defensive parity.**
+
+**NIT-2 — Double blank line (lines 305–306).** Two blank lines between the listener block and the next `const` declaration. Cosmetic. **Verdict: NIT.**
+
+**NIT-3 — Absolute-path edge case (line 284).** If a user hand-edits the epic markdown to include `[foo](/some/absolute.md)`, your resolver does `(baseDir + '/' + '/some/absolute.md').split('/')` → the leading `/` produces an empty segment that gets skipped, so the path resolves as `.switchboard/epics/some/absolute.md` — wrong. However, `_regenerateEpicFile` only ever emits `../plans/<basename>` relative links, and the extension-side `isAllowed` check (PlanningPanelProvider.ts line 1227) is the security boundary. **Verdict: NIT — not a real-world issue for auto-generated content; security is handled server-side.**
+
+**NIT-4 — `vscode-webview://` href transformation (the load-bearing assumption).** If `markdown.api.render` ever transforms relative hrefs to `vscode-webview://...` URIs, the `endsWith('.md')` guard (line 268) might still pass (if the path tail is preserved) but the protocol guard (line 269) would NOT catch it (no `https?:` match), and the resolver would produce garbage. The `data-href` fallback (line 255) is the mitigation — `data-href` preserves the pre-normalization value. This is the uncertain assumption documented in the plan (test #6). **Verdict: NIT — documented and mitigated by `data-href`; requires manual verification per test #6.**
+
+**Non-finding — Guard ordering (lines 268–269).** I checked: `https://example.com/foo.md` passes the `.md` check but is caught by the protocol check on the next line. Order is correct. No issue.
+
+**Non-finding — Response routing (line 458).** `_epicPreviewFilePath` is set to `resolvedPath` (line 293) before the message is sent (line 295). The extension echoes back the same `filePath` string. The check `_epicPreviewFilePath === msg.filePath` passes. Verified.
+
+**Non-finding — Scope.** All referenced symbols (`_epicPreviewFilePath`, `_epicSelectedPlan`, `_kanbanPreviewRequestId`, `exitEditMode`, `showToast`, `state.editMode.epics`, `vscode`) are in the same closure scope (declared at lines 164, 167, 169, 2345, 78, respectively). `node --check` passes (exit 0). No scope issues.
+
+**Non-finding — Security.** The extension-side `_handleFetchKanbanPlanPreview` (PlanningPanelProvider.ts line 1227) has `isAllowed = allRoots.some(r => resolved.startsWith(path.resolve(r)))`. Path traversal from malicious markdown is blocked at the extension boundary. The webview-side resolver is not a security boundary. Correct.
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Severity | Action |
+|---------|----------|--------|
+| Missing `e.stopPropagation()` | NIT | **Fix now** — one-line addition for defensive parity with the sidebar pattern. Harmless, future-proof. |
+| Double blank line 305–306 | NIT | **Fix now** — cosmetic cleanup. |
+| Absolute-path edge case | NIT | **Defer** — not a real-world issue for auto-generated content; extension-side `isAllowed` is the boundary. |
+| `vscode-webview://` transformation | NIT | **Defer** — documented uncertain assumption; mitigated by `data-href`; requires manual test #6. |
+
+**No CRITICAL or MAJOR findings.** The implementation is correct, matches the plan, and mirrors the established `renderEpicSubtasks` pattern. The two fixes applied are cosmetic/defensive only.
+
+### Fixes Applied
+
+1. **`src/webview/project.js` line 271**: Added `e.stopPropagation();` after `e.preventDefault();` for defensive parity with the sidebar subtask-link handler (line 1835).
+2. **`src/webview/project.js` lines 305–306**: Collapsed double blank line to single blank line.
+
+### Validation Results
+
+- **`node --check src/webview/project.js`**: PASS (exit 0) — no syntax errors.
+- **Scope verification**: All referenced symbols (`_epicPreviewFilePath`, `_epicSelectedPlan`, `_kanbanPreviewRequestId`, `exitEditMode`, `showToast`, `state.editMode.epics`) confirmed in-scope.
+- **Path resolution trace**: `.switchboard/epics` + `../plans/foo.md` → segments `['.switchboard','epics','..','plans','foo.md']` → resolved `.switchboard/plans/foo.md`. Matches DB `planFile` format. ✓
+- **Extension-side security**: `isAllowed` check confirmed at PlanningPanelProvider.ts:1227. ✓
+- **Response routing**: `_epicPreviewFilePath` set before `postMessage`; extension echoes `filePath`; check at line 458 passes. ✓
+- **Compilation**: Skipped per session policy.
+- **Automated tests**: Skipped per session policy.
+
+### Remaining Risks
+
+1. **`markdown.api.render` href transformation** (uncertain assumption): If a future VS Code update changes how `markdown.api.render` handles relative hrefs (e.g., transforming to `vscode-webview://` URIs without preserving `data-href`), the `endsWith('.md')` guard could fail silently. **Mitigation**: `data-href` fallback (line 255). **Verification**: Manual test #6 (inspect rendered `<a>` tags in webview devtools).
+2. **Absolute-path links in hand-edited epic markdown**: Would resolve incorrectly. **Mitigation**: Not a real-world issue for auto-generated content; extension-side `isAllowed` prevents path traversal. No fix needed.

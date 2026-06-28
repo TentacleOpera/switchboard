@@ -148,3 +148,45 @@ Automated tests are **deferred to the user** per session directive — no unit, 
 ---
 
 **Recommendation:** Complexity 2/10 → **Send to Intern**. This is a single-rule CSS fix that mirrors an already-shipped, proven pattern. No logic, no migrations, no JS changes.
+
+---
+
+## Review Pass — 2026-06-28
+
+### Stage 1 (Grumpy) Findings
+
+| # | Severity | Location | Finding |
+|---|----------|----------|---------|
+| 1 | NIT | `planning.html:664-666` (pre-fix) | Plan-specified explanatory comment was omitted from the shipped code. |
+| 2 | NIT | `planning.html:664` vs `project.html:197-199` | Shorthand `flex: 0 0 320px` diverges cosmetically from `project.html`'s `width: 320px; flex-shrink: 0` — behaviorally identical, plan justified. **No fix.** |
+| 3 | VERIFIED | `planning.html:258-265` vs `664` | Specificity claim (1-0-0 > 0-2-0) confirmed correct. |
+| 4 | VERIFIED | `planning.html:267-269` | Collapsed-state `!important` override confirmed still wins. |
+| 5 | VERIFIED | `planning.html:664` | ID selector targets `#tree-pane` only; sibling panes unaffected. |
+| 6 | VERIFIED | `planning.js:1220-1230` | `applySidebarState()` confirmed class-toggle-only, no inline styles. |
+| 7 | VERIFIED | `planning.html:3386-3393` | DOM structure confirmed: `#tree-pane` is `:first-child`, `.preview-panel-wrapper` is `:last-child`. |
+| 8 | VERIFIED | `planning.html:2194-2201` | Cyber-theme rule sets no `flex` property — no conflict with fixed width. |
+
+### Stage 2 (Balanced) Synthesis
+
+- **Keep:** The `flex: 0 0 320px` shorthand — behaviorally identical to `project.html`'s pattern, plan-justified.
+- **Fix now:** Missing plan-specified comment above the rule (Finding 1).
+- **Defer:** Nothing.
+
+### Fixes Applied
+
+- **`src/webview/planning.html:664-667`** — Added the 4-line explanatory comment specified in the plan's Proposed Changes section ("Docs tab sidebar: fixed width to match project.html kanban layout...").
+
+### Validation Results
+
+- **Compilation:** Skipped per session directive.
+- **Tests:** Skipped per session directive.
+- **Static verification:** All 8 findings verified by direct code inspection. No CRITICAL or MAJOR issues. Implementation matches plan requirements.
+
+### Files Changed in Review
+
+- `src/webview/planning.html` — added missing comment (4 lines, no behavioral change).
+
+### Remaining Risks
+
+- **None material.** The NIT-level shorthand divergence (Finding 2) is intentional and documented.
+- **Future extension candidate (unchanged from plan):** Sibling panes (`#tree-pane-online`, `#tree-pane-tickets`, `#tree-pane-planning-html`) retain proportional flex. If cramping is reported on those tabs, the same `flex: 0 0 320px` fix can be applied. Not a defect — out of scope for this plan.

@@ -103,7 +103,7 @@ export class NotionBackupService {
         const localByPlanId = new Map(localPlans.map(p => [p.planId, p]));
 
         const toRestore: KanbanPlanRecord[] = [];
-        const columnUpdates: Array<{ sessionId: string; planId: string; column: string }> = [];
+        const columnUpdates: Array<{ planId: string; column: string }> = [];
         let skipped = 0;
 
         for (let i = 0; i < notionPages.length; i++) {
@@ -127,7 +127,7 @@ export class NotionBackupService {
                 plan.dispatchedIde = local.dispatchedIde;
                 // Track column change to update separately
                 if (local.kanbanColumn !== plan.kanbanColumn) {
-                    columnUpdates.push({ sessionId: plan.sessionId, planId: plan.planId, column: plan.kanbanColumn });
+                    columnUpdates.push({ planId: plan.planId, column: plan.kanbanColumn });
                 }
             }
             toRestore.push(plan);
@@ -137,17 +137,21 @@ export class NotionBackupService {
         if (toRestore.length > 0) {
             await kanbanDb.upsertPlans(toRestore);
         }
-        for (const { sessionId, column } of columnUpdates) {
-            await kanbanDb.updateColumn(sessionId, column);
-        }
-
-        // Post-restore: cascade epic column (and status) to subtasks.
+        // Post-restore: apply column updates using planId-based lookup (never sessionId,
+        // which is '' for file-based plans and would match a random row).
+        // For epics, cascadeEpicByPlanId handles the epic's own column + subtasks atomically.
+        // For non-epics, use getPlanByPlanId → updateColumnByPlanFile.
         for (const { planId, column } of columnUpdates) {
             if (!planId) continue;
-            const epic = await kanbanDb.getPlanByPlanId(planId);
-            if (epic && epic.isEpic) {
-                const targetStatus = epic.status === 'completed' ? 'completed' : undefined;
-                await kanbanDb.cascadeEpicByPlanId(epic.planId, column, targetStatus, true);
+            const dbPlan = await kanbanDb.getPlanByPlanId(planId);
+            if (!dbPlan) continue;
+            if (dbPlan.isEpic) {
+                const targetStatus = dbPlan.status === 'completed' ? 'completed' : undefined;
+                // includeAllSubtasks=true: restore should re-align ALL subtasks (including
+                // completed/deleted), not just active ones, to match the epic's restored column.
+                await kanbanDb.cascadeEpicByPlanId(dbPlan.planId, column, targetStatus, true);
+            } else {
+                await kanbanDb.updateColumnByPlanFile(dbPlan.planFile, dbPlan.workspaceId, column);
             }
         }
 

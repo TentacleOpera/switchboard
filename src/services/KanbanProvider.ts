@@ -3574,15 +3574,15 @@ sqlite3 "${db.dbPath}" "SELECT plan_file, kanban_column, status FROM plans WHERE
 
 Run the following command (uses the kanban_operations skill to route through the extension/DB with proper cascades and syncs):
 
-```bash
+\`\`\`bash
 for plan_id in ${batchPlans.map(p => `'${p.planId}'`).join(' ')}; do
     node .agents/skills/kanban_operations/move-card.js "$plan_id" "${resolvedNextColumn}" "" "${workspaceRoot}"
 done
-```
+\`\`\`
 
-Verify that the output for each plan is `OK`. If the output is `FAILED`, the extension may not be running or compiled. Check the logs or notify the user to move the card manually.
+Verify that the output for each plan is \`OK\`. If the output is \`FAILED\`, the extension may not be running or compiled. Check the logs or notify the user to move the card manually.
 
-Target column: `${resolvedNextColumn}`
+Target column: \`${resolvedNextColumn}\`
 
 This step is what moves the plans forward in the Switchboard pipeline.
 `;
@@ -3618,13 +3618,13 @@ sqlite3 "${db.dbPath}" "SELECT plan_file, kanban_column, status FROM plans WHERE
 
 Run the following command (uses the kanban_operations skill to route through the extension/DB with proper cascades and syncs):
 
-```bash
+\`\`\`bash
 node .agents/skills/kanban_operations/move-card.js "${oldestPlan.planId}" "${resolvedNextColumn}" "" "${workspaceRoot}"
-```
+\`\`\`
 
-Verify that the output is `OK`. If the output is `FAILED`, the extension may not be running or compiled. Check the logs or notify the user to move the card manually.
+Verify that the output is \`OK\`. If the output is \`FAILED\`, the extension may not be running or compiled. Check the logs or notify the user to move the card manually.
 
-Target column: `${resolvedNextColumn}`
+Target column: \`${resolvedNextColumn}\`
 
 This step is what moves the plan forward in the Switchboard pipeline.
 `;
