@@ -5139,41 +5139,24 @@ Please format the updated output document strictly as follows:
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const provider = msg.provider;
                 const paths: string[] = [];
-                let lastError: string | undefined;
+                const missingIds: string[] = [];
                 if (workspaceRoot) {
                     if (Array.isArray(msg.ticketIds) && msg.ticketIds.length > 0) {
                         const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
                         for (const id of msg.ticketIds) {
                             if (typeof id === 'string' && id && !id.includes('/') && !id.includes('\\') && !id.includes('..')) {
+                                // Local-file-only lookup: "Link all"/"Link to ticket" copies paths
+                                // for tickets already imported. It does NOT make API calls — the
+                                // import happens during the sidebar load (importAllTickets document
+                                // mode). Missing tickets are reported so the user can Refetch.
                                 // Ticket files are named `${provider}_${id}_<slug>.md` and live in
                                 // nested hierarchies (team/project/sprint), so resolve the real path
                                 // by prefix scan rather than reconstructing a flat path.
-                                let filePath = this._findTicketFilePath(workspaceRoot, providerDir, id);
-                                if (!filePath) {
-                                    // Ensure-then-link: import the ticket as a local doc, then use the
-                                    // returned filePath directly (avoids a redundant re-scan race).
-                                    try {
-                                        const result: any = await vscode.commands.executeCommand('switchboard.importTaskAsDocument', {
-                                            workspaceRoot,
-                                            provider,
-                                            id,
-                                            includeSubtasks: true
-                                        });
-                                        if (result?.filePath) {
-                                            filePath = result.filePath;
-                                        } else if (result?.success === false) {
-                                            lastError = result.error || 'Could not import ticket.';
-                                            continue;
-                                        }
-                                        if (!filePath) {
-                                            filePath = this._findTicketFilePath(workspaceRoot, providerDir, id);
-                                        }
-                                    } catch (err: any) {
-                                        lastError = err?.message || String(err);
-                                    }
-                                }
+                                const filePath = this._findTicketFilePath(workspaceRoot, providerDir, id);
                                 if (filePath) {
                                     paths.push(filePath);
+                                } else {
+                                    missingIds.push(id);
                                 }
                             }
                         }
@@ -5186,12 +5169,20 @@ Please format the updated output document strictly as follows:
                 }
                 if (Array.isArray(msg.ticketIds) && msg.ticketIds.length > 0) {
                     if (paths.length === 0) {
-                        const hint = lastError || 'Could not locate or create a local file for this ticket.';
-                        this._panel?.webview.postMessage({ type: 'ticketLinkFailed', error: hint });
+                        this._panel?.webview.postMessage({
+                            type: 'ticketLinkFailed',
+                            error: missingIds.length > 0
+                                ? `No local files found for ${missingIds.length} ticket(s). Click "Refetch" to import them first.`
+                                : 'Could not locate local files for these tickets.'
+                        });
                     } else {
-                        const ticketRefs = paths;
-                        await vscode.env.clipboard.writeText(ticketRefs.join('\n'));
-                        this._panel?.webview.postMessage({ type: 'ticketLinkCopied', count: paths.length });
+                        await vscode.env.clipboard.writeText(paths.join('\n'));
+                        this._panel?.webview.postMessage({
+                            type: 'ticketLinkCopied',
+                            count: paths.length,
+                            requestedCount: msg.ticketIds.length,
+                            missingCount: missingIds.length
+                        });
                     }
                 } else {
                     await vscode.env.clipboard.writeText(paths.join('\n'));

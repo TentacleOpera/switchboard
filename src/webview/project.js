@@ -201,6 +201,7 @@
     const kanbanWorkspaceFilter = document.getElementById('kanban-workspace-filter');
     const kanbanProjectFilter = document.getElementById('kanban-project-filter');
     const kanbanColumnFilter = document.getElementById('kanban-column-filter');
+    const kanbanComplexityFilter = document.getElementById('kanban-complexity-filter');
     const kanbanSearch = document.getElementById('kanban-search');
     const btnImportKanbanPlans = document.getElementById('btn-import-kanban-plans');
     const btnCreateKanbanPlan = document.getElementById('btn-create-kanban-plan');
@@ -360,7 +361,7 @@
     let _prdLoadedProject = null;   // project name whose PRD is currently in the editor
     let _prdDirty = false;          // user has typed since the last load → don't clobber
 
-    const kanbanFilters = { column: '', workspaceRoot: '', project: '', search: '' };
+    const kanbanFilters = { column: '', workspaceRoot: '', project: '', search: '', complexity: '' };
     const epicsFilters = { workspaceRoot: '', column: '' };
     const projectsFilters = { workspaceRoot: '' };
 
@@ -499,6 +500,8 @@
                 if (kanbanColumnFilter) kanbanColumnFilter.value = '';
                 kanbanFilters.project = '';
                 if (kanbanProjectFilter) kanbanProjectFilter.value = '';
+                kanbanFilters.complexity = '';
+                if (kanbanComplexityFilter) kanbanComplexityFilter.value = '';
                 // Activate the Kanban tab — its click handler fires fetchKanbanPlans.
                 const kanbanTabBtn = document.querySelector('.shared-tab-btn[data-tab="kanban"]');
                 if (kanbanTabBtn) kanbanTabBtn.click();
@@ -1167,10 +1170,8 @@
     // =========================================================================
     // KANBAN TAB
     // =========================================================================
-    function renderKanbanPlans() {
-        if (!kanbanListPane) return;
-
-        let filtered = _kanbanPlansCache.filter(plan => {
+    function getFilteredKanbanPlans() {
+        return _kanbanPlansCache.filter(plan => {
             if (kanbanFilters.column && plan.column !== kanbanFilters.column) return false;
             if (kanbanFilters.workspaceRoot && plan.workspaceRoot !== kanbanFilters.workspaceRoot) return false;
             if (kanbanFilters.project) {
@@ -1184,12 +1185,50 @@
                 const searchLower = kanbanFilters.search.toLowerCase();
                 if (!plan.topic.toLowerCase().includes(searchLower)) return false;
             }
+            if (kanbanFilters.complexity) {
+                const c = String(plan.complexity || '').toLowerCase();
+                if (kanbanFilters.complexity === 'unknown') {
+                    if (c !== 'unknown' && c !== '') return false;
+                } else {
+                    const [lo, hi] = kanbanFilters.complexity.split('-').map(Number);
+                    const score = parseInt(plan.complexity, 10);
+                    if (isNaN(score) || score < lo || score > hi) return false;
+                }
+            }
             return true;
         });
+    }
+
+    function renderKanbanPlans() {
+        if (!kanbanListPane) return;
+
+        let filtered = getFilteredKanbanPlans();
 
         kanbanListPane.innerHTML = '';
         const toggleRow = document.createElement('div');
         toggleRow.className = 'sidebar-toggle-row';
+        const linkAllBtn = document.createElement('button');
+        linkAllBtn.id = 'kanban-link-all';
+        linkAllBtn.className = 'strip-btn';
+        linkAllBtn.title = 'Copy all filtered plan links to clipboard';
+        linkAllBtn.textContent = 'Link all';
+        linkAllBtn.addEventListener('click', () => {
+            const visiblePlans = getFilteredKanbanPlans();
+            const links = visiblePlans
+                .filter(p => p.planFile)
+                .map(p => toAgentRef(p.planFile))
+                .join('\n');
+            if (!links) {
+                showToast('No plans to link in the current filter.', 'info');
+                return;
+            }
+            navigator.clipboard.writeText(links).then(() => {
+                const oldText = linkAllBtn.textContent;
+                linkAllBtn.textContent = 'Copied!';
+                setTimeout(() => { linkAllBtn.textContent = oldText; }, 2000);
+            });
+        });
+        toggleRow.appendChild(linkAllBtn);
         const toggleBtn = document.createElement('button');
         toggleBtn.className = 'sidebar-toggle-btn';
         toggleBtn.title = 'Toggle sidebar';
@@ -1527,6 +1566,12 @@
     if (kanbanProjectFilter) {
         kanbanProjectFilter.addEventListener('change', () => {
             kanbanFilters.project = kanbanProjectFilter.value;
+            renderKanbanPlans();
+        });
+    }
+    if (kanbanComplexityFilter) {
+        kanbanComplexityFilter.addEventListener('change', () => {
+            kanbanFilters.complexity = kanbanComplexityFilter.value;
             renderKanbanPlans();
         });
     }

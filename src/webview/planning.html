@@ -2671,6 +2671,14 @@
             font-size: 11px;
         }
 
+        /* Inline filter selects — override .planning-select flex:1 to prevent layout expansion */
+        #controls-strip-tickets .planning-select {
+            flex: none;
+            max-width: 140px;
+            height: 26px;
+            font-size: 11px;
+        }
+
         #controls-strip-tickets {
             flex-direction: column;
             align-items: stretch;
@@ -3579,6 +3587,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <button id="tickets-source-btn" class="strip-btn" title="Choose provider and navigate the source hierarchy">Source</button>
                     <span id="tickets-source-summary" class="workspace-static-label"></span>
                     <input id="tickets-search" type="text" class="sidebar-search-input" placeholder="Search tickets..." />
+                    <!-- Inline filters moved out of Source modal -->
+                    <select id="tickets-project-picker" class="planning-select" style="display:none" title="Filter by Linear project"></select>
+                    <select id="tickets-state-filter" class="planning-select" style="display:none" title="Filter by Linear state"></select>
+                    <select id="tickets-status-filter" class="planning-select" style="display:none" title="Filter by ClickUp status"></select>
                     <button id="tickets-create" class="strip-btn" disabled title="Configure an integration in Setup first">+ New Ticket</button>
                     <button id="tickets-refresh" class="strip-btn" title="Re-fetch from source and save local copies">Refetch</button>
                     <button id="tickets-sync-all" class="strip-btn" title="Push all local ticket changes back to the integration">Sync changes</button>
@@ -3871,12 +3883,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 <div>
                     <label style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); display: block; margin-bottom: 4px;">Hierarchy</label>
                     <div id="tickets-hierarchy-nav" style="display:none; flex-wrap: wrap; gap: 8px; align-items: center;"></div>
-                </div>
-                <!-- Filters — preserve style="display:none"; add class="planning-select" for modal styling -->
-                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                    <select id="tickets-project-picker" class="planning-select" style="display:none"></select>
-                    <select id="tickets-state-filter" class="planning-select" style="display:none"></select>
-                    <select id="tickets-status-filter" class="planning-select" style="display:none"></select>
                 </div>
                 <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
                     <button id="btn-close-tickets-source-modal-action" class="strip-btn">Close</button>

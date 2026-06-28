@@ -4220,7 +4220,14 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 }
                 break;
             case 'ticketLinkCopied':
-                showTicketsStatus(`Copied ${msg.count} ticket link${msg.count > 1 ? 's' : ''} ✓`, false);
+                if (msg.missingCount && msg.missingCount > 0) {
+                    showTicketsStatus(
+                        `Copied ${msg.count} of ${msg.requestedCount} ticket links — ${msg.missingCount} have no local file. Click "Refetch" to import them.`,
+                        true  // isError = true, shows as warning
+                    );
+                } else {
+                    showTicketsStatus(`Copied ${msg.count} ticket link${msg.count > 1 ? 's' : ''} ✓`, false);
+                }
                 if (_lastLinkTicketBtn) {
                     flashCopyBtn(_lastLinkTicketBtn);
                     _lastLinkTicketBtn = null;

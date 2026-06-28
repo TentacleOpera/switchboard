@@ -18725,9 +18725,7 @@ What would you like to find?`;
                     this._getCacheService(resolvedRoot).invalidateTaskCache('clickup', listId);
                 }
                 const tasks = await clickup.getListTasks(listId);
-                const pageSize = 100;
-                const startIndex = (page - 1) * pageSize;
-                items = tasks.slice(startIndex, startIndex + pageSize);
+                items = tasks;  // Process all tasks — getListTasks already paginates internally through ALL tasks
 
                 const h = clickup.getSelectedHierarchy();
                 segments.push(h.spaceName);
@@ -18747,10 +18745,8 @@ What would you like to find?`;
                 }
             } else if (provider === 'linear' && projectId) {
                 const linear = this._getLinearService(resolvedRoot);
-                const issues = await linear.queryIssues({ projectId });
-                const pageSize = 50;
-                const startIndex = (page - 1) * pageSize;
-                items = issues.slice(startIndex, startIndex + pageSize);
+                const issues = await linear.queryIssues({ projectId, limit: 100 });
+                items = issues;  // Process all fetched issues — limit: 100 matches the sidebar's own limit
 
                 const teamName = linear.getTeamName();
                 const projectName = items[0]?.project?.name || '_no-project';
