@@ -2017,10 +2017,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             case 'CODED': return 'lead';
             case 'CODE REVIEWED': return 'reviewer';
             case 'ACCEPTANCE TESTED': return 'tester';
-            case 'CONTEXT GATHERER': return 'gatherer';
             case 'RESEARCHER': return 'researcher';
-            case 'CODE_RESEARCHER': return 'code_researcher';
-            case 'SPLITTER': return 'splitter';
             case 'TICKET UPDATER': return 'ticket_updater';
             case 'COMPLETED': return null;
             default: return column.startsWith('custom_agent_') ? column : null;
@@ -2052,10 +2049,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return 'PLAN REVIEWED';
             case 'researcher':
                 return 'PLAN REVIEWED';
-            case 'code_researcher':
-                return 'PLAN REVIEWED';
-            case 'splitter':
-                return 'PLAN REVIEWED';
             case 'ticket_updater':
                 return 'TICKET UPDATER';
             case 'lead':
@@ -2067,8 +2060,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return 'CODE REVIEWED';
             case 'tester':
                 return 'ACCEPTANCE TESTED';
-            case 'gatherer':
-                return 'PLAN REVIEWED';
             default:
                 return role.startsWith('custom_agent_') ? role : null;
         }
@@ -2078,14 +2069,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         switch (this._normalizeLegacyKanbanColumn(column)) {
             case 'PLAN REVIEWED':
                 return 'planner';
-            case 'CONTEXT GATHERER':
-                return 'gatherer';
             case 'RESEARCHER':
                 return 'researcher';
-            case 'CODE_RESEARCHER':
-                return 'code_researcher';
-            case 'SPLITTER':
-                return 'splitter';
             case 'TICKET UPDATER':
                 return 'ticket_updater';
             case 'LEAD CODED':
@@ -2241,8 +2226,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return 'PLAN REVIEWED';
             case 'PLAN REVIEWED':
                 return this._targetColumnForRole(await this._resolvePlanReviewedDispatchRole(sessionId, workspaceRoot));
-            case 'CONTEXT GATHERER':
-                return 'PLAN REVIEWED';
             case 'LEAD CODED':
             case 'CODER CODED':
             case 'INTERN CODED':
@@ -2911,8 +2894,7 @@ Each plan file must include:
             'tester': 'tester-pass',
             'jules': 'jules',
             'ticket_updater': 'ticket-update',
-            'researcher': 'deep-research',
-            'splitter': 'plan-split'
+            'researcher': 'deep-research'
         };
         return workflowMap[role];
     }
@@ -3712,13 +3694,10 @@ Each plan file must include:
             planner: true, 
             analyst: true, 
             jules: false, 
-            gatherer: false,
-            code_researcher: false,
             ticket_updater: false,
             researcher: false,
-            splitter: false,
             mcp_monitor: false,
-            orchestrator: false
+            orchestrator: true
         };
 
         const customAgentsGlobal = await this.getCustomAgents(workspaceRoot);
@@ -7536,7 +7515,7 @@ Each plan file must include:
         }
 
         // Merge with roleConfigs from globalState
-        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'splitter', 'orchestrator'];
+        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'orchestrator'];
         for (const role of roles) {
             const config: any = this.getSetting(`switchboard.prompts.roleConfig_${role}`, undefined);
             if (config && config.prompt?.trim()) {

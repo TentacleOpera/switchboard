@@ -1655,6 +1655,16 @@ export async function activate(context: vscode.ExtensionContext) {
             }));
 
             context.subscriptions.push(vscode.window.onDidCloseTerminal((terminal) => {
+                // Remove the closed terminal from the in-memory registry (object-identity match).
+                // handleTerminalClosed cleans up state.json by PID/name, but does not touch this Map —
+                // without this, manually-closed terminals leave stale references that leak memory and
+                // cause deactivate() to call .dispose() on already-closed terminals.
+                for (const [name, ref] of Array.from(registeredTerminals.entries())) {
+                    if (ref === terminal) {
+                        registeredTerminals.delete(name);
+                        break;
+                    }
+                }
                 // Ensure state.json is updated when terminal is closed manually
                 taskViewerProvider.handleTerminalClosed(terminal);
             }));
@@ -2636,16 +2646,18 @@ export async function activate(context: vscode.ExtensionContext) {
         const customAgents = await taskViewerProvider.getCustomAgents(effectiveWorkspaceRoot);
         const startupCommands = await taskViewerProvider.getStartupCommands(effectiveWorkspaceRoot);
         const allBuiltInAgents = [
+            // Orchestrator is created first so its terminal appears at the top of the VS Code
+            // terminal panel (VS Code's createTerminal API has no position parameter — order is
+            // determined solely by creation order). Orchestrator has no kanban column (Decision #2):
+            // it is a full role only so its terminal is spawnable/configurable and dispatch-by-role
+            // works for the Epics-tab Orchestrate action.
+            { name: 'Orchestrator', role: 'orchestrator' },
             { name: 'Planner', role: 'planner' },
             { name: 'Lead Coder', role: 'lead' },
             { name: 'Coder', role: 'coder' },
             { name: 'Intern', role: 'intern' },
             { name: 'Reviewer', role: 'reviewer' },
-            { name: 'Analyst', role: 'analyst' },
-            // Orchestrator has no kanban column (Decision #2): it is a full role only so its
-            // terminal is spawnable/configurable and dispatch-by-role works for the Epics-tab
-            // Orchestrate action. Hidden by default (visibleAgents.orchestrator === false).
-            { name: 'Orchestrator', role: 'orchestrator' }
+            { name: 'Analyst', role: 'analyst' }
         ];
         const plannerCount = await taskViewerProvider.getPlannerTerminalCount(effectiveWorkspaceRoot);
         const agents: { name: string; role: string }[] = [];

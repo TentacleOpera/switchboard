@@ -1,10 +1,10 @@
 # Kanban Board
 
-*Workspace: 038bffef-9842-4574-96a1-69a43a280b3c* · *Updated: 2026-06-28T11:10:26.768Z*
+*Workspace: 038bffef-9842-4574-96a1-69a43a280b3c* · *Updated: 2026-06-28T11:33:56.899Z*
 
 ## CREATED
 
-_No plans_
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260628212519_acceptance-tester-intent-conformance-rework.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260628212519_acceptance-tester-intent-conformance-rework.md) — Rework the Acceptance Tester into an Intent-Conformance Reviewer <!-- planId:e0b62769-80c1-4a8e-87ac-4aa5f1d838a2 -->
 
 ## BACKLOG
 
@@ -43,14 +43,12 @@ _No plans_
 ## PLAN REVIEWED
 
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/gitignore-rules-audit.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/gitignore-rules-audit.md) — Audit `.switchboard/` Git Tracking — Untrack Leaked State, Trim Dead Rules <!-- planId:4ceeb095-dc90-4bbe-ae9c-c4ae7945e163 -->
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260628180012_orchestrator-terminal-lifecycle-and-top-ordering.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260628180012_orchestrator-terminal-lifecycle-and-top-ordering.md) — Orchestrator Terminal Lifecycle and Top-of-List Ordering <!-- planId:33c08be5-496d-4068-874b-9627d42c2cc0 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/create-epic-skill.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/create-epic-skill.md) — Add `/create-epic` Skill for Remote Agent Epic Creation <!-- planId:9bec6ff1-c4ae-480e-a8b9-a7b9c5004786 subtask-of:"Epic: Remote Planning Infrastructure" -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/epic-grouping-awareness-in-chat-and-memo-skills.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/epic-grouping-awareness-in-chat-and-memo-skills.md) — Add Epic-Grouping Awareness to Chat and Memo-Planning Skills <!-- planId:cd748eab-7599-474a-b782-2a78ca55f1f0 subtask-of:"Epic: Remote Planning Infrastructure" -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/sw-remote-entry-skill.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/sw-remote-entry-skill.md) — Add /sw-remote Entry Skill for Remote Switchboard Sessions <!-- planId:4d90f251-9f7e-4c5a-9530-aa1888ccf216 subtask-of:"Epic: Remote Planning Infrastructure" -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/kanban-startup-reconciler.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/kanban-startup-reconciler.md) — Kanban Startup Reconciler for Remote Plan Status Changes <!-- planId:b9278529-ab6b-4d51-bc3b-4d48b6aecd25 subtask-of:"Epic: Remote Planning Infrastructure" -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/improve-remote-plan-skill.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/improve-remote-plan-skill.md) — Add /improve-remote-plan Skill for Linear/Notion-Native Plan Improvement <!-- planId:93c3bbf3-917a-48e8-bb27-3056de402855 subtask-of:"Epic: Remote Planning Infrastructure" -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/epic-remote-planning-infrastructure-7421946e-dea1-4d2b-985d-5de52d088f4d.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/epic-remote-planning-infrastructure-7421946e-dea1-4d2b-985d-5de52d088f4d.md) — Epic: Remote Planning Infrastructure <!-- planId:7421946e-dea1-4d2b-985d-5de52d088f4d epic -->
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/remove-context-gatherer-splitter-code-researcher-agents.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/remove-context-gatherer-splitter-code-researcher-agents.md) — Remove Context Gatherer, Splitter, and Code Researcher Agents <!-- planId:48de3bbf-05c5-42ed-8bf5-fabf1c982471 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/remote-control-triage-mutual-exclusivity.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/remote-control-triage-mutual-exclusivity.md) — Enforce Mutual Exclusivity Between Remote Control and Bug-Triage Modes <!-- planId:79db5810-cdba-4c53-9bd3-4613f403ffb0 subtask-of:"Remote Control Mode & Agent Orientation" -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/linear-import-epic-linking.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/linear-import-epic-linking.md) — Plan: Linear Import — Parent-with-Subtasks Always Becomes Epic <!-- planId:cb4d8d93-db2d-4670-8c14-d147d5ecb755 subtask-of:"Cross-Provider Epic Structure (Import, Sync, Mirroring)" -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/cross-provider-epic-structure-import-sync-mirroring-6fbbc3b6-9404-41f1-8314-eb5140b6db2f.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/cross-provider-epic-structure-import-sync-mirroring-6fbbc3b6-9404-41f1-8314-eb5140b6db2f.md) — Cross-Provider Epic Structure (Import, Sync, Mirroring) <!-- planId:6fbbc3b6-9404-41f1-8314-eb5140b6db2f epic -->
@@ -93,6 +91,7 @@ _No plans_
 
 ## CODER CODED
 
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/remove-context-gatherer-splitter-code-researcher-agents.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/remove-context-gatherer-splitter-code-researcher-agents.md) — Remove Context Gatherer, Splitter, and Code Researcher Agents <!-- planId:48de3bbf-05c5-42ed-8bf5-fabf1c982471 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/keep-valid-kanban-columns-in-sync-with-defaults.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/keep-valid-kanban-columns-in-sync-with-defaults.md) — Keep VALID_KANBAN_COLUMNS in Sync with DEFAULT_KANBAN_COLUMNS <!-- planId:1a403ef5-248d-4f46-acb8-0d9f3f0d13fd -->
 
 ## CODE REVIEWED

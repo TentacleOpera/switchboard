@@ -2576,7 +2576,7 @@ export class KanbanProvider implements vscode.Disposable {
         } catch { /* file may not exist or be invalid */ }
 
         // Merge with roleConfigs from workspaceState
-        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'splitter', 'orchestrator'];
+        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'orchestrator'];
         for (const role of roles) {
             const config: any = this._getRoleConfig(role);
             if (config && config.prompt?.trim()) {
@@ -2656,7 +2656,7 @@ export class KanbanProvider implements vscode.Disposable {
     ): Promise<Record<string, string>> {
         // Generate preview prompts for each role
         const previews: Record<string, string> = {};
-        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'code_researcher'];
+        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst'];
         for (const role of roles) {
             try {
                 // Context-aware plan filtering
@@ -3039,12 +3039,8 @@ export class KanbanProvider implements vscode.Disposable {
             resolvedOptions.researchDepth = promptsConfig.researchDepth;
             resolvedOptions.saveToLocalDocs = promptsConfig.saveToLocalDocs;
             resolvedOptions.localDocsPath = promptsConfig.localDocsPath;
-        } else if (role === 'code_researcher') {
-            // Advise-research flow does not use researchDepth options.
         } else if (role === 'ticket_updater') {
             resolvedOptions.ticketUpdateMode = promptsConfig.ticketUpdateMode;
-        } else if (role === 'splitter') {
-            resolvedOptions.complexityScoringSkill = promptsConfig.complexityScoringSkill;
         } else if (role === 'chat') {
             resolvedOptions.chatPlanDestinations = this._taskViewerProvider?.resolveChatPlanDestinations(workspaceRoot);
         } else if (role === 'orchestrator') {
@@ -3269,11 +3265,7 @@ export class KanbanProvider implements vscode.Disposable {
         const internConfig: any = this._getRoleConfig('intern');
         const analystConfig: any = this._getRoleConfig('analyst');
         const researcherConfig: any = this._getRoleConfig('researcher');
-        const splitterConfig: any = this._getRoleConfig('splitter');
         const ticketUpdaterConfig: any = this._getRoleConfig('ticket_updater');
-        const codeResearcherConfig: any = this._getRoleConfig('code_researcher')
-            ?? this._getRoleConfig('research_planner');
-        const gathererConfig: any = this._getRoleConfig('gatherer');
         const orchestratorConfig: any = this._getRoleConfig('orchestrator');
 
         return {
@@ -3286,10 +3278,7 @@ export class KanbanProvider implements vscode.Disposable {
                 intern: internConfig?.addons?.workflowFilePathEnabled ?? false,
                 analyst: analystConfig?.addons?.workflowFilePathEnabled ?? false,
                 researcher: researcherConfig?.addons?.workflowFilePathEnabled ?? false,
-                splitter: splitterConfig?.addons?.workflowFilePathEnabled ?? false,
                 ticket_updater: ticketUpdaterConfig?.addons?.workflowFilePathEnabled ?? false,
-                code_researcher: codeResearcherConfig?.addons?.workflowFilePathEnabled ?? false,
-                gatherer: gathererConfig?.addons?.workflowFilePathEnabled ?? false,
                 orchestrator: orchestratorConfig?.addons?.workflowFilePathEnabled ?? false,
             },
             workflowFilePathByRole: {
@@ -3301,10 +3290,7 @@ export class KanbanProvider implements vscode.Disposable {
                 intern: internConfig?.addons?.workflowFilePath || '',
                 analyst: analystConfig?.addons?.workflowFilePath || '',
                 researcher: researcherConfig?.addons?.workflowFilePath || '',
-                splitter: splitterConfig?.addons?.workflowFilePath || '',
                 ticket_updater: ticketUpdaterConfig?.addons?.workflowFilePath || '',
-                code_researcher: codeResearcherConfig?.addons?.workflowFilePath || '',
-                gatherer: gathererConfig?.addons?.workflowFilePath || '',
                 orchestrator: orchestratorConfig?.addons?.workflowFilePath || '',
             },
             accurateCodingEnabledByRole: {
@@ -3338,9 +3324,7 @@ export class KanbanProvider implements vscode.Disposable {
                 intern: internConfig?.addons?.skipCompilation ?? true,
                 analyst: analystConfig?.addons?.skipCompilation ?? false,
                 researcher: researcherConfig?.addons?.skipCompilation ?? false,
-                splitter: splitterConfig?.addons?.skipCompilation ?? false,
                 ticket_updater: ticketUpdaterConfig?.addons?.skipCompilation ?? false,
-                code_researcher: codeResearcherConfig?.addons?.skipCompilation ?? false,
                 orchestrator: orchestratorConfig?.addons?.skipCompilation ?? false,
             },
             skipTestsByRole: {
@@ -3352,15 +3336,10 @@ export class KanbanProvider implements vscode.Disposable {
                 intern: internConfig?.addons?.skipTests ?? true,
                 analyst: analystConfig?.addons?.skipTests ?? false,
                 researcher: researcherConfig?.addons?.skipTests ?? false,
-                splitter: splitterConfig?.addons?.skipTests ?? false,
                 ticket_updater: ticketUpdaterConfig?.addons?.skipTests ?? false,
-                code_researcher: codeResearcherConfig?.addons?.skipTests ?? false,
                 orchestrator: orchestratorConfig?.addons?.skipTests ?? false,
             },
             gitProhibitionEnabled: plannerConfig?.addons?.gitProhibition ?? config.get<boolean>('planner.gitProhibitionEnabled', false),
-            codeResearcher: {
-                researchDepth: codeResearcherConfig?.researchComplexity || 'deep',
-            },
             researchDepth: researcherConfig?.researchComplexity || 'deep',
             saveToLocalDocs: researcherConfig?.saveToLocalDocs ?? false,
             localDocsPath: config.get<string[]>('research.localFolderPaths', [])[0] ?? undefined,
@@ -3373,9 +3352,7 @@ export class KanbanProvider implements vscode.Disposable {
                 intern: internConfig?.addons?.gitProhibition ?? true,
                 analyst: analystConfig?.addons?.gitProhibition ?? true,
                 researcher: researcherConfig?.addons?.gitProhibition ?? true,
-                splitter: splitterConfig?.addons?.gitProhibition ?? true,
                 ticket_updater: ticketUpdaterConfig?.addons?.gitProhibition ?? true,
-                code_researcher: codeResearcherConfig?.addons?.gitProhibition ?? true,
                 orchestrator: orchestratorConfig?.addons?.gitProhibition ?? true,
             },
             switchboardSafeguardsByRole: {
@@ -3387,9 +3364,7 @@ export class KanbanProvider implements vscode.Disposable {
                 intern: internConfig?.addons?.switchboardSafeguards ?? true,
                 analyst: analystConfig?.addons?.switchboardSafeguards ?? true,
                 researcher: researcherConfig?.addons?.switchboardSafeguards ?? true,
-                splitter: splitterConfig?.addons?.switchboardSafeguards ?? true,
                 ticket_updater: ticketUpdaterConfig?.addons?.switchboardSafeguards ?? true,
-                code_researcher: codeResearcherConfig?.addons?.switchboardSafeguards ?? true,
                 orchestrator: orchestratorConfig?.addons?.switchboardSafeguards ?? false,
             },
             useSubagentsByRole: {
@@ -3401,10 +3376,7 @@ export class KanbanProvider implements vscode.Disposable {
                 intern: internConfig?.addons?.subagentPolicy === 'useSubagents' || (internConfig?.addons?.subagentPolicy === undefined && internConfig?.addons?.useSubagents === true),
                 analyst: analystConfig?.addons?.subagentPolicy === 'useSubagents' || (analystConfig?.addons?.subagentPolicy === undefined && analystConfig?.addons?.useSubagents === true),
                 researcher: researcherConfig?.addons?.subagentPolicy === 'useSubagents' || (researcherConfig?.addons?.subagentPolicy === undefined && researcherConfig?.addons?.useSubagents === true),
-                splitter: splitterConfig?.addons?.subagentPolicy === 'useSubagents' || (splitterConfig?.addons?.subagentPolicy === undefined && splitterConfig?.addons?.useSubagents === true),
                 ticket_updater: ticketUpdaterConfig?.addons?.subagentPolicy === 'useSubagents' || (ticketUpdaterConfig?.addons?.subagentPolicy === undefined && ticketUpdaterConfig?.addons?.useSubagents === true),
-                code_researcher: codeResearcherConfig?.addons?.subagentPolicy === 'useSubagents' || (codeResearcherConfig?.addons?.subagentPolicy === undefined && codeResearcherConfig?.addons?.useSubagents === true),
-                gatherer: gathererConfig?.addons?.subagentPolicy === 'useSubagents' || (gathererConfig?.addons?.subagentPolicy === undefined && gathererConfig?.addons?.useSubagents === true),
                 orchestrator: orchestratorConfig?.addons?.subagentPolicy === 'useSubagents' || (orchestratorConfig?.addons?.subagentPolicy === undefined && orchestratorConfig?.addons?.useSubagents !== false),
             },
             noSubagentsByRole: {
@@ -3416,10 +3388,7 @@ export class KanbanProvider implements vscode.Disposable {
                 intern: internConfig?.addons?.subagentPolicy === 'noSubagents',
                 analyst: analystConfig?.addons?.subagentPolicy === 'noSubagents',
                 researcher: researcherConfig?.addons?.subagentPolicy === 'noSubagents',
-                splitter: splitterConfig?.addons?.subagentPolicy === 'noSubagents',
                 ticket_updater: ticketUpdaterConfig?.addons?.subagentPolicy === 'noSubagents',
-                code_researcher: codeResearcherConfig?.addons?.subagentPolicy === 'noSubagents',
-                gatherer: gathererConfig?.addons?.subagentPolicy === 'noSubagents',
                 orchestrator: orchestratorConfig?.addons?.subagentPolicy === 'noSubagents',
             },
             customSubagentNameByRole: {
@@ -3431,10 +3400,7 @@ export class KanbanProvider implements vscode.Disposable {
                 intern: internConfig?.addons?.subagentPolicy === 'customSubagent' ? (internConfig?.addons?.customSubagentName || '') : '',
                 analyst: analystConfig?.addons?.subagentPolicy === 'customSubagent' ? (analystConfig?.addons?.customSubagentName || '') : '',
                 researcher: researcherConfig?.addons?.subagentPolicy === 'customSubagent' ? (researcherConfig?.addons?.customSubagentName || '') : '',
-                splitter: splitterConfig?.addons?.subagentPolicy === 'customSubagent' ? (splitterConfig?.addons?.customSubagentName || '') : '',
                 ticket_updater: ticketUpdaterConfig?.addons?.subagentPolicy === 'customSubagent' ? (ticketUpdaterConfig?.addons?.customSubagentName || '') : '',
-                code_researcher: codeResearcherConfig?.addons?.subagentPolicy === 'customSubagent' ? (codeResearcherConfig?.addons?.customSubagentName || '') : '',
-                gatherer: gathererConfig?.addons?.subagentPolicy === 'customSubagent' ? (gathererConfig?.addons?.customSubagentName || '') : '',
                 orchestrator: orchestratorConfig?.addons?.subagentPolicy === 'customSubagent' ? (orchestratorConfig?.addons?.customSubagentName || '') : '',
             },
             useWorktreesPerPlanByRole: {
@@ -3452,10 +3418,7 @@ export class KanbanProvider implements vscode.Disposable {
                 intern: internConfig?.addons?.clearAntigravityContext ?? false,
                 analyst: analystConfig?.addons?.clearAntigravityContext ?? false,
                 researcher: researcherConfig?.addons?.clearAntigravityContext ?? false,
-                splitter: splitterConfig?.addons?.clearAntigravityContext ?? false,
                 ticket_updater: ticketUpdaterConfig?.addons?.clearAntigravityContext ?? false,
-                code_researcher: codeResearcherConfig?.addons?.clearAntigravityContext ?? false,
-                gatherer: gathererConfig?.addons?.clearAntigravityContext ?? false,
                 orchestrator: orchestratorConfig?.addons?.clearAntigravityContext ?? false,
             },
             cavemanOutputByRole: {
@@ -3467,10 +3430,7 @@ export class KanbanProvider implements vscode.Disposable {
                 intern: internConfig?.addons?.cavemanOutput ?? true,
                 analyst: analystConfig?.addons?.cavemanOutput ?? false,
                 researcher: researcherConfig?.addons?.cavemanOutput ?? false,
-                splitter: splitterConfig?.addons?.cavemanOutput ?? false,
                 ticket_updater: ticketUpdaterConfig?.addons?.cavemanOutput ?? false,
-                code_researcher: codeResearcherConfig?.addons?.cavemanOutput ?? false,
-                gatherer: gathererConfig?.addons?.cavemanOutput ?? false,
                 orchestrator: orchestratorConfig?.addons?.cavemanOutput ?? true,
             },
             suppressWalkthroughByRole: {
@@ -3483,7 +3443,6 @@ export class KanbanProvider implements vscode.Disposable {
                 ?? (ticketUpdaterConfig?.addons?.ticketUpdateEnabled === true ? 'comment-only'
                     : ticketUpdaterConfig?.addons?.ticketUpdateEnabled === false ? 'disabled'
                     : 'disabled'),
-            complexityScoringSkill: splitterConfig?.addons?.complexityScoringSkill ?? true,
             ultracodeByRole: {
                 orchestrator: orchestratorConfig?.addons?.ultracode ?? false,
             },
@@ -6775,33 +6734,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 this.postMessage({ type: 'showStatusMessage', message: `Dispatched ${dispatchedCount} plans to Jules.`, isError: false });
                 break;
             }
-            case 'splitterSelected': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (!workspaceRoot || !Array.isArray(msg.sessionIds) || msg.sessionIds.length === 0) {
-                    vscode.window.showWarningMessage('Please select at least one plan to split.');
-                    break;
-                }
-                const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-                if (visibleAgents.splitter === false) {
-                    vscode.window.showWarningMessage('Splitter agent is currently disabled in setup.');
-                    break;
-                }
-                const eligibleSessionIds = await this._getEligibleSessionIds(msg.sessionIds, 'PLAN REVIEWED', workspaceRoot);
-                if (eligibleSessionIds.length === 0) {
-                    vscode.window.showWarningMessage('No selected plans are currently in the Planned column.');
-                    break;
-                }
-                await vscode.commands.executeCommand(
-                    'switchboard.triggerBatchAgentFromKanban',
-                    'splitter',
-                    eligibleSessionIds,
-                    undefined,
-                    workspaceRoot
-                );
-                await this._refreshBoard(workspaceRoot);
-                this.postMessage({ type: 'showStatusMessage', message: `Dispatched ${eligibleSessionIds.length} plan(s) to Splitter.`, isError: false });
-                break;
-            }
             case 'completePlan': {
                 const resolvedSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
                 if (resolvedSessionId) {
@@ -8137,7 +8069,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (!workspaceRoot) break;
                 // Pre-coding columns are the only place loose plans worth grouping live.
                 // Exclude existing epics and already-assigned subtasks.
-                const preCodingColumns = ['CREATED', 'CONTEXT GATHERER', 'PLAN REVIEWED'];
+                const preCodingColumns = ['CREATED', 'PLAN REVIEWED'];
                 const candidateCards = this._lastCards.filter(card =>
                     card.workspaceRoot === workspaceRoot &&
                     preCodingColumns.includes(card.column) &&
@@ -8855,7 +8787,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             `   Read the board snapshot:`,
             `     cat ${workspaceRoot}/.switchboard/kanban-board.md`,
             '',
-            '   Scope: CREATED, CONTEXT GATHERER, and PLAN REVIEWED columns only.',
+            '   Scope: CREATED and PLAN REVIEWED columns only.',
             '   Ignore BACKLOG and all post-coding columns.',
             '   Each plan line ends with an HTML comment, e.g.:',
             '     - [.switchboard/plans/foo.md](...) — Foo <!-- planId:abc-123 -->',

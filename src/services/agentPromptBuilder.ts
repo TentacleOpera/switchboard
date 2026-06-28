@@ -1048,151 +1048,6 @@ fields above, no speculative implementation detail. Comment only.`;
         return normalizeNewlines(promptParts);
     }
 
-    if (role === 'code_researcher') {
-        const crBase = `You are a Code Researcher Agent. Your job is to identify where each plan needs more research, hand the user a ready-to-run research prompt, then incorporate the findings they bring back.
-
-STEP 1 — Review: For each plan in PLANS TO PROCESS, read it and track every assumption, factual claim, or API/library/behavior detail you are NOT 100% certain about. Read .agents/skills/advise_research/SKILL.md and follow it.
-
-STEP 2 — If uncertainties exist:
-  a. Add a brief "## Uncertain Assumptions" section to the plan file listing ONLY those uncertainties (do NOT put the research prompt itself in the plan).
-  b. Output, in this terminal, a single ready-to-run research prompt structured per the skill (ROLE, CONTEXT, CENTRAL QUESTION, 4-6 SUB-QUESTIONS, SOURCE GUIDANCE, SCOPE, OUTPUT format, CITATIONS-at-end, DEPTH/source-count target).
-  c. STOP. Tell the user to run that prompt (Google AI Studio with search grounding, or their research agent of choice), organize the results, and paste them back into THIS terminal. Do not proceed until they do.
-
-STEP 3 — When the user pastes research findings back:
-  Integrate them into the plan's existing sections (add to relevant Proposed Changes subsections, update the Edge-Case & Dependency Audit with newly discovered risks, resolve/remove the "## Uncertain Assumptions" items they answer). Do NOT truncate, summarize, or delete existing plan content. Do NOT add new top-level sections that duplicate or conflict with the plan's canonical structure.
-
-If you are confident about everything, state that no research is needed, omit the "## Uncertain Assumptions" section and the research prompt, and leave the plan unchanged.`;
-
-        let baseInstructions = resolveBaseInstructions('code_researcher', crBase, options);
-        if (cavemanOutputEnabled) {
-            baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
-        }
-
-        const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
-        const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock]
-            .filter(Boolean)
-            .join('\n\n');
-
-        const promptParts = [
-            baseInstructions,
-            safeguardsBlock,
-            suffixBlock,
-            `PLANS TO PROCESS:\n${planList}`
-        ].filter(Boolean).join('\n\n');
-
-        return normalizeNewlines(promptParts);
-    }
-
-    if (role === 'splitter') {
-        const complexityScoringDirective =
-            `COMPLEXITY SCORING: Before proceeding, invoke the complexity_scoring skill ` +
-            `(skill: "complexity_scoring") to add a ## Complexity Audit section with ` +
-            `### Routine and ### Complex / Risky subsections. ` +
-            `Classify each implementation step by complexity before splitting.`;
-
-        const complexityScoringSkill = options?.complexityScoringSkill !== false;
-
-        const splitterBase = complexityScoringSkill
-            ? `You are a Plan Splitter Agent.
-
-STEP 1: Check for Complexity Audit
-Read the provided plan file. If it lacks a "## Complexity Audit" section with "### Routine" and "### Complex / Risky" subsections, apply the following directive:
-${complexityScoringDirective}
-
-STEP 2: Apply Split Plan Directive
-After ensuring the plan has a Complexity Audit, apply the following directive:
-\n\n${SPLIT_PLAN_DIRECTIVE}
-
-STEP 3: Dispatch Instructions
-After creating both files:
-
-Automated actions (execute these yourself):
-1. For each new file (both the complex original and the _routine.md companion), immediately after creation:
-   a. Run the kanban_operations move-card script (pass the workspace-root-relative path, e.g. .switchboard/plans/my_plan_routine.md):
-      node .agents/skills/kanban_operations/move-card.js "<relative_path>" "PLAN REVIEWED" "" "$(pwd)"
-   b. Verify output:
-      - If the output is "OK": success.
-      - If the output is "FAILED": the file may not be registered yet; notify the user to manually drag the card to the Planned column.
-
-Manual actions (instruct the USER to perform):
-2. Manually drag the original file (Complex) to the Lead Coder column
-3. Manually drag the _routine.md file to the Coder column
-
-Create both files in the same directory as the original plan.`
-            : `You are a Plan Splitter Agent.
-
-STEP 1: Apply Split Plan Directive
-Apply the following directive:
-\n\n${SPLIT_PLAN_DIRECTIVE}
-
-STEP 2: Dispatch Instructions
-After creating both files:
-
-Automated actions (execute these yourself):
-1. For each new file (both the complex original and the _routine.md companion), immediately after creation:
-   a. Run the kanban_operations move-card script (pass the workspace-root-relative path, e.g. .switchboard/plans/my_plan_routine.md):
-      node .agents/skills/kanban_operations/move-card.js "<relative_path>" "PLAN REVIEWED" "" "$(pwd)"
-   b. Verify output:
-      - If the output is "OK": success.
-      - If the output is "FAILED": the file may not be registered yet; notify the user to manually drag the card to the Planned column.
-
-Manual actions (instruct the USER to perform):
-2. Manually drag the original file (Complex) to the Lead Coder column
-3. Manually drag the _routine.md file to the Coder column
-
-Create both files in the same directory as the original plan.`;
-
-        let baseInstructions = resolveBaseInstructions('splitter', splitterBase, options);
-        if (cavemanOutputEnabled) {
-            baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
-        }
-
-        const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
-        const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock]
-            .filter(Boolean)
-            .join('\n\n');
-
-        const promptParts = [
-            baseInstructions,
-            safeguardsBlock,
-            suffixBlock,
-            `PLANS TO PROCESS:\n${planList}`
-        ].filter(Boolean).join('\n\n');
-
-        return normalizeNewlines(promptParts);
-    }
-
-    if (role === 'gatherer') {
-        const gathererBase = `You are operating as the **Context Gatherer** — a pre-planning research specialist.
-
-Read the persona at \`.agents/personas/gatherer.md\` and follow it step-by-step.`;
-
-        let baseInstructions = resolveBaseInstructions('gatherer', gathererBase, options);
-        if (cavemanOutputEnabled) {
-            baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
-        }
-
-        const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
-        const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock]
-            .filter(Boolean)
-            .join('\n\n');
-
-        const promptParts = [
-            baseInstructions,
-            safeguardsBlock,
-            suffixBlock,
-            `PLANS TO PROCESS:\n${planList}`
-        ].filter(Boolean).join('\n\n');
-
-        return normalizeNewlines(promptParts);
-    }
-
     if (role === 'orchestrator') {
         // Implementation-oriented base (Decision #9): the orchestrator hands the whole epic
         // to one agent that drives every subtask with native subagents/worktrees. In split
@@ -1281,7 +1136,7 @@ The subtask plans may already have been improved by a planning agent — treat t
 
     // No fallback — every built-in role must have an explicit template.
     // Custom agents are NOT routed through this function; they use plan-file-link-only prompts built at call sites.
-    throw new Error(`Unknown role '${role}' in buildKanbanBatchPrompt. Built-in roles: planner, reviewer, tester, lead, coder, intern, analyst, ticket_updater, researcher, splitter, gatherer, orchestrator, chat. Custom agents should be handled at the call site, not here.`);
+    throw new Error(`Unknown role '${role}' in buildKanbanBatchPrompt. Built-in roles: planner, reviewer, tester, lead, coder, intern, analyst, ticket_updater, researcher, orchestrator, chat. Custom agents should be handled at the call site, not here.`);
 }
 
 /**
@@ -1299,10 +1154,7 @@ export function columnToPromptRole(column: string): string | null {
             return 'reviewer';
         case 'CODE REVIEWED':
             return 'tester';
-        case 'CONTEXT GATHERER': return 'gatherer';
         case 'RESEARCHER': return 'researcher';
-        case 'CODE_RESEARCHER': return 'code_researcher';
-        case 'SPLITTER': return 'splitter';
         case 'TICKET UPDATER': return 'ticket_updater';
         default:
             return column.startsWith('custom_agent_') ? column : null;
