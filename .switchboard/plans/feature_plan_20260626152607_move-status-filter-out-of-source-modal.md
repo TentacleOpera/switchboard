@@ -132,3 +132,58 @@ No automated tests required — this is a pure DOM relocation with no logic chan
 ---
 
 **Recommendation:** Complexity is 3/10 → **Send to Intern**. This is a localized single-file DOM relocation with a CSS override. No JS changes, no data flow changes, no backend involvement. The only technical risk (CSS flex expansion) is addressed by the `flex: none` override.
+
+---
+
+## Code Review (Reviewer Pass — 2026-06-28)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> A DOM relocation, they said. "No JS changes," they said. I've heard that lullaby
+> before, right before someone leaves a duplicate element ID lurking in a modal and
+> spends a week wondering why `getElementById` returns the wrong corpse. So the
+> FIRST thing I did was hunt for stowaways: `grep` for all three filter IDs across
+> `planning.html`. Exactly ONE hit each — `tickets-project-picker`,
+> `tickets-state-filter`, `tickets-status-filter`, all at `3591-3593` in the
+> controls strip. The modal body at `3873-3890` is now stripped down to a Provider
+> selector, a Hierarchy nav, and a Close button. No orphaned filter row. No
+> duplicate IDs. The DOM has exactly one of each, so `getElementById` and the
+> `style.display` toggles in `renderTicketsLinearPanel`/`renderTicketsClickUpPanel`
+> still resolve to the live element. Drat.
+>
+> The CSS landmine — `.planning-select` carries `flex: 1`, which in a `flex-wrap`
+> strip would have ballooned three selects across the row and bumped every button
+> to a second line. The override at `2674-2680` —
+> `#controls-strip-tickets .planning-select { flex: none; max-width: 140px; height: 26px; font-size: 11px; }`
+> — defuses it. `flex: none` kills the growth, `max-width` caps the width, the
+> height/font-size match the sibling `#controls-strip-tickets select` rule. They
+> even kept the `style="display:none"` inline default so the selects stay hidden
+> until a provider is chosen, and bolted on `title` attributes so the things aren't
+> mystery-meat dropdowns floating in a toolbar. **(NIT)** the `title` text is fine.
+> That's the whole complaint. A NIT about a tooltip.
+>
+> Event listeners attach once in `initTicketsTab()`, independent of where the
+> element physically lives, so the move doesn't sever a single handler. I refuse to
+> be impressed but the file refuses to give me ammunition.
+
+### Stage 2 — Balanced Synthesis
+
+- **Keep:** All of it. The three selects are relocated to `#controls-strip-tickets`
+  with no duplicate IDs left in the modal, the CSS `flex: none`/`max-width` override
+  is in place, and `title` attributes were added as the plan asked.
+- **Fix now:** Nothing. No CRITICAL or MAJOR findings.
+- **Defer / accept:** Layout wrapping behavior under a narrow panel is a
+  manual-verification item (steps 7–8), not a code defect.
+
+### Fixes Applied
+None — implementation matched the plan exactly.
+
+### Files Changed (by implementation, verified this pass)
+- `src/webview/planning.html` — filters moved to controls strip (`3590-3593`); CSS override (`2674-2680`); Source modal body trimmed to Provider + Hierarchy + Close (`3873-3890`).
+
+### Validation
+- No JS changed; element-ID uniqueness confirmed by grep (exactly one of each filter ID, all in the controls strip). Modal body confirmed filter-free.
+- Compilation & automated tests skipped per session directive.
+
+### Remaining Risks
+- None material. Controls-strip wrapping under very narrow panel widths is cosmetic and covered by manual verification.

@@ -359,3 +359,64 @@ so the review-plan navigation isn't narrowed by a stale complexity filter.
 ## Recommendation
 Complexity is 3 (routine: two files, reuses existing patterns, one critical
 placement fix). **Send to Coder.**
+
+---
+
+## Code Review (Reviewer Pass — 2026-06-28)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *Cracks knuckles.* Alright, let's see what fresh disaster awaits. A "Link All"
+> button placed in static HTML inside a pane whose `innerHTML` gets nuked on every
+> render — the oldest trap in this codebase. If you fell for THAT one again I was
+> going to start charging by the bug.
+>
+> …Huh. You didn't. `project.html:1428` has the static placeholder, sure, but
+> `renderKanbanPlans()` at `project.js:1207` wipes `kanbanListPane.innerHTML = ''`
+> and then **rebuilds the button dynamically** at `1210-1231`, click handler and
+> all, appended BEFORE the toggle button exactly like the Tickets tab. The static
+> one is a throwaway scaffold. Fine. FINE. I'll allow it. **(NIT)** — the static
+> button at `1428` carries no click handler, so for the sub-second window between
+> tab paint and first render it's an inert decoration. Nobody will out-click the
+> render loop, and the plan explicitly blessed this as a placeholder. I'm noting
+> it only so you can't say I missed it.
+>
+> The complexity predicate at `1188-1196`: `String(plan.complexity || '').toLowerCase()`
+> for the Unknown branch, `parseInt(plan.complexity, 10)` for ranges, `isNaN`
+> excluded. So `'Unknown'`, `null`, `undefined`, `''` all land in Unknown and get
+> kept out of numeric ranges. Casing variants handled. **No notes.** Annoying.
+>
+> `getFilteredKanbanPlans()` is shared by BOTH the render (`1205`) and the Link All
+> handler (`1216`) — so what you copy is provably what you see. That's the one thing
+> that actually mattered and you got it right. The reset in
+> `activateKanbanTabAndSelectPlan` (`503-504`) clears `kanbanFilters.complexity` AND
+> the select value so review-plan nav can't be ambushed by a stale High filter.
+> Change handler at `1572-1577`. `showToast(msg, 'info')` matches the
+> `showToast(message, type='info')` signature at `78`. `toAgentRef` is global from
+> `sharedUtils.js:7`. Empty-filter path shows the toast and copies nothing.
+>
+> I came here to burn the place down and I'm leaving with a NIT. Pathetic. Good work.
+
+### Stage 2 — Balanced Synthesis
+
+- **Keep:** Everything. All seven proposed changes are present and correct. The
+  critical static-HTML-wipe trap was avoided — the button is created in the dynamic
+  toggle-row build, and `getFilteredKanbanPlans()` guarantees copy/render parity.
+- **Fix now:** Nothing. No CRITICAL or MAJOR findings.
+- **Defer / accept:** The static placeholder button (`project.html:1428`) is
+  handler-less until the first render — accepted by design as a pre-render scaffold.
+  No action.
+
+### Fixes Applied
+None — implementation matched the plan with no material defects.
+
+### Files Changed (by implementation, verified this pass)
+- `src/webview/project.html` — complexity `<select>` (`1413-1419`), static Link-all placeholder (`1428`).
+- `src/webview/project.js` — element ref (`204`), `kanbanFilters.complexity` (`364`), reset (`503-504`), `getFilteredKanbanPlans()` (`1173-1200`), dynamic Link-all button (`1210-1231`), change handler (`1572-1577`).
+
+### Validation
+- `node --check` not required (no JS edited this pass). Markers verified by grep; logic read end-to-end.
+- Compilation & automated tests skipped per session directive.
+
+### Remaining Risks
+- None material. Manual VSIX verification steps 1–10 remain the user's to exercise.

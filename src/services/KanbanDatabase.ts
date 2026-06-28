@@ -641,6 +641,10 @@ function delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function _columnSlug(columnName: string): string {
+    return columnName.toLowerCase().replace(/\s+/g, '-');
+}
+
 export class KanbanDatabase {
     public static readonly UNASSIGNED_PROJECT_FILTER = '__unassigned__';
     private static _instances = new Map<string, KanbanDatabase>();
@@ -5471,30 +5475,52 @@ FROM plans
                 if (list) list.push(plan);
             }
 
-            let md = `# Kanban Board\n\n`;
-            md += `*Workspace: ${workspaceId}* · *Updated: ${new Date().toISOString()}*\n\n`;
-            for (const [col, plans] of columns) {
-                md += `## ${col}\n\n`;
+            const customColumns = new Map<string, KanbanPlanRecord[]>();
+            for (const plan of allPlans) {
+                if (!columns.has(plan.kanbanColumn)) {
+                    if (!customColumns.has(plan.kanbanColumn)) {
+                        customColumns.set(plan.kanbanColumn, []);
+                    }
+                    customColumns.get(plan.kanbanColumn)!.push(plan);
+                }
+            }
+
+            const allColumns = [
+                ...columns.entries(),
+                ...customColumns.entries(),
+            ];
+
+            for (const [col, plans] of allColumns) {
+                const perColPath = path.join(this._workspaceRoot, '.switchboard', `kanban-state-${_columnSlug(col)}.md`);
+                let colMd = `## ${col}\n\n`;
                 if (plans.length === 0) {
-                    md += `_No plans_\n\n`;
+                    colMd += `_No plans_\n\n`;
                 } else {
                     for (const plan of plans) {
                         const filePath = path.isAbsolute(plan.planFile)
                             ? plan.planFile
                             : path.join(this._workspaceRoot, plan.planFile);
-                        // Append planId + epic assignment in an HTML comment so the visible
-                        // board is unchanged but the "Suggest Epics" agent can parse them
-                        // without falling back to the 1.3 MB get-state.js JSON blob.
                         const parts = [`planId:${plan.planId}`];
                         if (plan.isEpic) { parts.push('epic'); }
                         if (plan.epicId) {
                             const epicTopic = epicTopicById.get(plan.epicId);
                             parts.push(epicTopic ? `subtask-of:"${epicTopic}"` : `subtask-of:${plan.epicId}`);
                         }
-                        md += `- [${plan.planFile}](${filePath}) — ${plan.topic} <!-- ${parts.join(' ')} -->\n`;
+                        colMd += `- [${plan.planFile}](${filePath}) — ${plan.topic} <!-- ${parts.join(' ')} -->\n`;
                     }
-                    md += `\n`;
+                    colMd += `\n`;
                 }
+                const tmpPath = perColPath + '.tmp';
+                await fs.promises.writeFile(tmpPath, colMd, 'utf8');
+                await fs.promises.rename(tmpPath, perColPath);
+            }
+
+            let md = `# Kanban Board\n\n`;
+            md += `*Workspace: ${workspaceId}* · *Updated: ${new Date().toISOString()}*\n\n`;
+            md += `| Column | File |\n|---|---|\n`;
+            for (const [col, plans] of allColumns) {
+                const slug = _columnSlug(col);
+                md += `| ${col} | [kanban-state-${slug}.md](./kanban-state-${slug}.md) |\n`;
             }
 
             // One-time cleanup of old JSON file

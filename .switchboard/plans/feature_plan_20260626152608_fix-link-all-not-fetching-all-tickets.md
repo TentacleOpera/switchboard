@@ -225,3 +225,88 @@ The `importTaskAsDocument` method (`TaskViewerProvider.ts:18276`) is unchanged. 
 
 ### Recommendation
 Complexity is 5/10 → **Send to Coder**.
+
+---
+
+## Code Review (Reviewer Pass — 2026-06-28)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> Five out of ten complexity and a plan that spells out FOUR distinct changes, and
+> I would bet my pension that someone did three of them, felt productive, and went
+> to lunch. Let's count the bodies.
+>
+> **§1 — ClickUp slice removal.** `TaskViewerProvider.ts:18727-18728`:
+> `const tasks = await clickup.getListTasks(listId); items = tasks;`. The
+> page-slicing knife is gone. `getListTasks` already paginates internally, so we
+> stop throwing away tickets 101+. Fine. ✓
+>
+> **§2 — Linear slice removal AND the limit fix.** `18748-18749`:
+> `linear.queryIssues({ projectId, limit: 100 }); items = issues;`. And before you
+> ask — yes, I went and READ `LinearSyncService.ts:715-718`. Without a `limit` it
+> defaults to **50** and the slice removal would have been a glorious no-op; the
+> cap is `Math.min(floor(requestedLimit), 100)`, so `limit: 100` is both honored
+> and the ceiling, matching the sidebar's own `limit: 100`. This is the ONE subtle
+> trap in the whole plan and they didn't faceplant. ✓
+>
+> **§3 — `copyToClipboard` de-fanged.** `PlanningPanelProvider.ts:5140-5193`. The
+> "ensure-then-link" loop that fired a live `importTaskAsDocument` API call per
+> missing ticket — sequentially, silently, swallowing rate-limit failures with a
+> `continue` — is **gone**. I grepped the block for `importTaskAsDocument`,
+> `ensureTicket`, `lastError`: nothing. It now does a pure `_findTicketFilePath`
+> lookup, pushes hits to `paths`, pushes misses to `missingIds`, and posts
+> `ticketLinkCopied { count, requestedCount, missingCount }` or `ticketLinkFailed`.
+> A copy-paths button that no longer phones an API. ✓
+>
+> **§4 — …and here's the corpse.** The whole POINT of this plan is that tickets
+> stop vanishing SILENTLY. The backend dutifully ships `missingCount` and
+> `requestedCount` across the wire — and the webview handler at
+> `planning.js:4222` **threw them in the bin.** It read:
+> `showTicketsStatus('Copied ${msg.count} ticket links ✓', false)` — full stop.
+> So you ask for 100 links, 20 have no local file, and the UI chirps *"Copied 80
+> ticket links ✓"* with a happy green checkmark. **You reintroduced the EXACT
+> silent-truncation the user filed this bug about** — except now there's no API
+> fallback papering over it either, so it's *more* silent than before. The plan
+> hands you the replacement verbatim in §4 and someone skipped it. That is a
+> **MAJOR**. The backend half of the fix is useless if the frontend smiles and lies
+> about it.
+
+### Stage 2 — Balanced Synthesis
+
+- **Keep:** §1, §2, §3 — all correct, including the genuinely subtle Linear
+  `limit: 100` fix (verified against `LinearSyncService.ts:715-718`) and the
+  complete removal of the per-ticket API fallback (no orphaned `lastError`/
+  `importTaskAsDocument`/`ensureTicket` references remain).
+- **Fix now (MAJOR):** §4 — the `ticketLinkCopied` webview handler must surface
+  `missingCount`/`requestedCount` as a warning, or the entire fix is invisible to
+  the user and the original silent-truncation symptom returns. **Fixed this pass.**
+- **Defer / accept:** Linear sidebar 100-issue ceiling remains a known,
+  out-of-scope limitation (documented in the plan). Slow/plan path slices at
+  `18789-18800` are intentionally untouched — they serve the "Load More" explicit-ID
+  path, not the document fast path.
+
+### Fixes Applied
+- **`src/webview/planning.js` (`ticketLinkCopied` handler, ~line 4222):**
+  Implemented Proposed Change §4. When `msg.missingCount > 0`, the handler now shows
+  `Copied N of M ticket links — X have no local file. Click "Refetch" to import them.`
+  as a warning (`isError = true`); otherwise the original `Copied N ticket links ✓`
+  success message. `flashCopyBtn`/`_lastLinkTicketBtn` reset preserved in both branches.
+
+### Files Changed (by implementation, verified this pass)
+- `src/services/TaskViewerProvider.ts` — ClickUp fast-path slice removed (`18727-18728`); Linear fast-path slice removed + `limit: 100` added (`18748-18749`).
+- `src/services/PlanningPanelProvider.ts` — `copyToClipboard` rewritten to local-file-only with `missingIds` tracking (`5140-5193`); API-call fallback removed.
+- `src/webview/planning.js` — `ticketLinkFailed` handler present (`4229-4235`); **`ticketLinkCopied` partial-result warning added this pass (`4222-4235`).**
+
+### Validation
+- `node --check src/webview/planning.js` → **passed** (syntax OK after the §4 edit).
+- `copyToClipboard` block re-grepped: no orphaned `lastError`/`importTaskAsDocument`/`ensureTicket` references.
+- Linear `limit` cap confirmed in `LinearSyncService.ts:715-718` (`Math.min(floor(limit),100)`, default 50) — `limit: 100` is correct and matches the sidebar.
+- Compilation & automated tests skipped per session directive.
+
+### Remaining Risks
+- **Linear sidebar 100-issue ceiling (known, out of scope):** Linear users with >100
+  issues still only see 100 in the sidebar; "Link all" covers all 100 visible, but
+  issues beyond 100 are never shown. Tracked as a separate limitation.
+- **Behavioral change is intentional:** "Link all" no longer imports missing tickets
+  on the fly. With §4 now wired, the user is told exactly how many are missing and to
+  click Refetch — which is the designed UX. Confirm via manual verification steps 13–16.
