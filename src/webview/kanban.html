@@ -5113,7 +5113,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const hasOrchestrating = displayCards.some(card => (card._effectiveColumn || card.column) === 'ORCHESTRATING');
             if (hasOrchestrating && !columns.includes('ORCHESTRATING')) {
                 const orchDef = columnDefinitions.find(d => d.id === 'ORCHESTRATING') || {
-                    id: 'ORCHESTRATING', label: 'Orchestrator', order: 250,
+                    id: 'ORCHESTRATING', label: 'Orchestrator', role: 'orchestrator', order: 250,
                     kind: 'review', source: 'built-in', autobanEnabled: false,
                     dragDropMode: 'cli', hideWhenNoAgent: true, epicOnly: true
                 };

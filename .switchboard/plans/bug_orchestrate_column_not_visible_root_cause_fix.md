@@ -346,6 +346,7 @@ const statusMsg = mode === 'send'
 
 - `src/webview/kanban.html` — emoji removal (3x), purple CSS, click feedback, `renderBoard` safety net
 - `src/services/KanbanProvider.ts` — `markEpicOrchestrating` return value + `_lastColumnsSignature` reset + idempotent refresh, `dispatchEpicOrchestration` `moved` propagation, handler status message (both modes)
+- `src/services/PlanningPanelProvider.ts` — `orchestrateEpic` handler now propagates `moved` in both `send` and `copy` paths (reviewer fix for MAJOR-2)
 
 ## Verification Plan
 
@@ -369,3 +370,56 @@ Per session directives: compilation and automated tests are skipped. The test su
 ## Recommendation
 
 Complexity 5 → **Send to Coder**
+
+---
+
+## Reviewer Pass (In-Place Direct Review)
+
+### Verification Summary
+
+All 8 fixes (1, 2, 3, 4A–4E) verified as correctly applied against the plan requirements:
+
+| Fix | Status | Evidence |
+|-----|--------|----------|
+| Fix 1 (emoji removal, 3x) | VERIFIED | No `🎯` in kanban.html; button template (line 5442) says "Orchestrate"; reset at lines 6548, 6561 |
+| Fix 2 (purple CSS) | VERIFIED | `.card-btn.orchestrate` at lines 1001-1007; placed after `.card-btn.recover:hover`; correct specificity (0,2,0 > 0,1,0) |
+| Fix 3 (immediate feedback) | VERIFIED | Click handler (lines 5324-5340) sets `btn.disabled = true` and `btn.textContent = 'Orchestrating…'` before postMessage |
+| Fix 4A (signature reset) | VERIFIED | `_lastColumnsSignature = null` at line 3217 (idempotent) and line 3231 (main path), both before `_refreshBoard` |
+| Fix 4B (return boolean) | VERIFIED | `markEpicOrchestrating` returns `Promise<boolean>` (line 3198); returns `false` on all error/early-exit paths, `true`/`moved` on success |
+| Fix 4C (status message, copy mode) | VERIFIED | Handler (lines 7084-7111) declares `let moved = false`, sets it in both branches, uses unified ternary for both modes — cleaner than plan's suggestion |
+| Fix 4D (webview safety net) | VERIFIED + FIXED | Safety net at lines 5111-5130; placed after `buckets` init (5095), before `forEach` (5132); `renderColumns()` does NOT clobber `buckets`; **stub was missing `role: 'orchestrator'` — fixed by reviewer** |
+| Fix 4E (dispatch moved propagation) | VERIFIED + FIXED | `dispatchEpicOrchestration` (lines 3171-3192) returns `moved`; KanbanProvider handler (7087-7090) consumes it; **PlanningPanelProvider handler was NOT consuming it — fixed by reviewer** |
+
+### Adversarial Findings
+
+**MAJOR-1 (FIXED): Safety net stub missing `role: 'orchestrator'`**
+- File: `src/webview/kanban.html:5116` (was line 5116 before fix)
+- The backend's authoritative definition (`src/services/agentConfig.ts:117`) includes `role: 'orchestrator'`. The stub was missing it, causing `columnToRole()` (line 4931) to return `null` and drag-drop/assigned-agent consumers (lines 8691, 8864) to misbehave when the safety net path is active.
+- **Fix applied**: Added `role: 'orchestrator'` to the stub object literal.
+
+**MAJOR-2 (FIXED): `PlanningPanelProvider.orchestrateEpic` ignored `moved` return value**
+- File: `src/services/PlanningPanelProvider.ts:3269, 3284`
+- The Epics tab has its own `orchestrateEpic` handler. It destructured `{ assembled, sent }` from `dispatchEpicOrchestration` (dropping `moved`) and discarded `markEpicOrchestrating`'s boolean return, posting `ok: true` unconditionally. This is the exact bug class the plan's Adversarial Synthesis (line 56) flagged and Fix 4E was meant to address — but only the KanbanProvider caller was fixed.
+- **Fix applied**: Both `send` and `copy` paths now capture `moved` and include it in the `epicOrchestrationResult` message.
+
+**NIT-1 (DEFERRED): Idempotent path returns `true`, status says "moved"**
+- File: `src/services/KanbanProvider.ts:3219`
+- The idempotent path returns `true` (epic IS in ORCHESTRATING), causing status to say "Epic moved to ORCHESTRATING" even though no move occurred. The plan's UAT checklist (line 365) explicitly expects this behavior. Semantically defensible. No action.
+
+**NIT-2 (INFORMATIONAL): Implementation diverged from plan's statusMsg structure**
+- The plan (line 232) suggested moving `statusMsg` inside the `if (mode === 'copy')` block. The actual implementation (lines 7084-7111) uses a unified `let moved = false` + dual-branch ternary — cleaner and handles both modes symmetrically. Good divergence. No action.
+
+**NIT-3 (DEFERRED): Extra full board render on every orchestration**
+- Fix 4A forces `updateColumns` unconditionally, causing an extra `renderBoard` via `lastBoardSignature` reset. Plan already documented this (line 68) and assessed impact as negligible. Agreed. No action.
+
+### Validation Results
+
+- **Compilation**: Skipped per session directives.
+- **Automated tests**: Skipped per session directives. Test suite to be run separately by user.
+- **Static verification**: All 8 fixes traced to correct code locations and confirmed semantically correct. Two MAJOR findings fixed and re-verified by re-reading the modified sections.
+
+### Remaining Risks
+
+1. **Race condition (low)**: `refreshWithData` has multiple `await` points between `updateColumns` and `updateBoard`. A concurrent file-watcher refresh could interleave messages. Fix 4A mitigates (forces signature reset) but does not eliminate interleaving. Low risk — orchestration is user-initiated, unlikely to coincide with a file-watcher event for the same workspace.
+2. **Button state flicker (minor UX)**: Fix 3's `btn.disabled = true` is lost if the board re-renders between click and `epicOrchestrationResult`. The `epicOrchestrationResult` handler uses `querySelector` to find the new button, so it resets correctly. Minor flicker, not functional.
+3. **Epics tab `ok: true` semantics**: The `ok` field in `epicOrchestrationResult` means "prompt assembled and copied" — `ok: true` when move failed is semantically correct from the prompt perspective. The `moved` field (now propagated) carries the move-success signal for any future UI that wants to surface it.

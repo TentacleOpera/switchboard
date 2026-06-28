@@ -3265,14 +3265,16 @@ export class PlanningPanelProvider {
                     break;
                 }
                 try {
+                    let moved = false;
                     if (mode === 'send') {
-                        const { assembled, sent } = await this._kanbanProvider.dispatchEpicOrchestration(wsRoot, sessionId);
+                        const { assembled, sent, moved: movedRes } = await this._kanbanProvider.dispatchEpicOrchestration(wsRoot, sessionId);
+                        moved = movedRes;
                         if (!assembled) {
                             this._projectPanel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: false, mode, error: 'Could not resolve this epic.' });
                             break;
                         }
                         await vscode.env.clipboard.writeText(assembled.prompt);
-                        this._projectPanel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: true, mode, sent, prompt: assembled.prompt, epicTopic: assembled.epicTopic, subtaskCount: assembled.subtaskCount, totalSubtasks: assembled.totalSubtasks });
+                        this._projectPanel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: true, mode, sent, moved, prompt: assembled.prompt, epicTopic: assembled.epicTopic, subtaskCount: assembled.subtaskCount, totalSubtasks: assembled.totalSubtasks });
                     } else {
                         const assembled = await this._kanbanProvider.buildEpicOrchestrationPrompt(wsRoot, sessionId);
                         if (!assembled) {
@@ -3281,9 +3283,9 @@ export class PlanningPanelProvider {
                         }
                         if (mode === 'copy') {
                             await vscode.env.clipboard.writeText(assembled.prompt);
-                            await this._kanbanProvider.markEpicOrchestrating(wsRoot, sessionId);
+                            moved = await this._kanbanProvider.markEpicOrchestrating(wsRoot, sessionId);
                         }
-                        this._projectPanel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: true, mode, prompt: assembled.prompt, epicTopic: assembled.epicTopic, subtaskCount: assembled.subtaskCount, totalSubtasks: assembled.totalSubtasks });
+                        this._projectPanel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: true, mode, moved, prompt: assembled.prompt, epicTopic: assembled.epicTopic, subtaskCount: assembled.subtaskCount, totalSubtasks: assembled.totalSubtasks });
                     }
                 } catch (err) {
                     console.error('[PlanningPanelProvider] orchestrateEpic failed:', err);
