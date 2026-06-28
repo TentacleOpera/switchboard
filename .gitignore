@@ -74,6 +74,7 @@ list_output.txt
 .switchboard/*
 !.switchboard/reviews/
 !.switchboard/plans/
+!.switchboard/epics/
 !.switchboard/sessions/
 !.switchboard/CLIENT_CONFIG.md
 !.switchboard/README.md

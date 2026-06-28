@@ -104,7 +104,7 @@ export const BUILT_IN_AGENT_LABELS: Record<BuiltInAgentRole, string> = {
     orchestrator: 'Orchestrator',
 };
 
-const DEFAULT_KANBAN_COLUMNS: KanbanColumnDefinition[] = [
+export const DEFAULT_KANBAN_COLUMNS: KanbanColumnDefinition[] = [
     { id: 'CREATED', label: 'New', order: 0, kind: 'created', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'RESEARCHER', label: 'Researcher', role: 'researcher', order: 90, kind: 'review', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt', hideWhenNoAgent: true },
     { id: 'CODE_RESEARCHER', label: 'Code Researcher', role: 'code_researcher', order: 95, kind: 'review', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt', hideWhenNoAgent: true },

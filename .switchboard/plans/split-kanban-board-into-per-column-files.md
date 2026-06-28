@@ -259,3 +259,47 @@ The original plan said "All writes are fire-and-forget and chained via `_writeTa
 ## Recommendation
 
 Complexity 4 → **Send to Coder**
+
+---
+
+## Code Review Results (Reviewer Pass — 2026-06-28)
+
+### Files Changed by Implementation
+
+| File | Change |
+|---|---|
+| `src/services/KanbanDatabase.ts` | Added `_columnSlug()` helper (line 644); refactored `exportStateToFile()` (lines 5455–5538) to write per-column files + index; added custom-column discovery pass (lines 5478–5486) |
+| `src/services/WorkspaceExcludeService.ts` | Added `'!.switchboard/kanban-state-*.md'` to `TARGETED_RULES` (line 20) |
+| `.gitignore` | Added `!.switchboard/kanban-state-*.md` to managed block (line 82) |
+
+### Stage 1 — Grumpy Findings
+
+| # | Severity | Finding | File:Line | Status |
+|---|---|---|---|---|
+| 1 | MAJOR | Deleted 3-line explanatory comment about HTML comment format for Suggest Epics agent — violates CLAUDE.md "Do NOT add or remove comments unless asked!" | `src/services/KanbanDatabase.ts:5500-5502` (original) | **FIXED** — comment restored |
+| 2 | MAJOR | `TARGETED_RULES` has `!.switchboard/epics/` (line 14) but committed `.gitignore` doesn't — desync from sibling change bundled in same auto-commit. NOT this plan's requirement. | `src/services/WorkspaceExcludeService.ts:14` vs `.gitignore:72-92` | **Out of scope** — flagged for parent agent; working-tree `.gitignore` already self-healed by running extension |
+| 3 | NIT | Unused `plans` variable in index-building loop | `src/services/KanbanDatabase.ts:5521` | **Deferred** — inherited from plan pseudocode; `noUnusedLocals` not enabled |
+| 4 | NIT | Dead `path.isAbsolute` else-branch (planFile always absolute via `_resolveAbsolutePlanFile`) | `src/services/KanbanDatabase.ts:5500-5502` | **Deferred** — pre-existing, not introduced by this plan |
+
+### Stage 2 — Balanced Synthesis
+
+- **Fixed now**: MAJOR-1 (restored deleted comment).
+- **Not fixed (out of scope)**: MAJOR-2 (`!.switchboard/epics/` desync is from a sibling change, not this plan). The running extension has already synced the working-tree `.gitignore` to match `TARGETED_RULES`, but the committed version still lacks `!.switchboard/epics/`. This should be addressed by the plan that introduced the epics folder gitignore requirement.
+- **Deferred**: NIT-3, NIT-4 — cosmetic, pre-existing patterns.
+
+### Fixes Applied
+
+- `src/services/KanbanDatabase.ts`: Restored 3-line comment explaining the HTML comment sidecar format for the Suggest Epics agent (lines 5503–5505).
+
+### Validation
+
+- **Typecheck**: Skipped per review instructions (SKIP COMPILATION).
+- **Tests**: Skipped per review instructions (SKIP TESTS).
+- **Manual verification**: Confirmed `_columnSlug()` matches plan spec; custom-column discovery pass catches plans dropped by `if (list)` guard; per-column files use atomic `tmp → rename`; index table format is valid markdown with correct relative links; `kanbanColumn` always non-null (defaults to `'CREATED'` in `_readRows`); regression test `git-ignore-custom-default-regression.test.js` does NOT reference `TARGETED_RULES` (confirmed — no test update needed).
+- **Runtime note**: The installed VSIX predates this change — `kanban-board.md` in the working tree still shows the old column-heading format. The new per-column export + index format will take effect after a VSIX rebuild and reinstall.
+
+### Remaining Risks
+
+1. **Sibling plan ordering not followed**: The plan recommended implementing `keep-valid-kanban-columns-in-sync-with-defaults.md` and `remove-context-gatherer-splitter-code-researcher-agents.md` first. Neither was implemented — `VALID_KANBAN_COLUMNS` still has 9 entries including `CONTEXT GATHERER`. Per-column files will be generated for this stale column set. The plan explicitly accepted this as a known risk (User Review item #3).
+2. **`!.switchboard/epics/` desync**: `TARGETED_RULES` and committed `.gitignore` are out of sync for the epics glob. Not this plan's responsibility but should be resolved by the owning plan.
+3. **Stale per-column files**: If `CONTEXT GATHERER` is later removed, `kanban-state-context-gatherer.md` will stop updating but remain on disk. Explicitly out of scope per plan.

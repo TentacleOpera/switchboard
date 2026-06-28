@@ -857,6 +857,7 @@
             flex: 1;
             padding: 8px;
             overflow-y: auto;
+            overflow-x: hidden;
             min-height: 120px;
             transition: background 0.15s;
             /* Ensure body is below header/button area for tooltip stacking */
@@ -880,6 +881,7 @@
             cursor: grab;
             transition: all 0.15s;
             position: relative;
+            width: 100%;
         }
 
         .kanban-card:active {
@@ -5453,7 +5455,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <div class="card-topic">${epicBadge}${escapeHtml(shortTopic)}${wtButton}</div>
                     <div class="card-meta">${cardMetaContent}</div>
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">
-                        <div style="display: flex; gap: 4px;">
+                        <div style="display: flex; gap: 4px; flex-wrap: wrap;">
                             ${pairProgramBtn}
                             ${primaryActionBtn}
                             ${backlogActionBtn}

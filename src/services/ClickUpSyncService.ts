@@ -5,6 +5,7 @@ import * as https from 'https';
 import { hostInlineImages } from './ImageHostingHelper';
 import type { AutoPullIntervalMinutes } from './IntegrationAutoPullService';
 import { KanbanDatabase } from './KanbanDatabase';
+import { DEFAULT_KANBAN_COLUMNS } from './agentConfig';
 import {
   matchesClickUpAutomationRule,
   normalizeClickUpAutomationRules,
@@ -133,8 +134,9 @@ export interface ClickUpSyncResult {
 
 // Canonical Switchboard kanban columns (mirrors KanbanDatabase.ts VALID_KANBAN_COLUMNS)
 export const CANONICAL_COLUMNS = [
-  'CREATED', 'BACKLOG', 'PLAN REVIEWED', 'CONTEXT GATHERER', 'LEAD CODED',
-  'CODER CODED', 'CODE REVIEWED', 'CODED', 'COMPLETED'
+  ...DEFAULT_KANBAN_COLUMNS.map(c => c.id),
+  'BACKLOG',
+  'CODED'
 ];
 
 export class ClickUpSyncService {

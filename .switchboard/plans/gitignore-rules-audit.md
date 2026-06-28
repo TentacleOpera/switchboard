@@ -1,124 +1,112 @@
-# Audit and Trim Switchboard's Managed Gitignore Rules
+# Audit `.switchboard/` Git Tracking — Untrack Leaked State, Trim Dead Rules
 
 ## Goal
 
-Review whether Switchboard's `TARGETED_RULES` gitignore block is still appropriate now that the project has moved to a SQLite DB model for runtime state. Remove rules that are no longer needed, fix gaps (epics folder — covered in a separate plan), and reduce noise for users who wonder why so much of `.switchboard/` is excluded.
+Establish, file-by-file, what in `.switchboard/` should and should not be in git, and fix the mismatches.
 
-**Background:** Switchboard originally wrote many files to `.switchboard/` — `state.json`, `kanban-state.json`, `sessions/activity.jsonl`, etc. These justified the blanket `.switchboard/*` exclusion. Most of that file spam has been migrated to `kanban.db`. But the exclusion rules have never been revisited post-migration, so the current rule set may be overly broad or contain redundant entries.
+**The core problem (root cause).** The original audit framed this as "trim the managed gitignore rules now that we use SQLite." That framing is wrong and produced a plan that edited cosmetics while missing the actual exposure. Two facts reframe it:
+
+1. **The managed block is a blanket-exclude-plus-allowlist** (`.switchboard/*` then `!` carve-outs). Under this design, *every new file the extension writes is excluded by default*. A full live inventory (see "Complete Inventory" below) confirms it: ~50 distinct machine-local files exist on disk (the SQLite DB + ~15 backup/temp variants, caches, pointers, PID files, migration `.bak`s, ad-hoc scripts) and **none of them leak** — the blanket catches all of it. So **there is no "missing exclude rule." Nothing needs to be added to be excluded.**
+
+2. **gitignore cannot untrack already-committed files.** The real exposure is files committed *before* the rules existed, which the blanket is powerless to remove:
+   - **`.switchboard/workspace-id` is tracked** and contains a machine-local UUID plus an absolute home path (`/Users/<user>/…/.switchboard/kanban.db`). It leaks the maintainer's local path into a public repo and collides per-developer. A regression test already asserts the *rule* must never re-include it — but the file itself was grandfathered into the repo and never untracked.
+   - **`.switchboard/sessions/` (76 files)** are per-machine session archives, currently *kept* by a `!.switchboard/sessions/` carve-out. Useless to remote agents.
+   - **`.switchboard/epics/` (14 files)** is the inverse gap: the carve-out exists (shipped in commit `f343a19`) but the files were never `git add`ed, so a shareable artifact class is missing from the repo.
+
+**Background.** Switchboard originally wrote `state.json`, `kanban-state.json`, `sessions/activity.jsonl`, etc. to `.switchboard/`. Most of that moved into `kanban.db`. But the migration did **not** reduce the need for the managed block — it *created the single largest must-exclude artifact* (the DB). Secrets are **not** a factor: all API tokens live in VS Code SecretStorage (`context.secrets.store('switchboard.clickup.apiToken', …)` etc.), never in files. The `*-config.json` files hold only workspace IDs / sync maps and are themselves being migrated into the DB `config` table (`KanbanDatabase.ts:3323`).
 
 ## Metadata
 
 **Complexity:** 3
-**Tags:** infrastructure, devops, docs, reliability
+**Tags:** infrastructure, devops, reliability
 
-## User Review Required
+## Decisions Made (not deferred)
 
-Yes — before implementation, the implementer must confirm two decisions with the workspace owner:
-1. **Non-managed `.gitignore` line 45** (`!.switchboard/sessions/`): should it be removed for consistency with the managed-block change, or left in place (which means sessions remain excepted in this repo)?
-2. **`docs/` and `archive/` directories**: confirmed currently excluded and untracked (live inspection — see Reviewer Note below). Adding carve-out exceptions for them is **out of scope** for this trimming plan — flag for a separate plan if the owner wants remote agents to see them.
+Per house rule "decide and state," these are resolved, not punted to review:
 
-## Complexity Audit
+- **Managed-block design stays.** Keep `.switchboard/*` + carve-outs. The alternative (explicit denylist) is less safe and pointless given the blanket works.
+- **Remove `!.switchboard/sessions/`** from the managed rules and from this repo's non-managed block. Sessions are per-machine and worthless remotely.
+- **Remove the redundant `.switchboard/notion-cache.md`** explicit entry (already covered by the blanket; no documentary value).
+- **Keep `kanban.db` / `*.db-shm` / `*.db-wal` explicit entries** — redundant with the blanket but kept as intentional documentation.
+- **`docs/` and `archive/` stay excluded.** They are imported/regenerable copies and local history. (`docs/` is the *only* defensible future carve-out — if you ever want cloud agents to read project docs offline. Out of scope here.)
 
-### Routine
-- Removing two entries (`!.switchboard/sessions/`, `.switchboard/notion-cache.md`) from a static string array (`TARGETED_RULES`, `src/services/WorkspaceExcludeService.ts` lines 9–28).
-- Adding one entry (`!.switchboard/epics/`) from the companion plan.
-- Adding string-match assertions to an existing Node.js test file (same pattern as the existing `workspace-id` assertions at `src/test/git-ignore-custom-default-regression.test.js` lines 66–73).
-- The `WorkspaceExcludeService.apply()` method (lines 105–155) atomically rewrites only the managed block on next run — no manual `.gitignore` surgery needed for managed-block users.
+## Open Owner Decisions (genuine content calls only)
 
-### Complex / Risky
-- The non-managed `.gitignore` section (lines 41–64) contains a manual duplicate of the managed rules, including `!.switchboard/sessions/` on line 45. Removing the managed-block exception does NOT remove line 45, so sessions stay excepted in this repo unless line 45 is also removed. This is a coordination risk, not a logic risk.
-- 76 session files are currently git-tracked (all `*.migrated`). The gitignore change does not delete them, but future `git rm --cached` cleanup (if desired) is a destructive operation that must be user-initiated — never automated by the plan.
-
-## Edge-Case & Dependency Audit
-
-- **Race Conditions:** None. `WorkspaceExcludeService.apply()` is a sequential read-modify-write on `.gitignore`; the managed block is replaced atomically via `_replaceManagedBlock` (lines 64–85).
-- **Security:** No secrets are exposed. The config files (`*-config.json`) remain excluded in both managed and non-managed sections. Removing `!.switchboard/sessions/` does not expose secrets — session files contain agent metadata, not credentials.
-- **Side Effects:** Users on the `custom` or `none` strategy are unaffected (the managed block is not written for them — see `apply()` lines 138–152). Users on `targetedGitignore` get the trimmed block on next activation. Already-tracked session files remain tracked (gitignore only affects untracked files).
-- **Dependencies & Conflicts:** This plan overlaps with `expose-epics-folder-in-gitignore.md`, which adds `!.switchboard/epics/` to the same `TARGETED_RULES` array. Both plans touch `WorkspaceExcludeService.ts` and the test file. They should be implemented in a single pass to avoid a stale intermediate state. The "AFTER" code block below shows the combined result.
-
-## Dependencies
-
-- `expose-epics-folder-in-gitignore.md` — adds `!.switchboard/epics/` to `TARGETED_RULES`. Implement together with this plan (same file, same test).
-- No session-based (`sess_*`) dependencies.
-
-## Adversarial Synthesis
-
-Key risks: (1) both this plan and its companion hallucinate a "snapshot assertion" in the test file that does not exist — the test change must ADD new assertions, not edit a snapshot; (2) the non-managed `.gitignore` section retains `!.switchboard/sessions/` on line 45, silently defeating the sessions-removal goal for this repo unless also trimmed; (3) the "Needs review" items were unresolved. Mitigations: correct the test guidance to "add string-match assertions"; explicitly flag line 45 for owner decision; live inspection now resolves docs/archive/tickets (see updated Findings).
-
-## ⚠️ Reviewer Note: Inspect the Live `.switchboard/` Directory
-
-**This audit was written from a remote clone where the Switchboard extension has never run.** The remote `.switchboard/` only contains committed files (`plans/`, `sessions/`, `kanban-board.md`, etc.). None of the extension-generated directories exist in that environment.
-
-**✅ LIVE INSPECTION PERFORMED (2026-06-28):** The plan has since been reviewed against a live local workspace where the extension runs. Findings, incorporated into the table below:
-- `.switchboard/epics/` — **exists** with 13 real epic files; **0 git-tracked** (currently ignored by `.switchboard/*`). Confirms the companion plan's carve-out is needed.
-- `.switchboard/sessions/` — 76 files git-tracked (all `*.migrated`); confirms removing the exception won't delete tracked content.
-- `.switchboard/docs/` — 35 imported docs; **0 git-tracked** (ignored). Real artifacts but committing them requires a new carve-out — **out of scope** for this trimming plan.
-- `.switchboard/archive/` — 2 subdirs (`plans/`, `sessions/`); **0 git-tracked**. Same as docs/ — out of scope.
-- `.switchboard/tickets/` — **does NOT exist** on this machine. Row removed from the table below.
-- `.switchboard/planning-cache/` — `clickup/`, `clickup-tasks.json`, `linear-tasks.json`. Confirmed cache — keep excluded.
-- `.switchboard/insights/` — empty. Keep excluded.
-
-If implementing on a **different** machine, still run `find .switchboard -maxdepth 3 | sort` and compare against the above before touching `TARGETED_RULES`.
+1. **Commit this repo's 14 `epics/` files?** The rule already allows it; this is purely whether *your* current epic content should be public in the switchboard repo. Default recommendation: yes (matches the carve-out's intent that remote agents see epics).
+2. **`git rm --cached` is destructive and must be owner-initiated.** The commands are listed below but should be run deliberately, not automated by an implementer.
 
 ---
 
-## Findings from Audit
+## Complete Inventory of `.switchboard/` (live, 2026-06-28)
 
-### What still legitimately writes files (recommendations are provisional — see note above)
+> Review target. "In git now?" vs "Should be?" — every mismatch is an action item. Repetitive clusters collapsed with counts.
 
-| Path | Status | Provisional Recommendation |
+### A. Should be COMMITTED (shareable — remote/cloud agents need these)
+
+| Entry | In git now? | Should be? | Why |
+|:---|:---|:---|:---|
+| `plans/` (811 files) | ✅ yes | ✅ yes | Implementation plans — the shareable core. Correct. |
+| `epics/` (14 files) | ❌ **no** | ✅ **yes** | Epic definitions, same class as plans. Carve-out exists; never `git add`ed. **Gap → action.** |
+| `reviews/` (empty) | ✅ carve-out | ✅ yes | Code-review outputs. Correct when populated. |
+| `kanban-board.md` (284K) | ✅ yes | ✅ yes | Board snapshot for remote agents. Correct (churns hard — accepted). |
+| `README.md`, `SWITCHBOARD_PROTOCOL.md` | ✅ yes | ✅ yes | Static shared docs. Correct. |
+| `CLIENT_CONFIG.md`, `kanban-state-*.md` | n/a (absent) | ✅ yes | Carve-outs present; correct when files exist. |
+
+### B. Wrongly in git — should be EXCLUDED (the actual bugs)
+
+| Entry | In git now? | Should be? | Why |
+|:---|:---|:---|:---|
+| `workspace-id` | ✅ **TRACKED** | ❌ **no** | Machine-local UUID + absolute home path. Leaks local path to a public repo, collides per-developer. Rule already excludes it; grandfathered in. → `git rm --cached`. |
+| `sessions/` (76 files) | ✅ **TRACKED** | ❌ **no** | Per-machine session archives (all `*.migrated`). No remote value. Carve-out re-includes them today. → remove carve-out **+** `git rm --cached`. |
+
+### C. Correctly EXCLUDED (machine-local / cache / transient — blanket handles all)
+
+| Entry | Why excluded |
+|:---|:---|
+| `kanban.db` (3.7M) + ~15 variants: `.tmp` ×7, `.backup.<ts>` ×4, `.bak-20260623`, `.before-cleanup`, `.pre-restore-…`, `.zombiecleanup-backup-…` | Live SQLite DB + backup/temp zoo (~25M). Per-machine, constant churn. |
+| `dbbackup/` (5), `kanban-state-backup.json` (688K), `db-pointer`, `archive.duckdb` (780K) | DB backups / pointers / archive DB. Recovery + machine-local. |
+| `*.migrated` / `*.migrated.bak` ×6 (clickup-config, linear-config, linear-sync, local-folder-config, state.json, imported-docs) | Legacy files renamed by the DB migration. Local history. |
+| `clickup-docs-config.json` and other `*-config.json` | Workspace IDs / sync config (no secrets — tokens are in SecretStorage). Migrating into the DB. |
+| `clickup-docs-cache.md`, `local-folder-cache.md`, `research-aggregate-cache.md`, `notion-cache.md`, `planning-cache/` | Regenerable caches of external data. |
+| `NotebookLM/` (90 `.docx`), `integration/` (29 `.docx`), `stitch/` (37 `.png`) | Generated export bundles / design images. Regenerable artifacts. |
+| `insights/` (empty) | Insights cache. |
+| `.DS_Store`, `.agent_version.json`, `.mcp_server (1).pid`, `.mcp_server (2).pid`, `api-server-port.txt`, `workspace_identity.json`, `brain_plan_blacklist.json`, `memo.md` | OS junk, PID/port files, local agent/identity/dedup state, transient memo scratch. |
+| `fetch_all_tasks.js`, `fetch_all_tasks_markdown.js`, `reformat_tickets.py`, `task_86d2xdgtc_raw.json`, `temp_tasks.json` | Ad-hoc scripts/data dropped in by hand — not extension-managed. (Could simply be deleted; exclude is correct regardless.) |
+
+### D. Genuine judgment calls (excluded by default)
+
+| Entry | Default | Trade-off |
 |:---|:---|:---|
-| `.switchboard/kanban.db` / `*.db-shm` / `*.db-wal` | Machine-local DB | **Keep excluded** — never commit |
-| `.switchboard/docs/` | Imported docs from Linear/ClickUp/Notion (35 files, 0 tracked) | **Keep excluded** (out of scope) — real artifacts, but committing requires a new carve-out; defer to a separate plan if the owner wants remote agents to see them |
-| `.switchboard/planning-cache/` | Doc ID mappings cache (`clickup/`, `*-tasks.json`) | **Keep excluded** — internal ID mapping, regenerable |
-| `.switchboard/archive/` | Archived plans/sessions (2 subdirs, 0 tracked) | **Keep excluded** (out of scope) — same rationale as `docs/`; defer to a separate plan |
-| `.switchboard/*-config.json` (clickup, linear, notion) | Encrypted credentials | **Keep excluded** — never commit secrets |
-| `.switchboard/workspace-id` | Local DB path pointer | **Keep excluded** — machine-local |
-| `.switchboard/notion-cache.md` | Notion page cache | **Keep excluded** (currently duplicated — see below) |
-| `.switchboard/insights/`, `stitch/`, `NotebookLM/` | Caches/staging | **Keep excluded** |
-| `.switchboard/inbox/`, `outbox/`, `cooldowns/`, `MCP/`, `handoff/` | Transient runtime | **Keep excluded** |
-| `.switchboard/kanban-state-backup.json` | Recovery backup | **Keep excluded** — machine-local |
+| `docs/` (35 imported `.md`) | exclude | Regenerable copies of Linear/ClickUp/Notion docs. The one folder worth a future `!.switchboard/docs/` carve-out if cloud agents need offline docs. Out of scope. |
+| `archive/` (855 — old plans + sessions) | exclude | Local history of superseded plans/sessions. High churn, low remote value. Keep excluded. |
 
-### What has been migrated to DB (rules are now redundant documentation)
+**Conclusion from the inventory:** every excluded entry is correctly excluded. The only changes that alter the repo are untracking `workspace-id` + `sessions/` and adding `epics/`. The rule edits are cosmetic by comparison.
 
-| Path | Migration Status | Notes |
-|:---|:---|:---|
-| `.switchboard/state.json` | Fully bridged to DB | File never written — transparent bridge routes all calls to `kanban.db`. The explicit gitignore entry serves as documentation only. |
-| `.switchboard/sessions/activity.jsonl` | Migrated to DB sessions table | Renamed to `activity.jsonl.migrated` on disk. New activity goes to DB. |
-
-### The `sessions/` exception — questionable
-
-`!.switchboard/sessions/` is a current exception (sessions are committed). But `sess_*.json` files are per-machine session archives — machine-local metadata that differs per developer. Committing them creates noise with zero benefit for remote agents (they don't read session archives). **Recommendation: remove this exception.** 
-
-Migration note: existing users who have committed `sessions/` files should not have those deleted — just exclude new ones going forward. The gitignore change only affects untracked files; already-committed files require a separate `git rm --cached` by the user if they want to clean up.
-
-### Redundant explicit entries
-
-The managed block explicitly lists entries that are already covered by `.switchboard/*`:
-- `.switchboard/notion-cache.md` — redundant (covered by `*`)
-- `.switchboard/kanban.db`, `*.db-shm`, `*.db-wal` — redundant but kept as **intentional documentation** (the comment explains why the DB is excluded)
-
-The notion-cache.md explicit entry has no documentary value beyond what the wildcard provides. It can be removed.
+---
 
 ## Proposed Changes
 
-### [MODIFY] `src/services/WorkspaceExcludeService.ts` — Trim TARGETED_RULES
+### [MODIFY] `src/services/WorkspaceExcludeService.ts` — trim `TARGETED_RULES`
+
+Ships to all ~4000 installs. **Preserve `!.switchboard/epics/` and `!.switchboard/kanban-state-*.md`** — both are current, load-bearing carve-outs. Only two lines (plus a comment) are removed.
 
 ```typescript
-// BEFORE:
+// BEFORE (current source, lines 9–30):
 private static readonly TARGETED_RULES: string[] = [
     '# Switchboard runtime state (per-session, not shareable)',
     '.switchboard/*',
     '!.switchboard/reviews/',
     '!.switchboard/plans/',
-    '!.switchboard/sessions/',       // <-- remove
+    '!.switchboard/epics/',
+    '!.switchboard/sessions/',        // <-- REMOVE
     '!.switchboard/CLIENT_CONFIG.md',
     '!.switchboard/README.md',
     '!.switchboard/SWITCHBOARD_PROTOCOL.md',
     '!.switchboard/kanban-board.md',
+    '!.switchboard/kanban-state-*.md',
     '',
-    '# Notion page content cache',
-    '.switchboard/notion-cache.md',  // <-- remove (covered by wildcard, no doc value)
+    '# Notion page content cache',    // <-- REMOVE (comment for the entry below)
+    '.switchboard/notion-cache.md',   // <-- REMOVE (redundant with blanket, no doc value)
     '',
     '# kanban.db is already excluded by .switchboard/* above — explicit entry for documentation clarity.',
     '# Never commit the kanban database: it contains machine-local state that differs per developer.',
@@ -127,7 +115,7 @@ private static readonly TARGETED_RULES: string[] = [
     '.switchboard/*.db-wal',
 ];
 
-// AFTER (combined with the epics addition from the companion plan):
+// AFTER:
 private static readonly TARGETED_RULES: string[] = [
     '# Switchboard runtime state (per-session, not shareable)',
     '.switchboard/*',
@@ -138,6 +126,7 @@ private static readonly TARGETED_RULES: string[] = [
     '!.switchboard/README.md',
     '!.switchboard/SWITCHBOARD_PROTOCOL.md',
     '!.switchboard/kanban-board.md',
+    '!.switchboard/kanban-state-*.md',
     '',
     '# kanban.db is already excluded by .switchboard/* above — explicit entry for documentation clarity.',
     '# Never commit the kanban database: it contains machine-local state that differs per developer.',
@@ -147,19 +136,17 @@ private static readonly TARGETED_RULES: string[] = [
 ];
 ```
 
-**Note:** This plan can be merged with `expose-epics-folder-in-gitignore.md` into a single implementation pass since both touch the same constant and test file.
+`apply()` rewrites only the delimited managed block on next activation, so existing users get the trimmed block automatically.
 
-### [MODIFY] `src/test/git-ignore-custom-default-regression.test.js` — Add rule-guard assertions
+### [MODIFY] `.gitignore` (this repo's non-managed section) — remove the stale sessions exception
 
-**⚠️ Correction (verified against source):** This test file does **NOT** currently contain a snapshot of `TARGETED_RULES`. It has no assertion checking for `!.switchboard/sessions/`, `.switchboard/notion-cache.md`, `!.switchboard/epics/`, or even `!.switchboard/plans/`. The existing assertions (lines 19–82) only verify config defaults and the *absence* of `workspace-id`. The companion plan `expose-epics-folder-in-gitignore.md` makes the same incorrect "update snapshot" claim — both must be corrected.
+The repo's `.gitignore` carries a hand-maintained duplicate block (lines ~41–58) *above* the managed block. It contains `!.switchboard/sessions/`. Remove that single line for cleanliness. (The later managed `.switchboard/*` likely already overrides it, but leaving a contradictory re-include is confusing — delete it.) Leave the config-file entries; they are harmless and cover `custom`/`none` strategies.
 
-**Action:** Add new string-match assertions (matching the existing `workspace-id` pattern at lines 66–73) to lock down the expected `TARGETED_RULES` content. Insert after the existing `workspace-id` assertions:
+### [MODIFY] `src/test/git-ignore-custom-default-regression.test.js` — add rule guards
+
+The file has **no** snapshot of `TARGETED_RULES`; it only checks config defaults and the *absence* of `workspace-id` (lines 66–73). Add negative assertions next to those, matching the existing string-match pattern. (Do **not** add an epics-present assertion — it would pass trivially and guards nothing new.)
 
 ```js
-assert.ok(
-    excludeServiceSource.includes("'!.switchboard/epics/'"),
-    'Expected targeted rules to re-include .switchboard/epics/.'
-);
 assert.ok(
     !excludeServiceSource.includes("'!.switchboard/sessions/'"),
     'Expected targeted rules no longer to re-include .switchboard/sessions/.'
@@ -170,49 +157,53 @@ assert.ok(
 );
 ```
 
-These guard against silent regressions — currently no test locks the exact rule set, so any edit to `TARGETED_RULES` would pass unchecked.
+### [OWNER ACTION] Untrack grandfathered files (destructive — run deliberately, not automated)
 
-### [CHECK] `.gitignore` (repo-level, non-managed section) — ⚠️ contains a stale `sessions` exception
+These are the only changes that alter what is in the repo. They affect **this repo only** — not the shipped install base.
 
-The repo's `.gitignore` (lines 41–64, above the managed block) is a **manual duplicate** of the managed rules. It contains:
-- `.switchboard/*` and the same exception list (lines 42–48), **including `!.switchboard/sessions/` on line 45** and the `!kanban-board.md` exception is **missing** here (present only in the managed block).
-- The config files: `clickup-config.json`, `linear-config.json`, `linear-sync.json`, `notion-config.json`, `notion-cache.md` (lines 49–58).
+```bash
+# Stop leaking the machine-local path pointer
+git rm --cached .switchboard/workspace-id
 
-**⚠️ Gap (not in original plan):** Line 45 (`!.switchboard/sessions/`) was not mentioned. Even after removing `!.switchboard/sessions/` from the managed `TARGETED_RULES`, this repo will **continue to except sessions** via line 45. To fully stop tracking new session files in this repo, line 45 must also be removed.
+# Stop tracking per-machine session archives (76 files)
+git rm --cached -r .switchboard/sessions
 
-**Owner decision required (see User Review Required):**
-- Remove line 45 for consistency with the managed-block change, OR
-- Leave it (sessions stay excepted in this repo only; the managed-block change still applies to all other users).
+# Add the shareable epics that were never committed (owner content decision)
+git add .switchboard/epics
+```
 
-The config-file entries (lines 49–58) should stay — they cover `custom`/`none` strategies and are not part of the managed block.
+Neither `git rm --cached` deletes files from disk; it only removes them from the index going forward.
 
-## Migration Consideration
+## Migration / Install-Base Safety (~4000 installs)
 
-Removing `!.switchboard/sessions/` from `TARGETED_RULES` does NOT delete already-committed session files. It only means the gitignore stops carving out an exception for new ones. Users who have committed session files and want to clean up can run `git rm --cached .switchboard/sessions/*.json`. This is optional and can be mentioned in release notes.
-
-The `WorkspaceExcludeService.apply()` method rewrites only the managed block on next run — it will remove the old exception and add the new epics one atomically.
+- **The only shipped change is the `TARGETED_RULES` edit.** Removing `!.switchboard/sessions/` does **not** untrack any user's already-committed session files — gitignore only affects untracked paths. It simply stops *new* session files from being added. No data loss; nothing to migrate.
+- The `git rm --cached` and `git add` steps are local to this repo and ship to no one.
+- No state files are deleted, unlinked, or rewritten. The `*.migrated.bak` archival convention is untouched.
 
 ## Verification Plan
 
-> **Session directives:** Compilation and automated tests are skipped — the test suite will be run separately by the user.
+> Session directive: compilation and automated tests are run separately by the user.
 
-### Automated Tests
-- (Skipped per session directive.) When run separately, `node src/test/git-ignore-custom-default-regression.test.js` must pass with the new rule-guard assertions (epics present, sessions absent, notion-cache.md absent).
+### Automated
+- `node src/test/git-ignore-custom-default-regression.test.js` passes with the two new negative assertions.
 
-### Manual Checks
-1. Confirm `!.switchboard/sessions/` is no longer in the managed block written to `.gitignore` (the block delimited by `# >>> Switchboard managed exclusions >>>` / `# <<< ... <<<`).
-2. Confirm `!.switchboard/epics/` IS in the managed block.
-3. Confirm `git status` does not show `.switchboard/sessions/*.json` as newly untracked (they stay committed; gitignore only affects untracked files).
-4. Confirm `.switchboard/epics/*.md` now appears as untracked (no longer ignored) — run `git check-ignore .switchboard/epics/<file>.md` and expect no output (exit code 1).
-5. If the owner approved removing non-managed line 45, confirm `git status` still does not show tracked session files as deleted (only untracked new ones would be affected).
+### Manual
+1. After `apply()` runs, the managed block in `.gitignore` contains **no** `!.switchboard/sessions/` and **no** `.switchboard/notion-cache.md`, and still contains `!.switchboard/epics/` and `!.switchboard/kanban-state-*.md`.
+2. `git check-ignore .switchboard/sessions/<file>.json` → ignored (exit 0) after the rule change.
+3. `git check-ignore .switchboard/epics/<file>.md` → not ignored (exit 1).
+4. `git ls-files .switchboard/workspace-id` → empty after `git rm --cached`.
+5. `git ls-files .switchboard/sessions | wc -l` → 0 after `git rm --cached`.
+6. `git ls-files .switchboard/epics | wc -l` → 14 after `git add`.
+7. `git ls-files .switchboard/ | git check-ignore --stdin --no-index` → returns nothing (no remaining tracked file is shadowed by an ignore rule).
 
 ## Success Criteria
 
-1. `TARGETED_RULES` has: epics exception added, sessions exception removed, notion-cache.md redundant entry removed.
-2. Regression test passes.
-3. Managed gitignore block written to disk matches the new rules exactly.
-4. No existing committed files are deleted or newly ignored.
+1. `TARGETED_RULES`: sessions exception removed, notion-cache.md removed; epics and kanban-state-* preserved.
+2. Regression test passes with the new guards.
+3. `workspace-id` and `sessions/` no longer tracked; `epics/` tracked (pending owner decision).
+4. No file deleted from disk; no existing user's committed files untracked by the shipped change.
+5. `git check-ignore --no-index` over the tracked set returns empty.
 
 ## Recommendation
 
-**Complexity: 3 → Send to Intern.** The code change is a single static array edit plus test-assertion additions. The owner-decision items (non-managed line 45, docs/archive scope) must be resolved first, but the implementation itself is routine and localized.
+**Complexity: 3.** The shipped code change is a two-line array edit plus two test assertions — routine. The substance is the owner-run `git rm --cached` / `git add` cleanup, which is mechanically trivial but must be initiated by the owner because it mutates repo history. Resolve the two owner decisions, then implement in a single pass.

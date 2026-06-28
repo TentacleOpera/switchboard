@@ -22,10 +22,11 @@ This is the "not created properly" symptom. The user clicks Orchestrate and gets
 
 - The `onDidCloseTerminal` handler (extension.ts:1657-1660) calls `taskViewerProvider.handleTerminalClosed(terminal)`, which cleans up the `state.json` entry (TaskViewerProvider.ts:15230-15273 — matches by PID or name, then `delete state.terminals[terminalName]` and `clearTerminalAgentInfo`).
 - **However, the handler does NOT remove the terminal from the in-memory `registeredTerminals` Map** (extension.ts:249). There is no `registeredTerminals.delete(...)` call in the close handler.
-- This means the Map accumulates stale `vscode.Terminal` references for terminals the user has manually closed. Consequences:
+- **Eventual cleanup exists but has a gap:** `syncTerminalRegistryWithState` (extension.ts:1744-1833) does an atomic swap — it clears `registeredTerminals` and rebuilds it from `state.json` + live `vscode.window.terminals`. Since `handleTerminalClosed` cleans `state.json`, the next state sync hook fire (extension.ts:1668) rebuilds `registeredTerminals` without the stale entry. **However**, the state sync hook has a re-entry guard at line 1669: `if (hookSyncOutstanding) return;`. If a sync is already in flight when `handleTerminalClosed`'s `updateState` fires, the cleanup sync is **skipped**, and the stale entry persists in `registeredTerminals` until the next state change triggers another sync — which could be indefinitely if the user doesn't interact with the board. Additionally, `handleTerminalClosed` is async (1s PID timeout) and not awaited by the `onDidCloseTerminal` handler, so there's a 1s+ window where the stale entry exists even without the re-entry guard.
+- This means the Map can accumulate stale `vscode.Terminal` references for terminals the user has manually closed. Consequences:
   - `deactivate()` (extension.ts:3614-3624) iterates `registeredTerminals` and calls `.dispose()` on each — already-closed terminals throw (caught by the `catch {}` block, but it's wasted work and noisy in logs).
   - Any code path that looks up a terminal by name in `registeredTerminals` without checking `terminal.exitStatus === undefined` will get a dead reference. The `locateTerminal()` helper (extension.ts:364-385) and `createAgentGrid`'s reuse check (extension.ts:2772) both guard with `exitStatus === undefined`, so they currently survive — but the stale entries are a latent bug and a memory leak.
-- This is the "not destroyed properly" symptom. The `state.json` cleanup is correct; the in-memory cleanup is missing.
+- This is the "not destroyed properly" symptom. The `state.json` cleanup is correct; the in-memory cleanup is missing. The proposed fix provides **immediate** synchronous cleanup at close time, closing both the 1s async window and the re-entry guard gap.
 
 **Defect 3 — Orchestrator terminal appears at the bottom of the terminal list, not the top.**
 
@@ -37,10 +38,11 @@ This is the "not created properly" symptom. The user clicks Orchestrate and gets
 
 ## Metadata
 
-- **Tags:** `bugfix`, `orchestrator`, `terminal`, `lifecycle`, `agent-grid`, `epics`
+- **Tags:** `bugfix`, `ui`, `reliability`
 - **Complexity:** 4/10
 - **Files touched:** 2 (`src/extension.ts`, `src/services/TaskViewerProvider.ts`)
 - **Risk:** Medium — touches terminal creation order (visible to all users) and the default agent visibility (changes which terminals spawn by default). The `registeredTerminals` cleanup is low-risk. The visibility default change has a user-visible side effect (an extra terminal appears by default).
+- **Recent commit interaction:** Commit 58a24a8 (2026-06-28) fixed the "ORCHESTRATING Column Never Appears" bug by making `markEpicOrchestrating` force-refresh the board and return a boolean `moved` result. The status messages in `KanbanProvider.ts:7099-7108` now distinguish `sent` vs `moved` outcomes. Defect 1's fix (making the orchestrator visible by default) will make `sent === true`, so users will see "Orchestrator prompt sent and copied. Epic moved to ORCHESTRATING." instead of "No orchestrator terminal — prompt copied." — this is the intended outcome and the two fixes are complementary.
 
 ## User Review Required
 
@@ -79,6 +81,10 @@ This is the "not created properly" symptom. The user clicks Orchestrate and gets
 ## Dependencies
 
 None. Self-contained changes with no prerequisite plans or sessions. The three fixes are independent and can be implemented in any order, though all three should ship together for a coherent fix.
+
+## Adversarial Synthesis
+
+**Key risks:** (1) The visibility default change (Defect 1) affects all ~4,000 installs — every user gets a 7th terminal by default, even those who never use epics. (2) The Defect 2 problem analysis originally overlooked `syncTerminalRegistryWithState`'s eventual cleanup mechanism — the real gap is the re-entry guard at line 1669 that can skip the cleanup sync indefinitely. **Mitigations:** The visibility toggle remains in the Setup panel for users who don't want the orchestrator; the `registeredTerminals` cleanup is belt-and-suspenders over the existing eventual cleanup; the ordering fix is empirically validated — the existing 6 terminals already appear in `allBuiltInAgents` array order, proving creation order reliably determines panel position.
 
 ## Proposed Changes
 
@@ -221,6 +227,8 @@ This works because:
 
 None for the CSS/lifecycle changes. The terminal ordering and visibility changes are best validated manually via the VS Code terminal panel. If the project has existing terminal-lifecycle unit tests, they should be run to confirm no regressions in `handleTerminalClosed` or `createAgentGrid` behavior.
 
+**Session directives:** Compilation (`npm run compile`) and automated tests are skipped for this session per user directives. The test suite will be run separately by the user. Verification below is manual-only.
+
 ### Manual Verification
 
 1. **Defect 1 — Orchestrator terminal is created by default:**
@@ -261,4 +269,4 @@ None for the CSS/lifecycle changes. The terminal ordering and visibility changes
 
 ---
 
-**Recommendation:** Complexity 4/10. The ordering change (Defect 3) and the stale-cleanup change (Defect 2) are safe internal fixes. The visibility-default change (Defect 1) is the correct fix for the reported bug but has a user-visible side effect (extra terminal by default) — **confirm with the user before implementing Defect 1**. If the user prefers not to change the default, the alternative is to add an auto-enable prompt in `dispatchCustomPromptToRole` that offers to enable the orchestrator and recreate the grid when the user clicks Orchestrate with no orchestrator terminal present.
+**Recommendation:** Complexity 4/10 → **Send to Coder**. The ordering change (Defect 3) and the stale-cleanup change (Defect 2) are safe internal fixes. The visibility-default change (Defect 1) is the correct fix for the reported bug but has a user-visible side effect (extra terminal by default for all ~4,000 installs) — **confirm with the user before implementing Defect 1**. If the user prefers not to change the default, the alternative is lazy initialization: add an auto-create path in `dispatchCustomPromptToRole` that creates the orchestrator terminal on-demand when the user clicks Orchestrate with no orchestrator terminal present (note: this would not solve Defect 3's top-of-list ordering, since the lazily-created terminal would appear at the bottom).

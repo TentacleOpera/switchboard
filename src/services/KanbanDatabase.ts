@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { isAllowedSwitchboardLocation } from '../utils/switchboardLocationGuard';
 import { STATE_KEY_TO_CONFIG } from './stateConfigBridge';
+import { DEFAULT_KANBAN_COLUMNS } from './agentConfig';
 
 export interface WorkspaceDatabaseMapping {
     id: string;
@@ -629,7 +630,9 @@ const SCHEMA_PLAN_COLUMN_DEFS: Array<{ name: string; def: string }> = (() => {
 const runtimeRequire = createRequire(__filename);
 
 export const VALID_KANBAN_COLUMNS = new Set([
-    'CREATED', 'BACKLOG', 'CONTEXT GATHERER', 'PLAN REVIEWED', 'LEAD CODED', 'CODER CODED', 'CODE REVIEWED', 'CODED', 'COMPLETED'
+    ...DEFAULT_KANBAN_COLUMNS.map(c => c.id),
+    'BACKLOG',
+    'CODED',
 ]);
 // VALID_COMPLEXITIES is now handled by isValidComplexityValue() in complexityScale.ts
 const VALID_STATUSES = new Set(['active', 'archived', 'completed', 'deleted']);
@@ -5466,10 +5469,13 @@ FROM plans
                     epicTopicById.set(plan.planId, plan.topic);
                 }
             }
+            const orderedColumns = [...DEFAULT_KANBAN_COLUMNS].sort((a, b) => a.order - b.order);
             const columns = new Map<string, KanbanPlanRecord[]>();
-            for (const col of VALID_KANBAN_COLUMNS) {
-                columns.set(col, []);
+            for (const col of orderedColumns) {
+                columns.set(col.id, []);
             }
+            columns.set('BACKLOG', []);
+            columns.set('CODED', []);
             for (const plan of allPlans) {
                 const list = columns.get(plan.kanbanColumn);
                 if (list) list.push(plan);
@@ -5500,6 +5506,9 @@ FROM plans
                         const filePath = path.isAbsolute(plan.planFile)
                             ? plan.planFile
                             : path.join(this._workspaceRoot, plan.planFile);
+                        // Append planId + epic assignment in an HTML comment so the visible
+                        // board is unchanged but the "Suggest Epics" agent can parse them
+                        // without falling back to the 1.3 MB get-state.js JSON blob.
                         const parts = [`planId:${plan.planId}`];
                         if (plan.isEpic) { parts.push('epic'); }
                         if (plan.epicId) {
