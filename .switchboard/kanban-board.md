@@ -1,6 +1,6 @@
 # Kanban Board
 
-*Workspace: 038bffef-9842-4574-96a1-69a43a280b3c* · *Updated: 2026-06-28T11:48:19.760Z*
+*Workspace: 038bffef-9842-4574-96a1-69a43a280b3c* · *Updated: 2026-06-28T11:48:34.924Z*
 
 ## CREATED
 
@@ -97,11 +97,11 @@ _No plans_
 
 ## CODER CODED
 
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/remove-context-gatherer-splitter-code-researcher-agents.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/remove-context-gatherer-splitter-code-researcher-agents.md) — Remove Context Gatherer, Splitter, and Code Researcher Agents <!-- planId:48de3bbf-05c5-42ed-8bf5-fabf1c982471 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/keep-valid-kanban-columns-in-sync-with-defaults.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/keep-valid-kanban-columns-in-sync-with-defaults.md) — Keep VALID_KANBAN_COLUMNS in Sync with DEFAULT_KANBAN_COLUMNS <!-- planId:1a403ef5-248d-4f46-acb8-0d9f3f0d13fd -->
 
 ## CODE REVIEWED
 
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/remove-context-gatherer-splitter-code-researcher-agents.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/remove-context-gatherer-splitter-code-researcher-agents.md) — Remove Context Gatherer, Splitter, and Code Researcher Agents <!-- planId:48de3bbf-05c5-42ed-8bf5-fabf1c982471 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260628180012_orchestrator-terminal-lifecycle-and-top-ordering.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260628180012_orchestrator-terminal-lifecycle-and-top-ordering.md) — Orchestrator Terminal Lifecycle and Top-of-List Ordering <!-- planId:33c08be5-496d-4068-874b-9627d42c2cc0 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/split-kanban-board-into-per-column-files.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/split-kanban-board-into-per-column-files.md) — Split Kanban Board Export into Per-Column Markdown Files <!-- planId:ea969500-238d-4a53-b967-953756e12f82 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/expose-epics-folder-in-gitignore.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/expose-epics-folder-in-gitignore.md) — Expose `.switchboard/epics/` in Managed Gitignore Rules <!-- planId:31fa841e-2aac-475a-8f0f-5e1cac378b15 -->
