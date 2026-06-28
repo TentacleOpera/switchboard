@@ -29,6 +29,57 @@ The webview's `columns` array is only updated when a `updateColumns` message is 
 - `markEpicOrchestrating` has no return value (`Promise<void>`), so the caller (`orchestrateEpic` handler) cannot know if the move succeeded
 - The handler always sends "Epic moved to ORCHESTRATING" status message even when `moved === false`
 - `renderBoard` line 5105: `columns.includes(effectiveCol) ? effectiveCol : 'CREATED'` is the silent discard
+- `_filterDynamicColumns` (line 2424) uses `epicOnly` to gate ORCHESTRATING visibility: `if (col.epicOnly) return occupiedColumns.has(col.id)` — the column only appears in the filtered set when occupied. If the signature already reflects an occupied ORCHESTRATING from a prior refresh, a second orchestration's `_refreshBoard` produces the same signature and `updateColumns` is suppressed.
+
+---
+
+## Metadata
+
+**Tags:** [frontend, backend, bugfix, ui, ux]
+**Complexity:** 5
+
+## User Review Required
+
+Yes — the purple color choice (`#6b21a8` / `#7c3aed`) is a design decision the user should confirm. The safety net's stub column definition (order, label, kind) should also be reviewed to ensure it matches the backend's actual ORCHESTRATING column definition.
+
+## Complexity Audit
+
+### Routine
+- Removing the 🎯 emoji from 3 string locations (trivial text replacement)
+- Adding a CSS rule for `.card-btn.orchestrate` (follows existing `.card-btn.recover` pattern)
+- Adding `btn.disabled = true; btn.textContent = 'Orchestrating…'` to the click handler (2 lines)
+- Resetting `_lastColumnsSignature = null` before `_refreshBoard` (1 line)
+- Changing `markEpicOrchestrating` return type from `Promise<void>` to `Promise<boolean>` and adding return statements
+
+### Complex / Risky
+- Webview safety net (Fix 4D) dynamically mutates module-level `columns` and `columnDefinitions` arrays inside `renderBoard()`, then calls `renderColumns()` to re-render headers mid-board-render. While `renderColumns()` does not call `renderBoard()` (no recursion risk), the mid-render DOM rebuild has subtle ordering dependencies: `buckets` must be initialized after the safety net adds ORCHESTRATING, and the card-rendering loop later in `renderBoard` must find the DOM container created by `renderColumns()`.
+- The `send` mode path (`dispatchEpicOrchestration`) calls `markEpicOrchestrating` internally (line 3186) but does not propagate the `moved` result back to the handler. The handler's `send` mode status message (line 7094) unconditionally claims "Epic moved to ORCHESTRATING" even if the move failed. Fix 4C only addresses the `copy` mode path — the `send` mode path needs a parallel fix.
+- The idempotency short-circuit (line 3212) returns early without refreshing. If the epic is already in ORCHESTRATING in the DB but the webview's `columns` doesn't contain ORCHESTRATING (the bug state), clicking Orchestrate again hits the short-circuit and no `renderBoard` occurs — the column stays invisible until some other action triggers a board refresh.
+
+## Edge-Case & Dependency Audit
+
+**Race Conditions:**
+- `refreshWithData` is async with multiple `await` points between `updateColumns` (line 1281) and `updateBoard` (later in the function). If a second `_refreshBoard` is triggered concurrently (e.g., file watcher fires during orchestration), the two refreshes' messages could interleave. However, VS Code's `postMessage` preserves order within a single sender, and `_refreshBoard` is not re-entrant guarded — the second call's `updateColumns` could overwrite the first's before the first's `updateBoard` arrives. Fix 4A mitigates this by forcing the signature reset, but does not eliminate the interleaving risk entirely. Risk is low because orchestration is a user-initiated action unlikely to coincide with a file watcher event for the same workspace.
+
+**Security:**
+- No security implications. All changes are UI state management and internal column visibility logic.
+
+**Side Effects:**
+- Fix 4A forces `updateColumns` to be sent on every orchestration, even when columns haven't changed. This causes the webview to reset `lastBoardSignature = ''` (line 6341) and call `renderBoard(currentCards)` (line 6344) — an extra full board render. Performance impact is negligible (board renders are already fast and debounced by signature comparison in the normal path).
+- Fix 4D's safety net permanently modifies the module-level `columns` and `columnDefinitions` arrays. If a subsequent `updateColumns` message arrives (from Fix 4A), it overwrites both arrays with the backend's authoritative version — the safety net's modification is cleanly replaced. If no `updateColumns` arrives, the modification persists, which is the desired behavior (column stays visible).
+- Fix 3's `btn.disabled = true` state is lost if the board re-renders between the click and the `epicOrchestrationResult` message (the button DOM element is replaced). The `epicOrchestrationResult` handler uses `document.querySelector` to find the (new) button, so it still resets correctly. Minor UX flicker, not a functional bug.
+
+**Dependencies & Conflicts:**
+- No external library dependencies. All changes use existing project APIs (`moveCardToColumn`, `_refreshBoard`, `renderColumns`, `renderBoard`).
+- Fix 4B (return type change) is a breaking interface change for `markEpicOrchestrating`. All callers must be checked: `orchestrateEpic` handler (line 7091, copy mode) and `dispatchEpicOrchestration` (line 3186, send mode). Both are updated by the plan.
+
+## Dependencies
+
+None — this is a self-contained bug fix with no prerequisite plans.
+
+## Adversarial Synthesis
+
+Key risks: (1) the `send` mode path's status message is not fixed by the plan as written — `dispatchEpicOrchestration` must propagate the `moved` result; (2) the idempotent short-circuit bypasses the refresh, leaving the column invisible if the webview is already in the bug state; (3) the webview safety net mutates module-level state mid-render, which works but is fragile. Mitigations: add `moved` propagation to `dispatchEpicOrchestration`, add a lightweight refresh to the idempotent path, and keep the safety net as defense-in-depth rather than the primary fix.
 
 ---
 
@@ -54,7 +105,7 @@ btn.textContent = '🎯 Orchestrate'  →  btn.textContent = 'Orchestrate'
 
 **File**: `src/webview/kanban.html`
 
-Locate the `.card-btn` CSS block (around line 971). Insert a new rule after the existing `.card-btn.recover:hover` rule:
+Locate the `.card-btn` CSS block (around line 971). Insert a new rule after the existing `.card-btn.recover:hover` rule (line 996-999):
 
 ```css
 .card-btn.orchestrate {
@@ -116,54 +167,75 @@ await this._refreshBoard(workspaceRoot);
 
 **File**: `src/services/KanbanProvider.ts`
 
-Change signature from `Promise<void>` to `Promise<boolean>`, return `moved` (or `false` on early exits):
+Change signature from `Promise<void>` to `Promise<boolean>`, return `moved` (or `false` on early exits). Also add a lightweight refresh to the idempotent path so the column appears even if the webview was in the bug state:
 
 ```typescript
 public async markEpicOrchestrating(...): Promise<boolean> {
-    ...
+    const db = this._getKanbanDb(workspaceRoot);
+    if (!db || !(await db.ensureReady())) {
+        console.warn(...);
+        return false;
+    }
+    const epic = await db.getPlanByPlanId(epicSessionId);
     if (!epic || !epic.isEpic) {
         console.warn(...);
         return false;
     }
+    const currentColumn = this._normalizeLegacyKanbanColumn(epic.kanbanColumn) || '';
     if (currentColumn === 'ORCHESTRATING') {
-        return true; // already there, idempotent
+        // Idempotent: epic is already in ORCHESTRATING. Still refresh in case the
+        // webview's column state is stale (the bug we're fixing). The signature reset
+        // ensures updateColumns is re-sent.
+        this._lastColumnsSignature = null;
+        await this._refreshBoard(workspaceRoot);
+        return true;
     }
     try {
         let moved = false;
-        ...
+        if (epic.sessionId) {
+            moved = await this.moveCardToColumn(workspaceRoot, epic.sessionId, 'ORCHESTRATING');
+        } else if (epic.planFile) {
+            moved = await this.moveCardToColumnByPlanFile(workspaceRoot, epic.planFile, 'ORCHESTRATING');
+        }
         if (!moved) {
-            console.warn(...);
+            console.warn(`[KanbanProvider] markEpicOrchestrating: move to ORCHESTRATING returned false for ${epicSessionId}`);
         }
         this._lastColumnsSignature = null;
         await this._refreshBoard(workspaceRoot);
         return moved;
     } catch (err) {
-        ...
+        console.warn(`[KanbanProvider] markEpicOrchestrating: teleport to ORCHESTRATING failed for ${epicSessionId}: ${err}`);
         return false;
     }
 }
 ```
 
-#### Part C — Backend: use return value in handler to fix misleading status message
+#### Part C — Backend: use return value in handler to fix misleading status message (copy mode)
 
 **File**: `src/services/KanbanProvider.ts`
 
-In the `orchestrateEpic` case handler (around line 7091), update to:
+In the `orchestrateEpic` case handler (around line 7091), update the copy-mode path to use the `moved` return value:
 
 ```typescript
-const moved = await this.markEpicOrchestrating(wsRoot, epicId);
-const statusMsg = mode === 'send'
-    ? (sent ? 'Orchestrator prompt sent and copied. Epic moved to ORCHESTRATING.' : 'No orchestrator terminal — prompt copied. Epic moved to ORCHESTRATING.')
-    : (moved
-        ? 'Orchestrator prompt copied. Epic moved to ORCHESTRATING.'
-        : 'Orchestrator prompt copied. Could not move epic — check console for details.');
+if (mode === 'copy') {
+    // Copy path must teleport explicitly (send path already did above).
+    const moved = await this.markEpicOrchestrating(wsRoot, epicId);
+    const statusMsg = mode === 'send'
+        ? (sent ? 'Orchestrator prompt sent and copied. Epic moved to ORCHESTRATING.' : 'No orchestrator terminal — prompt copied. Epic moved to ORCHESTRATING.')
+        : (moved
+            ? 'Orchestrator prompt copied. Epic moved to ORCHESTRATING.'
+            : 'Orchestrator prompt copied. Could not move epic — check console for details.');
+    // ... (rest of handler unchanged)
+}
 ```
+
+**Note**: The `statusMsg` declaration must be moved inside the `if (mode === 'copy')` block (or restructured) so that `moved` is in scope. The `send` mode path's status message remains unchanged for now (see Fix 4E).
 
 #### Part D — Webview safety net: handle ORCHESTRATING in `renderBoard` even without prior `updateColumns`
 
 **File**: `src/webview/kanban.html`
 
-In the `renderBoard` function, before the `displayCards.forEach` loop, add a guard that dynamically inserts ORCHESTRATING into `columns` and `buckets` if any card has that column:
+In the `renderBoard` function, before the `displayCards.forEach` loop (after line 5101, before line 5103), add a guard that dynamically inserts ORCHESTRATING into `columns` and `buckets` if any card has that column:
 
 ```js
 // Safety net: if any card is in ORCHESTRATING but it's not in columns yet,
@@ -192,6 +264,72 @@ if (hasOrchestrating && !columns.includes('ORCHESTRATING')) {
 
 This is a safety net only — it should never be needed if Fix 4A works, but it prevents silent data loss when the column is missing from the current column set.
 
+#### Part E — Backend: propagate `moved` result through `dispatchEpicOrchestration` (send mode)
+
+**File**: `src/services/KanbanProvider.ts`
+
+`dispatchEpicOrchestration` (line 3171) currently calls `markEpicOrchestrating` internally (line 3186) but discards the result. Update it to capture and return `moved` so the handler can produce an accurate status message for the `send` mode path:
+
+```typescript
+public async dispatchEpicOrchestration(
+    workspaceRoot: string,
+    epicSessionId: string
+): Promise<{ assembled: { prompt: string; epicTopic: string; subtaskCount: number; totalSubtasks: number } | null; sent: boolean; moved: boolean }> {
+    const assembled = await this.buildEpicOrchestrationPrompt(workspaceRoot, epicSessionId);
+    if (!assembled) { return { assembled: null, sent: false, moved: false }; }
+    let sent = false;
+    if (this._taskViewerProvider) {
+        sent = await this._taskViewerProvider.dispatchCustomPromptToRole('orchestrator', assembled.prompt, workspaceRoot);
+    }
+    let moved = false;
+    try {
+        moved = await this.markEpicOrchestrating(workspaceRoot, epicSessionId);
+    } catch (teleportErr) {
+        console.warn(`[KanbanProvider] dispatchEpicOrchestration: teleport to ORCHESTRATING failed (prompt was still dispatched): ${teleportErr}`);
+    }
+    return { assembled, sent, moved };
+}
+```
+
+Then update the handler (around line 7077) to use `res.moved`:
+
+```typescript
+if (mode === 'send') {
+    const res = await this.dispatchEpicOrchestration(wsRoot, epicId);
+    assembled = res.assembled;
+    sent = res.sent;
+    moved = res.moved;  // ← NEW: track move success for send mode
+} else {
+    assembled = await this.buildEpicOrchestrationPrompt(wsRoot, epicId);
+}
+```
+
+And update the status message to account for `moved` in both modes. Declare `let moved = false;` before the if/else and set it in both branches, then use it in the status message:
+
+```typescript
+let moved = false;
+if (mode === 'send') {
+    const res = await this.dispatchEpicOrchestration(wsRoot, epicId);
+    assembled = res.assembled;
+    sent = res.sent;
+    moved = res.moved;
+} else {
+    assembled = await this.buildEpicOrchestrationPrompt(wsRoot, epicId);
+}
+// ... (assembled null check, clipboard write) ...
+if (mode === 'copy') {
+    moved = await this.markEpicOrchestrating(wsRoot, epicId);
+}
+const statusMsg = mode === 'send'
+    ? (sent && moved ? 'Orchestrator prompt sent and copied. Epic moved to ORCHESTRATING.'
+        : sent ? 'Orchestrator prompt sent and copied. Could not move epic — check console for details.'
+        : moved ? 'No orchestrator terminal — prompt copied. Epic moved to ORCHESTRATING.'
+        : 'No orchestrator terminal — prompt copied. Could not move epic — check console for details.')
+    : (moved
+        ? 'Orchestrator prompt copied. Epic moved to ORCHESTRATING.'
+        : 'Orchestrator prompt copied. Could not move epic — check console for details.');
+```
+
 ---
 
 ## Implementation Order
@@ -199,22 +337,35 @@ This is a safety net only — it should never be needed if Fix 4A works, but it 
 1. Fix 1 (emoji) — trivial string changes
 2. Fix 2 (purple CSS) — add new CSS rule
 3. Fix 3 (immediate feedback) — add two lines to click handler
-4. Fix 4 parts A+B (backend `_lastColumnsSignature` reset + return value)
-5. Fix 4 part C (handler status message accuracy)
-6. Fix 4 part D (webview safety net in `renderBoard`)
+4. Fix 4 parts A+B (backend `_lastColumnsSignature` reset + return value + idempotent refresh)
+5. Fix 4 part C (handler status message accuracy — copy mode)
+6. Fix 4 part E (dispatchEpicOrchestration `moved` propagation — send mode)
+7. Fix 4 part D (webview safety net in `renderBoard`)
 
 ## Files Modified
 
 - `src/webview/kanban.html` — emoji removal (3x), purple CSS, click feedback, `renderBoard` safety net
-- `src/services/KanbanProvider.ts` — `markEpicOrchestrating` return value + `_lastColumnsSignature` reset, handler status message
+- `src/services/KanbanProvider.ts` — `markEpicOrchestrating` return value + `_lastColumnsSignature` reset + idempotent refresh, `dispatchEpicOrchestration` `moved` propagation, handler status message (both modes)
 
-## UAT Checklist
+## Verification Plan
+
+### Automated Tests
+
+Per session directives: compilation and automated tests are skipped. The test suite will be run separately by the user.
+
+### Manual UAT Checklist
 
 - [ ] Orchestrate button has NO emoji — label is just "Orchestrate"
 - [ ] Orchestrate button is purple/violet and visually distinguishable from other card-btn buttons
 - [ ] Clicking Orchestrate immediately disables the button and shows "Orchestrating…"
 - [ ] After ~1-2 seconds, the ORCHESTRATING column appears in the board
 - [ ] The epic card is in the ORCHESTRATING column (not CREATED)
-- [ ] Status bar says "Orchestrator prompt copied. Epic moved to ORCHESTRATING."
+- [ ] Status bar says "Orchestrator prompt copied. Epic moved to ORCHESTRATING." (copy mode)
 - [ ] If the move fails for any reason, status bar shows a failure message (not the misleading success message)
-- [ ] Clicking Orchestrate a second time on a card already in ORCHESTRATING: status message says it was copied, card stays in ORCHESTRATING (idempotent)
+- [ ] Clicking Orchestrate a second time on a card already in ORCHESTRATING: status message says it was copied, card stays in ORCHESTRATING (idempotent), and the column is visible
+- [ ] Send mode (if orchestrator terminal is configured): status message accurately reflects whether the move succeeded
+- [ ] Send mode (if orchestrator terminal is NOT configured): status message says "No orchestrator terminal" and accurately reflects whether the move succeeded
+
+## Recommendation
+
+Complexity 5 → **Send to Coder**

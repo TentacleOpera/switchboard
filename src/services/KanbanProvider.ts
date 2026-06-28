@@ -3171,9 +3171,9 @@ export class KanbanProvider implements vscode.Disposable {
     public async dispatchEpicOrchestration(
         workspaceRoot: string,
         epicSessionId: string
-    ): Promise<{ assembled: { prompt: string; epicTopic: string; subtaskCount: number; totalSubtasks: number } | null; sent: boolean }> {
+    ): Promise<{ assembled: { prompt: string; epicTopic: string; subtaskCount: number; totalSubtasks: number } | null; sent: boolean; moved: boolean }> {
         const assembled = await this.buildEpicOrchestrationPrompt(workspaceRoot, epicSessionId);
-        if (!assembled) { return { assembled: null, sent: false }; }
+        if (!assembled) { return { assembled: null, sent: false, moved: false }; }
         let sent = false;
         if (this._taskViewerProvider) {
             sent = await this._taskViewerProvider.dispatchCustomPromptToRole('orchestrator', assembled.prompt, workspaceRoot);
@@ -3182,35 +3182,41 @@ export class KanbanProvider implements vscode.Disposable {
         // orchestrator was already dispatched above). This is the occupancy trigger that
         // makes the epic-only Orchestrator column appear on the board. Without this, the
         // column is permanently inert (epicOnly + hideWhenNoAgent = invisible unless occupied).
+        let moved = false;
         try {
-            await this.markEpicOrchestrating(workspaceRoot, epicSessionId);
+            moved = await this.markEpicOrchestrating(workspaceRoot, epicSessionId);
         } catch (teleportErr) {
             console.warn(`[KanbanProvider] dispatchEpicOrchestration: teleport to ORCHESTRATING failed (prompt was still dispatched): ${teleportErr}`);
         }
-        return { assembled, sent };
+        return { assembled, sent, moved };
     }
 
     /**
      * Teleport the epic into the ORCHESTRATING column.
      * Consolidates the teleport logic, provides an idempotency short-circuit, and handles logging.
      */
-    public async markEpicOrchestrating(workspaceRoot: string, epicSessionId: string): Promise<void> {
+    public async markEpicOrchestrating(workspaceRoot: string, epicSessionId: string): Promise<boolean> {
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !(await db.ensureReady())) {
             console.warn(`[KanbanProvider] markEpicOrchestrating: db not ready for ${epicSessionId}`);
-            return;
+            return false;
         }
         const epic = await db.getPlanByPlanId(epicSessionId);
         if (!epic || !epic.isEpic) {
             console.warn(`[KanbanProvider] markEpicOrchestrating: no epic found for ${epicSessionId}`);
-            return;
+            return false;
         }
         // Idempotency: skip the move (and the integration sync it would fire) if the
         // epic is already in ORCHESTRATING. Prevents re-syncing a no-op status change
         // to Linear/ClickUp when the user re-orchestrates an already-orchestrating epic.
         const currentColumn = this._normalizeLegacyKanbanColumn(epic.kanbanColumn) || '';
         if (currentColumn === 'ORCHESTRATING') {
-            return; // already there — no move, no sync, no refresh needed
+            // Already in ORCHESTRATING. Still refresh in case the webview's column
+            // state is stale (the bug we're fixing). The signature reset ensures
+            // updateColumns is re-sent.
+            this._lastColumnsSignature = null;
+            await this._refreshBoard(workspaceRoot);
+            return true;
         }
         try {
             let moved = false;
@@ -3222,9 +3228,12 @@ export class KanbanProvider implements vscode.Disposable {
             if (!moved) {
                 console.warn(`[KanbanProvider] markEpicOrchestrating: move to ORCHESTRATING returned false for ${epicSessionId}`);
             }
+            this._lastColumnsSignature = null;   // force updateColumns to always be sent
             await this._refreshBoard(workspaceRoot);
+            return moved;
         } catch (err) {
             console.warn(`[KanbanProvider] markEpicOrchestrating: teleport to ORCHESTRATING failed for ${epicSessionId}: ${err}`);
+            return false;
         }
     }
 
@@ -7072,11 +7081,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 try {
                     let assembled: { prompt: string; epicTopic: string; subtaskCount: number; totalSubtasks: number } | null = null;
                     let sent = false;
+                    let moved = false;
                     if (mode === 'send') {
                         // dispatchEpicOrchestration teleports to ORCHESTRATING internally.
                         const res = await this.dispatchEpicOrchestration(wsRoot, epicId);
                         assembled = res.assembled;
                         sent = res.sent;
+                        moved = res.moved;
                     } else {
                         assembled = await this.buildEpicOrchestrationPrompt(wsRoot, epicId);
                     }
@@ -7088,11 +7099,16 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     await vscode.env.clipboard.writeText(assembled.prompt);
                     if (mode === 'copy') {
                         // Copy path must teleport explicitly (send path already did above).
-                        await this.markEpicOrchestrating(wsRoot, epicId);
+                        moved = await this.markEpicOrchestrating(wsRoot, epicId);
                     }
                     const statusMsg = mode === 'send'
-                        ? (sent ? 'Orchestrator prompt sent and copied. Epic moved to ORCHESTRATING.' : 'No orchestrator terminal — prompt copied. Epic moved to ORCHESTRATING.')
-                        : 'Orchestrator prompt copied. Epic moved to ORCHESTRATING.';
+                        ? (sent && moved ? 'Orchestrator prompt sent and copied. Epic moved to ORCHESTRATING.'
+                            : sent ? 'Orchestrator prompt sent and copied. Could not move epic — check console for details.'
+                            : moved ? 'No orchestrator terminal — prompt copied. Epic moved to ORCHESTRATING.'
+                            : 'No orchestrator terminal — prompt copied. Could not move epic — check console for details.')
+                        : (moved
+                            ? 'Orchestrator prompt copied. Epic moved to ORCHESTRATING.'
+                            : 'Orchestrator prompt copied. Could not move epic — check console for details.');
                     this._panel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: true, mode, sent, sessionId: echoId, prompt: assembled.prompt, epicTopic: assembled.epicTopic, subtaskCount: assembled.subtaskCount, totalSubtasks: assembled.totalSubtasks });
                     this._panel?.webview.postMessage({ type: 'showStatusMessage', message: statusMsg, isError: false });
                 } catch (err) {

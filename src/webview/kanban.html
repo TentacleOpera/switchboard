@@ -998,6 +998,14 @@
             color: var(--vscode-testing-iconPassed, #73c991);
         }
 
+        .card-btn.orchestrate {
+            background: #6b21a8;
+            color: #fff;
+        }
+        .card-btn.orchestrate:hover {
+            background: #7c3aed;
+        }
+
         .card-btn.icon-btn {
             padding: 4px;
             width: 20px;
@@ -5100,6 +5108,27 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // Subtasks roll up into their epic card. Hide them from the main board.
             displayCards = displayCards.filter(card => !card.epicId);
 
+            // Safety net: if any card is in ORCHESTRATING but it's not in columns yet,
+            // add it now so the card isn't silently dropped to CREATED.
+            const hasOrchestrating = displayCards.some(card => (card._effectiveColumn || card.column) === 'ORCHESTRATING');
+            if (hasOrchestrating && !columns.includes('ORCHESTRATING')) {
+                const orchDef = columnDefinitions.find(d => d.id === 'ORCHESTRATING') || {
+                    id: 'ORCHESTRATING', label: 'Orchestrator', order: 250,
+                    kind: 'review', source: 'built-in', autobanEnabled: false,
+                    dragDropMode: 'cli', hideWhenNoAgent: true, epicOnly: true
+                };
+                const insertAt = columnDefinitions.findIndex(d => d.order > orchDef.order);
+                if (insertAt === -1) {
+                    columnDefinitions.push(orchDef);
+                    columns.push('ORCHESTRATING');
+                } else {
+                    columnDefinitions.splice(insertAt, 0, orchDef);
+                    columns.splice(insertAt, 0, 'ORCHESTRATING');
+                }
+                buckets['ORCHESTRATING'] = [];
+                renderColumns();
+            }
+
             displayCards.forEach(card => {
                 const effectiveCol = card._effectiveColumn || card.column;
                 const col = columns.includes(effectiveCol) ? effectiveCol : 'CREATED';
@@ -5295,6 +5324,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             document.querySelectorAll('.card-btn.orchestrate').forEach(btn => {
                 btn.addEventListener('click', (e) => {
                     e.stopPropagation(); // Prevent triggering card selection/drag.
+                    btn.disabled = true;
+                    btn.textContent = 'Orchestrating…';
                     // Pass planId as the PRIMARY identifier — the backend resolves the epic via
                     // getPlanByPlanId, and a locally-created epic's sessionId !== planId. Send
                     // sessionId too so the epicOrchestrationResult handler can re-match this button.
@@ -5408,7 +5439,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     : '';
             }
             const orchestrateBtn = (card.isEpic && !isCompleted)
-                ? `<button class="card-btn orchestrate" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Orchestrate Epic">🎯 Orchestrate</button>`
+                ? `<button class="card-btn orchestrate" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Orchestrate Epic">Orchestrate</button>`
                 : '';
             const completeOrDoneBtn = isCompleted
                 ? `<span class="card-done-badge">✓ Done</span>`
@@ -6514,7 +6545,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                             let fallbackTimer = null;
                             const resetBtn = () => {
-                                btn.textContent = '🎯 Orchestrate';
+                                btn.textContent = 'Orchestrate';
                                 btn.classList.remove('copied');
                                 btn.disabled = false;
                                 btn.removeEventListener('animationend', onAnimationEnd);
@@ -6527,7 +6558,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             btn.addEventListener('animationend', onAnimationEnd);
                             fallbackTimer = setTimeout(resetBtn, 2000);
                         } else {
-                            btn.textContent = '🎯 Orchestrate';
+                            btn.textContent = 'Orchestrate';
                             btn.classList.remove('copied');
                             btn.disabled = false;
                         }
