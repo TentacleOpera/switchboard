@@ -12,7 +12,7 @@ const DEFAULT_VISIBLE_AGENTS = {
     researcher: false,
     mcp_monitor: false,
     claude_designer: false,
-    orchestrator: false
+    orchestrator: true
 };
 
 // CRITICAL: DO NOT CHANGE DEFAULTS UNLESS SPECIFICALLY ASKED

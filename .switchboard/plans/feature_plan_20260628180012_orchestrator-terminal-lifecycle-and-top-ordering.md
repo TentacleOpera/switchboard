@@ -40,7 +40,7 @@ This is the "not created properly" symptom. The user clicks Orchestrate and gets
 
 - **Tags:** `bugfix`, `ui`, `reliability`
 - **Complexity:** 4/10
-- **Files touched:** 2 (`src/extension.ts`, `src/services/TaskViewerProvider.ts`)
+- **Files touched:** 5 (`src/extension.ts`, `src/services/TaskViewerProvider.ts`, `src/services/PlanningPanelProvider.ts`, `src/webview/sharedDefaults.js`, `src/webview/implementation.html`) — updated during review: three additional stale default locations were found and fixed (see Review Findings below).
 - **Risk:** Medium — touches terminal creation order (visible to all users) and the default agent visibility (changes which terminals spawn by default). The `registeredTerminals` cleanup is low-risk. The visibility default change has a user-visible side effect (an extra terminal appears by default).
 - **Recent commit interaction:** Commit 58a24a8 (2026-06-28) fixed the "ORCHESTRATING Column Never Appears" bug by making `markEpicOrchestrating` force-refresh the board and return a boolean `moved` result. The status messages in `KanbanProvider.ts:7099-7108` now distinguish `sent` vs `moved` outcomes. Defect 1's fix (making the orchestrator visible by default) will make `sent === true`, so users will see "Orchestrator prompt sent and copied. Epic moved to ORCHESTRATING." instead of "No orchestrator terminal — prompt copied." — this is the intended outcome and the two fixes are complementary.
 
@@ -266,6 +266,55 @@ None for the CSS/lifecycle changes. The terminal ordering and visibility changes
    - With the agent grid open (Orchestrator at top), run "Create Agent Grid" again without closing terminals.
    - Confirm no duplicate terminals are created (the reuse check at extension.ts:2772 finds the existing live Orchestrator terminal by name).
    - Confirm the terminal order is unchanged (reuse does not reorder).
+
+---
+
+## Review Findings (Reviewer Pass — 2026-06-28)
+
+### Stage 1: Adversarial Findings
+
+| Severity | File:Line | Finding |
+| :--- | :--- | :--- |
+| **CRITICAL** | `src/webview/sharedDefaults.js:15` | Webview `DEFAULT_VISIBLE_AGENTS.orchestrator: false` contradicts backend `true`. Setup panel shows Orchestrator checkbox unchecked by default; saving without touching it persists `orchestrator: false`, silently undoing Defect 1's fix. |
+| **CRITICAL** | `src/services/PlanningPanelProvider.ts:8279` | `visibleAgentDefaults.orchestrator: false` — explicitly mirrors backend defaults (comment says "matching KanbanProvider._getVisibleAgents") but is now stale. Causes ORCHESTRATING column to be hidden when empty (filter at lines 8317/8324: `visibleAgents[col.role] !== false`), re-breaking the bug commit 58a24a8 fixed. |
+| **MAJOR** | `src/webview/implementation.html:3713` | Onboarding flow default `orchestrator: false`. New users completing onboarding save `orchestrator: false` via `saveStartupCommands`, defeating Defect 1 on the first interaction path for all new installs. |
+| **NIT** | `src/services/KanbanProvider.ts:4322-4336` | Fallback `_getVisibleAgents` defaults don't list `orchestrator` at all. Functionally OK (`undefined !== false` passes the column filter), but inconsistent with all other defaults objects. Deferred — fallback path rarely hit. |
+| **NIT** | Plan "Proposed Changes" lines 176-193 | Plan's "before" snippet listed 15 keys; actual `TaskViewerProvider.ts` defaults have 11 keys (missing `gatherer`, `code_researcher`, `splitter`). Documentation inaccuracy only; the applied change is correct. |
+
+### Stage 2: Balanced Synthesis
+
+**Keep as-is (verified correct):**
+- `src/extension.ts:2648-2661` — Orchestrator-first array reorder. Comment updated. ✓
+- `src/extension.ts:1657-1670` — Stale-reference cleanup in `onDidCloseTerminal`. Object-identity match, snapshots entries, runs before `handleTerminalClosed`. ✓
+- `src/services/TaskViewerProvider.ts:3700` — Backend default `orchestrator: true`. ✓
+
+**Fixed during review (all same class: stale duplicate visibility defaults):**
+1. `src/webview/sharedDefaults.js:15` — `orchestrator: false` → `true`
+2. `src/services/PlanningPanelProvider.ts:8279` — `orchestrator: false` → `true`
+3. `src/webview/implementation.html:3713` — `orchestrator: false` → `true`
+
+**Deferred (NIT):** KanbanProvider fallback defaults missing `orchestrator` key — functionally correct by accident, low-traffic path.
+
+### Fixes Applied
+
+| File | Line | Change |
+| :--- | :--- | :--- |
+| `src/webview/sharedDefaults.js` | 15 | `orchestrator: false` → `orchestrator: true` |
+| `src/services/PlanningPanelProvider.ts` | 8279 | `orchestrator: false` → `orchestrator: true` |
+| `src/webview/implementation.html` | 3713 | `orchestrator: false` → `orchestrator: true` |
+
+### Validation Results
+
+- **Compilation:** Skipped per session directives.
+- **Automated tests:** Skipped per session directives.
+- **Grep verification:** `orchestrator:\s*false` returns zero matches in `src/` — all stale visibility defaults eliminated. Remaining `orchestrator` references in `KanbanProvider.ts` are addon configs (`orchestratorConfig?.addons?.* ?? false`), not visibility defaults.
+- **Manual verification:** Pending — user should run the manual verification steps above, with particular attention to Step 5 (explicit override still wins) and a new check: open the Setup panel with fresh config and confirm the Orchestrator checkbox is **checked** by default.
+
+### Remaining Risks
+
+1. **KanbanProvider fallback (NIT):** `KanbanProvider._getVisibleAgents` fallback (lines 4322-4336) doesn't list `orchestrator`. Only hit when `this._taskViewerProvider` is falsy. Works by accident (`undefined !== false`). Low risk — defer.
+2. **User-visible side effect:** All ~4,000 installs now get a 7th terminal by default. Users who previously relied on 6 terminals will notice the change. The visibility toggle remains available in the Setup panel for opt-out.
+3. **Onboarding checkbox state:** The onboarding HTML at `implementation.html:3713` sets the default `visibleAgents` object, but the actual checkbox state is driven by `.onboard-agent-toggle` checkboxes (line 3714-3717). If the onboarding UI has an Orchestrator toggle checkbox that defaults to unchecked, the `cb.checked` override at line 3716 would still write `false`. **Recommend manual verification** that the onboarding Orchestrator toggle (if present) is checked by default, or that no such toggle exists (in which case the default `true` from line 3713 passes through unchanged).
 
 ---
 

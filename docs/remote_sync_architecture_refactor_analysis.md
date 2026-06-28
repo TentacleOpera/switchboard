@@ -172,9 +172,45 @@ This closes the Notion push gap, collapses four config surfaces toward one, and 
 
 ---
 
-## Immediate vs. eventual
+## Decision: refactor-first
 
-- **Eventual:** the refactor above.
-- **Immediate option (if a stopgap is wanted before the refactor):** the original "surface, don't wire" answer still holds as a temporary measure — add the ingest/full + comment toggles to the Remote tab (both are clean, single-service gates) and *display push state read-only* with an honest caveat that Notion push is not yet implemented. This avoids shipping a push toggle that lies for Notion users, while delivering the lightweight ingest mode now.
+**Settled: refactor-first. No stopgap.**
 
-This decision — stopgap-then-refactor vs. refactor-first — is the next thing to settle.
+The "surface, don't wire" stopgap (ship the ingest/full + comment toggles now, display push read-only) was considered and **declined**. Rationale:
+
+- The stopgap would still expose the ingest/full distinction *before* push is provider-symmetric, which means the Remote tab would present a push story that is honest for Linear but a dead end for Notion — the exact "toggle that lies" problem we're trying to avoid. Better to land the foundation first and ship the UX once it's true for every provider.
+- The clean single-service gates (mode, comments) are cheap whether we do them now or after the refactor, so deferring them costs little. The UX is the *payoff* of the refactor, not a thing to rush ahead of it.
+
+The original ingest/full UX ask is therefore the **last** step, delivered on top of a foundation where push is a declared, provider-symmetric capability.
+
+---
+
+## Sequencing (the plan-of-plans)
+
+Three plans, in dependency order. Each is independently shippable and the first two are behavior-preserving for existing Linear/ClickUp users.
+
+### Plan 1 — Foundation: declared capabilities + unified provider push (behavior-preserving)
+
+- Add `capabilities: { pull: boolean; push: boolean }` to `RemoteProvider` and extend the interface with `pushState(remoteId, column)` / `pushContent(remoteId, markdown)`.
+- Introduce a **single provider registry** ("get the provider for this board") shared by both the pull loop and the push triggers — today pull builds providers inline in `KanbanProvider._getRemoteControl` while push reaches for `_getLinearService` / `_getClickUpService` separately. Unify them.
+- Reroute the **existing** push trigger sites — `KanbanProvider._queueLinearSync` / `_queueClickUpSync` (column move) and `ContinuousSyncService` (file change) — through `provider.pushState` / `pushContent` instead of hardcoding the concrete services. The triggers (local column move, file save) stay where they are; only the dispatch is unified.
+- Declare `Linear { pull, push }`, `ClickUp { pull:false, push }`, `Notion { pull, push:false }` *for now* (Notion push flips to true in Plan 2).
+- **No user-visible behavior change.** This is pure restructuring, fully testable against current behavior. Lowest-risk first step.
+
+### Plan 2 — Notion push pipeline (the one real provider gap)
+
+- Implement `pushState` / `pushContent` for `NotionRemoteProvider`: wire `NotionFetchService.updatePageContent` (already exists, currently only called by `ResearchImportService`) into the content path, and add a status-property write for state.
+- Requires confirming the Notion remote setup exposes a **writable status property** and defining the column→status mapping (the Linear analogue is `columnToStateId`). — *Open question #2.*
+- Flip Notion's declared capability to `push: true`.
+- **Re-prove the echo-loop guards for Notion** (*open question #4*). Linear is already bidirectional today, so the round trip (push state → bumped remote timestamp → inbound delta) and its column-equality echo guard are battle-tested for Linear. Notion gaining push-state is the *new* exposure: its `fetchStateDeltas` will now see its own pushes echo back. The column-equality guard is provider-agnostic and should hold, but must be verified against Notion's minute-rounded `last_edited_time`.
+
+### Plan 3 — Config consolidation + Remote-tab UX (the original ask)
+
+- Collapse the four config surfaces (`remote.config`, `realTimeSyncEnabled`, `completeSyncEnabled`, Auto-Pull modal) toward one per-board sync contract: `{ provider, mode: ingest|full, push, comments, cadence }`. — *Migration, open question #5.*
+- Reconcile the two pull loops (Remote-tab ping vs. Auto-Pull modal). — *Open question #3.*
+- Ship the Remote-tab UX: **Ingest | Full** radio + **comment polling** toggle (clean single-service gates in `RemoteControlService`), and a **push** control that the declared-capability matrix can honestly enable/disable/gray-out per provider. Because Plans 1–2 made push real and symmetric, no toggle lies.
+
+### Cross-cutting
+
+- **Migration (≈4,000 installs)** applies mainly to Plan 3's config collapse: import-before-delete, preserve `realTimeSyncEnabled` / `completeSyncEnabled` behavior for users who set them in older versions (CLAUDE.md rules).
+- **Echo-loop verification** lands in Plan 2 (Notion) and is re-checked in Plan 3 if push triggers move.
