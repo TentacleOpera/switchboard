@@ -77,16 +77,28 @@ New flow:
 
 All writes are fire-and-forget and chained via `_writeTail` — no change to the concurrency model.
 
-### 3. Update `.gitignore`
+### 3. Update `WorkspaceExcludeService.TARGETED_RULES` (WorkspaceExcludeService.ts ~line 9)
 
-In the `# >>> Switchboard managed exclusions >>>` block (around line 81), add one glob negation after the existing `kanban-board.md` line:
+The `.gitignore` managed block is **not static** — it is regenerated from `TARGETED_RULES` every time a user runs setup. Editing `.gitignore` directly would be overwritten on the next setup run.
 
+Add `'!.switchboard/kanban-state-*.md'` to `TARGETED_RULES` immediately after the existing `'!.switchboard/kanban-board.md'` entry:
+
+```typescript
+'!.switchboard/kanban-board.md',
+'!.switchboard/kanban-state-*.md',
 ```
-!.switchboard/kanban-board.md
-!.switchboard/kanban-state-*.md
-```
 
-The glob covers all nine per-column files without listing them individually.
+The glob covers all nine per-column files without listing them individually. `WorkspaceExcludeService.apply()` will write this into the managed block on next setup invocation; the existing `.gitignore` in the repo should also be updated manually to match so new contributors get it immediately (no setup run required).
+
+### 4. Update regression test (`src/test/git-ignore-custom-default-regression.test.js`)
+
+This test asserts the exact contents of `TARGETED_RULES`. Add the new glob entry to the expected array so the test continues to pass.
+
+---
+
+## What Was Missing from the Original Plan
+
+Step 3 originally said "update `.gitignore` directly." That is wrong — the managed block is owned by `WorkspaceExcludeService.TARGETED_RULES` and regenerated on setup. A direct `.gitignore` edit would be overwritten. The fix is to update `TARGETED_RULES` (which drives both generation and the setup.html preview display), then also patch the committed `.gitignore` to match.
 
 ---
 
