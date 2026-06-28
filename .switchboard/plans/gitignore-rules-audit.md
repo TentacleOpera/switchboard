@@ -11,17 +11,27 @@ Review whether Switchboard's `TARGETED_RULES` gitignore block is still appropria
 **Complexity:** 3
 **Tags:** infrastructure, devops, docs, reliability
 
+## ⚠️ Reviewer Note: Inspect the Live `.switchboard/` Directory
+
+**This audit was written from a remote clone where the Switchboard extension has never run.** The remote `.switchboard/` only contains committed files (`plans/`, `sessions/`, `kanban-board.md`, etc.). None of the extension-generated directories exist in this environment.
+
+Before finalising the recommendations below, the implementer must **inspect `.switchboard/` on a local machine where the extension has been running** (ideally the primary dev machine). Some directories that were categorised as "cache" from code inspection alone may in practice contain real, durable artifacts — for example, `docs/` holds imported documents that users may want committed and visible to remote agents, not regenerated on every clone.
+
+**Action required before implementation:** Run `find .switchboard -maxdepth 3 | sort` on a live local workspace and review each directory with the owner. Revise the recommendations table below based on actual observed content before touching `TARGETED_RULES`.
+
+---
+
 ## Findings from Audit
 
-### What still legitimately writes files (should remain excluded or kept)
+### What still legitimately writes files (recommendations are provisional — see note above)
 
-| Path | Status | Recommendation |
+| Path | Status | Provisional Recommendation |
 |:---|:---|:---|
 | `.switchboard/kanban.db` / `*.db-shm` / `*.db-wal` | Machine-local DB | **Keep excluded** — never commit |
-| `.switchboard/docs/` | Integration doc cache (machine-local) | **Keep excluded** — per-machine cache |
-| `.switchboard/tickets/` | Ticket cache hierarchy | **Keep excluded** — per-machine cache |
-| `.switchboard/planning-cache/` | Doc ID mappings cache | **Keep excluded** — per-machine cache |
-| `.switchboard/archive/` | Archived plans/reviews | **Keep excluded** — machine-local history |
+| `.switchboard/docs/` | Imported docs from Linear/ClickUp/Notion | **Needs review** — may be real artifacts worth committing for remote agents, not pure cache |
+| `.switchboard/tickets/` | Ticket cache hierarchy | **Needs review** — may contain curated content vs. raw API cache |
+| `.switchboard/planning-cache/` | Doc ID mappings cache | **Keep excluded** — internal ID mapping, regenerable |
+| `.switchboard/archive/` | Archived plans/reviews | **Needs review** — archived plans are durable history; remote agents may benefit from seeing them |
 | `.switchboard/*-config.json` (clickup, linear, notion) | Encrypted credentials | **Keep excluded** — never commit secrets |
 | `.switchboard/workspace-id` | Local DB path pointer | **Keep excluded** — machine-local |
 | `.switchboard/notion-cache.md` | Notion page cache | **Keep excluded** (currently duplicated — see below) |
