@@ -2190,6 +2190,11 @@
                     if (statusEl) statusEl.textContent = message.message || '';
                     break;
                 }
+                case 'memoError': {
+                    const statusEl = document.getElementById('memo-status');
+                    if (statusEl) { statusEl.textContent = message.message || 'Memo error'; }
+                    break;
+                }
                 case 'openMemoTab': {
                     // persist=true (default) is intentional: this is a user-initiated
                     // entry point (status-bar click / hub link), not a programmatic
@@ -2586,7 +2591,7 @@
             document.querySelectorAll('.sub-tab-btn').forEach(btn => {
                 btn.classList.toggle('is-active', btn.dataset.tab === tab);
             });
-            if (tab === 'memo' && isChanging) {
+            if (tab === 'memo') {
                 vscode.postMessage({ type: 'memoLoad', workspaceRoot: currentWorkspaceRoot });
             }
             if (tab === 'terminals') {

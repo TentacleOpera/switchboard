@@ -348,3 +348,53 @@ needed.
 ---
 
 **Recommendation:** Complexity is 4 → **Send to Coder**
+
+---
+
+## Code Review (Reviewer Pass)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*"You call this a fix? Let me look closer..."*
+
+- **NIT** — The fix is a four-line addition. That's it. The entire bug was a missing re-fetch trigger. The plan document is 350 lines describing a four-line fix. Over-engineered documentation, but the code itself is fine.
+- **NIT** — `activeTab === 'kanban'` guard: if the user clicks Copy Prompt then immediately switches to Epics tab before the response arrives, the re-fetch is skipped. The plan acknowledges this (edge case: tab-switch handler fires a fresh fetch). Acceptable.
+- **PASS** — Change 3 (optional) was correctly NOT implemented. No `refreshProjectPanel` method polluting `KanbanProvider`. Good restraint.
+- **PASS** — Re-fetch fires unconditionally (outside the `if (btn)` block), so even if the button selector misses, the list still refreshes. Correct.
+- **PASS** — Backend posts `kanbanPlanPromptCopied` on both success (PlanningPanelProvider.ts:3024, :3066) and failure (:3017, :3026, :3034, :3044, :3049, :3068). The unconditional re-fetch covers all paths.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep:** Everything as implemented. The fix is minimal and correct.
+
+**Fix now:** None required.
+
+**Defer:** None.
+
+### Validation Results
+
+- **Code verification:** `src/webview/project.js:726-749` — `kanbanPlanPromptCopied` handler includes unconditional `fetchKanbanPlans` re-fetch guarded by `activeTab === 'kanban'`. Matches plan Change 1 exactly.
+- **Change 2 (DROPPED):** Confirmed not implemented. Correct.
+- **Change 3 (OPTIONAL):** Confirmed not implemented. `KanbanProvider.refreshProjectPanel` does not exist. Correct per plan recommendation.
+- **Backend verification:** `PlanningPanelProvider.ts` posts `kanbanPlanPromptCopied` on 8 code paths (2 success, 6 failure). Re-fetch covers all.
+- **Compilation:** Skipped per session directive.
+- **Tests:** Skipped per session directive.
+
+### Files Changed
+
+- `src/webview/project.js` (lines 726-749) — added unconditional `fetchKanbanPlans` re-fetch in `kanbanPlanPromptCopied` handler.
+
+### Remaining Risks
+
+- **Low:** If `kanbanPlanPromptCopied` arrives before the DB write completes (message ordering race), the re-fetch could read stale DB state. The plan's analysis confirms the `await` on `_applyManualKanbanColumnChange` ensures the DB is updated before the message is posted, so this is theoretical only.
+- **Low:** `PLAN REVIEWED` non-advance is by design. If product intent changes, a separate `workflowName` change is needed (flagged in plan, not a defect).
+
+### Summary
+
+| Severity | Finding | Location |
+|----------|---------|----------|
+| NIT | Plan doc over-sized for a 4-line fix | N/A |
+| NIT | Tab-switch race is theoretical | project.js:746 |
+
+**Fixes applied:** None — implementation is correct as-is.
+**Remaining risks:** Theoretical message-ordering race (mitigated by `await`); `PLAN REVIEWED` advance is a product decision, not a bug.

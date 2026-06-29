@@ -280,6 +280,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _pendingPlanCreations = new Set<string>(); // suppress watcher for internally created plans
     private _planCreationInFlight = new Set<string>(); // same-file mutex for watcher/direct create races
     private _planFsDebounceTimers = new Map<string, NodeJS.Timeout>(); // debounce native plan watcher events
+    private _memoWatchers: vscode.FileSystemWatcher[] = [];
+    private _memoFsDebounce?: NodeJS.Timeout;
     private _clickUpConfigCache: Map<string, any> = new Map();
     private _recentNativePlanCreations = new Map<string, NodeJS.Timeout>(); // 4s TTL dedup: prevents native fs.watch double-fire after VS Code watcher has already handled the creation
     private _recentlyDeletedPaths = new Map<string, NodeJS.Timeout>(); // 10s TTL: prevents reconciliation from reviving just-deleted plans
@@ -290,8 +292,29 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _refreshTimeout?: NodeJS.Timeout;
     private _julesStatusPollTimer?: NodeJS.Timeout;
     private _isRefreshingJules: boolean = false;
+    private _julesCliUnavailable: boolean = false; // set on `spawn jules ENOENT`; stops the 30s poll until a new Jules dispatch resets it
     private readonly _julesDiagnosticsChannel = vscode.window.createOutputChannel('Switchboard Jules Diagnostics');
+    private readonly _apiServerDiagnosticsChannel = vscode.window.createOutputChannel('Switchboard API Server');
     private _needsSetup: boolean = false;
+
+    // --- Single-flight coalescing guards (refresh-storm circuit-breaker) ---
+    // Coalesce overlapping _refreshRunSheets / _syncFilesAndRefreshRunSheets calls
+    // into one in-flight run + exactly one trailing run. Awaited callers observe a
+    // completed refresh; the trailing run picks up the latest state. This is
+    // trigger-independent and provably stops the observed refresh storm regardless
+    // of which write path feeds it.
+    private _refreshRunSheetsInFlight: Promise<void> | null = null;
+    private _refreshRunSheetsQueued: Promise<void> | null = null;
+    private _refreshRunSheetsQueuedRoot: string | undefined;
+    private _syncFilesAndRefreshInFlight: Promise<void> | null = null;
+    private _syncFilesAndRefreshQueued: Promise<void> | null = null;
+    private _syncFilesAndRefreshQueuedRoot: string | undefined;
+    // Re-entry guard for _rescanAntigravityPlanSources (the write step that feeds the loop).
+    private _rescanInFlight: boolean = false;
+    private _rescanNeedsTrailing: boolean = false;
+    private _rescanTrailingRoot: string | undefined;
+    // --- API server watchdog ---
+    private _apiServerWatchdogTimer?: NodeJS.Timeout;
 
     private _registeredTerminals?: Map<string, vscode.Terminal>;
     // Cache: suffixed terminal name -> { role, displayName }
@@ -435,6 +458,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         this._setupStateWatcher();
         this._setupPlanWatcher();
+        this._setupMemoWatcher();
         this._setupSessionWatcher();
         this._setupGitCommitWatcher();
         // Heavy init (ownership registry, brain watcher, file sync) deferred to _runDeferredConstructorInit(),
@@ -4079,6 +4103,7 @@ Each plan file must include:
         this._resolveWorkspaceRoot(workspaceRoot);
         this._setupStateWatcher();
         this._setupPlanWatcher();
+        this._setupMemoWatcher();
         this.reinitializeBrainWatcher();
     }
 
@@ -9747,8 +9772,11 @@ Each plan file must include:
                         break;
                     }
                     case 'memoLoad': {
-                        const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
-                        if (!workspaceRoot) { break; }
+                        const workspaceRoot = this._resolveStateWorkspaceRoot(data.workspaceRoot);
+                        if (!workspaceRoot) {
+                            this._view?.webview.postMessage({ type: 'memoError', message: 'No workspace folder found for memo.' });
+                            break;
+                        }
                         const memoPath = this._getMemoPath(workspaceRoot);
                         let content = '';
                         try {
@@ -9758,8 +9786,11 @@ Each plan file must include:
                         break;
                     }
                     case 'memoSave': {
-                        const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
-                        if (!workspaceRoot) { break; }
+                        const workspaceRoot = this._resolveStateWorkspaceRoot(data.workspaceRoot);
+                        if (!workspaceRoot) {
+                            this._view?.webview.postMessage({ type: 'memoError', message: 'No workspace folder found for memo.' });
+                            break;
+                        }
                         const memoPath = this._getMemoPath(workspaceRoot);
                         const dir = path.dirname(memoPath);
                         await fs.promises.mkdir(dir, { recursive: true });
@@ -9767,15 +9798,21 @@ Each plan file must include:
                         break;
                     }
                     case 'memoClear': {
-                        const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
-                        if (!workspaceRoot) { break; }
+                        const workspaceRoot = this._resolveStateWorkspaceRoot(data.workspaceRoot);
+                        if (!workspaceRoot) {
+                            this._view?.webview.postMessage({ type: 'memoError', message: 'No workspace folder found for memo.' });
+                            break;
+                        }
                         const memoPath = this._getMemoPath(workspaceRoot);
                         await fs.promises.writeFile(memoPath, '', 'utf8');
                         break;
                     }
                     case 'memoGeneratePrompt': {
-                        const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
-                        if (!workspaceRoot) { break; }
+                        const workspaceRoot = this._resolveStateWorkspaceRoot(data.workspaceRoot);
+                        if (!workspaceRoot) {
+                            this._view?.webview.postMessage({ type: 'memoError', message: 'No workspace folder found for memo.' });
+                            break;
+                        }
                         const content = typeof data.content === 'string' ? data.content : '';
                         const action = data.action === 'send' ? 'send' : 'copy';
                         const issues = this._parseMemoEntries(content);
@@ -10369,6 +10406,73 @@ What would you like to find?`;
         this._fsPlansWatchers = watchDirs
             .map((dir) => watchPlanDirectory(dir))
             .filter((watcher): watcher is FSWatcher => !!watcher);
+    }
+
+    private _setupMemoWatcher(): void {
+        this._memoWatchers.forEach(w => { try { w.dispose(); } catch {} });
+        this._memoWatchers = [];
+        if (this._memoFsDebounce) {
+            clearTimeout(this._memoFsDebounce);
+            this._memoFsDebounce = undefined;
+        }
+
+        const workspaceRoot = this._resolveWorkspaceRoot();
+        if (!workspaceRoot) { return; }
+
+        const foldersToWatch: string[] = [];
+        try {
+            const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
+            const cfg = getMappingsFromIndex();
+            if (cfg?.enabled && Array.isArray(cfg.mappings) && cfg.mappings.length > 0) {
+                const expandHome = (p: string): string => {
+                    const trimmed = p.trim();
+                    return trimmed.startsWith('~')
+                        ? path.join(require('os').homedir(), trimmed.slice(1))
+                        : trimmed;
+                };
+                for (const mapping of cfg.mappings) {
+                    const parent = mapping.parentFolder || (mapping as any).parentWorkspaceFolder;
+                    if (typeof parent === 'string') {
+                        const resolved = path.resolve(expandHome(parent));
+                        if (!foldersToWatch.includes(resolved)) {
+                            foldersToWatch.push(resolved);
+                        }
+                    }
+                }
+            }
+        } catch { /* non-fatal */ }
+        if (foldersToWatch.length === 0) {
+            foldersToWatch.push(workspaceRoot);
+        }
+
+        const onMemoFsEvent = () => {
+            clearTimeout(this._memoFsDebounce);
+            this._memoFsDebounce = setTimeout(() => {
+                const root = this._resolveStateWorkspaceRoot();
+                if (root) { void this._pushMemoContent(root); }
+            }, 150);
+        };
+
+        for (const folder of foldersToWatch) {
+            const memoPath = this._getMemoPath(folder);
+            const watcher = vscode.workspace.createFileSystemWatcher(
+                new vscode.RelativePattern(path.dirname(memoPath), path.basename(memoPath))
+            );
+            watcher.onDidChange(onMemoFsEvent);
+            watcher.onDidCreate(onMemoFsEvent);
+            watcher.onDidDelete(onMemoFsEvent);
+            this._memoWatchers.push(watcher);
+        }
+    }
+
+    private async _pushMemoContent(workspaceRoot: string): Promise<void> {
+        let content = '';
+        try {
+            content = await fs.promises.readFile(this._getMemoPath(workspaceRoot), 'utf8');
+        } catch (e: any) {
+            if (e?.code !== 'ENOENT') { return; }
+        }
+        this._view?.webview.postMessage({ type: 'memoContent', content });
     }
 
     private _setupSessionWatcher() {
@@ -12587,7 +12691,39 @@ What would you like to find?`;
         }
     }
 
-    private async _rescanAntigravityPlanSources(workspaceRoot: string): Promise<void> {
+    private _rescanAntigravityPlanSources(workspaceRoot: string): Promise<void> {
+        // Re-entry guard: _rescanAntigravityPlanSources is the write step that feeds the
+        // mirror→watch→mirror loop. While one scan is in flight, coalesce further calls
+        // into exactly one trailing scan (which picks up the latest workspaceRoot).
+        if (this._rescanInFlight) {
+            this._rescanNeedsTrailing = true;
+            this._rescanTrailingRoot = workspaceRoot;
+            // Resolve when the in-flight scan (and any trailing scan it triggers) completes.
+            if (!this._rescanTrailingPromise) {
+                this._rescanTrailingPromise = this._rescanInFlightPromise?.then(async () => {
+                    if (!this._rescanNeedsTrailing) return;
+                    this._rescanNeedsTrailing = false;
+                    const root = this._rescanTrailingRoot;
+                    this._rescanTrailingRoot = undefined;
+                    this._rescanTrailingPromise = null;
+                    return this._rescanAntigravityPlanSources(root);
+                });
+            }
+            return this._rescanTrailingPromise;
+        }
+        this._rescanInFlight = true;
+        const run = this._rescanAntigravityPlanSourcesImpl(workspaceRoot).finally(() => {
+            this._rescanInFlight = false;
+            this._rescanInFlightPromise = null;
+        });
+        this._rescanInFlightPromise = run;
+        return run;
+    }
+
+    private _rescanInFlightPromise: Promise<void> | null = null;
+    private _rescanTrailingPromise: Promise<void> | null = null;
+
+    private async _rescanAntigravityPlanSourcesImpl(workspaceRoot: string): Promise<void> {
         const now = Date.now();
         const cutoff = this._lastAntigravityRescanAt > 0
             ? this._lastAntigravityRescanAt - 2000
@@ -14953,11 +15089,35 @@ What would you like to find?`;
      * LIGHTWEIGHT: Single DB read → feeds BOTH sidebar dropdown AND kanban board.
      * This is the ONLY method that sends plan data to the UI.
      * Called by refresh() and _syncFilesAndRefreshRunSheets().
+     *
+     * Single-flight coalescing wrapper: overlapping calls collapse into one in-flight
+     * run + exactly one trailing run (which picks up the latest workspaceRoot). Awaited
+     * callers observe a completed refresh. Trigger-independent circuit-breaker for the
+     * refresh storm — see plan fix-refresh-storm-and-self-healing-services.md.
      */
-    private async _refreshRunSheets(workspaceRoot?: string) {
-        // DIAGNOSTIC (temporary): identify what is driving repeated refreshes. The frame
-        // that repeats in this log names the caller responsible for a refresh storm.
-        console.log('[refreshRunSheets] caller:', new Error().stack?.split('\n')[2]?.trim());
+    private _refreshRunSheets(workspaceRoot?: string): Promise<void> {
+        if (this._refreshRunSheetsInFlight) {
+            // Coalesce all concurrent callers into a single trailing refresh.
+            if (!this._refreshRunSheetsQueued) {
+                this._refreshRunSheetsQueuedRoot = workspaceRoot;
+                this._refreshRunSheetsQueued = this._refreshRunSheetsInFlight.then(async () => {
+                    const root = this._refreshRunSheetsQueuedRoot;
+                    this._refreshRunSheetsQueued = null;
+                    this._refreshRunSheetsQueuedRoot = undefined;
+                    return this._refreshRunSheets(root);
+                });
+            } else {
+                // Update to the latest root so the trailing run reflects the most recent request.
+                this._refreshRunSheetsQueuedRoot = workspaceRoot;
+            }
+            return this._refreshRunSheetsQueued;
+        }
+        this._refreshRunSheetsInFlight = this._refreshRunSheetsImpl(workspaceRoot)
+            .finally(() => { this._refreshRunSheetsInFlight = null; });
+        return this._refreshRunSheetsInFlight;
+    }
+
+    private async _refreshRunSheetsImpl(workspaceRoot?: string) {
         const selectedWorkspaceRoot = workspaceRoot
             ? this._resolveWorkspaceRoot(workspaceRoot)
             : this._resolveWorkspaceRoot();
@@ -15063,8 +15223,32 @@ What would you like to find?`;
      * Rescans Antigravity plan sources (debounced) to recover missed watcher events,
      * then refreshes run sheets from the kanban DB.
      * Called after every plan mutation (create, import, dispatch, etc.)
+     *
+     * Single-flight coalescing wrapper: overlapping sync calls collapse into one
+     * in-flight run + exactly one trailing run. Pairs with the _refreshRunSheets
+     * and _rescanAntigravityPlanSources guards to break the mirror→watch→mirror loop.
      */
-    private async _syncFilesAndRefreshRunSheets(workspaceRoot?: string) {
+    private _syncFilesAndRefreshRunSheets(workspaceRoot?: string): Promise<void> {
+        if (this._syncFilesAndRefreshInFlight) {
+            if (!this._syncFilesAndRefreshQueued) {
+                this._syncFilesAndRefreshQueuedRoot = workspaceRoot;
+                this._syncFilesAndRefreshQueued = this._syncFilesAndRefreshInFlight.then(async () => {
+                    const root = this._syncFilesAndRefreshQueuedRoot;
+                    this._syncFilesAndRefreshQueued = null;
+                    this._syncFilesAndRefreshQueuedRoot = undefined;
+                    return this._syncFilesAndRefreshRunSheets(root);
+                });
+            } else {
+                this._syncFilesAndRefreshQueuedRoot = workspaceRoot;
+            }
+            return this._syncFilesAndRefreshQueued;
+        }
+        this._syncFilesAndRefreshInFlight = this._syncFilesAndRefreshRunSheetsImpl(workspaceRoot)
+            .finally(() => { this._syncFilesAndRefreshInFlight = null; });
+        return this._syncFilesAndRefreshInFlight;
+    }
+
+    private async _syncFilesAndRefreshRunSheetsImpl(workspaceRoot?: string) {
         try {
             const resolvedWorkspaceRoot = workspaceRoot
                 ? this._resolveWorkspaceRoot(workspaceRoot)
@@ -18466,6 +18650,12 @@ What would you like to find?`;
             this._sessionSyncTimer = undefined;
         }
         this._brainWatchers.forEach(w => { try { w.dispose(); } catch {} });
+        this._memoWatchers.forEach(w => { try { w.dispose(); } catch {} });
+        this._memoWatchers = [];
+        if (this._memoFsDebounce) {
+            clearTimeout(this._memoFsDebounce);
+            this._memoFsDebounce = undefined;
+        }
         try { this._stagingWatcher?.close(); } catch { }
         this._brainFsWatchers.forEach(w => { try { w.close(); } catch {} });
         this._disposeConfiguredPlanWatcher();

@@ -80,5 +80,16 @@ There are two ways to process memo entries into plan files:
 1. **Chat command:** Send exactly `process memo` to exit capture mode and have the agent create one plan file per entry. The memo is echoed into the chat and cleared up front, before plans are written, so re-running produces no duplicates; if a plan write fails the un-planned entries are restored to the file for retry.
 2. **Memo sub-tab (sidebar):** The sub-tab's "send" button dispatches entries to the planner and clears the memo; the "copy" button copies the planner prompt to clipboard and clears the memo. This path is backend-driven and immune to host system prompt overrides.
 
-## Guaranteed Capture Alternative
-For capture that no host system prompt can override, use the Memo sub-tab in the sidebar — it appends directly to `.switchboard/memo.md` via the extension backend with no agent involvement.
+
+### Workspace Root Resolution (Multi-Workspace) — BEST EFFORT
+
+In a workspace with multiple parent directories that each have their own `.switchboard` folder, the memo file SHOULD be written to the root workspace that the kanban board is showing — the effective/canonical parent root — NOT a nested child folder's `.switchboard`.
+
+The agent cannot query the kanban board's runtime mapping. Use this best-effort heuristic:
+1. If the current working directory's `.switchboard/workspace-id` matches the kanban board's active workspace, use the current directory.
+2. Otherwise, walk up to the nearest ancestor that contains a `.switchboard/workspace-id` corresponding to the kanban board's active workspace.
+3. If no ancestor's workspace-id can be determined, prefer the nearest ancestor that contains a `.switchboard` directory that is NOT the current folder.
+4. If undeterminable, fall back to the current directory and warn the user that the memo may be invisible to the kanban board's `process memo`.
+
+NOTE: This heuristic is NOT guaranteed. For reliable capture in multi-parent workspaces, use the Memo sub-tab in the sidebar (backend-driven, immune to this resolution ambiguity).
+

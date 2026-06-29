@@ -481,3 +481,64 @@ directive). The test suite will be run separately by the user.
 ---
 
 **Recommendation: Send to Coder** (Complexity 5 — multi-file changes with moderate logic, extending existing patterns with well-scoped risks).
+
+---
+
+## Code Review (Reviewer Pass)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*"Eight changes across three files, and you actually got them all right? Let me look harder..."*
+
+- **PASS** — Change 0 (variable declarations): `_pendingKanbanFilterIntent` and `_pendingKanbanSelectionRetries` declared at `project.js:181-182`. Correct.
+- **PASS** — Change 1 (non-epic narrow filters): `project.js:591-621` — stashes filter intent, clears filters to widest, clicks kanban tab, calls `tryResolvePendingKanbanSelection()`. Also clears `complexity` filter (line 614-615) — an addition beyond the plan but correct. Matches plan intent.
+- **PASS** — Change 4a (workspace intent before `populateKanbanFilters`): `project.js:441-460` — applies workspace filter intent with option-exists guard, plus epics workspace intent. Correctly positioned before `populateKanbanFilters()` at line 461.
+- **PASS** — Change 4b (project/column intent after `populateKanbanFilters`): `project.js:465-481` — applies project and column filter intents with option-exists guards, then consumes the intent (`_pendingKanbanFilterIntent = null`). Correctly positioned after `populateKanbanFilters()` and before `renderKanbanPlans()`.
+- **PASS** — Change 5 (retry counter with fallback): `project.js:1542-1574` — increments `_pendingKanbanSelectionRetries` on failed match, falls back to widest after 3 retries, clears pending selection and intent, re-fetches. Retry counter reset at line 598 on new selection. Correct.
+- **PASS** — Change 6 (epic path narrow workspace): `project.js:570-589` — clears epics filters, stashes `epicWorkspaceRoot` intent, switches to epics tab, calls `tryResolvePendingEpicSelection()`. Correct.
+- **PASS** — Change 7 (kanban.html review button): `kanban.html:5157-5172` — includes `project: cardData?.project || btn.closest('.kanban-card')?.dataset.project || ''` and `column: cardData?.column || ''`. Correct.
+- **PASS** — Change 8 (KanbanProvider backend): `KanbanProvider.ts:6786-6795` — passes `project: msg.project || ''` and `column: msg.column || ''` through to `activateKanbanTabAndSelectPlan`. Correct.
+- **NIT** — After the fallback-to-widest (3 retries), `_pendingKanbanSelection` is set to `null` (line 1561), so the target plan is NOT auto-selected after the fallback. The user sees all plans but has to manually find the target. The plan's verification step 4 says "the plan becomes visible" (not "selected"), so this is by design. Acceptable tradeoff — auto-selecting after widening would require keeping `_pendingKanbanSelection` alive, risking infinite retry loops.
+- **NIT** — The `tryResolvePendingKanbanSelection` call at line 490 is after `renderKanbanPlans()` (line 483), which is correct — the DOM must exist before querying for the plan item. But if `renderKanbanPlans` throws (e.g., malformed cache), the selection resolution would be skipped. This is a theoretical edge case — the existing code has no try/catch around `renderKanbanPlans` either.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep:** Everything as implemented. All 8 changes are correctly implemented and match the plan.
+
+**Fix now:** None required.
+
+**Defer:** None.
+
+### Validation Results
+
+- **Variable declarations:** `project.js:181-182` — `_pendingKanbanFilterIntent` and `_pendingKanbanSelectionRetries` declared. Verified.
+- **Non-epic path:** `project.js:591-621` — filter intent stashed, filters cleared, tab clicked, selection resolved. Verified.
+- **Epic path:** `project.js:570-589` — epics filters cleared, epic workspace intent stashed, epics tab clicked. Verified.
+- **Workspace intent (4a):** `project.js:441-460` — applied before `populateKanbanFilters()` with option-exists guard. Verified.
+- **Project/column intent (4b):** `project.js:465-481` — applied after `populateKanbanFilters()` with option-exists guards, intent consumed. Verified.
+- **Retry counter (5):** `project.js:1542-1574` — increments on failed match, falls back to widest at 3, re-fetches. Counter reset at line 598. Verified.
+- **kanban.html (7):** `kanban.html:5157-5172` — `project` and `column` included in `reviewPlan` message. Verified.
+- **KanbanProvider.ts (8):** `KanbanProvider.ts:6786-6795` — `project` and `column` passed through. Verified.
+- **Call ordering:** `kanbanPlansReady` handler calls `renderKanbanPlans()` (483) → `tryResolvePendingKanbanSelection()` (490). Correct.
+- **Compilation:** Skipped per session directive.
+- **Tests:** Skipped per session directive.
+
+### Files Changed
+
+No files changed — implementation is correct as-is.
+
+### Remaining Risks
+
+- **Low:** After fallback-to-widest (3 retries), the target plan is visible but not auto-selected. By design per plan verification step 4.
+- **Low:** If `renderKanbanPlans` throws, `tryResolvePendingKanbanSelection` is skipped (no try/catch). Theoretical — existing code has the same exposure.
+- **Low:** Proactive "plans changed" pushes (without `allWorkspaceProjects`) could trigger the intent application before the workspace dropdown is populated. The option-exists guard handles this correctly (leaves filter as-is if the option isn't present).
+
+### Summary
+
+| Severity | Finding | Location |
+|----------|---------|----------|
+| NIT | No auto-select after fallback-to-widest | project.js:1561 |
+| NIT | `tryResolvePendingKanbanSelection` skipped if `renderKanbanPlans` throws | project.js:483-490 |
+
+**Fixes applied:** None — implementation is correct as-is.
+**Remaining risks:** Fallback-to-widest doesn't auto-select (by design); theoretical `renderKanbanPlans` throw exposure (pre-existing).

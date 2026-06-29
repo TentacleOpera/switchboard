@@ -401,7 +401,7 @@
                     console.error('Kanban fetch error:', msg.error);
                     _kanbanProjectsError = true;
                     if (activeTab === 'projects') {
-                        updateProjectsPrdSelect();
+                        renderProjectsList();
                     }
                     return;
                 }
@@ -498,19 +498,41 @@
                 break;
             case 'projectPrdContent': {
                 // Ignore stale responses for a project the user has since switched away from.
-                if (projectsPrdSelect && projectsPrdSelect.value === msg.projectName) {
-                    if (projectsPrdEditor) projectsPrdEditor.value = msg.content || '';
+                if (_selectedProjectName === msg.projectName) {
+                    if (projectsPreviewContent) {
+                        projectsPreviewContent.innerHTML = msg.content || '';  // HTML from markdown.api.render
+                    }
+                    if (projectsEditor) projectsEditor.value = msg.rawContent || '';  // raw markdown for editing
+                    state.editOriginalContent.projects = msg.rawContent || '';
                     setProjectsPrdEditorEnabled(true);
                     if (projectsPrdStatus) projectsPrdStatus.textContent = msg.exists ? '' : 'New PRD — not yet saved';
                     if (projectsPrdPathHint) projectsPrdPathHint.textContent = msg.path || '';
                     _prdLoadedProject = msg.projectName;
                     _prdDirty = false;
+                    state.dirtyFlags.projects = false;
+                    // Show "not written yet" onboarding when no PRD exists.
+                    if (!msg.exists && projectsPreviewContent) {
+                        projectsPreviewContent.innerHTML = `
+                            <div class="constitution-onboarding">
+                                <p class="constitution-onboarding-title">No PRD found for this project.</p>
+                                <p>A PRD (Product Requirements Document) is a loose set of product requirements respected across all plans in a project — independent of epics. When <strong>PROJECT CONTEXT</strong> is on, this PRD is injected into <em>every</em> dispatched prompt.</p>
+                                <p>Use <strong>Build via Planner</strong> above to generate one, or <strong>Edit</strong> to write it yourself.</p>
+                            </div>
+                        `;
+                    }
+                    // Enable Edit button only when a project is selected.
+                    if (btnEditProjects) btnEditProjects.disabled = false;
                 }
                 break;
             }
             case 'projectPrdSaved':
                 if (projectsPrdStatus) projectsPrdStatus.textContent = msg.ok ? 'Saved ✓' : 'Save failed';
-                if (msg.ok) _prdDirty = false;
+                if (msg.ok) {
+                    _prdDirty = false;
+                    exitEditMode('projects');
+                    // Re-fetch the PRD so the preview pane updates with rendered HTML.
+                    requestProjectPrd();
+                }
                 break;
             case 'planCreated':
                 if (btnCreateKanbanPlan) {
@@ -770,6 +792,18 @@
                     setTimeout(() => {
                         btnCopySystemPrompt.textContent = oldText;
                         btnCopySystemPrompt.disabled = false;
+                    }, 2000);
+                }
+                break;
+            }
+            case 'prdPromptCopied': {
+                if (btnCopyPrdPrompt) {
+                    const oldText = btnCopyPrdPrompt.textContent;
+                    btnCopyPrdPrompt.textContent = 'Copied!';
+                    btnCopyPrdPrompt.disabled = true;
+                    setTimeout(() => {
+                        btnCopyPrdPrompt.textContent = oldText;
+                        btnCopyPrdPrompt.disabled = false;
                     }, 2000);
                 }
                 break;
@@ -1188,8 +1222,51 @@
         const wsRoot = getProjectsTabWorkspaceRoot();
         const projects = (_kanbanAllWorkspaceProjects && _kanbanAllWorkspaceProjects[normalizeRoot(wsRoot)]) || [];
         container.innerHTML = '';
+
+        // State 1: Error — backend fetch failed. Show retry affordance.
+        if (_kanbanProjectsError) {
+            if (emptyState) {
+                emptyState.style.display = '';
+                emptyState.textContent = 'Error loading projects — click to retry';
+                emptyState.style.cursor = 'pointer';
+                emptyState.onclick = () => {
+                    _kanbanProjectsError = false;
+                    emptyState.textContent = 'Loading projects…';
+                    emptyState.style.cursor = '';
+                    emptyState.onclick = null;
+                    vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+                };
+            }
+            container.style.display = 'none';
+            setProjectsPrdEditorEnabled(false);
+            if (btnBuildPrd) btnBuildPrd.disabled = true;
+            if (btnCopyPrdPrompt) btnCopyPrdPrompt.disabled = true;
+            return;
+        }
+
+        // State 2: Cache not loaded yet — show loading, not "No projects".
+        if (!Object.keys(_kanbanAllWorkspaceProjects || {}).length) {
+            if (emptyState) {
+                emptyState.style.display = '';
+                emptyState.textContent = 'Loading projects…';
+                emptyState.style.cursor = '';
+                emptyState.onclick = null;
+            }
+            container.style.display = 'none';
+            setProjectsPrdEditorEnabled(false);
+            if (btnBuildPrd) btnBuildPrd.disabled = true;
+            if (btnCopyPrdPrompt) btnCopyPrdPrompt.disabled = true;
+            return;
+        }
+
+        // State 3: Loaded but empty — genuine "no projects" case.
         if (!projects.length) {
-            if (emptyState) emptyState.style.display = '';
+            if (emptyState) {
+                emptyState.style.display = '';
+                emptyState.textContent = 'No projects — add one on the Kanban board (+).';
+                emptyState.style.cursor = '';
+                emptyState.onclick = null;
+            }
             container.style.display = 'none';
             setProjectsPrdEditorEnabled(false);
             if (projectsPrdPathHint) projectsPrdPathHint.textContent = '';
@@ -1201,7 +1278,13 @@
             if (btnCopyPrdPrompt) btnCopyPrdPrompt.disabled = true;
             return;
         }
-        if (emptyState) emptyState.style.display = 'none';
+
+        // State 4: Loaded with projects — normal populate.
+        if (emptyState) {
+            emptyState.style.display = 'none';
+            emptyState.style.cursor = '';
+            emptyState.onclick = null;
+        }
         container.style.display = '';
         projects.forEach(proj => {
             const item = document.createElement('div');
@@ -2718,7 +2801,6 @@
                 content: projectsEditor ? projectsEditor.value : '',
                 workspaceRoot: wsRoot
             });
-            exitEditMode('projects');
         });
     }
     if (projectsEditor) {

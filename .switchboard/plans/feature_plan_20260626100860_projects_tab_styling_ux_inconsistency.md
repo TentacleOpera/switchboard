@@ -764,3 +764,78 @@ case 'getProjectPrd': {
 11. **Stale-response guard test:** Rapidly click two different projects in the
     sidebar. Confirm the preview ends up showing the second project's PRD (not
     a stale first-project response).
+
+---
+
+## Code Review (Reviewer Pass)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*"You restructured the entire tab, renamed every ID, and then... forgot to update the message handler that loads the content? SERIOUSLY?"*
+
+- **CRITICAL** — `project.js:499-510` (`projectPrdContent` handler) was NOT updated by the refactor. It still referenced `projectsPrdSelect` and `projectsPrdEditor` — two variables that NO LONGER EXIST. The `<select id="projects-prd-select">` was replaced by the sidebar list, and `<textarea id="projects-prd-editor">` was renamed to `projects-editor`. Result: the moment a user clicks a project in the sidebar and the backend responds with the PRD content, the webview throws `ReferenceError: projectsPrdSelect is not defined`. The PRD NEVER LOADS. The entire tab is visually pretty but functionally dead. This is the kind of thing that happens when you refactor the HTML and the JS event listeners but forget the message handler that sits 100 lines away in the same file.
+- **MAJOR** — Change 2b was skipped entirely. The empty-state CSS selector at `project.html:1167-1171` includes `#kanban-preview-content .empty-state` through `#tuning-preview-content .empty-state` but NOT `#projects-preview-content .empty-state`. The "Select a project to view its PRD" empty state in the preview pane renders without flex centering, proper height, or text color. Every other tab's empty state is styled; the Projects tab's isn't. Half-finished CSS work.
+- **MAJOR** — Save flow is broken in two ways. (a) The save handler (`project.js:2770`) called `exitEditMode('projects')` IMMEDIATELY after posting the save message — before the backend confirms success. If the save fails, the user is already kicked out of edit mode with no way to retry. Compare with the Constitution tab which waits for the `fileSaved` response. (b) The `projectPrdSaved` handler (`project.js:528-530`) only updated the status text — it did NOT re-fetch the PRD to update the preview pane with rendered HTML. After a successful save, the preview showed stale pre-edit content. The user had to re-select the project to see their changes.
+- **NIT** — The `prdPromptCopied` message (posted by the backend at `PlanningPanelProvider.ts:3647` after Copy Build Prompt) was NOT handled in the frontend. The Constitution and System tabs both give "Copied!" visual feedback; the Projects tab silently copied to clipboard with no indication. Inconsistent UX.
+- **PASS** — HTML restructure (Change 1) is correct: `.content-row` + `#projects-list-pane` + `.preview-panel-wrapper` + `.cyber-scanlines` + `#projects-preview-pane` + `#projects-editor`. All IDs follow the `${tab}-editor` / `btn-edit-${tab}` naming convention for `enterEditMode`/`exitEditMode` compatibility.
+- **PASS** — CSS selectors (Change 2) correctly add `#projects-list-pane` and `#system-list-pane` to all 4 rule groups (lines 197, 504-506, 514-516, 735-737). The pre-existing `#system-list-pane` CSS omission is also fixed.
+- **PASS** — Edit-mode hiding CSS (Change 2c) includes `#projects-preview-content` at line 255.
+- **PASS** — State/persistence (Change 3, 3b): `projectsListCollapsed` in state (line 66), persistence init (line 77), tab-switch (line 32), toggle (lines 123-124), setState (line 136). Edit-mode state objects include `projects` keys (lines 56-59).
+- **PASS** — `renderProjectsList` refactor (Change 4): sidebar items with click handlers, `_selectedProjectName` variable, stale-response guard in `projectPrdContent` (after fix), `hydrateProjectsTab` calls `renderProjectsList`, `projectsWorkspaceFilter` change listener calls `renderProjectsList`.
+- **PASS** — Edit mode toggle (Change 5): `btnEditProjects`/`btnSaveProjects`/`btnCancelProjects` wired correctly. `enterEditMode('projects')`/`exitEditMode('projects')` work unchanged.
+- **PASS** — Build via Planner / Copy Build Prompt (Change 6): buttons wired, enabled/disabled based on `_selectedProjectName`.
+- **PASS** — Backend handlers (Change 7, 7b): `invokePrdBuilder` and `copyPrdBuildPrompt` mirror the Constitution pattern. `getProjectPrd` renders markdown to HTML via `markdown.api.render` and returns both `content` (HTML) and `rawContent` (markdown).
+
+### Stage 2 — Balanced Synthesis
+
+**Keep:**
+- HTML restructure, CSS selectors, state/persistence, `renderProjectsList` sidebar rendering, edit mode toggle, Build via Planner / Copy Build Prompt wiring, backend handlers. All correctly implemented.
+
+**Fix now (APPLIED):**
+1. **CRITICAL fix:** `project.js:499-527` — replaced the `projectPrdContent` handler. Now uses `_selectedProjectName` (not undeclared `projectsPrdSelect`), `projectsPreviewContent` (not undeclared `projectsPrdEditor`), `msg.content` for HTML preview, `msg.rawContent` for the editor textarea, `state.editOriginalContent.projects` for edit-mode restore, and the "No PRD found" onboarding message for new PRDs.
+2. **MAJOR fix:** `project.html:1172` — added `#projects-preview-content .empty-state` to the empty-state CSS selector. The "Select a project to view its PRD" empty state now has flex centering and proper styling.
+3. **MAJOR fix:** `project.js:2775-2787` — removed premature `exitEditMode('projects')` from the save handler. `project.js:528-536` — added `exitEditMode('projects')` and `requestProjectPrd()` to the `projectPrdSaved` handler on success. The preview now refreshes with rendered HTML after a successful save.
+4. **NIT fix:** `project.js:799-810` — added `prdPromptCopied` message handler with "Copied!" visual feedback on `btnCopyPrdPrompt`, mirroring the Constitution/System tab pattern.
+
+**Defer:** None.
+
+### Validation Results
+
+- **Code verification:** `project.js` — no remaining references to `projectsPrdSelect` or `projectsPrdEditor` (verified via grep). All references use `_selectedProjectName`, `projectsPreviewContent`, `projectsEditor`.
+- **HTML verification:** `project.html:1452-1487` — Projects tab structure matches plan Change 1 exactly. All IDs follow naming convention.
+- **CSS verification:** `#projects-list-pane` and `#system-list-pane` present in all 4 selector groups. `#projects-preview-content .empty-state` added. `.edit-mode #projects-preview-content` present.
+- **Backend verification:** `PlanningPanelProvider.ts:3538-3648` — `getProjectPrd` renders HTML, `invokePrdBuilder` and `copyPrdBuildPrompt` handlers complete.
+- **Save flow verification:** Save handler posts message without premature `exitEditMode`. `projectPrdSaved` handler calls `exitEditMode('projects')` + `requestProjectPrd()` on success.
+- **Compilation:** Skipped per session directive.
+- **Tests:** Skipped per session directive.
+
+### Files Changed
+
+- `src/webview/project.js:499-527` — replaced `projectPrdContent` handler to use `_selectedProjectName`/`projectsPreviewContent`/`projectsEditor`/`msg.content`(HTML)/`msg.rawContent`(markdown) + onboarding message (CRITICAL fix).
+- `src/webview/project.js:528-536` — `projectPrdSaved` handler now calls `exitEditMode('projects')` + `requestProjectPrd()` on success (MAJOR fix).
+- `src/webview/project.js:799-810` — added `prdPromptCopied` handler with "Copied!" feedback (NIT fix).
+- `src/webview/project.js:2775-2787` — removed premature `exitEditMode('projects')` from save handler (MAJOR fix).
+- `src/webview/project.html:1172` — added `#projects-preview-content .empty-state` to empty-state CSS selector (MAJOR fix).
+
+### Remaining Risks
+
+- **Low:** The `requestProjectPrd()` call in `projectPrdSaved` briefly shows "Loading…" status before the PRD re-renders. This is a minor UX flicker (status goes "Saved ✓" → "Loading…" → content). Acceptable — the alternative (stale preview) is worse.
+- **Low:** The `constitution-onboarding` CSS class is reused for the Projects tab's "No PRD found" message. If the Constitution tab's onboarding styling changes in the future, the Projects tab's onboarding would change too. Acceptable — they share the same semantic purpose.
+
+### Summary
+
+| Severity | Finding | Location |
+|----------|---------|----------|
+| CRITICAL | `projectPrdContent` handler referenced undeclared `projectsPrdSelect`/`projectsPrdEditor` — ReferenceError on every PRD load | project.js:499-510 (fixed) |
+| MAJOR | `#projects-preview-content .empty-state` CSS selector missing — unstyled empty state | project.html:1167-1171 (fixed) |
+| MAJOR | Save flow: premature `exitEditMode` + no preview refresh after save | project.js:2770, 528-530 (fixed) |
+| NIT | `prdPromptCopied` message unhandled — no "Copied!" feedback | project.js (fixed) |
+
+**Fixes applied:**
+1. `project.js:499-527` — rewrote `projectPrdContent` handler with correct variable references and HTML/markdown split.
+2. `project.js:528-536` — `projectPrdSaved` handler now exits edit mode and re-fetches PRD on success.
+3. `project.js:799-810` — added `prdPromptCopied` handler.
+4. `project.js:2775-2787` — removed premature `exitEditMode` from save handler.
+5. `project.html:1172` — added `#projects-preview-content .empty-state` to CSS selector.
+
+**Remaining risks:** Minor status flicker after save; shared `constitution-onboarding` CSS class between Constitution and Projects tabs.

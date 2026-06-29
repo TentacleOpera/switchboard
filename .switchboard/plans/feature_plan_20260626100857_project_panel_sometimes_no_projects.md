@@ -362,3 +362,64 @@ by the user. No compilation step is needed for this session.
 
 **Recommendation: Send to Coder** (Complexity 5 — multi-state UI logic in a
 single file, with one moderate risk in the error-path handling).
+
+---
+
+## Code Review (Reviewer Pass)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*"You had ONE job — make the error path work — and you left a BOMB in it."*
+
+- **CRITICAL** — `project.js:404` (error-path handler) called `updateProjectsPrdSelect()` — a function that **NO LONGER EXISTS**. Plan 3's refactor renamed it to `renderProjectsList()`, but this call site was never updated. Result: the moment a `kanbanPlansReady` error arrives while the Projects tab is active, the webview throws `ReferenceError: updateProjectsPrdSelect is not defined`. The error path that Plan 2 was specifically designed to fix is itself broken. This is the kind of integration regression that happens when two plans touch the same function without cross-referencing.
+- **MAJOR** — `renderProjectsList` (the renamed `updateProjectsPrdSelect`) was missing the **three-state logic** from Change 3. Plan 3's refactor carried over the sidebar-item rendering but dropped the error state (`_kanbanProjectsError` is set at line 402 but never checked in `renderProjectsList`) AND the loading state (cold cache showed "No projects" instead of "Loading projects…"). The `_kanbanProjectsError` flag was a dead variable — set but never read. The entire point of Plan 2 was the three-state UI; without it, the bug is only half-fixed.
+- **PASS** — `normalizeRoot` helper (line 1152) is present and applied to both cache keys on arrival (lines 420-425) and the lookup key (line 1189). Correct.
+- **PASS** — `_kanbanProjectsError` flag declared at line 168, reset to `false` on success at line 408. Correct lifecycle.
+- **PASS** — `hydrateProjectsTab` (lines 1265-1269) simplified to unconditional `renderProjectsList()` call. Correct.
+- **PASS** — Cache key normalization on arrival (lines 420-425) correctly preserves cache on proactive pushes (the `if (msg.allWorkspaceProjects)` guard).
+
+### Stage 2 — Balanced Synthesis
+
+**Keep:**
+- `normalizeRoot` helper and cache key normalization — working correctly.
+- `_kanbanProjectsError` flag declaration and reset — working correctly.
+- `hydrateProjectsTab` simplification — working correctly.
+
+**Fix now (APPLIED):**
+1. **CRITICAL fix:** `project.js:404` — changed `updateProjectsPrdSelect()` to `renderProjectsList()`. The dangling call to a renamed function would have crashed the error-path handler.
+2. **MAJOR fix:** `renderProjectsList` (lines 1184-1254) — added the three-state logic (error / loading / loaded-empty / loaded-with-projects) that was lost during Plan 3's refactor. The error state shows "Error loading projects — click to retry" with a click-to-retry handler; the loading state shows "Loading projects…" when the cache is empty; the loaded-empty state shows the genuine "No projects" message. All states properly reset `emptyState.textContent`, `cursor`, and `onclick` to avoid stale handlers bleeding across states.
+
+**Defer:** None.
+
+### Validation Results
+
+- **Code verification:** `project.js:404` now calls `renderProjectsList()` (verified — no remaining references to `updateProjectsPrdSelect`).
+- **Three-state logic:** `renderProjectsList` (lines 1184-1254) now checks `_kanbanProjectsError` (State 1), empty cache (State 2), empty projects list (State 3), and normal populate (State 4). All four states verified.
+- **Error flag lifecycle:** Declared at line 168, set at line 402, reset at line 408. Verified.
+- **`normalizeRoot`:** Present at line 1152, applied at lines 423 and 1189. Verified.
+- **`hydrateProjectsTab`:** Lines 1265-1269 — unconditional `renderProjectsList()`. Verified.
+- **Compilation:** Skipped per session directive.
+- **Tests:** Skipped per session directive.
+
+### Files Changed
+
+- `src/webview/project.js` — line 404: fixed dangling `updateProjectsPrdSelect()` → `renderProjectsList()` call (CRITICAL fix).
+- `src/webview/project.js` — lines 1184-1254: added three-state logic (error/loading/loaded-empty/populated) to `renderProjectsList` (MAJOR fix).
+
+### Remaining Risks
+
+- **Low:** The error-state click-to-retry handler sets `_kanbanProjectsError = false` before re-fetching. If the re-fetch also errors, the flag is set again on the next `kanbanPlansReady` error response. Correct behavior — no stuck state.
+- **Low:** The loading state checks `!Object.keys(_kanbanAllWorkspaceProjects || {}).length`. If a workspace genuinely has zero workspaces mapped (edge case), this would show "Loading…" indefinitely. In practice, `allWorkspaceProjects` always has at least one key (the current workspace) on a successful fetch, so this is theoretical.
+
+### Summary
+
+| Severity | Finding | Location |
+|----------|---------|----------|
+| CRITICAL | Dangling call to renamed `updateProjectsPrdSelect()` — ReferenceError on error path | project.js:404 (fixed) |
+| MAJOR | Three-state logic (error/loading/empty) missing from `renderProjectsList` | project.js:1184-1246 (fixed) |
+
+**Fixes applied:**
+1. `project.js:404` — `updateProjectsPrdSelect()` → `renderProjectsList()`.
+2. `project.js:1184-1254` — added error state (click-to-retry), loading state, and loaded-empty state with proper `emptyState` text/cursor/onclick reset.
+
+**Remaining risks:** Theoretical indefinite "Loading…" on zero-workspace edge case (mitigated by backend always returning at least one workspace key).
