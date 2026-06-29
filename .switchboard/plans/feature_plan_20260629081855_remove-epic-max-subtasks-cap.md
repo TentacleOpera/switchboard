@@ -140,3 +140,45 @@ Do **not** add a migration and do **not** delete `epic_max_subtasks` rows from t
 2. Move it to PLAN REVIEWED, high complexity; click **Pair**. Inspect the clipboard Lead prompt + the Coder terminal prompt: all 25 `[SUBTASK]` lines present, no WARNING line.
 3. From the Epics tab, click **Orchestrate** (copy mode): prompt shows all 25; status reads "25 subtask(s) included" with no "capped at" suffix.
 4. Confirm the epic + all 25 subtasks advance to LEAD CODED together (dispatched set == moved set — the prior inconsistency is gone).
+
+---
+
+## Code Review (Reviewer Pass)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> **NIT — `updateEpicConfig` stubs left as tombstones instead of deleted.** The plan said "Delete the entire `case 'updateEpicConfig':` block" in both `KanbanProvider.ts:7949` and `PlanningPanelProvider.ts:3371`. The implementation kept them as no-op case stubs with explanatory comments. They do *nothing* — but they're dead code the plan explicitly ordered removed. The comments are nice, but a no-op `case` that falls through to `break` is just a tombstone taking up space. Zero webview senders confirmed (grep: no matches in `src/webview/`). Harmless, but not what the plan said.
+
+> **Observation (not a finding) — `buildEpicOrchestrationPrompt` was deleted entirely, not just modified.** The plan proposed modifying it in-place (remove cap, set counts). The implementation went further: deleted the function and replaced it with a `copyEpicPlannerPrompt` handler (`PlanningPanelProvider.ts:3016-3056`) that uses the shared `expandEpicSubtaskPlans` helper + `generateUnifiedPrompt`. This is a *better* refactor — it unifies the epic prompt path with the standard prompt builder — but it's a scope expansion the plan didn't authorize. The return shape concern in the plan is moot since the function no longer exists. Acceptable.
+
+> **Observation — shared `expandEpicSubtaskPlans` helper extracted.** The plan proposed modifying `_cardsToPromptPlans` and `buildEpicOrchestrationPrompt` independently. The implementation extracted a shared `expandEpicSubtaskPlans` helper (`KanbanProvider.ts:2566-2595`) used by both `_cardsToPromptPlans` and `_resolveKanbanDispatchPlans` in `TaskViewerProvider.ts:2991`. This is cleaner than the plan's approach and ensures all dispatch paths are uncapped consistently. Good engineering judgment.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep:**
+- The shared `expandEpicSubtaskPlans` helper refactor — superior to the plan's per-method approach.
+- The `copyEpicPlannerPrompt` replacement for `buildEpicOrchestrationPrompt` — unifies the prompt path.
+- The `generateUnifiedPrompt` filter simplification (`plans.filter(p => p.isSubtask).length` — no WARNING guard).
+- The `agentPromptBuilder.ts` `epicMaxSubtasks` field deletion.
+- The `project.js` "capped at" branch deletion.
+- No migration, no stored-config deletion.
+
+**Fix now:** None required. The no-op `updateEpicConfig` stubs are a NIT — they're harmless, the comments explain the reasoning (legacy keys never dropped per CLAUDE.md), and they provide a safety net if a stale webview cache sends the message. Deleting them would be marginally cleaner but introduces a small risk of an unhandled-message error path. The implementer's choice to keep them as documented no-ops is defensible.
+
+**Defer:** None.
+
+### Files Changed (Verified)
+- `src/services/KanbanProvider.ts` — `_cardsToPromptPlans` uses shared `expandEpicSubtaskPlans` (no cap, no WARNING); `expandEpicSubtaskPlans` helper added (`:2566-2595`); `generateUnifiedPrompt` filter simplified (`:3101`); `updateEpicConfig` case kept as no-op stub (`:7949-7956`); `createEpicFromPlanIds` calls `recomputeEpicComplexity` (`:8580`).
+- `src/services/PlanningPanelProvider.ts` — `buildEpicOrchestrationPrompt` deleted, replaced with `copyEpicPlannerPrompt` handler (`:3016-3056`); `updateEpicConfig` case kept as no-op stub (`:3371-3377`); `_setupEpicDocsWatcher` repurposed to `fetchKanbanPlans` (`:906-949`).
+- `src/services/agentPromptBuilder.ts` — `epicMaxSubtasks` field deleted from `PromptBuilderOptions`.
+- `src/webview/project.js` — "capped at" UI branch deleted; `copyEpicPlannerPrompt` sender wired (`:1732-1736`).
+- `src/services/TaskViewerProvider.ts` — CLI dispatch path uses `expandEpicSubtaskPlans` (`:2991`).
+
+### Validation Results
+- **Grep verification:** `epic_max_subtasks` — only comment references remain (2 hits, both in no-op stub comments). `epicMaxSubtasks` — zero hits. `[WARNING:` — zero hits. `updateEpicConfig` webview senders — zero hits in `src/webview/`.
+- **Compilation:** Skipped per session directive.
+- **Tests:** Skipped per session directive.
+
+### Remaining Risks
+- **NIT:** No-op `updateEpicConfig` case stubs remain in both providers. Harmless but deviates from plan's "delete entirely" instruction. No action needed.
+- **Very large epics (100+ subtasks):** Prompt is path-lines only; no token risk. Downstream agent cost is the user's explicit intent.

@@ -106,3 +106,35 @@ None — this is a single-line frontend template change with no new logic, no ne
 ## Recommendation
 
 Complexity 2 → **Send to Intern**. One-line template edit, all variables/CSS/read-path verified in scope, no backend or state changes. The only non-trivial constraint is the release-ordering gate against `feature_plan_20260629091401_epics-always-high-complexity.md`, which is a release-management concern, not an implementation one.
+
+---
+
+## Code Review (Reviewer Pass)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> **It's a one-line edit. It's correct.** The epic branch of `cardMetaContent` (`kanban.html:5350-5351`) now reads `EPIC: N SUBTASKS · Complexity: <chip>` — the `${timeAgo}` is gone, the complexity chip is in. The non-epic branch (`:5352`) is unchanged: `Complexity: <chip> · ${timeAgo}`. The `complexityValue`/`category`/`complexityClass` variables are computed unconditionally at `:5289-5291`, before the ternary. The chip CSS at `:960-965` is untouched. There is nothing to complain about. The dependency (`feature_plan_20260629091401`) has landed — epic complexity is now the derived max, stored in the DB, so `card.complexity` carries a real value. The release-ordering gate is satisfied.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep:**
+- The epic branch template change — `${timeAgo}` dropped, complexity chip appended.
+- The non-epic branch — untouched, timestamp preserved.
+- All variable computation — unconditional at `:5289-5291`, in scope for both branches.
+
+**Fix now:** None required.
+
+**Defer:** None.
+
+### Files Changed (Verified)
+- `src/webview/kanban.html` — epic branch of `cardMetaContent` in `createCardHtml` (`:5350-5351`): `${timeAgo}` replaced with `Complexity: <span class="complexity-indicator ${complexityClass}">${category}</span>`. Non-epic branch unchanged (`:5352`).
+
+### Validation Results
+- **Grep verification:** `cardMetaContent` — 3 hits (declaration `:5350`, epic branch `:5351`, non-epic branch `:5352`). `EPIC:.*SUBTASK` — 1 hit at `:5351`, confirms the epic branch. `timeAgo` — still computed at `:5287` and used by non-epic branch at `:5352`. No dead-code concern.
+- **Dependency check:** `feature_plan_20260629091401_epics-always-high-complexity.md` — landed. `recomputeEpicComplexity` stores numeric max in DB `complexity` column. `card.complexity` sourced from DB at `KanbanProvider.ts:1237`. Release-ordering gate satisfied.
+- **Compilation:** Skipped per session directive.
+- **Tests:** Skipped per session directive.
+
+### Remaining Risks
+- **Release-ordering:** This plan and its dependency must ship in the same VSIX. Both are now implemented — the gate is satisfied as long as they release together.
+- **Completed-epic timestamp loss:** Deliberate tradeoff per the plan's Decision section. Completed epics show `Complexity: <chip>` with no timestamp. Acceptable.

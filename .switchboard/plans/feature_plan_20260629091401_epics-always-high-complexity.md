@@ -181,3 +181,48 @@ try {
 3. Have a planner agent rescore a subtask's plan file upward → after the watcher reparse, the epic's complexity rises to match (file-watch path propagates, not a UI action).
 4. Advance the same epic via the column button and via AUTOCODE drag → same destination both ways (divergence gone).
 5. On an upgraded install, a pre-existing epic recomputes to its subtask max after the backfill.
+
+---
+
+## Code Review (Reviewer Pass)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> **The clobber-guard is correct.** I traced every write path. `updateComplexityByPlanFile` (`KanbanDatabase.ts:1645-1667`) looks up the target row via `getPlanByPlanFile`, redirects epic rows to `recomputeEpicComplexity` (ignoring the incoming file-parsed value), and bubbles up subtask rescoring to the parent epic. `updateComplexityByPlanId` (`:1677-1695`) mirrors this exactly. The auto-regenerated epic file (no `Complexity:` line → `parsePlanMetadata` returns `'Unknown'` → `isValidComplexityValue('Unknown')` is `true`) would have clobbered the computed max — but the guard catches it. Good.
+
+> **The membership-change recompute is correct.** `updateEpicStatus` (`:1519-1535`) recomputes both the old epic (if the subtask moved from one epic to another) and the new epic (if a subtask was assigned). The `createEpicFromPlanIds` link loop (`KanbanProvider.ts:8563-8570`) drives `updateEpicStatus` per subtask, and the explicit `recomputeEpicComplexity` at `:8580` guarantees the final value is the true max regardless of intermediate write order. The per-link N-recomputes for N subtasks is acknowledged in the plan and acceptable.
+
+> **The migration is idempotent and gated.** V41 (`KanbanDatabase.ts:5156-5170`) checks `getMigrationVersion() < 41`, runs the correlated UPDATE (only epics whose active-subtask max ≥ 1), and sets version 41. Non-numeric legacy scores cast to 0; the first runtime recompute self-heals. Best-effort try/catch. This mirrors the V3 zombie-plan precedent. Clean.
+
+> **`parseComplexityScore` handles all cases.** Numeric strings ("7" → 7), `'Unknown'` → 0, legacy strings via `legacyToScore`. The `recomputeEpicComplexity` helper stores `String(max)` when max ≥ 1, `'Unknown'` otherwise. The unscored fallback is left as `'Unknown'` per the decision — the existing Unknown→High batch-move threshold handles it. Correct.
+
+> **NIT — `recomputeEpicComplexity` uses `require('./complexityScale')` at call time instead of a top-level import.** This is a runtime `require` inside the method (`KanbanDatabase.ts:1545`). It works (Node CommonJS), but it's a pattern inconsistency — the file uses ES module imports elsewhere. Not a correctness issue; the `require` is cached after first call. Cosmetic.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep:**
+- `recomputeEpicComplexity` helper — correct max-of-subtasks logic, stores `'Unknown'` when unscored.
+- Clobber-guard in both `updateComplexityByPlanFile` and `updateComplexityByPlanId` — epic rows redirect to recompute, subtask rows write-then-bubble.
+- Membership-change recompute in `updateEpicStatus` — covers creation, assign, remove.
+- Explicit `recomputeEpicComplexity` call in `createEpicFromPlanIds` after the link loop.
+- V41 migration — idempotent, gated, best-effort.
+- `parseComplexityScore` integration — handles numeric, Unknown, and legacy strings.
+
+**Fix now:** None required. The `require` vs `import` pattern is a NIT — the codebase mixes both patterns elsewhere, and the runtime `require` is functionally correct and cached.
+
+**Defer:** None.
+
+### Files Changed (Verified)
+- `src/services/KanbanDatabase.ts` — `recomputeEpicComplexity` helper (`:1543-1554`); clobber-guard + bubble-up in `updateComplexityByPlanFile` (`:1645-1667`); clobber-guard + bubble-up in `updateComplexityByPlanId` (`:1677-1695`); membership-change recompute in `updateEpicStatus` (`:1530-1533`); V41 migration backfill (`:5156-5170`).
+- `src/services/KanbanProvider.ts` — `createEpicFromPlanIds` explicit `recomputeEpicComplexity` call after link loop (`:8580`).
+
+### Validation Results
+- **Grep verification:** `recomputeEpicComplexity` — 7 hits, all in `KanbanDatabase.ts` (definition + call sites) and `KanbanProvider.ts:8580`. No orphaned references.
+- **Migration gating:** V41 check at `:5156` — `if (v41 < 41)` → `setMigrationVersion(41)` at `:5168`. Idempotent.
+- **`getSubtasksByEpicId` filter:** `WHERE epic_id = ? AND status = 'active'` (`:3925`). Completed subtasks drop out of the max. Correct.
+- **Compilation:** Skipped per session directive.
+- **Tests:** Skipped per session directive.
+
+### Remaining Risks
+- **NIT:** `require('./complexityScale')` runtime require in `recomputeEpicComplexity` instead of top-level import. Functionally correct, cached after first call. Cosmetic inconsistency.
+- **Per-link recompute cost:** N recomputes for N subtasks during `createEpicFromPlanIds`. Acceptable for typical epics (~300 DB ops for 100 subtasks). The explicit final recompute guarantees correctness.

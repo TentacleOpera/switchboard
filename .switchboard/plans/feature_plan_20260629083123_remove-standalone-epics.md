@@ -169,3 +169,39 @@ let filtered = _kanbanPlansCache.filter(plan => plan.isEpic);
 6. **No orphaned UI:** Subtask accordions load via `getEpicDetails` for every epic; no "standalone epic document" text remains anywhere.
 7. **Regression sweep:** Orchestrate, + Subtask, Delete Epic, Edit/Save/Cancel, column badge/dropdown, Copy Link, Copy Planning Prompt, Send to Planner all still work for DB epics.
 8. **Files untouched:** Confirm no `.switchboard/epics/*.md` file is moved, renamed, or deleted by any code path in this change.
+
+---
+
+## Code Review (Reviewer Pass)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> **Clean.** I went looking for blood and found nothing. Every standalone-epic reference — `fetchEpicDocuments`, `epicDocumentsReady`, `_epicDocumentsCache`, `isEpicDocument` — is *gone*. Zero grep hits across the entire `src/` tree. The watcher was repurposed exactly as specified: `_setupEpicDocsWatcher` (`PlanningPanelProvider.ts:906-949`) now fires `fetchKanbanPlans` with a 1200ms debounce instead of the old `fetchEpicDocuments` at 400ms. The `renderEpicsList` merge site collapsed to `_kanbanPlansCache.filter(plan => plan.isEpic)` — pure DB, matching the Plans list. `isManageable` is `!!plan` in both `renderEpicsList` and `renderEpicMetaBar`. The `Doc` column-badge fallback is gone. The accordion always takes the `getEpicDetails` path. No "standalone epic document" text anywhere. This is what a clean deletion looks like.
+
+> **NIT — the `fetchEpicDocuments` case handler deletion left a comment referencing `fetchEpicDocuments` in `PlanningPanelProvider.ts:3026`.** "deleted buildEpicOrchestrationPrompt orchestrator preview" — this is a comment in the `copyEpicPlannerPrompt` handler referencing the old function. Not a code issue, just a stale reference in a comment. Harmless.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep:**
+- All deletions: `fetchEpicDocuments` handler, `epicDocumentsReady` handler, `_epicDocumentsCache`, `isEpicDocument` branches, `Doc` badge fallback, standalone accordion branch.
+- Watcher repurpose: `_setupEpicDocsWatcher` → `fetchKanbanPlans` with 1200ms debounce.
+- `isManageable` collapse to `!!plan` in both render functions.
+- `tryResolvePendingEpicSelection` pool simplified to DB-only.
+- `renderEpicsList` DB-only merge.
+
+**Fix now:** None required. The implementation is a faithful, clean execution of the plan.
+
+**Defer:** None.
+
+### Files Changed (Verified)
+- `src/services/PlanningPanelProvider.ts` — `fetchEpicDocuments` case handler deleted; `_setupEpicDocsWatcher` repurposed to `fetchKanbanPlans` with 1200ms debounce (`:906-949`); `updateEpicConfig` case kept as no-op stub (Plan 1 overlap).
+- `src/webview/project.js` — `_epicDocumentsCache` deleted; `epicDocumentsReady` handler deleted; `fetchEpicDocuments` post-message triggers deleted; `renderEpicsList` DB-only (`:1608`); `tryResolvePendingEpicSelection` pool DB-only (`:1373`); `isManageable` collapsed to `!!plan` (`:1801`); `Doc` badge fallback removed; accordion always uses `getEpicDetails` (`:1768`); no "standalone epic document" text.
+
+### Validation Results
+- **Grep verification:** `fetchEpicDocuments` — zero hits. `epicDocumentsReady` — zero hits. `_epicDocumentsCache` — zero hits. `isEpicDocument` — zero hits. "standalone epic" — only in comments explaining the removal.
+- **Compilation:** Skipped per session directive.
+- **Tests:** Skipped per session directive.
+
+### Remaining Risks
+- **Refresh-timing:** The 1200ms watcher debounce vs `GlobalPlanWatcherService` import race is eventual-consistency, identical to how plans behave. Not a correctness issue.
+- **NIT:** Stale comment reference to deleted `buildEpicOrchestrationPrompt` in `PlanningPanelProvider.ts:3026`. Harmless.

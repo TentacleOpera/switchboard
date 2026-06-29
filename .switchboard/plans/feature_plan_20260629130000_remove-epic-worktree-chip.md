@@ -117,3 +117,34 @@ None — pure markup deletion with no logic. (Per session directive, automated t
 ## Recommendation
 
 Complexity 1 → **Send to Intern**. Two-edit markup deletion, no state or logic change, no dependencies. The only care needed is to not touch `currentEpicWorktrees` or the `:9297` dropdown guard — both explicitly out of scope.
+
+---
+
+## Code Review (Reviewer Pass)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> **Clean deletion.** `wtButton` — zero grep hits. `wt-chip` — zero grep hits. The entire 10-line `wtButton` block is gone. The `${wtButton}` interpolation is gone from the topic line (`kanban.html:5362`: `<div class="card-topic">${epicBadge}${escapeHtml(shortTopic)}</div>` — no `${wtButton}`). Three references removed, zero dangling. The `currentEpicWorktrees` state map is preserved (5 hits: declaration `:3752`, state sync `:6128-6129`, dropdown guard `:9242`). The Worktrees-tab dropdown guard at `:9242` still excludes already-linked epics. Nothing was over-deleted. This is the simplest plan in the epic and it was executed exactly as written.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep:**
+- The `wtButton` block deletion — all 10 lines removed.
+- The `${wtButton}` interpolation removal from the topic line.
+- `currentEpicWorktrees` state — preserved, still drives the Worktrees-tab dropdown guard.
+
+**Fix now:** None required.
+
+**Defer:** None.
+
+### Files Changed (Verified)
+- `src/webview/kanban.html` — `wtButton` block deleted (was `:5388-5397`); `${wtButton}` removed from topic line template (`:5362`). `currentEpicWorktrees` state preserved (`:3752`, `:6128-6129`, `:9242`).
+
+### Validation Results
+- **Grep verification:** `wtButton` — zero hits. `wt-chip` — zero hits. `currentEpicWorktrees` — 5 hits (declaration, state sync, dropdown guard). State and functional consumer intact.
+- **Topic line:** `kanban.html:5362` — `<div class="card-topic">${epicBadge}${escapeHtml(shortTopic)}</div>` — no `${wtButton}`. Confirmed.
+- **Compilation:** Skipped per session directive.
+- **Tests:** Skipped per session directive.
+
+### Remaining Risks
+- None. Pure markup deletion with state preserved. No logic, no backend, no dependencies.

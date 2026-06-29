@@ -18,9 +18,9 @@ Make the epic data model and its dispatch and routing behavior consistent and co
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Remove the Epic Subtask Cap (`epic_max_subtasks`) Entirely](../plans/feature_plan_20260629081855_remove-epic-max-subtasks-cap.md) — **LEAD CODED**
-- [ ] [Remove Standalone Epics as a Concept](../plans/feature_plan_20260629083123_remove-standalone-epics.md) — **LEAD CODED**
-- [ ] [Epic Complexity Is the Max of Its Subtasks (Derived, Never Unknown)](../plans/feature_plan_20260629091401_epics-always-high-complexity.md) — **LEAD CODED**
-- [ ] [Show Epic Complexity on the Epic Card (Replace the Timestamp)](../plans/feature_plan_20260629124815_epic-card-complexity-display.md) — **LEAD CODED**
-- [ ] [Remove the Worktree Chip from Epic Cards (Visual Noise)](../plans/feature_plan_20260629130000_remove-epic-worktree-chip.md) — **LEAD CODED**
+- [ ] [Remove the Epic Subtask Cap (`epic_max_subtasks`) Entirely](../plans/feature_plan_20260629081855_remove-epic-max-subtasks-cap.md) — **CODE REVIEWED**
+- [ ] [Remove Standalone Epics as a Concept](../plans/feature_plan_20260629083123_remove-standalone-epics.md) — **CODE REVIEWED**
+- [ ] [Epic Complexity Is the Max of Its Subtasks (Derived, Never Unknown)](../plans/feature_plan_20260629091401_epics-always-high-complexity.md) — **CODE REVIEWED**
+- [ ] [Show Epic Complexity on the Epic Card (Replace the Timestamp)](../plans/feature_plan_20260629124815_epic-card-complexity-display.md) — **CODE REVIEWED**
+- [ ] [Remove the Worktree Chip from Epic Cards (Visual Noise)](../plans/feature_plan_20260629130000_remove-epic-worktree-chip.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
