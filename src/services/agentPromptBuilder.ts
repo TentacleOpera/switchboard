@@ -35,6 +35,7 @@ export interface BatchPromptPlan {
     epicId?: string;
     isSubtask?: boolean;
     epicTopic?: string;
+    isEpic?: boolean;
 }
 
 /**

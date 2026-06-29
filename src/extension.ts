@@ -2661,12 +2661,6 @@ export async function activate(context: vscode.ExtensionContext) {
         const customAgents = await taskViewerProvider.getCustomAgents(effectiveWorkspaceRoot);
         const startupCommands = await taskViewerProvider.getStartupCommands(effectiveWorkspaceRoot);
         const allBuiltInAgents = [
-            // Orchestrator is created first so its terminal appears at the top of the VS Code
-            // terminal panel (VS Code's createTerminal API has no position parameter — order is
-            // determined solely by creation order). Orchestrator has no kanban column (Decision #2):
-            // it is a full role only so its terminal is spawnable/configurable and dispatch-by-role
-            // works for the Epics-tab Orchestrate action.
-            { name: 'Orchestrator', role: 'orchestrator' },
             { name: 'Planner', role: 'planner' },
             { name: 'Lead Coder', role: 'lead' },
             { name: 'Coder', role: 'coder' },

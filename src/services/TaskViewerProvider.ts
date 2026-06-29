@@ -2920,8 +2920,9 @@ Each plan file must include:
                 let workingDir = '';
                 let epicId: string | undefined;
                 let worktreePath: string | undefined;
+                let plan: KanbanPlanRecord | undefined;
                 if (db) {
-                    const plan = await db.getPlanBySessionId(sid);
+                    plan = await db.getPlanBySessionId(sid);
                     if (plan) {
                         // Try plan_file first
                         if (plan.planFile) {
@@ -2977,8 +2978,30 @@ Each plan file must include:
                     absolutePath,
                     workingDir,
                     epicId,
-                    worktreePath
+                    worktreePath,
+                    isEpic: !!plan?.isEpic
                 });
+
+                // Epic subtask bundling (parity with copy/board path). The CLI
+                // resolver previously dropped subtasks; expand them here via the
+                // shared KanbanProvider helper so CLI-dispatched epics carry the
+                // full subtask bundle into generateUnifiedPrompt.
+                if (plan && plan.isEpic && plan.planId && this._kanbanProvider) {
+                    try {
+                        const subtaskPlans = await this._kanbanProvider.expandEpicSubtaskPlans(
+                            workspaceRoot,
+                            plan.planId,
+                            plan.topic || topic || 'Untitled',
+                            plan.kanbanColumn || '',
+                            worktreePath
+                        );
+                        for (const sp of subtaskPlans) {
+                            validPlans.push({ ...sp, sessionId: sp.sessionId || sid });
+                        }
+                    } catch (err) {
+                        console.warn(`[TaskViewerProvider] epic subtask expansion failed for ${sid}:`, err);
+                    }
+                }
             } catch (err) {
                 console.error(`[TaskViewerProvider] Failed to resolve plan for session ${sid}:`, err);
             }
@@ -4003,7 +4026,7 @@ Each plan file must include:
             return {};
         }
         const workspaceRoot = this._resolveWorkspaceRoot() || '';
-        const roles: string[] = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'orchestrator'];
+        const roles: string[] = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst'];
         const placeholder: BatchPromptPlan = {
             topic: '[your selected plans]',
             absolutePath: '/path/to/plan.md',
@@ -7534,7 +7557,7 @@ Each plan file must include:
         }
 
         // Merge with roleConfigs from globalState
-        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'orchestrator'];
+        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher'];
         for (const role of roles) {
             const config: any = this.getSetting(`switchboard.prompts.roleConfig_${role}`, undefined);
             if (config && config.prompt?.trim()) {

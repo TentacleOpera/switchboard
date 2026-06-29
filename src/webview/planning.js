@@ -3440,6 +3440,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (doc.sourceId === 'local-folder') return; // Skip local-folder
                 state.importedDocs.set(doc.docName, { sourceId: doc.sourceId, docId: doc.docId, docName: doc.docName, slugPrefix: doc.slugPrefix, canSync: doc.canSync });
                 state.importedDocs.set(doc.slugPrefix, { sourceId: doc.sourceId, docId: doc.docId, docName: doc.docName, slugPrefix: doc.slugPrefix, canSync: doc.canSync });
+                // Online docs are selected from the online tree by their remote
+                // docId (state.activeDocId === remote id), so key by docId too —
+                // otherwise the inline Edit gate and slugPrefix resolution miss.
                 if (doc.docId) {
                     state.importedDocs.set(doc.docId, { sourceId: doc.sourceId, docId: doc.docId, docName: doc.docName, slugPrefix: doc.slugPrefix, canSync: doc.canSync });
                 }

@@ -2498,6 +2498,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <button class="strip-icon-btn" id="btn-cli-triggers" data-tooltip="Toggle CLI triggers on/off">
                 <img src="{{ICON_CLI}}" alt="CLI Triggers">
             </button>
+            <button class="strip-icon-btn is-off" id="btn-epic-ultracode" data-tooltip="Epic workflow: prepend ultracode directive to epic prompts">
+                UC
+            </button>
+            <button class="strip-icon-btn is-off" id="btn-epic-goal" data-tooltip="Epic workflow: prepend /goal slash command to epic prompts">
+                /goal
+            </button>
             <button class="strip-icon-btn is-off" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">
                 <img src="{{ICON_COLLAPSE_CODERS}}" alt="Collapse Coders">
             </button>
@@ -4206,6 +4212,27 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 btn.classList.toggle('is-active', !!cliTriggersEnabled);
                 btn.classList.toggle('is-off', !cliTriggersEnabled);
             }
+        }
+
+        // Epic workflow mode: 'none' | 'ultracode' | 'goal' (mutually exclusive sticky toggles)
+        let epicWorkflowMode = 'none';
+        function updateEpicWorkflowToggleUi() {
+            const ucBtn = document.getElementById('btn-epic-ultracode');
+            const goalBtn = document.getElementById('btn-epic-goal');
+            if (ucBtn) {
+                ucBtn.classList.toggle('is-active', epicWorkflowMode === 'ultracode');
+                ucBtn.classList.toggle('is-off', epicWorkflowMode !== 'ultracode');
+            }
+            if (goalBtn) {
+                goalBtn.classList.toggle('is-active', epicWorkflowMode === 'goal');
+                goalBtn.classList.toggle('is-off', epicWorkflowMode !== 'goal');
+            }
+        }
+        function setEpicWorkflowMode(mode) {
+            // Clicking the active button resets to 'none'
+            epicWorkflowMode = (epicWorkflowMode === mode) ? 'none' : mode;
+            updateEpicWorkflowToggleUi();
+            postKanbanMessage({ type: 'setEpicWorkflowMode', mode: epicWorkflowMode });
         }
 
         function updateComplexityRoutingToggleUi() {
@@ -6349,6 +6376,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     cliTriggersEnabled = msg.enabled !== false;
                     updateCliToggleUi();
                     break;
+                case 'epicWorkflowModeState':
+                    epicWorkflowMode = ['none', 'ultracode', 'goal'].includes(msg.mode) ? msg.mode : 'none';
+                    updateEpicWorkflowToggleUi();
+                    break;
                 case 'dynamicComplexityRoutingState':
                     dynamicComplexityRoutingEnabled = msg.enabled !== false;
                     updateComplexityRoutingToggleUi();
@@ -7121,6 +7152,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             updateCliToggleUi();
             postKanbanMessage({ type: 'toggleCliTriggers', enabled: cliTriggersEnabled });
         });
+        document.getElementById('btn-epic-ultracode')?.addEventListener('click', () => {
+            setEpicWorkflowMode('ultracode');
+        });
+        document.getElementById('btn-epic-goal')?.addEventListener('click', () => {
+            setEpicWorkflowMode('goal');
+        });
         document.getElementById('unknown-complexity-toggle')?.addEventListener('change', (event) => {
             const checked = !!event.target?.checked;
             allowUnknownComplexityAutoMove = checked;
@@ -7150,6 +7187,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         });
 
         updateCliToggleUi();
+        updateEpicWorkflowToggleUi();
         renderColumns();
         renderBoard([]);
         updateAutobanButtonState();

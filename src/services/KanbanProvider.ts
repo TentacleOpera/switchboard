@@ -45,6 +45,15 @@ import { resolveEffectiveWorkspaceRootFromMappings } from './WorkspaceIdentitySe
 import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 
 /**
+ * Epic workflow mode directives, prepended at position-zero of an epic prompt
+ * when the corresponding sticky board toggle is active. Distinct from the
+ * legacy ULTRACODE_DIRECTIVE (deleted with the orchestrator role).
+ */
+const ULTRACODE_EPIC_PREFIX = 'This is an epic with multiple subtasks. Activate your ultracode workflow.';
+const GOAL_EPIC_PREFIX = '/goal';
+const VALID_EPIC_WORKFLOW_MODES = new Set(['none', 'ultracode', 'goal']);
+
+/**
  * Schedules a fire-and-forget write of the kanban state section to the plan file.
  * Debounced per sessionId (300ms) so rapid successive moves only trigger one write.
  * DISABLED: File-based state writes are deprecated.
@@ -1312,6 +1321,7 @@ export class KanbanProvider implements vscode.Disposable {
             this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig, epicWorktrees });
 
             this._panel.webview.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
+            await this._postEpicWorkflowModeState(resolvedWorkspaceRoot);
 
             this._panel.webview.postMessage({
                 type: 'dynamicComplexityRoutingState',
@@ -2233,6 +2243,7 @@ export class KanbanProvider implements vscode.Disposable {
                 epicWorktrees
             });
             this._panel.webview.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
+            await this._postEpicWorkflowModeState(resolvedWorkspaceRoot);
             this._panel.webview.postMessage({
                 type: 'allowUnknownComplexityAutoMoveState',
                 enabled: this._allowUnknownComplexityAutoMove
@@ -2380,6 +2391,7 @@ export class KanbanProvider implements vscode.Disposable {
             this._lastCards = cards;
             this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig });
             this._panel.webview.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
+            await this._postEpicWorkflowModeState(resolvedWorkspaceRoot);
             this._panel.webview.postMessage({
                 type: 'allowUnknownComplexityAutoMoveState',
                 enabled: this._allowUnknownComplexityAutoMove
@@ -2520,41 +2532,84 @@ export class KanbanProvider implements vscode.Disposable {
                 workingDir,
                 sessionId: cardKey,
                 worktreePath,
-                epicId
+                epicId,
+                isEpic: !!card.isEpic
             });
 
             if (card.isEpic && hasDb && card.planId) {
-                const maxRaw = await db.getConfig('epic_max_subtasks');
-                const maxSubtasks = maxRaw ? parseInt(maxRaw, 10) : 20;
-                const subtasks = await db.getSubtasksByEpicId(card.planId);
-                const limited = subtasks.slice(0, maxSubtasks);
-                for (const st of limited) {
-                    const stWorktreePath = st.epicId ? worktreePathMap.get(String(st.epicId)) : worktreePath;
-                    promptPlans.push({
-                        topic: `[SUBTASK] ${st.topic}`,
-                        absolutePath: this._resolvePlanFilePath(workspaceRoot, st.planFile),
-                        complexity: st.complexity,
-                        workingDir: st.repoScope ? resolveWorkingDir(workspaceRoot, st.repoScope) : '',
-                        sessionId: st.sessionId || st.planId,
-                        worktreePath: stWorktreePath,
-                        isSubtask: true,
-                        epicTopic: card.topic,
-                        epicId: card.planId || undefined
-                    });
-                }
-                if (subtasks.length > maxSubtasks) {
-                    promptPlans.push({
-                        topic: `[WARNING: ${subtasks.length} subtasks exist but only ${maxSubtasks} included. Remaining subtasks stay in column: ${card.column}]`,
-                        absolutePath: '',
-                        sessionId: '',
-                        worktreePath,
-                        isSubtask: true,
-                        epicTopic: card.topic
-                    });
-                }
+                const subtaskPlans = await this.expandEpicSubtaskPlans(
+                    workspaceRoot, card.planId, card.topic, card.column, worktreePath, worktreePathMap
+                );
+                for (const sp of subtaskPlans) { promptPlans.push(sp); }
             }
         }
         return promptPlans;
+    }
+
+    /**
+     * Shared epic-subtask expansion helper. Returns a new array of subtask
+     * BatchPromptPlan entries (plus an overflow-warning card when the cap is
+     * exceeded) for the given epic. Used by both the copy/board path
+     * (_cardsToPromptPlans, which passes a worktreePathMap) and the CLI-dispatch
+     * path (_resolveKanbanDispatchPlans in TaskViewerProvider, which passes only
+     * a resolved worktreePath). Does not mutate any caller array.
+     */
+    public async expandEpicSubtaskPlans(
+        workspaceRoot: string,
+        epicPlanId: string,
+        epicTopic: string,
+        epicColumn: string,
+        worktreePath?: string,
+        worktreePathMap?: Map<string, string>
+    ): Promise<BatchPromptPlan[]> {
+        const out: BatchPromptPlan[] = [];
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady()) || !epicPlanId) { return out; }
+        const maxRaw = await db.getConfig('epic_max_subtasks');
+        const maxSubtasks = maxRaw ? parseInt(maxRaw, 10) : 20;
+        const subtasks = await db.getSubtasksByEpicId(epicPlanId);
+        const limited = subtasks.slice(0, maxSubtasks);
+        for (const st of limited) {
+            const stWorktreePath = st.epicId
+                ? (worktreePathMap?.get(String(st.epicId)) ?? worktreePath)
+                : worktreePath;
+            out.push({
+                topic: `[SUBTASK] ${st.topic}`,
+                absolutePath: this._resolvePlanFilePath(workspaceRoot, st.planFile),
+                complexity: st.complexity,
+                workingDir: st.repoScope ? resolveWorkingDir(workspaceRoot, st.repoScope) : '',
+                sessionId: st.sessionId || st.planId,
+                worktreePath: stWorktreePath,
+                isSubtask: true,
+                epicTopic,
+                epicId: epicPlanId
+            });
+        }
+        if (subtasks.length > maxSubtasks) {
+            out.push({
+                topic: `[WARNING: ${subtasks.length} subtasks exist but only ${maxSubtasks} included. Remaining subtasks stay in column: ${epicColumn}]`,
+                absolutePath: '',
+                sessionId: '',
+                worktreePath,
+                isSubtask: true,
+                epicTopic
+            });
+        }
+        return out;
+    }
+
+    /**
+     * Read epic_workflow_mode from the per-workspace DB config table and push
+     * the current state to the webview so the sticky toggle buttons reflect
+     * the persisted mode on board load/refresh.
+     */
+    private async _postEpicWorkflowModeState(workspaceRoot: string): Promise<void> {
+        const db = this._getKanbanDb(workspaceRoot);
+        let mode = 'none';
+        if (db && await db.ensureReady()) {
+            mode = (await db.getConfig('epic_workflow_mode')) || 'none';
+        }
+        this._panel?.webview.postMessage({ type: 'epicWorkflowModeState', mode });
     }
 
     private async _getDefaultPromptOverrides(
@@ -2576,7 +2631,7 @@ export class KanbanProvider implements vscode.Disposable {
         } catch { /* file may not exist or be invalid */ }
 
         // Merge with roleConfigs from workspaceState
-        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'orchestrator'];
+        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher'];
         for (const role of roles) {
             const config: any = this._getRoleConfig(role);
             if (config && config.prompt?.trim()) {
@@ -2968,7 +3023,6 @@ export class KanbanProvider implements vscode.Disposable {
             useWorktreesPerPlanEnabled: promptsConfig.useWorktreesPerPlanByRole?.[role] ?? false,
             switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role] ?? true,
             gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.[role] ?? true,
-            ultracodeEnabled: promptsConfig.ultracodeByRole?.[role] ?? false,
             workflowFilePathEnabled: promptsConfig.workflowFilePathEnabledByRole?.[role] ?? false,
             workflowFilePath: promptsConfig.workflowFilePathByRole?.[role] || '',
             defaultPromptOverrides,
@@ -3043,22 +3097,6 @@ export class KanbanProvider implements vscode.Disposable {
             resolvedOptions.ticketUpdateMode = promptsConfig.ticketUpdateMode;
         } else if (role === 'chat') {
             resolvedOptions.chatPlanDestinations = this._taskViewerProvider?.resolveChatPlanDestinations(workspaceRoot);
-        } else if (role === 'orchestrator') {
-            // The legacy global `epic_prompt_template` key (shipped — written by the old
-            // on-board epic-manage modal) now lives in the orchestrator role prompt
-            // override (Decision #3/#4). If the user has NOT set an orchestrator prompt,
-            // import the legacy template as a prepend so its old epic instructions still
-            // apply on top of the implementation-oriented default base. Read-only fallback:
-            // the legacy DB key is never written from here and never dropped (per CLAUDE.md).
-            if (!defaultPromptOverrides['orchestrator']) {
-                const db = this._getKanbanDb(workspaceRoot);
-                if (db && await db.ensureReady()) {
-                    const legacyTemplate = (await db.getConfig('epic_prompt_template') || '').trim();
-                    if (legacyTemplate) {
-                        defaultPromptOverrides['orchestrator'] = { mode: 'prepend', text: legacyTemplate };
-                    }
-                }
-            }
         }
 
         const hasSubtasks = plans.some(p => p.isSubtask);
@@ -3068,28 +3106,12 @@ export class KanbanProvider implements vscode.Disposable {
             resolvedOptions.epicMode = true;
             resolvedOptions.epicTopic = epicPlan?.topic || '';
             resolvedOptions.subtaskCount = subtaskCount;
-            if (role === 'orchestrator' && epicPlan) {
-                let relativePath = epicPlan.absolutePath;
-                if (workspaceRoot && epicPlan.absolutePath.startsWith(workspaceRoot)) {
-                    relativePath = epicPlan.absolutePath.substring(workspaceRoot.length).replace(/^[/\\]+/, '');
-                }
-                resolvedOptions.epicDocLink = relativePath;
-            }
-            // Epic prompt template: the orchestrator role prompt override is the new home
-            // (Decision #3/#4). For NON-orchestrator roles (step mode: epic dragged to the
-            // planner/lead column) prepend that override, falling back to the legacy
-            // `epic_prompt_template` DB key (shipped — read as fallback, never dropped).
-            // The orchestrator role itself already applies its override as the prompt base
-            // via resolveBaseInstructions, so prepending it again here would duplicate it.
-            if (role !== 'orchestrator') {
-                const orchestratorTemplate = defaultPromptOverrides['orchestrator']?.text?.trim();
-                let template = orchestratorTemplate;
-                if (!template) {
-                    const db = this._getKanbanDb(workspaceRoot);
-                    if (db && await db.ensureReady()) {
-                        template = (await db.getConfig('epic_prompt_template')) || undefined;
-                    }
-                }
+            // Epic prompt template: read the legacy `epic_prompt_template` DB key
+            // (shipped — read as fallback, never dropped) and prepend it for epic
+            // dispatches routed through any non-orchestrator role.
+            const db = this._getKanbanDb(workspaceRoot);
+            if (db && await db.ensureReady()) {
+                const template = (await db.getConfig('epic_prompt_template')) || undefined;
                 if (template) resolvedOptions.epicPromptTemplate = template;
             }
         }
@@ -3099,158 +3121,28 @@ export class KanbanProvider implements vscode.Disposable {
             ...overrides,
         };
 
-        return buildKanbanBatchPrompt(role, plans, mergedOptions);
-    }
+        const built = buildKanbanBatchPrompt(role, plans, mergedOptions);
 
-    /**
-     * Assemble the orchestrator prompt for a single epic (Epics-tab Orchestrate action).
-     * Expands the epic into epic + its subtasks — capped at `epic_max_subtasks` with the same
-     * [WARNING] line the board step-mode path uses — and runs it through generateUnifiedPrompt
-     * so the preview the Epics tab shows is byte-identical to what gets dispatched (preview =
-     * dispatch parity). Returns null when the epic can't be resolved.
-     */
-    public async buildEpicOrchestrationPrompt(
-        workspaceRoot: string,
-        epicSessionId: string,
-        role: string = 'orchestrator'
-    ): Promise<{ prompt: string; epicTopic: string; subtaskCount: number; totalSubtasks: number } | null> {
-        const db = this._getKanbanDb(workspaceRoot);
-        if (!db || !(await db.ensureReady())) { return null; }
-        const epic = await db.getPlanByPlanId(epicSessionId);
-        if (!epic || !epic.isEpic) { return null; }
-
-        await this._regenerateEpicFile(workspaceRoot, epic.planId, db);
-
-        const maxRaw = await db.getConfig('epic_max_subtasks');
-        const maxSubtasks = maxRaw ? parseInt(maxRaw, 10) : 20;
-        const subtasks = await db.getSubtasksByEpicId(epic.planId);
-        const limited = subtasks.slice(0, maxSubtasks);
-
-        const plans: BatchPromptPlan[] = [{
-            topic: epic.topic,
-            absolutePath: this._resolvePlanFilePath(workspaceRoot, epic.planFile),
-            complexity: epic.complexity,
-            sessionId: epic.sessionId || epic.planId,
-            epicId: epic.planId || undefined
-        }];
-        for (const st of limited) {
-            plans.push({
-                topic: `[SUBTASK] ${st.topic}`,
-                absolutePath: this._resolvePlanFilePath(workspaceRoot, st.planFile),
-                complexity: st.complexity,
-                workingDir: st.repoScope ? resolveWorkingDir(workspaceRoot, st.repoScope) : '',
-                sessionId: st.sessionId || st.planId,
-                isSubtask: true,
-                epicTopic: epic.topic,
-                epicId: epic.planId || undefined
-            });
-        }
-        if (subtasks.length > maxSubtasks) {
-            plans.push({
-                topic: `[WARNING: ${subtasks.length} subtasks exist but only ${maxSubtasks} included. Remaining subtasks stay in column: ${epic.kanbanColumn}]`,
-                absolutePath: '',
-                sessionId: '',
-                isSubtask: true,
-                epicTopic: epic.topic
-            });
-        }
-
-        const prompt = await this.generateUnifiedPrompt(role, plans, workspaceRoot);
-        return { prompt, epicTopic: epic.topic, subtaskCount: limited.length, totalSubtasks: subtasks.length };
-    }
-
-    /**
-     * Build the orchestrator prompt for an epic and dispatch it to the orchestrator terminal
-     * via dispatch-by-role. Returns the assembled prompt (so the caller can still copy it even
-     * if no orchestrator terminal exists — never hard-fail on a missing dispatch target).
-     */
-    public async dispatchEpicOrchestration(
-        workspaceRoot: string,
-        epicSessionId: string
-    ): Promise<{ assembled: { prompt: string; epicTopic: string; subtaskCount: number; totalSubtasks: number } | null; sent: boolean; moved: boolean }> {
-        const assembled = await this.buildEpicOrchestrationPrompt(workspaceRoot, epicSessionId);
-        if (!assembled) { return { assembled: null, sent: false, moved: false }; }
-        let sent = false;
-        if (this._taskViewerProvider) {
-            sent = await this._taskViewerProvider.dispatchCustomPromptToRole('orchestrator', assembled.prompt, workspaceRoot);
-        }
-        // Teleport the epic into the ORCHESTRATING column (non-dispatching move — the
-        // orchestrator was already dispatched above). This is the occupancy trigger that
-        // makes the epic-only Orchestrator column appear on the board. Without this, the
-        // column is permanently inert (epicOnly + hideWhenNoAgent = invisible unless occupied).
-        let moved = false;
-        try {
-            moved = await this.markEpicOrchestrating(workspaceRoot, epicSessionId);
-        } catch (teleportErr) {
-            console.warn(`[KanbanProvider] dispatchEpicOrchestration: teleport to ORCHESTRATING failed (prompt was still dispatched): ${teleportErr}`);
-        }
-        return { assembled, sent, moved };
-    }
-
-    /**
-     * Teleport the epic into the ORCHESTRATING column.
-     * Consolidates the teleport logic, provides an idempotency short-circuit, and handles logging.
-     */
-    public async markEpicOrchestrating(workspaceRoot: string, epicSessionId: string): Promise<boolean> {
-        const db = this._getKanbanDb(workspaceRoot);
-        if (!db || !(await db.ensureReady())) {
-            console.warn(`[KanbanProvider] markEpicOrchestrating: db not ready for ${epicSessionId}`);
-            return false;
-        }
-        const epic = await db.getPlanByPlanId(epicSessionId);
-        if (!epic || !epic.isEpic) {
-            console.warn(`[KanbanProvider] markEpicOrchestrating: no epic found for ${epicSessionId}`);
-            return false;
-        }
-        // Idempotency: skip the move (and the integration sync it would fire) if the
-        // epic is already in ORCHESTRATING. Prevents re-syncing a no-op status change
-        // to Linear/ClickUp when the user re-orchestrates an already-orchestrating epic.
-        const currentColumn = this._normalizeLegacyKanbanColumn(epic.kanbanColumn) || '';
-        if (currentColumn === 'ORCHESTRATING') {
-            // Already in ORCHESTRATING. Still refresh in case the webview's column
-            // state is stale (the bug we're fixing). The signature reset ensures
-            // updateColumns is re-sent.
-            this._lastColumnsSignature = null;
-            await this._refreshBoard(workspaceRoot);
-            return true;
-        }
-        try {
-            let moved = false;
-            if (epic.sessionId) {
-                moved = await this.moveCardToColumn(workspaceRoot, epic.sessionId, 'ORCHESTRATING');
-            } else if (epic.planFile) {
-                moved = await this.moveCardToColumnByPlanFile(workspaceRoot, epic.planFile, 'ORCHESTRATING');
+        // Epic workflow mode prepend: when the primary plan is an epic and a
+        // board-level workflow toggle (ultracode / goal) is active, prepend the
+        // directive at position-zero of the prompt. Covers both copy and CLI
+        // dispatch paths since both funnel through generateUnifiedPrompt.
+        const primaryPlan = plans[0];
+        if (primaryPlan && primaryPlan.isEpic) {
+            const db = this._getKanbanDb(workspaceRoot);
+            if (db && await db.ensureReady()) {
+                const mode = (await db.getConfig('epic_workflow_mode')) || 'none';
+                if (mode === 'ultracode') {
+                    return `${ULTRACODE_EPIC_PREFIX}\n\n${built}`;
+                } else if (mode === 'goal') {
+                    // /goal must be position-zero for the host to parse it as a
+                    // slash command. Prepending to the outermost return string
+                    // guarantees no safeguard/authorization wall precedes it.
+                    return `${GOAL_EPIC_PREFIX}\n${built}`;
+                }
             }
-            if (!moved) {
-                console.warn(`[KanbanProvider] markEpicOrchestrating: move to ORCHESTRATING returned false for ${epicSessionId}`);
-            }
-            this._lastColumnsSignature = null;   // force updateColumns to always be sent
-            await this._refreshBoard(workspaceRoot);
-            return moved;
-        } catch (err) {
-            console.warn(`[KanbanProvider] markEpicOrchestrating: teleport to ORCHESTRATING failed for ${epicSessionId}: ${err}`);
-            return false;
         }
-    }
-
-
-    /**
-     * Returns true if the orchestrator agent is both visible (enabled) and has
-     * a startup command configured. Used by the Epics tab to style the
-     * Orchestrate button to reflect whether dispatch will succeed.
-     * Note: this is a heuristic — it checks configuration, not whether a
-     * terminal is currently running. The prompt is always copied as a fallback.
-     */
-    public async isOrchestratorAvailable(workspaceRoot?: string): Promise<boolean> {
-        if (!this._taskViewerProvider) { return false; }
-        try {
-            const visibleAgents = await this._taskViewerProvider.getVisibleAgents(workspaceRoot);
-            if (!visibleAgents?.orchestrator) { return false; }
-            const commands = await this._taskViewerProvider.getStartupCommands(workspaceRoot);
-            return !!(commands?.orchestrator && commands.orchestrator.trim());
-        } catch {
-            return false;
-        }
+        return built;
     }
 
     private async _getPromptsConfig(workspaceRoot: string): Promise<any> {
@@ -3266,7 +3158,6 @@ export class KanbanProvider implements vscode.Disposable {
         const analystConfig: any = this._getRoleConfig('analyst');
         const researcherConfig: any = this._getRoleConfig('researcher');
         const ticketUpdaterConfig: any = this._getRoleConfig('ticket_updater');
-        const orchestratorConfig: any = this._getRoleConfig('orchestrator');
 
         return {
             workflowFilePathEnabledByRole: {
@@ -3279,7 +3170,6 @@ export class KanbanProvider implements vscode.Disposable {
                 analyst: analystConfig?.addons?.workflowFilePathEnabled ?? false,
                 researcher: researcherConfig?.addons?.workflowFilePathEnabled ?? false,
                 ticket_updater: ticketUpdaterConfig?.addons?.workflowFilePathEnabled ?? false,
-                orchestrator: orchestratorConfig?.addons?.workflowFilePathEnabled ?? false,
             },
             workflowFilePathByRole: {
                 planner: plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agents/workflows/improve-plan.md'),
@@ -3291,7 +3181,6 @@ export class KanbanProvider implements vscode.Disposable {
                 analyst: analystConfig?.addons?.workflowFilePath || '',
                 researcher: researcherConfig?.addons?.workflowFilePath || '',
                 ticket_updater: ticketUpdaterConfig?.addons?.workflowFilePath || '',
-                orchestrator: orchestratorConfig?.addons?.workflowFilePath || '',
             },
             accurateCodingEnabledByRole: {
                 lead: leadConfig?.addons?.accurateCoding ?? config.get<boolean>('accurateCoding.enabled', false),
@@ -3325,7 +3214,6 @@ export class KanbanProvider implements vscode.Disposable {
                 analyst: analystConfig?.addons?.skipCompilation ?? false,
                 researcher: researcherConfig?.addons?.skipCompilation ?? false,
                 ticket_updater: ticketUpdaterConfig?.addons?.skipCompilation ?? false,
-                orchestrator: orchestratorConfig?.addons?.skipCompilation ?? false,
             },
             skipTestsByRole: {
                 planner: plannerConfig?.addons?.skipTests ?? false,
@@ -3337,7 +3225,6 @@ export class KanbanProvider implements vscode.Disposable {
                 analyst: analystConfig?.addons?.skipTests ?? false,
                 researcher: researcherConfig?.addons?.skipTests ?? false,
                 ticket_updater: ticketUpdaterConfig?.addons?.skipTests ?? false,
-                orchestrator: orchestratorConfig?.addons?.skipTests ?? false,
             },
             gitProhibitionEnabled: plannerConfig?.addons?.gitProhibition ?? config.get<boolean>('planner.gitProhibitionEnabled', false),
             researchDepth: researcherConfig?.researchComplexity || 'deep',
@@ -3353,7 +3240,6 @@ export class KanbanProvider implements vscode.Disposable {
                 analyst: analystConfig?.addons?.gitProhibition ?? true,
                 researcher: researcherConfig?.addons?.gitProhibition ?? true,
                 ticket_updater: ticketUpdaterConfig?.addons?.gitProhibition ?? true,
-                orchestrator: orchestratorConfig?.addons?.gitProhibition ?? true,
             },
             switchboardSafeguardsByRole: {
                 planner: plannerConfig?.addons?.switchboardSafeguards ?? true,
@@ -3365,7 +3251,6 @@ export class KanbanProvider implements vscode.Disposable {
                 analyst: analystConfig?.addons?.switchboardSafeguards ?? true,
                 researcher: researcherConfig?.addons?.switchboardSafeguards ?? true,
                 ticket_updater: ticketUpdaterConfig?.addons?.switchboardSafeguards ?? true,
-                orchestrator: orchestratorConfig?.addons?.switchboardSafeguards ?? false,
             },
             useSubagentsByRole: {
                 planner: plannerConfig?.addons?.subagentPolicy === 'useSubagents' || (plannerConfig?.addons?.subagentPolicy === undefined && plannerConfig?.addons?.useSubagents === true),
@@ -3377,7 +3262,6 @@ export class KanbanProvider implements vscode.Disposable {
                 analyst: analystConfig?.addons?.subagentPolicy === 'useSubagents' || (analystConfig?.addons?.subagentPolicy === undefined && analystConfig?.addons?.useSubagents === true),
                 researcher: researcherConfig?.addons?.subagentPolicy === 'useSubagents' || (researcherConfig?.addons?.subagentPolicy === undefined && researcherConfig?.addons?.useSubagents === true),
                 ticket_updater: ticketUpdaterConfig?.addons?.subagentPolicy === 'useSubagents' || (ticketUpdaterConfig?.addons?.subagentPolicy === undefined && ticketUpdaterConfig?.addons?.useSubagents === true),
-                orchestrator: orchestratorConfig?.addons?.subagentPolicy === 'useSubagents' || (orchestratorConfig?.addons?.subagentPolicy === undefined && orchestratorConfig?.addons?.useSubagents !== false),
             },
             noSubagentsByRole: {
                 planner: plannerConfig?.addons?.subagentPolicy === 'noSubagents',
@@ -3389,7 +3273,6 @@ export class KanbanProvider implements vscode.Disposable {
                 analyst: analystConfig?.addons?.subagentPolicy === 'noSubagents',
                 researcher: researcherConfig?.addons?.subagentPolicy === 'noSubagents',
                 ticket_updater: ticketUpdaterConfig?.addons?.subagentPolicy === 'noSubagents',
-                orchestrator: orchestratorConfig?.addons?.subagentPolicy === 'noSubagents',
             },
             customSubagentNameByRole: {
                 planner: plannerConfig?.addons?.subagentPolicy === 'customSubagent' ? (plannerConfig?.addons?.customSubagentName || '') : '',
@@ -3401,13 +3284,11 @@ export class KanbanProvider implements vscode.Disposable {
                 analyst: analystConfig?.addons?.subagentPolicy === 'customSubagent' ? (analystConfig?.addons?.customSubagentName || '') : '',
                 researcher: researcherConfig?.addons?.subagentPolicy === 'customSubagent' ? (researcherConfig?.addons?.customSubagentName || '') : '',
                 ticket_updater: ticketUpdaterConfig?.addons?.subagentPolicy === 'customSubagent' ? (ticketUpdaterConfig?.addons?.customSubagentName || '') : '',
-                orchestrator: orchestratorConfig?.addons?.subagentPolicy === 'customSubagent' ? (orchestratorConfig?.addons?.customSubagentName || '') : '',
             },
             useWorktreesPerPlanByRole: {
                 lead: leadConfig?.addons?.useWorktreesPerPlan === true,
                 coder: coderConfig?.addons?.useWorktreesPerPlan === true,
                 intern: internConfig?.addons?.useWorktreesPerPlan === true,
-                orchestrator: orchestratorConfig?.addons?.useWorktreesPerPlan === true,
             },
             clearAntigravityContextByRole: {
                 planner: plannerConfig?.addons?.clearAntigravityContext ?? false,
@@ -3419,7 +3300,6 @@ export class KanbanProvider implements vscode.Disposable {
                 analyst: analystConfig?.addons?.clearAntigravityContext ?? false,
                 researcher: researcherConfig?.addons?.clearAntigravityContext ?? false,
                 ticket_updater: ticketUpdaterConfig?.addons?.clearAntigravityContext ?? false,
-                orchestrator: orchestratorConfig?.addons?.clearAntigravityContext ?? false,
             },
             cavemanOutputByRole: {
                 planner: plannerConfig?.addons?.cavemanOutput ?? true,
@@ -3431,21 +3311,16 @@ export class KanbanProvider implements vscode.Disposable {
                 analyst: analystConfig?.addons?.cavemanOutput ?? false,
                 researcher: researcherConfig?.addons?.cavemanOutput ?? false,
                 ticket_updater: ticketUpdaterConfig?.addons?.cavemanOutput ?? false,
-                orchestrator: orchestratorConfig?.addons?.cavemanOutput ?? true,
             },
             suppressWalkthroughByRole: {
                 lead: leadConfig?.addons?.suppressWalkthrough ?? false,
                 coder: coderConfig?.addons?.suppressWalkthrough ?? false,
                 intern: internConfig?.addons?.suppressWalkthrough ?? false,
-                orchestrator: orchestratorConfig?.addons?.suppressWalkthrough ?? false,
             },
             ticketUpdateMode: ticketUpdaterConfig?.addons?.ticketUpdateMode
                 ?? (ticketUpdaterConfig?.addons?.ticketUpdateEnabled === true ? 'comment-only'
                     : ticketUpdaterConfig?.addons?.ticketUpdateEnabled === false ? 'disabled'
                     : 'disabled'),
-            ultracodeByRole: {
-                orchestrator: orchestratorConfig?.addons?.ultracode ?? false,
-            },
         };
     }
 
@@ -5805,6 +5680,17 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 this._cliTriggersEnabled = !!msg.enabled;
                 await this._updateSetting('kanban.cliTriggersEnabled', this._cliTriggersEnabled);
                 break;
+            case 'setEpicWorkflowMode': {
+                const mode = String(msg.mode || 'none');
+                if (!VALID_EPIC_WORKFLOW_MODES.has(mode)) { break; }
+                const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const db = wsRoot ? this._getKanbanDb(wsRoot) : undefined;
+                if (db && await db.ensureReady()) {
+                    await db.setConfig('epic_workflow_mode', mode);
+                }
+                this._panel?.webview.postMessage({ type: 'epicWorkflowModeState', mode });
+                break;
+            }
             case 'toggleDynamicComplexityRouting':
                 this._dynamicComplexityRoutingEnabled = !!msg.enabled;
                 try {

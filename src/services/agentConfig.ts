@@ -1,4 +1,4 @@
-export type BuiltInAgentRole = 'lead' | 'coder' | 'intern' | 'reviewer' | 'tester' | 'planner' | 'analyst' | 'ticket_updater' | 'researcher' | 'orchestrator';
+export type BuiltInAgentRole = 'lead' | 'coder' | 'intern' | 'reviewer' | 'tester' | 'planner' | 'analyst' | 'ticket_updater' | 'researcher';
 
 export interface CustomAgentAddons {
     // Core
@@ -99,7 +99,6 @@ export const BUILT_IN_AGENT_LABELS: Record<BuiltInAgentRole, string> = {
     analyst: 'Analyst',
     ticket_updater: 'Ticket Updater',
     researcher: 'Researcher',
-    orchestrator: 'Orchestrator',
 };
 
 export const DEFAULT_KANBAN_COLUMNS: KanbanColumnDefinition[] = [
@@ -109,7 +108,6 @@ export const DEFAULT_KANBAN_COLUMNS: KanbanColumnDefinition[] = [
     { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 180, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'INTERN CODED', label: 'Intern', role: 'intern', order: 200, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli', hideWhenNoAgent: true },
-    { id: 'ORCHESTRATING', label: 'Orchestrator', role: 'orchestrator', order: 250, kind: 'review', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli', hideWhenNoAgent: true, epicOnly: true },
     { id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer', order: 300, kind: 'reviewed', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli' },
     { id: 'ACCEPTANCE TESTED', label: 'Acceptance Tested', role: 'tester', order: 350, kind: 'reviewed', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli', hideWhenNoAgent: true },
     { id: 'TICKET UPDATER', label: 'Ticket Updater', role: 'ticket_updater', order: 9000, kind: 'reviewed', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt', hideWhenNoAgent: true },
@@ -394,7 +392,7 @@ export function parseDefaultPromptOverrides(
 ): Partial<Record<BuiltInAgentRole, DefaultPromptOverride>> {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
     const result: Partial<Record<BuiltInAgentRole, DefaultPromptOverride>> = {};
-    const VALID_ROLES: BuiltInAgentRole[] = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'orchestrator'];
+    const VALID_ROLES: BuiltInAgentRole[] = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher'];
     const VALID_MODES: PromptOverrideMode[] = ['append', 'prepend', 'replace'];
     for (const role of VALID_ROLES) {
         const entry = (raw as Record<string, unknown>)[role];

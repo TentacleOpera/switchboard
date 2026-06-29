@@ -256,3 +256,51 @@ No automated tests required — this is a webview rendering fix verified through
 ### Recommendation
 
 Complexity 4 → **Send to Coder**
+
+## Review Results (2026-06-29)
+
+### Stage 1: Adversarial Findings
+
+| # | Severity | Finding | Location |
+|---|----------|---------|----------|
+| 1 | NIT | Lost explanatory comment during Map population move — the `// Online docs are selected from the online tree by their remote docId...` comment was dropped when the Map population logic was moved from `renderImportedDocsSection` to `handleImportedDocsReady`. House rule violation (CLAUDE.md: do not remove comments). | `planning.js:3443-3445` (was at old lines 3497-3522) |
+| 2 | NIT | No filter gating on imported docs section — renders unconditionally when `state._lastImportedDocs` is truthy, ignoring `filterSet`. All other sections in `renderUnifiedDocs` respect the source filter. Plan does not require filter gating, so not a plan violation. Deferrable. | `planning.js:2640` |
+| 3 | NIT | Redundant `treePane` null check in `renderImportedDocsSection` — `renderUnifiedDocs` already guards at line 2251. Harmless; matches `renderAntigravitySessions` pattern. Kept for consistency. | `planning.js:3455` |
+
+### Stage 2: Balanced Synthesis
+
+- **Fix now:** Finding #1 — restored the lost comment at the new Map population site in `handleImportedDocsReady`.
+- **Defer:** Finding #2 — filter gating is a future enhancement, not a plan requirement.
+- **Keep:** Finding #3 — redundant check matches the established `renderAntigravitySessions` pattern.
+
+No CRITICAL or MAJOR findings. The implementation is a faithful execution of the plan's "cleaner approach."
+
+### Code Fixes Applied
+
+1. **`src/webview/planning.js:3443-3445`** — Restored the explanatory comment for the `docId` Map key that was lost during the Map population move from `renderImportedDocsSection` to `handleImportedDocsReady`.
+
+### Files Changed (by implementation)
+
+- `src/webview/planning.js` — Added `state._lastImportedDocs` initialization (line 18); added `renderImportedDocsSection` call in `renderUnifiedDocs` (lines 2639-2642); refactored `handleImportedDocsReady` to store-and-re-render pattern with pre-populated dedup Map (lines 3426-3452); extracted `renderImportedDocsSection` standalone function (lines 3456-3617); removed Map population from card rendering loop.
+- `src/webview/planning.html` — No changes needed; `.imported-docs-section` CSS already existed at line 1465.
+
+### Files Changed (by review)
+
+- `src/webview/planning.js` — Restored lost comment at lines 3443-3445.
+
+### Verification Results
+
+- **Syntax check:** `node -c src/webview/planning.js` — passed (exit 0).
+- **Compilation:** Skipped per session instructions.
+- **Tests:** Skipped per session instructions; manual UI verification steps remain in the Verification Plan above.
+- **Plan conformance:** All 5 proposed changes verified against actual code:
+  1. ✅ `state._lastImportedDocs` initialization (line 18)
+  2. ✅ `handleImportedDocsReady` store-and-re-render with pre-populated Map (lines 3426-3452)
+  3. ✅ `renderImportedDocsSection` extracted as standalone function (lines 3456-3617)
+  4. ✅ Called from within `renderUnifiedDocs` after online docs, before Antigravity (lines 2639-2642)
+  5. ✅ CSS for `.imported-docs-section` already present in `planning.html:1465`
+
+### Remaining Risks
+
+1. **Filter inconsistency (deferred):** The imported docs section ignores `filterSet` and always renders when `state._lastImportedDocs` is truthy. If a user filters to a single source, imported docs from all sources still appear. This is consistent with the plan's intent but inconsistent with the filter pattern used by all other sections. Low impact — file as a future enhancement.
+2. **Manual verification pending:** The 16-step manual verification checklist has not been executed in this session. The user should run through it to confirm the UI behavior.

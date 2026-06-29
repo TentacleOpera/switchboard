@@ -165,6 +165,7 @@
     let uploadingPlanAttachment = false;
 
     let _epicSelectedPlan = null;
+    let _epicSubtaskPreview = null; // holds the subtask plan object when a subtask is previewed in the epics pane
     let _orchestratorAvailable = false;
     let _epicPreviewFilePath = null;
     let _epicDocumentsCache = [];
@@ -869,7 +870,21 @@
                         if (msg.renamedFilePath && _epicSelectedPlan) {
                             _epicSelectedPlan.planFile = msg.renamedFilePath;
                         }
-                        if (_epicSelectedPlan) selectEpic(_epicSelectedPlan);
+                        if (_epicSubtaskPreview) {
+                            if (msg.renamedFilePath) {
+                                _epicPreviewFilePath = msg.renamedFilePath;
+                                _epicSubtaskPreview.planFile = msg.renamedFilePath;
+                            }
+                            if (epicsPreviewContent) epicsPreviewContent.innerHTML = '<div class="kanban-empty-state">Loading preview...</div>';
+                            vscode.postMessage({
+                                type: 'fetchKanbanPlanPreview',
+                                filePath: _epicPreviewFilePath,
+                                requestId: ++_kanbanPreviewRequestId
+                            });
+                            renderEpicSubtaskMetaBar(_epicSubtaskPreview);
+                        } else {
+                            if (_epicSelectedPlan) selectEpic(_epicSelectedPlan);
+                        }
                         vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
                         vscode.postMessage({ type: 'fetchEpicDocuments' });
                     }
@@ -1782,8 +1797,10 @@
     }
 
     function selectEpic(plan) {
+        if (state.editMode.epics) exitEditMode('epics');
         _epicSelectedPlan = plan;
         _epicPreviewFilePath = plan.planFile || null;
+        _epicSubtaskPreview = null;
         if (btnSetActiveEpic) btnSetActiveEpic.disabled = false;
         renderEpicMetaBar(plan);
 
@@ -1865,6 +1882,95 @@
                     });
                 }
             });
+    }
+
+    function renderEpicSubtaskMetaBar(plan) {
+        const metaBar = document.getElementById('epic-preview-meta-bar');
+        if (!metaBar) return;
+        metaBar.style.display = 'flex';
+
+        const complexityClass = _complexityToCssClass(plan ? plan.complexity : null);
+        const complexityLabel = escapeHtml((plan && plan.complexity) || 'Unknown');
+        const hasPlanId = plan && plan.planId;
+
+        const complexityGroup = hasPlanId ? `
+            <div class="kanban-meta-group">
+                <span class="kanban-meta-label">Complexity:</span>
+                <span class="complexity-dot ${complexityClass}"></span>
+                <span class="kanban-meta-value" id="epic-subtask-meta-complexity">${complexityLabel}</span>
+                <select class="kanban-meta-dropdown" id="epic-subtask-meta-complexity-select" style="display:none;" data-plan-id="${escapeHtml(plan.planId)}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}">
+                    ${['Unknown', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10'].map(v => `<option value="${v}" ${v === (plan.complexity || 'Unknown') ? 'selected' : ''}>${v}</option>`).join('')}
+                </select>
+            </div>
+        ` : '';
+
+        const deleteBtn = hasPlanId ? `<button class="strip-btn" id="epic-subtask-meta-delete-btn" style="color:#ff6b6b;">Delete</button>` : '';
+
+        metaBar.innerHTML = `
+            <div class="kanban-meta-group">
+                <span class="kanban-meta-label" style="color: var(--text-secondary); font-style: italic;">Subtask</span>
+            </div>
+            ${complexityGroup}
+            <div class="kanban-meta-group" style="margin-left: auto;">
+                <button class="strip-btn" id="btn-edit-epics" style="${state.editMode.epics ? 'display:none;' : ''}">Edit</button>
+                <button class="strip-btn" id="btn-save-epics" style="${state.editMode.epics ? '' : 'display:none;'}">Save</button>
+                <button class="strip-btn" id="btn-cancel-epics" style="${state.editMode.epics ? '' : 'display:none;'}">Cancel</button>
+                ${deleteBtn}
+            </div>
+        `;
+
+        // Edit / Save / Cancel — target _epicPreviewFilePath (the subtask file), not the epic
+        const btnEdit = document.getElementById('btn-edit-epics');
+        const btnCancel = document.getElementById('btn-cancel-epics');
+        const btnSave = document.getElementById('btn-save-epics');
+        if (btnEdit) btnEdit.addEventListener('click', () => enterEditMode('epics'));
+        if (btnCancel) btnCancel.addEventListener('click', () => exitEditMode('epics'));
+        if (btnSave) {
+            btnSave.addEventListener('click', () => {
+                const filePath = _epicPreviewFilePath;
+                const content = epicsEditor ? epicsEditor.value : '';
+                const originalContent = state.editOriginalContent.epics;
+                if (filePath) {
+                    vscode.postMessage({
+                        type: 'saveFileContent',
+                        filePath,
+                        content,
+                        originalContent,
+                        tab: 'epics'
+                    });
+                }
+            });
+        }
+
+        // Complexity dropdown toggle (mirror kanban pattern, project.js:1485-1498)
+        if (hasPlanId) {
+            const compToggle = document.getElementById('epic-subtask-meta-complexity');
+            const compSelect = document.getElementById('epic-subtask-meta-complexity-select');
+            if (compToggle && compSelect) {
+                compToggle.addEventListener('click', e => {
+                    e.stopPropagation();
+                    compSelect.style.display = 'block';
+                    compSelect.focus();
+                });
+                compSelect.addEventListener('change', () => {
+                    compSelect.style.display = 'none';
+                    vscode.postMessage({ type: 'setKanbanPlanComplexity', planId: compSelect.dataset.planId, complexity: compSelect.value, workspaceRoot: compSelect.dataset.workspaceRoot });
+                });
+                compSelect.addEventListener('blur', () => setTimeout(() => compSelect.style.display = 'none', 200));
+            }
+
+            // Delete (mirror kanban pattern, project.js:1504-1506)
+            const delBtn = document.getElementById('epic-subtask-meta-delete-btn');
+            if (delBtn) {
+                delBtn.addEventListener('click', () => {
+                    vscode.postMessage({ type: 'deleteKanbanPlan', planId: plan.planId, planFile: plan.planFile, workspaceRoot: plan.workspaceRoot });
+                    _epicSubtaskPreview = null;
+                    _epicPreviewFilePath = _epicSelectedPlan ? _epicSelectedPlan.planFile : null;
+                    if (epicsPreviewContent) epicsPreviewContent.innerHTML = '<div class="kanban-empty-state">Select an epic to preview</div>';
+                    if (_epicSelectedPlan) renderEpicMetaBar(_epicSelectedPlan);
+                    else metaBar.style.display = 'none';
+                });
+            }
         }
     }
 
@@ -1893,15 +1999,14 @@
                 }
                 if (state.editMode.epics) exitEditMode('epics');
                 _epicPreviewFilePath = planFile;
+                _epicSubtaskPreview = _kanbanPlansCache.find(p => p.planFile === planFile) || { planFile, planId: '', workspaceRoot: '', complexity: 'Unknown' };
+                renderEpicSubtaskMetaBar(_epicSubtaskPreview);
                 if (epicsPreviewContent) epicsPreviewContent.innerHTML = '<div class="kanban-empty-state">Loading preview...</div>';
                 vscode.postMessage({
                     type: 'fetchKanbanPlanPreview',
                     filePath: planFile,
                     requestId: ++_kanbanPreviewRequestId
                 });
-                // Hide the Edit button while a subtask is previewed
-                const btnEdit = document.getElementById('btn-edit-epics');
-                if (btnEdit) btnEdit.style.display = 'none';
             });
         });
 
