@@ -4882,8 +4882,8 @@ Please format the updated output document strictly as follows:
                     // open (no cursor) falls back to a full import + prune. Subsequent
                     // opens do a delta pull (only changed tasks written, prune skipped).
                     // Stale-file cleanup for remotely-deleted tickets is handled by the
-                    // existing delta deletion sweep inside importAllTasks (lines 19482
-                    // 19541), NOT by a periodic full prune.
+                    // existing delta deletion sweep inside importAllTasks (lines
+                    // 19482-19541), NOT by a periodic full prune.
                     //
                     // Exception: when includeClosed is true (user switched the status
                     // filter to a closed status, webview planning.js line 8916), force a

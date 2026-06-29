@@ -3669,7 +3669,7 @@
     // The Stitch assets folder (.switchboard/stitch) is "included" in HTML previews when its
     // path is present in the HTML folder list — no separate persisted flag needed.
     function getHtmlModalRoot() {
-        return state.htmlWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+        return state.htmlWorkspaceRootFilter || '';
     }
     function isStitchHtmlPreviewEnabled(root) {
         const paths = (state.htmlFolderPathsByRoot && state.htmlFolderPathsByRoot[root]) || [];
@@ -3679,7 +3679,7 @@
         const row = document.getElementById('stitch-html-preview-toggle-row');
         const checkbox = document.getElementById('stitch-html-preview-toggle');
         if (!row || !checkbox) return;
-        if (folderModalScope === 'html') {
+        if (folderModalScope === 'html' && getHtmlModalRoot()) {
             row.style.display = 'flex';
             checkbox.checked = isStitchHtmlPreviewEnabled(getHtmlModalRoot());
         } else {
@@ -3692,32 +3692,51 @@
         if (!folderListModal) return;
         folderListModal.innerHTML = '';
 
-        let folderPaths = [];
         let root = '';
+        let folderMap = null;
         if (folderModalScope === 'design') {
-            root = state.designWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
-            folderPaths = state.designFolderPathsByRoot ? (state.designFolderPathsByRoot[root] || []) : [];
+            root = state.designWorkspaceRootFilter || '';
+            folderMap = state.designFolderPathsByRoot;
         } else if (folderModalScope === 'html') {
-            root = state.htmlWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
-            folderPaths = state.htmlFolderPathsByRoot ? (state.htmlFolderPathsByRoot[root] || []) : [];
+            root = state.htmlWorkspaceRootFilter || '';
+            folderMap = state.htmlFolderPathsByRoot;
         } else if (folderModalScope === 'claude') {
-            root = state.claudeWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
-            folderPaths = state.claudeFolderPathsByRoot ? (state.claudeFolderPathsByRoot[root] || []) : [];
+            root = state.claudeWorkspaceRootFilter || '';
+            folderMap = state.claudeFolderPathsByRoot;
         } else if (folderModalScope === 'images') {
-            root = state.imagesWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
-            folderPaths = state.imagesFolderPathsByRoot ? (state.imagesFolderPathsByRoot[root] || []) : [];
+            root = state.imagesWorkspaceRootFilter || '';
+            folderMap = state.imagesFolderPathsByRoot;
         } else if (folderModalScope === 'stitch') {
             root = state.stitchWorkspaceRoot || '';
-            folderPaths = state.stitchFolderPathsByRoot ? (state.stitchFolderPathsByRoot[root] || []) : [];
+            folderMap = state.stitchFolderPathsByRoot;
         } else if (folderModalScope === 'briefs') {
-            root = state.briefsWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
-            folderPaths = state.briefsFolderPathsByRoot ? (state.briefsFolderPathsByRoot[root] || []) : [];
+            root = state.briefsWorkspaceRootFilter || '';
+            folderMap = state.briefsFolderPathsByRoot;
+        }
+        const folderPaths = getCurrentFolderPaths(folderMap || {}, root);
+        const isAggregate = !root;
+
+        const addBtn = document.getElementById('btn-add-folder-modal');
+        if (addBtn) {
+            addBtn.disabled = isAggregate;
+            addBtn.title = isAggregate ? 'Select a specific workspace to add a folder' : '';
+            addBtn.style.opacity = isAggregate ? '0.5' : '';
+        }
+
+        if (isAggregate && folderPaths.length === 0) {
+            const hint = document.createElement('div');
+            hint.className = 'folder-list-hint';
+            hint.style.cssText = 'padding: 8px 4px; font-size: 11px; color: var(--text-secondary); opacity: 0.85;';
+            hint.textContent = 'Viewing all workspaces. Select a specific workspace to add or remove folders.';
+            folderListModal.appendChild(hint);
         }
 
         if (folderPaths.length === 0) {
             const empty = document.createElement('div');
             empty.className = 'folder-list-empty';
-            empty.textContent = 'No folders configured. Click Add Folder to get started.';
+            empty.textContent = isAggregate
+                ? 'No folders configured in any workspace.'
+                : 'No folders configured. Click Add Folder to get started.';
             folderListModal.appendChild(empty);
             syncStitchHtmlPreviewToggle();
             return;
@@ -3743,22 +3762,28 @@
             removeBtn.className = 'folder-list-remove-btn strip-btn';
             removeBtn.textContent = 'Remove';
             removeBtn.style.color = '#ff6b6b';
-            removeBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                if (folderModalScope === 'design') {
-                    vscode.postMessage({ type: 'removeDesignFolder', folderPath: path, workspaceRoot: root });
-                } else if (folderModalScope === 'html') {
-                    vscode.postMessage({ type: 'removeHtmlFolder', folderPath: path, workspaceRoot: root });
-                } else if (folderModalScope === 'claude') {
-                    vscode.postMessage({ type: 'removeClaudeFolder', folderPath: path, workspaceRoot: root });
-                } else if (folderModalScope === 'images') {
-                    vscode.postMessage({ type: 'removeImagesFolder', folderPath: path, workspaceRoot: root });
-                } else if (folderModalScope === 'stitch') {
-                    vscode.postMessage({ type: 'removeStitchFolder', folderPath: path, workspaceRoot: root });
-                } else if (folderModalScope === 'briefs') {
-                    vscode.postMessage({ type: 'removeBriefsFolder', folderPath: path, workspaceRoot: root });
-                }
-            });
+            if (isAggregate) {
+                removeBtn.disabled = true;
+                removeBtn.title = 'Select a specific workspace to remove its folders';
+                removeBtn.style.opacity = '0.5';
+            } else {
+                removeBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    if (folderModalScope === 'design') {
+                        vscode.postMessage({ type: 'removeDesignFolder', folderPath: path, workspaceRoot: root });
+                    } else if (folderModalScope === 'html') {
+                        vscode.postMessage({ type: 'removeHtmlFolder', folderPath: path, workspaceRoot: root });
+                    } else if (folderModalScope === 'claude') {
+                        vscode.postMessage({ type: 'removeClaudeFolder', folderPath: path, workspaceRoot: root });
+                    } else if (folderModalScope === 'images') {
+                        vscode.postMessage({ type: 'removeImagesFolder', folderPath: path, workspaceRoot: root });
+                    } else if (folderModalScope === 'stitch') {
+                        vscode.postMessage({ type: 'removeStitchFolder', folderPath: path, workspaceRoot: root });
+                    } else if (folderModalScope === 'briefs') {
+                        vscode.postMessage({ type: 'removeBriefsFolder', folderPath: path, workspaceRoot: root });
+                    }
+                });
+            }
 
             row.appendChild(pathSpan);
             row.appendChild(removeBtn);
@@ -3837,22 +3862,22 @@
     document.getElementById('btn-refresh-folders-modal')?.addEventListener('click', () => {
         let root = '';
         if (folderModalScope === 'design') {
-            root = state.designWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            root = state.designWorkspaceRootFilter || '';
             vscode.postMessage({ type: 'listDesignFolders', workspaceRoot: root });
         } else if (folderModalScope === 'html') {
-            root = state.htmlWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            root = state.htmlWorkspaceRootFilter || '';
             vscode.postMessage({ type: 'listHtmlFolders', workspaceRoot: root });
         } else if (folderModalScope === 'claude') {
-            root = state.claudeWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            root = state.claudeWorkspaceRootFilter || '';
             vscode.postMessage({ type: 'listClaudeFolders', workspaceRoot: root });
         } else if (folderModalScope === 'images') {
-            root = state.imagesWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            root = state.imagesWorkspaceRootFilter || '';
             vscode.postMessage({ type: 'listImagesFolders', workspaceRoot: root });
         } else if (folderModalScope === 'stitch') {
             root = state.stitchWorkspaceRoot || '';
             vscode.postMessage({ type: 'listStitchFolders', workspaceRoot: root });
         } else if (folderModalScope === 'briefs') {
-            root = state.briefsWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            root = state.briefsWorkspaceRootFilter || '';
             vscode.postMessage({ type: 'listBriefsFolders', workspaceRoot: root });
         }
     });
@@ -3860,22 +3885,22 @@
     document.getElementById('btn-add-folder-modal')?.addEventListener('click', () => {
         let root = '';
         if (folderModalScope === 'design') {
-            root = state.designWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            root = state.designWorkspaceRootFilter || '';
             vscode.postMessage({ type: 'addDesignFolder', workspaceRoot: root });
         } else if (folderModalScope === 'html') {
-            root = state.htmlWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            root = state.htmlWorkspaceRootFilter || '';
             vscode.postMessage({ type: 'addHtmlFolder', workspaceRoot: root });
         } else if (folderModalScope === 'claude') {
-            root = state.claudeWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            root = state.claudeWorkspaceRootFilter || '';
             vscode.postMessage({ type: 'addClaudeFolder', workspaceRoot: root });
         } else if (folderModalScope === 'images') {
-            root = state.imagesWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            root = state.imagesWorkspaceRootFilter || '';
             vscode.postMessage({ type: 'addImagesFolder', workspaceRoot: root });
         } else if (folderModalScope === 'stitch') {
             root = state.stitchWorkspaceRoot || '';
             vscode.postMessage({ type: 'addStitchFolder', workspaceRoot: root });
         } else if (folderModalScope === 'briefs') {
-            root = state.briefsWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+            root = state.briefsWorkspaceRootFilter || '';
             vscode.postMessage({ type: 'addBriefsFolder', workspaceRoot: root });
         }
     });
@@ -4391,7 +4416,7 @@
     function getClaudeWorkspaceRootFallback() {
         const select = document.getElementById('claude-workspace-filter');
         if (select && select.value) return select.value;
-        return state.claudeWorkspaceRootFilter || state.stitchWorkspaceRoot || '';
+        return state.claudeWorkspaceRootFilter || '';
     }
 
     function renderClaudeDocs(rootEntry) {

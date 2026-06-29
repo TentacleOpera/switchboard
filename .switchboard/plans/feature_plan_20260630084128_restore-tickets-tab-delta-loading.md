@@ -290,3 +290,57 @@ No modifications needed — the delta machinery is fully intact (including the d
 **Complexity: 5 (Mixed) → Send to Coder.**
 
 The change is a single-file (~15-line) copy-back of the verified auto-sync timer delta-cursor pattern into `refreshTicketsDelta`, plus a one-line `forceFull` guard for `includeClosed` and a one-line `isDelta` flag fix. The most complex aspect of the original plan (the prune dilemma) is eliminated by the existing delta deletion sweep. The remaining risks (cursor correctness across 6 entry points, `includeClosed` force-full) are well-scoped and reuse existing patterns. No `TaskViewerProvider` changes required.
+
+---
+
+## Code Review (Reviewer Pass — 2026-06-30)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*Adjusts reading glasses, glares at the diff.*
+
+**What I see:** A 20-line diff in `PlanningPanelProvider.ts` that swaps an unconditional full-import for a delta-cursor read, gated by a `forceFull = includeClosed` guard. Let me tear this apart.
+
+**NIT-1 — Comment line-range split (PlanningPanelProvider.ts:4885-4886):** The comment reads "lines 19482\n// 19541" — a bare line break where the plan's spec had "lines 19482–19541" with an en-dash. Reads like two random numbers instead of a range. Cosmetic, but if I'm tracing the deletion sweep six months from now, I want the comment to point me there unambiguously.
+
+**NIT-2 — Problem-section scope vs. actual fix (plan file, lines 6-7):** The Problem section lists "a full API fetch of every task in the list" as part of the churn. The fix only delta-optimizes the *import* path (`refreshTicketsDelta`). The sidebar display fetch (`clickupLoadProject` → `clickupProjectLoaded` at `planning.js:5121`) still fetches ALL tasks on every open — that API call is untouched. The fix reduces document *writes* and prune *sweeps*, not the sidebar display fetch. The Problem section's framing is broader than the actual fix. Not a code bug, but the plan overstates its own scope.
+
+**NIT-3 — Closed-ticket file linger (inherent to delta model):** With the delta path restored, the cleanup prune (line 19398: `if (!isDelta && ...)`) only runs on full imports (first-open or `forceFull`). Closed ticket files written during a `forceFull` (includeClosed=true) import linger on disk after the user switches back to an open status filter — the delta deletion sweep doesn't remove them (closed tickets still exist remotely, so they're not "absent" from the remote set). This is the *same behavior as the auto-sync timer* (which has been doing delta pulls every 45s without pruning closed files) and the sidebar display is unaffected (`getFilteredClickUpTasks` at `planning.js:8956` filters by status client-side). Not a regression — an inherent property of the delta model the plan chose. Worth documenting but not fixing.
+
+**Things I verified and found correct:**
+- The `forceFull = includeClosed` guard correctly bypasses the cursor read (line 4898: `if (!forceFull && kanbanDb)`), so `isDeltaRefresh` is `false` and `importAllTasks` runs as a full import. Only the status-filter-to-closed path (`planning.js:8916`) sends `includeClosed: true`; the other 5 send points default to `false`. Verified all 6 send points.
+- The cursor update (lines 4926-4929) runs after *any* successful pull (full or delta), correctly resetting the baseline to "now". After a `forceFull` import, the cursor is set — subsequent open-status refreshes do a delta from "now", which is correct because the `forceFull` already wrote all tasks.
+- The `isDelta: isDeltaRefresh` flag change (line 4956) is cosmetic — the webview `importAllTicketsComplete` handler (`planning.js:4367`) branches on `msg.autoSync` (line 4377), not `msg.isDelta`. The manual refresh path doesn't set `autoSync`, so the toast still shows. Correct.
+- The delta deletion sweep (TaskViewerProvider.ts:19482-19541) is fully intact and gates on `fetchSucceeded` — never deletes on a failed/partial fetch. The prune gate (line 19398) correctly skips on delta. The conflict guard (lines 19364-19380) correctly skips locally-modified files only when `isDelta`.
+- The implementation is a verbatim match of the auto-sync timer pattern (lines 8535-8553), just with the `forceFull`/`includeClosed` additions.
+
+**Verdict:** No CRITICAL. No MAJOR. Three NITs, one of which (NIT-1) is a trivial comment fix. The implementation is clean, well-scoped, and faithfully mirrors the verified auto-sync timer pattern. Ship it.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is:**
+- The delta-cursor restoration (lines 4895-4917) — correct, matches auto-sync timer.
+- The `forceFull = includeClosed` guard — correct, prevents the closed-ticket semantic gap.
+- The `isDelta: isDeltaRefresh` flag fix — cosmetic but correct for consistency/future telemetry.
+- The "no periodic full prune" decision — correct, the existing delta deletion sweep handles remotely-deleted tickets.
+
+**Fix now:**
+- NIT-1: Comment line-range formatting (PlanningPanelProvider.ts:4885-4886) — fixed. Changed "lines 19482\n// 19541" to "lines\n// 19482-19541" with a hyphen for clarity.
+
+**Defer (no action needed):**
+- NIT-2: Plan Problem-section scope precision — documentation-only, no code impact. The Proposed Changes section is correctly scoped to the import path.
+- NIT-3: Closed-ticket file linger — inherent to the delta model, same as auto-sync timer, sidebar display unaffected. Not a regression.
+
+### Code Fixes Applied
+- `src/services/PlanningPanelProvider.ts:4885-4886` — Fixed comment line-range formatting (added hyphen between line numbers for readability).
+
+### Validation Results
+- **Compilation:** Skipped per session directive.
+- **Automated tests:** Skipped per session directive.
+- **Manual verification (static):** All 6 webview send points verified (`planning.js` lines 4961, 5141, 7650, 7681, 7692, 8916) — only line 8916 sends `includeClosed: true`. The `importAllTicketsComplete` handler confirmed to branch on `autoSync` not `isDelta`. The `importAllTasks` delta machinery (deletion sweep, prune gate, conflict guard, cache invalidation gate) verified intact in `TaskViewerProvider.ts`. The auto-sync timer pattern (lines 8535-8553) confirmed as the reference implementation matching the manual path.
+- **Git diff:** Confirmed the only code change is in `PlanningPanelProvider.ts` (commit `07040a1`), matching the plan's Revised Implementation exactly. No `TaskViewerProvider.ts` changes.
+
+### Remaining Risks
+1. **Closed-ticket file linger (NIT-3):** Closed ticket files persist on disk after switching back to an open status filter, until the next full import (first-open or `forceFull`). Sidebar display is unaffected (client-side status filter). Same behavior as auto-sync timer. Low risk.
+2. **Delta deletion sweep API cost:** Every delta pull incurs one full-list API fetch for the deletion sweep (ClickUp: `getListTasks(listId)`, Linear: `fetchAllIssueIds`). The net win is in document writes and prune skipping, not API call count. Existing behavior, out of scope.
+3. **Sidebar display fetch unchanged:** The `clickupLoadProject` API fetch (for sidebar display) still fetches all tasks on every open. This plan only optimizes the import path. A future plan could address the display fetch separately.

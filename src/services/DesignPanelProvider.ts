@@ -131,7 +131,6 @@ export class DesignPanelProvider implements vscode.Disposable {
 
         this._panel.onDidChangeViewState(e => this._onVisibilityChanged(e.webviewPanel.visible), null, this._disposables);
 
-        await this._migrateClaudeFoldersOnce();
         this._setupHtmlFolderWatchers();
         this._setupClaudeFolderWatchers();
         this._setupDesignFolderWatchers();
@@ -228,7 +227,6 @@ export class DesignPanelProvider implements vscode.Disposable {
 
         this._panel.onDidChangeViewState(e => this._onVisibilityChanged(e.webviewPanel.visible), null, this._disposables);
 
-        await this._migrateClaudeFoldersOnce();
         this._setupHtmlFolderWatchers();
         this._setupClaudeFolderWatchers();
         this._setupDesignFolderWatchers();
@@ -591,28 +589,6 @@ export class DesignPanelProvider implements vscode.Disposable {
                 });
             }
         }, 300);
-    }
-
-    /**
-     * One-time per-install migration: seed claudeFolderPaths from htmlFolderPaths for
-     * installs that configured folders via the Claude tab while it was coupled to the
-     * html-folder source. Detects "never migrated" via raw key-absence — the key is
-     * literally missing from storage — so an explicit empty list set later is respected
-     * and never re-seeded. Fresh installs (no stored config) skip migration entirely;
-     * claudeFolderPaths defaults to [] via loadFolderPathsConfig.
-     */
-    private async _migrateClaudeFoldersOnce(): Promise<void> {
-        for (const root of this._getWorkspaceRoots()) {
-            try {
-                const svc = this._getLocalFolderService(root);
-                const raw = await svc.loadFolderPathsConfigRaw();
-                if (raw && raw.claudeFolderPaths === undefined) {
-                    const cfg = await svc.loadFolderPathsConfig();
-                    cfg.claudeFolderPaths = cfg.htmlFolderPaths || [];
-                    await svc.saveFolderPathsConfig(cfg);
-                }
-            } catch {}
-        }
     }
 
     private async _sendDesignDocsReady(): Promise<void> {

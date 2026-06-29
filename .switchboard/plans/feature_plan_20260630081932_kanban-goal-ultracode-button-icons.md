@@ -120,3 +120,31 @@ The existing regex replacement loop at lines 8106-8108 will pick these up automa
 ## Recommendation
 
 Complexity is 2 (routine, two-file icon-asset swap reusing the existing `iconMap` injection mechanism). **Send to Intern.**
+
+## Review Results (Reviewer Pass — 2026-06-30)
+
+### Verdict
+**APPROVED — no code fixes required.** Implementation matches the plan's "After" state verbatim.
+
+### Files Changed (Verified)
+- `src/webview/kanban.html` lines 2490-2495 — text nodes `UC` / `/goal` replaced with `<img src="{{ICON_ULTRACODE}}" alt="Ultracode">` and `<img src="{{ICON_GOAL}}" alt="Goal">`.
+- `src/services/KanbanProvider.ts` lines 8093-8094 — `{{ICON_ULTRACODE}}` and `{{ICON_GOAL}}` entries added to `iconMap` (inserted after `{{ICON_CLI}}`), pointing at `25-101-150 Sci-Fi Flat icons-102.png` and `25-101-150 Sci-Fi Flat icons-139.png` respectively.
+
+### Static Verification Performed (no compile / no tests per session directives)
+- ✅ `kanban.html:2490-2495` — `<img>` tags with correct placeholders + `alt` attrs present.
+- ✅ `KanbanProvider.ts:8093-8094` — both `iconMap` entries present with correct filenames.
+- ✅ Icon files exist on disk (`icons/25-101-150 Sci-Fi Flat icons-102.png` [25271 bytes], `icons/25-101-150 Sci-Fi Flat icons-139.png` [13249 bytes]).
+- ✅ No stale `>UC<` / `>/goal<` text labels remain in `kanban.html`.
+- ✅ Toggle logic (`updateEpicWorkflowToggleUi` lines 4206-4217, click handlers lines 7037-7042) operates only on `classList.toggle` / `getElementById` — content swap is safe; zero `textContent`/`innerText` reads on these IDs.
+- ✅ No collateral `UC`/`/goal` button-text references in `src/` (the one `GOAL_EPIC_PREFIX = '/goal'` hit at `KanbanProvider.ts:53` is an unrelated slash-command prefix constant).
+
+### Findings by Severity
+- **CRITICAL**: None.
+- **MAJOR**: None.
+- **NIT**: `25-101-150` icon-range luminance under `is-off` dimming is an unverified visual risk — deferred to the manual VSIX visual check (Verification Plan item 3). Not a code defect; user-owned acceptance gate.
+
+### Fixes Applied
+- None. Implementation is materially correct and complete.
+
+### Remaining Risks
+- **Visual only (deferred to VSIX check)**: glyph legibility at `.strip-icon-btn img` dimensions and under `is-off` dimming for the `25-101-150` icon range. If either glyph is illegible, a substitute from the `icons/` set may be needed — this is a cosmetic, user-owned acceptance decision, not a plan blocker.
