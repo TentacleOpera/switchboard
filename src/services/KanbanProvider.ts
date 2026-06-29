@@ -8445,6 +8445,10 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         if (!db || !(await db.ensureReady())) {
             return { success: false, error: 'Kanban database not available.' };
         }
+        const workspaceId = await db.getWorkspaceId();
+        if (!workspaceId) {
+            return { success: false, error: 'Workspace ID not found. Cannot create epic.' };
+        }
         const subtasks: any[] = [];
         for (const pid of subtaskPlanIds) {
             const plan = await db.getPlanByPlanId(pid);
@@ -8462,8 +8466,22 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         // board as its children. Without this, the new epic record has project='' /
         // project_id=NULL and is filtered off any project-specific board view — the
         // epic card never appears, which is the reported "not appearing as epic" bug.
-        const epicProject = subtasks.find(st => st.project)?.project || '';
-        const epicProjectId = subtasks.find(st => st.projectId != null)?.projectId ?? null;
+        // For blank epics (zero subtasks), fall back to the board's active project filter
+        // (persisted in the DB config table by _refreshBoardImpl) so the epic shows up on
+        // the board the user was looking at when they created it. This mirrors how the
+        // file watcher stamps imported plans (GlobalPlanWatcherService._handlePlanFile).
+        let epicProject = subtasks.find(st => st.project)?.project || '';
+        let epicProjectId = subtasks.find(st => st.projectId != null)?.projectId ?? null;
+        if (!epicProject) {
+            const activeProject = (await db.getConfig('kanban.activeProjectFilter')) || '';
+            if (activeProject) epicProject = activeProject;
+        }
+        // upsertPlan does NOT resolve project_id from the project name (unlike
+        // insertFileDerivedPlan). Resolve it here so the epic appears on the
+        // project-filtered board, which JOINs on project_id.
+        if (epicProjectId === null && epicProject) {
+            epicProjectId = await db.getProjectIdByName(workspaceId, epicProject);
+        }
         const customColumns = await this._getCustomKanbanColumns(workspaceRoot);
         const columnDefs = await this._buildKanbanColumns([], customColumns);
         const ordinalMap = new Map<string, number>();
@@ -8485,10 +8503,6 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         console.log(`[KanbanProvider] createEpicFromPlanIds: subtask columns = [${subtasks.map(st => st.kanbanColumn).join(', ')}], resolvedColumn=${resolvedColumn}, effectiveColumn=${effectiveColumn}`);
         const planId = crypto.randomUUID();
         const sessionId = crypto.randomUUID();
-        const workspaceId = await db.getWorkspaceId();
-        if (!workspaceId) {
-            return { success: false, error: 'Workspace ID not found. Cannot create epic.' };
-        }
 
         const slug = (epicName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'epic');
         const epicDir = path.join(workspaceRoot, '.switchboard', 'epics');

@@ -273,3 +273,30 @@ Add one row beneath the `refine_ticket` row (currently line 96):
 ---
 
 **Recommendation:** Complexity 4/10 → Send to Coder.
+
+## Code Review Results (2026-06-29)
+
+### Files Changed
+- `.agents/skills/refine_epic.md` — new skill file with frontmatter, template sections, agent instructions, and auto-generated subtasks block note.
+- `src/services/ClaudeCodeMirrorService.ts` (line 68) — added `{ source: 'skills/refine_epic.md', name: 'refine-epic', invocation: 'no-model' }` to MIRROR_MANIFEST.
+- `src/webview/project.js` (lines 1802-1808, 1821-1835) — added Refine button in `manageGroup` template and click listener inside `if (isManageable)` block.
+- `src/services/PlanningPanelProvider.ts` (lines 5408-5462) — added `case 'refineEpic'` handler with 3-tier skill read fallback, `path.resolve` for epic file, clipboard copy.
+- `AGENTS.md` (line 98) — added `refine_epic` skill table row.
+
+### Findings
+| Severity | Finding | File:Line | Status |
+|:---|:---|:---|:---|
+| NIT | Plan says "beside Orchestrate button" but Orchestrate was removed by the standalone-epics removal plan — Refine is correctly in manage group | project.js:1802-1808 | Documentation discrepancy only — code correct |
+| NIT | Mirror-generated `.claude/skills/refine-epic/SKILL.md` not yet present — appears on next version bump | ClaudeCodeMirrorService.ts:68 | By design (version-gated mirror regen) |
+
+### Fixes Applied
+None — implementation is correct and complete. All 5 deliverables verified against plan requirements.
+
+### Validation
+- No compilation step run (per session directive).
+- No tests run (per session directive).
+- Code verification: skill file content matches plan. Manifest entry uses `no-model` invocation. Button placed in manage group with correct title/tooltip. Listener guards `_epicSelectedPlan`, sends `planId`/`planFile`/`title`/`subtaskCount`/`workspaceRoot`. Handler uses `path.resolve` (not `path.join`), has `.agents` → `.agent` → embedded fallback, handles missing epic file. AGENTS.md row added after `refine_ticket`.
+
+### Remaining Risks
+- Mirror-generated skill file appears only on version bump — for dev testing, bump the dev extension version to trigger regen.
+- The plan's "beside Orchestrate" description is stale (Orchestrate removed by dependency plan) — code placement is correct regardless.

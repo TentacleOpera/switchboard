@@ -38,7 +38,7 @@ Yes — before implementation, the user should confirm:
 
 1. **Reconciler approach correction**: The `kanban-startup-reconciler.md` child plan as written references a non-existent `last_remote_sync` config key and proposes a parallel reconciliation function in `TaskViewerProvider`. The recommended fix is to extend `RemoteControlService.restoreFromConfig()` instead. Confirm this correction is acceptable before touching the child plan.
 2. **Skill consolidation vs. duplication**: A `switchboard_remote_notion.md` remote-orientation skill already ships. Confirm whether `/sw-remote` should **supersede/absorb** it or coexist (the plan below assumes consolidation to avoid drift).
-3. **Phase 2 scope timing**: Phase 2 (repo mapping & live doc sync) remains a deferred design session. Confirm it stays out of this implementation pass.
+3. **Phase 2 scope timing**: Phase 2 (repo mapping & live doc sync) is now fully specified into four child plans (see Phase 2 below) — it is no longer a deferred design session. The only remaining decision is *sequencing*: implement Phase 2 alongside Phase 1, or land Phase 1 first and Phase 2 as a follow-on. Recommended: Phase 1 first (it has no dependency on Phase 2), then Phase 2.
 4. **Resolved via web research** — the two uncertain assumptions (Linear MCP tool names; Notion body-block write fidelity) were confirmed via research. See `## Research Findings` for the resolved facts, including one **critical safety caveat**: a Notion `update-page-markdown` full overwrite permanently deletes/orphans nested sub-pages, DB views, and templates and breaks block IDs/deep-links.
 
 ---
@@ -134,11 +134,18 @@ Key risks: (1) the startup-reconciler child plan re-invents a `last_remote_sync`
 
 **Goal** (preserved): Detailed codebase documentation lives in Linear/Notion, maintained continuously by the extension. Enables pure claude.ai + Notion connector planning sessions with no Claude Code remote, no GitHub MCP, no branches.
 
-**Child plans:** TBD — requires a design session on:
-- Rate limit management for continuous sync (research-confirmed: Notion = **3 req/s average**, 429 with `Retry-After`, 529 when overloaded; Linear = **1,500 req/hour** via PAT / **500 req/hour** via OAuth, plus 250k complexity points/hour, 429 with `X-RateLimit-*` headers). Notion is the binding constraint for continuous sync — write-batching and backoff queues are mandatory; the official local Notion server does NOT auto-retry (community servers do).
-- Doc granularity strategy (file summaries, module docs, ADRs)
-- Leveraging existing notebooklm integration folder as a base
-- Sync state tracking (what changed, what was already pushed)
+**Child plans (specified — codebase-grounded, Notion-only for v1):**
+- `phase2-codebase-doc-generator.md` (1/4, Complexity 5) — Reuse `ContextBundler`'s repo walker to emit a structured markdown doc set (overview → module → file pages) with stable slugs + content hashes. Pure local transform, no I/O.
+- `phase2-notion-codebase-docs-sync.md` (2/4, Complexity 6) — New "Switchboard Codebase Docs" Notion DB + incremental push pipeline; pushes only changed pages (content-hash diff), archives deleted files. New `codebase_docs_sync` table mirrors the `imported_docs` hash-tracking pattern.
+- `phase2-codebase-docs-sync-triggers-and-ui.md` (3/4, Complexity 5) — Trigger layer (manual / on-commit reusing the Airlock hook / optional timer) + Remote-tab config & status UI. Off by default, opt-in.
+- `phase2-remote-plan-from-notion-docs.md` (4/4, Complexity 2) — Orient the remote agent (claude.ai + Notion) to read the codebase docs DB and author code-grounded plans with zero repo/GitHub-MCP access. Folds into the Notion remote skill; cross-referenced from `/sw-remote`.
+
+**Design decisions resolved (no open design session needed):**
+- **Rate limits:** Notion ≈ 3 req/s is the binding constraint, but `NotionFetchService.httpRequest()` (lines 74–117) **already** retries with `Retry-After` (the earlier "no auto-retry" note applied to external MCP servers, not this extension's own client). Plan 2/4 adds a serialized ~350 ms queue on top; the hash diff keeps steady-state syncs to a handful of pages.
+- **Doc granularity:** per-file pages under per-directory module parents + a repo-root overview (not per-symbol, not one-giant-doc). Decided in plan 1/4.
+- **NotebookLM base:** reuse `ContextBundler.bundleWorkspaceContext()`'s repo walk + file-summary extraction (factored into shared helpers), re-targeted to markdown for Notion; the DOCX/NotebookLM flow is untouched.
+- **Sync-state tracking:** new `codebase_docs_sync` table (slug + `content_hash` + `notion_page_id` + `last_synced_at`), mirroring the proven `imported_docs` incremental pattern (`PlanningPanelProvider` content-hash logic). Push only what changed.
+- **Scope:** Notion-only for v1 (matches the Phase 2 outcome statement); Linear/ClickUp codebase-doc sync is an explicit follow-on.
 
 **Outcome** (preserved): User opens claude.ai, attaches Notion, asks Claude to write a plan. Claude reads live codebase docs from Notion, authors a plan, writes it back to Notion with the trigger status. Extension picks it up on startup. Zero git.
 

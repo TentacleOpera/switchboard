@@ -54,3 +54,30 @@ None. The skill name is adjustable but does not block; the design decision (sing
 Belongs under the existing **"Epic Creation and Specification UX"** epic (this is epic *creation tooling*, distinct from the orchestrator-dispatch epic). Complements `create-epic-skill` (remote file-write path) and `epic-grouping-awareness` (chat/memo nudges): together those plus this skill cover remote creation, proactive suggestion, and the on-demand grouping procedure. The verb scripts it relies on (`create-epic.js` / `assign-to-epic.js`) already exist.
 
 **No blocking dependency.** Visibility is governed by the version-gated mirror regen, which is intentional (users get skill changes only on a version update). The new skill ships visible on the next version bump; for dev testing, bump the dev extension version to trigger the regen. No mirror code change is required.
+
+## Code Review Results (2026-06-29)
+
+### Files Changed
+- `.agents/skills/group-into-epics/SKILL.md` — new model-invocable skill file with full scan→read→propose→confirm→execute→backlog flow, `{{WORKSPACE_ROOT}}` placeholder, `create-epic.js` / `assign-to-epic.js` invocation, and confirm gate.
+- `src/services/ClaudeCodeMirrorService.ts` (line 72) — added `{ source: 'skills/group-into-epics', name: 'group-into-epics', invocation: 'default', allowedTools: 'Bash' }` to MIRROR_MANIFEST.
+- `src/services/KanbanProvider.ts` (lines 8647–8684) — refactored `_buildSuggestEpicsPrompt` to read `group-into-epics/SKILL.md` at runtime with `.agents` → `.agent` → embedded fallback, strip YAML frontmatter, and substitute `{{WORKSPACE_ROOT}}`.
+- `AGENTS.md` (line 99) — added `group-into-epics` skill table row.
+
+### Findings
+| Severity | Finding | File:Line | Status |
+|:---|:---|:---|:---|
+| NIT | Embedded fallback string is condensed vs full SKILL.md — lacks detailed formatting examples | KanbanProvider.ts:8657-8677 | Deferred — safety net only; primary path reads the file |
+| NIT | Frontmatter stripping regex requires file to start with `---\n` — BOM/whitespace would break it | KanbanProvider.ts:8682 | Not an issue — confirmed file starts with `---\n` |
+| NIT | Mirror-generated `.claude/skills/group-into-epics/SKILL.md` not yet present | ClaudeCodeMirrorService.ts:72 | By design (version-gated mirror regen) |
+
+### Fixes Applied
+None — implementation is correct and complete. All 4 implementation steps verified.
+
+### Validation
+- No compilation step run (per session directive).
+- No tests run (per session directive).
+- Code verification: SKILL.md contains full flow with `{{WORKSPACE_ROOT}}` placeholder and confirm gate. Manifest entry uses `invocation: 'default'` (model-invocable) with `allowedTools: 'Bash'`. `_buildSuggestEpicsPrompt` reads skill with 3-tier fallback, strips frontmatter, substitutes placeholder. `suggestEpics` case behavior preserved (candidate count, clipboard copy, status message). Verb scripts untouched. Skill listed in available_skills. AGENTS.md row added.
+
+### Remaining Risks
+- Mirror-generated skill file appears only on version bump — for dev testing, bump the dev extension version.
+- Embedded fallback is a condensed version — if the skill file is missing, the pasted prompt lacks detailed formatting but captures the critical flow.

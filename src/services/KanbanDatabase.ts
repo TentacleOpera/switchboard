@@ -2367,6 +2367,28 @@ export class KanbanDatabase {
         return rows.map((r: any) => String(r.name || ''));
     }
 
+    /**
+     * Resolve a project's numeric ID from its name and workspace.
+     * Mirrors the inline lookup in insertFileDerivedPlan so callers that
+     * build plan records outside the watcher path (e.g. createEpicFromPlanIds)
+     * can resolve project_id without reaching into _db.
+     */
+    public async getProjectIdByName(workspaceId: string, projectName: string): Promise<number | null> {
+        if (!(await this.ensureReady()) || !this._db || !projectName) return null;
+        const stmt = this._db.prepare(
+            'SELECT id FROM projects WHERE name = ? AND workspace_id = ?',
+            [projectName, workspaceId]
+        );
+        try {
+            if (stmt.step()) {
+                return Number(stmt.getAsObject().id);
+            }
+            return null;
+        } finally {
+            stmt.free();
+        }
+    }
+
     public async addProject(workspaceId: string, projectName: string): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
         try {

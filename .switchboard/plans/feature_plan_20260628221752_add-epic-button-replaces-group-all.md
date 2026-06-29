@@ -271,3 +271,34 @@ The subtask linking loop (line 8705–8709) already iterates zero times when `su
 ---
 
 **Recommendation:** Complexity 5/10 → Send to Coder.
+
+## Code Review Results (2026-06-29)
+
+### Files Changed
+- `src/webview/kanban.html` — column button template (lines 4623–4627): relabeled to `addBlankEpic` action, "Add Epic" alt, "Add a blank epic to this column" tooltip; variable renamed `epicGroupBtn` → `epicAddBtn`; reference updated at line 4653.
+- `src/webview/kanban.html` — click handler (lines 4853–4862): replaced `groupAllIntoEpic` case with `addBlankEpic` case that clears selection and opens modal in blank-epic mode; guard at line 4759 updated.
+- `src/webview/kanban.html` — `openEpicCreateModal()` (lines 7403–7416): added `blankEpic` early-return branch before existing flow.
+- `src/services/KanbanProvider.ts` — `createEpicFromPlanIds()` (lines 8438–8460): removed `subtaskPlanIds.length === 0` guard; added stale-ID warning when `subtaskPlanIds.length > 0 && subtasks.length === 0`.
+- `src/services/KanbanProvider.ts` — `createEpicFromPlanIds()` (lines 8474–8484): added zero-subtask fallback for `resolvedColumn = 'CREATED'`.
+
+### Findings
+| Severity | Finding | File:Line | Status |
+|:---|:---|:---|:---|
+| NIT | Stale-ID warning says "Creating blank epic anyway" — slightly misleading for unintentional stale IDs | KanbanProvider.ts:8459 | Deferred — diagnostic-only, behavior correct |
+| MAJOR | Blank epic gets `project=''` / `projectId=null` — won't appear on project-filtered boards | KanbanProvider.ts:8465-8466 | **FIXED** — now falls back to active project filter |
+
+### Fixes Applied
+**MAJOR fix — blank epic project inheritance.** `createEpicFromPlanIds` now falls back to the board's active project filter (read from the DB `kanban.activeProjectFilter` config key, the same source the file watcher uses) when subtasks don't provide a project. Also resolves `project_id` from the project name via a new `getProjectIdByName` method on `KanbanDatabase`, since `upsertPlan` does not resolve `project_id` from `project` name (unlike `insertFileDerivedPlan`). The `workspaceId` resolution was moved earlier in the function to be available for the project-id lookup.
+
+Files changed:
+- `src/services/KanbanDatabase.ts` (lines 2370-2390): added `getProjectIdByName(workspaceId, projectName)` method.
+- `src/services/KanbanProvider.ts` (lines 8448-8484): moved `workspaceId` resolution earlier; added active-project-filter fallback and `project_id` resolution for blank epics.
+
+### Validation
+- No compilation step run (per session directive).
+- No tests run (per session directive).
+- Code verification: all 6 changes confirmed against plan requirements. Zero-subtask guard removed. Stale-ID warning present. Column default handles `subtasks.length === 0`. Modal blank-epic mode is clean early return. Click handler clears selection before opening modal.
+
+### Remaining Risks
+- API behavior change: `POST /kanban/epic/create` now accepts empty `planIds` arrays. This is intentional per the plan but should be noted in API documentation.
+- Blank epic project inheritance depends on `kanban.activeProjectFilter` being persisted in the DB config — if the board has never refreshed (e.g. fresh install with no board open), the config key may be empty and the epic gets `project=''`. This is the same dependency the file watcher has, so it's not a new risk.

@@ -201,3 +201,27 @@ if (epicAfterRegen && epicAfterRegen.isEpic) {
 ---
 
 **Recommendation:** Complexity 6/10 → Send to Coder.
+
+## Code Review Results (2026-06-29)
+
+### Files Changed
+- `src/services/KanbanProvider.ts` — `createEpicFromPlanIds()` (lines 8432–8585): added `effectiveEpicPlanId` resolution via `getPlanByPlanFile` fallback when `getPlanByPlanId(newPlanId)` returns null after ON CONFLICT; propagated `effectiveEpicPlanId` to subtask linking, `_regenerateEpicFile`, `updateEpicStatus` re-assertion, and return value.
+- `src/services/KanbanProvider.ts` — `_regenerateEpicFile()` (lines 8362–8398): added permanent `console.warn` logging at both early-return guards (epic not found, isEpic falsy) and `console.log` for subtask count.
+
+### Findings
+| Severity | Finding | File:Line | Status |
+|:---|:---|:---|:---|
+| NIT | `sessionId` not resolved from DB on ON CONFLICT mismatch — return value uses originally-generated UUID | KanbanProvider.ts:8584 | Deferred — no practical impact; documented in User Review Required |
+| NIT | Verbose `console.log` at lines 8485, 8582 (diagnostic, not warn-level) | KanbanProvider.ts:8485,8582 | Deferred — matches existing codebase logging style |
+
+### Fixes Applied
+None — implementation is correct and complete. Change 1 (effectiveEpicPlanId) properly implemented. Change 2 (diagnostic logging) properly implemented. Change 3 (fallback writer) correctly dropped per adversarial review.
+
+### Validation
+- No compilation step run (per session directive).
+- No tests run (per session directive).
+- Code verification: all 4 downstream uses of `effectiveEpicPlanId` confirmed correct. Change 3 confirmed absent. Diagnostic logging confirmed at both early-return guards.
+
+### Remaining Risks
+- The `sessionId` mismatch on ON CONFLICT is theoretical — no current caller looks up the epic by `sessionId` after creation. If a future caller does, it would need to use `getPlanByPlanId` instead.
+- The `upsertPlan` ON CONFLICT clause still does not update `plan_id` or `session_id` — this is a structural issue that could affect other flows, but the fallback resolution in `createEpicFromPlanIds` mitigates it for the epic-creation path.

@@ -95,3 +95,22 @@ This communicates the actual behavior (grouping selected cards under a new epic)
 ---
 
 **Recommendation:** Complexity 3/10 → Send to Intern.
+
+## Code Review Results (2026-06-29)
+
+### Files Changed
+- `src/webview/kanban.html` — `updateEpicActionButton()` (line 6769): changed multi-card branch label from `'PROMOTE TO EPIC'` to `'GROUP INTO EPIC'`.
+
+### Findings
+None — all 6 branches of `updateEpicActionButton` verified correct. Click handler dispatch logic unchanged.
+
+### Fixes Applied
+None — implementation is correct and complete.
+
+### Validation
+- No compilation step run (per session directive).
+- No tests run (per session directive).
+- Code verification: all 6 selection-state branches confirmed. Multi-card branch (line 6769) reads `'GROUP INTO EPIC'`. Click handler (lines 9553-9556) dispatches correctly regardless of label.
+
+### Remaining Risks
+None — purely cosmetic label change with no behavioral impact.
