@@ -1485,12 +1485,20 @@ export class KanbanDatabase {
         const params: unknown[] = ['PLAN REVIEWED', new Date().toISOString(), workspaceId, ...deprecatedColumns];
         if (!(await this.ensureReady()) || !this._db) return 0;
         try {
-            this._db.run(sql, params);
-            // Count affected rows by checking how many were in deprecated columns (best-effort)
+            // Count matching rows first (the local sql.js type doesn't expose getRowsModified)
             const checkSql = `SELECT COUNT(*) as cnt FROM plans WHERE workspace_id = ? AND kanban_column IN (${placeholders})`;
-            const remaining = this._db.exec(checkSql, [workspaceId, ...deprecatedColumns]);
-            const migrated = remaining.length > 0 ? 0 : 1; // If no rows remain, migration cleared them
-            console.log(`[KanbanDatabase] migrateDeprecatedColumns: workspaceId=${workspaceId}, remaining in deprecated columns=${remaining.length > 0 ? remaining[0].values[0][0] : 0}`);
+            const countStmt = this._db.prepare(checkSql, [workspaceId, ...deprecatedColumns]);
+            let migrated = 0;
+            try {
+                if (countStmt.step()) {
+                    migrated = (countStmt.getAsObject() as any).cnt as number;
+                }
+            } finally {
+                countStmt.free();
+            }
+            if (migrated === 0) return 0;
+            this._db.run(sql, params);
+            console.log(`[KanbanDatabase] migrateDeprecatedColumns: workspaceId=${workspaceId}, migrated ${migrated} card(s) out of deprecated columns`);
             return migrated;
         } catch (error) {
             console.error('[KanbanDatabase] migrateDeprecatedColumns failed:', error);

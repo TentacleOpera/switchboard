@@ -1659,6 +1659,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     btn.title = action === 'Link Doc' ? 'Copy validated document path' : 'Delete';
                     btn.setAttribute('data-tooltip', action === 'Link Doc' ? 'Copy validated document path' : 'Delete');
                     btn.setAttribute('aria-label', action === 'Link Doc' ? 'Copy link to document' : 'Delete document');
+                } else if (action === 'Serve & Open') {
+                    btn.className = 'card-icon-btn html-serve-btn';
+                    btn.innerHTML = '<span class="btn-label">Open</span>';
+                    btn.title = 'Start local server and open in browser';
+                    btn.setAttribute('aria-label', 'Serve and open in browser');
                 } else {
                     // Text button (Set Context, Import, Sync)
                     btn.className = 'planning-card-btn';
@@ -1704,6 +1709,15 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                             sourceFolder: nodeMetadata ? nodeMetadata.sourceFolder : undefined
                         });
                     }
+                    } else if (action === 'Serve & Open') {
+                        vscode.postMessage({
+                            type: 'serveAndOpenHtml',
+                            docId: nodeId,
+                            docName: title,
+                            absolutePath: nodeMetadata ? nodeMetadata.absolutePath : undefined,
+                            sourceFolder: nodeMetadata ? nodeMetadata.sourceFolder : undefined
+                        });
+                    }
                 });
 
                 cardActions.appendChild(btn);
@@ -1719,6 +1733,132 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         }
 
         return wrapper;
+    }
+
+    function buildFolderLinkHeader(folderPath, docCount) {
+        const header = document.createElement('div');
+        header.className = 'folder-subheader source-folder-header';
+        header.title = folderPath;
+
+        const label = document.createElement('span');
+        label.style.fontWeight = 'bold';
+        const folderName = folderPath.split(/[\\/]/).filter(Boolean).pop() || folderPath;
+        label.textContent = `${folderName}${docCount != null ? ` (${docCount})` : ''}`;
+        header.appendChild(label);
+
+        const linkBtn = document.createElement('button');
+        linkBtn.className = 'folder-link-btn';
+        linkBtn.textContent = 'Link';
+        linkBtn.title = 'Copy folder path to clipboard';
+        linkBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            vscode.postMessage({ type: 'linkToFolder', folderPath });
+        });
+        header.appendChild(linkBtn);
+
+        return header;
+    }
+
+    function buildSubfolderLinkHeader(folderId, folderName, docCount) {
+        const subheader = document.createElement('div');
+        subheader.className = 'folder-subheader';
+        subheader.title = folderId;
+
+        const subLabel = document.createElement('span');
+        subLabel.textContent = `${folderName}${docCount != null ? ` (${docCount})` : ''}`;
+        subheader.appendChild(subLabel);
+
+        const subLinkBtn = document.createElement('button');
+        subLinkBtn.className = 'folder-link-btn';
+        subLinkBtn.textContent = 'Link';
+        subLinkBtn.title = 'Copy subfolder path to clipboard';
+        subLinkBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            vscode.postMessage({ type: 'linkToFolder', folderPath: folderId });
+        });
+        subheader.appendChild(subLinkBtn);
+
+        return subheader;
+    }
+
+    function renderSubfolderGroups(docList, docs, subfolderNodes, createCardFn, showAll) {
+        const folderIdMap = new Map();
+        subfolderNodes.forEach(f => folderIdMap.set(f.id, f));
+
+        const docsByParentFolder = new Map();
+        const rootDocs = [];
+        docs.forEach(d => {
+            const docId = d.id || '';
+            const lastSlashIdx = docId.lastIndexOf('/');
+            const parentFolderId = lastSlashIdx > 0 ? docId.substring(0, lastSlashIdx) : null;
+
+            if (parentFolderId && folderIdMap.has(parentFolderId)) {
+                if (!docsByParentFolder.has(parentFolderId)) docsByParentFolder.set(parentFolderId, []);
+                docsByParentFolder.get(parentFolderId).push(d);
+            } else {
+                rootDocs.push(d);
+            }
+        });
+
+        subfolderNodes.forEach(folder => {
+            const folderDocs = docsByParentFolder.get(folder.id) || [];
+            if (folderDocs.length === 0 && !showAll) return;
+
+            docList.appendChild(buildSubfolderLinkHeader(folder.id, folder.name, folderDocs.length));
+            folderDocs.forEach(doc => {
+                docList.appendChild(createCardFn(doc));
+            });
+        });
+
+        rootDocs.forEach(doc => {
+            docList.appendChild(createCardFn(doc));
+        });
+    }
+
+    function renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, createCardFn) {
+        const folderPathsList = folderPaths || [];
+
+        const foldersBySourceFolder = new Map();
+        (folderNodes || []).forEach(f => {
+            const sf = f.metadata?.sourceFolder;
+            if (!sf) return;
+            if (!foldersBySourceFolder.has(sf)) foldersBySourceFolder.set(sf, []);
+            foldersBySourceFolder.get(sf).push(f);
+        });
+
+        if (search) {
+            const byFolder = new Map();
+            docNodes.forEach(d => {
+                const sf = d.metadata?.sourceFolder;
+                if (!sf) return;
+                if (!byFolder.has(sf)) byFolder.set(sf, []);
+                byFolder.get(sf).push(d);
+            });
+            [...byFolder.entries()].forEach(([sf, docs]) => {
+                docList.appendChild(buildFolderLinkHeader(sf, docs.length));
+                renderSubfolderGroups(docList, docs, foldersBySourceFolder.get(sf) || [], createCardFn, false);
+            });
+        } else {
+            const docsByFolder = new Map();
+            docNodes.forEach(d => {
+                const sf = d.metadata?.sourceFolder;
+                if (sf) {
+                    if (!docsByFolder.has(sf)) docsByFolder.set(sf, []);
+                    docsByFolder.get(sf).push(d);
+                }
+            });
+            folderPathsList.forEach(fp => {
+                docList.appendChild(buildFolderLinkHeader(fp, (docsByFolder.get(fp) || []).length));
+                renderSubfolderGroups(docList, docsByFolder.get(fp) || [], foldersBySourceFolder.get(fp) || [], createCardFn, true);
+            });
+            const configuredSet = new Set(folderPathsList);
+            docsByFolder.forEach((docs, sf) => {
+                if (!configuredSet.has(sf)) {
+                    docList.appendChild(buildFolderLinkHeader(sf, docs.length));
+                    renderSubfolderGroups(docList, docs, foldersBySourceFolder.get(sf) || [], createCardFn, true);
+                }
+            });
+        }
     }
 
     function renderNode(node, sourceId, depth = 0) {
@@ -6548,26 +6688,28 @@ Return ONLY the drafted prompt with no additional commentary.`;
             return;
         }
 
-        docNodes.forEach(doc => {
-            const card = document.createElement('div');
-            card.className = 'source-doc-card';
-            card.dataset.sourceId = sourceId || 'planning-html-folder';
-            card.dataset.nodeId = doc.id;
-            card.dataset.name = doc.name;
-            if (doc.metadata && doc.metadata.sourceFolder) {
-                card.dataset.sourceFolder = doc.metadata.sourceFolder;
+        renderFolderGroupedDocs(
+            docList,
+            docNodes,
+            folderNodes,
+            folderPaths,
+            search,
+            (doc) => createPlanningHtmlDocCard(doc, sourceId || 'planning-html-folder')
+        );
+    }
+
+    function createPlanningHtmlDocCard(doc, sourceId) {
+        return renderDocCard({
+            title: doc.name || doc.id,
+            subtitle: 'HTML',
+            sourceId,
+            nodeId: doc.id,
+            nodeMetadata: doc.metadata,
+            actions: ['Serve & Open', 'Link Doc'],
+            isSelected: state.activeSource === sourceId && state.activeDocId === doc.id,
+            clickHandler: () => {
+                loadPlanningHtmlPreview(sourceId, doc.id, doc.name, doc.metadata && doc.metadata.sourceFolder);
             }
-            if (state.activeSource === (sourceId || 'planning-html-folder') && state.activeDocId === doc.id) {
-                card.classList.add('selected');
-            }
-            const title = document.createElement('div');
-            title.className = 'source-doc-title';
-            title.textContent = doc.name;
-            card.appendChild(title);
-            card.addEventListener('click', () => {
-                loadPlanningHtmlPreview(sourceId || 'planning-html-folder', doc.id, doc.name, doc.metadata && doc.metadata.sourceFolder);
-            });
-            docList.appendChild(card);
         });
     }
 
