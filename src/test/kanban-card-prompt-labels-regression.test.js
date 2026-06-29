@@ -68,9 +68,9 @@ function run() {
     label = evaluateLabel('PLAN REVIEWED', (src) => sourceToNext(src, stdColumns), stdDefs, stdColumns);
     assert.strictEqual(label, 'Copy coder prompt', 'PLAN REVIEWED -> LEAD CODED failed');
 
-    // TEST: LEAD CODED -> CODER CODED -> "Copy coder prompt" (when collapseCodersEnabled=false)
+    // TEST: LEAD CODED (expanded) -> resolves past CODER CODED to CODE REVIEWED -> "Copy review prompt"
     label = evaluateLabel('LEAD CODED', (src) => sourceToNext(src, stdColumns), stdDefs, stdColumns, false);
-    assert.strictEqual(label, 'Copy coder prompt', 'LEAD CODED -> CODER CODED failed (collapsed=false)');
+    assert.strictEqual(label, 'Copy review prompt', 'LEAD CODED expanded should show Copy review prompt');
     
     // TEST: CODER CODED -> CODE REVIEWED -> "Copy review prompt" (when collapseCodersEnabled=false)
     label = evaluateLabel('CODER CODED', (src) => sourceToNext(src, stdColumns), stdDefs, stdColumns, false);

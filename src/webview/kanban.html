@@ -5300,7 +5300,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                 // When a card is in the AUTOCODE bucket (visually collapsed or stored as CODED_AUTO),
                 // the next step is always the column after the coded lanes.
-                if (sourceColumn === 'CODED_AUTO' || (collapseCodersEnabled && CODED_IDS.includes(sourceColumn))) {
+                if (sourceColumn === 'CODED_AUTO' || CODED_IDS.includes(sourceColumn)) {
                     const visibleCodedIds = CODED_IDS.filter(id => columns.includes(id));
                     sourceColumn = visibleCodedIds[visibleCodedIds.length - 1] || 'CODER CODED';
                 }

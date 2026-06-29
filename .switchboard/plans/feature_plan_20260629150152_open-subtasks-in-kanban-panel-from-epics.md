@@ -332,3 +332,37 @@ Automated tests are skipped per session directive. The test suite will be run se
 19. **Verify:** The meta bar shows Edit only (no complexity dropdown, no delete button). The preview content still loads.
 20. **Data loss guard:** Click a subtask, click Edit, modify content, then click back on the epic card (without saving).
 21. **Verify:** Edit mode is exited, the epic loads cleanly, and the editor does NOT contain subtask content. The epic's Save button targets the epic file (not the subtask file).
+
+## Code Review Results (Reviewer Pass)
+
+### Stage 1: Adversarial Findings
+
+| # | Severity | File:Line | Finding |
+|---|----------|-----------|---------|
+| 1 | **CRITICAL** | `src/webview/project.js:1874` | `renderEpicMetaBar` missing closing brace. The original code had two `}` after the `if (btnSaveEpics)` block — one for the `if`, one for the function. The implementation kept only one, causing `renderEpicSubtaskMetaBar` and every subsequent function to be **nested inside** `renderEpicMetaBar` as a closure. The entire file failed to parse (`node -c` → `SyntaxError: Unexpected token ')'` at the IIFE close, line 2771). The webview would load as a blank pane. |
+| 2 | **MAJOR** | `src/webview/project.js:876` | `vscode.postMessage({ type: 'fetchEpicDocuments' });` was silently dropped from the `saveFileContentResult` epics handler. The original code had it; the plan's replacement code explicitly includes it (plan lines 301-302). Without it, the epic documents list goes stale after saving an epic or subtask. |
+| 3 | NIT | `src/webview/project.js:1953` | Delete button handler wrapped in an extra `if (delBtn) { ... }` guard not present in the plan. Harmless defensive null-check; deviates from plan but not worth changing. |
+
+### Stage 2: Balanced Synthesis
+
+- **Fix #1 (CRITICAL):** Added the missing `}` to close `renderEpicMetaBar` before `renderEpicSubtaskMetaBar`. This restores the function as a sibling at the IIFE level, not a nested closure. Without this fix, the feature is completely non-functional and the entire webview is broken.
+- **Fix #2 (MAJOR):** Restored the `vscode.postMessage({ type: 'fetchEpicDocuments' });` call at the end of the epics save handler. This prevents the epic documents list from going stale after a save.
+- **Finding #3 (NIT):** Deferred — the extra null guard is harmless.
+
+### Fixes Applied
+
+1. `src/webview/project.js:1875` — Added missing `}` to close `renderEpicMetaBar` function.
+2. `src/webview/project.js:877` — Restored `vscode.postMessage({ type: 'fetchEpicDocuments' });` to the epics `saveFileContentResult` handler.
+
+### Validation Results
+
+- **Syntax check (`node -c src/webview/project.js`):** PASS (exit code 0). Before fixes: FAIL (`SyntaxError: Unexpected token ')'` at line 2771).
+- **Brace structure verification:** `renderEpicSubtaskMetaBar` is now a sibling of `renderEpicMetaBar` at the IIFE scope level (depth=1), not nested inside it (depth=2).
+- **Compilation:** Skipped per session directive.
+- **Automated tests:** Skipped per session directive.
+
+### Remaining Risks
+
+- **Complexity staleness after change:** As noted in the Edge-Case audit (plan line 67), changing complexity via the dropdown does not live-refresh the subtask meta bar. The complexity value in the DB is correct; the meta bar shows stale value until the subtask is re-clicked. This is a known cosmetic limitation, not a regression.
+- **Markdown body links:** Cross-reference links inside the epic's markdown body (intercepted by the handler at `project.js:234-306`) still preview in-place without the subtask meta bar. This is by design (plan line 68) — they are content cross-references, not managed subtasks.
+- **Manual verification steps 1-21 not yet executed:** The syntax is verified, but the full manual UX flow (clicking subtasks, editing, saving, deleting) should be run by the user in a live VS Code instance.

@@ -874,6 +874,7 @@
                             if (_epicSelectedPlan) selectEpic(_epicSelectedPlan);
                         }
                         vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+                        vscode.postMessage({ type: 'fetchEpicDocuments' });
                     }
                 } else {
                     showToast('Save failed: ' + (msg.error || 'Unknown error'), 'error');
@@ -1871,6 +1872,7 @@
                     });
                 }
             });
+        }
     }
 
     function renderEpicSubtaskMetaBar(plan) {
