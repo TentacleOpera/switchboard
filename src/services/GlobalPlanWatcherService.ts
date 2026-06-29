@@ -41,7 +41,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
         if (existing) clearTimeout(existing);
         GlobalPlanWatcherService._pendingCreations.set(key, setTimeout(() => {
             GlobalPlanWatcherService._pendingCreations.delete(key);
-        }, 3000));
+        }, 10000));
     }
 
     public registerRename(oldRelativePath: string): void {

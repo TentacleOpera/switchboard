@@ -63,6 +63,10 @@ export class LocalApiServer {
     private readonly _CACHE_TTL_MS = 30000; // 30 seconds
     private readonly _MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
     private _mermaidCliAvailable: boolean | null = null;
+    // In-process liveness signal — set true in the listen callback, false on stop/error.
+    // The watchdog checks this (NOT a self-HTTP round-trip, which times out on a starved
+    // host and produces a false negative).
+    private _isListening: boolean = false;
 
     constructor(options: LocalApiServerOptions) {
         this._options = options;
@@ -73,12 +77,19 @@ export class LocalApiServer {
     /**
      * Start the local API server on a random free port.
      * Returns the port number.
+     *
+     * Wraps the listen promise in a 5s timeout race: if the host is starved so the
+     * listen callback never fires, the promise never settles and the port file is
+     * never written (the "no port file ⇒ manual reload" failure mode). On timeout
+     * the promise rejects with a clear error so the watchdog can retry.
      */
     async start(): Promise<number> {
         // Cleanup temp files from previous interrupted writes
         await this._cleanupTempFiles();
+        this._isListening = false;
 
-        return new Promise((resolve, reject) => {
+        const START_TIMEOUT_MS = 5000;
+        const listenPromise = new Promise<number>((resolve, reject) => {
             this._server = http.createServer(async (req: http.IncomingMessage, res: http.ServerResponse) => {
                 await this._handleRequest(req, res);
             });
@@ -86,6 +97,7 @@ export class LocalApiServer {
             this._server.listen(0, '127.0.0.1', () => {
                 const address = this._server?.address() as { port: number };
                 this._port = address.port;
+                this._isListening = true;
                 console.log(`[LocalApiServer] Started on port ${this._port}`);
 
                 resolve(this._port);
@@ -93,15 +105,38 @@ export class LocalApiServer {
 
             this._server.on('error', (err: Error) => {
                 console.error('[LocalApiServer] Server error:', err);
+                this._isListening = false;
                 reject(err);
             });
         });
+
+        const timeoutPromise = new Promise<never>((_resolve, reject) => {
+            setTimeout(() => {
+                reject(new Error(`[LocalApiServer] start() timed out after ${START_TIMEOUT_MS}ms (extension host starved — listen callback did not fire)`));
+            }, START_TIMEOUT_MS);
+        });
+
+        return Promise.race([listenPromise, timeoutPromise]);
+    }
+
+    /**
+     * In-process liveness signal for the watchdog. True only when the listen callback
+     * has fired and stop() has not run. Do NOT use a self-HTTP round-trip to probe
+     * liveness — it times out on a starved host and produces a false negative.
+     */
+    public isListening(): boolean {
+        return this._isListening && this._server !== null;
+    }
+
+    public getPort(): number {
+        return this._port;
     }
 
     /**
      * Stop the local API server.
      */
     async stop(): Promise<void> {
+        this._isListening = false;
         if (this._server) {
             return new Promise((resolve) => {
                 this._server?.close(() => {

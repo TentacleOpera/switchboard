@@ -4081,7 +4081,12 @@ export class KanbanDatabase {
             const stats = await fs.promises.stat(this._dbPath);
             const currentMtime = stats.mtimeMs;
 
-            if (currentMtime === this._loadedMtime) return; // No external changes
+            // Only reload on a FORWARD mtime change. A backwards mtime (older than what we
+            // loaded) comes from a competing/older writer (e.g. a path-resolution divergence
+            // yielding two KanbanDatabase instances for one file, or a backup restore). Reloading
+            // on a backwards mtime triggered a reload→resync churn on top of the refresh storm.
+            // Equal mtime = no change. Strictly greater = genuine external write.
+            if (currentMtime <= this._loadedMtime) return;
 
             // Drain any in-flight writes before reloading to prevent data loss
             try { await this._writeTail; } catch { /* swallow — chain keeps alive internally */ }

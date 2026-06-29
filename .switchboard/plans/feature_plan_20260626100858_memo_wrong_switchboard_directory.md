@@ -324,3 +324,54 @@ Complexity 4 → **Send to Coder**. The core fix is a 4-line mechanical swap
 following an established pattern; the webview handler (Change 2b) is a 4-line
 addition; Change 3 is a documentation append. No architectural risk, no data
 migration, no new dependencies.
+
+---
+
+## Code Review Pass (Reviewer-Executor)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> **"Let me see if you actually read the plan you wrote, or just waved at it."**
+
+**Change 1 — The four-handler swap.** `TaskViewerProvider.ts:9775,9789,9801,9811`. All four memo handlers (`memoLoad`, `memoSave`, `memoClear`, `memoGeneratePrompt`) now call `_resolveStateWorkspaceRoot(data.workspaceRoot)` instead of `_resolveWorkspaceRoot(data.workspaceRoot)`. This is the exact mechanical swap the plan demanded. The `_resolveStateWorkspaceRoot` method at line 1247 delegates to `resolveEffectiveWorkspaceRoot`, collapsing child→parent. **VERIFIED CORRECT.** Not bad. For once.
+
+**Change 2 — The `memoError` postMessage guard.** All four handlers now post `{ type: 'memoError', message: 'No workspace folder found for memo.' }` before `break` on the null-root path. Lines 9777, 9791, 9803, 9813. **VERIFIED CORRECT.** The plan offered a clarification that the team could drop this in favor of a silent `break` — the implementer chose to keep it. Fine. But it's dead code without the webview handler, which brings me to...
+
+**Change 2b — The webview `memoError` case.** `implementation.html:2193-2197`. A `case 'memoError'` block exists, writing `message.message || 'Memo error'` to `#memo-status`. **VERIFIED CORRECT.** The feedback loop is closed. Good. I was ready to scream if this was missing.
+
+**Change 3 — The agent-skill workspace-root directive.** `.agents/workflows/memo.md:84-94` has the full "Workspace Root Resolution (Multi-Workspace) — BEST EFFORT" section with the 4-step heuristic and the non-guarantee note. **VERIFIED CORRECT** for the workflows file.
+
+> **BUT.** The plan says — and I quote — `### File: .agents/workflows/memo.md (and .claude/skills/memo/SKILL.md)`. That "(and ...)" is not decorative. It means BOTH files get the directive. `.claude/skills/memo/SKILL.md` has **ZERO** mention of workspace root resolution. The Claude Code host reads from `.claude/skills/`, not `.agents/workflows/`. So every Claude Code agent using the memo skill in a multi-parent workspace gets **no guidance at all** and blithely writes to the child folder. This is a **MAJOR** finding — the fix is incomplete for an entire host platform.
+
+**Severity: MAJOR** — `.claude/skills/memo/SKILL.md` missing the workspace root resolution directive specified in Change 3.
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Severity | Disposition |
+| :--- | :--- | :--- |
+| Change 1 (four-handler swap) | — | **Keep.** Verified correct, matches plan exactly. |
+| Change 2 (`memoError` postMessage) | — | **Keep.** Verified correct, all four handlers covered. |
+| Change 2b (webview `memoError` case) | — | **Keep.** Verified correct, feedback loop closed. |
+| Change 3 missing from `.claude/skills/memo/SKILL.md` | MAJOR | **Fix now.** The plan explicitly names both files; the Claude Code host reads from `.claude/skills/`. Without this, the agent-skill path is completely unguided on Claude Code. |
+
+### Fixes Applied
+
+- **`.claude/skills/memo/SKILL.md`**: Added the "Workspace Root Resolution (Multi-Workspace) — BEST EFFORT" section (lines 87-97) with the identical 4-step heuristic and non-guarantee note from `.agents/workflows/memo.md`. This completes Change 3 for the Claude Code host.
+
+### Files Changed by Review
+
+| File | Change |
+| :--- | :--- |
+| `.claude/skills/memo/SKILL.md` | Added workspace root resolution directive (Change 3 completion) |
+
+### Verification Results
+
+- **Compilation:** Skipped per session directives.
+- **Tests:** Skipped per session directives.
+- **Code inspection:** All four memo handlers verified at `TaskViewerProvider.ts:9775,9789,9801,9811` — use `_resolveStateWorkspaceRoot`. Webview `memoError` case verified at `implementation.html:2193-2197`. Both memo skill files now contain the workspace root resolution directive.
+
+### Remaining Risks
+
+- **Agent-skill path is best-effort, not guaranteed.** Even with the directive in both skill files, the agent has no runtime access to the kanban board's workspace mapping. The heuristic relies on `.switchboard/workspace-id` file presence and may fail in edge cases. This is documented and accepted per the plan's Complexity Audit.
+- **Null kanban provider.** If memo is used before kanban provider initialization, `_resolveStateWorkspaceRoot` falls back to the raw root. Low risk (kanban initializes at activation). Documented in the plan's Complexity Audit.
+- **Orphaned in-progress memos.** An in-progress memo in a child folder becomes invisible after the fix (memo now reads from the parent). Low-impact (transient content). Documented in the plan's Edge-Case Audit.

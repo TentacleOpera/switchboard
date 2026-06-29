@@ -1013,10 +1013,66 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     await fs.promises.rename(tempFilePath, portFilePath);
                 } catch (writeErr) {
                     console.warn(`[TaskViewerProvider] Failed to write port file to ${root}:`, writeErr);
+                    this._apiServerDiagnosticsChannel.appendLine(`[TaskViewerProvider] Failed to write port file to ${root}: ${writeErr}`);
                 }
             }
+            this._apiServerDiagnosticsChannel.appendLine(`[TaskViewerProvider] Local API server started on port ${port}.`);
+            this._startApiServerWatchdog();
         } catch (err) {
+            // Do NOT swallow — log to the dedicated diagnostics channel so a dead server is
+            // visible, not silent. The watchdog (started below) will retry. Previously this
+            // failure was swallowed (only console.error), which produced the "no port file ⇒
+            // manual reload" failure mode when start() timed out on a starved host.
+            this._apiServerDiagnosticsChannel.appendLine(`[TaskViewerProvider] Failed to start local API server: ${err}`);
             console.error('[TaskViewerProvider] Failed to start local API server:', err);
+            // Start the watchdog even on failure so it retries the start.
+            this._startApiServerWatchdog();
+        }
+    }
+
+    /**
+     * Lightweight in-process watchdog for the local API server. Verifies liveness via
+     * in-process signals (this._localApiServer non-null + isListening() + port-file
+     * existence) — NOT a self-HTTP round-trip, which times out on a starved host and
+     * produces a false negative that would make the watchdog kill/restart a healthy
+     * server in its own loop. If the server is missing/dead or the port file is gone,
+     * restart it and rewrite the port file. Cheap (boolean + fs.existsSync) and
+     * storm-proof.
+     */
+    private _startApiServerWatchdog(): void {
+        if (this._apiServerWatchdogTimer) return; // never double-start
+        const WATCHDOG_INTERVAL_MS = 30000;
+        this._apiServerWatchdogTimer = setInterval(() => {
+            void this._checkApiServerLiveness();
+        }, WATCHDOG_INTERVAL_MS);
+    }
+
+    private async _checkApiServerLiveness(): Promise<void> {
+        try {
+            const allRoots = this._filterMappedRoots(this._getWorkspaceRoots());
+            if (allRoots.length === 0) return;
+
+            const serverAlive = !!this._localApiServer && this._localApiServer.isListening();
+            // Port-file existence check (any root). Missing port file ⇒ agents can't discover.
+            let portFileExists = false;
+            for (const root of allRoots) {
+                const portFilePath = path.join(root, '.switchboard', 'api-server-port.txt');
+                if (fs.existsSync(portFilePath)) { portFileExists = true; break; }
+            }
+
+            if (serverAlive && portFileExists) return; // healthy
+
+            this._apiServerDiagnosticsChannel.appendLine(
+                `[TaskViewerProvider] API server watchdog: liveness check failed (serverAlive=${serverAlive}, portFileExists=${portFileExists}). Restarting.`
+            );
+            // Restart: stop any half-dead instance, then re-start.
+            if (this._localApiServer) {
+                try { await this._localApiServer.stop(); } catch { /* ignore */ }
+                this._localApiServer = null;
+            }
+            await this._startLocalApiServer();
+        } catch (err) {
+            this._apiServerDiagnosticsChannel.appendLine(`[TaskViewerProvider] API server watchdog check threw: ${err}`);
         }
     }
 
@@ -1024,6 +1080,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * Stop the local API server.
      */
     private async _stopLocalApiServer(): Promise<void> {
+        if (this._apiServerWatchdogTimer) {
+            clearInterval(this._apiServerWatchdogTimer);
+            this._apiServerWatchdogTimer = undefined;
+        }
         if (this._localApiServer) {
             try {
                 const allRoots = this._filterMappedRoots(this._getWorkspaceRoots());
@@ -10333,7 +10393,7 @@ What would you like to find?`;
                 }
                 const ttlTimer = setTimeout(
                     () => this._recentNativePlanCreations.delete(stablePath),
-                    4000
+                    10000
                 );
                 this._recentNativePlanCreations.set(stablePath, ttlTimer);
 
@@ -10365,11 +10425,13 @@ What would you like to find?`;
                     console.log(`[TaskViewerProvider] Native watcher suppressed (VS Code watcher handled): ${fullPath}`);
                     return;
                 }
-                // Mark this path as "native watcher has claimed it" for 4 seconds.
+                // Mark this path as "native watcher has claimed it" for 10 seconds.
                 // TTL must exceed: 250ms debounce + typical _handlePlanCreation async duration (~100–300ms DB write).
+                // Extended from 4s to 10s to survive extension-host starvation (the refresh storm
+                // delayed watcher callbacks past the old TTL, letting self-writes get re-ingested).
                 const nativeTtlTimer = setTimeout(
                     () => this._recentNativePlanCreations.delete(stablePath),
-                    4000
+                    10000
                 );
                 this._recentNativePlanCreations.set(stablePath, nativeTtlTimer);
 
@@ -12700,14 +12762,21 @@ What would you like to find?`;
             this._rescanTrailingRoot = workspaceRoot;
             // Resolve when the in-flight scan (and any trailing scan it triggers) completes.
             if (!this._rescanTrailingPromise) {
-                this._rescanTrailingPromise = this._rescanInFlightPromise?.then(async () => {
-                    if (!this._rescanNeedsTrailing) return;
-                    this._rescanNeedsTrailing = false;
-                    const root = this._rescanTrailingRoot;
-                    this._rescanTrailingRoot = undefined;
-                    this._rescanTrailingPromise = null;
-                    return this._rescanAntigravityPlanSources(root);
-                });
+                const inFlight = this._rescanInFlightPromise;
+                this._rescanTrailingPromise = (inFlight
+                    ? inFlight.then(async () => {
+                        if (!this._rescanNeedsTrailing) return;
+                        this._rescanNeedsTrailing = false;
+                        const root = this._rescanTrailingRoot;
+                        this._rescanTrailingRoot = undefined;
+                        this._rescanTrailingPromise = null;
+                        return this._rescanAntigravityPlanSources(root);
+                    })
+                    // Defensive fallback: if the in-flight promise is somehow null, wait a
+                    // microtask for the finally to clear _rescanInFlight, then re-enter the
+                    // wrapper so the call still observes a completed scan.
+                    : Promise.resolve().then(() => this._rescanAntigravityPlanSources(workspaceRoot))
+                );
             }
             return this._rescanTrailingPromise;
         }
@@ -13476,7 +13545,11 @@ What would you like to find?`;
             const dedupeTimer = setTimeout(() => this._recentMirrorProcessed.delete(dedupeKey), 5000);
             this._recentMirrorProcessed.set(dedupeKey, dedupeTimer);
 
-            // mtime check: skip if mirror is already up-to-date AND runsheet exists
+            // mtime check: skip if mirror is already up-to-date AND runsheet exists.
+            // When runSheetKnown is false, fall through to the content guard below —
+            // the content guard (ungated from runSheetKnown) is the authoritative
+            // mirror→watch→mirror loop breaker; this mtime check is only a fast-path
+            // for the common case where both mirror and runsheet are already current.
             if (fs.existsSync(mirrorPath)) {
                 const mirrorStat = fs.statSync(mirrorPath);
                 if (mirrorStat.mtimeMs >= mtimeMs && runSheetKnown) return;
@@ -13523,21 +13596,35 @@ What would you like to find?`;
                 console.log(`[TaskViewerProvider] Auto-claimed new brain plan: ${topic}`);
             }
 
-            // Content check: skip write if mirror already has identical content AND runsheet exists
+            // Content check: skip the mirror WRITE when on-disk content is byte-identical,
+            // regardless of runsheet state. This is the authoritative mirror→watch→mirror
+            // loop breaker (PRIMARY B): an identical-content rewrite re-fires the plan
+            // watcher's onDidCreate, which re-enters _handlePlanCreation →
+            // _syncFilesAndRefreshRunSheets → _rescanAntigravityPlanSources → here.
+            // Previously gated on `&& runSheetKnown`, so a missing runsheet under
+            // runSheetId = antigravity_<hash> caused an identical mirror to be rewritten
+            // every scan. The runsheet is reconciled in the dedup branch below so future
+            // scans converge; the sync call is suppressed when content is unchanged so the
+            // loop is not re-pumped.
+            let mirrorContentUnchanged = false;
             if (fs.existsSync(mirrorPath)) {
                 const existing = await fs.promises.readFile(mirrorPath, 'utf8');
-                if (existing === content && runSheetKnown) return;
+                if (existing === content) {
+                    mirrorContentUnchanged = true;
+                }
             }
 
             // Mirror file to workspace-visible staging area
             // Mark mirror as recently written (2s TTL) BEFORE the write so the staging watcher skips it
-            if (!fs.existsSync(stagingDir)) { fs.mkdirSync(stagingDir, { recursive: true }); }
+            if (!mirrorContentUnchanged) {
+                if (!fs.existsSync(stagingDir)) { fs.mkdirSync(stagingDir, { recursive: true }); }
 
-            const stableMirrorPath = this._getStablePath(mirrorPath);
-            const existingTimer = this._recentMirrorWrites.get(stableMirrorPath);
-            if (existingTimer) clearTimeout(existingTimer);
-            this._recentMirrorWrites.set(stableMirrorPath, setTimeout(() => this._recentMirrorWrites.delete(stableMirrorPath), 2000));
-            await fs.promises.writeFile(mirrorPath, content);
+                const stableMirrorPath = this._getStablePath(mirrorPath);
+                const existingTimer = this._recentMirrorWrites.get(stableMirrorPath);
+                if (existingTimer) clearTimeout(existingTimer);
+                this._recentMirrorWrites.set(stableMirrorPath, setTimeout(() => this._recentMirrorWrites.delete(stableMirrorPath), 2000));
+                await fs.promises.writeFile(mirrorPath, content);
+            }
 
             // Create/update runsheet via DB-backed SessionActionLog
             // DB-level dedup: if this brain plan already exists in kanban.db (by plan_file key),
@@ -13565,7 +13652,26 @@ What would you like to find?`;
                     await db.upsertPlans([updatedRecord]);
                     console.log(`[TaskViewerProvider] Updated brain plan metadata: topic="${metadata.topic}", complexity="${metadata.complexity}"`);
 
-                    if (!suppressFollowupSync) {
+                    // Reconcile sessionId so runSheetKnown converges to true. The dedup branch
+                    // found the plan by plan_file, but runSheetKnown = db.hasPlan(runSheetId)
+                    // checks the plans table by session_id. When existingPlan.sessionId differs
+                    // from runSheetId (e.g. a bare pathHash from an older ingestion path),
+                    // runSheetKnown stays false forever and the mtime fast-path never fires —
+                    // forcing every scan to re-read content. Reconcile once so future scans
+                    // converge. (UPSERT's ON CONFLICT(plan_file, workspace_id) does NOT update
+                    // session_id, so a direct updateSessionId is required.)
+                    if (existingPlan.sessionId && existingPlan.sessionId !== runSheetId) {
+                        try {
+                            await db.updateSessionId(existingPlan.sessionId, runSheetId);
+                            console.log(`[TaskViewerProvider] Reconciled brain plan sessionId ${existingPlan.sessionId} → ${runSheetId}`);
+                        } catch (reconcileErr) {
+                            console.warn(`[TaskViewerProvider] sessionId reconciliation failed (non-fatal — content guard still breaks the loop):`, reconcileErr);
+                        }
+                    }
+
+                    // Only re-pump the sync when something actually changed. An unchanged
+                    // mirror + unchanged metadata would feed the mirror→watch→mirror loop.
+                    if (!suppressFollowupSync && !mirrorContentUnchanged) {
                         await this._syncFilesAndRefreshRunSheets(resolvedWorkspaceRoot);
                     }
                     return;
@@ -13608,7 +13714,11 @@ What would you like to find?`;
             }
 
             console.log(`[TaskViewerProvider] Mirrored brain plan: ${topic}`);
-            if (!suppressFollowupSync) {
+            if (!suppressFollowupSync && !(mirrorContentUnchanged && existingSheet)) {
+                // Suppress the sync when the mirror content was unchanged AND the runsheet
+                // already existed — there is nothing new to render, and re-pumping the sync
+                // would re-feed the mirror→watch→mirror loop. A genuine new runsheet (no
+                // existingSheet) or a changed mirror still refreshes the UI.
                 await this._syncFilesAndRefreshRunSheets(resolvedWorkspaceRoot);
                 this._view?.webview.postMessage({ type: 'selectSession', sessionId: runSheetId });
             }
@@ -13631,7 +13741,15 @@ What would you like to find?`;
         // produces a duplicate kanban card with a different plan_id/session_id.
         if (!_internal && /^brain_[0-9a-f]{64}\.md$/i.test(basename)) {
             const wsRoot = this._resolveWorkspaceRootForPath(uri.fsPath, workspaceRoot);
-            if (wsRoot && !suppressFollowupSync) { await this._syncFilesAndRefreshRunSheets(wsRoot); }
+            // PRIMARY B: if this create event is the extension's own mirror write (marked in
+            // _recentMirrorWrites just before _mirrorBrainPlan's writeFile), do NOT re-pump
+            // _syncFilesAndRefreshRunSheets — that call rescans brain sources, which re-mirrors,
+            // which re-fires this watcher handler: the mirror→watch→mirror loop. The single-flight
+            // guard (PRIMARY A) is the structural backstop; this check breaks the cycle at the
+            // watcher entry point so a self-write never re-enters the sync path.
+            const stableMirrorPath = this._getStablePath(uri.fsPath);
+            const isOwnMirrorWrite = this._recentMirrorWrites.has(stableMirrorPath);
+            if (wsRoot && !suppressFollowupSync && !isOwnMirrorWrite) { await this._syncFilesAndRefreshRunSheets(wsRoot); }
             return;
         }
 
@@ -17406,6 +17524,9 @@ What would you like to find?`;
 
     private async _refreshJulesStatus() {
         if (!this._view) return;
+        // Hard gate: if the Jules CLI binary was confirmed missing, do not attempt to poll
+        // until a new Jules dispatch resets _julesCliUnavailable (which restarts the timer).
+        if (this._julesCliUnavailable) return;
         if (this._isRefreshingJules) return;
         this._isRefreshingJules = true;
 
@@ -17853,6 +17974,20 @@ What would you like to find?`;
                 // Do not fast-fail on transient Jules crashes (zlib errors, OAuth failures, etc.) - those should retry.
                 const missingCommand = /'jules' is not recognized|jules: command not found|spawn\s+jules\s+ENOENT/i.test(lastError.message);
                 if (missingCommand) {
+                    // Harden the gate: the Jules CLI binary is definitively missing. Set the
+                    // _julesCliUnavailable flag and stop the 30s poll interval so even stale
+                    // tracked sessions can't reintroduce the spawn spam. The flag resets when a
+                    // user later dispatches to Jules (see _dispatchToJules), which restarts the
+                    // poll. Previously, a stale tracked session kept the poll alive and emitted
+                    // `spawn jules ENOENT` every 30s forever.
+                    if (!this._julesCliUnavailable) {
+                        this._julesCliUnavailable = true;
+                        this._julesDiagnosticsChannel.appendLine(`[TaskViewerProvider] Jules CLI binary not found — setting _julesCliUnavailable and stopping the status poll.`);
+                        if (this._julesStatusPollTimer) {
+                            clearInterval(this._julesStatusPollTimer);
+                            this._julesStatusPollTimer = undefined;
+                        }
+                    }
                     throw lastError;
                 }
                 if (attempt < maxRetries) {
@@ -18001,6 +18136,19 @@ What would you like to find?`;
         });
 
         try {
+            // A user-initiated Jules dispatch implies the CLI is now expected to be available
+            // (e.g. installed since the last ENOENT). Reset the unavailable flag and restart the
+            // 30s status poll so polling resumes. If the CLI is still missing, the next poll
+            // will re-detect ENOENT and re-set the flag.
+            if (this._julesCliUnavailable) {
+                this._julesCliUnavailable = false;
+                this._julesDiagnosticsChannel.appendLine(`[TaskViewerProvider] Jules dispatch requested — resetting _julesCliUnavailable and restarting the status poll.`);
+                if (!this._julesStatusPollTimer) {
+                    this._julesStatusPollTimer = setInterval(() => {
+                        this._refreshJulesStatus();
+                    }, 30000);
+                }
+            }
             const output = await this._runJulesCli(workspaceRoot, ['remote', 'new', '--session', prompt], 120_000);
 
             const sessionIds = this._parseJulesSessionIds(output);
@@ -18681,6 +18829,11 @@ What would you like to find?`;
         this._recentSourceWrites.forEach(t => clearTimeout(t));
         this._recentMirrorProcessed.forEach(t => clearTimeout(t));
         this._julesDiagnosticsChannel.dispose();
+        this._apiServerDiagnosticsChannel.dispose();
+        if (this._apiServerWatchdogTimer) {
+            clearInterval(this._apiServerWatchdogTimer);
+            this._apiServerWatchdogTimer = undefined;
+        }
         void this._stopLocalApiServer();
     }
 

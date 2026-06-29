@@ -238,3 +238,66 @@ None applicable (no unit test harness covers webview message round-trips).
 ---
 
 **Recommendation: Send to Coder** (complexity 5/10 — multi-file, moderate state, no new architecture)
+
+---
+
+## Code Review Pass (Reviewer-Executor)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> **"A file watcher. The plan asked for a file watcher. Let me see if you actually built one or just lit a candle and prayed."**
+
+**Step 1 — Class fields.** `TaskViewerProvider.ts:283-284`. `_memoWatchers: vscode.FileSystemWatcher[] = []` and `_memoFsDebounce?: NodeJS.Timeout`. Placed right alongside `_planFsDebounceTimers` as the plan specified. **VERIFIED CORRECT.** A field that exists. Revolutionary.
+
+**Step 2 — `_setupMemoWatcher()` and `_pushMemoContent()`.** `TaskViewerProvider.ts:10411-10476`. The method disposes previous watchers, clears the debounce timer, resolves `foldersToWatch` from the workspace-identity mappings (with the `expandHome` helper and `parentFolder`/`parentWorkspaceFolder` fallback), falls back to the workspace root if no mappings, creates a `vscode.FileSystemWatcher` per folder with `onDidChange`/`onDidCreate`/`onDidDelete` all wired to the 150ms debounced `onMemoFsEvent`, and pushes `memoContent` via `_pushMemoContent`. **VERIFIED CORRECT** against every detail in the plan.
+
+> **One deviation worth noting — and it's a GOOD one.** The plan's proposed code (line 124) has the debounce callback call `this._resolveWorkspaceRoot()` (raw). The implementation at line 10451 calls `this._resolveStateWorkspaceRoot()` (effective). This is a **correctness improvement**: after Plan 1's fix, the memo file lives at the effective (mapped parent) root, so the watcher should push content from that same effective root. Using the raw root would read from a child folder's `memo.md` — the exact bug Plan 1 fixed. The implementer either understood the cross-plan dependency or got lucky. Either way, the code is right.
+
+**Step 3 — Constructor call.** `TaskViewerProvider.ts:461`. `this._setupMemoWatcher()` sits between `_setupPlanWatcher()` and `_setupSessionWatcher()`, exactly as the plan specified. **VERIFIED CORRECT.**
+
+**Step 4 — `reinitializePlanWatcher()` call.** `TaskViewerProvider.ts:4106`. `this._setupMemoWatcher()` is called after `_setupPlanWatcher()` and before `reinitializeBrainWatcher()`. **VERIFIED CORRECT.** Workspace switches will re-target the memo watcher.
+
+**Step 5 — `dispose()` teardown.** `TaskViewerProvider.ts:18657-18662`. Disposes all `_memoWatchers`, clears the array, and clears `_memoFsDebounce`. Placed right after the `_brainWatchers` teardown as the plan specified. **VERIFIED CORRECT.** No leaked watchers on extension dispose.
+
+**Step 6 — Webview guard relaxation.** `implementation.html:2594`. The guard is now `if (tab === 'memo') {` — the `&& isChanging` condition has been removed. Every tab switch to memo triggers a `memoLoad`. The existing `memoContent` handler at lines 2177-2186 has the `if (isFocused || memoDirty) break;` guard, so typing is never clobbered. **VERIFIED CORRECT.**
+
+> **Now let me poke at the edges, because that's where the bodies are buried.**
+
+**Cross-watcher false triggers (NIT).** The watcher is set up on ALL parent roots from the mappings (`foldersToWatch`). When ANY parent's `memo.md` changes, the debounce callback pushes the ACTIVE effective root's content — not the specific parent that changed. In a multi-workspace setup where workspace A's memo changes while workspace B is active, the callback reads B's (unchanged) `memo.md` and pushes it. This is a harmless no-op (the webview's `memoContent` handler either sets the same value or is blocked by the focused/dirty guard), but it's a wasted read. Not worth fixing — the debounce coalesces and the guard prevents visible side effects. **NIT only.**
+
+**`files.watcherExclude` risk (NIT, documented in plan).** The plan's Complexity Audit (line 41) and the nice-to-have section (line 221) both acknowledge that `vscode.workspace.createFileSystemWatcher` can miss `.switchboard/` events if the folder is in `files.watcherExclude`. The plan marks the native `fs.watch` fallback as "nice-to-have, not required for correctness." The implementation does NOT include the native fallback. This is consistent with the plan. **NIT — deferred per plan.**
+
+**No CRITICAL or MAJOR findings.** The implementation is complete and correct against the plan. The one deviation (`_resolveStateWorkspaceRoot` in the debounce) is an improvement.
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Severity | Disposition |
+| :--- | :--- | :--- |
+| Step 1 (class fields) | — | **Keep.** Verified correct. |
+| Step 2 (`_setupMemoWatcher` + `_pushMemoContent`) | — | **Keep.** Verified correct. Deviation (`_resolveStateWorkspaceRoot` in debounce) is a correctness improvement — keep it. |
+| Step 3 (constructor call) | — | **Keep.** Verified correct. |
+| Step 4 (`reinitializePlanWatcher` call) | — | **Keep.** Verified correct. |
+| Step 5 (`dispose` teardown) | — | **Keep.** Verified correct. |
+| Step 6 (webview guard relaxation) | — | **Keep.** Verified correct. |
+| Cross-watcher false triggers | NIT | **Defer.** Harmless no-op; debounce + focused/dirty guard prevent visible side effects. |
+| Native `fs.watch` fallback | NIT | **Defer.** Plan marks as nice-to-have; not required for correctness. |
+
+### Fixes Applied
+
+None. The implementation is complete and correct against the plan. No CRITICAL or MAJOR findings.
+
+### Files Changed by Review
+
+None. No code fixes were needed.
+
+### Verification Results
+
+- **Compilation:** Skipped per session directives.
+- **Tests:** Skipped per session directives.
+- **Code inspection:** All six steps verified against source. `_memoWatchers`/`_memoFsDebounce` fields at `TaskViewerProvider.ts:283-284`. `_setupMemoWatcher()` at lines 10411-10466, `_pushMemoContent()` at lines 10468-10476. Constructor call at line 461. `reinitializePlanWatcher` call at line 4106. Dispose teardown at lines 18657-18662. Webview guard at `implementation.html:2594` (relaxed). `memoContent` focused/dirty guard at `implementation.html:2180-2183` (intact).
+
+### Remaining Risks
+
+- **`files.watcherExclude` blind spot.** If `.switchboard/` is in the user's `files.watcherExclude` setting, the VS Code watcher will silently miss memo file changes. The native `fs.watch` fallback (deferred per plan) would harden this. Low real-world impact — most users don't exclude `.switchboard/`.
+- **Cross-watcher false triggers in multi-workspace.** A file change on a non-active workspace's `memo.md` triggers a redundant (but harmless) content push from the active workspace. No visible side effect.
+- **Watcher echo on extension's own saves.** `memoSave`/`memoClear`/`memoGeneratePrompt` write the file, triggering the watcher echo ~150ms later. The `memoContent` handler's focused/dirty guard makes this a no-op. Verified safe per the plan's Race Conditions audit.

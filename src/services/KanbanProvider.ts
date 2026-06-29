@@ -151,6 +151,14 @@ export class KanbanProvider implements vscode.Disposable {
     private _clickUpSyncWarnings = new Map<string, string>();
     private _continuousSync?: ContinuousSyncService;
     private _lastCards: KanbanCard[] = [];
+    // Identical-snapshot skip cache (refresh-storm backstop). Keyed by
+    // (workspaceId, projectFilter, repoScope) so a context switch always re-pushes.
+    // Stores a hash of the effective board snapshot (cards + epicWorktrees) so a static
+    // board does not get re-posted on every refresh tick. Palliative — pairs with the
+    // single-flight guard + mirror content no-op (the actual cure). Only gates the
+    // `updateBoard` data push, not the auxiliary state messages refreshWithData posts.
+    private _lastBoardSnapshotHash: string | null = null;
+    private _lastBoardSnapshotKey: string = '';
     private _currentWorkspaceRoot: string | null = null;
     private _columnDragDropModes: Record<string, 'cli' | 'prompt' | 'disabled'>;
     private _showingBacklog: boolean = false;
@@ -1319,7 +1327,25 @@ export class KanbanProvider implements vscode.Disposable {
             const epicWorktrees = allWorktrees
                 .filter(w => w.epic_id !== null && w.status === 'active')
                 .reduce((acc, w) => { acc[w.epic_id!] = { branch: w.branch, path: w.path, id: w.id }; return acc; }, {} as Record<string, { branch: string; path: string; id: number }>);
-            this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig, epicWorktrees });
+
+            // Identical-snapshot skip (refresh-storm backstop): when the effective board
+            // snapshot (cards + epicWorktrees) is byte-identical to the last push AND the
+            // (workspaceId, projectFilter, repoScope) context has not changed, skip the
+            // `updateBoard` post. A static board no longer gets re-posted on every refresh
+            // tick. Context switches always re-push because the key changes. This only
+            // gates the data push — the auxiliary state messages below still post so the
+            // webview stays in sync on config/column/agent state.
+            const snapshotKey = `${workspaceId}|${this._projectFilter ?? ''}|${this._repoScopeFilter ?? ''}`;
+            const snapshotHash = crypto.createHash('sha256')
+                .update(JSON.stringify({ cards, epicWorktrees }))
+                .digest('hex');
+            const snapshotUnchanged = snapshotKey === this._lastBoardSnapshotKey
+                && snapshotHash === this._lastBoardSnapshotHash;
+            this._lastBoardSnapshotKey = snapshotKey;
+            this._lastBoardSnapshotHash = snapshotHash;
+            if (!snapshotUnchanged) {
+                this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig, epicWorktrees });
+            }
 
             this._panel.webview.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
             await this._postEpicWorkflowModeState(resolvedWorkspaceRoot);
@@ -8329,6 +8355,18 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             newContent = existingContent.slice(0, beginIdx) + subtaskSection + existingContent.slice(endIdx + endMarker.length);
         } else {
             newContent = existingContent.replace(/\n*$/, '') + '\n\n' + subtaskSection + '\n';
+        }
+        // Content no-op: skip the write (and the registerPendingCreation guard) when the
+        // generated content is byte-identical to what's already on disk. This breaks the
+        // epic-regen self-write loop at its source — an identical rewrite re-fires the plan
+        // watcher, which re-enters the refresh path, which re-regenerates the epic file.
+        // The comparison is exact string equality; existingContent was read with the same
+        // utf8 encoding used to build newContent, so there is no encoding/newline drift.
+        // Must run BEFORE registerPendingCreation so no stale pending-creation entry is set
+        // for a skipped write (a stale entry could suppress a later genuine external edit
+        // to the same file within the TTL window).
+        if (newContent === existingContent) {
+            return;
         }
         GlobalPlanWatcherService.registerPendingCreation(epicAbsPath);
         await fs.promises.writeFile(epicAbsPath, newContent, 'utf8');
