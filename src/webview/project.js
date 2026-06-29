@@ -166,7 +166,6 @@
 
     let _epicSelectedPlan = null;
     let _epicSubtaskPreview = null; // holds the subtask plan object when a subtask is previewed in the epics pane
-    let _orchestratorAvailable = false;
     let _epicPreviewFilePath = null;
     let _epicDocumentsCache = [];
     let _pendingKanbanSelection = null;
@@ -378,7 +377,6 @@
                 handleThemeChanged(msg.theme);
                 break;
             case 'kanbanPlansReady':
-                _orchestratorAvailable = !!msg.orchestratorAvailable;
                 if (btnCreateKanbanPlan) {
                     btnCreateKanbanPlan.disabled = false;
                     btnCreateKanbanPlan.textContent = 'Create';
@@ -527,9 +525,6 @@
                 break;
             case 'epicError':
                 showToast(msg.message || 'Error occurred', 'error');
-                break;
-            case 'epicOrchestrationResult':
-                handleEpicOrchestrationResult(msg);
                 break;
             case 'activeDesignDocUpdated': {
                 const planningEpic = msg.planningEpic || { enabled: msg.enabled, docName: msg.docName, sourceId: msg.sourceId, docId: msg.docId };
@@ -1820,12 +1815,11 @@
         const metaBar = document.getElementById('epic-preview-meta-bar');
         if (!metaBar) return;
         metaBar.style.display = 'flex';
-        // DB-backed epics support orchestration + subtask management; standalone epic
+        // DB-backed epics support subtask management; standalone epic
         // documents (.switchboard/epics/*.md with no DB record) do not.
         const isManageable = plan && !plan.isEpicDocument;
         const manageGroup = isManageable ? `
             <div class="kanban-meta-group" style="display:flex; gap:6px;">
-                <button class="strip-btn" id="btn-epic-orchestrate" style="${_orchestratorAvailable ? 'border-color: var(--accent-teal);' : 'opacity: 0.6; border-color: var(--border-color);'}" title="${_orchestratorAvailable ? 'Hand this epic to one orchestrator agent that runs all subtasks end-to-end with native subagents. Copies the prompt and attempts to dispatch to the orchestrator terminal.' : 'Hand this epic to one orchestrator agent that runs all subtasks end-to-end. No orchestrator agent is configured yet — clicking copies the prompt. Enable the Orchestrator agent in the kanban Agents tab to dispatch directly.'}">Orchestrate</button>
                 <button class="strip-btn" id="btn-epic-add-subtask" title="Add an existing plan to this epic as a subtask">+ Subtask</button>
                 <button class="strip-btn" id="btn-epic-delete" style="color:#ff6b6b;" title="Delete this epic (subtasks are detached)">Delete Epic</button>
             </div>
@@ -1840,10 +1834,8 @@
         `;
 
         if (isManageable) {
-            const btnOrch = document.getElementById('btn-epic-orchestrate');
             const btnAddSub = document.getElementById('btn-epic-add-subtask');
             const btnDelEpic = document.getElementById('btn-epic-delete');
-            if (btnOrch) btnOrch.addEventListener('click', () => requestEpicOrchestration('copy'));
             if (btnAddSub) btnAddSub.addEventListener('click', openEpicAddSubtaskOverlay);
             if (btnDelEpic) btnDelEpic.addEventListener('click', () => {
                 if (!_epicSelectedPlan) return;
@@ -2022,50 +2014,6 @@
         });
     }
 
-    // ---- Epic orchestration (Epics-tab Orchestrate action) ----
-    function requestEpicOrchestration(mode) {
-        if (!_epicSelectedPlan) return;
-        vscode.postMessage({
-            type: 'orchestrateEpic',
-            mode, // 'copy' | 'send' | 'preview'
-            // planId is the PRIMARY identifier — the backend resolves the epic via
-            // getPlanByPlanId, and a locally-created epic's sessionId !== planId.
-            planId: _epicSelectedPlan.planId || '',
-            sessionId: _epicSelectedPlan.sessionId || _epicSelectedPlan.planId,
-            workspaceRoot: _epicSelectedPlan.workspaceRoot
-        });
-    }
-
-    function closeEpicOrchestrateOverlay() {
-        const ov = document.getElementById('epic-orchestrate-overlay');
-        if (ov) ov.style.display = 'none';
-    }
-
-    function handleEpicOrchestrationResult(msg) {
-        const ov = document.getElementById('epic-orchestrate-overlay');
-        if (!msg.ok) {
-            showToast(msg.error || 'Orchestration failed.', 'error');
-            return;
-        }
-        const titleEl = document.getElementById('epic-orchestrate-title');
-        const statusEl = document.getElementById('epic-orchestrate-status');
-        const promptEl = document.getElementById('epic-orchestrate-prompt');
-        if (titleEl) titleEl.textContent = msg.epicTopic || '';
-        if (promptEl) promptEl.textContent = msg.prompt || '';
-        if (statusEl) {
-            let status = `${msg.subtaskCount || 0} subtask(s) included`;
-            if (msg.totalSubtasks && msg.totalSubtasks > (msg.subtaskCount || 0)) {
-                status += ` (capped at ${msg.subtaskCount} of ${msg.totalSubtasks})`;
-            }
-            if (msg.mode === 'send') status += msg.sent ? ' · sent to Orchestrator terminal' : ' · no Orchestrator terminal found — prompt copied instead';
-            else if (msg.mode === 'copy') status += ' · copied to clipboard';
-            statusEl.textContent = status;
-        }
-        if (ov) ov.style.display = 'flex';
-        if (msg.mode === 'copy') showToast('Orchestrator prompt copied.', 'success');
-        else if (msg.mode === 'send') showToast(msg.sent ? 'Sent to Orchestrator.' : 'No Orchestrator terminal — prompt copied.', msg.sent ? 'success' : 'error');
-    }
-
     // ---- Add subtask to epic (Epics-tab) ----
     function openEpicAddSubtaskOverlay() {
         if (!_epicSelectedPlan) return;
@@ -2090,9 +2038,6 @@
         if (ov) ov.style.display = 'none';
     }
 
-    document.getElementById('btn-epic-orchestrate-copy')?.addEventListener('click', () => requestEpicOrchestration('copy'));
-    document.getElementById('btn-epic-orchestrate-send')?.addEventListener('click', () => requestEpicOrchestration('send'));
-    document.getElementById('btn-epic-orchestrate-close')?.addEventListener('click', closeEpicOrchestrateOverlay);
     document.getElementById('btn-epic-add-subtask-cancel')?.addEventListener('click', closeEpicAddSubtaskOverlay);
     document.getElementById('btn-epic-add-subtask-submit')?.addEventListener('click', () => {
         const select = document.getElementById('epic-add-subtask-select');

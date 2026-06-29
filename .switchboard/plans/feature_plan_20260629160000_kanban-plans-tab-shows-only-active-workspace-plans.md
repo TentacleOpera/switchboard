@@ -212,3 +212,55 @@ No automated tests required — this is a webview message-contract change verifi
 ## Recommendation
 
 **Complexity: 4/10 → Send to Coder.**
+
+---
+
+## Reviewer Pass — 2026-06-29
+
+### Stage 1: Grumpy Findings (severity-tagged)
+
+| Severity | Finding | Location |
+|---|---|---|
+| NIT (deferred) | Pre-existing `_orchestratorAvailable` reset on partial pushes — `!!msg.orchestratorAvailable` evaluates to `false` on partial pushes (field absent), silently disabling the orchestrate button after every complexity edit or epic mutation. Now the most visible remaining symptom post-fix. Explicitly scoped out of this plan. | `src/webview/project.js:381` |
+| NIT | `requestId: Date.now()` on partial pushes is vestigial — no guard checks it for partial pushes (the `requestId` guard at lines 2882–2883 only applies to `fetchKanbanPlans`). Harmless but meaningless. | `src/services/PlanningPanelProvider.ts:3121,3234,3251,3277` |
+
+No CRITICAL findings. No MAJOR findings in the introduced code.
+
+### Stage 2: Balanced Synthesis
+
+**Keep as-is:**
+- All four backend `effectiveRoot` resolutions + `workspaceRoot` envelope additions — correct, the critical `effectiveRoot` (not raw `wsRoot`) subtlety was handled properly.
+- Frontend merge branch (`project.js:390–397`) — correct splice-and-append logic.
+- Surrounding `if (msg.xxx)` guards for workspace/project/column metadata — already correct for partial pushes, no change needed.
+
+**Fix now:** Nothing — no CRITICAL or MAJOR defects in the introduced code.
+
+**Defer:**
+- `_orchestratorAvailable` reset on partial pushes (`project.js:381`). Real bug, explicitly scoped out. Recommend follow-up plan to guard line 381 with `if (msg.orchestratorAvailable !== undefined)` or only set on full loads.
+
+### Code Fixes Applied
+
+None — the implementation matched the plan exactly with no material defects.
+
+### Files Changed (Implementation)
+
+- `src/services/PlanningPanelProvider.ts` — lines 3119–3121, 3232–3234, 3249–3251, 3275–3277: added `const effectiveRoot = this._resolveEffectiveWorkspaceRoot(wsRoot)` and `workspaceRoot: effectiveRoot` to the four partial-push `kanbanPlansReady` postMessage calls.
+- `src/webview/project.js` — lines 390–397: replaced unconditional `_kanbanPlansCache = msg.plans || []` with a merge branch that splices the mutated workspace's slice when `msg.workspaceRoot` is present, full-replaces otherwise.
+
+### Verification Results
+
+Compilation and automated tests skipped per review directives. Static verification performed:
+
+- All four partial-push handlers confirmed to include `workspaceRoot: effectiveRoot` (lines 3121, 3234, 3251, 3277).
+- Frontend merge branch confirmed present and correct (`project.js:390–397`).
+- Full-load path confirmed to omit `workspaceRoot` (line 2934), triggering the `else` full-replace branch.
+- `_getKanbanPlans` return objects confirmed to carry `workspaceRoot: effectiveRoot` (line 8608) — matches the envelope field, so the frontend filter `p.workspaceRoot !== msg.workspaceRoot` correctly identifies the slice to replace.
+- `_resolveEffectiveWorkspaceRoot` confirmed to exist and resolve via `WorkspaceIdentityService` (lines 1934–1940).
+- Invariant verified: all four partial pushes target `_projectPanel` only; `planning.js` (line 6238) is unaffected.
+- `createEpic` confirmed to trigger full `fetchKanbanPlans` (line 3405), not a partial push — no change needed.
+- Auto-refresh watcher confirmed to trigger full `fetchKanbanPlans` (lines 887–892) — no change needed.
+
+### Remaining Risks
+
+1. **`_orchestratorAvailable` reset (deferred):** After this fix, the orchestrate button will silently disable after every complexity edit or epic mutation (`project.js:381`). This is the next-most-visible symptom and should be addressed in a follow-up plan.
+2. **Invariant fragility:** The `planning.js` cache (`line 6238`) remains a naive full-overwrite. It is safe only because partial pushes target `_projectPanel` exclusively. Any future handler that adds `this._panel?.webview.postMessage(...)` for a partial push would reintroduce the clobber bug in the planning sidebar. The plan documents this invariant; it should be enforced via code comments or a shared helper.

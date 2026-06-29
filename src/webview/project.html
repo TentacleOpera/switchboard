@@ -1455,7 +1455,7 @@
                 <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
                     A PRD is a loose set of product requirements respected across all plans in a project — independent of epics.
                     When <strong>PROJECT CONTEXT</strong> is on, the selected project's PRD is injected into <em>every</em> dispatched
-                    prompt (planner, lead, coder, reviewer, tester, orchestrator). Stored at
+                    prompt (planner, lead, coder, reviewer, tester). Stored at
                     <code>.switchboard/projects/&lt;project&gt;/prd.md</code> (git-trackable).
                 </div>
                 <div id="projects-prd-path-hint" style="font-size:10px; font-family:monospace; color:var(--text-secondary); opacity:0.7; margin-bottom:6px;"></div>
@@ -1640,34 +1640,15 @@
         </div>
     </div>
 
-    <!-- Epic Orchestration Prompt Preview -->
-    <div id="epic-orchestrate-overlay" class="kanban-log-overlay" style="display: none;">
-        <div class="kanban-log-modal" style="width: 640px; max-width: 90vw;">
-            <div style="padding: 12px 16px; font-weight: bold; border-bottom: 1px solid var(--border-color);">
-                Orchestrate Epic — <span id="epic-orchestrate-title"></span>
-            </div>
-            <div style="padding: 12px 16px;">
-                <div id="epic-orchestrate-status" style="font-size: 11px; color: var(--text-secondary); margin-bottom: 8px;"></div>
-                <pre id="epic-orchestrate-prompt" style="background: #111; border: 1px solid var(--border-color); color: var(--text-primary); padding: 10px; border-radius: 4px; font-size: 11px; max-height: 50vh; overflow: auto; white-space: pre-wrap; word-break: break-word;"></pre>
-            </div>
-            <div class="kanban-log-close" style="display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px;">
-                <button id="btn-epic-orchestrate-copy" class="strip-btn">Copy Prompt</button>
-                <button id="btn-epic-orchestrate-send" class="strip-btn" style="border-color: var(--accent-teal);">Send to Orchestrator</button>
-                <button id="btn-epic-orchestrate-close" class="strip-btn">Close</button>
-            </div>
-        </div>
-    </div>
-
     <!-- Epic Modes Help Modal -->
     <div id="epic-modes-help-overlay" class="kanban-log-overlay" style="display: none;">
         <div class="kanban-log-modal" style="width: 480px; max-width: 90vw;">
             <div style="padding: 12px 16px; font-weight: bold; border-bottom: 1px solid var(--border-color);">
-                How to Run an Epic (3 Ways)
+                How to Run an Epic (2 Ways)
             </div>
             <div style="padding: 16px; line-height: 1.6; font-size: 12px;">
                 <div style="margin-bottom: 10px;"><b>Step</b> — drag the epic column-to-column on the board; each column's agent batch-processes every subtask.</div>
-                <div style="margin-bottom: 10px;"><b>Orchestrate</b> — click <b>Orchestrate</b> on an epic; one orchestrator agent runs the whole epic end-to-end with native subagents.</div>
-                <div><b>Split (recommended)</b> — drag the epic to the <b>Planner</b> column to improve every subtask plan, <i>then</i> click <b>Orchestrate</b> in the Epics tab to hand the improved epic to the orchestrator to implement.</div>
+                <div><b>Split (recommended)</b> — drag the epic to the <b>Planner</b> column to improve every subtask plan, <i>then</i> dispatch the improved epic to a coder column to implement.</div>
             </div>
             <div class="kanban-log-close" style="display: flex; justify-content: flex-end; padding: 12px 16px;">
                 <button id="btn-epic-modes-help-close" class="strip-btn">Close</button>

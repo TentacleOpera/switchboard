@@ -11,8 +11,7 @@ const DEFAULT_VISIBLE_AGENTS = {
     ticket_updater: false,
     researcher: false,
     mcp_monitor: false,
-    claude_designer: false,
-    orchestrator: true
+    claude_designer: false
 };
 
 // CRITICAL: DO NOT CHANGE DEFAULTS UNLESS SPECIFICALLY ASKED
