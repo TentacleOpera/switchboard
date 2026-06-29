@@ -105,3 +105,46 @@ Key risks: (1) The plan says "mirror cliTriggers" but cliTriggers persists to gl
 Subtask of epic **"Replace Epic Orchestrator with Lead-Coder Dispatch and Workflow Buttons."** The prepend lives in `generateUnifiedPrompt`, which *"Remove the Epic Orchestrator Role…"* also edits (stripping orchestrator branches) — coordinate edits to that function. These buttons supersede the `ultracode` add-on that the removal plan deletes.
 
 **Recommendation: Complexity 5/10 → Send to Coder**
+
+---
+
+## Code Review Results
+
+### Stage 1 — Grumpy Principal Engineer
+
+> **OK. I'll say it. This one's clean.** I came in ready to tear this apart — two toggle buttons, a DB round-trip, a prompt prepend — and what do I find? The buttons are in the sub-bar between `btn-cli-triggers` and `btn-collapse-coders`, exactly where the plan said. Default `is-off`. Mutually exclusive. Click the active one → resets to `none`. The `setEpicWorkflowMode` handler validates against `VALID_EPIC_WORKFLOW_MODES` — a Set, not a loose array check. Persists to `db.setConfig('epic_workflow_mode', mode)`, NOT `_updateSetting` — the plan SCREAMED about this and the implementer listened. Initial state pushed at three refresh paths. The prepend wraps `generateUnifiedPrompt`'s return value, gated on `primaryPlan.isEpic`, with `/goal` at position-zero. Constants are defined. The `epicWorkflowModeState` round-trip updates the UI.
+>
+> **I have ONE nit.** The buttons use text glyphs ("UC" and "/goal") instead of icons. The plan allowed this explicitly ("If using text glyphs instead of icons, no `iconMap` entry needed"). So this isn't even a real finding. It's a compliment disguised as a nit.
+>
+> **No CRITICAL. No MAJOR. No NIT of substance.** The implementation matches the plan requirement-for-requirement. I'm almost disappointed.
+
+### Stage 2 — Balanced Synthesis
+
+**What to keep:**
+- Everything. The implementation is a faithful, complete realization of the plan.
+- Button placement, mutual exclusivity, toggle-off-on-active-click, DB persistence (not globalState), enum validation, initial state push at all three refresh paths, prepend wrapping the return value, `/goal` position-zero guarantee, `isEpic` gating (not `isSubtask`), constant definitions — all present and correct.
+
+**What to fix now:**
+- Nothing. Zero valid findings.
+
+**What can defer:**
+- Nothing.
+
+### Fixes Applied
+- None required.
+
+### Validation Results
+- **Typecheck**: Skipped per session directives.
+- **Tests**: Skipped per session directives.
+- **Manual verification**: Confirmed all code paths:
+  - `kanban.html:2501-2506`: Two buttons with correct IDs, classes, tooltips, default `is-off`.
+  - `kanban.html:4214-4232`: `epicWorkflowMode` state, `updateEpicWorkflowToggleUi()`, `setEpicWorkflowMode()` with toggle-off-on-active-click.
+  - `kanban.html:6303-6306`: `epicWorkflowModeState` message handler with enum validation.
+  - `kanban.html:7046-7051`: Click event listeners for both buttons.
+  - `KanbanProvider.ts:52-54`: `ULTRACODE_EPIC_PREFIX`, `GOAL_EPIC_PREFIX`, `VALID_EPIC_WORKFLOW_MODES` constants.
+  - `KanbanProvider.ts:5670-5679`: `setEpicWorkflowMode` handler with `db.setConfig` persistence and state broadcast.
+  - `KanbanProvider.ts:1325,2255,2403`: `_postEpicWorkflowModeState` called at three refresh paths.
+  - `KanbanProvider.ts:3122-3141`: Prepend logic wrapping return value, gated on `primaryPlan.isEpic`, `/goal` at position-zero.
+
+### Remaining Risks
+- **None identified.** The implementation is complete and matches the plan.

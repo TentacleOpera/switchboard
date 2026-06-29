@@ -145,3 +145,62 @@ Key risks: (1) The original plan missed two webview files (`implementation.html`
 Subtask of epic **"Replace Epic Orchestrator with Lead-Coder Dispatch and Workflow Buttons."** Land **after** *"Unify Epic Subtask Bundling Across Both Plan Resolvers"* (so the shared bundling helper is the surviving canonical copy) and alongside *"Sticky Epic Workflow Toggle Buttons"* (which replaces the `ultracode` add-on deleted here, and co-edits `generateUnifiedPrompt`).
 
 **Recommendation: Complexity 6/10 → Send to Coder**
+
+---
+
+## Code Review Results
+
+### Stage 1 — Grumpy Principal Engineer
+
+> **A deletion plan. Ten-plus files. You know what happens with deletion plans? SOMETHING SURVIVES.** Let me hunt.
+>
+> I searched every `.ts`, `.js`, and `.html` file for `orchestrator`. You know what I found? **TWO dead CSS rules and a stale comment.** That's it. The `orchestrator-prompt.test.js` file? GONE. The `BuiltInAgentRole` union? Clean — no `'orchestrator'`. The `DEFAULT_KANBAN_COLUMNS`? No ORCHESTRATING. The `VALID_ROLES` array? Clean. The `BUILT_IN_AGENT_LABELS`? Clean. `extension.ts`? Clean. `TaskViewerProvider.ts` role arrays? Clean. `KanbanProvider.ts` role arrays, `buildEpicOrchestrationPrompt`, `dispatchEpicOrchestration`, `markEpicOrchestrating`, `isOrchestratorAvailable`, `orchestrateEpic` message case, ORCHESTRATING column handling, `_columnToRole` case, `ultracodeByRole`? ALL GONE. `agentPromptBuilder.ts` — `ULTRACODE_DIRECTIVE`, `ultracodeEnabled`, `orchestratorBase`, the orchestrator prompt branch? ALL GONE. `kanban.html` — startup command input, Agents dropdown option, description, column safety-net, per-card Orchestrate button + handler? ALL GONE. `project.js` — `_orchestratorAvailable`, Orchestrate button, handler, overlay? ALL GONE. `sharedDefaults.js` — orchestrator config block, `ultracode` add-on, `BUILT_IN_AGENT_LABELS` entry? ALL GONE. `PlanningPanelProvider.ts` — `orchestratorAvailable`, `buildEpicOrchestrationPrompt` preview, `orchestrateEpic` handler? ALL GONE. `implementation.html` — onboarding checkbox, save handler? ALL GONE.
+>
+> And the PipelineOrchestrator? **UNTOUCHED.** The CSS at `implementation.html:1106-1208`, the test file, the `TaskViewerProvider.ts` imports — all preserved. Someone was PAYING ATTENTION.
+>
+> **NIT** — `kanban.html:1003-1009`: Dead CSS `.card-btn.orchestrate` and `.card-btn.orchestrate:hover` remain. The button element is deleted; these rules style a ghost. **FIXED in this review.**
+>
+> **NIT** — `project.html:1484`: Stale comment says "The Epics tab is orchestration-only." The orchestrator role is deleted; this comment is now wrong. **FIXED in this review.**
+>
+> The stale-column edge case? `kanban.html:5075`: `const col = columns.includes(effectiveCol) ? effectiveCol : 'CREATED';` — cards with a phantom `ORCHESTRATING` column fall back to CREATED. No crash. The safety-net was deleted but the fallback was already there. Clean.
+>
+> **No CRITICAL. No MAJOR. Two NITs, both fixed.** This is a thorough, complete deletion. I'm almost impressed. Almost.
+
+### Stage 2 — Balanced Synthesis
+
+**What to keep:**
+- The entire deletion surface is complete and correct. Every file listed in the plan's Proposed Changes has been cleaned of orchestrator references.
+- PipelineOrchestrator references are correctly preserved — the name collision risk was navigated flawlessly.
+- The stale-column fallback (`kanban.html:5075`) handles the edge case where a card's `kanbanColumn` is `ORCHESTRATING` — it falls back to `CREATED` without crashing.
+- The `generateUnifiedPrompt` orchestrator branches were removed and the dead conditional simplified, leaving a clean epic-handling block.
+- The `updateEpicConfig` handlers in both `KanbanProvider.ts` and `PlanningPanelProvider.ts` were gutted to no-ops with explanatory comments, preserving the legacy key read-fallback policy.
+
+**What to fix now:**
+- **NIT (dead CSS)**: Removed `.card-btn.orchestrate` and `.card-btn.orchestrate:hover` from `kanban.html` (was lines 1003-1009). These styled a deleted button element.
+- **NIT (stale comment)**: Updated `project.html:1484` to remove "The Epics tab is orchestration-only" — no longer accurate.
+
+**What can defer:**
+- Nothing. All deletion surface is clean.
+
+### Fixes Applied
+- `src/webview/kanban.html`: Removed dead CSS rules `.card-btn.orchestrate` and `.card-btn.orchestrate:hover` (7 lines deleted).
+- `src/webview/project.html`: Updated stale comment at line 1484 to remove "The Epics tab is orchestration-only" reference.
+
+### Files Changed (by this review)
+- `src/webview/kanban.html` — dead CSS removal
+- `src/webview/project.html` — stale comment fix
+
+### Validation Results
+- **Typecheck**: Skipped per session directives.
+- **Tests**: Skipped per session directives.
+- **Manual verification**: Comprehensive grep across all `src/` files confirms:
+  - Zero remaining `orchestrator` references in functional code (only comments and PipelineOrchestrator CSS/test).
+  - Zero remaining `ULTRACODE_DIRECTIVE` / `ultracodeEnabled` / `ultracodeByRole` references.
+  - Zero remaining `ORCHESTRATING` column references.
+  - `orchestrator-prompt.test.js` confirmed deleted.
+  - PipelineOrchestrator references confirmed preserved (17 CSS matches in `implementation.html`, 16 matches in `pipeline-orchestrator-regression.test.js`).
+  - Stale-column fallback confirmed at `kanban.html:5075`.
+
+### Remaining Risks
+- **None functional.** The deletion is complete. The two NITs (dead CSS, stale comment) were fixed in this review.
+- **Minor**: The `epic_max_subtasks` / `epic_prompt_template` / `epic_lock_columns` DB config keys are still READ as fallback (per CLAUDE.md legacy-key policy) but never written. This is correct behavior — no action needed.

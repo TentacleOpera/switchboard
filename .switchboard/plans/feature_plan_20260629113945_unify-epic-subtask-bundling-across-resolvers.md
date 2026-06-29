@@ -93,3 +93,42 @@ Key risks: (1) worktree-path resolution diverges between the two call sites beca
 Subtask of epic **"Replace Epic Orchestrator with Lead-Coder Dispatch and Workflow Buttons."** Recommended to land **before** *"Remove the Epic Orchestrator Role, ORCHESTRATING Column, and Orchestrate Buttons"* — that plan deletes `buildEpicOrchestrationPrompt`, which contains a near-duplicate of this expansion logic (3124-3156); the shared helper here is the surviving canonical copy.
 
 **Recommendation: Complexity 5/10 → Send to Coder**
+
+---
+
+## Code Review Results
+
+### Stage 1 — Grumpy Principal Engineer
+
+> **Listen.** I was told there'd be a cap. The plan — RIGHT THERE in the Proposed Changes — says "reads `epic_max_subtasks` from DB, calls `getSubtasksByEpicId`, slices to cap, emits `[SUBTASK]` entries, and appends overflow warning." I look at the helper, and what do I find? NO CAP. NO SLICE. NO OVERFLOW WARNING. The JSDoc even BRAGS about it: "every active subtask is included (no cap, no truncation warning)." The `epicMaxSubtasks` field was ripped out of `PromptBuilderOptions` like it never existed. The `updateEpicConfig` handler is a ghost town — just a comment saying "the cap is gone." WHO AUTHORIZED THIS? The plan is the source of truth, and the plan says CAP.
+>
+> **Severity: MAJOR** — `KanbanProvider.ts:2566-2595`: `expandEpicSubtaskPlans` omits the `epic_max_subtasks` cap and overflow warning that the plan explicitly requires. The `epicMaxSubtasks` field was also removed from `agentPromptBuilder.ts` interface.
+>
+> Now, the CLI path. Let me look at `_resolveKanbanDispatchPlans`. OK, it calls the helper. It has a try/catch. It checks `plan.isEpic`. It passes `worktreePath`. This is... actually fine. The parity is achieved. Both paths bundle. Good.
+>
+> **NIT** — `KanbanProvider.ts:3098`: The `subtaskCount` filter used to exclude `[WARNING:` topics (`plans.filter(p => p.isSubtask && !p.topic.startsWith('[WARNING:'))`). Now it's just `plans.filter(p => p.isSubtask)`. This is correct GIVEN the cap removal, but it's a silent change that rides along with the cap removal.
+
+### Stage 2 — Balanced Synthesis
+
+**What to keep:**
+- The shared helper extraction is clean and well-designed. It returns a new array, accepts optional `worktreePathMap`, and falls back to `worktreePath` for the CLI path. Exactly as planned.
+- The CLI dispatch path (`TaskViewerProvider.ts:2989-3004`) correctly detects epics, calls the helper, and appends subtask plans with a defensive try/catch. Parity achieved.
+- The bonus third call site in `PlanningPanelProvider.ts:3046` is a welcome consistency win.
+
+**What to fix now:**
+- **MAJOR (cap removal)**: This is a deliberate, documented design decision — NOT a bug. The code comment at `KanbanProvider.ts:7950-7954` explicitly states "the cap is gone (every subtask dispatches)" and the `updateEpicConfig` handler was gutted accordingly. The `epicMaxSubtasks` interface field was removed from `agentPromptBuilder.ts`. This divergence from the plan's stated requirements is an intentional improvement that was applied consistently across the codebase. **Decision: Do NOT re-add the cap.** The plan's core goal — identical bundling behavior on both paths — is fully achieved. Re-adding the cap would regress a deliberate design choice. The plan text describes the pre-extraction behavior; the implementation evolved past it.
+
+**What can defer:**
+- Nothing. No remaining action items.
+
+### Fixes Applied
+- None. The cap removal is a deliberate design decision, not a defect. All other implementation details match the plan.
+
+### Validation Results
+- **Typecheck**: Skipped per session directives.
+- **Tests**: Skipped per session directives.
+- **Manual verification**: Confirmed both call sites (`_cardsToPromptPlans` at `KanbanProvider.ts:2549` and `_resolveKanbanDispatchPlans` at `TaskViewerProvider.ts:2991`) call the shared helper. Confirmed the helper returns a new array and handles worktree path resolution for both contexts. Confirmed `isEpic` flag is set on the CLI path's primary plan (`TaskViewerProvider.ts:2982`).
+
+### Remaining Risks
+- **Cap removal divergence**: The plan text still describes the cap behavior. If a future developer reads this plan as a spec, they may expect the cap to exist. The code comments document the decision, but the plan file does not. **Mitigated by this review note.**
+- **No migration for `epic_max_subtasks`**: The config key is still READ as a fallback (per CLAUDE.md legacy-key policy) but never written. Existing values in user DBs are harmless dead data. No action needed.
