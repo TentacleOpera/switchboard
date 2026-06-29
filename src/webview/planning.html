@@ -2744,6 +2744,16 @@
             line-height: 1.5;
             font-family: var(--font-family);
         }
+        /* Status meta row hosts the sync badge inline next to the state name. */
+        .ticket-node .tickets-issue-meta.ticket-status-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .ticket-node .tickets-issue-meta.ticket-status-row .ticket-sync-badge {
+            flex-shrink: 0;
+            align-self: center; /* overrides base .ticket-sync-badge align-self: flex-start */
+        }
 
         .ticket-node .card-actions {
             display: flex;
@@ -2784,12 +2794,6 @@
             align-self: flex-start;
             pointer-events: none;
             user-select: none;
-        }
-        /* Pin the sync badge to the bottom-left of the card, pushing the
-           action buttons to the right within the card-actions row. */
-        .ticket-node .card-actions .ticket-sync-badge {
-            margin-right: auto;
-            align-self: center;
         }
         .ticket-sync-synced {
             color: var(--vscode-testing-iconPassed, #73c991);
@@ -3623,7 +3627,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             <button id="tickets-tags" class="strip-btn" title="Edit tags">Tags</button>
                             <button id="btn-comment-ticket" class="strip-btn">Comment</button>
                             <button id="btn-view-attachments" class="strip-btn" style="display:none;">Attachments</button>
-                            <button id="btn-open-ticket" class="strip-btn" style="display:none;">Open</button>
                             <button id="btn-diagram-prompt" class="strip-btn" style="display:none;" title="Copy a diagram prompt for this ticket">Diagram</button>
                             <button id="btn-add-subtask" class="strip-btn" title="Create a subtask under this ticket">+ Subtask</button>
                             <button id="btn-convert-subtask" class="strip-btn" title="Convert this ticket to a subtask of another ticket">To subtask</button>

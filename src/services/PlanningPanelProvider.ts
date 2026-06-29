@@ -930,10 +930,13 @@ export class PlanningPanelProvider {
                 this._epicDocsWatchDebounce = setTimeout(() => {
                     this._epicDocsWatchDebounce = undefined;
                     if (!this._projectPanel) { return; }
-                    this._handleMessage({ type: 'fetchEpicDocuments' }, true).catch(err => {
-                        console.error('[PlanningPanel] Error auto-refreshing epic documents:', err);
+                    // Epic files are imported into the kanban DB by GlobalPlanWatcherService;
+                    // refresh the DB-backed plans so the Epics list (DB-only) reflects the
+                    // change. Longer debounce gives the import time to land before we re-read.
+                    this._handleMessage({ type: 'fetchKanbanPlans', requestId: Date.now() }, true).catch(err => {
+                        console.error('[PlanningPanel] Error auto-refreshing epics after file change:', err);
                     });
-                }, 400);
+                }, 1200);
             };
 
             watcher.onDidCreate(triggerRefresh);
@@ -3280,55 +3283,6 @@ export class PlanningPanelProvider {
                 }
                 break;
             }
-            case 'fetchEpicDocuments': {
-                try {
-                    const allRoots = Array.from(this._getAllowedRoots());
-                    const workspaceItems = this._buildKanbanWorkspaceItems();
-                    const documents: any[] = [];
-                    for (const root of allRoots) {
-                        const epicDir = path.join(root, '.switchboard', 'epics');
-                        let files: string[] = [];
-                        try { files = await fs.promises.readdir(epicDir); } catch { /* dir doesn't exist */ }
-                        for (const file of files) {
-                            if (!file.endsWith('.md')) continue;
-                            const fullPath = path.join(epicDir, file);
-                            try {
-                                const stat = await fs.promises.stat(fullPath);
-                                const content = await fs.promises.readFile(fullPath, 'utf8');
-                                // Extract title from first H1 or frontmatter description, fallback to filename
-                                let title = file.replace(/\.md$/, '');
-                                const h1Match = content.match(/^#\s+(.+)$/m);
-                                if (h1Match) { title = h1Match[1].trim(); }
-                                else {
-                                    const descMatch = content.match(/^description:\s*'(.+)'/m);
-                                    if (descMatch) { title = descMatch[1].trim(); }
-                                }
-                                const effectiveRoot = this._resolveEffectiveWorkspaceRoot(root);
-                                const wsLabel = workspaceItems.find(
-                                    item => item.workspaceRoot === effectiveRoot
-                                )?.label || path.basename(effectiveRoot);
-                                documents.push({
-                                    planId: `epic-doc:${fullPath}`,
-                                    topic: title,
-                                    planFile: fullPath,
-                                    workspaceRoot: effectiveRoot,
-                                    workspaceLabel: wsLabel,
-                                    mtime: stat.mtime.getTime(),
-                                    isEpic: true,
-                                    isEpicDocument: true,
-                                    subtaskCount: 0
-                                });
-                            } catch { /* skip unreadable files */ }
-                        }
-                    }
-                    documents.sort((a, b) => b.mtime - a.mtime);
-                    this._projectPanel?.webview.postMessage({ type: 'epicDocumentsReady', documents });
-                } catch (err) {
-                    console.error('[PlanningPanelProvider] fetchEpicDocuments failed:', err);
-                    this._projectPanel?.webview.postMessage({ type: 'epicDocumentsReady', documents: [] });
-                }
-                break;
-            }
             case 'createEpic': {
                 try {
                     const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
@@ -3415,18 +3369,10 @@ export class PlanningPanelProvider {
                 break;
             }
             case 'updateEpicConfig': {
-                // epic_prompt_template writes removed to avoid dual-source conflict.
-                // epic_lock_columns is dormant; writes removed.
-                // epic_max_subtasks still bounds epic expansion and has no addon replacement
-                // yet, so its write is kept. Legacy keys are still READ as fallback (per CLAUDE.md).
-                const wsRoot = String(msg.workspaceRoot || workspaceRoot);
-                if (!wsRoot) break;
-                try {
-                    const db = KanbanDatabase.forWorkspace(wsRoot);
-                    if (msg.epicMaxSubtasks !== undefined) await db.setConfig('epic_max_subtasks', String(msg.epicMaxSubtasks));
-                } catch (err) {
-                    console.error('[PlanningPanelProvider] updateEpicConfig failed:', err);
-                }
+                // epic_prompt_template / epic_lock_columns / epic_max_subtasks writes are all
+                // removed: the cap is gone (every subtask dispatches), and the other two were
+                // already dormant. Legacy keys are never dropped — they are still READ as
+                // fallback (per CLAUDE.md); we simply stop writing them here.
                 break;
             }
             case 'loadConstitutionFiles': {
@@ -5168,7 +5114,8 @@ Please format the updated output document strictly as follows:
                                         status: clickStatus || kanbanColumn || '',
                                         filePath: dbT.filePath,
                                         lastSyncedAt: dbT.lastSyncedAt,
-                                        syncStatus
+                                        syncStatus,
+                                        url: dbT.url || ''
                                     });
                                 }
                             }
@@ -5455,6 +5402,61 @@ Read the existing ticket content from the local file if it exists. Determine wha
                     vscode.window.showInformationMessage('Refine prompt copied to clipboard');
                 } catch (err) {
                     vscode.window.showErrorMessage(`Failed to copy refine prompt: ${String(err)}`);
+                }
+                break;
+            }
+            case 'refineEpic': {
+                try {
+                    const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                    const { planId, planFile, title, subtaskCount } = msg;
+                    if (!workspaceRoot || !planFile) {
+                        vscode.window.showErrorMessage('Missing workspace or epic file for refine prompt');
+                        break;
+                    }
+
+                    // Read user-editable skill file (.agents → legacy .agent → embedded fallback).
+                    const nfs = require('fs') as typeof import('fs');
+                    let skillContent = '';
+                    try {
+                        skillContent = nfs.readFileSync(path.join(workspaceRoot, '.agents', 'skills', 'refine_epic.md'), 'utf8');
+                    } catch {
+                        try {
+                            skillContent = nfs.readFileSync(path.join(workspaceRoot, '.agent', 'skills', 'refine_epic.md'), 'utf8');
+                        } catch {
+                            skillContent = `Refine this epic into a complete specification with:
+- A clear ## Goal (outcome + problem it solves)
+- ## Success Criteria (checkboxed, testable)
+- ## Scope (in/out)
+- ## Proposed Subtasks (ordered, checkboxed breakdown into shippable units)
+- ## Risks / Open Questions
+Preserve YAML frontmatter and the auto-generated <!-- BEGIN SUBTASKS --> block. Do not create kanban cards. Write the result back to the local file path provided.`;
+                        }
+                    }
+
+                    // Resolve the epic markdown file — use path.resolve to match existing codebase pattern.
+                    const epicFilePath = path.isAbsolute(planFile) ? planFile : path.resolve(workspaceRoot, planFile);
+                    let existingContent = '';
+                    try { existingContent = nfs.readFileSync(epicFilePath, 'utf8'); } catch { /* file may not exist yet */ }
+
+                    const prompt = `You are refining a Switchboard epic into a complete, decomposable specification.
+
+## Skill Instructions
+${skillContent}
+
+## Epic to Refine
+- **Title:** ${title || ''}
+- **Existing subtask cards:** ${subtaskCount || 0}
+- **Local file path (write the refined content here):** ${epicFilePath}
+
+## Current epic file content
+${existingContent ? existingContent : '(file is empty or does not exist yet — author a complete epic at the path above)'}
+
+Read the current content above. Determine what's missing. Produce a complete epic following the skill instructions — pay special attention to a concrete ## Proposed Subtasks breakdown. Write the refined markdown directly to the local file path, preserving any YAML frontmatter and the auto-generated <!-- BEGIN SUBTASKS --> block. Do NOT create kanban cards or modify any database. Report back with a summary and the proposed subtask list.`;
+
+                    await vscode.env.clipboard.writeText(prompt);
+                    vscode.window.showInformationMessage('Refine-epic prompt copied to clipboard. Paste it into your agent.');
+                } catch (err) {
+                    vscode.window.showErrorMessage(`Failed to copy refine-epic prompt: ${String(err)}`);
                 }
                 break;
             }
@@ -7421,15 +7423,12 @@ Read the existing ticket content from the local file if it exists. Determine wha
     private async _handleFetchImportedDocs(workspaceRoot: string): Promise<void> {
         try {
             const allRoots = this._getWorkspaceRoots();
-            console.log('[PlanningPanelProvider] _handleFetchImportedDocs: allRoots=', allRoots);
             const allDocs: any[] = [];
             const seenSlugs = new Set<string>();
 
             for (const root of allRoots) {
                 const wsId = await this._getWorkspaceId(root);
-                console.log('[PlanningPanelProvider] _handleFetchImportedDocs: root=', root, 'wsId=', wsId);
                 const cacheService = this._adapterFactories.getCacheService(root);
-                console.log('[PlanningPanelProvider] _handleFetchImportedDocs: cacheService._kanbanDb.dbPath=', (cacheService as any)._kanbanDb?.dbPath);
 
                 // Run heal scan first (idempotent, fast if recent)
                 const kanbanDb = (cacheService as any)._kanbanDb;
@@ -7443,7 +7442,6 @@ Read the existing ticket content from the local file if it exists. Determine wha
 
                 // Query DB for imported docs
                 const dbEntries = await cacheService.getImportedDocs(wsId);
-                console.log('[PlanningPanelProvider] _handleFetchImportedDocs: dbEntries count=', dbEntries.length, 'for wsId=', wsId);
 
                 for (const entry of dbEntries) {
                     if (!seenSlugs.has(entry.slugPrefix)) {
@@ -7463,7 +7461,6 @@ Read the existing ticket content from the local file if it exists. Determine wha
                 }
             }
 
-            console.log('[PlanningPanelProvider] Sending importedDocsReady with docs:', allDocs);
             this._panel?.webview.postMessage({ type: 'importedDocsReady', docs: allDocs });
         } catch (err) {
             console.error('[PlanningPanelProvider] Error fetching imported docs:', err);
@@ -8230,7 +8227,7 @@ Read the existing ticket content from the local file if it exists. Determine wha
                     const h1 = content.match(/^#\s+(.+)$/m);
                     if (h1) { title = h1[1].trim(); }
                 } catch { }
-                out.push({ id, title, status: kanbanColumn || '', filePath: fullPath });
+                out.push({ id, title, status: kanbanColumn || '', filePath: fullPath, url: '' });
             }
         }
     }

@@ -73,6 +73,7 @@ export interface ImportedDocEntry {
     contentHash?: string;
     workspaceId: string;
     displayOrder?: number;
+    url?: string;
 }
 
 export interface HealResult {
@@ -253,6 +254,14 @@ const MIGRATION_V12_SQL = [
 const MIGRATION_V39_SQL = [
     `ALTER TABLE plans ADD COLUMN notion_page_id TEXT DEFAULT ''`,
     `CREATE INDEX IF NOT EXISTS idx_plans_notion_page ON plans(workspace_id, notion_page_id)`,
+];
+
+const MIGRATION_V40_SQL = [
+    // Add a nullable url column to imported_docs so ticket rows can store the
+    // provider-supplied external URL (Linear issue url / ClickUp task url).
+    // Existing rows get NULL; they backfill on the next import/sync. Docs rows
+    // leave this NULL (only tickets use it).
+    `ALTER TABLE imported_docs ADD COLUMN url TEXT`,
 ];
 
 const MIGRATION_V13_SQL = [
@@ -1510,10 +1519,37 @@ export class KanbanDatabase {
     public async updateEpicStatus(planId: string, isEpic: number, epicId: string): Promise<boolean> {
         const plan = await this.getPlanByPlanId(planId);
         if (!plan) return false;
+        const oldEpicId = plan.epicId;
         const relativePlanFile = this._ensureRelativePlanFile(plan.planFile);
-        return this._persistedUpdate(
+        const ok = await this._persistedUpdate(
             'UPDATE plans SET is_epic = ?, epic_id = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
             [isEpic, epicId, new Date().toISOString(), relativePlanFile, plan.workspaceId]
+        );
+        // Recompute affected epics' derived complexity on membership change.
+        // Covers creation linking (createEpicFromPlanIds), assign, and remove.
+        if (ok) {
+            if (oldEpicId && oldEpicId !== epicId) { await this.recomputeEpicComplexity(oldEpicId); }
+            if (epicId && isEpic === 0) { await this.recomputeEpicComplexity(epicId); }
+        }
+        return ok;
+    }
+
+    /**
+     * Recompute an epic's stored complexity as the max score among its active subtasks.
+     * Writes the numeric string (e.g. '8'), or 'Unknown' when no subtask carries a
+     * parseable score. Epic complexity is purely derived — this is the single source
+     * of truth, invoked on membership change and whenever a subtask is rescored.
+     */
+    public async recomputeEpicComplexity(epicPlanId: string): Promise<boolean> {
+        if (!epicPlanId || !(await this.ensureReady()) || !this._db) return false;
+        const { parseComplexityScore } = require('./complexityScale');
+        const subtasks = await this.getSubtasksByEpicId(epicPlanId);
+        const max = subtasks.reduce(
+            (m, s) => Math.max(m, parseComplexityScore(s.complexity || '')), 0);
+        const value = max >= 1 ? String(max) : 'Unknown';
+        return this._persistedUpdate(
+            'UPDATE plans SET complexity = ?, updated_at = ? WHERE plan_id = ? AND is_epic = 1',
+            [value, new Date().toISOString(), epicPlanId]
         );
     }
 
@@ -1613,10 +1649,21 @@ export class KanbanDatabase {
             return false;
         }
         const normalized = this._ensureRelativePlanFile(planFile);
-        return this._persistedUpdate(
+        const target = await this.getPlanByPlanFile(normalized, workspaceId);
+        if (target?.isEpic) {
+            // Epic complexity is derived — ignore the incoming (file-parsed) value; recompute.
+            // This is the clobber-guard: the auto-regenerated epic file has no Complexity line,
+            // so parsePlanMetadata returns 'Unknown', which would otherwise overwrite the
+            // computed max. Redirect to the derived source of truth.
+            return this.recomputeEpicComplexity(target.planId);
+        }
+        const ok = await this._persistedUpdate(
             'UPDATE plans SET complexity = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
             [complexity, new Date().toISOString(), normalized, workspaceId]
         );
+        // Bubble-up: a subtask rescore lifts the parent epic's derived complexity.
+        if (ok && target?.epicId) { await this.recomputeEpicComplexity(target.epicId); }
+        return ok;
     }
 
     /** @deprecated session_id is no longer the unique key; use updateComplexityByPlanFile instead. */
@@ -1633,10 +1680,18 @@ export class KanbanDatabase {
             console.error(`[KanbanDatabase] Rejected updateComplexityByPlanId: planId=${planId}, complexity=${complexity}`);
             return false;
         }
-        return this._persistedUpdate(
+        const target = await this.getPlanByPlanId(planId);
+        if (target?.isEpic) {
+            // Epic complexity is derived — ignore the incoming value; recompute from subtasks.
+            return this.recomputeEpicComplexity(planId);
+        }
+        const ok = await this._persistedUpdate(
             'UPDATE plans SET complexity = ?, updated_at = ? WHERE plan_id = ?',
             [complexity, new Date().toISOString(), planId]
         );
+        // Bubble-up: a subtask rescore lifts the parent epic's derived complexity.
+        if (ok && target?.epicId) { await this.recomputeEpicComplexity(target.epicId); }
+        return ok;
     }
 
     public async updateTagsByPlanFile(planFile: string, workspaceId: string, tags: string): Promise<boolean> {
@@ -2048,7 +2103,8 @@ export class KanbanDatabase {
                 importedAt: String(row.imported_at),
                 lastSyncedAt: row.last_synced_at ? String(row.last_synced_at) : undefined,
                 contentHash: row.content_hash ? String(row.content_hash) : undefined,
-                workspaceId: String(row.workspace_id)
+                workspaceId: String(row.workspace_id),
+                url: row.url ? String(row.url) : undefined
             };
         } finally {
             stmt.free();
@@ -2062,15 +2118,28 @@ export class KanbanDatabase {
         remoteDocId: string,
         docName: string,
         filePath: string,
-        contentHash: string
+        contentHash: string,
+        url?: string
     ): Promise<void> {
         if (!(await this.ensureReady()) || !this._db) return;
         const now = new Date().toISOString();
         this._db.run(
-            `INSERT OR REPLACE INTO imported_docs 
+            `INSERT INTO imported_docs 
              (slug_prefix, source_id, remote_doc_id, doc_name, parent_doc_name, 
-              file_path, imported_at, last_synced_at, content_hash, workspace_id, display_order, content_type)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ticket')`,
+              file_path, imported_at, last_synced_at, content_hash, workspace_id, display_order, content_type, url)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ticket', ?)
+             ON CONFLICT(slug_prefix, workspace_id) DO UPDATE SET
+              source_id = excluded.source_id,
+              remote_doc_id = excluded.remote_doc_id,
+              doc_name = excluded.doc_name,
+              parent_doc_name = excluded.parent_doc_name,
+              file_path = excluded.file_path,
+              imported_at = excluded.imported_at,
+              last_synced_at = excluded.last_synced_at,
+              content_hash = excluded.content_hash,
+              display_order = excluded.display_order,
+              content_type = excluded.content_type,
+              url = COALESCE(excluded.url, imported_docs.url)`,
             [
                 slugPrefix,
                 sourceId,
@@ -2082,7 +2151,8 @@ export class KanbanDatabase {
                 now,
                 contentHash,
                 workspaceId,
-                0
+                0,
+                url ?? null
             ]
         );
         await this._persist();
@@ -2109,7 +2179,8 @@ export class KanbanDatabase {
                     lastSyncedAt: row.last_synced_at ? String(row.last_synced_at) : undefined,
                     contentHash: row.content_hash ? String(row.content_hash) : undefined,
                     workspaceId: String(row.workspace_id),
-                    displayOrder: row.display_order ? Number(row.display_order) : 0
+                    displayOrder: row.display_order ? Number(row.display_order) : 0,
+                    url: row.url ? String(row.url) : undefined
                 });
             }
         } finally {
@@ -5058,6 +5129,44 @@ export class KanbanDatabase {
             }
             await this.setMigrationVersion(39);
             console.log('[KanbanDatabase] V39 migration completed: notion_page_id column added to plans');
+        }
+
+        // V40: add nullable url column to imported_docs (ticket external URL).
+        const v40 = await this.getMigrationVersion();
+        if (v40 < 40) {
+            for (const sql of MIGRATION_V40_SQL) {
+                try { this._db.exec(sql); } catch (e) {
+                    const msg = e instanceof Error ? e.message : String(e);
+                    if (!msg.includes('duplicate column') && !msg.includes('already exists')) {
+                        console.warn('[KanbanDatabase] V40 migration step failed:', msg);
+                    }
+                }
+            }
+            await this.setMigrationVersion(40);
+            console.log('[KanbanDatabase] V40 migration completed: url column added to imported_docs');
+        }
+
+        // V41: epics derive complexity = max(active subtask score). Backfill legacy epics
+        // that were stored as 'Unknown' (the pre-derivation default) so their stored
+        // complexity matches the new derived model and routing converges. Idempotent and
+        // best-effort: only epics whose active-subtask max >= 1 are touched; unscored
+        // epics stay 'Unknown' (the existing Unknown→High batch-move threshold handles them).
+        // Non-numeric legacy subtask scores cast to 0 here; the first runtime recompute
+        // (on next membership/rescore event) self-heals them.
+        const v41 = await this.getMigrationVersion();
+        if (v41 < 41) {
+            try {
+                this._db.exec(`
+                    UPDATE plans SET complexity = CAST(
+                        (SELECT MAX(CAST(s.complexity AS INTEGER)) FROM plans s
+                         WHERE s.epic_id = plans.plan_id AND s.status = 'active') AS TEXT)
+                    WHERE is_epic = 1
+                      AND (SELECT MAX(CAST(s.complexity AS INTEGER)) FROM plans s
+                           WHERE s.epic_id = plans.plan_id AND s.status = 'active') >= 1
+                `);
+            } catch { /* best effort */ }
+            await this.setMigrationVersion(41);
+            console.log('[KanbanDatabase] V41 migration completed: epic complexity backfilled to subtask max');
         }
     }
 

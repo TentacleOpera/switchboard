@@ -507,12 +507,10 @@ export async function activate(context: vscode.ExtensionContext) {
     // Wire the watcher into the already-created KanbanProvider
     await kanbanProvider!.setGlobalPlanWatcher(globalPlanWatcher);
 
-    // Let the watcher read the live displayed project at plan-import time, so a plan
-    // created while a project board is open is stamped with that project deterministically
-    // (rather than relying on the easily-stale _currentProjects mirror).
-    globalPlanWatcher.setDisplayedProjectResolver(
-        (watchedRoot: string) => kanbanProvider?.getDisplayedProjectForRoot(watchedRoot) ?? null
-    );
+    // NOTE: the watcher stamps a newly-imported plan with the board's active project by
+    // reading the `kanban.activeProjectFilter` config key the board persists into each
+    // workspace's DB (KanbanProvider._refreshBoardImpl). No resolver wiring is needed —
+    // the DB is the single source of truth, read back from the same DB the plan imports into.
 
     // Let the watcher re-derive an epic's kanban_column from its subtasks after
     // every epic-file import, self-healing the clobber where insertFileDerivedPlan
@@ -1169,9 +1167,11 @@ export async function activate(context: vscode.ExtensionContext) {
         await initializeMappingIndex(outputChannel ?? undefined);
         // Refresh UI
         kanbanProvider!._scheduleBoardRefresh();
-        // Tell watchers to refresh
+        // Tell watchers to refresh. The active project is no longer mirrored in the
+        // watcher — it lives in each DB's `kanban.activeProjectFilter` config key and is
+        // re-synced by the board refresh scheduled just above, so there is nothing to clear.
         if (globalPlanWatcher) {
-            await globalPlanWatcher.refreshWatchers({ clearProjectFilters: true });
+            await globalPlanWatcher.refreshWatchers();
         }
     });
     context.subscriptions.push(mappingsChangedDisposable);

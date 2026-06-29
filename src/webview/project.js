@@ -38,7 +38,6 @@
                 hydrateProjectsTab();
             } else if (activeTab === 'epics') {
                 vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
-                vscode.postMessage({ type: 'fetchEpicDocuments' });
                 updateActiveEpicBanner();
             } else if (activeTab === 'constitution') {
                 vscode.postMessage({ type: 'loadConstitutionFiles' });
@@ -167,7 +166,6 @@
     let _epicSelectedPlan = null;
     let _epicSubtaskPreview = null; // holds the subtask plan object when a subtask is previewed in the epics pane
     let _epicPreviewFilePath = null;
-    let _epicDocumentsCache = [];
     let _pendingKanbanSelection = null;
     let _pendingEpicSelection = null;
     let _pendingAutoEdit = false;
@@ -517,11 +515,6 @@
             }
             case 'epicDetails':
                 renderEpicSubtasks(msg.epic, msg.subtasks);
-                break;
-            case 'epicDocumentsReady':
-                _epicDocumentsCache = msg.documents || [];
-                renderEpicsList();
-                tryResolvePendingEpicSelection();
                 break;
             case 'epicError':
                 showToast(msg.message || 'Error occurred', 'error');
@@ -881,7 +874,6 @@
                             if (_epicSelectedPlan) selectEpic(_epicSelectedPlan);
                         }
                         vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
-                        vscode.postMessage({ type: 'fetchEpicDocuments' });
                     }
                 } else {
                     showToast('Save failed: ' + (msg.error || 'Unknown error'), 'error');
@@ -1378,7 +1370,7 @@
     function tryResolvePendingEpicSelection() {
         if (!_pendingEpicSelection) return;
         const sel = _pendingEpicSelection;
-        const pool = [..._kanbanPlansCache.filter(p => p.isEpic), ..._epicDocumentsCache];
+        const pool = _kanbanPlansCache.filter(p => p.isEpic);
         const match = pool.find(p =>
             (sel.planFile && p.planFile === sel.planFile) ||
             (sel.planId && p.planId === sel.planId) ||
@@ -1610,11 +1602,10 @@
     function renderEpicsList() {
         if (!epicsListPane) return;
 
-        // Merge DB epics (from kanban cache) with standalone epic documents (.switchboard/epics/)
-        let filtered = [
-            ..._kanbanPlansCache.filter(plan => plan.isEpic),
-            ..._epicDocumentsCache
-        ];
+        // Epics list is DB-only — identical source to the Plans list. Epic files in
+        // .switchboard/epics/ are imported into the kanban DB by GlobalPlanWatcherService
+        // and appear here as normal DB-backed epics.
+        let filtered = _kanbanPlansCache.filter(plan => plan.isEpic);
         if (epicsFilters.workspaceRoot) {
             filtered = filtered.filter(plan => plan.workspaceRoot === epicsFilters.workspaceRoot);
         }
@@ -1657,19 +1648,15 @@
                    <select class="kanban-column-dropdown" style="display:none;" data-plan-file="${escapeHtml(plan.planFile || '')}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}">
                        ${_kanbanAvailableColumns.map(col => `<option value="${escapeHtml(col.id)}" ${col.id === plan.column ? 'selected' : ''}>${escapeHtml(col.label)}</option>`).join('')}
                    </select>`
-                : `<span class="kanban-column-badge" style="opacity:0.6;">Doc</span>`;
+                : '';
 
-            const isManageable = plan && !plan.isEpicDocument;
-            const actionButtons = isManageable ? `
+            // Every epic is DB-backed/manageable now — standalone epic documents are gone.
+            const actionButtons = `
                 <div class="kanban-plan-actions" style="margin-top: 6px;">
                     ${columnBadge}
                     ${plan.planFile ? `<button class="kanban-plan-copy-link epic-card-action" data-plan-file="${escapeHtml(plan.planFile)}">Copy Link</button>` : ''}
                     ${plan.sessionId || plan.planId ? `<button class="kanban-plan-copy-prompt epic-card-action" data-session-id="${escapeHtml(plan.sessionId || plan.planId)}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}">Copy Planning Prompt</button>` : ''}
                     ${plan.sessionId || plan.planId ? `<button class="epic-send-to-planner epic-card-action" data-plan-file="${escapeHtml(plan.planFile || '')}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}">Send to Planner</button>` : ''}
-                </div>
-            ` : `
-                <div class="kanban-plan-actions" style="margin-top: 6px;">
-                    ${columnBadge}
                 </div>
             `;
 
@@ -1778,12 +1765,7 @@
             const accordion = itemDiv.querySelector('.epic-accordion');
             accordion.addEventListener('toggle', () => {
                 if (accordion.open) {
-                    if (plan.isEpicDocument) {
-                        // Standalone epic documents have no subtasks in the DB
-                        document.getElementById(`subtasks-${escapeHtml(plan.planId)}`).innerHTML = '<div style="padding: 4px 0; color: var(--text-secondary);">No subtasks (standalone epic document).</div>';
-                    } else {
-                        vscode.postMessage({ type: 'getEpicDetails', sessionId: plan.sessionId || plan.planId, workspaceRoot: plan.workspaceRoot });
-                    }
+                    vscode.postMessage({ type: 'getEpicDetails', sessionId: plan.sessionId || plan.planId, workspaceRoot: plan.workspaceRoot });
                 }
             });
 
@@ -1815,15 +1797,15 @@
         const metaBar = document.getElementById('epic-preview-meta-bar');
         if (!metaBar) return;
         metaBar.style.display = 'flex';
-        // DB-backed epics support subtask management; standalone epic
-        // documents (.switchboard/epics/*.md with no DB record) do not.
-        const isManageable = plan && !plan.isEpicDocument;
-        const manageGroup = isManageable ? `
+        // Every epic is DB-backed/manageable now — standalone epic documents are gone.
+        const isManageable = !!plan;
+        const manageGroup = `
             <div class="kanban-meta-group" style="display:flex; gap:6px;">
+                <button class="strip-btn" id="btn-epic-refine" title="Refine this epic's description and propose a subtask breakdown — copies a prompt to the clipboard">Refine</button>
                 <button class="strip-btn" id="btn-epic-add-subtask" title="Add an existing plan to this epic as a subtask">+ Subtask</button>
                 <button class="strip-btn" id="btn-epic-delete" style="color:#ff6b6b;" title="Delete this epic (subtasks are detached)">Delete Epic</button>
             </div>
-        ` : '';
+        `;
         metaBar.innerHTML = `
             ${manageGroup}
             <div class="kanban-meta-group" style="margin-left: auto;">
@@ -1836,6 +1818,21 @@
         if (isManageable) {
             const btnAddSub = document.getElementById('btn-epic-add-subtask');
             const btnDelEpic = document.getElementById('btn-epic-delete');
+            const btnRefine = document.getElementById('btn-epic-refine');
+            if (btnRefine) btnRefine.addEventListener('click', () => {
+                if (!_epicSelectedPlan) return;
+                const original = btnRefine.textContent;
+                btnRefine.textContent = 'Copied ✓';
+                setTimeout(() => { btnRefine.textContent = original; }, 1200);
+                vscode.postMessage({
+                    type: 'refineEpic',
+                    planId: _epicSelectedPlan.planId || '',
+                    planFile: _epicSelectedPlan.planFile || '',
+                    title: _epicSelectedPlan.topic || _epicSelectedPlan.name || '',
+                    subtaskCount: _epicSelectedPlan.subtaskCount || 0,
+                    workspaceRoot: _epicSelectedPlan.workspaceRoot
+                });
+            });
             if (btnAddSub) btnAddSub.addEventListener('click', openEpicAddSubtaskOverlay);
             if (btnDelEpic) btnDelEpic.addEventListener('click', () => {
                 if (!_epicSelectedPlan) return;

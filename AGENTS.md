@@ -95,6 +95,8 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | `memo` | User invokes `/memo` or says "start memo capture" to enter progressive capture mode — agent appends each user message to `.switchboard/memo.md` without analysis. |
 | `switchboard-chat` | Enter consultative planning mode on claude.ai — type `/sw` to activate. Reads kanban state so you can reference columns and chain workflows. |
 | `refine_ticket` | User clicks "Refine" on a ticket card to copy a prompt that produces a complete, agent-actionable specification (backend-consumed skill — not invocable via `skill: "refine_ticket"`) |
+| `refine_epic` | User clicks "Refine" on a selected epic in the Epics tab to copy a prompt that fleshes out the epic description and proposes a subtask breakdown (backend-consumed skill — not invocable via `skill: "refine_epic"`) |
+| `group-into-epics` | User asks to "group plans into an epic", "organise loose plans into epics", or "suggest epic groupings" — scans pre-coding columns, clusters by capability, proposes all groupings for one approval, then creates epics via create-epic.js (model-invocable; also sourced by the Suggest Epics board button) |
 
 **Usage**: Call `skill: "archive"` before performing archive operations to access detailed tool documentation and examples.
 

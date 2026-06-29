@@ -126,4 +126,52 @@ Skipped per session directive — test suite will be run separately by the user.
 
 ---
 
-**Recommendation:** Complexity 2 → Send to Intern
+## Review Pass (2026-06-29)
+
+### Stage 1 — Grumpy Findings
+
+| Severity | Finding | Location |
+| :--- | :--- | :--- |
+| NIT (resolved) | `console.log` debug statements in `_handleFetchImportedDocs` now fire on every panel open (previously only on import/watcher/delete). Pre-existing noise amplified by this fix — 5+ log lines per root per open. **Resolved: removed in review pass.** | `PlanningPanelProvider.ts:7424,7430,7432,7446,7466` |
+| NIT | `workspaceRoot` parameter of `_handleFetchImportedDocs` is dead code (body uses `this._getWorkspaceRoots()`). The `|| ''` fallback is the correct defensive choice. Pre-existing smell, not this plan's problem. | `PlanningPanelProvider.ts:7421` |
+
+No CRITICAL findings. No MAJOR findings.
+
+### Stage 2 — Balanced Synthesis
+
+- **Keep as-is:** Single-line addition at `PlanningPanelProvider.ts:7045`. Correct placement (after the three existing doc-source fetches, before theme settings), correct null fallback (`|| ''`), correct error-handling reasoning (callee has its own try/catch, won't reject, theme settings still post).
+- **Fix now:** Nothing — no CRITICAL/MAJOR findings.
+- **Defer:** ~~`console.log` cleanup in `_handleFetchImportedDocs`~~ — done in review pass.
+
+### Code Fixes Applied
+
+- **`src/services/PlanningPanelProvider.ts`** — removed 5 debug `console.log` statements from `_handleFetchImportedDocs` (lines 7424, 7430, 7432, 7446, 7466 in the pre-review version). These predated the one-line fix (introduced in commit `d851614`, 2026-05-22) but were promoted from rare to constant noise by the new initial-load call site. The `console.error` in the catch block was retained (legitimate error logging).
+- **`src/webview/planning.js`** — removed 1 debug `console.log` from `handleImportedDocsReady` (line 3429). Same rationale: now fires on every panel open.
+
+### Validation Results
+
+- **Compilation:** Skipped per session directive.
+- **Tests:** Skipped per session directive.
+- **Static verification:**
+  - Added line at `PlanningPanelProvider.ts:7045` matches plan verbatim.
+  - `_handleFetchImportedDocs` (lines 7421–7472) has its own try/catch; sends `importedDocsReady` on both success and failure paths — `await` in `_handleFetchRoots` will not reject.
+  - `workspaceRoot` parameter unused in function body (uses `this._getWorkspaceRoots()`) — `|| ''` fallback harmless.
+  - Webview wiring confirmed: `importedDocsReady` → `handleImportedDocsReady` (planning.js:3426) → `state._lastImportedDocs` → `rerenderUnifiedDocs()` → guard at planning.js:2640 → `renderImportedDocsSection` (planning.js:3457), which handles empty arrays with empty-state message.
+  - `state._lastImportedDocs` initializes to `null` (planning.js:18); guard at line 2640 correctly fails pre-message, passes post-message (`docs || []` yields truthy empty array).
+
+### Files Changed
+
+- `src/services/PlanningPanelProvider.ts`:
+  - Line 7045: added `await this._handleFetchImportedDocs(this._getWorkspaceRoot() || '');` in `_handleFetchRoots` (the core fix).
+  - `_handleFetchImportedDocs` (lines 7421–7465): removed 5 debug `console.log` statements; retained `console.error` in catch block.
+- `src/webview/planning.js`:
+  - `handleImportedDocsReady` (line ~3427): removed 1 debug `console.log` statement.
+
+### Remaining Risks
+
+- **Latency on cold panel open:** `_handleFetchImportedDocs` runs a throttled `healImports()` scan (1/hour per workspace) which may add latency to the initial load path. The `await` delays theme-settings messages until the heal scan + DB query completes. Acceptable: idempotent, throttled, consistent with existing file-watcher/import triggers. Not a regression — same latency users already experience when importing a doc.
+- ~~**Debug log noise:** The `console.log` statements in `_handleFetchImportedDocs` now fire on every panel open.~~ **Resolved** — removed in review pass.
+
+---
+
+**Recommendation:** Complexity 2 → Send to Intern ✅ Implemented & Reviewed

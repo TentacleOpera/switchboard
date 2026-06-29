@@ -4620,9 +4620,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                <img src="${ICON_ANALYST_MAP}" alt="Re-plan">
                            </button>`
                         : '';
-                    const epicGroupBtn = isCreated
-                        ? `<button class="column-icon-btn" data-action="groupAllIntoEpic" data-column="${escapeAttr(def.id)}" data-tooltip="Group all plans in this column into an epic">
-                               <img src="${ICON_CODE_MAP}" alt="Group Into Epic">
+                    const epicAddBtn = isCreated
+                        ? `<button class="column-icon-btn" data-action="addBlankEpic" data-column="${escapeAttr(def.id)}" data-tooltip="Add a blank epic to this column">
+                               <img src="${ICON_CODE_MAP}" alt="Add Epic">
                            </button>`
                         : '';
                     const testingFailBtn = (def.kind === 'coded')
@@ -4650,7 +4650,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         ${pipelineButtons}
                         ${julesBtn}
                         ${rePlanBtn}
-                        ${epicGroupBtn}
+                        ${epicAddBtn}
                         ${testingFailBtn}
                     </div>`;
                 }
@@ -4756,7 +4756,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         nextColSource = visibleCodedIds[visibleCodedIds.length - 1] || 'CODER CODED';
                     }
                     const nextCol = getNextColumn(nextColSource);
-                    if (!nextCol && action !== 'julesSelected' && action !== 'rePlanSelected' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed' && action !== 'groupAllIntoEpic') return;
+                    if (!nextCol && action !== 'julesSelected' && action !== 'rePlanSelected' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed' && action !== 'addBlankEpic') return;
 
                     switch (action) {
                         case 'moveSelected': {
@@ -4850,32 +4850,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             ids.forEach(id => selectedCards.delete(id));
                             break;
                         }
-                        case 'groupAllIntoEpic': {
-                            // In backlog view, the CREATED column slot displays BACKLOG cards
-                            // (remapped via _effectiveColumn at render time). Resolve to 'BACKLOG'
-                            // so the collector returns the visible BACKLOG cards, not the hidden
-                            // real-CREATED cards.
-                            const effectiveCol = (showingBacklog && column === 'CREATED') ? 'BACKLOG' : column;
-                            const allIds = getAllInColumn(effectiveCol);
-                            if (allIds.length === 0) return;
+                        case 'addBlankEpic': {
+                            // Clear any existing selection so no cards are silently linked as subtasks.
                             selectedCards.clear();
                             document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
-                            const nonEpicCards = [];
-                            for (const id of allIds) {
-                                const card = currentCards.find(c => (c.planId || c.sessionId) === id);
-                                if (card && !card.isEpic && !card.epicId) {
-                                    selectedCards.set(id, card);
-                                    nonEpicCards.push(card);
-                                    const cardEl = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-session="${CSS.escape(id)}"]`);
-                                    if (cardEl) cardEl.classList.add('selected');
-                                }
-                            }
-                            if (nonEpicCards.length === 0) return;
-                            // Mirror the EPIC button: 1 card promotes in-place (no description),
-                            // 2+ cards create a new epic. Without this flag a lone card would open
-                            // the "Create Epic" modal yet dispatch promoteToEpic (submit branches on
-                            // count), silently discarding the description and mislabelling the modal.
-                            openEpicCreateModal({ singlePlanPromote: nonEpicCards.length === 1 });
+                            updateReassignButtonVisibility();
+                            updateEpicActionButton();
+                            // Open the epic-create modal in blank-epic mode (no pre-selected subtasks).
+                            openEpicCreateModal({ blankEpic: true });
                             break;
                         }
                         case 'testingFailed': {
@@ -5366,19 +5348,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const epicBadge = ''; // Badge removed; epic identity shown via purple border + meta line
             
             const cardMetaContent = card.isEpic
-                ? `<span class="epic-subtask-label">EPIC: ${card.subtaskCount || 0} SUBTASK${(card.subtaskCount || 0) !== 1 ? 'S' : ''}</span> · ${timeAgo}`
+                ? `<span class="epic-subtask-label">EPIC: ${card.subtaskCount || 0} SUBTASK${(card.subtaskCount || 0) !== 1 ? 'S' : ''}</span> · Complexity: <span class="complexity-indicator ${complexityClass}">${category}</span>`
                 : `Complexity: <span class="complexity-indicator ${complexityClass}">${category}</span> · ${timeAgo}`;
-            
-            let wtButton = '';
-            if (card.isEpic) {
-                const linkedWorktree = currentEpicWorktrees[card.planId];
-                wtButton = linkedWorktree
-                    ? ` <span class="wt-chip" title="Worktree: ${linkedWorktree.branch}"
-                           style="font-family:monospace; font-size:10px; cursor:default; padding:1px 5px; background:var(--badge-bg, #333); border-radius:3px; margin-left:5px;">
-                         ${escapeHtml(linkedWorktree.branch)}
-                       </span>`
-                    : '';
-            }
             const completeOrDoneBtn = isCompleted
                 ? `<span class="card-done-badge">✓ Done</span>`
                 : `<button class="card-btn icon-btn complete" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Complete and archive">
@@ -5388,7 +5359,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const reviewTooltip = card.isEpic ? 'Review epic' : 'Review plan';
             return `
                 <div class="kanban-card${completedClass}${epicClass}" draggable="true" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}">
-                    <div class="card-topic">${epicBadge}${escapeHtml(shortTopic)}${wtButton}</div>
+                    <div class="card-topic">${epicBadge}${escapeHtml(shortTopic)}</div>
                     <div class="card-meta">${cardMetaContent}</div>
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">
                         <div style="display: flex; gap: 4px; flex-wrap: wrap;">
@@ -6795,7 +6766,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 btn.textContent = 'PROMOTE TO EPIC';
             } else if (epics.length === 0 && nonEpics.length > 1) {
                 btn.disabled = false;
-                btn.textContent = 'PROMOTE TO EPIC';
+                btn.textContent = 'GROUP INTO EPIC';
             } else {
                 btn.disabled = true;
                 btn.textContent = 'PROMOTE TO EPIC';
@@ -7426,15 +7397,31 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const descLabel = modal?.querySelector('label[for="epic-create-description"]');
             const descInput = document.getElementById('epic-create-description');
             const submitBtn = document.getElementById('epic-create-submit');
+            // Clear any stale empty-name error indicator from a prior open
+            if (nameInput) nameInput.style.borderColor = '';
+
+            // --- blank-epic mode (early return, existing flow unchanged below) ---
+            const isBlankEpic = opts.blankEpic === true;
+            if (isBlankEpic) {
+                if (planCount) planCount.style.display = 'none';
+                if (planList) planList.style.display = 'none';
+                if (nameInput) nameInput.value = '';
+                if (titleText) titleText.textContent = 'Add Epic';
+                if (descLabel) descLabel.style.display = '';
+                if (descInput) descInput.style.display = '';
+                if (submitBtn) submitBtn.textContent = 'Add Epic';
+                if (modal) modal.classList.remove('hidden');
+                return;
+            }
+            // --- END blank-epic mode ---
+
             const selectedIds = Array.from(selectedCards.keys());
             const selectedPlans = selectedIds.map(id => currentCards.find(c => (c.planId || c.sessionId) === id)).filter(Boolean);
-            if (planCount) planCount.textContent = `${selectedPlans.length} plan(s) selected`;
-            if (planList) planList.innerHTML = selectedPlans.map(p => `<li>${escapeHtml(p.topic)}</li>`).join('');
+            if (planCount) { planCount.textContent = `${selectedPlans.length} plan(s) selected`; planCount.style.display = ''; }
+            if (planList) { planList.innerHTML = selectedPlans.map(p => `<li>${escapeHtml(p.topic)}</li>`).join(''); planList.style.display = ''; }
 
             const isSinglePromote = opts.singlePlanPromote === true;
             const firstTopic = selectedPlans[0]?.topic || '';
-            // Clear any stale empty-name error indicator from a prior open
-            if (nameInput) nameInput.style.borderColor = '';
             if (isSinglePromote) {
                 if (nameInput) nameInput.value = firstTopic;
                 if (titleText) titleText.textContent = 'Promote to Epic';

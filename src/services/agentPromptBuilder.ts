@@ -185,8 +185,6 @@ export interface PromptBuilderOptions {
     epicTopic?: string;
     /** Number of subtasks included in the epic batch. */
     subtaskCount?: number;
-    /** Max subtasks before truncation warning (default 20). */
-    epicMaxSubtasks?: number;
     /** User-configured epic prompt template, injected after the epic directive. */
     epicPromptTemplate?: string;
     /** §11 — when true, the dispatched card's board is under remote control; inject REMOTE_MODE_DIRECTIVE into all role prompts. */

@@ -165,6 +165,9 @@ export class KanbanProvider implements vscode.Disposable {
     private _projectFilter: string | null = KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
     private _projectFilterNeedsValidation: boolean = false;
     private _projectFilterSaveTimeout: NodeJS.Timeout | null = null;
+    // resolvedWorkspaceRoot -> last active-project name written to that DB's config table.
+    // In-memory guard so we only write (and re-serialize the DB) when the value changes.
+    private _lastSyncedActiveProject = new Map<string, string>();
     private _allWorkspaceProjectsCache: Record<string, string[]> | null = null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- PlannerPromptWriter type lives in extension.ts; using any avoids a circular import
     private _plannerPromptWriter: any | null = null;
@@ -306,11 +309,9 @@ export class KanbanProvider implements vscode.Disposable {
             if (persistedFilter !== null) {
                 this._projectFilter = persistedFilter;
                 this._projectFilterNeedsValidation = true;
-                // Propagate the restored filter to the watcher immediately so plans
-                // created before the first board refresh still get the active project.
-                // The validation path in _refreshBoardImpl will correct this if the
-                // project no longer exists.
-                this._globalPlanWatcher?.setCurrentProject(resolvedRoot, persistedFilter);
+                // The restored filter is persisted into the DB `kanban.activeProjectFilter`
+                // config key by the first _refreshBoardImpl (which also validates it against
+                // the live project list); the watcher reads it from there at import time.
             }
         }
         this._cliTriggersEnabled = this._getSetting<boolean>('kanban.cliTriggersEnabled', true);
@@ -2101,17 +2102,25 @@ export class KanbanProvider implements vscode.Disposable {
                     if (this._projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER && !projects.includes(this._projectFilter ?? '')) {
                         this._projectFilter = KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
                     }
-                    // The persisted filter restored at construction (~line 292) is assigned
-                    // directly to _projectFilter, bypassing setProjectFilter() — so the watcher's
-                    // _currentProjects map is never populated on a fresh extension load. Without
-                    // this, plans created while a restored project board is open get an empty
-                    // project and land on the workspace-root board. Propagate the restored +
-                    // validated filter now that the workspace and project list are known.
-                    if (this._currentWorkspaceRoot) {
-                        this._globalPlanWatcher?.setCurrentProject(path.resolve(this._currentWorkspaceRoot), this._projectFilter);
-                    }
+                    // The restored-and-validated filter is persisted into the DB config key
+                    // by the activeProjectName write just below, so a plan imported while a
+                    // restored project board is open is stamped correctly on first refresh.
                 }
                 const projectFilter = this._projectFilter;
+                // Persist the displayed project name into this DB's config table. The plan
+                // watcher reads it straight back when importing a new plan, so a watcher-
+                // imported plan gets stamped with the active project — exactly like the
+                // manual "Assign to project" button — with NO in-memory mirror, live
+                // resolver, or workspace-root comparison that can drift out of sync. This
+                // is the single source of truth for "what project is the board showing".
+                // See GlobalPlanWatcherService._handlePlanFile.
+                const activeProjectName = (projectFilter && projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER)
+                    ? projectFilter
+                    : '';
+                if (this._lastSyncedActiveProject.get(resolvedWorkspaceRoot) !== activeProjectName) {
+                    this._lastSyncedActiveProject.set(resolvedWorkspaceRoot, activeProjectName);
+                    void db.setConfig('kanban.activeProjectFilter', activeProjectName);
+                }
                 const repoScope = this._repoScopeFilter;
                 const dbRows = (projectFilter !== null || repoScope)
                     ? await db.getBoardFilteredByProject(workspaceId, projectFilter, repoScope)
@@ -2548,8 +2557,8 @@ export class KanbanProvider implements vscode.Disposable {
 
     /**
      * Shared epic-subtask expansion helper. Returns a new array of subtask
-     * BatchPromptPlan entries (plus an overflow-warning card when the cap is
-     * exceeded) for the given epic. Used by both the copy/board path
+     * BatchPromptPlan entries for the given epic — every active subtask is
+     * included (no cap, no truncation warning). Used by both the copy/board path
      * (_cardsToPromptPlans, which passes a worktreePathMap) and the CLI-dispatch
      * path (_resolveKanbanDispatchPlans in TaskViewerProvider, which passes only
      * a resolved worktreePath). Does not mutate any caller array.
@@ -2565,11 +2574,8 @@ export class KanbanProvider implements vscode.Disposable {
         const out: BatchPromptPlan[] = [];
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !(await db.ensureReady()) || !epicPlanId) { return out; }
-        const maxRaw = await db.getConfig('epic_max_subtasks');
-        const maxSubtasks = maxRaw ? parseInt(maxRaw, 10) : 20;
         const subtasks = await db.getSubtasksByEpicId(epicPlanId);
-        const limited = subtasks.slice(0, maxSubtasks);
-        for (const st of limited) {
+        for (const st of subtasks) {
             const stWorktreePath = st.epicId
                 ? (worktreePathMap?.get(String(st.epicId)) ?? worktreePath)
                 : worktreePath;
@@ -2583,16 +2589,6 @@ export class KanbanProvider implements vscode.Disposable {
                 isSubtask: true,
                 epicTopic,
                 epicId: epicPlanId
-            });
-        }
-        if (subtasks.length > maxSubtasks) {
-            out.push({
-                topic: `[WARNING: ${subtasks.length} subtasks exist but only ${maxSubtasks} included. Remaining subtasks stay in column: ${epicColumn}]`,
-                absolutePath: '',
-                sessionId: '',
-                worktreePath,
-                isSubtask: true,
-                epicTopic
             });
         }
         return out;
@@ -3102,13 +3098,13 @@ export class KanbanProvider implements vscode.Disposable {
         const hasSubtasks = plans.some(p => p.isSubtask);
         if (hasSubtasks) {
             const epicPlan = plans.find(p => !p.isSubtask);
-            const subtaskCount = plans.filter(p => p.isSubtask && !p.topic.startsWith('[WARNING:')).length;
+            const subtaskCount = plans.filter(p => p.isSubtask).length;
             resolvedOptions.epicMode = true;
             resolvedOptions.epicTopic = epicPlan?.topic || '';
             resolvedOptions.subtaskCount = subtaskCount;
             // Epic prompt template: read the legacy `epic_prompt_template` DB key
             // (shipped — read as fallback, never dropped) and prepend it for epic
-            // dispatches routed through any non-orchestrator role.
+            // dispatches routed through any role.
             const db = this._getKanbanDb(workspaceRoot);
             if (db && await db.ensureReady()) {
                 const template = (await db.getConfig('epic_prompt_template')) || undefined;
@@ -4547,11 +4543,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
     /**
      * Returns the project currently shown on the board for the given watched workspace
      * root, or null if the board isn't showing that workspace or is unfiltered/unassigned.
-     * This is the authoritative answer to "what project board is open" — read live by the
-     * plan watcher at import time so newly-created plans are stamped with the displayed
-     * project deterministically, instead of relying on the easily-stale _currentProjects
-     * mirror. Compares via resolveEffectiveWorkspaceRoot so a child repo, the parent, and
-     * an explicit control-plane root all match the same board.
+     * Used by the PRD resolver (_resolveProjectPrd) to find the active project's PRD.
+     * Compares via resolveEffectiveWorkspaceRoot so a child repo, the parent, and an
+     * explicit control-plane root all match the same board.
+     *
+     * NOTE: the plan watcher does NOT use this — it stamps imported plans from the DB
+     * `kanban.activeProjectFilter` config key (persisted by _refreshBoardImpl), which has
+     * no dependency on live in-memory provider state at the moment of import.
      */
     public getDisplayedProjectForRoot(watchedRoot: string): string | null {
         if (!this._currentWorkspaceRoot) return null;
@@ -4619,8 +4617,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
         this._projectFilter = filter;
         if (this._currentWorkspaceRoot) {
             const resolvedRoot = path.resolve(this._currentWorkspaceRoot);
-            this._globalPlanWatcher?.setCurrentProject(resolvedRoot, filter);
-
+            // The DB `kanban.activeProjectFilter` config key (read by the plan watcher) is
+            // written by _refreshBoardImpl, which runs immediately after every filter change.
             if (this._projectFilterSaveTimeout) {
                 clearTimeout(this._projectFilterSaveTimeout);
             }
@@ -7950,19 +7948,10 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             }
             case 'updateEpicConfig': {
                 // No remaining kanban caller — the on-board epic-manage modal was removed.
-                // epic_prompt_template writes are removed to avoid a dual-source conflict.
-                // epic_lock_columns is dormant (default matches no real column id); writes removed.
-                // epic_max_subtasks still bounds epic expansion (board step-mode and epic
-                // dispatch) and has no addon replacement yet, so its write is kept.
-                // Legacy keys are never dropped — they are still READ as fallback (per CLAUDE.md).
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (!workspaceRoot) break;
-                const db = this._getKanbanDb(workspaceRoot);
-                if (!db || !(await db.ensureReady())) break;
-                if (msg.epicMaxSubtasks !== undefined) {
-                    await db.setConfig('epic_max_subtasks', String(msg.epicMaxSubtasks));
-                }
-                vscode.window.showInformationMessage('Epic configuration updated.');
+                // epic_prompt_template / epic_lock_columns / epic_max_subtasks writes are all
+                // removed: the cap is gone (every subtask dispatches), and the other two were
+                // already dormant. Legacy keys are never dropped — they are still READ as
+                // fallback (per CLAUDE.md); we simply stop writing them here.
                 break;
             }
         }
@@ -8372,8 +8361,16 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
 
     private async _regenerateEpicFile(workspaceRoot: string, epicPlanId: string, db: KanbanDatabase): Promise<void> {
         const epic = await db.getPlanByPlanId(epicPlanId);
-        if (!epic || !epic.isEpic) return;
+        if (!epic) {
+            console.warn(`[KanbanProvider] _regenerateEpicFile: epic not found for planId=${epicPlanId}, aborting.`);
+            return;
+        }
+        if (!epic.isEpic) {
+            console.warn(`[KanbanProvider] _regenerateEpicFile: epic.isEpic is falsy (${epic.isEpic}) for planId=${epicPlanId}, aborting.`);
+            return;
+        }
         const subtasks = await db.getSubtasksByEpicId(epicPlanId);
+        console.log(`[KanbanProvider] _regenerateEpicFile: epicPlanId=${epicPlanId}, subtasks found=${subtasks.length}`);
         const epicAbsPath = path.resolve(workspaceRoot, epic.planFile);
         let existingContent = '';
         try {
@@ -8441,8 +8438,8 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         // Strip newlines so a multi-line name cannot inject a second YAML key or H1 heading.
         const epicName = (name || '').replace(/[\r\n]+/g, ' ').trim();
         const subtaskPlanIds = Array.isArray(planIds) ? planIds : [];
-        if (!epicName || subtaskPlanIds.length === 0) {
-            return { success: false, error: 'Epic name and at least one subtask are required.' };
+        if (!epicName) {
+            return { success: false, error: 'Epic name is required.' };
         }
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !(await db.ensureReady())) {
@@ -8453,8 +8450,13 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             const plan = await db.getPlanByPlanId(pid);
             if (plan) subtasks.push(plan);
         }
-        if (subtasks.length === 0) {
-            return { success: false, error: 'No valid subtasks found for epic creation.' };
+        // Zero subtasks is now valid — creates a blank epic. The "No valid subtasks"
+        // guard is removed; callers that pass invalid IDs simply get an epic with
+        // fewer linked subtasks than requested.
+        // WARNING: if the caller expected subtasks but none resolved (stale IDs),
+        // emit a warning so the silent failure is visible.
+        if (subtaskPlanIds.length > 0 && subtasks.length === 0) {
+            console.warn(`[KanbanProvider] createEpicFromPlanIds: ${subtaskPlanIds.length} subtask IDs provided but 0 resolved to valid plans. Creating blank epic anyway.`);
         }
         // Inherit project from subtasks so the epic appears on the same project-filtered
         // board as its children. Without this, the new epic record has project='' /
@@ -8469,10 +8471,16 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         if (!ordinalMap.has('BACKLOG')) {
             ordinalMap.set('BACKLOG', -1);
         }
-        const resolvedColumn = subtasks
-             .map((st: any) => this._normalizeLegacyKanbanColumn(st.kanbanColumn))
-             .filter((col: string | null): col is string => !!col)
-             .sort((a: string, b: string) => (ordinalMap.get(a) ?? Infinity) - (ordinalMap.get(b) ?? Infinity))[0] || this._normalizeLegacyKanbanColumn(subtasks[0].kanbanColumn) || 'CREATED';
+        let resolvedColumn: string;
+        if (subtasks.length === 0) {
+            // Blank epic: no subtasks to derive from — default to CREATED.
+            resolvedColumn = 'CREATED';
+        } else {
+            resolvedColumn = subtasks
+                 .map((st: any) => this._normalizeLegacyKanbanColumn(st.kanbanColumn))
+                 .filter((col: string | null): col is string => !!col)
+                 .sort((a: string, b: string) => (ordinalMap.get(a) ?? Infinity) - (ordinalMap.get(b) ?? Infinity))[0] || this._normalizeLegacyKanbanColumn(subtasks[0].kanbanColumn) || 'CREATED';
+        }
         const effectiveColumn = resolvedColumn === 'BACKLOG' ? 'CREATED' : resolvedColumn;
         console.log(`[KanbanProvider] createEpicFromPlanIds: subtask columns = [${subtasks.map(st => st.kanbanColumn).join(', ')}], resolvedColumn=${resolvedColumn}, effectiveColumn=${effectiveColumn}`);
         const planId = crypto.randomUUID();
@@ -8523,6 +8531,22 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             return { success: false, error: 'Failed to create epic: DB upsert failed. The epic file was not written.' };
         }
 
+        // Verify the record is findable by the new planId. If ON CONFLICT kept an old
+        // plan_id (pre-existing record for the same plan_file), use the actual DB plan_id
+        // for all downstream operations.
+        let effectiveEpicPlanId = planId;
+        const verifyRecord = await db.getPlanByPlanId(planId);
+        if (!verifyRecord) {
+            // ON CONFLICT kept an old plan_id — look up by plan_file
+            const existingByFile = await db.getPlanByPlanFile(epicPlanFile, workspaceId);
+            if (existingByFile) {
+                effectiveEpicPlanId = existingByFile.planId;
+                console.warn(`[KanbanProvider] createEpicFromPlanIds: planId mismatch — upsert kept old plan_id ${effectiveEpicPlanId}, expected ${planId}. Using DB plan_id for all downstream operations.`);
+            } else {
+                return { success: false, error: 'Failed to create epic: record not found after upsert.' };
+            }
+        }
+
         // Quote YAML values to prevent frontmatter breakage from names containing ---, :, etc.
         const yamlSafeName = epicName.replace(/'/g, "''");
         // The description lives in the markdown body under ## Goal (after the closed
@@ -8539,17 +8563,25 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         for (const st of subtasks) {
             // Use planId (not sessionId) — file-watcher-imported plans have session_id=''
             // and getPlanBySessionId('') would find an arbitrary other plan instead.
-            await db.updateEpicStatus(st.planId || st.sessionId, 0, planId);
+            const linkOk = await db.updateEpicStatus(st.planId || st.sessionId, 0, effectiveEpicPlanId);
+            if (!linkOk) {
+                console.warn(`[KanbanProvider] createEpicFromPlanIds: updateEpicStatus failed for subtask ${st.planId}`);
+            }
         }
-        await this._regenerateEpicFile(workspaceRoot, planId, db);
+        await this._regenerateEpicFile(workspaceRoot, effectiveEpicPlanId, db);
         // Re-assert is_epic=1 as the FINAL DB write before refresh — defensive hardening
         // so any intermediate file-watcher/scan event that might touch the record leaves
         // is_epic=1 as the last-write-wins state.
-        await db.updateEpicStatus(planId, 1, '');
-        const verifyEpic = await db.getPlanByPlanId(planId);
+        await db.updateEpicStatus(effectiveEpicPlanId, 1, '');
+        // Epic complexity is derived = max of active subtask scores. The link loop above
+        // drove recomputeEpicComplexity via updateEpicStatus; this explicit call guarantees
+        // the epic carries the true max once all subtasks are linked, regardless of the
+        // order of intermediate is_epic/epic_id writes.
+        await db.recomputeEpicComplexity(effectiveEpicPlanId);
+        const verifyEpic = await db.getPlanByPlanId(effectiveEpicPlanId);
         console.log(`[KanbanProvider] createEpicFromPlanIds: verify is_epic=${verifyEpic?.isEpic}, kanbanColumn=${verifyEpic?.kanbanColumn}, project=${verifyEpic?.project}, projectId=${(verifyEpic as any)?.projectId}, planFile=${verifyEpic?.planFile}, activeProjectFilter=${this._projectFilter}`);
         await this._refreshBoard(workspaceRoot);
-        return { success: true, epicPlanId: planId, epicSessionId: sessionId };
+        return { success: true, epicPlanId: effectiveEpicPlanId, epicSessionId: sessionId };
     }
 
     /**
@@ -8604,78 +8636,50 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
     }
 
     /**
-     * Build the clipboard prompt for the "Suggest Epics" board button. Instructs the
-     * agent to scan pre-coding columns, propose ALL groupings at once for one approval,
-     * then run create-epic.js per approved group. Copied to the clipboard (host-agnostic,
-     * matching the CHAT PROMPT button) rather than auto-dispatched to a terminal.
+     * Build the clipboard prompt for the "Suggest Epics" board button. The procedure
+     * lives in the model-invocable `group-into-epics` skill (`.agents/skills/group-into-epics/SKILL.md`);
+     * this method reads that skill file and injects the dynamic workspace root, mirroring
+     * how `copyRefinePrompt` reads `refine_ticket.md`. This keeps the button's clipboard
+     * output self-contained (host-agnostic) while eliminating procedure duplication — an
+     * agent can also load the skill directly by description without clicking the button.
+     * Falls back to an embedded copy if the skill file is missing (older install / dev).
      */
     private _buildSuggestEpicsPrompt(workspaceRoot: string): string {
-        return [
-            'You are grouping loose Switchboard plans into epics. Follow this flow exactly — do not create any epic before the user approves.',
-            '',
-            '1. SCAN',
-            `   Read the board snapshot:`,
-            `     cat ${workspaceRoot}/.switchboard/kanban-board.md`,
-            '',
-            '   Scope: CREATED and PLAN REVIEWED columns only.',
-            '   Ignore BACKLOG and all post-coding columns.',
-            '   Each plan line ends with an HTML comment, e.g.:',
-            '     - [.switchboard/plans/foo.md](...) — Foo <!-- planId:abc-123 -->',
-            '     - [.switchboard/epics/epic-def.md](...) — Bar Epic <!-- planId:def-456 epic -->',
-            '     - [.switchboard/plans/baz.md](...) — Baz <!-- planId:ghi-789 subtask-of:"Bar Epic" -->',
-            '   Skip lines tagged `epic` (they are epics) or `subtask-of:...` (already assigned).',
-            '   Use the `planId:` value from the comment — NOT the filename — when calling create-epic.js.',
-            '   (A path under .switchboard/epics/ also indicates an epic, but subtask detection',
-            '   requires the subtask-of tag — do not rely on filenames alone.)',
-            '',
-            '2. READ PLAN BODIES',
-            '   For each candidate plan in scope, read the full plan file.',
-            '   Extract: goal, problem summary, dependencies, tags.',
-            '   Use this — not just titles — to determine groupings.',
-            '   Read plans in parallel where possible. If >25 candidates, first-pass cluster by',
-            '   title then deep-read within each cluster.',
-            '',
-            '3. PROPOSE (single message, all groups at once)',
-            '   Group by underlying capability theme, not by surface keyword.',
-            '   Cross-provider plans that address the same capability go into one epic.',
-            '   Minimum 2 plans per epic. Single-plan "groups" go in the Standalone section.',
-            '   Flag POSSIBLE OVERLAP / REDUNDANCY / GAP where detected.',
-            '   For each proposed epic, write:',
-            '     - Epic name',
-            '     - Goal: 2-4 sentences describing what the epic achieves, what problem it',
-            '       solves, and why these plans are grouped together.',
-            '     - How the Subtasks Achieve This: one bullet per member plan explaining what',
-            '       it does and how it contributes to the epic\'s goal. Format:',
-            '         - **Plan Name**: <what it does and how it contributes>',
-            '     - Member plans with planId and one-line summary',
-            '   List genuinely standalone plans separately. Then stop and wait.',
-            '',
-            '4. CONFIRM',
-            '   Wait for user approval or edits. Do not touch the database until confirmed.',
-            '',
-            '5. EXECUTE',
-            '   For each approved group, pass the Goal text as the description argument.',
-            '   Escape any double quotes in the Goal text (replace " with \") or rephrase to',
-            '   avoid them, so the bash command does not break. Also avoid $, backticks, and',
-            '   backslashes in the Goal text — these are shell metacharacters inside double quotes.',
-            '   ```bash',
-            `   node .agents/skills/kanban_operations/create-epic.js "<epic name>" '["planId1","planId2",...]' "${workspaceRoot}" "<goal text with escaped quotes>"`,
-            '   ```',
-            '   The description becomes the ## Goal section in the epic file.',
-            '   After all epics are created, write the ## How the Subtasks Achieve This section',
-            '   into each epic file manually (the create-epic script only writes the Goal).',
-            '   Use the text from your step 3 proposal — paste it between the Goal and the',
-            '   <!-- BEGIN SUBTASKS --> marker. This section is preserved by _regenerateEpicFile',
-            '   on subsequent subtask changes, so it only needs to be written once.',
-            '   To add more plans to an epic later, use assign-to-epic.js with the epic planId from the create-epic.js output.',
-            '',
-            '6. BACKLOG (optional, after execution)',
-            '   Ask the user: "Would you like me to analyse the BACKLOG for epic groupings too?"',
-            '   Do NOT re-read the board or inspect the BACKLOG column yourself.',
-            '   If the user says yes, repeat steps 1-5 scoped to the BACKLOG column.',
-            '   If the user says no or does not respond, stop.',
-            '',
-            'Note: epic creation updates the Switchboard board and writes a .switchboard/epics/ file. It does NOT sync to Linear/ClickUp.',
-        ].join('\n');
+        const skillPath = path.join(workspaceRoot, '.agents', 'skills', 'group-into-epics', 'SKILL.md');
+        let skillBody = '';
+        try {
+            skillBody = fs.readFileSync(skillPath, 'utf8');
+        } catch {
+            // Legacy .agent/ folder fallback, then embedded fallback.
+            try {
+                skillBody = fs.readFileSync(path.join(workspaceRoot, '.agent', 'skills', 'group-into-epics', 'SKILL.md'), 'utf8');
+            } catch {
+                skillBody = `You are grouping loose Switchboard plans into epics. Follow this flow exactly — do not create any epic before the user approves.
+
+1. SCAN
+   Read the board snapshot:
+     cat {{WORKSPACE_ROOT}}/.switchboard/kanban-board.md
+   Scope: CREATED and PLAN REVIEWED columns only. Ignore BACKLOG and all post-coding columns.
+   Each plan line ends with an HTML comment with a planId: value — use that (not the filename) when calling create-epic.js. Skip lines tagged epic or subtask-of:...
+
+2. READ PLAN BODIES — extract goal/problem/dependencies/tags; cluster by capability theme.
+
+3. PROPOSE (single message, all groups at once) — min 2 plans/epic; standalone section for singles; flag overlap/redundancy/gap. For each: name, Goal, How the Subtasks Achieve This, member plans. Then stop and wait.
+
+4. CONFIRM — wait for user approval. Do not touch the database until confirmed.
+
+5. EXECUTE — for each approved group:
+   node .agents/skills/kanban_operations/create-epic.js "<epic name>" '["planId1","planId2",...]' "{{WORKSPACE_ROOT}}" "<goal text with escaped quotes>"
+   Then manually write the ## How the Subtasks Achieve This section into each epic file.
+
+6. BACKLOG (optional) — ask the user; only proceed if they say yes.
+
+Note: epic creation updates the Switchboard board and writes a .switchboard/epics/ file. It does NOT sync to Linear/ClickUp.`;
+            }
+        }
+        // Strip YAML frontmatter (the skill description is for model-invocation discovery,
+        // not part of the pasted procedure) and substitute the workspace root placeholder.
+        const bodyWithoutFrontmatter = skillBody.replace(/^---\n[\s\S]*?\n---\n/, '');
+        return bodyWithoutFrontmatter.replace(/\{\{WORKSPACE_ROOT\}\}/g, workspaceRoot);
     }
 }

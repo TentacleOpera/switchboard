@@ -462,7 +462,8 @@ cachedAt: ${new Date().toISOString()}
         slugPrefix: string,
         filePath: string,
         contentHash: string,
-        workspaceId?: string
+        workspaceId?: string,
+        url?: string
     ): Promise<void> {
         if (!this._kanbanDb) return;
         const ready = await this._kanbanDb.ensureReady();
@@ -476,7 +477,8 @@ cachedAt: ${new Date().toISOString()}
                 docId,
                 docName,
                 filePath,
-                contentHash
+                contentHash,
+                url
             );
         } catch (err: any) {
             console.error(`[PlanningPanelCacheService] Ticket import registration failed: ${err.message}`);

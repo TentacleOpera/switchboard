@@ -1079,7 +1079,6 @@
             selectStatusTicket: document.getElementById('select-status-ticket'),
             btnCommentTicket: document.getElementById('btn-comment-ticket'),
             btnViewAttachments: document.getElementById('btn-view-attachments'),
-            btnOpenTicket: document.getElementById('btn-open-ticket'),
             btnDiagramPrompt: document.getElementById('btn-diagram-prompt'),
             attachmentsModal: document.getElementById('attachments-modal'),
             attachmentsList: document.getElementById('attachments-list'),
@@ -3426,8 +3425,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     function handleImportedDocsReady(msg) {
         const { docs } = msg;
 
-        console.log('[handleImportedDocsReady] Received docs:', docs);
-
         state.importedDocs.clear();
 
         // Store the raw docs payload so renderUnifiedDocs can re-render
@@ -4409,7 +4406,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     clickUpProjectIssues = tickets.map(t => ({
                         id: t.id, title: t.title, identifier: t.id,
                         status: t.status || '', assignees: [], filePath: t.filePath,
-                        syncStatus: t.syncStatus
+                        syncStatus: t.syncStatus, url: t.url
                     }));
                     clickUpProjectStatus = 'loaded';
                     clickUpProjectMessage = '';
@@ -4418,7 +4415,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     linearProjectIssues = tickets.map(t => ({
                         id: t.id, title: t.title, identifier: t.id,
                         state: { name: t.status || '' }, assignee: null, description: '', filePath: t.filePath,
-                        syncStatus: t.syncStatus
+                        syncStatus: t.syncStatus, url: t.url
                     }));
                     linearProjectStatus = 'loaded';
                     linearProjectMessage = '';
@@ -7397,12 +7394,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
             openCommentManager(provider, id);
         });
 
-        // Action bar: Open ticket in browser
-        document.getElementById('btn-open-ticket')?.addEventListener('click', (e) => {
-            const url = e.currentTarget.dataset.url;
-            if (url) vscode.postMessage({ type: 'openExternalUrl', url });
-        });
-
         // Action bar: Diagram Prompt — copies a prompt to clipboard for agent handoff
         document.getElementById('btn-diagram-prompt')?.addEventListener('click', () => {
             const provider = lastIntegrationProvider;
@@ -7663,6 +7654,15 @@ Instructions:
                     workspaceRoot: ticketsWorkspaceRoot
                 });
                 flashCopyBtn(refineBtn);
+                return;
+            }
+            const openTicketBtn = e.target.closest('[data-open-ticket-url]');
+            if (openTicketBtn) {
+                const url = openTicketBtn.dataset.openTicketUrl;
+                if (url) {
+                    vscode.postMessage({ type: 'openExternalUrl', url });
+                    flashIconBtn(openTicketBtn);
+                }
                 return;
             }
             const card = e.target.closest('[data-linear-issue-id], [data-clickup-task-id]');
@@ -8330,18 +8330,20 @@ Instructions:
             const statusName = issue.state?.name || '';
             const statusColor = issue.state?.color || _ticketStatusLightColor(statusName);
             const statusLight = `<span class="ticket-status-light" style="background:${escapeAttr(statusColor)}" title="${escapeAttr(statusName || 'No status')}"></span>`;
+            const openUrl = _ticketExternalUrl('linear', issue.identifier || issue.id, issue.url);
+            const openBtn = openUrl ? `<button type="button" class="card-icon-btn" data-open-ticket-url="${escapeAttr(openUrl)}">Open</button>` : '';
             return `
             <div class="ticket-node${isSelected ? ' selected' : ''}" data-linear-issue-id="${escapeAttr(issue.id)}">
                 ${statusLight}
                 <div class="tickets-issue-title">${escapeHtml(issue.title || issue.identifier || issue.id)}</div>
-                <div class="tickets-issue-meta">${escapeHtml(issue.state?.name || 'Unknown state')}</div>
+                <div class="tickets-issue-meta ticket-status-row">${escapeHtml(issue.state?.name || 'Unknown state')}${syncBadge}</div>
                 <div class="tickets-issue-meta">${escapeHtml(issue.assignee?.name || issue.assignee?.email || 'Unassigned')}</div>
                 <div class="tickets-issue-meta">${escapeHtml((issue.description || '').trim().slice(0, 180) || 'No description provided.')}</div>
                 <div class="card-actions">
-                    ${syncBadge}
                     <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(issue.id)}" data-provider="linear">Add to kanban</button>
                     <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(issue.id)}" data-provider="linear">Link to ticket</button>
                     <button type="button" class="card-icon-btn" data-refine-ticket-id="${escapeAttr(issue.id)}" data-provider="linear">Refine</button>
+                    ${openBtn}
                 </div>
             </div>
             `;
@@ -8392,15 +8394,10 @@ Instructions:
 
         if (previewMetaBar) {
             previewMetaBar.style.display = 'flex';
-            const { btnViewAttachments, btnOpenTicket, btnDiagramPrompt } = getTicketsTabElements();
+            const { btnViewAttachments, btnDiagramPrompt } = getTicketsTabElements();
             if (btnViewAttachments) {
                 const hasAttachments = selectedLinearIssue.attachments && selectedLinearIssue.attachments.length > 0;
                 btnViewAttachments.style.display = hasAttachments ? '' : 'none';
-            }
-            if (btnOpenTicket) {
-                const openUrl = _ticketExternalUrl('linear', issue.identifier || issue.id, issue.url);
-                btnOpenTicket.style.display = openUrl ? '' : 'none';
-                btnOpenTicket.dataset.url = openUrl;
             }
             if (btnDiagramPrompt) {
                 btnDiagramPrompt.style.display = '';
@@ -8859,17 +8856,19 @@ Instructions:
                 const statusName = task.status || '';
                 const statusColor = task.statusColor || _ticketStatusLightColor(statusName);
                 const statusLight = `<span class="ticket-status-light" style="background:${escapeAttr(statusColor)}" title="${escapeAttr(statusName || 'No status')}"></span>`;
+                const openUrl = _ticketExternalUrl('clickup', task.id, task.url);
+                const openBtn = openUrl ? `<button type="button" class="card-icon-btn" data-open-ticket-url="${escapeAttr(openUrl)}">Open</button>` : '';
                 return `
                 <div class="ticket-node${isSelected ? ' selected' : ''}" data-clickup-task-id="${escapeAttr(task.id)}">
                     ${statusLight}
                     <div class="tickets-issue-title">${escapeHtml(task.title || task.identifier)}</div>
-                    <div class="tickets-issue-meta">${escapeHtml(task.status || 'Unknown')}</div>
+                    <div class="tickets-issue-meta ticket-status-row">${escapeHtml(task.status || 'Unknown')}${syncBadge}</div>
                     <div class="tickets-issue-meta">${task.assignees?.length ? escapeHtml(task.assignees.map(a => a.username || a.email).join(', ')) : 'Unassigned'}</div>
                     <div class="card-actions">
-                        ${syncBadge}
                         <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(task.id)}" data-provider="clickup">Add to kanban</button>
                         <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(task.id)}" data-provider="clickup">Link to ticket</button>
                         <button type="button" class="card-icon-btn" data-refine-ticket-id="${escapeAttr(task.id)}" data-provider="clickup">Refine</button>
+                        ${openBtn}
                     </div>
                 </div>
                 `;
@@ -8924,15 +8923,10 @@ Instructions:
 
         if (previewMetaBar) {
             previewMetaBar.style.display = 'flex';
-            const { btnViewAttachments, btnOpenTicket, btnDiagramPrompt } = getTicketsTabElements();
+            const { btnViewAttachments, btnDiagramPrompt } = getTicketsTabElements();
             if (btnViewAttachments) {
                 const hasAttachments = selectedClickUpIssue.attachments && selectedClickUpIssue.attachments.length > 0;
                 btnViewAttachments.style.display = hasAttachments ? '' : 'none';
-            }
-            if (btnOpenTicket) {
-                const openUrl = _ticketExternalUrl('clickup', task.id, task.url);
-                btnOpenTicket.style.display = openUrl ? '' : 'none';
-                btnOpenTicket.dataset.url = openUrl;
             }
             if (btnDiagramPrompt) {
                 btnDiagramPrompt.style.display = '';

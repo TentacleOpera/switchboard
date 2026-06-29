@@ -8,7 +8,6 @@ import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord } 
 import { parsePlanMetadata, extractClickUpTaskId, extractLinearIssueId } from './planMetadataUtils';
 import { isRuntimeMirrorPlanFile } from './PlanFileImporter';
 import type { ClickUpSyncService } from './ClickUpSyncService';
-import { resolveEffectiveWorkspaceRootFromMappings } from './WorkspaceIdentityService';
 
 export class GlobalPlanWatcherService implements vscode.Disposable {
     private _watchers = new Map<string, vscode.FileSystemWatcher>();
@@ -31,7 +30,6 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
     private _scanInProgress = false; // Guard against overlapping scans
     private _recentRenames = new Set<string>();
     private _recentlyDeletedColumns = new Map<string, { column: string; ts: number }>();
-    private _currentProjects = new Map<string, string>();
     private _scanSeenPaths = new Map<string, Set<string>>();
 
     // Paths currently being written by _createInitiatedPlan — skip watcher insert to avoid duplicates
@@ -53,21 +51,6 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
     }
 
     /**
-     * Live resolver into the authoritative displayed-project source (KanbanProvider).
-     * Given the raw watched workspace root, returns the project currently shown on that
-     * board, or null. This is the source of truth at import time — the _currentProjects
-     * map below is only a fallback for when the provider is unavailable. Reading the live
-     * value avoids the sync gaps that left newly-created plans unassigned (restored filter
-     * bypassing setProjectFilter, map cleared on mappings change, import racing the first
-     * board refresh).
-     */
-    private _resolveDisplayedProject?: (watchedRoot: string) => string | null;
-
-    public setDisplayedProjectResolver(fn: (watchedRoot: string) => string | null): void {
-        this._resolveDisplayedProject = fn;
-    }
-
-    /**
      * Live re-deriver into the KanbanProvider for an epic's kanban_column. Called
      * after the is_epic re-assert in _handlePlanFile to self-heal the
      * kanban_column clobber from insertFileDerivedPlan's hardcoded 'CREATED' on
@@ -82,21 +65,6 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
         this._recomputeEpicColumn = fn;
     }
 
-    public setCurrentProject(workspaceRoot: string, project: string | null): void {
-        // Translate sentinel to empty string — the sentinel '__unassigned__' is a UI filter value
-        // and must never be stored as a plan's project name.
-        const effectiveProject = project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : project;
-        const effectiveRoot = resolveEffectiveWorkspaceRootFromMappings(workspaceRoot);
-        if (effectiveRoot !== workspaceRoot) {
-            this._outputChannel?.appendLine(`[GlobalPlanWatcher] setCurrentProject: resolved ${workspaceRoot} → ${effectiveRoot} for project "${effectiveProject}"`);
-        }
-        if (effectiveProject) {
-            this._currentProjects.set(effectiveRoot, effectiveProject);
-        } else {
-            this._currentProjects.delete(effectiveRoot);
-        }
-    }
-
     constructor(
         private readonly _getClickUpService: (workspaceRoot: string) => ClickUpSyncService,
         outputChannel?: vscode.OutputChannel
@@ -104,10 +72,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
         this._outputChannel = outputChannel;
     }
 
-    public async refreshWatchers(options?: { clearProjectFilters?: boolean }): Promise<void> {
-        if (options?.clearProjectFilters) {
-            this._currentProjects.clear();
-        }
+    public async refreshWatchers(): Promise<void> {
         await this._refreshWatchers();
     }
 
@@ -132,8 +97,8 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
         this._disposables.push(configListener);
 
         // NOTE: switchboard.mappingsChanged is registered in extension.ts, which calls
-        // this.refreshWatchers({ clearProjectFilters: true }) directly. Do NOT register
-        // a duplicate handler here, as the second registerCommand() call would override this one.
+        // this.refreshWatchers() directly. Do NOT register a duplicate handler here, as
+        // the second registerCommand() call would override this one.
 
         // Watch for workspace folder additions/removals
         const folderListener = vscode.workspace.onDidChangeWorkspaceFolders(async () => {
@@ -534,16 +499,14 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             }
 
             if (!plan) {
-                const effectiveRoot = resolveEffectiveWorkspaceRootFromMappings(workspaceRoot);
-                if (effectiveRoot !== workspaceRoot) {
-                    this._outputChannel?.appendLine(`[GlobalPlanWatcher] _handlePlanFile: resolved ${workspaceRoot} → ${effectiveRoot} for project lookup`);
-                }
-                // Prefer the live displayed project from the board provider (source of truth),
-                // then the in-memory mirror as fallback. Pass the RAW watched root so the
-                // provider applies its own effective-root resolution (incl. explicit
-                // control-plane root, which the bare mappings resolver above does not honor).
-                const liveProject = this._resolveDisplayedProject?.(workspaceRoot) || '';
-                const project = metadata.project || liveProject || this._currentProjects.get(effectiveRoot) || '';
+                // The board writes the currently-displayed project name into this DB's
+                // config table whenever it refreshes (KanbanProvider._refreshBoardImpl).
+                // Read it straight back from the SAME db handle we're importing into —
+                // no resolver, no in-memory mirror, no workspace-root comparison to drift
+                // out of sync. insertFileDerivedPlan resolves project_id from this name
+                // using the exact same lookup the manual "Assign to project" button uses.
+                const activeProject = (await db.getConfig('kanban.activeProjectFilter')) || '';
+                const project = metadata.project || activeProject;
                 // New plan - parse and insert (sessionId left empty; plan_file+workspace_id is the unique key)
                 //
                 // For epic files named `epic-<uuid>.md`, reuse the embedded UUID as the
@@ -627,19 +590,18 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             } else {
                 // Existing plan - update metadata.
                 // Re-resolve the active project if the plan currently has none.
-                // Priority: explicit frontmatter project > live displayed project >
-                // _currentProjects fallback > existing DB project (preserved by COALESCE).
+                // Priority: explicit frontmatter project > board's active project (DB config)
+                // > existing DB project (preserved by COALESCE).
                 let resolvedProject = plan.project;
                 if (metadata.project) {
                     // Frontmatter explicitly sets a project — honor it (overrides everything)
                     resolvedProject = metadata.project;
                 } else if (!resolvedProject) {
-                    // Plan has no project and frontmatter doesn't set one — try the active
-                    // project sources that the new-plan path uses. Without this, a plan
-                    // initially imported with project='' (timing gap) is stuck empty forever.
-                    const effectiveRoot = resolveEffectiveWorkspaceRootFromMappings(workspaceRoot);
-                    const liveProject = this._resolveDisplayedProject?.(workspaceRoot) || '';
-                    resolvedProject = liveProject || this._currentProjects.get(effectiveRoot) || '';
+                    // Plan has no project yet — stamp it with the board's active project,
+                    // read from the same DB the board persists it to. Without this, a plan
+                    // initially imported with project='' (e.g. before the board first
+                    // refreshed) would stay empty forever.
+                    resolvedProject = (await db.getConfig('kanban.activeProjectFilter')) || '';
                 }
                 const updatedRecord: KanbanPlanRecord = {
                     ...plan,

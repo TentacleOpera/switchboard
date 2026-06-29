@@ -3727,8 +3727,7 @@ Each plan file must include:
             jules: false, 
             ticket_updater: false,
             researcher: false,
-            mcp_monitor: false,
-            orchestrator: true
+            mcp_monitor: false
         };
 
         const customAgentsGlobal = await this.getCustomAgents(workspaceRoot);
@@ -18388,6 +18387,7 @@ What would you like to find?`;
             let title = '';
             let content = '';
             let issue: any = null;
+            let ticketUrl: string | undefined;
             if (provider === 'linear') {
                 const linear = this._getLinearService(resolvedRoot);
                 if (preFetchedTask) {
@@ -18408,6 +18408,7 @@ What would you like to find?`;
                     }
                 }
                 title = issue.title || id;
+                ticketUrl = issue.url;
                 const node: any = {
                     issue,
                     subtasks: []
@@ -18446,6 +18447,7 @@ What would you like to find?`;
                     subtasks = includeSubtasks && details.subtasks ? details.subtasks : [];
                 }
                 title = clickUpTask.name || id;
+                ticketUrl = clickUpTask.url;
                 // Comments are no longer embedded in the imported doc — they are
                 // surfaced via the comment manager UI (local _comments.json cache).
                 // Passing undefined keeps _buildCommentsSection as a harmless no-op.
@@ -18495,7 +18497,7 @@ What would you like to find?`;
                 const contentBody = content.replace(/^---\n[\s\S]*?\n---\n*/, '');
                 const contentHash = crypto.createHash('sha256').update(contentBody).digest('hex');
                 const slugPrefix = `${provider}_${id}`;
-                await cacheService.registerImportedTicket(provider, id, title, slugPrefix, filePath, contentHash);
+                await cacheService.registerImportedTicket(provider, id, title, slugPrefix, filePath, contentHash, undefined, ticketUrl);
             } catch (cacheErr) {
                 console.error('[TaskViewerProvider] failed to register imported ticket in cache:', cacheErr);
             }
@@ -18688,17 +18690,20 @@ What would you like to find?`;
             let content = '';
             let title = '';
             let id = '';
+            let ticketUrl: string | undefined;
 
             if (provider === 'linear') {
                 const issue = task as LinearIssue;
                 id = issue.id;
                 title = issue.title || issue.id;
+                ticketUrl = issue.url;
                 const node: any = { issue, subtasks: [] };
                 content = this._buildLinearImportPlanContent(node, undefined, new Date().toISOString());
             } else {
                 const clickUpTask = task as ClickUpTask;
                 id = clickUpTask.id;
                 title = clickUpTask.name || clickUpTask.id;
+                ticketUrl = clickUpTask.url;
                 content = this._buildClickUpImportPlanContent(clickUpTask, new Date().toISOString());
             }
 
@@ -18714,7 +18719,7 @@ What would you like to find?`;
             try {
                 const cacheService = this._getCacheService(resolvedRoot);
                 const slugPrefix = `${provider}_${id}`;
-                await cacheService.registerImportedTicket(provider, id, title, slugPrefix, filePath, '');
+                await cacheService.registerImportedTicket(provider, id, title, slugPrefix, filePath, '', undefined, ticketUrl);
             } catch (regErr) {
                 console.error('[TaskViewerProvider] failed to record sync time after bulk write:', regErr);
             }

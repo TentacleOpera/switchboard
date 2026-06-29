@@ -65,6 +65,11 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     { source: 'skills/generate_diagram.md', name: 'generate-diagram', invocation: 'no-model', allowedTools: 'Bash' },
     { source: 'skills/kanban_operations', name: 'kanban-operations', invocation: 'no-model', allowedTools: 'Bash' },
     { source: 'skills/refine_ticket.md', name: 'refine-ticket', invocation: 'no-model' },
+    { source: 'skills/refine_epic.md', name: 'refine-epic', invocation: 'no-model' },
+
+    // Model-invocable procedure skills — an agent loads these by description and
+    // follows the flow directly (no button click required).
+    { source: 'skills/group-into-epics', name: 'group-into-epics', invocation: 'default', allowedTools: 'Bash' },
 
     // Pure info-retrieval / read-only skills → user-invokable:false + rich description.
     {
