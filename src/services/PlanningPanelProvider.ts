@@ -125,9 +125,7 @@ export class PlanningPanelProvider {
     private _activeDesignDocSourceId: string | null = null;
     private _activeDesignDocId: string | null = null;
     private _activeTicketsProvider: 'clickup' | 'linear' | null = null;
-    // Type-only reference (avoids a runtime circular import with KanbanProvider). Used to
-    // assemble/dispatch the orchestrator prompt for the Epics-tab Orchestrate action so the
-    // builder logic lives in one place (preview = dispatch parity).
+    // Type-only reference (avoids a runtime circular import with KanbanProvider).
     private _kanbanProvider?: import('./KanbanProvider').KanbanProvider;
     // Type-only reference (avoids a runtime circular import with TaskViewerProvider).
     // Used to dispatch constitution builder/updater + system builder prompts through the planner rotation.
@@ -2930,11 +2928,6 @@ export class PlanningPanelProvider {
                             }
                         } catch (err) { /* root has no kanban DB, skip */ }
                     }
-                    // Compute orchestrator availability before the guard check so a newer
-                    // request arriving during the await doesn't get a stale message.
-                    const orchestratorAvailable = this._kanbanProvider
-                        ? await this._kanbanProvider.isOrchestratorAvailable()
-                        : false;
                     if (requestId !== this._latestRequestIds.get(guardKey)) { break; }
                     allPlans.sort((a, b) => b.mtime - a.mtime);
                     mergedColumns.sort((a, b) => a.order - b.order);
@@ -2945,12 +2938,11 @@ export class PlanningPanelProvider {
                         allWorkspaceProjects,
                         columns: mergedColumns,
                         kanbanWorkspaceRoot: this._kanbanProvider?.getCurrentWorkspaceRoot() || null,
-                        requestId,
-                        orchestratorAvailable
+                        requestId
                     });
                 } catch (err) {
                     if (requestId === this._latestRequestIds.get(guardKey)) {
-                        this._projectPanel?.webview.postMessage({ type: 'kanbanPlansReady', plans: [], columns: [], requestId, error: String(err), orchestratorAvailable: false });
+                        this._projectPanel?.webview.postMessage({ type: 'kanbanPlansReady', plans: [], columns: [], requestId, error: String(err) });
                     }
                 }
                 break;
@@ -3026,12 +3018,34 @@ export class PlanningPanelProvider {
                     break;
                 }
                 try {
-                    const assembled = await this._kanbanProvider.buildEpicOrchestrationPrompt(wsRoot, sessionId, 'planner');
-                    if (!assembled) {
+                    // Build the epic + subtask plans array via the shared expansion helper
+                    // and run it through generateUnifiedPrompt (planner role). Replaces the
+                    // deleted buildEpicOrchestrationPrompt orchestrator preview.
+                    const kp = this._kanbanProvider;
+                    const db = (kp as any)._getKanbanDb(wsRoot);
+                    if (!db || !(await db.ensureReady())) {
                         this._projectPanel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: 'Could not resolve this epic.' });
                         break;
                     }
-                    await vscode.env.clipboard.writeText(assembled.prompt);
+                    const epic = await db.getPlanByPlanId(sessionId);
+                    if (!epic || !epic.isEpic) {
+                        this._projectPanel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: 'Could not resolve this epic.' });
+                        break;
+                    }
+                    const plans: import('./agentPromptBuilder').BatchPromptPlan[] = [{
+                        topic: epic.topic,
+                        absolutePath: (kp as any)._resolvePlanFilePath(wsRoot, epic.planFile),
+                        complexity: epic.complexity,
+                        sessionId: epic.sessionId || epic.planId,
+                        epicId: epic.planId || undefined,
+                        isEpic: true
+                    }];
+                    const subtaskPlans = await kp.expandEpicSubtaskPlans(
+                        wsRoot, epic.planId, epic.topic, epic.kanbanColumn || '', undefined
+                    );
+                    for (const sp of subtaskPlans) { plans.push(sp); }
+                    const prompt = await kp.generateUnifiedPrompt('planner', plans, wsRoot);
+                    await vscode.env.clipboard.writeText(prompt);
                     this._projectPanel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: true, sessionId });
                 } catch (err) {
                     this._projectPanel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: String(err) });
@@ -3266,50 +3280,6 @@ export class PlanningPanelProvider {
                 }
                 break;
             }
-            case 'orchestrateEpic': {
-                // Assemble the orchestrator prompt for one epic and either copy it (default,
-                // Decision #6) or also dispatch it to the orchestrator terminal. Copy always
-                // happens so the action works even when no orchestrator terminal exists.
-                // Prefer planId — buildEpicOrchestrationPrompt / markEpicOrchestrating resolve the
-                // epic via getPlanByPlanId, and a locally-created epic's sessionId !== planId (two
-                // independent UUIDs in createEpicFromPlanIds). Passing sessionId silently fails the
-                // lookup, which is why the Epics-tab Orchestrate action never moved the epic.
-                const sessionId = String(msg.planId || msg.sessionId || '');
-                const wsRoot = String(msg.workspaceRoot || workspaceRoot);
-                const mode = msg.mode === 'send' ? 'send' : (msg.mode === 'preview' ? 'preview' : 'copy');
-                if (!sessionId || !wsRoot || !this._kanbanProvider) {
-                    this._projectPanel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: false, mode, error: 'Orchestration is unavailable in this window.' });
-                    break;
-                }
-                try {
-                    let moved = false;
-                    if (mode === 'send') {
-                        const { assembled, sent, moved: movedRes } = await this._kanbanProvider.dispatchEpicOrchestration(wsRoot, sessionId);
-                        moved = movedRes;
-                        if (!assembled) {
-                            this._projectPanel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: false, mode, error: 'Could not resolve this epic.' });
-                            break;
-                        }
-                        await vscode.env.clipboard.writeText(assembled.prompt);
-                        this._projectPanel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: true, mode, sent, moved, prompt: assembled.prompt, epicTopic: assembled.epicTopic, subtaskCount: assembled.subtaskCount, totalSubtasks: assembled.totalSubtasks });
-                    } else {
-                        const assembled = await this._kanbanProvider.buildEpicOrchestrationPrompt(wsRoot, sessionId);
-                        if (!assembled) {
-                            this._projectPanel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: false, mode, error: 'Could not resolve this epic.' });
-                            break;
-                        }
-                        if (mode === 'copy') {
-                            await vscode.env.clipboard.writeText(assembled.prompt);
-                            moved = await this._kanbanProvider.markEpicOrchestrating(wsRoot, sessionId);
-                        }
-                        this._projectPanel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: true, mode, moved, prompt: assembled.prompt, epicTopic: assembled.epicTopic, subtaskCount: assembled.subtaskCount, totalSubtasks: assembled.totalSubtasks });
-                    }
-                } catch (err) {
-                    console.error('[PlanningPanelProvider] orchestrateEpic failed:', err);
-                    this._projectPanel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: false, mode, error: String(err) });
-                }
-                break;
-            }
             case 'fetchEpicDocuments': {
                 try {
                     const allRoots = Array.from(this._getAllowedRoots());
@@ -3445,8 +3415,7 @@ export class PlanningPanelProvider {
                 break;
             }
             case 'updateEpicConfig': {
-                // epic_prompt_template is superseded by the orchestrator role prompt override
-                // (Decision #3/#4); writes removed to avoid dual-source conflict.
+                // epic_prompt_template writes removed to avoid dual-source conflict.
                 // epic_lock_columns is dormant; writes removed.
                 // epic_max_subtasks still bounds epic expansion and has no addon replacement
                 // yet, so its write is kept. Legacy keys are still READ as fallback (per CLAUDE.md).
@@ -8659,8 +8628,7 @@ Read the existing ticket content from the local file if it exists. Determine wha
         const visibleAgentDefaults: Record<string, boolean> = {
             lead: true, coder: true, intern: true, reviewer: true,
             tester: false, planner: true, analyst: true, jules: false,
-            ticket_updater: false, researcher: false,
-            orchestrator: true
+            ticket_updater: false, researcher: false
         };
         let visibleAgents: Record<string, boolean> = { ...visibleAgentDefaults };
         try {

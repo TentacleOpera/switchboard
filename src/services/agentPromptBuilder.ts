@@ -162,8 +162,6 @@ export interface PromptBuilderOptions {
     customSubagentName?: string;
     /** When true, instructs the agent to use native subagent/worktree capabilities to isolate each plan. */
     useWorktreesPerPlanEnabled?: boolean;
-    /** When true, appends the ultracode directive. */
-    ultracodeEnabled?: boolean;
     /** The epic doc's path/link. */
     epicDocLink?: string;
 
@@ -315,21 +313,12 @@ export const REMOTE_MODE_DIRECTIVE = `REMOTE MODE: You are running under remote 
  * prefix (`dispatchPrefixCore`) so it reaches EVERY role — mirroring the §11
  * remote-mode prefix injection, NOT the planner-only constitution block.
  * Gated by `options.prdEnabled` (the project-context toggle + an active PRD).
- * For the orchestrator we prefer the link over full content to preserve the
- * slim-prompt goal — its subagents read the file and the PRD is also surfaced
- * in the epic doc.
  */
 export function buildPrdReferenceBlock(options: PromptBuilderOptions | undefined, role: string): string {
     if (!options?.prdEnabled) return '';
     const link = options.prdLink?.trim();
     const content = options.prdContent?.trim();
     if (!link && !content) return '';
-    if (role === 'orchestrator') {
-        if (link) {
-            return `PROJECT REQUIREMENTS (PRD):\nThe active project has a product requirements document that all work on this project must respect. Read it and pass the relevant requirements to your subagents:\n${link}`;
-        }
-        return `PROJECT REQUIREMENTS (PRD):\nThe following product requirements apply to the active project and must be respected by all work on it. Pass the relevant requirements to your subagents:\n\n${content}`;
-    }
     if (content) {
         return `PROJECT REQUIREMENTS (PRD):\nThe following product requirements apply to the active project and must be respected throughout this work:\n\n${content}`;
     }
@@ -353,7 +342,6 @@ export const SKIP_TESTS_DIRECTIVE = `SKIP TESTS: Do NOT run automated tests (uni
 export const ADVISE_RESEARCH_DIRECTIVE = `RESEARCH WHEN UNSURE: As you plan, track every assumption, factual claim, API/behavior, or library detail you are NOT 100% certain about. If any exist, read the skill file .agents/skills/advise_research/SKILL.md and follow it. In the plan file, add a brief "## Uncertain Assumptions" section that lists ONLY those uncertainties and notes that the user was advised to run web research to confirm them before implementation — do NOT put the research prompt itself in the plan. Then, at the very end of your chat summary to the user (after everything else), supply the ready-to-run research prompt so they can trigger web research. If you are confident about everything, state that no research is needed and omit both the section and the prompt.`;
 export const CAVEMAN_OUTPUT_DIRECTIVE = `CAVEMAN MODE: Talk like caveman. Drop filler, keep substance. Use fragments. Technical terms exact. Code unchanged. Pattern: [thing] [action] [reason]. [next step].`;
 export const SUPPRESS_WALKTHROUGH_DIRECTIVE = `SUPPRESS WALKTHROUGH: Do NOT generate a walkthrough.md artifact at the end of this task. Omit the walkthrough creation step entirely.`;
-export const ULTRACODE_DIRECTIVE = `use ultracode`;
 
 export const NO_SUBAGENTS_DIRECTIVE = "SUBAGENT POLICY: You are strictly forbidden from spawning or invoking any subagents. Handle all tasks yourself.";
 export const CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE = (name: string) =>
@@ -487,7 +475,6 @@ export function buildKanbanBatchPrompt(
     const noSubagentsEnabled = options?.noSubagentsEnabled ?? false;
     const customSubagentName = options?.customSubagentName?.replace(/[^a-zA-Z0-9_]/g, '').trim() || undefined;
     const useWorktreesPerPlanEnabled = options?.useWorktreesPerPlanEnabled ?? false;
-    const ultracodeEnabled = options?.ultracodeEnabled ?? false;
     const epicDocLink = options?.epicDocLink;
 
     let subagentBlock = '';
@@ -526,7 +513,7 @@ export function buildKanbanBatchPrompt(
     // every role's suffixBlock without touching each role branch individually.
     const remoteModeBlock = options?.remoteControlActive ? REMOTE_MODE_DIRECTIVE : '';
     // Per-project PRD: fold into the shared prefix so it reaches every role's
-    // suffixBlock (planner, lead, coder, reviewer, tester, orchestrator, …) without
+    // suffixBlock (planner, lead, coder, reviewer, tester, …) without
     // touching each role branch — same pattern as the §11 remote-mode block.
     const prdBlock = buildPrdReferenceBlock(options, role);
     const dispatchPrefixCore = [dispatchContextBlock, remoteModeBlock, prdBlock].filter(Boolean).join('\n\n');
@@ -1049,63 +1036,6 @@ fields above, no speculative implementation detail. Comment only.`;
         return normalizeNewlines(promptParts);
     }
 
-    if (role === 'orchestrator') {
-        // Implementation-oriented base (Decision #9): the orchestrator hands the whole epic
-        // to one agent that drives every subtask with native subagents/worktrees. In split
-        // mode the subtask plans were already improved by the planner, so the default leans
-        // toward implementing them; it still works standalone on a cold epic.
-        const orchestratorBase = `You are the Epic Orchestrator.
-
-You receive an epic and its subtask plans as a SINGLE delivery unit. Implement every subtask end-to-end using your native subagent or orchestration capabilities.
-
-The subtask plans may already have been improved by a planning agent — treat them as ready to implement. Refine a subtask plan only if it is clearly insufficient to implement from; do not re-plan a subtask whose plan is already adequate. Keep the subtasks coupled as one epic — do NOT treat them as independent tickets.`;
-
-        let baseInstructions = resolveBaseInstructions('orchestrator', orchestratorBase, options);
-        if (cavemanOutputEnabled) {
-            baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
-        }
-
-        let safetySessionBlock = '';
-        for (const plan of plans) {
-            if (plan.worktreePath) {
-                safetySessionBlock += `\nIMPORTANT: You are working in a safety session. All file operations and git commands\n` +
-                    `must be run from inside the worktree directory: ${plan.worktreePath}\n` +
-                    `Navigate into this directory before making any changes. Do NOT run git commands\n` +
-                    `from the parent directory — that is the main branch and will corrupt it.\n`;
-            }
-        }
-        if (safetySessionBlock) {
-            baseInstructions += '\n\n' + safetySessionBlock.trim();
-        }
-
-        const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
-        const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const ultracodeBlock = ultracodeEnabled ? ULTRACODE_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock, ultracodeBlock]
-            .filter(Boolean)
-            .join('\n\n');
-
-        const suppressWalkthroughBlock = suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '';
-        const epicDocLinkLine = epicDocLink ? `Read the epic and its subtasks at: ${epicDocLink}` : '';
-        // The AUTHORIZATION TO EXECUTE wall is gated with the rest of the safeguards
-        // (batch rules + FOCUS) so the terse "[add-on blocks] + [epic doc link]" form —
-        // all add-ons off except ultracode — carries no AUTHORIZATION/FOCUS/GIT walls.
-        // The execute-don't-replan intent still lives in the orchestrator base instruction.
-        const executionBlock = switchboardSafeguardsEnabled ? executionDirective : '';
-        const promptParts = [
-            `Please orchestrate the following epic.`,
-            executionBlock,
-            safeguardsBlock,
-            baseInstructions,
-            suffixBlock,
-            epicDocLinkLine,
-            suppressWalkthroughBlock
-        ].filter(Boolean).join('\n\n');
-
-        return normalizeNewlines(promptParts);
-    }
-
     if (role === 'chat') {
         const chatBase = DEFAULT_CHAT_BASE_INSTRUCTIONS;
         let baseInstructions = resolveBaseInstructions('chat', chatBase, options);
@@ -1137,7 +1067,7 @@ The subtask plans may already have been improved by a planning agent — treat t
 
     // No fallback — every built-in role must have an explicit template.
     // Custom agents are NOT routed through this function; they use plan-file-link-only prompts built at call sites.
-    throw new Error(`Unknown role '${role}' in buildKanbanBatchPrompt. Built-in roles: planner, reviewer, tester, lead, coder, intern, analyst, ticket_updater, researcher, orchestrator, chat. Custom agents should be handled at the call site, not here.`);
+    throw new Error(`Unknown role '${role}' in buildKanbanBatchPrompt. Built-in roles: planner, reviewer, tester, lead, coder, intern, analyst, ticket_updater, researcher, chat. Custom agents should be handled at the call site, not here.`);
 }
 
 /**

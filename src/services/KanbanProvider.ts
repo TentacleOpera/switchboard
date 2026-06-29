@@ -4027,15 +4027,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
         }
 
         if (column.epicOnly) {
-            // epicOnly columns (e.g. ORCHESTRATING) are never a configured drag/integration
-            // dispatch target. NOTE: returning null here is NOT, by itself, sufficient to block
-            // a dispatch — callers resolve role as `spec?.role || this._columnToRole(col)`, and
-            // _columnToRole('ORCHESTRATING') legitimately returns 'orchestrator' (needed so an
-            // epic already parked here can be re-dispatched on inbound comments). Foreign-entry
-            // dispatch is actually prevented upstream: the webview handleDrop guard rejects every
-            // drop onto an epicOnly column, _getNextColumnId/shouldSkip never auto-advances into
-            // one, and no Linear status maps to ORCHESTRATING. This null return only strips the
-            // spec-driven (custom-user) dispatch config; it is defense-in-depth, not the gate.
+            // epicOnly columns are never a configured drag/integration dispatch target.
+            // This null return only strips the spec-driven (custom-user) dispatch config;
+            // it is defense-in-depth, not the gate (the webview handleDrop guard rejects
+            // every drop onto an epicOnly column, and auto-advance never enters one).
             return null;
         }
 
@@ -4719,9 +4714,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
             await this._autoCommitIfCodeReviewTransition(workspaceRoot, sessionId, targetColumn);
 
             const plan = await db.getPlanBySessionId(sessionId);
-            if (targetColumn === 'ORCHESTRATING' && !(plan && plan.isEpic)) {
-                return false;
-            }
             let moved: boolean;
             let subtaskSessionIds: string[] = [];
             if (plan && plan.isEpic) {
@@ -4783,9 +4775,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
             const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
 
             const previousRecord = await db.getPlanByPlanFile(planFile, workspaceId);
-            if (targetColumn === 'ORCHESTRATING' && !(previousRecord && previousRecord.isEpic)) {
-                return false;
-            }
             const sessionId = previousRecord?.sessionId || null;
 
             if (targetColumn === 'CODE REVIEWED') {
@@ -6873,66 +6862,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 this.refresh();
                 break;
             }
-            case 'orchestrateEpic': {
-                // Kanban-board Orchestrate button (epic cards). The board is a SEPARATE webview
-                // from the Epics tab (PlanningPanelProvider), so it needs its own handler — the
-                // PlanningPanelProvider 'orchestrateEpic' case never receives board messages.
-                // Resolve the epic by plan_id: buildEpicOrchestrationPrompt / markEpicOrchestrating
-                // both look up via getPlanByPlanId, and a locally-created epic's sessionId !== planId
-                // (two independent UUIDs in createEpicFromPlanIds), so passing sessionId would
-                // silently fail the lookup and the ORCHESTRATING column would never appear.
-                const epicId = String(msg.planId || msg.sessionId || '');
-                const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                const mode: 'send' | 'copy' = msg.mode === 'send' ? 'send' : 'copy';
-                // Echo back whatever identifier the button carries so the kanban-side
-                // epicOrchestrationResult handler can re-match the originating button (it matches
-                // msg.sessionId against data-session, then data-plan-id).
-                const echoId = String(msg.sessionId || msg.planId || '');
-                if (!epicId || !wsRoot) {
-                    this._panel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: false, mode, sessionId: echoId, error: 'Orchestrate failed: missing plan or workspace.' });
-                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'Orchestrate failed: missing plan or workspace.', isError: true });
-                    break;
-                }
-                try {
-                    let assembled: { prompt: string; epicTopic: string; subtaskCount: number; totalSubtasks: number } | null = null;
-                    let sent = false;
-                    let moved = false;
-                    if (mode === 'send') {
-                        // dispatchEpicOrchestration teleports to ORCHESTRATING internally.
-                        const res = await this.dispatchEpicOrchestration(wsRoot, epicId);
-                        assembled = res.assembled;
-                        sent = res.sent;
-                        moved = res.moved;
-                    } else {
-                        assembled = await this.buildEpicOrchestrationPrompt(wsRoot, epicId);
-                    }
-                    if (!assembled) {
-                        this._panel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: false, mode, sessionId: echoId, error: 'Could not resolve this epic for orchestration.' });
-                        this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'Could not resolve this epic for orchestration.', isError: true });
-                        break;
-                    }
-                    await vscode.env.clipboard.writeText(assembled.prompt);
-                    if (mode === 'copy') {
-                        // Copy path must teleport explicitly (send path already did above).
-                        moved = await this.markEpicOrchestrating(wsRoot, epicId);
-                    }
-                    const statusMsg = mode === 'send'
-                        ? (sent && moved ? 'Orchestrator prompt sent and copied. Epic moved to ORCHESTRATING.'
-                            : sent ? 'Orchestrator prompt sent and copied. Could not move epic — check console for details.'
-                            : moved ? 'No orchestrator terminal — prompt copied. Epic moved to ORCHESTRATING.'
-                            : 'No orchestrator terminal — prompt copied. Could not move epic — check console for details.')
-                        : (moved
-                            ? 'Orchestrator prompt copied. Epic moved to ORCHESTRATING.'
-                            : 'Orchestrator prompt copied. Could not move epic — check console for details.');
-                    this._panel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: true, mode, sent, sessionId: echoId, prompt: assembled.prompt, epicTopic: assembled.epicTopic, subtaskCount: assembled.subtaskCount, totalSubtasks: assembled.totalSubtasks });
-                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: statusMsg, isError: false });
-                } catch (err) {
-                    console.error('[KanbanProvider] orchestrateEpic failed:', err);
-                    this._panel?.webview.postMessage({ type: 'epicOrchestrationResult', ok: false, mode, sessionId: echoId, error: String(err) });
-                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Orchestrate failed: ${String(err)}`, isError: true });
-                }
-                break;
-            }
             case 'importFromClipboard':
                 await vscode.commands.executeCommand('switchboard.importPlanFromClipboard', msg.markdownText);
                 break;
@@ -8014,19 +7943,17 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 const subtasks = await db.getSubtasksByEpicId(epic.planId);
                 this._panel?.webview.postMessage({ type: 'epicDetails', epic, subtasks });
                 // The legacy `source:'kanban'` branch (which sent kanbanEpicDetails to the
-                // removed on-board epic-manage modal) is gone. The orchestration prompt is
-                // now the orchestrator role prompt (Decision #3); epic_prompt_template is
+                // removed on-board epic-manage modal) is gone. epic_prompt_template is
                 // read as a fallback in generateUnifiedPrompt, never surfaced for per-epic
                 // editing here.
                 break;
             }
             case 'updateEpicConfig': {
                 // No remaining kanban caller — the on-board epic-manage modal was removed.
-                // epic_prompt_template is superseded by the orchestrator role prompt override
-                // (Decision #3/#4); writes to it are removed to avoid a dual-source conflict.
+                // epic_prompt_template writes are removed to avoid a dual-source conflict.
                 // epic_lock_columns is dormant (default matches no real column id); writes removed.
-                // epic_max_subtasks still bounds epic expansion (board step-mode and Epics-tab
-                // Orchestrate assembly) and has no addon replacement yet, so its write is kept.
+                // epic_max_subtasks still bounds epic expansion (board step-mode and epic
+                // dispatch) and has no addon replacement yet, so its write is kept.
                 // Legacy keys are never dropped — they are still READ as fallback (per CLAUDE.md).
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) break;
@@ -8130,7 +8057,6 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             case 'CODER CODED': return 'coder';
             case 'INTERN CODED': return 'intern';
             case 'CODED': return 'lead';
-            case 'ORCHESTRATING': return 'orchestrator';
             case 'CODE REVIEWED': return 'reviewer';
             case 'ACCEPTANCE TESTED': return 'tester';
             case 'COMPLETED': return null;

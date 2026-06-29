@@ -95,3 +95,52 @@ Automated tests are skipped per session directive. The test suite will be run se
 8. **Verify:** Epic files still appear in the epics list (the fix did not break the epics tab).
 9. Create a new epic and a new plan.
 10. **Verify:** The epic appears only in the Epics tab; the plan appears only in the Kanban tab.
+
+---
+
+## Code Review Results (Reviewer Pass — 2026-06-29)
+
+### Stage 1: Grumpy Adversarial Findings
+
+- **NIT** (`project.js:1197`): The one-line fix was committed in `2daedaa` (the *previous* plan's auto-commit), not in this plan's auto-commit `12062e5`. This plan's auto-commit (`12062e5`) contains ~113 lines of unrelated subtask-preview machinery (`renderEpicSubtaskMetaBar`, `_epicSubtaskPreview`, etc.) that is outside this plan's scope. Commit hygiene issue — not a code defect.
+- **NIT** (commit `12062e5`): Unrelated subtask-preview changes in `project.js` (lines 165, 870-884, 1797-1800, 1882-1976, 1999-2003) are out of scope for this plan. Flagged for awareness — not reviewed here per isolation directive.
+
+No CRITICAL or MAJOR findings.
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Severity | Verdict |
+|---|---|---|
+| `if (plan.isEpic) return false;` at top of filter | — | **Keep.** Correct, matches plan spec exactly. |
+| Fix landed in prior commit, not this plan's auto-commit | NIT | **Defer.** Commit hygiene, not a code defect. |
+| Unrelated subtask-preview code in auto-commit | NIT | **Defer.** Out of scope. Flagged. |
+
+**Code fixes applied:** None needed. Implementation matches plan precisely.
+
+### Files Changed (Verified)
+
+- `src/webview/project.js:1197` — `if (plan.isEpic) return false;` added at top of `getFilteredKanbanPlans()` filter callback.
+
+### Validation Results
+
+- ✅ Fix present at `project.js:1197` — `if (plan.isEpic) return false;`
+- ✅ Placed before all other filter checks (short-circuits cleanly)
+- ✅ Epics tab (`renderEpicsList`, `project.js:1620`) still filters `plan => plan.isEpic` — unaffected
+- ✅ Backend (`PlanningPanelProvider.ts:8646`) ships `isEpic: r.isEpic`
+- ✅ `tryResolvePendingEpicSelection` (`project.js:1386`) accesses cache directly — unaffected
+- ✅ No confirm dialogs (house rule satisfied)
+- ⏭️ Compilation skipped per session directive
+- ⏭️ Tests skipped per session directive
+
+### Remaining Risks
+
+- **Commit hygiene:** The plan's one-line fix is in commit `2daedaa`; this plan's auto-commit `12062e5` contains unrelated work. No code impact, but worth noting for history clarity.
+
+### Corrected: `planning.js` is NOT affected
+
+The original plan's edge-case audit speculated that `planning.js` might have the same bug. **This is incorrect.** `planning.js` uses a fundamentally different UI paradigm:
+
+- `planning.js` has a **two-mode toggle** (`_kanbanViewMode`: `'all'` vs `'epics'`, `planning.js:5750-5752`). In `'all'` mode, all plans (including epics) appear — this is **by design**, not a bug. In `'epics'` mode, only epics appear (`planning.js:5794-5796`).
+- `project.html` has **separate tabs** (Kanban tab + Epics tab) that are meant to be mutually exclusive. Epics appearing in the Kanban tab was the bug this plan fixed.
+
+There is no `planning.js` parity issue. No separate plan is needed.
