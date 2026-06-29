@@ -1,114 +1,183 @@
-# Epics Are Always High Complexity (Regardless of Subtasks)
+# Epic Complexity Is the Max of Its Subtasks (Derived, Never Unknown)
 
 ## Metadata
 **Complexity:** 3
-**Tags:** backend, kanban, epic, complexity, routing, migration, bugfix
+**Tags:** backend, bugfix
 
 ## Goal
 
-Make an epic's complexity **always High** — a constant property of being an epic, never derived from or averaged across its subtasks, and never `'Unknown'`. This makes epic routing deterministic and correct everywhere (board AUTOCODE drop, column dispatch, batch/preview), and fixes the current behavior where a default epic silently routes to the Coder lane.
+Make an epic's complexity a **derived value: the maximum complexity score among its active subtasks** — stored in the DB `complexity` column and kept current as subtasks are added, removed, or rescored. Once any subtask is scored, the epic is never `'Unknown'`. This makes epic routing both **deterministic** and **right-sized**: a cleanup epic of three score-3 subtasks routes to the cheap lane, while an epic containing a score-8 subtask routes to the lead — without inventing complexity that batching alone does not justify.
 
 ### Problem Analysis
 
-An epic's `complexity` is stored as `'Unknown'` at creation (`KanbanProvider.ts:8669`, `createEpicFromPlanIds`) and is **not** aggregated from subtasks (deliberate design: "Switchboard does not compute aggregate complexity"). That `'Unknown'` causes two concrete problems:
+An epic's `complexity` is stored as `'Unknown'` at creation (`KanbanProvider.ts:8669`, `createEpicFromPlanIds`). That `'Unknown'` causes two problems, and the obvious "fix" causes a third:
 
-1. **Wrong lane on AUTOCODE drop.** When an epic is dragged into the AUTOCODE column with dynamic complexity routing on, the frontend lane resolver (`kanban.html:5652`, `resolveCodedAutoTarget`) does `parseInt(card.complexity)` → `NaN` for `'Unknown'` → returns **`CODER CODED`**. The whole epic + all subtasks are then dispatched to the **Coder** agent (the backend honors the frontend-chosen lane via `_columnToRole`). Subtask complexity is irrelevant — the epic's single score decides the lane for everything.
+1. **Wrong + divergent lane.** The frontend lane resolver (`kanban.html:5652`, `resolveCodedAutoTarget`) does `parseInt('Unknown')` → `NaN` → returns **`CODER CODED`**. The backend role resolvers (`scoreToRoutingRole`) map `'Unknown'`→score `0`→**`lead`** (`complexityScale.ts:64`). So the *same* epic routes to **Coder** when dragged onto AUTOCODE but to **Lead** when advanced via the column button. Same card, two destinations.
 
-2. **Frontend/backend divergence.** The backend role resolvers (`resolveRoutedRole` / `scoreToRoutingRole`) map `'Unknown'`→score `0`→**`lead`** (the "Unknown defaults to lead" rule, `complexityScale.ts:64`). So the *same* `'Unknown'` epic routes to **Coder** if dragged to AUTOCODE but to **Lead** if advanced via the column button. Same card, two destinations — and the AUTOCODE path is semantically wrong (an epic is not "unknown" complexity; it is high).
+2. **Pinning every epic to High is wrong in the other direction.** Forcing an epic to High (score 8) would make routing deterministic but would ship an all-cleanup epic — three score-3 subtasks — straight to the lead. Batching low-complexity work does not make it high-complexity work.
 
-The fix is not to rely on the `'Unknown'`→lead coincidence, but to make epics genuinely High so every read path agrees.
+3. **The correct value is the maximum, not a constant or an average.** An epic dispatches the whole batch (epic + all subtasks) to **one** agent/lane. That single agent must be able to handle the **hardest** subtask in the batch — so the right complexity is the **max**. An average is unsafe: `[3,3,10]` averages to ~5 → coder, and the coder can't do the 10.
 
 ### Root Cause
 
-There are three different complexity *sources* feeding routing — frontend `card.complexity` (DB), backend batch filters reading `c.complexity` (DB, `KanbanProvider.ts:2681,7426`), and backend per-session/role resolvers reading the plan **file** via `getComplexityFromPlan` (`KanbanProvider.ts:4961`, `TaskViewerProvider.ts:2103,13871`). Crucially, `getComplexityFromPlan` falls back to the **DB** complexity (its step 2, `KanbanProvider.ts:~4460`) when the file has no explicit complexity. Therefore **storing a real High score in the DB `complexity` column fixes all three read paths at once** — no per-site logic changes, no reliance on defaults.
+Three complexity *sources* feed routing — frontend `card.complexity` (DB), backend batch filters reading `c.complexity` (DB, `KanbanProvider.ts:2681,7426`), and backend per-session/role resolvers via `getComplexityFromPlan` (`KanbanProvider.ts:4432`), which **falls back to the DB complexity** when the plan file has no explicit complexity line. Therefore **storing a real numeric value in the DB `complexity` column fixes all three read paths at once** — exactly as a constant-High would have, but with the *right* value.
 
-One sharp edge to guard: `isValidComplexityValue('Unknown')` returns **true** (`complexityScale.ts`), so `updateComplexityByPlanFile`/`updateComplexityByPlanId` will happily write `'Unknown'` back. A self-heal or mirror-metadata sync that parses an epic file with no complexity line could therefore downgrade a stored `8` to `'Unknown'`. A write-layer guard is required to make "always High" actually hold.
+The only requirements beyond a constant are (a) **keeping the stored value current** as subtasks change, and (b) **stopping the auto-generated epic file from clobbering it back to `'Unknown'`**. The epic `.md` is produced by `_regenerateEpicFile` with no `Complexity:` line, so `parsePlanMetadata` returns `'Unknown'`, and `isValidComplexityValue('Unknown')` is `true` — so the staging watcher's `updateComplexityByPlanFile` would happily write `'Unknown'` over the computed max unless guarded.
 
 ## Decision (no open product questions)
 
-- **Epic complexity = High = score `8`** (`categoryToScore('High')`). High, not Very High, matches the literal "high complexity"; the value flows through the existing routing map so custom maps are still honored.
-- **Enforce at three layers** so the rule is true for new epics, existing epics, and against any future write path:
-  1. **Creation** stores `8`.
-  2. **Migration** backfills existing epics.
-  3. **Write-guard** clamps any epic complexity write to a minimum of High.
-- **Reads are untouched.** Storing `8` in the DB column makes the frontend, backend batch filters, and `getComplexityFromPlan` (DB fallback) all resolve `8`→lead uniformly. No derived `isEpic` checks scattered through routing.
-- **Manual override is allowed upward only.** A user may raise an epic to Very High (9/10); attempts to set it below High are clamped back to `8`. This honors "epics should always have high complexity."
-- **Subtasks are excluded.** The rule applies to `is_epic = 1` rows only. Subtasks keep their own complexity and route individually when dispatched standalone — this is the "regardless of subtasks" requirement (constant High for the epic, no aggregation).
+- **Epic complexity = `max(parseComplexityScore(subtask))` over active subtasks**, stored as the numeric string (e.g. `'8'`) in the DB `complexity` column.
+- **Bundled-by-max is the only dispatch model.** The epic + its subtasks dispatch to one lane, sized to the hardest subtask. No fan-out / per-subtask routing — explicitly out of scope (it would need per-subtask worktree isolation, and epics are intentionally worktree-free).
+- **Recompute, don't pin.** A single helper `recomputeEpicComplexity(epicPlanId)` is the source of truth, invoked at every point an epic's inputs change:
+  1. **Membership change** — inside `updateEpicStatus` (covers creation linking, assign, remove).
+  2. **Subtask rescore** — inside `updateComplexityByPlanFile` / `updateComplexityByPlanId`, the chokepoint the **planner-agent file-watch reparse** and the review-panel edit both funnel through. A write to a row with `epic_id` set bubbles up and recomputes its parent.
+- **Epic rows never accept an incoming complexity write.** In the same two write methods, a target row with `is_epic = 1` is redirected to `recomputeEpicComplexity` and the incoming value is ignored. This is the clobber-guard for the regenerated epic file.
+- **Reads are untouched.** Storing the numeric max makes frontend `card.complexity`, backend batch filters, and `getComplexityFromPlan` (DB fallback) all agree — no `isEpic` checks scattered through routing.
+- **No manual epic-level override.** Epic complexity is purely derived. The lever for influencing it is rescoring a **subtask** (which flows up). This matches the "auto-pull from subtasks" intent.
+- **Unscored fallback is left as `'Unknown'`.** When no active subtask carries a parseable score (max = 0), the epic stores `'Unknown'` and falls through the **existing** "Unknown → High (8)" batch-move threshold (`kanban.html:8032/8420`), which stays as-is per decision. Not specially handled.
 
 ### Rejected Alternatives
-- *Pure derived (`isEpic ? 8 : …` at each read site)* — rejected: scatters checks across 3+ routing sites, leaves existing epics' **stored** complexity as `'Unknown'` (display surfaces stay inconsistent), and relies on the `'Unknown'`→lead coincidence for backend paths. Storing a real value is cleaner and matches the codebase's "real state over runtime fiction" preference.
-- *Aggregate epic complexity from subtasks* — explicitly rejected by the requirement.
-- *Fix only `resolveCodedAutoTarget`* — rejected: addresses the symptom (AUTOCODE lane) but leaves the stored value wrong and the frontend/backend divergence in place.
+- *Pin every epic to High (8)* — rejected: ships all-cleanup epics to the lead. Batching ≠ higher complexity.
+- *Aggregate by average* — unsafe: `[3,3,10]`→~5→coder, which cannot do the 10. The batch needs the **max**.
+- *Compute lazily at dispatch time* — rejected: the AUTOCODE lane is chosen **in the browser** by `resolveCodedAutoTarget` from the *stored* `card.complexity`, before any backend dispatch code runs. A dispatch-time pull can't serve the drag path and would re-create the frontend/backend split. Storing + recomputing serves every read path.
+- *Put the recompute in a UI handler* — rejected: the dominant rescore path is the **planner-agent file-watch reparse** (`TaskViewerProvider.ts:10485/10543` → `updateComplexityByPlanFile`), which never touches a UI handler. The recompute must live in the DB write method or it silently fails for exactly that path.
+
+## User Review Required
+
+No open product questions. The user has confirmed: epic complexity = max of subtask scores (not a constant, not an average). No manual epic-level override. Unscored fallback remains 'Unknown'. Proceed without further review.
 
 ## Complexity Audit
 
 ### Routine
-- Change the creation literal `'Unknown'` → `'8'`.
-- Append one idempotent data-backfill UPDATE to the migration sequence.
+- New `recomputeEpicComplexity` helper (SELECT active subtasks → max via `parseComplexityScore` → UPDATE epic row).
+- Migration: one idempotent correlated UPDATE.
 
 ### Complex / Risky
-- The write-guard in `updateComplexityByPlanFile`/`updateComplexityByPlanId` adds an `is_epic` lookup before writing. Low risk, but it is the enforcement chokepoint — must be correct (clamp lower values, allow ≥ High, never block subtasks).
+- The redirect + bubble-up branches inside `updateComplexityByPlanFile` / `updateComplexityByPlanId`. This is the enforcement chokepoint and must be correct: epic rows recompute (never accept), subtask rows write-then-bubble, plain plans unchanged.
 
 ## Edge-Case & Dependency Audit
 
-- **Custom routing map:** score `8` routes wherever the user's `routingMapConfig` sends `8` (default: lead). This is the user's explicit configuration and is respected — "high complexity" is honored regardless of where they route it.
-- **Subtasks:** migration `WHERE is_epic = 1` does not touch subtasks (subtasks have `epic_id` set but `is_epic = 0`). Write-guard checks `is_epic` so subtask writes are unaffected.
-- **Interaction with the Pair-button-removal plan** (`feature_plan_20260629085554_remove-per-card-pair-button.md`): with epics now High, an epic in PLAN REVIEWED will satisfy that button's `isHighComplexity` gate and show "Pair" — until the other plan removes the button. The two plans are compatible; if Pair is still present when this lands, epics simply gain it (resolved when the removal plan merges).
-- **`getComplexityFromPlan` precedence:** a `**Manual Complexity Override:**` line in an epic file (step 1) still wins over the DB. That is intended (explicit user override) and does not conflict with the upward-only manual-override decision.
-- **Display surfaces:** Epics-tab / archive that read `complexity` now show "High" consistently for all epics. The board card already shows "EPIC: N SUBTASKS" instead of a complexity chip (`kanban.html:5384`), so it is unaffected.
+- **Completed subtasks** drop out of the max (`getSubtasksByEpicId` filters `status='active'`). Intended: once the hard subtask is done, the remaining batch may legitimately route lighter.
+- **Legacy `Low`/`High` string scores** on subtasks: runtime `parseComplexityScore` handles them via `legacyToScore`. The migration SQL treats non-numeric as `0` (best-effort); the first runtime recompute self-heals.
+- **`getComplexityFromPlan` precedence:** a `**Manual Complexity Override:**` line wins over the DB, but epic files are auto-regenerated without one, so this does not apply to epics in practice.
+- **Membership churn during creation:** the `createEpicFromPlanIds` link loop recomputes once per subtask link; intermediate values are transient, and the final link yields the full max. Idempotent and cheap.
+- **`clearEpicIdForEpic` (epic dissolution):** the epic is going away; no recompute needed.
+- **Display:** the board epic card shows `EPIC: N SUBTASKS` (no chip) today and is unaffected by *this* plan. A companion plan (`feature_plan_20260629124815_epic-card-complexity-display.md`) replaces the timestamp on the epic card with the derived score and depends on this plan landing first.
 
 ### Migration safety (per CLAUDE.md — epics shipped in a released version)
-- Backfill is idempotent and best-effort (mirrors the existing V3 zombie-plan `UPDATE` precedent at `KanbanDatabase.ts:4303-4308`).
-- No-op for epics already carrying a numeric score; only `'Unknown'`/empty/NULL are upgraded.
+- Backfill is idempotent and best-effort (mirrors the V3 zombie-plan `UPDATE` precedent at `KanbanDatabase.ts:4303-4308`).
+- Only epics whose active-subtask max ≥ 1 are updated; `'Unknown'`/unscored epics are left untouched.
 - No keys or rows dropped; subtasks and non-epic plans untouched.
+
+## Dependencies
+- Epic: `epic-model-and-dispatch-correctness-efcf9b43` — sibling plans `remove-epic-max-subtasks-cap` and `remove-standalone-epics` compose cleanly. This plan touches `KanbanDatabase.ts` (recompute helper, write-method guards, migration) and `KanbanProvider.ts` (creation stops asserting Unknown); Plan 1 touches `KanbanProvider.ts` (cap removal in `_cardsToPromptPlans` / `buildEpicOrchestrationPrompt`) and `KanbanDatabase.ts` (no changes) — different methods, no conflict.
+- Companion: `feature_plan_20260629124815_epic-card-complexity-display.md` — depends on this plan landing first (replaces the timestamp on the epic card with the derived score).
+
+## Adversarial Synthesis
+
+Key risks: the `updateComplexityByPlanFile` bubble-up requires a target-row lookup that the method doesn't currently perform (must add `getPlanByPlanFile` call before the UPDATE); the per-link recompute during `createEpicFromPlanIds` does N recomputes for N subtasks (acceptable for typical epics, ~300 DB ops for a 100-subtask epic); manual complexity edits to epic files are silently ignored by the clobber-guard (correct per design — epic complexity is purely derived). Mitigations: the `getPlanByPlanFile` accessor already exists (used in `getComplexityFromPlan`); the per-link cost is idempotent and cheap; the clobber-guard is the intended behavior.
 
 ## Proposed Changes
 
-### 1. `src/services/KanbanProvider.ts` — store High at epic creation
-- Add `categoryToScore` to the import (`:25`):
-  ```ts
-  import { legacyToScore, scoreToRoutingRole, parseComplexityScore, categoryToScore } from './complexityScale';
-  ```
-- In `createEpicFromPlanIds` (`:8669`), change the upsert field:
-  ```ts
-  complexity: String(categoryToScore('High')),   // '8' — epics are always High (was 'Unknown')
-  ```
+### 1. `src/services/KanbanDatabase.ts` — `recomputeEpicComplexity` helper
+```ts
+/** Recompute an epic's stored complexity as the max score among its active subtasks.
+ *  Writes the numeric string (e.g. '8'), or 'Unknown' when no subtask carries a score. */
+public async recomputeEpicComplexity(epicPlanId: string): Promise<boolean> {
+    if (!epicPlanId || !(await this.ensureReady()) || !this._db) return false;
+    const { parseComplexityScore } = require('./complexityScale');
+    const subtasks = await this.getSubtasksByEpicId(epicPlanId);
+    const max = subtasks.reduce(
+        (m, s) => Math.max(m, parseComplexityScore(s.complexity || '')), 0);
+    const value = max >= 1 ? String(max) : 'Unknown';
+    return this._persistedUpdate(
+        'UPDATE plans SET complexity = ?, updated_at = ? WHERE plan_id = ? AND is_epic = 1',
+        [value, new Date().toISOString(), epicPlanId]
+    );
+}
+```
 
-### 2. `src/services/KanbanDatabase.ts` — backfill existing epics
-- In `_runMigrations` (`:4291`), append a new idempotent step alongside the other data fixes (same try/exec pattern as V3):
-  ```ts
-  // V-epic-complexity: epics are always High; upgrade legacy 'Unknown'/empty epics to score 8.
-  try {
-      this._db.exec(
-          "UPDATE plans SET complexity = '8' WHERE is_epic = 1 AND (complexity = 'Unknown' OR complexity = '' OR complexity IS NULL)"
-      );
-  } catch { /* best effort */ }
-  ```
+### 2. `src/services/KanbanDatabase.ts` — bubble-up + epic clobber-guard in the two write methods
+In `updateComplexityByPlanId` (`:1630`) and `updateComplexityByPlanFile` (`:1609`), after validation, branch on the target row before/after the UPDATE:
+```ts
+// updateComplexityByPlanId
+const target = await this.getPlanByPlanId(planId);
+if (target?.isEpic) {
+    // Epic complexity is derived — ignore the incoming (file-parsed) value; recompute.
+    return this.recomputeEpicComplexity(planId);
+}
+const ok = await this._persistedUpdate(
+    'UPDATE plans SET complexity = ?, updated_at = ? WHERE plan_id = ?',
+    [complexity, new Date().toISOString(), planId]);
+if (ok && target?.epicId) { await this.recomputeEpicComplexity(target.epicId); }
+return ok;
+```
+`updateComplexityByPlanFile` mirrors this, resolving the target row by `(plan_file, workspace_id)` via the existing `getPlanByPlanFile(normalized, workspaceId)` accessor (already used in `getComplexityFromPlan` at `KanbanProvider.ts:4461`, defined at `KanbanDatabase.ts:2709`). The full implementation:
 
-### 3. `src/services/KanbanDatabase.ts` — write-guard (clamp epic complexity to ≥ High)
-- In `updateComplexityByPlanId` (`:1630`) and `updateComplexityByPlanFile` (`:1609`), after validation, look up the target row's `is_epic`. If it is an epic and the incoming value parses to a score `< 7` (or is `'Unknown'`/legacy `Low`/`Medium`), substitute `'8'` before the UPDATE and log the clamp. Values `≥ 7` (High/Very High) pass through unchanged. Pseudocode:
-  ```ts
-  let effective = complexity;
-  const row = /* SELECT is_epic FROM plans WHERE plan_id = ? (or plan_file = ? AND workspace_id = ?) */;
-  if (row?.is_epic) {
-      const score = parseComplexityScore(complexity); // 'Unknown'/Low/Medium -> < 7
-      if (score < 7) { effective = '8'; console.log(`[KanbanDatabase] Clamped epic complexity ${complexity} -> 8`); }
-  }
-  // ...UPDATE with `effective`
-  ```
+```ts
+// updateComplexityByPlanFile
+const normalized = this._ensureRelativePlanFile(planFile);
+const target = await this.getPlanByPlanFile(normalized, workspaceId);
+if (target?.isEpic) {
+    // Epic complexity is derived — ignore the incoming (file-parsed) value; recompute.
+    return this.recomputeEpicComplexity(target.planId);
+}
+const ok = await this._persistedUpdate(
+    'UPDATE plans SET complexity = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+    [complexity, new Date().toISOString(), normalized, workspaceId]);
+if (ok && target?.epicId) { await this.recomputeEpicComplexity(target.epicId); }
+return ok;
+```
+
+**Note:** Manual complexity edits to epic files are intentionally ignored — the clobber-guard redirects epic rows to `recomputeEpicComplexity`, which always derives from subtasks. This is the designed behavior: epic complexity is purely derived, and the lever for influencing it is rescoring a subtask (which flows up).
+
+### 3. `src/services/KanbanDatabase.ts` — recompute on membership change in `updateEpicStatus` (`:1510`)
+```ts
+const oldEpicId = plan.epicId;            // plan already fetched via getPlanByPlanId above
+const ok = await this._persistedUpdate(/* existing is_epic/epic_id UPDATE */);
+if (ok) {
+    if (oldEpicId && oldEpicId !== epicId) await this.recomputeEpicComplexity(oldEpicId);
+    if (epicId && isEpic === 0)            await this.recomputeEpicComplexity(epicId);
+}
+return ok;
+```
+This covers creation (the `createEpicFromPlanIds` link loop at `:8705`), assign, and remove with no call-site changes.
+
+### 4. `src/services/KanbanProvider.ts` — creation stops asserting Unknown
+`createEpicFromPlanIds` keeps the `'Unknown'` placeholder at upsert (`:8669`); the subtask-link loop (`:8705`) now drives `recomputeEpicComplexity` via `updateEpicStatus` (#3), leaving the epic at the true max once all subtasks are linked. Optionally add an explicit `await db.recomputeEpicComplexity(planId);` after the loop for clarity.
+
+### 5. `src/services/KanbanDatabase.ts` — backfill existing epics
+In `_runMigrations` (`:4291`), append alongside the other data fixes:
+```ts
+// V-epic-complexity: epics derive complexity = max(active subtask score). Backfill legacy epics.
+try {
+    this._db.exec(`
+        UPDATE plans SET complexity = CAST(
+            (SELECT MAX(CAST(s.complexity AS INTEGER)) FROM plans s
+             WHERE s.epic_id = plans.plan_id AND s.status = 'active') AS TEXT)
+        WHERE is_epic = 1
+          AND (SELECT MAX(CAST(s.complexity AS INTEGER)) FROM plans s
+               WHERE s.epic_id = plans.plan_id AND s.status = 'active') >= 1
+    `);
+} catch { /* best effort */ }
+```
+(Non-numeric legacy subtask scores cast to `0` here; the first runtime recompute corrects them.)
 
 ## Verification Plan
 
-### Automated
-- **Frontend unit:** `resolveCodedAutoTarget` for an epic card whose `complexity = '8'` returns `'LEAD CODED'` (with dynamic routing on and a default routing map).
-- **Creation:** `createEpicFromPlanIds` writes `complexity = '8'` to the DB.
-- **Migration:** seed an epic with `'Unknown'`, a subtask (`is_epic = 0`, `epic_id` set) with `'5'`, and a non-epic plan with `'Unknown'`; run `_runMigrations`; assert only the epic becomes `'8'`.
-- **Write-guard:** `updateComplexity*` on an epic with `'5'` → stored `'8'`; with `'10'` → stored `'10'`; on a subtask with `'5'` → stored `'5'` (unaffected).
+### Automated Tests
+- **Helper:** epic with subtasks `[3,3,3]` → `recomputeEpicComplexity` stores `'3'`; `[3,3,8]` → `'8'`; all-`Unknown` → `'Unknown'`.
+- **Bubble-up:** `updateComplexityByPlanFile` on a subtask (`epic_id` set) `5`→`9` recomputes the parent epic to `'9'`.
+- **Clobber-guard:** `updateComplexityByPlanFile` on the epic row with `'Unknown'` (simulating the regenerated epic file) leaves the epic at its computed max.
+- **Membership:** assigning an `8` subtask to an epic of `[3,3]` lifts it to `'8'`; removing it drops it back to `'3'`.
+- **Creation:** `createEpicFromPlanIds` over plans `[5,6]` yields epic `'6'` (not `'Unknown'`).
+- **Migration:** seed a legacy `'Unknown'` epic with subtasks `[4,7]` + a non-epic `'Unknown'` plan; run `_runMigrations`; only the epic becomes `'7'`.
+- **Routing:** `resolveCodedAutoTarget` for an epic card `complexity='3'` returns the intern/coder lane; `'8'` returns `'LEAD CODED'` (default map).
 - `npm test` green.
 
 ### Manual (installed VSIX — dev does not use `dist/`)
-1. Create a new epic; confirm it routes to **LEAD CODED** when dragged to AUTOCODE (dynamic routing on), and the lead agent is dispatched with epic + subtasks; epic + subtasks cascade together.
-2. Turn dynamic routing **off**; drag epic to AUTOCODE → still LEAD CODED.
-3. Advance the same epic via the column button and via AUTOCODE drag → **same** destination (Lead) both ways (divergence gone).
-4. On an upgraded install, a pre-existing epic (previously `'Unknown'`) now routes to Lead after the backfill.
-5. Try to set an epic's complexity to Medium via the complexity control → it clamps back to High; setting Very High sticks.
+1. Create an epic from three score-3 plans → routes to the cheap lane on AUTOCODE drop (dynamic routing on).
+2. Create an epic containing one score-8 plan → routes to LEAD CODED.
+3. Have a planner agent rescore a subtask's plan file upward → after the watcher reparse, the epic's complexity rises to match (file-watch path propagates, not a UI action).
+4. Advance the same epic via the column button and via AUTOCODE drag → same destination both ways (divergence gone).
+5. On an upgraded install, a pre-existing epic recomputes to its subtask max after the backfill.

@@ -2,7 +2,7 @@
 
 ## Metadata
 **Complexity:** 4
-**Tags:** frontend, backend, cleanup, refactor, epic, tech-debt
+**Tags:** frontend, backend, refactor
 
 ## Goal
 
@@ -50,17 +50,21 @@ This supersedes the "apply Refine to standalone epics" decision in `feature_plan
 - **No DB migration, no file archival, no settings change.** There is no persisted "standalone epic" state to migrate — `isEpicDocument` is computed at scan time and never written anywhere.
 - The watcher imports **any** `.md` in the epics dir (topic derived from `# H1`/`description:`/filename), so there is no class of epic file that would become permanently invisible.
 
+## User Review Required
+
+No open product questions. The user has confirmed: delete the standalone-epic concept entirely (do not gate behind a flag). Do not delete or move `.switchboard/epics/*.md` files — removal is display-only. Proceed without further review.
+
 ## Complexity Audit
 
 ### Routine
-- Deleting the `fetchEpicDocuments` case handler (`PlanningPanelProvider.ts:3296-3343`).
+- Deleting the `fetchEpicDocuments` case handler (`PlanningPanelProvider.ts:3309-3356`).
 - Deleting the `epicDocumentsReady` webview handler and `_epicDocumentsCache` declaration + 2 merge sites (`project.js`).
 - Deleting the two `fetchEpicDocuments` post-message triggers (`project.js:41`, `867`).
 - Collapsing `isManageable` and removing the `isEpicDocument` branches (`project.js:1644`, `1763-1765`, `1800`, doc-only `actionButtons`/`columnBadge` branches).
 
 ### Complex / Risky
-- **Root coverage parity (the one real risk).** `fetchEpicDocuments` enumerates `_getAllowedRoots()` (workspace folders **plus** mapped parent/child folders, `PlanningPanelProvider.ts:1709`), whereas `fetchKanbanPlans` enumerates `_getWorkspaceRoots()` (open workspace folders only, line 1667). These differ in **mapped-workspace** setups. The DB query should still cover the same logical epics because `GlobalPlanWatcherService` imports from all mapped folders into the shared (parent) kanban DB, and `KanbanDatabase.forWorkspace(childRoot)` resolves to that same shared DB — so an epic file under any allowed root is represented in a DB that `fetchKanbanPlans` reads. **This must be verified in a mapped-workspace test** (Verification step 5) before shipping; it is the only path that could otherwise hide an epic.
-- **Refresh-timing on file change.** Repurposing the watcher to `fetchKanbanPlans` introduces a race: the project-panel refresh (400 ms debounce) can fire before `GlobalPlanWatcherService` finishes importing the changed file, so the change lands on the *next* refresh. Mitigation: keep the existing tab-activation/filter refreshes as the reconciling backstop, and bump the watcher debounce modestly (e.g. 400 ms → 1200 ms) so the import usually wins. This is eventual-consistency identical to how plans behave; not a correctness issue.
+- **Refresh-timing on file change.** Repurposing the watcher to `fetchKanbanPlans` introduces a race: the project-panel refresh (debounced) can fire before `GlobalPlanWatcherService` finishes importing the changed file, so the change lands on the *next* refresh. Mitigation: keep the existing tab-activation/filter refreshes as the reconciling backstop, and bump the watcher debounce modestly (e.g. 400 ms → 1200 ms) so the import usually wins. This is eventual-consistency identical to how plans behave; not a correctness issue.
+- **None — root coverage parity verified.** The plan originally hypothesized a root-enumeration difference between `fetchEpicDocuments` (using `_getAllowedRoots()`) and `fetchKanbanPlans` (claimed to use `_getWorkspaceRoots()`). **This is incorrect**: `fetchKanbanPlans` at line 2887 also calls `Array.from(this._getAllowedRoots())` — the same method. Both paths enumerate identical roots. The mapped-workspace coverage risk is a non-issue.
 
 ## Edge-Case & Dependency Audit
 
@@ -75,22 +79,32 @@ This supersedes the "apply Refine to standalone epics" decision in `feature_plan
 | **Empty epics dir / no epics** | Empty-state message unchanged ("No epics found. Use '+ New Epic' to create one."). |
 | **Other panel (`planning.js`)** | Has its own `kanbanPlansReady` handler but no `_epicDocumentsCache` / `isEpicDocument` usage (grep-confirmed). Untouched. |
 
-### Dependency map (full surface — grep-confirmed)
-- `isEpicDocument`: `project.js:1644, 1763, 1800`; `PlanningPanelProvider.ts:3331` (only construction site). No persisted/DB usage.
+### Dependency map (full surface — grep-confirmed, line numbers verified)
+- `isEpicDocument`: `project.js:1644, 1763, 1800`; `PlanningPanelProvider.ts:3344` (only construction site). No persisted/DB usage.
 - `_epicDocumentsCache`: `project.js:170, 516, 1363, 1598`.
-- `fetchEpicDocuments` / `epicDocumentsReady`: `project.js:41, 515, 867`; `PlanningPanelProvider.ts:922, 3296, 3338, 3341`.
-- `_setupEpicDocsWatcher` / `_epicDocsWatchDebounce`: `PlanningPanelProvider.ts:88, 522, 539, 642, 658, 895-926`.
+- `fetchEpicDocuments` / `epicDocumentsReady`: `project.js:41, 515, 867`; `PlanningPanelProvider.ts:935, 3309, 3351, 3353, 3354`.
+- `_setupEpicDocsWatcher` / `_epicDocsWatchDebounce` / `_epicDocsWatchers`: `PlanningPanelProvider.ts:87-88` (declarations), `908-946` (watcher setup), `929-933` (debounce logic), `945` (watcher push), `8461-8468` (dispose/cleanup — remains valid after repurpose, no action needed).
+- `_getAllowedRoots`: `PlanningPanelProvider.ts:1722` (used by both `fetchEpicDocuments` at 3311 and `fetchKanbanPlans` at 2887 — identical root enumeration).
+- `_getWorkspaceRoots`: `PlanningPanelProvider.ts:1680` (used by `_setupEpicDocsWatcher` at 916 — watcher covers workspace roots only, but `fetchKanbanPlans` query covers all allowed roots).
+
+## Dependencies
+- Epic: `epic-model-and-dispatch-correctness-efcf9b43` — sibling plans `remove-epic-max-subtasks-cap` and `epics-always-high-complexity` compose cleanly. This plan touches `PlanningPanelProvider.ts` (deleting `fetchEpicDocuments` handler) and `project.js`; Plan 1 touches `PlanningPanelProvider.ts` (deleting `updateEpicConfig` handler at 3443-3457) — different case blocks, no conflict.
+- Related: `feature_plan_20260628222343_refine-epic-skill-and-card-button.md` — if both land, drop the standalone-doc special-casing from the Refine plan (see "Relationship to the Refine-Epic plan" above).
+
+## Adversarial Synthesis
+
+Key risks: the plan's original "one real risk" (root coverage parity between `fetchEpicDocuments` and `fetchKanbanPlans`) was based on a false premise — both use `_getAllowedRoots()` (verified at line 2887), so the risk is eliminated. Remaining risk is refresh-timing (watcher debounce vs DB import), which is eventual-consistency identical to how plans behave. Line numbers in `PlanningPanelProvider.ts` were off by 10-50 lines throughout and have been corrected. The dispose/cleanup block at 8461-8468 was missed by the original dependency map but requires no action (remains valid after repurpose).
 
 ## Proposed Changes
 
 ### 1. `src/services/PlanningPanelProvider.ts`
 
-**1a. Delete the `fetchEpicDocuments` case handler** (lines 3296-3343) in its entirety — the directory scan, title extraction, and `epicDocumentsReady` post.
+**1a. Delete the `fetchEpicDocuments` case handler** (lines 3309-3356) in its entirety — the directory scan, title extraction, and `epicDocumentsReady` post.
 
-**1b. Repurpose the epic-docs watcher** (`_setupEpicDocsWatcher`, lines 895-926). Keep the `createFileSystemWatcher` on `.switchboard/epics/**/*.md` (so file changes still refresh the Epics list), but change the debounced action from `fetchEpicDocuments` to `fetchKanbanPlans`, and lengthen the debounce so the DB import usually completes first:
+**1b. Repurpose the epic-docs watcher** (`_setupEpicDocsWatcher`, lines 908-946). Keep the `createFileSystemWatcher` on `.switchboard/epics/**/*.md` (so file changes still refresh the Epics list), but change the debounced action from `fetchEpicDocuments` to `fetchKanbanPlans`, and lengthen the debounce so the DB import usually completes first:
 
 ```typescript
-// before (line ~919-925):
+// before (line ~932-938):
 this._epicDocsWatchDebounce = setTimeout(() => {
     this._epicDocsWatchDebounce = undefined;
     if (!this._projectPanel) { return; }
@@ -142,11 +156,16 @@ let filtered = _kanbanPlansCache.filter(plan => plan.isEpic);
 
 ## Verification Plan
 
+### Automated Tests
+- `npm test` — full suite must stay green. No existing test references `_epicDocumentsCache`, `fetchEpicDocuments`, or `isEpicDocument` (confirmed by grep), so nothing breaks.
+- **Add a regression test:** after removing the scan path, the Epics list renders solely from `_kanbanPlansCache.filter(p => p.isEpic)`. Verify that a DB-backed epic appears and a synthetic `isEpicDocument` entry does not.
+
+### Manual (installed VSIX — dev does not use `dist/`)
 1. **Build sanity:** `npm run compile` succeeds; no remaining references to `_epicDocumentsCache`, `epicDocumentsReady`, `fetchEpicDocuments`, or `isEpicDocument` (grep both `src/webview/project.js` and `src/services/PlanningPanelProvider.ts` → zero hits). *(`dist/` not used in dev/testing.)*
 2. **DB epics still list:** Open Project panel → Epics tab. All epics that exist on the board appear, with full actions (Orchestrate / + Subtask / Delete / Edit). No `Doc`-badged entries.
 3. **New epic via "+ New Epic":** Create one; it appears immediately (DB-backed via `createEpic` → `fetchKanbanPlans`).
 4. **Agent-created epic file:** Write a new `.switchboard/epics/x.md` on disk. Confirm it does NOT appear instantly as a `Doc`, and DOES appear as a normal epic within one watcher cycle (≤10 s, usually sub-second), and that the repurposed watcher refreshes the list without a manual tab switch.
-5. **Mapped-workspace coverage (critical):** In a mapped parent/child workspace, place an epic file under a mapped root that is *not* the primary open folder. Confirm it still appears in the Epics tab via the DB path (proves `fetchKanbanPlans`'s `_getWorkspaceRoots()`/shared-DB resolution covers what `_getAllowedRoots()` scanned). If it does not appear, the watcher repurpose is insufficient and `fetchKanbanPlans` root enumeration must be widened — do not ship until this passes.
+5. **Mapped-workspace coverage (sanity check):** In a mapped parent/child workspace, place an epic file under a mapped root. Confirm it appears in the Epics tab via the DB path. **Note:** `fetchKanbanPlans` and `fetchEpicDocuments` both use `_getAllowedRoots()` (verified at line 2887 and 3311 respectively), so root enumeration is identical — this test is a sanity check, not a critical gate.
 6. **No orphaned UI:** Subtask accordions load via `getEpicDetails` for every epic; no "standalone epic document" text remains anywhere.
 7. **Regression sweep:** Orchestrate, + Subtask, Delete Epic, Edit/Save/Cancel, column badge/dropdown, Copy Link, Copy Planning Prompt, Send to Planner all still work for DB epics.
 8. **Files untouched:** Confirm no `.switchboard/epics/*.md` file is moved, renamed, or deleted by any code path in this change.

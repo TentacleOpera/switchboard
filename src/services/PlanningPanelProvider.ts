@@ -100,6 +100,9 @@ export class PlanningPanelProvider {
     // consecutive failures, cap at 5 then pause until next toggle cycle.
     private _ticketsAutoSyncTimers: Map<string, NodeJS.Timeout> = new Map();
     private _ticketsAutoSyncFailures: Map<string, number> = new Map();
+    // Exponential backoff: after N consecutive failures, the next eligible
+    // tick time is set to now + INTERVAL * 2^N. Reset to 0 on success.
+    private _ticketsAutoSyncNextEligible: Map<string, number> = new Map();
     // Tracks the currently-selected list/project per workspace root so the
     // delta-pull timer knows what to poll. Updated by refreshTicketsDelta
     // and importAllTickets handlers.
@@ -4775,6 +4778,7 @@ Please format the updated output document strictly as follows:
             case 'importAllTickets': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const { provider, ids, listId, projectId, workspaceId, page, append, importMode } = msg;
+                if (!workspaceRoot) break;
                 // Track the current selection so the auto-sync delta-pull timer
                 // knows what to poll.
                 if (importMode === 'document' && !ids) {
@@ -6445,40 +6449,54 @@ Read the existing ticket content from the local file if it exists. Determine wha
         folderPath: string
     ): Promise<void> {
         try {
+            if (!folderPath) {
+                throw new Error('No folder path provided');
+            }
+
+            // Build the allowed-folder set across ALL roots and BOTH folder kinds
+            // (local docs folders + planning HTML source folders). The frontend sends
+            // a bare absolute path with no owning-root hint, and the HTML tab's
+            // "Link" buttons point at planning HTML source folders, which are NOT in
+            // getFolderPaths(). Validating against a single root / single kind would
+            // reject legitimate HTML folders (and folders from non-primary roots).
+            // Mirrors DesignPanelProvider._handleLinkToFolder's root-agnostic approach.
+            const allowedPaths: string[] = [];
+            for (const root of this._getWorkspaceRoots()) {
+                const svc = this._getLocalFolderService(root);
+                allowedPaths.push(
+                    ...svc.getFolderPaths(),
+                    ...svc.getPlanningHtmlFolderPaths(),
+                );
+            }
+
             let resolvedFolder = '';
-            let localFolderService = this._getLocalFolderService(workspaceRoot);
 
             if (/^\d+:/.test(folderPath)) {
+                // Subfolder id `<index>:<relativePath>` — join against every allowed
+                // base and take the first that exists on disk.
                 const colonIdx = folderPath.indexOf(':');
                 const relativePath = folderPath.substring(colonIdx + 1);
                 let found = false;
-                for (const root of this._getWorkspaceRoots()) {
-                    const service = this._getLocalFolderService(root);
-                    const folderPaths = service.getFolderPaths();
-                    for (let i = 0; i < folderPaths.length; i++) {
-                        const candidate = path.join(folderPaths[i], relativePath);
-                        if (fs.existsSync(candidate)) {
-                            resolvedFolder = candidate;
-                            localFolderService = service;
-                            found = true;
-                            break;
-                        }
+                for (const base of allowedPaths) {
+                    const candidate = path.join(base, relativePath);
+                    if (fs.existsSync(candidate)) {
+                        resolvedFolder = candidate;
+                        found = true;
+                        break;
                     }
-                    if (found) { break; }
                 }
                 if (!found) {
                     throw new Error('Subfolder not found');
                 }
             } else {
-                localFolderService = this._getLocalFolderServiceForFolder(folderPath, workspaceRoot, 'local-folder')
+                const localFolderService = this._getLocalFolderServiceForFolder(folderPath, workspaceRoot, 'local-folder')
                     || this._getLocalFolderService(workspaceRoot);
                 resolvedFolder = localFolderService.resolveFolderPath(folderPath);
             }
 
-            const allowedPaths = localFolderService.getFolderPaths();
             const isWithinAllowed = allowedPaths.some(p => resolvedFolder.startsWith(p + path.sep) || resolvedFolder === p);
             if (!isWithinAllowed) {
-                throw new Error('Folder is not within a configured local docs folder');
+                throw new Error('Folder is not within a configured folder');
             }
             if (!fs.existsSync(resolvedFolder)) {
                 throw new Error('Folder does not exist');
@@ -8260,6 +8278,7 @@ Read the existing ticket content from the local file if it exists. Determine wha
                 this._ticketsAutoSyncTimers.delete(workspaceRoot);
             }
             this._ticketsAutoSyncFailures.delete(workspaceRoot);
+            this._ticketsAutoSyncNextEligible.delete(workspaceRoot);
             return;
         }
         if (existing) { return; } // already watching
@@ -8330,6 +8349,12 @@ Read the existing ticket content from the local file if it exists. Determine wha
                 // Paused — wait for toggle cycle to reset. Log once.
                 return;
             }
+            // Exponential backoff: after N consecutive failures, skip ticks
+            // until the next eligible time (now + INTERVAL * 2^N at the time
+            // of the failure). This spaces out retries: 45s → 90s → 180s → …
+            const now = Date.now();
+            const nextEligible = this._ticketsAutoSyncNextEligible.get(workspaceRoot) || 0;
+            if (nextEligible > now) { return; }
             const selection = this._ticketsCurrentSelection.get(workspaceRoot);
             if (!selection || !selection.provider) { return; }
             try {
@@ -8369,6 +8394,7 @@ Read the existing ticket content from the local file if it exists. Determine wha
 
                 if (result?.success) {
                     this._ticketsAutoSyncFailures.set(workspaceRoot, 0);
+                    this._ticketsAutoSyncNextEligible.set(workspaceRoot, 0);
                     // If any tickets were updated, refresh the sidebar silently.
                     if ((result.successCount || 0) > 0) {
                         this._panel?.webview.postMessage({
@@ -8389,11 +8415,14 @@ Read the existing ticket content from the local file if it exists. Determine wha
                 } else {
                     const f = (this._ticketsAutoSyncFailures.get(workspaceRoot) || 0) + 1;
                     this._ticketsAutoSyncFailures.set(workspaceRoot, f);
+                    // Exponential backoff: next eligible = now + INTERVAL * 2^f
+                    this._ticketsAutoSyncNextEligible.set(workspaceRoot, Date.now() + POLL_INTERVAL_MS * Math.pow(2, f));
                     console.warn(`[PlanningPanel] Auto-sync delta pull failed (${f}/${MAX_CONSECUTIVE_FAILURES}):`, result?.error);
                 }
             } catch (e) {
                 const f = (this._ticketsAutoSyncFailures.get(workspaceRoot) || 0) + 1;
                 this._ticketsAutoSyncFailures.set(workspaceRoot, f);
+                this._ticketsAutoSyncNextEligible.set(workspaceRoot, Date.now() + POLL_INTERVAL_MS * Math.pow(2, f));
                 console.warn(`[PlanningPanel] Auto-sync delta pull error (${f}/${MAX_CONSECUTIVE_FAILURES}):`, e);
             }
         }, POLL_INTERVAL_MS);
@@ -8470,6 +8499,7 @@ Read the existing ticket content from the local file if it exists. Determine wha
         for (const t of this._ticketsAutoSyncTimers.values()) { clearInterval(t); }
         this._ticketsAutoSyncTimers.clear();
         this._ticketsAutoSyncFailures.clear();
+        this._ticketsAutoSyncNextEligible.clear();
         this._ticketsCurrentSelection.clear();
 
         this._disposables.forEach(d => d.dispose());

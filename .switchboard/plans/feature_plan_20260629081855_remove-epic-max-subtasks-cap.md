@@ -2,7 +2,7 @@
 
 ## Metadata
 **Complexity:** 3
-**Tags:** backend, frontend, epic, kanban, cleanup, bugfix
+**Tags:** backend, frontend, bugfix, refactor
 
 ## Goal
 
@@ -49,6 +49,10 @@ Additional dead-code findings (all removable in this change):
 - *Keep an inert `epic_max_subtasks` knob as a safety valve* — rejected: no UI, no demand, and it re-introduces the truncation-vs-cascade bug for anyone who sets it.
 - *Only cap the cascade to match the prompt* — rejected: that would preserve truncation (the actual problem) and merely make it consistent; the user wants all subtasks dispatched.
 
+## User Review Required
+
+No open product questions. The user has confirmed: remove the cap entirely (not "default to unlimited but keep the knob"). No migration of stored config rows (leave inert). Proceed without further review.
+
 ## Complexity Audit
 
 ### Routine
@@ -70,6 +74,13 @@ Additional dead-code findings (all removable in this change):
 
 ### Dependencies
 - `buildEpicOrchestrationPrompt` consumers that pass `subtaskCount`/`totalSubtasks` through unchanged: `PlanningPanelProvider.ts:3277,3288`, `KanbanProvider.ts:7041`. Return shape is preserved, so no edits needed there.
+
+## Dependencies
+- Epic: `epic-model-and-dispatch-correctness-efcf9b43` — sibling plans `remove-standalone-epics` and `epics-always-high-complexity` compose cleanly (no shared code paths in the methods touched by this plan).
+
+## Adversarial Synthesis
+
+Key risks: downstream token cost for very large epics (100+ subtasks) is the user's explicit intent and orthogonal to this cap; the cascade-vs-prompt mismatch fix is incidental (removing the cap makes them match, but a future re-introduced cap would re-create the bug — the cascade itself was never capped). Mitigations: no safety valve is needed since dispatching all subtasks is the desired behavior; the dead `updateEpicConfig` handlers have zero webview senders (grep-confirmed), so removal is safe.
 
 ## Proposed Changes
 
@@ -99,7 +110,7 @@ Simplify `plans.filter(p => p.isSubtask && !p.topic.startsWith('[WARNING:'))` to
 ### 4. `src/services/KanbanProvider.ts` — remove dead `updateEpicConfig` case (8137-8154)
 Delete the entire `case 'updateEpicConfig':` block. It only wrote `epic_max_subtasks` and has no webview sender.
 
-### 5. `src/services/PlanningPanelProvider.ts` — remove dead `updateEpicConfig` case (3430-3445)
+### 5. `src/services/PlanningPanelProvider.ts` — remove dead `updateEpicConfig` case (3443-3457)
 Delete the entire `case 'updateEpicConfig':` block (same reasoning).
 
 ### 6. `src/services/agentPromptBuilder.ts` — remove dead option (190)
@@ -120,7 +131,7 @@ Do **not** add a migration and do **not** delete `epic_max_subtasks` rows from t
 
 ## Verification Plan
 
-### Automated
+### Automated Tests
 - `npm test` — full suite must stay green. No existing test references `epic_max_subtasks` / `maxSubtasks` / the WARNING line (confirmed by grep), so nothing breaks; the epic/pair suites (`pair-programming-comprehensive.test.ts`, `kanban-default-prompt-previews.test.js`) must still pass.
 - **Add a regression test:** an epic with subtask count > old default (e.g. 25) must expand to 25 `[SUBTASK]` entries in both `_cardsToPromptPlans` and `buildEpicOrchestrationPrompt`, and the generated prompt must contain **no** `[WARNING:` line. Assert `buildEpicOrchestrationPrompt` returns `subtaskCount === totalSubtasks === 25`.
 

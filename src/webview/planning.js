@@ -211,7 +211,6 @@
     let _ticketsEditBackupHtml = null;
     let ticketsWorkspaceRoot = '';
     let ticketsAutoSync = false;
-    let _pendingRefreshImport = false;
     let researchWorkspaceRoot = '';
     let folderModalScope = 'local';
     let notebookWorkspaceRoot = '';
@@ -4921,7 +4920,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 // was `ticketsAutoSync` only (no _pendingRefreshImport fallback) —
                 // Linear users with auto-sync OFF had no manual workaround at all.
                 if (linearProjectPickerValue) {
-                    _pendingRefreshImport = false;
                     vscode.postMessage({
                         type: 'refreshTicketsDelta',
                         workspaceRoot: ticketsWorkspaceRoot,
@@ -4929,7 +4927,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         projectId: linearProjectPickerValue
                     });
                 } else {
-                    _pendingRefreshImport = false;
                     _requestTicketSyncStatuses();
                 }
                 // Render sidebar from local files in both modes.
@@ -5103,7 +5100,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 // on every list-select. Always fires regardless of the auto-sync
                 // toggle — the toggle only governs background pull/push automation.
                 if (clickUpSelectedListId) {
-                    _pendingRefreshImport = false;
                     vscode.postMessage({
                         type: 'refreshTicketsDelta',
                         workspaceRoot: ticketsWorkspaceRoot,
@@ -5111,7 +5107,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         listId: clickUpSelectedListId
                     });
                 } else {
-                    _pendingRefreshImport = false;
                     _requestTicketSyncStatuses();
                 }
                 // Render sidebar from local files in both modes (files only, not
@@ -9167,19 +9162,26 @@ Instructions:
     }
 
     function loadLocalTicketFiles() {
-        if (!lastIntegrationProvider || !ticketsWorkspaceRoot) return;
-        vscode.postMessage({ type: 'listLocalTicketFiles', provider: lastIntegrationProvider, workspaceRoot: ticketsWorkspaceRoot });
+        // Do NOT bail when ticketsWorkspaceRoot is empty — the Tickets tab has no
+        // explicit workspace assignment, so the root is resolved on the backend
+        // (via _resolveWorkspaceRoot), exactly like loadClickUpProject/loadLinearProject.
+        // Guarding on a falsy root here left the (now files-only) sidebar permanently
+        // blank even though the import wrote every file and the DB held every row.
+        if (!lastIntegrationProvider) return;
+        vscode.postMessage({ type: 'listLocalTicketFiles', provider: lastIntegrationProvider, workspaceRoot: ticketsWorkspaceRoot || undefined });
     }
 
     function _requestTicketSyncStatuses() {
-        if (!lastIntegrationProvider || !ticketsWorkspaceRoot) return;
+        // Same fix as loadLocalTicketFiles: don't bail on an empty workspace root
+        // (the Tickets tab has none) — let the backend resolve it.
+        if (!lastIntegrationProvider) return;
         const issues = lastIntegrationProvider === 'clickup' ? clickUpProjectIssues : linearProjectIssues;
         if (!issues.length) return;
         vscode.postMessage({
             type: 'getTicketSyncStatuses',
             provider: lastIntegrationProvider,
             ids: issues.map(t => t.id),
-            workspaceRoot: ticketsWorkspaceRoot
+            workspaceRoot: ticketsWorkspaceRoot || undefined
         });
     }
 

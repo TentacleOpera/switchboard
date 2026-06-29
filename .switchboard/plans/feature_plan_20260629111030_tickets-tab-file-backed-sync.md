@@ -161,3 +161,49 @@ Key risks: (1) a delta pull silently overwriting unpushed local edits — mitiga
 10. Toggle auto-sync OFF → confirm the timer and watcher are torn down (no further background pulls/pushes); manual buttons still work.
 
 **Recommendation**: Complexity 7/10 → Send to Lead Coder. Multi-file, cross-provider, behavior-changing on a shipped feature with conflict-safety requirements and cross-class private method dependencies.
+
+---
+
+## Code Review Results (2026-06-29)
+
+### Implementation Assessment
+
+All five steps were implemented. The four original reproduction failures (Push, Sync changes, Edit persistence, Create) are addressed by the code changes. The auto-sync toggle redefinition (ON = background automation, OFF = manual mode) is correctly implemented — the file layer is always populated regardless of toggle state.
+
+### Files Changed (Implementation)
+- `src/extension.ts` — command signature updates for `preFetchedTask`, `deltaSince`, `deltaSinceIso`
+- `src/services/ClickUpSyncService.ts` — `dateUpdatedGt` option on `getListTasks`, cache bypass for delta queries
+- `src/services/LinearSyncService.ts` — `updatedAfter` option on `queryIssues`, `updatedAt` in `LinearIssueFilter`, cache bypass
+- `src/services/TaskViewerProvider.ts` — `preFetchedTask` param on `importTaskAsDocument` (skips re-fetch), delta mode in `importAllTasks` with conflict guard (mtime > last_synced_at + 1s grace → skip)
+- `src/services/PlanningPanelProvider.ts` — `refreshTicketsDelta` handler, per-list delta cursor (`last_delta_pull_*`), Save create-if-missing, create handlers check import result, auto-sync delta-pull timer with exponential backoff
+- `src/webview/planning.js` — removed all `ticketsAutoSync`-conditioned list-source gates, dropdown/Refresh paths send `refreshTicketsDelta`, sidebar always renders from `loadLocalTicketFiles()`, "Sync changes" zero-file feedback, auto-sync toast suppression
+
+### Files Changed (Review Fixes)
+- `src/services/PlanningPanelProvider.ts` — **MAJOR fix**: added `_ticketsAutoSyncNextEligible` map for exponential backoff (45s → 90s → 180s → 360s → 720s → pause at 5). Reset on success. Cleanup in toggle-off and dispose paths.
+- `src/webview/planning.js` — **NIT fix**: removed dead `_pendingRefreshImport` variable and its 4 assignments (never set to `true`, never read as a gate after the refactor).
+
+### Findings by Severity
+
+| Severity | Finding | File:Line | Status |
+|---|---|---|---|
+| MAJOR | No exponential backoff in auto-sync timer (comment claimed it, code didn't do it) | `PlanningPanelProvider.ts:8330-8412` | **Fixed** — added `_ticketsAutoSyncNextEligible` map with `INTERVAL * 2^N` backoff |
+| NIT | `_pendingRefreshImport` dead code (zombie variable) | `planning.js:214,4923,4931,5103,5111` | **Fixed** — removed variable and assignments |
+| NIT | Cursor-setting in `importAllTickets` handler is dead (condition `!ids` never true) | `PlanningPanelProvider.ts:4791-4801` | Deferred — harmless dead code |
+| NIT | `isDelta` field sent in `importAllTicketsComplete` but never read by webview | `PlanningPanelProvider.ts:4916,8396` | Deferred — harmless dead data |
+| NIT | Brief raw-API flash before file-backed list overwrites | `planning.js:5088,4901` | Deferred — steady state correct; fixing risks blank-flash regression |
+
+### Remaining Risks
+
+1. **HTTP 429 header respect not implemented.** The plan called for respecting `Retry-After` (ClickUp) and `X-RateLimit-Requests-Reset` (Linear) headers on rate-limit responses. The exponential backoff provides a generic safety net, but provider-specific header parsing would require changes to the HTTP service layer (`httpRequest` in `ClickUpSyncService` / `graphqlRequest` in `LinearSyncService`), which is out of scope for this review. The 45s base interval with exponential backoff is conservative enough that 429s are unlikely in normal use.
+
+2. **Linear project picker change doesn't trigger import.** Changing the Linear project picker dropdown (`planning.js:7512`) only filters the already-loaded issue list — it doesn't send `refreshTicketsDelta` for the newly-selected project. This is pre-existing behavior (not a regression from this plan). Files for the new project won't appear until Refresh is clicked or the tab is reloaded. ClickUp doesn't have this gap because its list-select dropdown calls `loadClickUpProject` which triggers `clickupProjectLoaded` → `refreshTicketsDelta`.
+
+3. **`preFetchedTask?: any` typing.** The `preFetchedTask` parameter is typed as `any` rather than `ClickUpTask | LinearIssue`. This is acceptable for cross-provider flexibility but loses type safety. A future refactor could use a discriminated union.
+
+4. **Deletions/removals out of scope (as planned).** Delta pulls do not auto-delete local files for remotely-deleted tasks. This is explicitly noted as v1 out-of-scope in the plan.
+
+### Validation Results
+- `node -c src/webview/planning.js` — **pass** (no syntax errors)
+- `npx tsc --noEmit --skipLibCheck src/services/PlanningPanelProvider.ts` — only pre-existing `downlevelIteration` errors; **no new errors from review fixes**
+- Automated tests: **skipped per session directives** (user will run separately)
+- Compilation: **skipped per session directives**

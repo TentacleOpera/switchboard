@@ -1,7 +1,7 @@
 {
   "generator": "ClaudeCodeMirrorService",
-  "version": "1.7.4",
-  "generatedAt": "2026-06-24T23:15:00.027Z",
+  "version": "1.7.5",
+  "generatedAt": "2026-06-29T04:00:51.096Z",
   "skills": [
     {
       "source": "workflows/memo.md",
@@ -57,6 +57,16 @@
       "source": "skills/linear_api.md",
       "name": "linear-api",
       "relPath": ".claude/skills/linear-api/SKILL.md"
+    },
+    {
+      "source": "skills/notion_api.md",
+      "name": "notion-api",
+      "relPath": ".claude/skills/notion-api/SKILL.md"
+    },
+    {
+      "source": "skills/switchboard_remote_notion.md",
+      "name": "switchboard-remote-notion",
+      "relPath": ".claude/skills/switchboard-remote-notion/SKILL.md"
     },
     {
       "source": "skills/get_tickets.md",

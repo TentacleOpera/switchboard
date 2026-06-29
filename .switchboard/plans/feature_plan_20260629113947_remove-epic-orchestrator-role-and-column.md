@@ -20,27 +20,128 @@ The entire epic-orchestration feature (orchestrator role, ORCHESTRATING column, 
 - **Tags**: refactor, backend, ui
 - **Complexity**: 6/10
 
-## Implementation — deletion surface
-
-Remove every reference below so the build stays green. **Do NOT** touch `src/test/pipeline-orchestrator-regression.test.js` — that is the unrelated PipelineOrchestrator subsystem.
-
-- **Role / column definitions** — `src/services/agentConfig.ts`: drop `'orchestrator'` from `BuiltInAgentRole` (line 48), the `AGENT_ROLE_LABELS` entry (77), and the ORCHESTRATING entry in `DEFAULT_KANBAN_COLUMNS` (112). Remove ORCHESTRATING from `VALID_KANBAN_COLUMNS` wherever it mirrors the defaults.
-- **Agent registration** — `src/extension.ts:2669`: remove the Orchestrator agent registration.
-- **Role lists** — remove `'orchestrator'` from the role arrays in `TaskViewerProvider.ts:1530,1626`, `KanbanProvider.ts:797`, and the default-visibility entry in `PlanningPanelProvider.ts:3199`.
-- **Orchestrate functions** — delete `buildEpicOrchestrationPrompt`, `dispatchEpicOrchestration`, `markEpicOrchestrating`, `isOrchestratorAvailable` (`KanbanProvider.ts:3112-3260`), and the `orchestrateEpic` message case (6990-7048).
-- **Column / role glue in KanbanProvider.ts** — remove ORCHESTRATING handling at 4155-4162, the move guards at 4847 and 4911, the `_columnToRole` case at 8247, and the orchestrator branches in `generateUnifiedPrompt` at 3046-3062 (incl. the `epic_prompt_template` legacy import) and 3071-3077. Keep the `role !== 'orchestrator'` epic-handling block (3084-3094) — now the only branch; simplify away the dead conditional.
-- **Prompt builder** — `agentPromptBuilder.ts`: remove the `if (role === 'orchestrator')` branch and `orchestratorBase` (488-1100, 1076), the `ULTRACODE_DIRECTIVE` constant (355), and the `ultracodeEnabled` option plumbing (164-165, 489, 1083). Remove `ultracodeByRole`/add-on plumbing in `KanbanProvider.ts` (2971, 3446-3448).
-- **Kanban webview** — `src/webview/kanban.html`: remove the orchestrator startup-command input (2748), the Orchestrator option in the Agents dropdown (2804), its description (3212), the ORCHESTRATING column visibility safety-net (5068-5085), and the per-card Orchestrate button + handler (5281-5297, 5399).
-- **Project webview** — `src/webview/project.js`: remove `_orchestratorAvailable` (168, 380) and the Orchestrate button + overlay + handlers (1803, 1818-1821, 1913-1982). `PlanningPanelProvider.ts`: remove the `orchestratorAvailable` computation/messages (2922-2940), the planner-preview call to `buildEpicOrchestrationPrompt` (3016), and the `orchestrateEpic` handler (3252-3294).
-- **sharedDefaults.js** — `src/webview/sharedDefaults.js`: remove the `orchestrator` config block (32) and the `ultracode` add-on toggle definition (228).
-- **Tests** — delete `src/test/orchestrator-prompt.test.js`. (New bundling/prepend coverage is added by the sibling subtasks.)
-
-### Risks
-- Removing `'orchestrator'` from the `BuiltInAgentRole` union surfaces any remaining exhaustive `switch`/map usages at compile time — use that to catch stragglers. A missed reference is a build break, so the surface above must be applied completely.
-
 ## User Review Required
 None. Clean break on unreleased-only feature state; no migration is owed.
+
+## Complexity Audit
+
+### Routine
+- Deleting code blocks at known locations (mechanical deletion).
+- Removing a role from a TypeScript union type (compile-time exhaustive switch checking catches stragglers).
+- Deleting a test file.
+
+### Complex / Risky
+- **Large deletion surface across 10+ files**: A single missed reference breaks the build. The deletion surface spans `agentConfig.ts`, `extension.ts`, `TaskViewerProvider.ts`, `KanbanProvider.ts`, `PlanningPanelProvider.ts`, `agentPromptBuilder.ts`, `kanban.html`, `project.js`, `project.html`, `implementation.html`, and `sharedDefaults.js`.
+- **PipelineOrchestrator name collision**: The repo has a **separate** `PipelineOrchestrator` feature (auto-advancing plans) with its own class, CSS, and test file. References to `PipelineOrchestrator` must NOT be touched. The implementer must distinguish `orchestrator` (the epic role being deleted) from `PipelineOrchestrator` (the pipeline feature being kept).
+- **`VALID_KANBAN_COLUMNS` is derived**: It lives in `KanbanDatabase.ts` and is derived from `DEFAULT_KANBAN_COLUMNS` (line 633: `...DEFAULT_KANBAN_COLUMNS.map(c => c.id)`). Removing ORCHESTRATING from `DEFAULT_KANBAN_COLUMNS` automatically removes it from `VALID_KANBAN_COLUMNS` — no direct edit to `KanbanDatabase.ts` needed.
+- **Two webview files missed by the original plan**: `implementation.html` (onboarding) and `project.html` (help text + button) contain orchestrator references that must also be removed.
+
+## Edge-Case & Dependency Audit
+
+**Race Conditions:**
+- If an epic is currently parked in the ORCHESTRATING column when this code ships, the column will disappear from `DEFAULT_KANBAN_COLUMNS`. The card's `kanbanColumn` field may still reference `ORCHESTRATING`. The board refresh logic should handle unknown columns gracefully (it already has a safety-net for this at `kanban.html:5068-5085`, which is also being deleted). Verify that cards in an unknown column are either moved to a default column or displayed without crashing.
+
+**Security:**
+- No security implications. Removing a role reduces attack surface.
+
+**Side Effects:**
+- Removing `'orchestrator'` from `BuiltInAgentRole` union will cause compile errors in any exhaustive `switch`/map that handles all roles — this is **desirable** (surfaces stragglers at compile time).
+- The `orchestrator-prompt.test.js` deletion removes test coverage for the orchestrator prompt format. New coverage for the unified bundling + prepend is added by sibling subtasks.
+
+**Dependencies & Conflicts:**
+- Lands **after** "Unify Epic Subtask Bundling Across Both Plan Resolvers" (so the shared helper is the surviving canonical copy of the expansion logic that `buildEpicOrchestrationPrompt` duplicates).
+- Lands **alongside** "Sticky Epic Workflow Toggle Buttons" (which replaces the `ultracode` add-on deleted here, and co-edits `generateUnifiedPrompt`).
+- Co-edits `generateUnifiedPrompt` with the toggle-buttons plan — coordinate to avoid merge conflicts.
+
+## Dependencies
+
+- Epic: **"Replace Epic Orchestrator with Lead-Coder Dispatch and Workflow Buttons"**
+- Sibling: *"Unify Epic Subtask Bundling Across Both Plan Resolvers"* — must land first (shared helper survives; `buildEpicOrchestrationPrompt`'s duplicate expansion logic is deleted here).
+- Sibling: *"Sticky Epic Workflow Toggle Buttons"* — co-edits `generateUnifiedPrompt`; replaces the `ultracode` add-on deleted here.
+
+## Adversarial Synthesis
+
+Key risks: (1) The original plan missed two webview files (`implementation.html` onboarding, `project.html` help/button) and had wrong line numbers for all role arrays — the deletion surface must be applied completely or the build breaks. (2) The `PipelineOrchestrator` name collision must be carefully navigated — do NOT touch `PipelineOrchestrator.ts`, its CSS in `implementation.html` (lines 1105-1211), or `pipeline-orchestrator-regression.test.js`. (3) Cards parked in ORCHESTRATING column at upgrade time need graceful handling since the column safety-net is also being deleted. Mitigations: corrected line numbers and added missed files to the deletion surface below; explicit "DO NOT TOUCH" list for PipelineOrchestrator; verify board refresh handles unknown columns.
+
+## Proposed Changes
+
+### `src/services/agentConfig.ts`
+- **Context**: Defines the `orchestrator` role and ORCHESTRATING column.
+- **Logic**: Drop `'orchestrator'` from `BuiltInAgentRole` type (line 48), the `BUILT_IN_AGENT_LABELS` entry `orchestrator: 'Orchestrator'` (line 102), the ORCHESTRATING entry in `DEFAULT_KANBAN_COLUMNS` (line 112), and `'orchestrator'` from `VALID_ROLES` in `parseDefaultPromptOverrides` (line 397).
+- **Edge Cases**: `VALID_KANBAN_COLUMNS` in `KanbanDatabase.ts` is derived from `DEFAULT_KANBAN_COLUMNS` — no direct edit needed there.
+
+### `src/extension.ts`
+- **Context**: Orchestrator agent registration.
+- **Logic**: Remove the registration `{ name: 'Orchestrator', role: 'orchestrator' }` at line 2669 and its explanatory comments (2664-2668).
+
+### `src/services/TaskViewerProvider.ts`
+- **Context**: Role arrays containing `'orchestrator'`.
+- **Logic**: Remove `'orchestrator'` from the roles array at line 3998 (`['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'orchestrator']`) and at line 7518 (`['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'orchestrator']`).
+- **Edge Cases**: Do NOT touch `PipelineOrchestrator` references at lines 17, 302, 401, 3700 — these are a different feature.
+
+### `src/services/KanbanProvider.ts`
+- **Context**: Contains the orchestrator functions, column handling, role arrays, and `generateUnifiedPrompt` branches.
+- **Logic (role array)**: Remove `'orchestrator'` from the roles array at line 2579.
+- **Logic (functions)**: Delete `buildEpicOrchestrationPrompt` (3112-3160), `dispatchEpicOrchestration` (3167-3188), `markEpicOrchestrating` (3194-3234), `isOrchestratorAvailable` (3244-3254).
+- **Logic (message case)**: Delete the `orchestrateEpic` message case (6990-7048).
+- **Logic (column/role glue)**: Remove ORCHESTRATING handling at 4154-4165, move guards at 4847-4849 and 4911-4913, `_columnToRole` case at 8247.
+- **Logic (generateUnifiedPrompt)**: Remove orchestrator branches at 3046-3062 (incl. `epic_prompt_template` legacy import) and 3071-3077. Keep the `role !== 'orchestrator'` epic-handling block at 3084-3094 — now the only branch; simplify away the dead conditional.
+- **Logic (ultracode plumbing)**: Remove `ultracodeByRole` at line 2971 and the `ultracodeByRole` object at 3446-3448.
+- **Edge Cases**: The `buildEpicOrchestrationPrompt` function contains a near-duplicate of the subtask-expansion logic (3124-3156). This is safe to delete because the sibling "Unify Bundling" plan extracts the canonical copy into a shared helper that lands first.
+
+### `src/services/agentPromptBuilder.ts`
+- **Context**: Contains the orchestrator prompt branch and ultracode directive.
+- **Logic**: Remove the `if (role === 'orchestrator')` branch in `buildPrdReferenceBlock` (line 326) and the main orchestrator prompt builder branch at line 1051-1106 (including `orchestratorBase` string at 1056-1060). Remove `ULTRACODE_DIRECTIVE` constant (line 355). Remove `ultracodeEnabled` option plumbing: interface definition (line 165), variable assignment (line 489), usage in suffix block (line 1083).
+- **Edge Cases**: The `ULTRACODE_DIRECTIVE` constant (`"use ultracode"`) is replaced by the new `ULTRACODE_EPIC_PREFIX` constant in the sibling toggle-buttons plan. Coordinate so the new constant is defined before this one is deleted (or define it in the same PR).
+
+### `src/webview/kanban.html`
+- **Context**: Kanban webview with orchestrator UI elements.
+- **Logic**: Remove the orchestrator startup-command input (line 2748), the Orchestrator option in the Agents dropdown (line 2804), its description (line 3212), the ORCHESTRATING column visibility safety-net (5068-5087), and the per-card Orchestrate button + handler (5281-5297, 5399).
+- **Edge Cases**: After removing the column safety-net, verify that cards with a stale `kanbanColumn` of `ORCHESTRATING` (from before the update) don't crash the board render. The board should either display them in a default column or filter them gracefully.
+
+### `src/webview/project.js`
+- **Context**: Project webview with Orchestrate button and overlay.
+- **Logic**: Remove `_orchestratorAvailable` (line 168, assignment at 380), the Orchestrate button (line 1803), button handler (1818-1821), and the Orchestrate overlay + handlers (1913-1954).
+
+### `src/webview/project.html` — **ADDED (missed by original plan)**
+- **Context**: Project webview HTML with orchestrator help text and button.
+- **Logic**: Remove help text mentioning orchestrator in PRD description (line 1458), "Send to Orchestrator" button text (line 1655), and help modal text explaining Orchestrate mode (lines 1669-1670).
+
+### `src/webview/implementation.html` — **ADDED (missed by original plan)**
+- **Context**: Onboarding/implementation webview with orchestrator agent configuration.
+- **Logic**: Remove the onboarding Orchestrator agent configuration: checkbox with `data-role="orchestrator"` and label/input (lines 1475-1478), and the onboarding save handler references to `orchestrator` (lines 3710-3712, including `orchestrator: document.getElementById('onboard-cli-orchestrator')?.value` and `visibleAgents.orchestrator`).
+- **Edge Cases**: Do NOT remove CSS for `.orchestrator-card`, `.orchestrator-header`, `.orchestrator-timer`, `.orchestrator-controls` (lines 73, 1105-1211) — these are for the **Pipeline Orchestrator** feature (auto-advancing plans), which is a different feature and must be kept.
+
+### `src/services/PlanningPanelProvider.ts`
+- **Context**: Planning panel with orchestrator availability computation and orchestrate handler.
+- **Logic**: Remove `orchestratorAvailable` computation/messages (lines 2933-2949), the planner-preview call to `buildEpicOrchestrationPrompt` (line 3029), and the `orchestrateEpic` handler (lines 3265-3308). Also remove orchestrator references at lines 129, 2953, 3444, 8575.
+- **Edge Cases**: The default-visibility entry referenced in the original plan at line 3199 does not exist at that location — the actual orchestrator references in this file are at the lines listed above.
+
+### `src/webview/sharedDefaults.js`
+- **Context**: Shared default configuration for webviews.
+- **Logic**: Remove the `orchestrator` config block (line 32), the `ultracode` add-on toggle definition (line 228), and additional orchestrator references at lines 15 and 47.
+
+### `src/test/orchestrator-prompt.test.js`
+- **Context**: Test file for the orchestrator prompt format.
+- **Logic**: Delete the file entirely. New bundling/prepend coverage is added by sibling subtasks.
+
+### DO NOT TOUCH (PipelineOrchestrator — different feature)
+- `src/services/PipelineOrchestrator.ts` — pipeline orchestration for auto-advancing plans.
+- `src/test/pipeline-orchestrator-regression.test.js` — tests PipelineOrchestrator.
+- `src/services/TaskViewerProvider.ts` lines 17, 302, 401, 3700 — PipelineOrchestrator import, field, instantiation, config.
+- `src/webview/implementation.html` lines 73, 1105-1211 — CSS for Pipeline Orchestrator card/controls.
+
+## Verification Plan
+
+### Automated Tests
+- After deletion, run `npm run compile` (TypeScript) to catch any missed references via exhaustive switch/union errors. (Per session directives, compilation is not run during this planning session — the user will run it separately.)
+- Verify no test file imports the deleted `orchestrator-prompt.test.js`.
+- Verify the sibling subtask tests (bundling parity, prepend) still pass after the orchestrator code is removed.
+
+> **Note**: Per session directives, automated tests and compilation are not run during this planning session. The user will run the test suite and compilation separately.
 
 ## Epic / Dependencies
 
 Subtask of epic **"Replace Epic Orchestrator with Lead-Coder Dispatch and Workflow Buttons."** Land **after** *"Unify Epic Subtask Bundling Across Both Plan Resolvers"* (so the shared bundling helper is the surviving canonical copy) and alongside *"Sticky Epic Workflow Toggle Buttons"* (which replaces the `ultracode` add-on deleted here, and co-edits `generateUnifiedPrompt`).
+
+**Recommendation: Complexity 6/10 → Send to Coder**
