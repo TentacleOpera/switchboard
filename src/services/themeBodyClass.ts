@@ -45,7 +45,8 @@ export function getThemeBodyClass(): string {
     const theme = cfg.get<string>('theme.name', 'afterburner');
     if (theme === 'afterburner') {
         const animDisabled = cfg.get<boolean>('theme.disableCyberAnimation', false);
-        return 'cyber-theme-enabled' + (animDisabled ? ' cyber-animation-disabled' : '');
+        const scanlinesDisabled = cfg.get<boolean>('theme.disableCyberScanlines', false);
+        return 'cyber-theme-enabled' + (animDisabled ? ' cyber-animation-disabled' : '') + (scanlinesDisabled ? ' cyber-scanlines-disabled' : '');
     }
     const colourIcons = getEffectiveColourKanbanIcons();
     const colourClass = colourIcons ? ' kanban-icons-colour' : '';

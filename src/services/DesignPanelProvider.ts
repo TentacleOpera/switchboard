@@ -172,6 +172,10 @@ export class DesignPanelProvider implements vscode.Disposable {
                         const disabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
                         this._panel?.webview.postMessage({ type: 'cyberAnimationSetting', disabled });
                     }
+                    if (e.affectsConfiguration('switchboard.theme.disableCyberScanlines')) {
+                        const disabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberScanlines', false);
+                        this._panel?.webview.postMessage({ type: 'cyberScanlinesSetting', disabled });
+                    }
                     if (e.affectsConfiguration('switchboard.theme.name')) {
                         const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
                         this._panel?.webview.postMessage({ type: 'switchboardThemeChanged', theme });
@@ -266,6 +270,10 @@ export class DesignPanelProvider implements vscode.Disposable {
                     if (e.affectsConfiguration('switchboard.theme.disableCyberAnimation')) {
                         const disabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
                         this._panel?.webview.postMessage({ type: 'cyberAnimationSetting', disabled });
+                    }
+                    if (e.affectsConfiguration('switchboard.theme.disableCyberScanlines')) {
+                        const disabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberScanlines', false);
+                        this._panel?.webview.postMessage({ type: 'cyberScanlinesSetting', disabled });
                     }
                     if (e.affectsConfiguration('switchboard.theme.name')) {
                         const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
@@ -1409,6 +1417,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 const themeConfig = vscode.workspace.getConfiguration('switchboard');
                 this.postMessage({ type: 'switchboardThemeChanged', theme: themeConfig.get<string>('theme.name', 'afterburner') });
                 this.postMessage({ type: 'cyberAnimationSetting', disabled: themeConfig.get<boolean>('theme.disableCyberAnimation', false) });
+                this.postMessage({ type: 'cyberScanlinesSetting', disabled: themeConfig.get<boolean>('theme.disableCyberScanlines', false) });
                 await this._sendHtmlDocsReady();
                 await this._sendClaudeDocsReady();
                 await this._sendDesignDocsReady();

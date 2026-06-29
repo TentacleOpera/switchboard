@@ -3501,6 +3501,9 @@
             case 'cyberAnimationSetting':
                 document.body.classList.toggle('cyber-animation-disabled', msg.disabled);
                 break;
+            case 'cyberScanlinesSetting':
+                document.body.classList.toggle('cyber-scanlines-disabled', msg.disabled);
+                break;
         }
     });
 

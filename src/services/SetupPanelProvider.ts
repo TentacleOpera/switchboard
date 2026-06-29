@@ -709,6 +709,17 @@ export class SetupPanelProvider implements vscode.Disposable {
                     await this._taskViewerProvider.postSetupPanelState();
                     await vscode.commands.executeCommand('switchboard.refreshUI');
                     break;
+                case 'getCyberScanlinesDisabledSetting':
+                    this._panel.webview.postMessage({
+                        type: 'cyberScanlinesDisabledSetting',
+                        enabled: this._taskViewerProvider.handleGetCyberScanlinesDisabledSetting()
+                    });
+                    break;
+                case 'setCyberScanlinesDisabledSetting':
+                    await this._taskViewerProvider.handleSetCyberScanlinesDisabledSetting(message.enabled);
+                    await this._taskViewerProvider.postSetupPanelState();
+                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    break;
                 case 'getColourKanbanIconsSetting':
                     this._panel.webview.postMessage({
                         type: 'colourKanbanIconsSetting',

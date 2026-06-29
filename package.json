@@ -681,6 +681,12 @@
           "default": false,
           "description": "Disable the animated rolling CRT sweep beam in the Cyber Panel theme."
         },
+        "switchboard.theme.disableCyberScanlines": {
+          "type": "boolean",
+          "default": false,
+          "description": "Disable the static CRT scanline texture in the Afterburner theme. The rolling sweep animation is controlled separately.",
+          "scope": "window"
+        },
         "switchboard.theme.colourKanbanIcons": {
           "type": "boolean",
           "default": false,

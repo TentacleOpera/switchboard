@@ -490,6 +490,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         .get<boolean>('theme.disableCyberAnimation', false);
                     this.broadcastToWebviews({ type: 'cyberAnimationSetting', disabled });
                 }
+                if (e.affectsConfiguration('switchboard.theme.disableCyberScanlines')) {
+                    const scanlinesDisabled = vscode.workspace
+                        .getConfiguration('switchboard')
+                        .get<boolean>('theme.disableCyberScanlines', false);
+                    this.broadcastToWebviews({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
+                }
             })
         );
 
@@ -4133,6 +4139,15 @@ Each plan file must include:
         await config.update('theme.disableCyberAnimation', disabled, vscode.ConfigurationTarget.Workspace);
     }
 
+    public handleGetCyberScanlinesDisabledSetting(): boolean {
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberScanlines', false);
+    }
+
+    public async handleSetCyberScanlinesDisabledSetting(disabled: boolean): Promise<void> {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        await config.update('theme.disableCyberScanlines', disabled, vscode.ConfigurationTarget.Workspace);
+    }
+
     public handleGetColourKanbanIconsSetting(): boolean {
         return getEffectiveColourKanbanIcons();
     }
@@ -4543,6 +4558,11 @@ Each plan file must include:
         this._setupPanelProvider.postMessage({
             type: 'cyberAnimationDisabledSetting',
             enabled: this.handleGetCyberAnimationDisabledSetting()
+        });
+
+        this._setupPanelProvider.postMessage({
+            type: 'cyberScanlinesDisabledSetting',
+            enabled: this.handleGetCyberScanlinesDisabledSetting()
         });
 
         const designDocSetting = this.handleGetDesignDocSetting();

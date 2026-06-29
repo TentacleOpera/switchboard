@@ -121,3 +121,53 @@ Key risks: incorrect line numbers could cause deletion of the wrong elements (th
 ## Recommendation
 
 Complexity 1/10 → **Send to Intern**
+
+---
+
+## Reviewer Pass — Completed
+
+### Stage 1: Grumpy Principal Engineer Review
+
+*Theatrical grumpy voice engaged. Findings severity-tagged.*
+
+1. **NIT — `src/webview/project.js:2258-2259`** — Congratulations, you deleted the block and left a *double blank line* as a tombstone. One blank line separates sibling blocks; two is just you being lazy with your editor's diff. The compiler doesn't care. The next person reading this does. Fix it.
+
+2. **NIT — Plan line-number drift** — The plan cheerfully cites "line 1507", "lines 1664-1678", "lines 2259-2270" as if line numbers are eternal. They aren't. Post-deletion the New Epic button sits at 1506, the Add Subtask overlay at 1663. This is fine for a historical plan artifact but don't pretend these are stable anchors.
+
+3. **OBSERVATION (not a finding)** — The plan's Edge-Case Audit point #3 predicted "Old plan files in `.switchboard/plans/` may reference this modal, but those are historical artifacts." Verified: 9 references remain across two sibling plan files (`feature_plan_20260626130002_*` and `feature_plan_20260625110507_*`). All are historical, none affect runtime. The prediction was correct. No action needed.
+
+4. **OBSERVATION** — Zero CRITICAL or MAJOR findings. The deletion is surgically clean: `#btn-new-epic` intact at the end of the controls strip, `#new-epic-modal` intact, `#epic-add-subtask-overlay` intact, all shared CSS classes (`.kanban-log-overlay`, `.kanban-log-modal`, `.kanban-log-close`, `.strip-btn`) preserved. The optional-chaining safety net the plan bragged about was unnecessary — every element ID was actually removed from both files. Grep confirms zero `epic-modes-help` matches in `src/`.
+
+### Stage 2: Balanced Synthesis
+
+- **Keep as-is**: The HTML deletions (button + modal block) and the JS event-handler block deletion. All three are clean, complete, and correctly scoped. No collateral damage to neighboring elements.
+- **Fix now**: The double blank line at `project.js:2258-2259` → collapsed to a single blank line. Trivial cosmetic cleanup applied.
+- **Defer / no-op**: Historical plan-file references to `epic-modes-help` in `.switchboard/plans/` — these are immutable historical artifacts and must not be edited. Plan line-number drift is expected and harmless.
+
+### Code Fixes Applied
+
+| File | Change | Severity |
+|------|--------|----------|
+| `src/webview/project.js:2258-2259` | Collapsed double blank line (deletion tombstone) to single blank line | NIT |
+
+No CRITICAL or MAJOR fixes were required — the implementation was already correct and complete.
+
+### Verification Results
+
+| Check | Result |
+|-------|--------|
+| Grep `epic-modes-help` in `src/` | **0 matches** — all references removed |
+| Grep `epic-modes-help` repo-wide | 3 files, all in `.switchboard/plans/` (historical artifacts — expected, no action) |
+| `#btn-new-epic` intact | Yes — `project.html:1506` |
+| `#new-epic-modal` intact | Yes — `project.html:1641` |
+| `#epic-add-subtask-overlay` intact | Yes — `project.html:1664` |
+| Shared CSS classes preserved | Yes — `.kanban-log-overlay` (3 uses), `.strip-btn` (41 uses) all intact |
+| JS surrounding context intact | Yes — Add Subtask overlay handlers + epics filter handlers flow correctly |
+| Compilation | Skipped per session policy |
+| Tests | Skipped per session policy |
+
+### Remaining Risks
+
+- **None material.** The change is a pure client-side UI deletion with no backend, no message types, no settings, no shared state. The only residual references are in immutable historical plan files, which do not affect runtime.
+- **Manual verification still recommended** (per the plan's Verification Plan §Manual): open the Epics tab in an installed VSIX, confirm the `?` button is gone, confirm `+ New Epic` and other controls work, confirm no devtools console errors, confirm sibling modals (New Epic, Add Subtask, log viewer, constitution paths) still open/close correctly.
+

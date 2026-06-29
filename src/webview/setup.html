@@ -1250,6 +1250,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Show the animated rolling CRT sweep beam in the planning panel preview.</span>
                     </div>
                 </label>
+                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
+                    <input id="cyber-scanlines-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                    <div style="display:flex; flex-direction:column; gap:4px;">
+                        <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Enable CRT scanlines</span>
+                        <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Show the static CRT scanline texture overlay in Afterburner preview panels.</span>
+                    </div>
+                </label>
                 <div id="cyber-animation-status" style="min-height:14px; margin-top:6px; font-size:10px; color:var(--accent-teal); font-family:var(--font-mono);"></div>
             </div>
             <div id="theme-colour-icons-settings">
@@ -1846,6 +1853,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 },
                 'theme': () => {
                     vscode.postMessage({ type: 'getCyberAnimationDisabledSetting' });
+                    vscode.postMessage({ type: 'getCyberScanlinesDisabledSetting' });
                     vscode.postMessage({ type: 'getColourKanbanIconsSetting' });
                     vscode.postMessage({ type: 'getThemeSetting' });
                     const savedTheme = currentSwitchboardTheme || 'afterburner';
@@ -3940,6 +3948,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
         });
 
+        document.getElementById('cyber-scanlines-toggle')?.addEventListener('change', (e) => {
+            const isDisabled = !e.target.checked;
+            vscode.postMessage({ type: 'setCyberScanlinesDisabledSetting', enabled: isDisabled });
+            document.body.classList.toggle('cyber-scanlines-disabled', isDisabled);
+            const statusEl = document.getElementById('cyber-animation-status');
+            if (statusEl) {
+                statusEl.textContent = 'Saved';
+                setTimeout(() => { statusEl.textContent = ''; }, 2000);
+            }
+        });
+
         document.getElementById('colour-kanban-icons-toggle')?.addEventListener('change', (e) => {
             vscode.postMessage({ type: 'setColourKanbanIconsSetting', enabled: e.target.checked });
             const statusEl = document.getElementById('colour-kanban-icons-status');
@@ -4638,6 +4657,20 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         const toggle = document.getElementById('cyber-animation-toggle');
                         if (toggle) toggle.checked = message.enabled !== true;
                         document.body.classList.toggle('cyber-animation-disabled', message.enabled === true);
+                    });
+                    break;
+                }
+                case 'cyberScanlinesSetting': {
+                    runSetupHydration(() => {
+                        document.body.classList.toggle('cyber-scanlines-disabled', message.disabled);
+                    });
+                    break;
+                }
+                case 'cyberScanlinesDisabledSetting': {
+                    runSetupHydration(() => {
+                        const toggle = document.getElementById('cyber-scanlines-toggle');
+                        if (toggle) toggle.checked = message.enabled !== true;
+                        document.body.classList.toggle('cyber-scanlines-disabled', message.enabled === true);
                     });
                     break;
                 }

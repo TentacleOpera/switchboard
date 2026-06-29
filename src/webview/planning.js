@@ -3830,6 +3830,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 document.body.classList.toggle('cyber-animation-disabled', msg.disabled);
                 break;
             }
+            case 'cyberScanlinesSetting': {
+                document.body.classList.toggle('cyber-scanlines-disabled', msg.disabled);
+                break;
+            }
             case 'kanbanPlansReady':
                 handleKanbanPlansReady(msg);
                 break;

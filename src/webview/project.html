@@ -613,7 +613,7 @@
             padding: 8px 16px;
             cursor: pointer;
             border-radius: 3px 3px 0 0;
-            transition: all 0.15s;
+            transition: all 0.08s;
             position: relative;
             top: 1px;
         }
@@ -709,6 +709,11 @@
         }
 
         .preview-panel-wrapper.scanlines-suppressed > .cyber-scanlines {
+            display: none !important;
+        }
+
+        /* Global scanline suppression — toggled by the Setup panel checkbox */
+        .cyber-theme-enabled.cyber-scanlines-disabled .cyber-scanlines {
             display: none !important;
         }
 
