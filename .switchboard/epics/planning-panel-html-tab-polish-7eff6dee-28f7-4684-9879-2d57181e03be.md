@@ -16,7 +16,7 @@ Bring the Planning panel HTML tab up to parity with the rest of the panel and th
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Reposition HTML Tab to Second Position in Planning Panel](../plans/feature_plan_20260629091055_html-tab-second-position.md) — **CODER CODED**
-- [ ] [HTML Tab Sidebar Formatting Parity with Design Panel](../plans/feature_plan_20260629091056_html-tab-sidebar-formatting-parity.md) — **CODER CODED**
-- [ ] [Remove Afterburner CRT Scanline Effects from HTML Tab in Planning Panel](../plans/feature_plan_20260629091057_remove-crt-scanlines-from-html-tab.md) — **CODER CODED**
+- [ ] [Reposition HTML Tab to Second Position in Planning Panel](../plans/feature_plan_20260629091055_html-tab-second-position.md) — **CODE REVIEWED**
+- [ ] [HTML Tab Sidebar Formatting Parity with Design Panel](../plans/feature_plan_20260629091056_html-tab-sidebar-formatting-parity.md) — **CODE REVIEWED**
+- [ ] [Remove Afterburner CRT Scanline Effects from HTML Tab in Planning Panel](../plans/feature_plan_20260629091057_remove-crt-scanlines-from-html-tab.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->

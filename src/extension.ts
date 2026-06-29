@@ -1564,7 +1564,7 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(importClickUpTaskDisposable);
 
-    const importTaskAsDocumentDisposable = vscode.commands.registerCommand('switchboard.importTaskAsDocument', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; id: string; includeSubtasks?: boolean }) => {
+    const importTaskAsDocumentDisposable = vscode.commands.registerCommand('switchboard.importTaskAsDocument', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; id: string; includeSubtasks?: boolean; preFetchedTask?: any }) => {
         return taskViewerProvider.importTaskAsDocument(data.workspaceRoot, data);
     });
     context.subscriptions.push(importTaskAsDocumentDisposable);
@@ -1574,7 +1574,7 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(pushTicketEditsDisposable);
 
-    const importAllTasksDisposable = vscode.commands.registerCommand('switchboard.importAllTasks', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; ids?: string[]; listId?: string; projectId?: string; workspaceId?: string; page?: number; append?: boolean; importMode: 'plan' | 'document' }) => {
+    const importAllTasksDisposable = vscode.commands.registerCommand('switchboard.importAllTasks', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; ids?: string[]; listId?: string; projectId?: string; workspaceId?: string; page?: number; append?: boolean; importMode: 'plan' | 'document'; deltaSince?: number; deltaSinceIso?: string }) => {
         return taskViewerProvider.importAllTasks(data.workspaceRoot, data);
     });
     context.subscriptions.push(importAllTasksDisposable);

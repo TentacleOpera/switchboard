@@ -18331,7 +18331,7 @@ What would you like to find?`;
 
     public async importTaskAsDocument(
         workspaceRoot: string,
-        data: { provider: 'linear' | 'clickup'; id: string; includeSubtasks?: boolean }
+        data: { provider: 'linear' | 'clickup'; id: string; includeSubtasks?: boolean; preFetchedTask?: any }
     ): Promise<{ success: boolean; filePath?: string; error?: string }> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedRoot) {
@@ -18340,6 +18340,7 @@ What would you like to find?`;
         const provider = data.provider;
         const id = data.id;
         const includeSubtasks = data.includeSubtasks !== false;
+        const preFetchedTask = data.preFetchedTask;
 
         try {
             let title = '';
@@ -18347,9 +18348,22 @@ What would you like to find?`;
             let issue: any = null;
             if (provider === 'linear') {
                 const linear = this._getLinearService(resolvedRoot);
-                issue = await linear.getIssue(id);
-                if (!issue) {
-                    return { success: false, error: `Linear issue ${id} not found.` };
+                if (preFetchedTask) {
+                    // Build the issue from the create response + the title/description
+                    // the user just typed. Avoids the read-after-write lag where a
+                    // fresh getIssue() returns null for a just-created issue.
+                    issue = {
+                        id: preFetchedTask.id || id,
+                        identifier: preFetchedTask.identifier,
+                        title: preFetchedTask.title || '',
+                        description: preFetchedTask.description || '',
+                        project: preFetchedTask.projectName ? { name: preFetchedTask.projectName } : undefined
+                    };
+                } else {
+                    issue = await linear.getIssue(id);
+                    if (!issue) {
+                        return { success: false, error: `Linear issue ${id} not found.` };
+                    }
                 }
                 title = issue.title || id;
                 const node: any = {
@@ -18360,10 +18374,12 @@ What would you like to find?`;
                 // surfaced via the comment manager UI (local _comments.json cache).
                 // Setting comments to [] keeps _buildCommentsSection as a harmless no-op.
                 node.comments = [];
-                if (includeSubtasks) {
+                if (includeSubtasks && !preFetchedTask) {
                     // Shallow fetch only — the recursive _loadLinearImportNode walk
                     // (comments + attachments per subtask, sequential) froze the UI
                     // for a minute on nested issues. The doc only needs a checklist.
+                    // Skipped for preFetchedTask (create path) — subtasks scheduled
+                    // via a follow-up delta pull instead of blocking the create.
                     const subtasks = await linear.getSubtasks(id);
                     node.subtasks = subtasks.map((st: any) => ({ issue: st, subtasks: [] }));
                 }
@@ -18373,16 +18389,25 @@ What would you like to find?`;
                 }
             } else {
                 const clickUp = this._getClickUpService(resolvedRoot);
-                const details = await clickUp.getTaskDetails(id);
-                if (!details || !details.task) {
-                    return { success: false, error: `ClickUp task ${id} not found.` };
+                let clickUpTask: any;
+                let subtasks: any[] = [];
+                if (preFetchedTask) {
+                    // Use the createTask response directly — avoids the read-after-write
+                    // lag where a fresh getTaskDetails() returns null for a just-created task.
+                    clickUpTask = preFetchedTask;
+                } else {
+                    const details = await clickUp.getTaskDetails(id);
+                    if (!details || !details.task) {
+                        return { success: false, error: `ClickUp task ${id} not found.` };
+                    }
+                    clickUpTask = details.task;
+                    subtasks = includeSubtasks && details.subtasks ? details.subtasks : [];
                 }
-                title = details.task.name || id;
+                title = clickUpTask.name || id;
                 // Comments are no longer embedded in the imported doc — they are
                 // surfaced via the comment manager UI (local _comments.json cache).
                 // Passing undefined keeps _buildCommentsSection as a harmless no-op.
-                content = this._buildClickUpImportPlanContent(details.task, new Date().toISOString(), undefined);
-                const subtasks = includeSubtasks && details.subtasks ? details.subtasks : [];
+                content = this._buildClickUpImportPlanContent(clickUpTask, new Date().toISOString(), undefined);
                 if (includeSubtasks && subtasks.length > 0) {
                     content += '\n\n## Subtasks\n\n' + subtasks.map((st: any) => `- [ ] ${st.name || st.id}`).join('\n');
                 }
@@ -18669,16 +18694,20 @@ What would you like to find?`;
             page?: number;
             append?: boolean;
             importMode: 'plan' | 'document';
+            deltaSince?: number;       // ClickUp: epoch ms for date_updated_gt
+            deltaSinceIso?: string;    // Linear: ISO 8601 for updatedAt gt filter
         }
-    ): Promise<{ success: boolean; successCount: number; failCount: number; errors: { id: string; error: string }[] }> {
+    ): Promise<{ success: boolean; successCount: number; failCount: number; errors: { id: string; error: string }[]; skippedModified?: number }> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedRoot) {
             return { success: false, successCount: 0, failCount: 0, errors: [{ id: 'all', error: 'No workspace open.' }] };
         }
-        const { provider, ids, listId, projectId, page = 1, append = false, importMode } = data;
+        const { provider, ids, listId, projectId, page = 1, append = false, importMode, deltaSince, deltaSinceIso } = data;
+        const isDelta = deltaSince !== undefined || deltaSinceIso !== undefined;
 
         let successCount = 0;
         let failCount = 0;
+        let skippedModified = 0;
         const errors: { id: string; error: string }[] = [];
 
         // Fast path: bulk document import from already-fetched list data (no N+1 API calls)
@@ -18696,10 +18725,11 @@ What would you like to find?`;
                 // stale data to disk, forcing a second refresh. Invalidate on the first page
                 // only (start of a fresh import/refresh) so the import pulls live data; later
                 // pages reuse the freshly-populated cache to avoid re-fetching the full list.
-                if (page === 1 && !append) {
+                // Delta queries bypass the cache entirely (isSimpleQuery=false in getListTasks).
+                if (page === 1 && !append && !isDelta) {
                     this._getCacheService(resolvedRoot).invalidateTaskCache('clickup', listId);
                 }
-                const tasks = await clickup.getListTasks(listId);
+                const tasks = await clickup.getListTasks(listId, deltaSince !== undefined ? { dateUpdatedGt: deltaSince } : {});
                 items = tasks;  // Process all tasks — getListTasks already paginates internally through ALL tasks
 
                 const h = clickup.getSelectedHierarchy();
@@ -18720,7 +18750,7 @@ What would you like to find?`;
                 }
             } else if (provider === 'linear' && projectId) {
                 const linear = this._getLinearService(resolvedRoot);
-                const issues = await linear.queryIssues({ projectId, limit: 100 });
+                const issues = await linear.queryIssues({ projectId, limit: 100, ...(deltaSinceIso ? { updatedAfter: deltaSinceIso } : {}) });
                 items = issues;  // Process all fetched issues — limit: 100 matches the sidebar's own limit
 
                 const teamName = linear.getTeamName();
@@ -18743,7 +18773,40 @@ What would you like to find?`;
                 targetDir = path.join(resolvedRoot, '.switchboard', 'tickets', providerDir, ...segments.map(s => this._slugify(s).slice(0, 60)));
             }
 
+            // For delta pulls, load the cache DB entries once to check conflict
+            // status (file mtime > last_synced_at → locally modified → skip).
+            let dbTickets: any[] = [];
+            if (isDelta) {
+                try {
+                    const cacheService = this._getCacheService(resolvedRoot);
+                    dbTickets = await cacheService.getImportedTickets();
+                } catch (e) {
+                    console.warn('[TaskViewerProvider] Delta pull: could not load cache entries for conflict check:', e);
+                }
+            }
+
             for (const item of items) {
+                // Conflict guard: in delta mode, skip tasks whose local file has
+                // unpushed changes (syncStatus === 'modified'). A delta pull must
+                // never silently overwrite local edits — route through the existing
+                // conflict path instead.
+                if (isDelta && item.id) {
+                    const slugPrefix = `${provider}_${item.id}`;
+                    const dbEntry = dbTickets.find(t => t.slugPrefix === slugPrefix);
+                    if (dbEntry && dbEntry.filePath && dbEntry.lastSyncedAt) {
+                        try {
+                            const fileMtime = fs.statSync(dbEntry.filePath).mtimeMs;
+                            const lastSyncMs = new Date(dbEntry.lastSyncedAt).getTime();
+                            // 1s grace: the import writes the file then records
+                            // last_synced_at a moment later — without a grace window
+                            // a freshly imported file would read as "modified."
+                            if (fileMtime > lastSyncMs + 1000) {
+                                skippedModified++;
+                                continue;
+                            }
+                        } catch { /* file may not exist yet — proceed with import */ }
+                    }
+                }
                 const res = await this._writeTaskDocument(resolvedRoot, provider, item, targetDir);
                 if (res.success) {
                     successCount++;
@@ -18753,7 +18816,7 @@ What would you like to find?`;
                 }
             }
 
-            return { success: true, successCount, failCount, errors };
+            return { success: true, successCount, failCount, errors, ...(skippedModified > 0 ? { skippedModified } : {}) };
         }
 
         // Slow path: explicit IDs or plan mode (per-item API calls)

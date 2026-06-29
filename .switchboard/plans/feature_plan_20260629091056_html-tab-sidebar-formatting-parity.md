@@ -179,3 +179,75 @@ No automated tests required. The test suite will be run separately by the user.
 12. Verify the empty-state messages: with no folders configured, see "Configure a folder using Manage Folders."; with folders configured but no HTML files, see "No HTML files found in configured folders."
 
 **Recommendation**: Complexity 5/10 → Send to Coder.
+
+---
+
+## Code Review (Reviewer Pass)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *"You ported four functions verbatim from design.js. Verbatim! And then you couldn't even be bothered to run `node --check` on the file before declaring 'implementation complete.' You know what happened? You inserted the `Serve & Open` branch AFTER the closing brace of the `Import` branch, creating a dangling `} else if` that makes the ENTIRE planning.js file fail to parse. The whole Planning panel is dead. Every tab. Dead. Because you couldn't count braces."*
+
+**CRITICAL — Syntax error: dangling `} else if` in `renderDocCard` click handler** (`planning.js` line 1712)
+The `Serve & Open` click handler branch was inserted after a standalone `}` that closed the `Import` branch, producing:
+```javascript
+                    } else if (action === 'Import') {
+                        vscode.postMessage({ ... });
+                    }           // ← closes Import branch
+                    } else if (action === 'Serve & Open') {  // ← EXTRA } — closes the arrow callback, then dangles
+```
+`node --check` output: `SyntaxError: missing ) after argument list at line 1712`. The entire `planning.js` module fails to load — **every Planning panel tab is broken**, not just HTML.
+
+**NIT — `Link Doc` sourceFolder guard diverges from design.js**: planning.js's `Link Doc` handler has a `console.error` guard when `nodeMetadata?.sourceFolder` is missing (lines 1684–1687), while design.js sends unconditionally. This is a planning.js-specific enhancement, not a bug — but it means the two panels behave differently on malformed metadata. Acceptable; documenting for awareness.
+
+**NIT — No `aria-label` on `Serve & Open` in design.js reference**: planning.js adds `btn.setAttribute('aria-label', 'Serve and open in browser')` (line 1666) which design.js does not have. This is an improvement over the reference. No issue.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep**:
+- All four ported helper functions (`buildFolderLinkHeader`, `buildSubfolderLinkHeader`, `renderSubfolderGroups`, `renderFolderGroupedDocs`) — verified verbatim against design.js lines 514–669. Correct.
+- `createPlanningHtmlDocCard` — matches design.js `createHtmlDocCard` (line 892) with correct `loadPlanningHtmlPreview` substitution. Correct.
+- `renderPlanningHtmlDocs` rewrite — toggle row, Manage Folders button, search filtering, dual empty-state messages, and `renderFolderGroupedDocs` call all present and correct.
+- `Serve & Open` button styling (lines 1662–1666) — matches design.js lines 1021–1024. Correct.
+- All CSS classes confirmed present in `planning.html` stylesheet.
+- All three backend handlers (`serveAndOpenHtml`, `linkToDocument`, `linkToFolder`) confirmed in `PlanningPanelProvider.ts`.
+
+**Fix now**:
+- **CRITICAL**: Remove the extra `}` at the former line 1711 that prematurely closed the `Import` branch, causing the `Serve & Open` `else if` to dangle. Merge the two branches into a proper `if/else if` chain.
+
+**Defer**: Nothing.
+
+### Code Fixes Applied
+
+**Fix 1 (CRITICAL): `src/webview/planning.js` — removed duplicate closing brace in `renderDocCard` click handler**
+
+Before (broken):
+```javascript
+                        });
+                    }
+                    } else if (action === 'Serve & Open') {
+```
+
+After (fixed):
+```javascript
+                        });
+                    } else if (action === 'Serve & Open') {
+```
+
+The standalone `}` that closed the `Import` branch was removed, allowing the `Serve & Open` branch to properly continue the `if/else if` chain.
+
+### Verification Results
+- **Syntax check (`node --check src/webview/planning.js`)**: PASSED (exit code 0) after fix. FAILED before fix (`SyntaxError: missing ) after argument list` at line 1712).
+- **Ported functions fidelity**: All 4 helper functions match design.js verbatim (minus JSDoc comments). ✓
+- **`createPlanningHtmlDocCard`**: Matches design.js `createHtmlDocCard` with correct `loadPlanningHtmlPreview` call. ✓
+- **`renderPlanningHtmlDocs` empty-state logic**: Dual messages preserved — "Configure a folder using Manage Folders." and "No HTML files found in configured folders." ✓
+- **CSS classes**: All 12 required classes confirmed in `planning.html` stylesheet (`.tree-node`, `.card-text`, `.card-title`, `.card-subtitle`, `.card-actions`, `.card-icon-btn`, `.folder-subheader`, `.source-folder-header`, `.folder-link-btn`, `.source-doc-list`, `.html-serve-btn`, `.html-link-btn`). ✓
+- **Backend handlers**: `serveAndOpenHtml` (line 2421), `linkToDocument` (line 2620), `linkToFolder` (line 2624) all present in `PlanningPanelProvider.ts`. ✓
+- **No `planning.html` CSS changes needed**: Confirmed — all classes pre-exist. ✓
+
+### Files Changed
+- `src/webview/planning.js` — fixed CRITICAL syntax error in `renderDocCard` click handler (removed duplicate `}` at former line 1711)
+
+### Remaining Risks
+- **NIT**: The `Link Doc` handler's `sourceFolder` guard (console.error + return) diverges from design.js. If a doc card is created with missing `sourceFolder` metadata, the Link button silently does nothing in planning.js but sends a message in design.js. Low risk — metadata should always be present for HTML docs from configured folders.
+- **Pre-existing**: `d.name.substring(d.name.lastIndexOf('.'))` at line 6673 could throw if `d.name` is undefined. Same pattern exists in design.js. Not introduced by this plan.

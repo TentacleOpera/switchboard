@@ -1323,13 +1323,11 @@
                 ticketsInitialized = true;
             }
             if (lastIntegrationProvider && !ticketsLoadedOnce) {
-                // Always load hierarchy for navigation; ticketsAutoSync only
-                // controls task content source (API vs local files).
+                // Always load hierarchy for navigation; the sidebar is always
+                // file-backed now (ticketsAutoSync only governs background pull/push).
                 if (lastIntegrationProvider === 'clickup') loadClickUpSpaces();
                 else if (lastIntegrationProvider === 'linear') loadLinearProject();
-                if (!ticketsAutoSync) {
-                    loadLocalTicketFiles();
-                }
+                loadLocalTicketFiles();
             } else {
                 renderTicketsTab();
             }
@@ -1708,7 +1706,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                             docName: title,
                             sourceFolder: nodeMetadata ? nodeMetadata.sourceFolder : undefined
                         });
-                    }
                     } else if (action === 'Serve & Open') {
                         vscode.postMessage({
                             type: 'serveAndOpenHtml',
@@ -4338,15 +4335,23 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 const importAllPlansBtn = document.getElementById('tickets-import-all-kanban');
                 if (importAllBtn) importAllBtn.disabled = false;
                 if (importAllPlansBtn) importAllPlansBtn.disabled = false;
-                if (msg.success) {
-                    let statusText = `Imported ${msg.successCount} tickets, ${msg.failCount} failed.`;
-                    if (msg.errors && msg.errors.length > 0) {
-                        statusText += ' Failed: ' + msg.errors.map(e => e.id).join(', ');
+                // Suppress status toast for auto-sync delta pulls — the user
+                // didn't initiate the action, and showing "Imported N tickets"
+                // every 45s would be toast spam. Just refresh the sidebar.
+                if (!msg.autoSync) {
+                    if (msg.success) {
+                        let statusText = `Imported ${msg.successCount} tickets, ${msg.failCount} failed.`;
+                        if (msg.errors && msg.errors.length > 0) {
+                            statusText += ' Failed: ' + msg.errors.map(e => e.id).join(', ');
+                        }
+                        showTicketsStatus(statusText, msg.failCount > 0);
+                    }  else {
+                        showTicketsStatus(msg.error || 'Bulk import failed', true);
                     }
-                    showTicketsStatus(statusText, msg.failCount > 0);
-                }  else {
-                    showTicketsStatus(msg.error || 'Bulk import failed', true);
                 }
+                // Re-render sidebar from local files so newly imported tickets appear.
+                // The sidebar is always file-backed (files only, not raw API).
+                loadLocalTicketFiles();
                 _requestTicketSyncStatuses();
                 break;
             case 'syncAllTicketsResult':
@@ -4354,7 +4359,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 const syncAllBtn = document.getElementById('tickets-sync-all');
                 if (syncAllBtn) syncAllBtn.disabled = false;
                 if (msg.success) {
-                    showTicketsStatus(`Synced ${msg.succeeded} tickets successfully.`, false);
+                    if (msg.succeeded === 0) {
+                        showTicketsStatus('No local ticket files to sync.', false);
+                    } else {
+                        showTicketsStatus(`Synced ${msg.succeeded} tickets successfully.`, false);
+                    }
                 } else {
                     showTicketsStatus(`Synced ${msg.succeeded} succeeded, ${msg.failed} failed.`, true);
                 }
@@ -4906,19 +4915,25 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     _restoredLinearProjectPickerValue = '';
                 }
                 renderTicketsTab();
-                if (ticketsAutoSync && linearProjectPickerValue) {
+                // Trigger a delta-aware import: the backend reads the per-project
+                // cursor and does a full import (first time) or delta pull
+                // (subsequent times). Fixes the Linear asymmetry where the old gate
+                // was `ticketsAutoSync` only (no _pendingRefreshImport fallback) —
+                // Linear users with auto-sync OFF had no manual workaround at all.
+                if (linearProjectPickerValue) {
                     _pendingRefreshImport = false;
                     vscode.postMessage({
-                        type: 'importAllTickets',
+                        type: 'refreshTicketsDelta',
                         workspaceRoot: ticketsWorkspaceRoot,
                         provider: 'linear',
-                        importMode: 'document',
                         projectId: linearProjectPickerValue
                     });
                 } else {
                     _pendingRefreshImport = false;
                     _requestTicketSyncStatuses();
                 }
+                // Render sidebar from local files in both modes.
+                loadLocalTicketFiles();
                 vscode.postMessage({
                     type: 'linearLoadAutomationCatalog',
                     workspaceRoot: ticketsWorkspaceRoot
@@ -5082,20 +5097,27 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     vscode.postMessage({ type: 'clickupLoadListStatuses', listId: clickUpSelectedListId, workspaceRoot: ticketsWorkspaceRoot });
                 }
                 renderTicketsTab();
-                if ((ticketsAutoSync || _pendingRefreshImport) && clickUpSelectedListId) {
+                // Trigger a delta-aware import: the backend reads the per-list
+                // cursor and does a full import (first time) or delta pull
+                // (subsequent times). This avoids re-importing the entire list
+                // on every list-select. Always fires regardless of the auto-sync
+                // toggle — the toggle only governs background pull/push automation.
+                if (clickUpSelectedListId) {
                     _pendingRefreshImport = false;
                     vscode.postMessage({
-                        type: 'importAllTickets',
+                        type: 'refreshTicketsDelta',
                         workspaceRoot: ticketsWorkspaceRoot,
                         provider: 'clickup',
-                        importMode: 'document',
-                        listId: clickUpSelectedListId,
-                        workspaceId: clickUpSelectedSpaceId
+                        listId: clickUpSelectedListId
                     });
                 } else {
                     _pendingRefreshImport = false;
                     _requestTicketSyncStatuses();
                 }
+                // Render sidebar from local files in both modes (files only, not
+                // raw API). loadLocalTicketFiles() is re-called after import
+                // completes (importAllTicketsComplete handler) to pick up new files.
+                loadLocalTicketFiles();
                 break;
             case 'clickupTaskDetailsLoaded': {
                 const _prevClickUp = clickUpTaskDetailCache.get(msg.task.id);
@@ -5172,12 +5194,12 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     const restoredState = getRestoredState('tickets', ticketsWorkspaceRoot);
                     if (restoredState) {
                         restoreTicketsStateForRoot(restoredState);
-                        // Always load hierarchy for navigation; ticketsAutoSync only
-                        // controls task content source (API vs local files).
+                        // Always load hierarchy for navigation; the sidebar is always
+                        // file-backed now (ticketsAutoSync only governs background pull/push).
                         if (isTicketsTabActive() && lastIntegrationProvider && !ticketsLoadedOnce) {
                             if (lastIntegrationProvider === 'clickup') loadClickUpSpaces();
                             else if (lastIntegrationProvider === 'linear') loadLinearProject();
-                            if (!ticketsAutoSync) loadLocalTicketFiles();
+                            loadLocalTicketFiles();
                         }
                     } else if (Object.keys(_restoredPanelState.byRoot).length > 0) {
                         // restoredTabState already arrived but no persisted state for this
@@ -5186,7 +5208,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         if (isTicketsTabActive() && lastIntegrationProvider) {
                             if (lastIntegrationProvider === 'clickup') loadClickUpSpaces();
                             else if (lastIntegrationProvider === 'linear') loadLinearProject();
-                            if (!ticketsAutoSync) loadLocalTicketFiles();
+                            loadLocalTicketFiles();
                         }
                     } else {
                         // restoredTabState hasn't arrived yet — defer until it does
@@ -5229,17 +5251,14 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     if (isTicketsTabActive() && lastIntegrationProvider && !ticketsLoadedOnce) {
                         // Always load the hierarchy (spaces/folders/lists for ClickUp,
                         // projects for Linear) — these are navigation, not task content.
-                        // ticketsAutoSync only controls whether task content comes from
-                        // the API (true) or local files (false).
+                        // The sidebar is always file-backed now; ticketsAutoSync only
+                        // governs background pull/push automation.
                         if (lastIntegrationProvider === 'clickup') {
                             loadClickUpSpaces();
                         } else if (lastIntegrationProvider === 'linear') {
                             loadLinearProject();
                         }
-                        // If not auto-syncing, also load local ticket files
-                        if (!ticketsAutoSync) {
-                            loadLocalTicketFiles();
-                        }
+                        loadLocalTicketFiles();
                     }
                 }
                 break;
@@ -7165,10 +7184,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 restoreTicketsStateForRoot(rootState);
             }
 
-            // 4. Refresh local files if not auto-syncing
-            if (!ticketsAutoSync) {
-                loadLocalTicketFiles();
-            }
+            // 4. Refresh local files — sidebar is always file-backed.
+            loadLocalTicketFiles();
         });
 
         // Import All button (imports as local documents for editing)
@@ -7512,17 +7529,33 @@ Instructions:
             saveTicketsState();
         });
 
-        // Refresh button — re-fetches online view
+        // Refresh button — delta pull (only changed tasks since last sync).
+        // Falls back to full import if the per-list delta cursor is unset
+        // (first refresh after initial load). The backend handler reads the
+        // cursor, does delta or full, updates the cursor, and posts
+        // importAllTicketsComplete — which triggers loadLocalTicketFiles().
         refreshButton?.addEventListener('click', () => {
             linearIssueDetailCache.clear();
             clickUpTaskDetailCache.clear();
-            _pendingRefreshImport = true;
             if (lastIntegrationProvider === 'linear') {
-                loadLinearProject(true);
+                if (linearProjectPickerValue) {
+                    vscode.postMessage({
+                        type: 'refreshTicketsDelta',
+                        provider: 'linear',
+                        projectId: linearProjectPickerValue,
+                        workspaceRoot: ticketsWorkspaceRoot
+                    });
+                } else {
+                    loadLinearProject(true);
+                }
             } else if (lastIntegrationProvider === 'clickup') {
                 if (clickUpSelectedListId) {
-                    vscode.postMessage({ type: 'invalidateClickUpCache', workspaceRoot: ticketsWorkspaceRoot });
-                    loadClickUpProject(true);
+                    vscode.postMessage({
+                        type: 'refreshTicketsDelta',
+                        provider: 'clickup',
+                        listId: clickUpSelectedListId,
+                        workspaceRoot: ticketsWorkspaceRoot
+                    });
                 } else {
                     loadClickUpSpaces();
                 }
@@ -9258,7 +9291,8 @@ Instructions:
             _restoringClickUpHierarchy = true;
             // Don't set ticketsLoadedOnce or call loadClickUpSpaces() here —
             // the integrationProviderStates handler will trigger the correct
-            // load based on ticketsAutoSync (remote if true, local files if false).
+            // load. The sidebar is always file-backed; ticketsAutoSync only
+            // governs background pull/push automation.
             // _restoringClickUpHierarchy tells the clickupSpacesLoaded handler
             // to auto-select the saved space/folder/list.
         } else {

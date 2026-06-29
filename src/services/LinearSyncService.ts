@@ -82,9 +82,10 @@ export interface LinearAttachment {
 export type LinearIssueFilter = {
   team: { id: { eq: string } };
   project?: { id: { eq: string } };
+  updatedAt?: { gt: string };
 };
 
-export function buildLinearIssueFilter(teamId: string, projectId?: string): LinearIssueFilter {
+export function buildLinearIssueFilter(teamId: string, projectId?: string, updatedAfter?: string): LinearIssueFilter {
   const normalizedTeamId = String(teamId || '').trim();
   if (!normalizedTeamId) {
     throw new Error('Linear issue list queries require a team ID.');
@@ -97,6 +98,12 @@ export function buildLinearIssueFilter(teamId: string, projectId?: string): Line
 
   if (normalizedProjectId) {
     filter.project = { id: { eq: normalizedProjectId } };
+  }
+
+  // Delta filter: Linear's GraphQL IssueFilter accepts updatedAt as a
+  // DateComparator with gt operator. Value is ISO 8601 (DateTimeOrDuration).
+  if (updatedAfter) {
+    filter.updatedAt = { gt: updatedAfter };
   }
 
   return filter;
@@ -652,6 +659,7 @@ export class LinearSyncService {
     assigneeId?: string;
     projectId?: string;
     limit?: number;
+    updatedAfter?: string;
   }): string {
     const parts: string[] = [];
     if (options.search) {
@@ -668,6 +676,9 @@ export class LinearSyncService {
     }
     if (options.limit !== undefined) {
       parts.push(`limit:${options.limit}`);
+    }
+    if (options.updatedAfter) {
+      parts.push(`updatedAfter:${options.updatedAfter}`);
     }
     return parts.length > 0 ? parts.join('|') : 'default';
   }
@@ -701,6 +712,7 @@ export class LinearSyncService {
     assigneeId?: string;
     projectId?: string;
     limit?: number;
+    updatedAfter?: string;
   }): Promise<LinearIssue[]> {
     const config = await this.loadConfig();
     if (!config?.setupComplete || !config.teamId) {
@@ -716,10 +728,12 @@ export class LinearSyncService {
     const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
       ? Math.min(Math.floor(requestedLimit), 100)
       : 50;
+    const updatedAfter = options.updatedAfter ? String(options.updatedAfter).trim() : '';
 
     // Determine if this is a "simple" query that can use cache
-    // Simple: no search, stateId, stateName, or assigneeId filters (project comes from config)
-    const isSimpleQuery = !normalizedSearch && !normalizedStateId && !normalizedStateName && !normalizedAssigneeId;
+    // Simple: no search, stateId, stateName, assigneeId, or updatedAfter filters
+    // (project comes from config). Delta queries (updatedAfter set) bypass cache.
+    const isSimpleQuery = !normalizedSearch && !normalizedStateId && !normalizedStateName && !normalizedAssigneeId && !updatedAfter;
     // Cache key MUST include the filter-config fingerprint so that include/
     // exclude project name changes invalidate the cache via key divergence.
     const configFingerprint = this._fingerprintLinearFilterConfig(config);
@@ -742,7 +756,7 @@ export class LinearSyncService {
 
     // Hybrid optimization: use server-side filter for single include, no excludes
     const resolvedProjectId = await this._resolveSingleIncludeProjectId(config);
-    const filter = buildLinearIssueFilter(config.teamId, resolvedProjectId || undefined);
+    const filter = buildLinearIssueFilter(config.teamId, resolvedProjectId || undefined, updatedAfter || undefined);
 
     const issues: LinearIssue[] = [];
     let cursor: string | null = null;

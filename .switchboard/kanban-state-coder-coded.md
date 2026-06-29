@@ -1,7 +1,4 @@
 ## CODER CODED
 
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/planning-panel-html-tab-polish-7eff6dee-28f7-4684-9879-2d57181e03be.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/planning-panel-html-tab-polish-7eff6dee-28f7-4684-9879-2d57181e03be.md) — Planning Panel HTML Tab Polish <!-- planId:7eff6dee-28f7-4684-9879-2d57181e03be epic -->
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260629091055_html-tab-second-position.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260629091055_html-tab-second-position.md) — Reposition HTML Tab to Second Position in Planning Panel <!-- planId:b31a93b0-0dc0-4b10-a2e0-7ba8e87d2d56 subtask-of:"Planning Panel HTML Tab Polish" -->
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260629091056_html-tab-sidebar-formatting-parity.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260629091056_html-tab-sidebar-formatting-parity.md) — HTML Tab Sidebar Formatting Parity with Design Panel <!-- planId:a1029b6d-097f-4853-8c6d-7a320da0a61f subtask-of:"Planning Panel HTML Tab Polish" -->
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260629091057_remove-crt-scanlines-from-html-tab.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260629091057_remove-crt-scanlines-from-html-tab.md) — Remove Afterburner CRT Scanline Effects from HTML Tab in Planning Panel <!-- planId:9627f2d4-a518-482c-84df-c61394175f2d subtask-of:"Planning Panel HTML Tab Polish" -->
+_No plans_
 

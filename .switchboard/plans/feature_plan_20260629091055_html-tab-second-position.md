@@ -89,3 +89,40 @@ No automated tests required. This is a static HTML reorder with no logic change.
 5. Reload the webview and confirm the tab order persists (it is static HTML, so it should).
 
 **Recommendation**: Complexity 2/10 → Send to Intern.
+
+---
+
+## Code Review (Reviewer Pass)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *"You moved a button. One button. In a flex container. And you somehow managed to not screw it up. Congratulations, here's your participation trophy."*
+
+**NIT — Line numbers drifted**: The plan references lines 3359–3365. The actual file has the tab bar at lines 3359–3365 — matches exactly. No issue, just noting the plan author got lucky with line stability.
+
+**NIT — No `data-tab` ordering assertion in JS**: `switchToTab()` uses `querySelector('[data-tab="..."]')` which is position-independent. The plan correctly identifies this. No issue.
+
+No CRITICAL, MAJOR, or NIT findings. The implementation is a verbatim match of the plan's "After" snippet.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep**: Everything. The DOM reorder is exactly as specified — DOCS, HTML, TICKETS, RESEARCH, NotebookLM. The `id="tickets-tab-btn"` attribute is preserved on the TICKETS button.
+
+**Fix now**: Nothing.
+
+**Defer**: Nothing.
+
+### Code Fixes Applied
+None required.
+
+### Verification Results
+- **Syntax check**: N/A (static HTML, no JS).
+- **DOM order confirmed**: `planning.html` lines 3359–3365 show `DOCS → HTML → TICKETS → RESEARCH → NotebookLM`. ✓
+- **`id="tickets-tab-btn"` preserved**: Confirmed on line 3362. ✓
+- **No scanline or sidebar changes**: This plan touches only the tab bar. ✓
+
+### Files Changed
+- `src/webview/planning.html` — tab bar reordered (lines 3359–3365)
+
+### Remaining Risks
+None. This is a static HTML reorder with no logic, state, or migration implications.

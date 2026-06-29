@@ -21,4 +21,5 @@ Make the journey of creating and fleshing out an epic coherent and correct, from
 - [ ] [Dynamic "Promote to Epic" Button Label Based on Selection Count](../plans/feature_plan_20260628221751_promote-to-epic-button-label-dynamic.md) — **PLAN REVIEWED**
 - [ ] [Replace "Group All Plans Into Epic" Button with "Add Epic" (Blank Epic Creation)](../plans/feature_plan_20260628221752_add-epic-button-replaces-group-all.md) — **PLAN REVIEWED**
 - [ ] [Refine Epic Skill & Epics-Tab Button](../plans/feature_plan_20260628222343_refine-epic-skill-and-card-button.md) — **PLAN REVIEWED**
+- [ ] [Extract the Suggest-Epics Orchestration Flow into a Model-Invocable Skill](../plans/feature_plan_20260629114530_extract-suggest-epics-flow-into-skill.md) — **CREATED**
 <!-- END SUBTASKS -->

@@ -100,3 +100,38 @@ No automated tests required. This is a single-element deletion from static HTML.
 7. Switch back to Afterburner and re-confirm the HTML tab is clean.
 
 **Recommendation**: Complexity 1/10 → Send to Intern.
+
+---
+
+## Code Review (Reviewer Pass)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *"You deleted a div. One div. A self-closing div with one class. And you didn't even need to count braces for this one. I'm almost disappointed it's correct."*
+
+No CRITICAL, MAJOR, or NIT findings. The `<div class="cyber-scanlines"></div>` element has been removed from the HTML tab's `preview-panel-wrapper` (formerly line 3510). The Docs tab (line 3420) and Tickets tab (line 3666) retain their scanline divs. The CSS rules remain untouched.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep**: Everything. The deletion is clean — the HTML tab's `preview-panel-wrapper` (lines 3484–3510) now contains only `#preview-pane-planning-html` and no scanline overlay. Docs and Tickets tabs confirmed unaffected.
+
+**Fix now**: Nothing.
+
+**Defer**: Nothing.
+
+### Code Fixes Applied
+None required.
+
+### Verification Results
+- **Syntax check**: N/A (static HTML element deletion).
+- **HTML tab scanline removal confirmed**: `planning.html` lines 3484–3510 — `preview-panel-wrapper` contains only `#preview-pane-planning-html`, no `.cyber-scanlines` div. ✓
+- **Docs tab scanlines preserved**: Line 3420 — `<div class="cyber-scanlines"></div>` present. ✓
+- **Tickets tab scanlines preserved**: Line 3666 — `<div class="cyber-scanlines"></div>` present. ✓
+- **CSS rules untouched**: `.cyber-scanlines` rules at lines 1985, 1999, 2002, 2060 remain for other tabs. ✓
+- **No JS changes**: Scanline visibility is purely CSS-driven; no JS references the HTML tab's scanline element. ✓
+
+### Files Changed
+- `src/webview/planning.html` — removed `<div class="cyber-scanlines"></div>` from HTML tab's `preview-panel-wrapper` (formerly line 3510)
+
+### Remaining Risks
+None. The `.scanlines-suppressed` JS-toggled class (line 2060) is now dead code for the HTML tab specifically, but this is harmless — the selector simply matches nothing. No functional impact.

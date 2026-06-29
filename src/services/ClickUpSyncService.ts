@@ -1098,6 +1098,7 @@ export class ClickUpSyncService {
     assignee?: string;
     archived?: boolean;
     includeClosed?: boolean;
+    dateUpdatedGt?: number;
   }): string {
     const parts: string[] = [];
     if (options.status?.length) {
@@ -1112,6 +1113,9 @@ export class ClickUpSyncService {
     if (options.includeClosed !== undefined) {
       parts.push(`includeClosed:${options.includeClosed}`);
     }
+    if (options.dateUpdatedGt !== undefined) {
+      parts.push(`dateUpdatedGt:${options.dateUpdatedGt}`);
+    }
     return parts.length > 0 ? parts.join('|') : 'default';
   }
 
@@ -1122,6 +1126,7 @@ export class ClickUpSyncService {
       assignee?: string;
       archived?: boolean;
       includeClosed?: boolean;
+      dateUpdatedGt?: number;
     } = {}
   ): Promise<ClickUpTask[]> {
     const config = await this.loadConfig();
@@ -1135,8 +1140,10 @@ export class ClickUpSyncService {
     }
 
     // Determine if this is a "simple" query that can use cache
-    // Filtered queries (status, assignee) bypass cache; archived:false is default/simple
-    const isSimpleQuery = !options.status?.length && !options.assignee && (options.archived === undefined || options.archived === false);
+    // Filtered queries (status, assignee, dateUpdatedGt) bypass cache;
+    // archived:false is default/simple. Delta queries must hit the API —
+    // the cache is keyed on isSimpleQuery and a delta query is not "simple".
+    const isSimpleQuery = !options.status?.length && !options.assignee && !options.dateUpdatedGt && (options.archived === undefined || options.archived === false);
     const cacheKey = isSimpleQuery ? normalizedListId : `${normalizedListId}:${this._fingerprintListOptions(options)}`;
 
     // Try cache first for simple queries
@@ -1157,9 +1164,12 @@ export class ClickUpSyncService {
     let page = 0;
 
     while (true) {
+      // ClickUp v2 API: date_updated_gt is Unix epoch milliseconds on
+      // GET /list/{id}/task, with order_by=updated for sort order.
+      const deltaParam = options.dateUpdatedGt ? `&date_updated_gt=${options.dateUpdatedGt}&order_by=updated` : '';
       const result = await this.httpRequest(
         'GET',
-        `/list/${normalizedListId}/task?page=${page}&subtasks=true&include_closed=${includeClosed}&include_markdown_description=true`
+        `/list/${normalizedListId}/task?page=${page}&subtasks=true&include_closed=${includeClosed}&include_markdown_description=true${deltaParam}`
       );
       if (result.status !== 200) {
         throw new Error(`Failed to fetch ClickUp tasks for list ${normalizedListId}: ${result.status}`);

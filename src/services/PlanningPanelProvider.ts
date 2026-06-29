@@ -94,6 +94,16 @@ export class PlanningPanelProvider {
     private _ticketsViewWatcher: vscode.Disposable | undefined;
     private _ticketsViewWatcherDebounces: Map<string, NodeJS.Timeout> = new Map();
     private _ticketsAutoSyncDebounces: Map<string, NodeJS.Timeout> = new Map();
+    // Delta-pull timer (auto-sync ON only). Runs the delta pull on a 45s
+    // interval for the currently-selected list/project. Torn down on
+    // toggle-off or dispose. Rate-limit aware: exponential backoff on
+    // consecutive failures, cap at 5 then pause until next toggle cycle.
+    private _ticketsAutoSyncTimers: Map<string, NodeJS.Timeout> = new Map();
+    private _ticketsAutoSyncFailures: Map<string, number> = new Map();
+    // Tracks the currently-selected list/project per workspace root so the
+    // delta-pull timer knows what to poll. Updated by refreshTicketsDelta
+    // and importAllTickets handlers.
+    private _ticketsCurrentSelection: Map<string, { provider: string; listId?: string; projectId?: string }> = new Map();
     private _lastPanelWriteTimestamp: number = 0;
     private _isAutoRefreshing: boolean = false;
     private _nonce: string = '';
@@ -4765,11 +4775,33 @@ Please format the updated output document strictly as follows:
             case 'importAllTickets': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const { provider, ids, listId, projectId, workspaceId, page, append, importMode } = msg;
+                // Track the current selection so the auto-sync delta-pull timer
+                // knows what to poll.
+                if (importMode === 'document' && !ids) {
+                    this._ticketsCurrentSelection.set(workspaceRoot, { provider, listId, projectId });
+                }
                 try {
                     const result: any = await vscode.commands.executeCommand(
                         'switchboard.importAllTasks',
                         { workspaceRoot, provider, ids, listId, projectId, workspaceId, page, append, importMode }
                     );
+                    // Set the per-list delta cursor after a successful full document
+                    // import so the next Refresh can do a delta pull instead of
+                    // re-fetching the entire list.
+                    if (result?.success && importMode === 'document' && !ids) {
+                        try {
+                            if (!this._cacheService) {
+                                this._cacheService = this._adapterFactories.getCacheService(workspaceRoot);
+                            }
+                            const kanbanDb = (this._cacheService as any)?._kanbanDb;
+                            if (kanbanDb) {
+                                const cursorKey = provider === 'clickup'
+                                    ? `last_delta_pull_clickup_${listId || ''}`
+                                    : `last_delta_pull_linear_${projectId || ''}`;
+                                await kanbanDb.setMeta(cursorKey, new Date().toISOString());
+                            }
+                        } catch { /* non-fatal — cursor is a perf optimization */ }
+                    }
                     // Webview status is silent — surface the real outcome natively so
                     // failures aren't invisible (mirrors the ticket-push handler).
                     const errDetail = (result?.errors || []).slice(0, 3)
@@ -4811,6 +4843,94 @@ Please format the updated output document strictly as follows:
                 }
                 break;
             }
+            case 'refreshTicketsDelta': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const { provider, listId, projectId } = msg;
+                if (!workspaceRoot) break;
+                // Track the current selection so the auto-sync delta-pull timer
+                // knows what to poll.
+                this._ticketsCurrentSelection.set(workspaceRoot, { provider, listId, projectId });
+                try {
+                    // Read the per-list delta cursor from the kanban DB.
+                    // Mirrors the last_ticket_heal_scan_ throttle pattern.
+                    if (!this._cacheService) {
+                        this._cacheService = this._adapterFactories.getCacheService(workspaceRoot);
+                    }
+                    const kanbanDb = (this._cacheService as any)?._kanbanDb;
+                    const cursorKey = provider === 'clickup'
+                        ? `last_delta_pull_clickup_${listId || ''}`
+                        : `last_delta_pull_linear_${projectId || ''}`;
+                    let lastPullIso: string | null = null;
+                    if (kanbanDb) {
+                        try { lastPullIso = await kanbanDb.getMeta(cursorKey); } catch { /* ignore */ }
+                    }
+
+                    // If cursor is unset → fall back to full import (initial load).
+                    // If cursor is set → delta pull (only changed tasks).
+                    const deltaSince = lastPullIso ? new Date(lastPullIso).getTime() : undefined;
+                    const deltaSinceIso = lastPullIso || undefined;
+
+                    const result: any = await vscode.commands.executeCommand(
+                        'switchboard.importAllTasks',
+                        {
+                            workspaceRoot,
+                            provider,
+                            listId,
+                            projectId,
+                            importMode: 'document',
+                            ...(deltaSince !== undefined ? { deltaSince } : {}),
+                            ...(deltaSinceIso ? { deltaSinceIso } : {})
+                        }
+                    );
+
+                    // Update the cursor only after a successful pull.
+                    if (result?.success && kanbanDb) {
+                        const nowIso = new Date().toISOString();
+                        try { await kanbanDb.setMeta(cursorKey, nowIso); } catch { /* ignore */ }
+                    }
+
+                    const skippedModified = result?.skippedModified || 0;
+                    const errDetail = (result?.errors || []).slice(0, 3)
+                        .map((e: any) => `${e.id}: ${e.error}`).join('; ');
+                    if (!result?.success) {
+                        vscode.window.showErrorMessage(`Refresh failed: ${result?.error || 'unknown'}`);
+                    } else if (skippedModified > 0) {
+                        vscode.window.showWarningMessage(
+                            `Refreshed ${result.successCount} ticket${result.successCount !== 1 ? 's' : ''}. ${skippedModified} skipped (locally modified — push or discard changes first).`
+                        );
+                    } else if ((result.failCount || 0) > 0) {
+                        vscode.window.showWarningMessage(`Refresh: ${result.successCount} updated, ${result.failCount} failed — ${errDetail}`);
+                    }
+
+                    this._panel?.webview.postMessage({
+                        type: 'importAllTicketsComplete',
+                        success: result.success,
+                        successCount: result.successCount,
+                        failCount: result.failCount,
+                        errors: result.errors,
+                        importMode: 'document',
+                        workspaceRoot,
+                        provider,
+                        listId,
+                        projectId,
+                        isDelta: lastPullIso !== null
+                    });
+                } catch (error) {
+                    const errMsg = error instanceof Error ? error.message : String(error);
+                    vscode.window.showErrorMessage(`Refresh failed: ${errMsg}`);
+                    this._panel?.webview.postMessage({
+                        type: 'importAllTicketsComplete',
+                        success: false,
+                        error: errMsg,
+                        importMode: 'document',
+                        workspaceRoot,
+                        provider,
+                        listId,
+                        projectId
+                    });
+                }
+                break;
+            }
             case 'openExternalUrl': {
                 const url = msg.url as string;
                 if (url && (url.startsWith('https://') || url.startsWith('http://'))) {
@@ -4822,15 +4942,45 @@ Please format the updated output document strictly as follows:
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const { provider, id, content } = msg;
                 if (!workspaceRoot || !id || typeof content !== 'string') break;
-                const filePath = this._findTicketFilePath(workspaceRoot, provider, id);
-                if (!filePath) break;
+                let filePath = this._findTicketFilePath(workspaceRoot, provider, id);
+                // Create-if-missing: if no local file exists yet (e.g. auto-sync was
+                // OFF when the list was selected, or the ticket was never imported),
+                // import it from the remote first so we have a file + cache entry to
+                // write into. The remote fetch is acceptable here — Save is a manual
+                // user action and the ticket already exists remotely. The user's
+                // edited content overwrites the imported content immediately after.
+                if (!filePath) {
+                    try {
+                        const importResult: any = await vscode.commands.executeCommand(
+                            'switchboard.importTaskAsDocument',
+                            { workspaceRoot, provider, id, includeSubtasks: false }
+                        );
+                        if (importResult && importResult.success === false) {
+                            const errMsg = importResult.error || 'Local document write failed.';
+                            vscode.window.showErrorMessage(`Save failed: ${errMsg}`);
+                            break;
+                        }
+                        filePath = this._findTicketFilePath(workspaceRoot, provider, id);
+                    } catch (importErr) {
+                        const errMsg = importErr instanceof Error ? importErr.message : String(importErr);
+                        vscode.window.showErrorMessage(`Save failed (could not create local file): ${errMsg}`);
+                        break;
+                    }
+                }
+                if (!filePath) {
+                    vscode.window.showErrorMessage('Save failed: could not locate or create the local ticket file.');
+                    break;
+                }
                 try {
                     const nfs = require('fs') as typeof import('fs');
                     const existing = nfs.readFileSync(filePath, 'utf8');
                     const frontmatterMatch = existing.match(/^(---\n[\s\S]*?\n---\n?)/);
                     const frontmatter = frontmatterMatch ? frontmatterMatch[1] : '';
                     nfs.writeFileSync(filePath, frontmatter + content, 'utf8');
-                } catch { }
+                } catch (writeErr) {
+                    const errMsg = writeErr instanceof Error ? writeErr.message : String(writeErr);
+                    vscode.window.showErrorMessage(`Save failed: ${errMsg}`);
+                }
                 break;
             }
             case 'editTicket': {
@@ -5513,17 +5663,29 @@ Read the existing ticket content from the local file if it exists. Determine wha
                         // A remote-only ticket diverges from every other ticket in the
                         // tab (which are both local + online). Import it immediately so
                         // the local file + DB entry exist, exactly like the Import button.
+                        // Pass the createTask response as preFetchedTask to dodge the
+                        // read-after-write lag where a fresh getTaskDetails() returns
+                        // null for a just-created task.
+                        let importOk = true;
+                        let importError: string | undefined;
                         try {
-                            await vscode.commands.executeCommand(
+                            const importResult: any = await vscode.commands.executeCommand(
                                 'switchboard.importTaskAsDocument',
-                                { workspaceRoot, provider: 'clickup', id: task.id, includeSubtasks: false }
+                                { workspaceRoot, provider: 'clickup', id: task.id, includeSubtasks: false, preFetchedTask: task }
                             );
+                            if (importResult && importResult.success === false) {
+                                importOk = false;
+                                importError = importResult.error || 'Local document write failed.';
+                            }
                         } catch (importErr) {
+                            importOk = false;
+                            importError = importErr instanceof Error ? importErr.message : String(importErr);
                             console.error('[PlanningPanel] Created ClickUp task but local import failed:', importErr);
                         }
                         this._panel?.webview.postMessage({
                             type: 'clickupTaskCreated',
-                            success: true,
+                            success: importOk,
+                            ...(importError ? { error: `Task created remotely, but local file write failed: ${importError}` } : {}),
                             workspaceRoot
                         });
                     } else {
@@ -5575,21 +5737,45 @@ Read the existing ticket content from the local file if it exists. Determine wha
                     });
                     // A remote-only ticket diverges from every other ticket in the tab
                     // (which are both local + online). Import it immediately so the local
-                    // file + DB entry exist, exactly like the Import button.
+                    // file + DB entry exist, exactly like the Import button. Pass the
+                    // createIssueSimple response + the typed title/description/projectName
+                    // as preFetchedTask to dodge the read-after-write lag where a fresh
+                    // getIssue() returns null for a just-created issue.
+                    let importOk = true;
+                    let importError: string | undefined;
                     if (result?.id) {
                         try {
-                            await vscode.commands.executeCommand(
+                            const importResult: any = await vscode.commands.executeCommand(
                                 'switchboard.importTaskAsDocument',
-                                { workspaceRoot, provider: 'linear', id: result.id, includeSubtasks: false }
+                                {
+                                    workspaceRoot,
+                                    provider: 'linear',
+                                    id: result.id,
+                                    includeSubtasks: false,
+                                    preFetchedTask: {
+                                        id: result.id,
+                                        identifier: result.identifier,
+                                        title: msg.title,
+                                        description: msg.description,
+                                        projectName: msg.projectName
+                                    }
+                                }
                             );
+                            if (importResult && importResult.success === false) {
+                                importOk = false;
+                                importError = importResult.error || 'Local document write failed.';
+                            }
                         } catch (importErr) {
+                            importOk = false;
+                            importError = importErr instanceof Error ? importErr.message : String(importErr);
                             console.error('[PlanningPanel] Created Linear issue but local import failed:', importErr);
                         }
                     }
                     this._panel?.webview.postMessage({
                         type: 'linearIssueCreated',
-                        success: true,
+                        success: importOk,
                         result,
+                        ...(importError ? { error: `Issue created remotely, but local file write failed: ${importError}` } : {}),
                         workspaceRoot
                     });
                 } catch (error) {
@@ -8066,6 +8252,14 @@ Read the existing ticket content from the local file if it exists. Determine wha
                 try { existing.dispose(); } catch (e) {}
                 this._ticketsAutoSyncWatchers.delete(workspaceRoot);
             }
+            // Tear down the delta-pull timer as well — auto-sync OFF means
+            // no background network activity (manual Refresh still works).
+            const timer = this._ticketsAutoSyncTimers.get(workspaceRoot);
+            if (timer) {
+                clearInterval(timer);
+                this._ticketsAutoSyncTimers.delete(workspaceRoot);
+            }
+            this._ticketsAutoSyncFailures.delete(workspaceRoot);
             return;
         }
         if (existing) { return; } // already watching
@@ -8122,6 +8316,88 @@ Read the existing ticket content from the local file if it exists. Determine wha
 
         const combined = vscode.Disposable.from(...watchers);
         this._ticketsAutoSyncWatchers.set(workspaceRoot, combined);
+
+        // Start the delta-pull timer (auto-sync ON only). Runs every 45s —
+        // safe for both ClickUp (100 req/min) and Linear (5,000 req/hour).
+        // The callback wraps API calls in try/catch with exponential backoff
+        // on consecutive failures (cap at 5, then pause until next toggle).
+        // Errors are logged silently — no user toast spam on every failed poll.
+        const POLL_INTERVAL_MS = 45000;
+        const MAX_CONSECUTIVE_FAILURES = 5;
+        const timer = setInterval(async () => {
+            const failures = this._ticketsAutoSyncFailures.get(workspaceRoot) || 0;
+            if (failures >= MAX_CONSECUTIVE_FAILURES) {
+                // Paused — wait for toggle cycle to reset. Log once.
+                return;
+            }
+            const selection = this._ticketsCurrentSelection.get(workspaceRoot);
+            if (!selection || !selection.provider) { return; }
+            try {
+                // Reuse the same delta-pull path as the manual Refresh button.
+                // The cursor is read/updated inside importAllTasks; here we
+                // just trigger it silently (no user toast on success).
+                if (!this._cacheService) {
+                    this._cacheService = this._adapterFactories.getCacheService(workspaceRoot);
+                }
+                const kanbanDb = (this._cacheService as any)?._kanbanDb;
+                const cursorKey = selection.provider === 'clickup'
+                    ? `last_delta_pull_clickup_${selection.listId || ''}`
+                    : `last_delta_pull_linear_${selection.projectId || ''}`;
+                let lastPullIso: string | null = null;
+                if (kanbanDb) {
+                    try { lastPullIso = await kanbanDb.getMeta(cursorKey); } catch { /* ignore */ }
+                }
+                const deltaSince = lastPullIso ? new Date(lastPullIso).getTime() : undefined;
+                const deltaSinceIso = lastPullIso || undefined;
+
+                const result: any = await vscode.commands.executeCommand(
+                    'switchboard.importAllTasks',
+                    {
+                        workspaceRoot,
+                        provider: selection.provider,
+                        listId: selection.listId,
+                        projectId: selection.projectId,
+                        importMode: 'document',
+                        ...(deltaSince !== undefined ? { deltaSince } : {}),
+                        ...(deltaSinceIso ? { deltaSinceIso } : {})
+                    }
+                );
+
+                if (result?.success && kanbanDb) {
+                    try { await kanbanDb.setMeta(cursorKey, new Date().toISOString()); } catch { /* ignore */ }
+                }
+
+                if (result?.success) {
+                    this._ticketsAutoSyncFailures.set(workspaceRoot, 0);
+                    // If any tickets were updated, refresh the sidebar silently.
+                    if ((result.successCount || 0) > 0) {
+                        this._panel?.webview.postMessage({
+                            type: 'importAllTicketsComplete',
+                            success: true,
+                            successCount: result.successCount,
+                            failCount: result.failCount,
+                            errors: result.errors,
+                            importMode: 'document',
+                            workspaceRoot,
+                            provider: selection.provider,
+                            listId: selection.listId,
+                            projectId: selection.projectId,
+                            isDelta: lastPullIso !== null,
+                            autoSync: true
+                        });
+                    }
+                } else {
+                    const f = (this._ticketsAutoSyncFailures.get(workspaceRoot) || 0) + 1;
+                    this._ticketsAutoSyncFailures.set(workspaceRoot, f);
+                    console.warn(`[PlanningPanel] Auto-sync delta pull failed (${f}/${MAX_CONSECUTIVE_FAILURES}):`, result?.error);
+                }
+            } catch (e) {
+                const f = (this._ticketsAutoSyncFailures.get(workspaceRoot) || 0) + 1;
+                this._ticketsAutoSyncFailures.set(workspaceRoot, f);
+                console.warn(`[PlanningPanel] Auto-sync delta pull error (${f}/${MAX_CONSECUTIVE_FAILURES}):`, e);
+            }
+        }, POLL_INTERVAL_MS);
+        this._ticketsAutoSyncTimers.set(workspaceRoot, timer);
     }
 
     public dispose(): void {
@@ -8190,6 +8466,11 @@ Read the existing ticket content from the local file if it exists. Determine wha
         this._ticketsAutoSyncWatchers.clear();
         for (const t of this._ticketsAutoSyncDebounces.values()) { clearTimeout(t); }
         this._ticketsAutoSyncDebounces.clear();
+        // Tear down delta-pull timers.
+        for (const t of this._ticketsAutoSyncTimers.values()) { clearInterval(t); }
+        this._ticketsAutoSyncTimers.clear();
+        this._ticketsAutoSyncFailures.clear();
+        this._ticketsCurrentSelection.clear();
 
         this._disposables.forEach(d => d.dispose());
         this._disposables = [];
